@@ -452,6 +452,7 @@ fn normalize(
                 reason: Some("no data".to_string()),
                 provisional,
                 parts: BTreeMap::new(),
+                apportioned: BTreeMap::new(),
                 checklist_state: None,
             });
         }
@@ -520,6 +521,7 @@ fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
         partial: None,
         parts: value.parts.clone(),
         parts_display: format_parts(&value.parts, unit),
+        apportioned: value.apportioned.clone(),
         checklist_state: value.checklist_state,
     }
 }
@@ -610,9 +612,17 @@ fn aggregate_bucket(
     let valid: Vec<_> = days.iter().filter(|day| day.value.is_some()).collect();
     let provisional = days.iter().any(|day| day.provisional);
     let mut parts = BTreeMap::<String, BTreeMap<String, i64>>::new();
+    let mut apportioned = BTreeMap::<String, BTreeMap<String, i64>>::new();
     for day in days {
         for (dimension, entries) in &day.parts {
             let grouped = parts.entry(dimension.clone()).or_default();
+            for (key, value) in entries {
+                let total = grouped.entry(key.clone()).or_default();
+                *total = total.saturating_add(*value);
+            }
+        }
+        for (dimension, entries) in &day.apportioned {
+            let grouped = apportioned.entry(dimension.clone()).or_default();
             for (key, value) in entries {
                 let total = grouped.entry(key.clone()).or_default();
                 *total = total.saturating_add(*value);
@@ -670,6 +680,7 @@ fn aggregate_bucket(
         partial: partial_bucket.then_some(true),
         parts_display: format_parts(&parts, unit),
         parts,
+        apportioned,
         checklist_state: None,
     }
 }
@@ -1023,9 +1034,19 @@ fn summarize_parts(
     unit: MetricUnit,
 ) -> BTreeMap<String, Vec<PartSummary>> {
     let mut totals = BTreeMap::<String, BTreeMap<String, i64>>::new();
+    let mut apportioned_totals =
+        BTreeMap::<String, BTreeMap<String, i64>>::new();
     for day in values.iter().filter(|day| !day.provisional) {
         for (dimension, entries) in &day.parts {
             let dimension_totals = totals.entry(dimension.clone()).or_default();
+            for (key, value) in entries {
+                let total = dimension_totals.entry(key.clone()).or_default();
+                *total = total.saturating_add(*value);
+            }
+        }
+        for (dimension, entries) in &day.apportioned {
+            let dimension_totals =
+                apportioned_totals.entry(dimension.clone()).or_default();
             for (key, value) in entries {
                 let total = dimension_totals.entry(key.clone()).or_default();
                 *total = total.saturating_add(*value);
@@ -1066,6 +1087,10 @@ fn summarize_parts(
                     }
                 }
             }
+            let dimension_apportioned = apportioned_totals
+                .get(&dimension)
+                .cloned()
+                .unwrap_or_default();
             Some((
                 dimension,
                 ranked
@@ -1079,15 +1104,30 @@ fn summarize_parts(
                                 i128::from(all_total),
                             ) as i64
                         };
+                        let apportioned = dimension_apportioned
+                            .get(&key)
+                            .copied()
+                            .filter(|minutes| *minutes > 0);
+                        let minutes_mode = unit == MetricUnit::Minutes;
                         PartSummary {
                             key,
                             value,
-                            display: if unit == MetricUnit::Minutes {
+                            display: if minutes_mode {
                                 format_value(Some(value), unit)
                             } else {
                                 value.to_string()
                             },
                             share: format!("{share}%"),
+                            label: None,
+                            apportioned: minutes_mode
+                                .then_some(())
+                                .and(apportioned),
+                            apportioned_display: minutes_mode
+                                .then_some(())
+                                .and(apportioned)
+                                .map(|minutes| {
+                                    format_value(Some(minutes), unit)
+                                }),
                         }
                     })
                     .collect(),
@@ -1330,6 +1370,7 @@ mod tests {
             reason: value.is_none().then(|| "missing".to_string()),
             provisional: false,
             parts: BTreeMap::new(),
+            apportioned: BTreeMap::new(),
             checklist_state: None,
         }
     }
@@ -1641,6 +1682,23 @@ mod tests {
         assert_eq!(notes[5].key, "other");
         assert_eq!(notes[5].value, 1);
         assert_eq!(notes[0].share, "29%");
+    }
+
+    #[test]
+    fn parts_summary_keeps_every_area_and_project_key() {
+        let mut value = daily(date(2026, 1, 1), Some(21));
+        value.parts.insert(
+            "area".to_string(),
+            [("a", 6), ("b", 5), ("c", 4), ("d", 3), ("e", 2), ("f", 1)]
+                .into_iter()
+                .map(|(key, count)| (key.to_string(), count))
+                .collect(),
+        );
+        let summary = summarize_parts(&[value], MetricUnit::Minutes);
+        let areas = &summary["area"];
+        assert_eq!(areas.len(), 6);
+        assert!(areas.iter().all(|part| part.key != "other"));
+        assert_eq!(areas[0].display, "6m");
     }
 
     #[test]

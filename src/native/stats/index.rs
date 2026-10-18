@@ -12,7 +12,7 @@ use serde_yaml::Value as YamlValue;
 use super::error::StatsError;
 use crate::native::{
     capture_pomodoros, capture_pomodoros_agenda, collect_done, dataview,
-    projects, vault_links::NoteIndex,
+    pomodoro_homes, projects, vault_links::NoteIndex,
 };
 
 /// Shared vault and journal facts for evaluators. The inputs phase
@@ -24,6 +24,9 @@ pub(crate) struct StatsIndex {
     pub(crate) parent_of: BTreeMap<String, String>,
     pub(crate) journal_events: Vec<IndexedJournalEvent>,
     pub(crate) note_index: crate::native::vault_links::NoteIndex,
+    /// Markdown buffers from the single vault pass, used to build the
+    /// indexed homes source without a second read.
+    pub(crate) buffers: Vec<(String, String)>,
     pub(crate) health: IndexHealth,
 }
 
@@ -75,12 +78,13 @@ pub(crate) struct DailyNoteInputs {
     pub(crate) inline_fields: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct PomodoroSession {
     pub(crate) name: Option<String>,
     pub(crate) recorded_minutes: Option<u32>,
     pub(crate) range_minutes: Option<u32>,
     pub(crate) line: u32,
+    pub(crate) links: Vec<pomodoro_homes::SessionLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -265,6 +269,7 @@ impl StatsIndex {
             }
         }
         index.note_index = note_index;
+        index.buffers = buffers;
         index.journal_events = read_journal(vault, &mut index.health.journal)?;
         Ok(index)
     }
@@ -509,6 +514,10 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 recorded_minutes: recorded,
                 range_minutes: range,
                 line: u32::try_from(entry.line).unwrap_or(u32::MAX),
+                links: pomodoro_homes::session_links(
+                    contents,
+                    entry.line.saturating_sub(1),
+                ),
             }
         })
         .collect();
@@ -1011,6 +1020,7 @@ mod tests {
                 recorded_minutes: Some(25),
                 range_minutes: Some(30),
                 line: 12,
+                links: Vec::new(),
             }],
             frontmatter_fields: BTreeMap::from([(
                 "energy".to_string(),

@@ -504,6 +504,7 @@ fn null_before_tracking(date: NaiveDate, provisional: bool) -> DailyValue {
         reason: Some("before tracking began".to_string()),
         provisional,
         parts: std::collections::BTreeMap::new(),
+        apportioned: std::collections::BTreeMap::new(),
         checklist_state: None,
     }
 }
@@ -523,6 +524,7 @@ fn null_value(
         reason: Some(reason),
         provisional,
         parts: std::collections::BTreeMap::new(),
+        apportioned: std::collections::BTreeMap::new(),
         checklist_state: None,
     }
 }
@@ -542,6 +544,7 @@ fn some_value(
         reason: None,
         provisional,
         parts: std::collections::BTreeMap::new(),
+        apportioned: std::collections::BTreeMap::new(),
         checklist_state: None,
     }
 }
@@ -638,6 +641,7 @@ mod tests {
                     reason: None,
                     provisional: false,
                     parts: BTreeMap::new(),
+                    apportioned: BTreeMap::new(),
                     checklist_state: None,
                 })
                 .collect(),

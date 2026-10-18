@@ -422,6 +422,7 @@ fn daily_value(
         reason,
         provisional,
         parts,
+        apportioned: BTreeMap::new(),
         checklist_state: None,
     }
 }

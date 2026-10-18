@@ -20,8 +20,8 @@ pub(crate) use facts::{NoteFacts, NoteKind, Rollup};
 pub(crate) use json::{HomeKind, HomePart, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, fnv1a32, Hue};
 pub(crate) use resolve::{
-    rollup_value, DiskHomeSource, Home, HomeResolver, HomeSource,
-    IndexedHomeSource, ResolverHealth,
+    path_string, rollup_value, unfiled_home, unlinked_home, DiskHomeSource,
+    Home, HomeResolver, HomeSource, IndexedHomeSource, ResolverHealth,
 };
 pub(crate) use session::{
     attribute_ledger_entry, attribute_session, session_links, split_minutes,

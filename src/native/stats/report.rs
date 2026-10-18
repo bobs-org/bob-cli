@@ -4,6 +4,7 @@ use chrono::NaiveDate;
 use serde::Serialize;
 
 use super::value::{ChecklistState, DataQuality};
+use crate::native::pomodoro_homes::{HomeKind, Hue};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 
@@ -18,6 +19,9 @@ pub(crate) struct StatsReport {
     pub(crate) metrics: Vec<MetricReport>,
     pub(crate) health: HealthReport,
     pub(crate) warnings: Vec<StatsWarning>,
+    /// Catalog of every home key used in the report. Omitted when empty.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) homes: BTreeMap<String, HomeCatalogEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -213,6 +217,8 @@ pub(crate) struct SeriesPoint {
     pub(crate) parts: BTreeMap<String, BTreeMap<String, i64>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) parts_display: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) apportioned: BTreeMap<String, BTreeMap<String, i64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) checklist_state: Option<ChecklistState>,
 }
@@ -223,12 +229,61 @@ pub(crate) struct PartSummary {
     pub(crate) value: i64,
     pub(crate) display: String,
     pub(crate) share: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) apportioned: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) apportioned_display: Option<String>,
+}
+
+/// One derived home used anywhere in the report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HomeCatalogEntry {
+    pub(crate) label: String,
+    pub(crate) kind: HomeKind,
+    pub(crate) area: Option<String>,
+    pub(crate) subarea: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) hue: Option<Hue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) project_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) rolled_up: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct HealthReport {
     pub(crate) journal: JournalHealthReport,
     pub(crate) tasks: TaskHealthReport,
+    pub(crate) homes: HomesHealthReport,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub(crate) struct HomesHealthReport {
+    pub(crate) unlinked_minutes: u32,
+    pub(crate) unlinked_sessions: u32,
+    pub(crate) unfiled_links: u32,
+    pub(crate) ambiguous_links: u32,
+    pub(crate) unresolved_links: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) rollup_invalid: Vec<HomeLintReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) area_color_invalid: Vec<HomeLintReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) hue_collisions: Vec<HueCollisionReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HomeLintReport {
+    pub(crate) path: String,
+    pub(crate) raw: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HueCollisionReport {
+    pub(crate) hue: Hue,
+    pub(crate) areas: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -324,6 +379,9 @@ mod tests {
                 value: 3330,
                 display: "55h 30m".to_string(),
                 share: "41%".to_string(),
+                label: None,
+                apportioned: None,
+                apportioned_display: None,
             }],
         );
         let report = StatsReport {
@@ -428,6 +486,7 @@ mod tests {
                         partial: None,
                         parts: BTreeMap::new(),
                         parts_display: BTreeMap::new(),
+                        apportioned: BTreeMap::new(),
                         checklist_state: None,
                     },
                     SeriesPoint {
@@ -450,6 +509,7 @@ mod tests {
                                 "25m".to_string(),
                             )]),
                         )]),
+                        apportioned: BTreeMap::new(),
                         checklist_state: None,
                     },
                 ],
@@ -475,6 +535,7 @@ mod tests {
                     closed_without_date: 220,
                     missing_created: None,
                 },
+                homes: HomesHealthReport::default(),
             },
             warnings: vec![StatsWarning {
                 code: "journal_gap".to_string(),
@@ -483,6 +544,7 @@ mod tests {
                 message: "Review closed but no answers were recorded"
                     .to_string(),
             }],
+            homes: BTreeMap::new(),
         };
 
         let json = serde_json::to_value(&report).unwrap();
@@ -542,6 +604,7 @@ mod tests {
             partial: Some(true),
             parts: BTreeMap::new(),
             parts_display: BTreeMap::new(),
+            apportioned: BTreeMap::new(),
             checklist_state: None,
         };
         let json = serde_json::to_value(&point).unwrap();

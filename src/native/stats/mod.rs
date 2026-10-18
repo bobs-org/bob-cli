@@ -6,6 +6,7 @@ pub(crate) mod cli;
 pub(crate) mod compute;
 pub(crate) mod error;
 pub(crate) mod formula;
+mod homes;
 pub(crate) mod index;
 pub(crate) mod journal;
 pub(crate) mod metrics;
@@ -86,6 +87,7 @@ mod tests {
             metrics: Vec::new(),
             health: report::HealthReport::default(),
             warnings: Vec::new(),
+            homes: Default::default(),
         };
         let _value = DailyValue {
             date: today,
@@ -96,6 +98,7 @@ mod tests {
             reason: Some("untracked".to_string()),
             provisional: false,
             parts: Default::default(),
+            apportioned: Default::default(),
             checklist_state: None,
         };
         let missing = load_stats_config(

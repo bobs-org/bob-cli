@@ -13,9 +13,10 @@ use chrono::NaiveDate;
 use super::{
     error::StatsError,
     formula::evaluate_formula,
+    homes::{default_exempt, label_parts, HomesEngine},
     index::StatsIndex,
     journal::evaluate_journal,
-    metrics::{effective_since, evaluate_metric, MetricEvaluation},
+    metrics::{effective_since, evaluate_with_homes, MetricEvaluation},
     range::RangeSpec,
     registry::{build_registry, MetricDef, MetricRegistry, MetricSpec},
     report::{
@@ -27,7 +28,7 @@ use super::{
         build_metric_series, lead_in_start, resolve_range, ResolvedRange,
     },
 };
-use crate::native::config::load_stats_config;
+use crate::native::config::{load_plan_config, load_stats_config};
 
 /// Compute a schema-1 stats report for one request.
 ///
@@ -52,15 +53,26 @@ pub(crate) fn compute(
     let selected = registry.select(&request.selection)?;
     let ordered = evaluation_set(&registry, &selected);
     let index = StatsIndex::read(&request.vault, request.now)?;
+    let exempt = load_plan_config(&request.config)
+        .map(|plan| plan.exempt().to_vec())
+        .unwrap_or_else(|_| default_exempt());
+    let homes = HomesEngine::new(&index, &exempt);
 
     // Probe pass over an empty date span: tracking starts are index-derived,
     // so this yields every metric's inferred since without any daily values.
     // The result feeds `all`-range resolution below.
     let mut probe: BTreeMap<String, MetricEvaluation> = BTreeMap::new();
     for def in &ordered {
-        if let Some(evaluation) =
-            evaluate_one(def, &index, &[], today, config.since, None, &probe)
-        {
+        if let Some(evaluation) = evaluate_one(
+            def,
+            &index,
+            &[],
+            today,
+            config.since,
+            None,
+            &probe,
+            &homes,
+        ) {
             probe.insert(def.id.clone(), evaluation);
         }
     }
@@ -97,10 +109,19 @@ pub(crate) fn compute(
             config.since,
             range_start,
             &evaluations,
+            &homes,
         ) {
             evaluations.insert(def.id.clone(), evaluation);
         }
     }
+
+    let health_end = if resolved.includes_today {
+        today
+    } else {
+        resolved.report.end
+    };
+    let (catalog, homes_health, homes_warnings) =
+        homes.finish(&index, resolved.report.start, health_end);
 
     let mut metrics = Vec::with_capacity(selected.len());
     for def in &selected {
@@ -114,6 +135,8 @@ pub(crate) fn compute(
             &resolved,
             def.kind_name() == "checklist",
         );
+        let mut parts_summary = series.parts_summary;
+        label_parts(&mut parts_summary, &catalog);
         metrics.push(MetricReport {
             id: def.id.clone(),
             label: def.label.clone(),
@@ -136,18 +159,20 @@ pub(crate) fn compute(
                 Vec::new()
             },
             daily_points: series.daily_points,
-            parts_summary: series.parts_summary,
+            parts_summary,
             chores: series.chores,
             warnings: evaluation.warnings.clone(),
         });
     }
 
+    let mut health = index_health(&index);
+    health.homes = homes_health;
     Ok(StatsReport {
         ok: true,
         schema_version: SCHEMA_VERSION,
         today,
         range: resolved.report,
-        health: index_health(&index),
+        health,
         warnings: dedupe_warnings(
             registry
                 .warnings
@@ -156,9 +181,11 @@ pub(crate) fn compute(
                 .chain(
                     metrics.iter().flat_map(|metric| metric.warnings.clone()),
                 )
+                .chain(homes_warnings)
                 .collect(),
         ),
         metrics,
+        homes: catalog,
     })
 }
 
@@ -183,13 +210,14 @@ fn evaluate_one(
     global_since: Option<NaiveDate>,
     range_start: Option<NaiveDate>,
     evaluations: &BTreeMap<String, MetricEvaluation>,
+    homes: &HomesEngine<'_>,
 ) -> Option<MetricEvaluation> {
     match &def.spec {
         MetricSpec::Pomodoro { .. }
         | MetricSpec::Tasks { .. }
         | MetricSpec::Checklist { .. }
         | MetricSpec::Field { .. } => {
-            evaluate_metric(def, index, dates, today, global_since)
+            evaluate_with_homes(def, index, dates, today, global_since, homes)
         }
         MetricSpec::Journal { .. } => evaluate_journal(
             def,
@@ -264,6 +292,7 @@ fn index_health(index: &StatsIndex) -> HealthReport {
             missing_created: (index.health.missing_created > 0)
                 .then_some(index.health.missing_created),
         },
+        homes: Default::default(),
     }
 }
 

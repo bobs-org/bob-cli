@@ -258,9 +258,13 @@ definitions (plus downstream dependents) with local warnings.
 
 Every metric yields one value per date: an integer `value` (or `null`), an
 optional ratio `num`/`den` in basis points, a quality, an optional non-ok
-reason, and dimension parts (`theme`, `kind`, `note`, `tier`, `outcome`,
-`met`/`missed`). Consumers never recalculate a display string, summary,
-percentage, or delta — the report carries them all.
+reason, and dimension parts (`area`, `project`, `theme`, `kind`, `note`,
+`tier`, `outcome`, `met`/`missed`). Pomodoro and task metrics add `area` and
+`project` homes from the shared resolver in [pomodoro-homes.md](pomodoro-homes.md);
+minutes-mode days also carry `apportioned`, the share of each part that came
+from sessions with two or more keys in that dimension. Consumers never
+recalculate a display string, summary, percentage, or delta — the report
+carries them all.
 
 - `ok`: a real observed value (including a real zero, e.g. an empty
   Pomodoros section).
@@ -296,9 +300,14 @@ invalid, journal metrics report a `journal_limitation` instead.
 
 **Health.** Each report carries `health.tasks` (`invalid_dates`,
 `closed_without_date`, and `missing_created` when nonzero — every affected
-task counts once per limitation, never once per metric or day) and
+task counts once per limitation, never once per metric or day),
 `health.journal` (tracking start, malformed-line count, and per-host event
-counts with the latest timestamp and day). `invalid_dates` counts a task
+counts with the latest timestamp and day), and `health.homes` (in-window
+`unlinked_minutes` / `unlinked_sessions` / `unfiled_links` /
+`ambiguous_links` / `unresolved_links`, plus global `rollup_invalid`,
+`area_color_invalid`, and hue-collision lists). Matching
+`warning <message>  <code>` lines use `rollup_invalid`, `area_color_invalid`,
+and `area_hue_collision`. `invalid_dates` counts a task
 when created, done, or cancelled is malformed or future, or when scheduled
 is malformed. A future `scheduled` date is ordinary planning data and does
 not count. Daily-note field extraction skips task lines and ordered-list
@@ -336,7 +345,8 @@ linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
 `summary.p25`/`p75` stay daily even when the chart is grouped. Parts
 summaries rank dimensions by total; only `note` and `theme` collapse to top
-five plus `other`. Rolling medians span 7 day points, 4 week buckets, or 3
+five plus `other`. `area` and `project` keep every key (the note tree already
+bounds them). Rolling medians span 7 day points, 4 week buckets, or 3
 month buckets, with a 6-day / 3-week / 2-month lead-in so the first displayed
 point can fill, need half the window in real observations, and stay `null`
 for today.
@@ -387,14 +397,22 @@ yesterday, zero days) and still includes today as provisional.
 
 Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 (with prior metadata), per-metric definitions/summaries/chart/points/parts/
-warnings, health, and global warnings. Ratio points add `num`/`den`, grouped
-points add `partial`, and empty maps (`parts`, `parts_summary`,
-`parts_display`) and empty lists (`daily_points`, `chores`) are omitted.
+warnings, health, global warnings, and a top-level `homes` catalog keyed by
+every home used in the report (`label`, `kind` project|area|bucket, `area`,
+`subarea`, `path`, `hue`; `project_label` on area-kind entries;
+`rolled_up` on rollup homes). The catalog is omitted when empty. Ratio points
+add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
+`parts_summary`, `parts_display`, `apportioned`) and empty lists
+(`daily_points`, `chores`) are omitted. `PartSummary` rows for `area` and
+`project` add an optional `label` plus minutes-mode `apportioned` /
+`apportioned_display`. Points add an optional `apportioned` map,
+`{dimension: {key: minutes}}`, omitted when empty.
 `definition`, `limits`, `parameters`, `chart`, and `total` are always present
 (total and chart quartiles may be JSON `null`). Optional fields that appear
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
-`chores`, and `parts_display`.
+`chores`, `parts_display`, `apportioned`, `label`, `project_label`,
+`rolled_up`, and `health.homes` lint lists.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -482,10 +500,18 @@ Overview is a header, a sparkline table in each metric's 256-color hue
 in-progress values, journal hosts, then `warning <message>  <code>`
 lines. `·` marks null days; booleans use `●` met / `○` missed. Detail
 (`bob stats show`) draws eighth-block columns, a hollow `▯` today
-column, and a weekday × week grid for booleans. Metrics is a catalog
+column, and a weekday × week grid for booleans. It prints every parts
+dimension in a stable order: pomodoro `area`, `project`, `theme`; tasks
+`kind`, `area`, `project`, `note`. Area and project cells use catalog
+labels; under color they prefix a `●` in the area's xterm hue, and
+buckets render dim. The project line shows the top five homes plus
+`other`, with buckets always shown outside those five. When apportioned
+minutes are non-zero, a dim `split` line reports the share of project
+minutes that came from sessions with several homes. Metrics is a catalog
 table with a dim definition line per id.
 
-Plain text under `NO_COLOR` or a non-TTY (`Styler::detect()`).
+Plain text under `NO_COLOR` or a non-TTY (`Styler::detect()`) drops the
+glyphs.
 
 ### CSV
 
@@ -548,6 +574,36 @@ after-line outcomes, host naming, and which recorded events contribute to
 order disagree), duplicate keys, two hosts, malformed and truncated lines,
 unknown outcomes/tiers, pre/post-only days, keep-then-done, gap days, and
 pre-tracking dates.
+
+## Homes fixture and H-vector table
+
+`tests/fixtures/stats/homes_vault/` is a separate hand-computed vault for
+derived Pomodoro homes. It leaves M1–M17 and `tests/fixtures/stats/vault/`
+untouched. The clock is Saturday 2026-10-18 noon and the window is
+`2026-10-15..2026-10-18` (complete Oct 15–17, provisional today Oct 18).
+Expected values are derived by hand from the file contents and asserted in
+`src/native/stats/homes.rs`. Home labels follow
+[pomodoro-homes.md](pomodoro-homes.md): counted minutes C are the
+theme-selected shares, then R5 splits C so every dimension sums to the
+metric total.
+
+| # | Metric | What it proves |
+| --- | --- | --- |
+| H1 | worked total 167m | Complete-window minutes; today 15m is provisional |
+| H2 | worked area | gtd 45, dev 90, job 7, @unlinked 10, @unfiled 15; sums to 167 |
+| H3 | worked project | sase 80 (blog rollup 50 + HACK 10 + GTD+SASE 20), @review:GTD 35, bob 10, dev 10, job 4, job_apply 3, @unlinked 10, @unfiled 15; sums to 167 |
+| H4 | apportioned | sase 10 and job 4 from multi-home sessions; gtd area 10 from HACK |
+| H5 | sessions | 8 closed rows; lead homes put 2 on sase and 2 on @review:GTD |
+| H6 | done | 7 completions; 2 on sase, 1 @unfiled; job area tasks use `job · area tasks` |
+| H7 | sase_time | themes:[SASE] counted C is 10m, then split onto sase/dev |
+| H8 | health | 1 unlinked session / 10m, 1 unfiled link, rollup_invalid on invalid.md, hue collision gtd+body orange |
+
+Oct 15: named GTD review 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
+sase_blog (rolls to sase), HACK 30m split bob/sase/dev, JOB 7m split 4/3,
+MISC 15m on an article (@unfiled), GTD+SASE 20m all on sase (theme remainder
+gives SASE 10m), unnamed 10m review via `[[#^gtd]]`. Oct 17 is an empty
+Pomodoros section (real zero). Repeated `compute` calls return byte-identical
+JSON.
 
 ## Limitations
 
@@ -617,6 +673,19 @@ and matches this rollout. The original ≤300 ms target is not met on
 this vault (~15–25% over). The extra time is the Markdown pass, not
 journal I/O (no journal files exist yet). Treat 370 ms as the recorded
 budget unless a later pass shrinks the index.
+
+Homes-parts measurement (athena, live `~/bob`, this checkout,
+`BOB_NOW=2026-10-18T12:00:00`, `NO_COLOR=1`, release
+`bob stats -f json -r 4w`, nine runs after one warmup, Python
+`perf_counter`):
+
+| Path | Time |
+| --- | --- |
+| Before (4w JSON baseline) | 174 ms (plan); 168 ms median on this host |
+| After (median / min / max) | 200 ms / 193 ms / 209 ms |
+
+The after median stays within 15% of the 174 ms baseline (budget
+200 ms).
 
 ## Obsidian Stats block
 

@@ -2,12 +2,16 @@
 //!
 //! Each evaluator is pure: all vault parsing and I/O happen in `index`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use chrono::NaiveDate;
 use regex::Regex;
 
 use super::{
+    homes::{default_exempt, HomesEngine},
     index::{
         canonical_daily_date, DailyNoteInputs, DateDiagnostic, DatedValue,
         IndexedTask, StatsIndex, TaskKindPart,
@@ -39,17 +43,36 @@ pub(crate) fn evaluate_metric(
     today: NaiveDate,
     global_since: Option<NaiveDate>,
 ) -> Option<MetricEvaluation> {
+    let exempt = default_exempt();
+    let homes = HomesEngine::new(index, &exempt);
+    evaluate_with_homes(metric, index, dates, today, global_since, &homes)
+}
+
+pub(crate) fn evaluate_with_homes(
+    metric: &MetricDef,
+    index: &StatsIndex,
+    dates: &[NaiveDate],
+    today: NaiveDate,
+    global_since: Option<NaiveDate>,
+    homes: &HomesEngine<'_>,
+) -> Option<MetricEvaluation> {
     let (inferred_since, evaluate, warnings) = match &metric.spec {
         MetricSpec::Pomodoro { .. } => {
             let since = pomodoro_since(index);
-            let values = evaluate_pomodoros(metric, index, dates, today);
+            let values = evaluate_pomodoros(metric, index, dates, today, homes);
             (since, values, Vec::new())
         }
         MetricSpec::Tasks { .. } => {
             let since = task_since(metric, index);
             let effective_since = effective_since(metric, since, global_since);
-            let values =
-                evaluate_tasks(metric, index, dates, today, effective_since);
+            let values = evaluate_tasks(
+                metric,
+                index,
+                dates,
+                today,
+                effective_since,
+                homes,
+            );
             (since, values, Vec::new())
         }
         MetricSpec::Checklist { .. } => {
@@ -82,6 +105,7 @@ pub(crate) fn evaluate_metric(
                 value.quality = DataQuality::NotTracked;
                 value.reason = Some("before tracking began".to_string());
                 value.parts.clear();
+                value.apportioned.clear();
                 if value.checklist_state.is_some() {
                     value.checklist_state = Some(ChecklistState::NotTracked);
                 }
@@ -133,7 +157,11 @@ fn pomodoro_since(index: &StatsIndex) -> Option<NaiveDate> {
 struct PomodoroDay {
     total: i64,
     sessions: i64,
-    parts: BTreeMap<String, i64>,
+    theme_parts: BTreeMap<String, i64>,
+    area_parts: BTreeMap<String, i64>,
+    project_parts: BTreeMap<String, i64>,
+    area_apportioned: BTreeMap<String, i64>,
+    project_apportioned: BTreeMap<String, i64>,
     used_fallback: bool,
     missing_duration: bool,
 }
@@ -143,6 +171,7 @@ fn evaluate_pomodoros(
     index: &StatsIndex,
     dates: &[NaiveDate],
     today: NaiveDate,
+    homes: &HomesEngine<'_>,
 ) -> Vec<DailyValue> {
     let MetricSpec::Pomodoro {
         measure,
@@ -157,6 +186,7 @@ fn evaluate_pomodoros(
         if !note.has_pomodoros_heading {
             continue;
         }
+        let daily_path = Path::new(&note.path);
         for session in &note.closed_pomodoros {
             let components = pomodoro_components(session.name.as_deref());
             let selected = components
@@ -176,7 +206,14 @@ fn evaluate_pomodoros(
                     day.sessions = day.sessions.saturating_add(1);
                     // A session belongs to one part in count mode, so part
                     // totals continue to add up to the metric total.
-                    add_part(&mut day.parts, selected[0].clone(), 1);
+                    add_part(&mut day.theme_parts, selected[0].clone(), 1);
+                    let split = homes.split_session(session, daily_path, None);
+                    if let Some(project) = split.lead_project {
+                        add_part(&mut day.project_parts, project, 1);
+                    }
+                    if let Some(area) = split.lead_area {
+                        add_part(&mut day.area_parts, area, 1);
+                    }
                 }
                 PomodoroMeasure::Minutes => {
                     let (minutes, fallback) = match session.recorded_minutes {
@@ -196,13 +233,37 @@ fn evaluate_pomodoros(
                         i64::try_from(components.len()).unwrap_or(1).max(1);
                     let each = minutes / count;
                     let remainder = minutes % count;
+                    let mut counted = 0_i64;
                     for (position, component) in components.iter().enumerate() {
                         if !theme_matches(component, themes, exclude_themes) {
                             continue;
                         }
                         let share = each + i64::from(position == 0) * remainder;
-                        day.total = day.total.saturating_add(share);
-                        add_part(&mut day.parts, component.clone(), share);
+                        counted = counted.saturating_add(share);
+                        add_part(
+                            &mut day.theme_parts,
+                            component.clone(),
+                            share,
+                        );
+                    }
+                    day.total = day.total.saturating_add(counted);
+                    let counted_u32 = u32::try_from(counted).unwrap_or(0);
+                    let split = homes.split_session(
+                        session,
+                        daily_path,
+                        Some(counted_u32),
+                    );
+                    for (key, value) in split.project {
+                        add_part(&mut day.project_parts, key, value);
+                    }
+                    for (key, value) in split.area {
+                        add_part(&mut day.area_parts, key, value);
+                    }
+                    for (key, value) in split.project_apportioned {
+                        add_part(&mut day.project_apportioned, key, value);
+                    }
+                    for (key, value) in split.area_apportioned {
+                        add_part(&mut day.area_apportioned, key, value);
                     }
                 }
             }
@@ -269,10 +330,42 @@ fn evaluate_pomodoros(
             } else {
                 Some(total)
             };
-            let parts = day.map_or_else(BTreeMap::new, |day| {
-                BTreeMap::from([("theme".to_string(), day.parts.clone())])
-            });
-            daily(
+            let (parts, apportioned) = day.map_or_else(
+                || (BTreeMap::new(), BTreeMap::new()),
+                |day| {
+                    let mut parts = BTreeMap::new();
+                    if !day.area_parts.is_empty() {
+                        parts.insert("area".to_string(), day.area_parts.clone());
+                    }
+                    if !day.project_parts.is_empty() {
+                        parts.insert(
+                            "project".to_string(),
+                            day.project_parts.clone(),
+                        );
+                    }
+                    if !day.theme_parts.is_empty() {
+                        parts.insert(
+                            "theme".to_string(),
+                            day.theme_parts.clone(),
+                        );
+                    }
+                    let mut apportioned = BTreeMap::new();
+                    if !day.area_apportioned.is_empty() {
+                        apportioned.insert(
+                            "area".to_string(),
+                            day.area_apportioned.clone(),
+                        );
+                    }
+                    if !day.project_apportioned.is_empty() {
+                        apportioned.insert(
+                            "project".to_string(),
+                            day.project_apportioned.clone(),
+                        );
+                    }
+                    (parts, apportioned)
+                },
+            );
+            let mut value = daily(
                 *date,
                 value,
                 None,
@@ -281,7 +374,9 @@ fn evaluate_pomodoros(
                 reason,
                 provisional,
                 parts,
-            )
+            );
+            value.apportioned = apportioned;
+            value
         })
         .collect()
 }
@@ -335,6 +430,7 @@ fn evaluate_tasks(
     dates: &[NaiveDate],
     today: NaiveDate,
     since: Option<NaiveDate>,
+    homes: &HomesEngine<'_>,
 ) -> Vec<DailyValue> {
     let MetricSpec::Tasks { event, .. } = &metric.spec else {
         return Vec::new();
@@ -364,6 +460,9 @@ fn evaluate_tasks(
         };
         add_dimension_part(parts_for_day, "kind", kind, 1);
         add_dimension_part(parts_for_day, "note", &task.source_path, 1);
+        let home = homes.home_for_note(&task.source_path);
+        add_dimension_part(parts_for_day, "area", &home.area, 1);
+        add_dimension_part(parts_for_day, "project", &home.key, 1);
     }
 
     dates
@@ -1012,6 +1111,7 @@ fn daily(
         reason,
         provisional,
         parts,
+        apportioned: BTreeMap::new(),
         checklist_state: None,
     }
 }
@@ -1129,12 +1229,14 @@ mod tests {
                         recorded_minutes: Some(7),
                         range_minutes: Some(30),
                         line: 2,
+                        links: Vec::new(),
                     },
                     super::super::index::PomodoroSession {
                         name: Some("GTD".to_string()),
                         recorded_minutes: None,
                         range_minutes: Some(25),
                         line: 3,
+                        links: Vec::new(),
                     },
                 ],
                 ..DailyNoteInputs::default()
@@ -1179,6 +1281,7 @@ mod tests {
                     recorded_minutes: None,
                     range_minutes: None,
                     line: 2,
+                    links: Vec::new(),
                 }],
                 ..DailyNoteInputs::default()
             },
@@ -1526,6 +1629,7 @@ mod tests {
                     recorded_minutes: None,
                     range_minutes: Some(180),
                     line: 2,
+                    links: Vec::new(),
                 }],
                 ..DailyNoteInputs::default()
             },

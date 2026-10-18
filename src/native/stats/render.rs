@@ -3,10 +3,11 @@
 use chrono::{Datelike, NaiveDate, Timelike, Weekday};
 
 use super::report::{
-    HealthReport, JournalHostReport, MetricReport, SeriesPoint, StatsReport,
-    StatsWarning,
+    HealthReport, HomeCatalogEntry, JournalHostReport, MetricReport,
+    PartSummary, SeriesPoint, StatsReport, StatsWarning,
 };
 use super::value::DataQuality;
+use crate::native::pomodoro_homes::{HomeKind, Hue};
 use crate::native::style::{pad_right, terminal_width, Styler, SPARK_BLOCKS};
 
 const NULL_MARK: char = '·';
@@ -398,6 +399,7 @@ fn collapse_points<'a>(
         partial: None,
         parts: Default::default(),
         parts_display: Default::default(),
+        apportioned: Default::default(),
         checklist_state: None,
     }
 }
@@ -528,7 +530,7 @@ fn detail_metric(
     }
     out.push('\n');
     out.push_str(&detail_summary(metric, report, styler));
-    out.push_str(&parts_line(metric, styler));
+    out.push_str(&parts_lines(report, metric, styler));
     out
 }
 
@@ -821,17 +823,173 @@ fn format_unit(value: i64, unit: &str) -> String {
     }
 }
 
-fn parts_line(metric: &MetricReport, styler: &Styler) -> String {
-    let Some((name, parts)) = metric.parts_summary.iter().next() else {
-        return String::new();
+fn parts_lines(
+    report: &StatsReport,
+    metric: &MetricReport,
+    styler: &Styler,
+) -> String {
+    let order: &[&str] = match metric.kind.as_str() {
+        "pomodoro" => &["area", "project", "theme"],
+        "tasks" => &["kind", "area", "project", "note"],
+        _ => return legacy_parts_lines(metric, styler),
     };
+    let mut out = String::new();
     let sep = styler.separator();
-    let cells: Vec<String> = parts
-        .iter()
-        .take(6)
-        .map(|part| format!("{} {} {}", part.key, part.display, part.share))
-        .collect();
-    format!(" {:<8} {}\n", name, cells.join(&format!(" {sep} ")),)
+    for name in order {
+        let Some(parts) = metric.parts_summary.get(*name) else {
+            continue;
+        };
+        let displayed = if *name == "project" {
+            collapse_project_cli(parts)
+        } else {
+            parts.clone()
+        };
+        if displayed.is_empty() {
+            continue;
+        }
+        let cells: Vec<String> = displayed
+            .iter()
+            .map(|part| format_part_cell(part, *name, &report.homes, styler))
+            .collect();
+        out.push_str(&format!(
+            " {:<8} {}\n",
+            name,
+            cells.join(&format!(" {sep} ")),
+        ));
+    }
+    if metric.unit == "minutes" {
+        if let Some(project) = metric.parts_summary.get("project") {
+            let total: i64 = project.iter().map(|part| part.value).sum();
+            let split: i64 =
+                project.iter().filter_map(|part| part.apportioned).sum();
+            if split > 0 && total > 0 {
+                let percent = ((i128::from(split) * 100)
+                    + i128::from(total) / 2)
+                    / i128::from(total);
+                let line = format!(
+                    "{percent}% of project minutes came from sessions with several homes"
+                );
+                out.push_str(&format!(
+                    " {:<8} {}\n",
+                    "split",
+                    styler.dim(&line),
+                ));
+            }
+        }
+    }
+    out
+}
+
+fn legacy_parts_lines(metric: &MetricReport, styler: &Styler) -> String {
+    let mut out = String::new();
+    let sep = styler.separator();
+    for (name, parts) in &metric.parts_summary {
+        if parts.is_empty() {
+            continue;
+        }
+        let cells: Vec<String> = parts
+            .iter()
+            .map(|part| format!("{} {} {}", part.key, part.display, part.share))
+            .collect();
+        out.push_str(&format!(
+            " {:<8} {}\n",
+            name,
+            cells.join(&format!(" {sep} ")),
+        ));
+    }
+    out
+}
+
+fn collapse_project_cli(parts: &[PartSummary]) -> Vec<PartSummary> {
+    let mut homes = Vec::new();
+    let mut buckets = Vec::new();
+    for part in parts {
+        if is_bucket_key(&part.key) {
+            buckets.push(part.clone());
+        } else {
+            homes.push(part.clone());
+        }
+    }
+    let overflow = if homes.len() > 5 {
+        homes.split_off(5)
+    } else {
+        Vec::new()
+    };
+    if !overflow.is_empty() {
+        let value = overflow
+            .iter()
+            .fold(0_i64, |sum, part| sum.saturating_add(part.value));
+        let apportioned = overflow
+            .iter()
+            .filter_map(|part| part.apportioned)
+            .fold(0_i64, i64::saturating_add);
+        let all_total = parts.iter().fold(0_i64, |sum, part| {
+            sum.saturating_add(part.value.saturating_abs())
+        });
+        let share = if all_total == 0 {
+            0
+        } else {
+            ((i128::from(value.saturating_abs()) * 100)
+                + i128::from(all_total) / 2)
+                / i128::from(all_total)
+        };
+        homes.push(PartSummary {
+            key: "other".to_string(),
+            value,
+            display: overflow
+                .first()
+                .map(|part| {
+                    if part.display.ends_with('m') {
+                        format_unit(value, "minutes")
+                    } else {
+                        value.to_string()
+                    }
+                })
+                .unwrap_or_else(|| value.to_string()),
+            share: format!("{share}%"),
+            label: None,
+            apportioned: (apportioned > 0).then_some(apportioned),
+            apportioned_display: None,
+        });
+    }
+    homes.extend(buckets);
+    homes
+}
+
+fn is_bucket_key(key: &str) -> bool {
+    key.starts_with('@')
+}
+
+fn format_part_cell(
+    part: &PartSummary,
+    dimension: &str,
+    catalog: &std::collections::BTreeMap<String, HomeCatalogEntry>,
+    styler: &Styler,
+) -> String {
+    let label = part.label.as_deref().unwrap_or(&part.key);
+    let body = format!("{label} {} {}", part.display, part.share);
+    if dimension != "area" && dimension != "project" {
+        return body;
+    }
+    let entry = catalog.get(&part.key);
+    let bucket = part.key == "other"
+        || entry.is_some_and(|entry| entry.kind == HomeKind::Bucket)
+        || is_bucket_key(&part.key);
+    if !styler.is_color() {
+        return body;
+    }
+    if bucket {
+        return styler.dim(&body);
+    }
+    let hue = entry.and_then(|entry| entry.hue);
+    match hue {
+        Some(hue) => format!("{} {body}", hue_dot(styler, hue)),
+        None => format!("● {body}"),
+    }
+}
+
+fn hue_dot(styler: &Styler, hue: Hue) -> String {
+    styler.paint(&format!("38;5;{}", hue.xterm()), "●")
 }
 
 #[cfg(test)]
@@ -867,6 +1025,7 @@ mod tests {
             partial: None,
             parts: BTreeMap::new(),
             parts_display: BTreeMap::new(),
+            apportioned: BTreeMap::new(),
             checklist_state: None,
         }
     }
@@ -931,8 +1090,10 @@ mod tests {
             health: HealthReport {
                 journal: JournalHealthReport::default(),
                 tasks: TaskHealthReport::default(),
+                homes: Default::default(),
             },
             warnings: Vec::new(),
+            homes: BTreeMap::new(),
         }
     }
 
@@ -985,5 +1146,147 @@ mod tests {
         assert!(!text.contains('\n'));
         assert!(text.starts_with('{'));
         assert!(text.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn detail_prints_every_pomodoro_parts_dimension() {
+        let mut report = report(vec![point(9, Some(32), "32m")]);
+        report.metrics[0].parts_summary.insert(
+            "area".to_string(),
+            vec![PartSummary {
+                key: "gtd.md".to_string(),
+                value: 25,
+                display: "25m".to_string(),
+                share: "78%".to_string(),
+                label: Some("gtd".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
+            "project".to_string(),
+            vec![PartSummary {
+                key: "@review:GTD".to_string(),
+                value: 25,
+                display: "25m".to_string(),
+                share: "78%".to_string(),
+                label: Some("GTD review".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
+            "theme".to_string(),
+            vec![PartSummary {
+                key: "GTD".to_string(),
+                value: 25,
+                display: "25m".to_string(),
+                share: "78%".to_string(),
+                label: None,
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        let text = detail(&report, &Styler::plain());
+        assert!(
+            text.contains("area") && text.contains("gtd 25m 78%"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("project") && text.contains("GTD review 25m 78%"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("theme") && text.contains("GTD 25m 78%"),
+            "{text:?}"
+        );
+        let area_idx = text.find("area").expect("area dimension");
+        let project_idx = text.find("project").expect("project dimension");
+        let theme_idx = text.find("theme").expect("theme dimension");
+        assert!(area_idx < project_idx && project_idx < theme_idx);
+        assert!(!text.contains("●"));
+    }
+
+    #[test]
+    fn detail_prints_every_task_parts_dimension() {
+        let mut report = report(vec![point(9, Some(7), "7")]);
+        report.metrics[0].id = "done".to_string();
+        report.metrics[0].label = "Done".to_string();
+        report.metrics[0].kind = "tasks".to_string();
+        report.metrics[0].unit = "count".to_string();
+        report.metrics[0].parts_summary.insert(
+            "kind".to_string(),
+            vec![PartSummary {
+                key: "task".to_string(),
+                value: 5,
+                display: "5".to_string(),
+                share: "71%".to_string(),
+                label: None,
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
+            "area".to_string(),
+            vec![PartSummary {
+                key: "dev.md".to_string(),
+                value: 4,
+                display: "4".to_string(),
+                share: "57%".to_string(),
+                label: Some("dev".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
+            "project".to_string(),
+            vec![PartSummary {
+                key: "sase.md".to_string(),
+                value: 3,
+                display: "3".to_string(),
+                share: "43%".to_string(),
+                label: Some("sase".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
+            "note".to_string(),
+            vec![PartSummary {
+                key: "sase.md".to_string(),
+                value: 3,
+                display: "3".to_string(),
+                share: "43%".to_string(),
+                label: None,
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        let text = detail(&report, &Styler::plain());
+        assert!(
+            text.contains("kind") && text.contains("task 5 71%"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("area") && text.contains("dev 4 57%"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("project") && text.contains("sase 3 43%"),
+            "{text:?}"
+        );
+        assert!(
+            text.contains("note") && text.contains("sase.md 3 43%"),
+            "{text:?}"
+        );
+        let kind_idx = text.find("kind").expect("kind dimension");
+        let area_idx = text.find("area").expect("area dimension");
+        let project_idx = text.find("project").expect("project dimension");
+        let note_idx = text.find("note").expect("note dimension");
+        assert!(
+            kind_idx < area_idx
+                && area_idx < project_idx
+                && project_idx < note_idx
+        );
     }
 }

@@ -15,6 +15,9 @@ pub(crate) struct DailyValue {
     pub(crate) reason: Option<String>,
     pub(crate) provisional: bool,
     pub(crate) parts: BTreeMap<String, BTreeMap<String, i64>>,
+    /// Minutes in each part that came from sessions with two or more keys
+    /// in that dimension. Empty for count metrics.
+    pub(crate) apportioned: BTreeMap<String, BTreeMap<String, i64>>,
     /// Checklist calendar state, set only by checklist evaluators.
     pub(crate) checklist_state: Option<ChecklistState>,
 }
@@ -65,6 +68,7 @@ mod tests {
             reason: None,
             provisional: true,
             parts,
+            apportioned: BTreeMap::new(),
             checklist_state: None,
         };
         assert!(value.provisional);

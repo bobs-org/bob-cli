@@ -459,6 +459,10 @@ color: orange
 description: "Minutes in closed Pomodoros under ## Pomodoros; equals each daily note's heading."
 limits:
   - Open Pomodoros are plans and never count.
+  - Attributed from Task Links.
+  - Grouped by today's note tree.
+  - Sessions with several homes are split evenly by task.
+  - Links show what a session was for, not a stopwatch.
 "##,
     ),
     (
@@ -599,6 +603,11 @@ unit: minutes
 direction: neutral
 color: orange
 description: "Worked restricted to sessions themed GTD."
+limits:
+  - Attributed from Task Links.
+  - Grouped by today's note tree.
+  - Sessions with several homes are split evenly by task.
+  - Links show what a session was for, not a stopwatch.
 "##,
     ),
     (
@@ -611,6 +620,11 @@ unit: count
 direction: neutral
 color: orange
 description: "Closed Pomodoros on D."
+limits:
+  - Attributed from Task Links.
+  - Grouped by today's note tree.
+  - Sessions with several homes are split evenly by task.
+  - Links show what a session was for, not a stopwatch.
 "##,
     ),
 ];
@@ -922,8 +936,21 @@ fn parse_metric(
                 optional_string(mapping, "definition", id, path, &mut errors)
             })
             .unwrap_or_default();
-    let limits = optional_string_list(mapping, "limits", id, path, &mut errors)
-        .unwrap_or_default();
+    let mut limits =
+        optional_string_list(mapping, "limits", id, path, &mut errors)
+            .unwrap_or_default();
+    if matches!(spec, MetricSpec::Pomodoro { .. }) {
+        for line in [
+            "Attributed from Task Links.",
+            "Grouped by today's note tree.",
+            "Sessions with several homes are split evenly by task.",
+            "Links show what a session was for, not a stopwatch.",
+        ] {
+            if !limits.iter().any(|existing| existing == line) {
+                limits.push(line.to_string());
+            }
+        }
+    }
 
     if !errors.is_empty() {
         return Err(errors);

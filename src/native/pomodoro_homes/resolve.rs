@@ -148,6 +148,10 @@ impl<S: HomeSource> HomeResolver<S> {
         &self.health
     }
 
+    pub(crate) fn facts(&mut self, path: &Path) -> Option<NoteFacts> {
+        self.facts_for(path)
+    }
+
     pub(crate) fn resolve_target(
         &self,
         current: &Path,
