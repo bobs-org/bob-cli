@@ -109,7 +109,7 @@ target.
 | Line | Owner | Writer | Slot | Recognisers that reject it |
 | --- | --- | --- | --- | --- |
 | `❌ **CANCEL LOG**` | any `#task` with a cancel history | nav cancel / decay cancel | first direct child | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, and Work Log parsers; R8 legacy-child |
-| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage, capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage and Blocks stage (§15), capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
 | `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` / `*` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
 | `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
 | `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
@@ -597,9 +597,20 @@ api.blocks?.version >= 1):
 - blocks.removeDependent(ownerRef, target) removes dependent T through the
   Blocks writer. target is { path, blockId }.
 - Both return Promises resolving to { ok, reason? } and never throw.
-  Refusals use invalid-ref, line-out-of-range, or note-not-open unless the
-  active view is ref.path / ownerRef.path. removeDependent returns
-  not-a-dependent when T does not list the owner; it never silently succeeds.
+  The refusal set that ships is:
+  - Both calls: invalid-ref, line-out-of-range, or note-not-open unless
+    the active view is ref.path / ownerRef.path; no-owning-task when the
+    line is not inside a task block.
+  - openStage only: picker-not-opened (the Task Card refused the entry) and
+    open-failed.
+  - removeDependent only: not-a-dependent when T does not list the owner or
+    the owner has no block id (it never silently succeeds); target-not-found
+    when T's note cannot be read; the Depends-On parse reason of a malformed
+    T line; the writer's own reason (`changed — reopen`, `guard`, or a
+    planner reason such as `invalid-target` or `unexpected-preparation`);
+    and remove-failed for an unexpected throw.
+  - The wrapper: unexpected-result when a call resolves something that is
+    not { ok }, and api-failed when a call throws.
 - With a null plugin, both resolve { ok: false, reason: "unavailable" }.
 
 ## 10. Legacy window and rollout
@@ -2363,11 +2374,13 @@ from an ancestor. No other open task carries it.
 - **The Task Card subtree pass is the immediate cascade writer.**
   After a Depends on edit — or a Schedule edit — to N's `^prj`, it
   blocks and tags N's descendants top-down in the same gesture, and
-  recovers them when N's last reason clears (§13.10).
+  recovers them when N's last reason clears (§13.10). The Blocks stage
+  (§15) runs the same pass for each project it picks as T.
 - **Same-note writers keep their own note current in the same
   write** wherever they flip a resident: capture (`&` on `^prj`, new
   tasks into a blocked project); nav (the Depends on stage on `^prj`,
-  Ctrl+Shift+M, conversion); and cycler/capture recovery of residents.
+  the Blocks stage when a `^prj` is the picked T, Ctrl+Shift+M,
+  conversion); and cycler/capture recovery of residents.
 - **Every other cascade write defers to reconcile.** Capture `&` on
   `^prj`, close recovery, Alt+`]`/Alt+`[` on a `[?]` `^prj`,
   Ctrl+Shift+M, conversion, and new child projects respect the tag
@@ -2751,7 +2764,9 @@ last thing in the way:
   writers never touch it.
 
 `⛓️ **DEPENDS ON:**` on the dependent remains the only place a
-dependency is authored. No engine reads a Blocks line as dependency
+dependency is stored; it is edited from the dependent's Depends on
+stage or from the owner's Blocks stage (§15), which writes the same
+line. No engine reads a Blocks line as dependency
 input: not Blocked derivation, promotion, consumption, successor
 offers, fields, R2 adoption, or R8 legacy children. A hand edit of a
 Blocks line never adds or removes an edge; reconcile restores the
@@ -3232,8 +3247,9 @@ Entry refusals close the Task Card and show a short Notice:
 - A non-task bullet: Blocks requires a #task checkbox.
 - A closed N: 🧱 A finished task can't block another task · reopen it first.
 - N in done/ or the previous daily note: the existing read-only refusal.
-- Fenced or blockquoted N, prose with several links, or a selection
-  spanning tasks: the existing Ctrl+Shift+P refusal.
+- Fenced N, prose with several links, or a selection spanning tasks: the
+  existing Ctrl+Shift+P refusal.
+- A blockquoted N: 🧱 Blocks can't be edited inside a blockquote.
 - N has no id and its path cannot be encoded: 🧱 This note's path can't
   be a dependency id · add [id::] or rename the note.
 
@@ -3268,7 +3284,8 @@ dependents for which N is the last remaining reason. It comes from the
 warm Tasks cache by querying open tasks whose dependsOn contains N's id.
 It is omitted when the cache is cold or N has no id. The unavailable
 reasons are “Blocks requires a #task checkbox” and “A finished task
-can't block another task · reopen it first”.
+can't block another task · reopen it first”, shown on the card without the
+🧱; the entry Notice for a finished N keeps it (§15.2).
 
 The stage reuses the wide bob-cnp modal and the Depends on stage's
 CURRENT / RESULTS / BLOCKED sections:
@@ -3333,6 +3350,19 @@ disable N, or any counted source:
   the stage reopens fresh in the Blocks direction.
 - Removing a current dependency is always allowed.
 
+The stage disables a row only from content it holds. Under a warm Tasks
+cache a closed note's rows carry no note content, so the malformed
+Depends-On, project-descendant, project-resident cycle, and cycle checks
+cannot run there. Those rows are checked when the gesture is applied (§15.6
+step 1): the writer reads each touched note live, rechecks the guards on the
+trial graph after the whole batch, and refuses the entire gesture, writing
+nothing, with a notice such as “🧱 Can't block “Bad” · its Depends-On line is
+malformed”.
+
+A blockquoted N is refused at entry (§15.2) with “🧱 Blocks can't be edited
+inside a blockquote”, the reverse twin of forward's “⛓ Dependencies can't be
+edited inside a blockquote”.
+
 When N lacks a block id, the existing block-ID stage opens once when
 applying the change. It suggests an id against N's note; a valid free
 legacy [id::] is reused. Counted sources prompt one at a time, reserving
@@ -3354,8 +3384,12 @@ stamper?, dateText? }) and returns { ok, reason?, notice, committed[],
 failed[], pomodoro, blocksFailed }.
 
 1. **Preflight:** read every source note, picked T note, and today's
-   daily note (open buffers win); recheck guards on the trial graph and
-   refuse the entire gesture if a task changed since stage open.
+   daily note live (open buffers win, else the vault) and compare each with
+   the stage's open-time snapshot of the touched notes; a picked row also
+   carries its staged line text, so a closed note the stage never read is
+   checked by that line. Recheck the guards on the trial graph and refuse the
+   entire gesture if a task changed since stage open or a guard fails. The
+   writer returns the refusal notice and its caller shows it exactly once.
 2. **Plan:** plan each T note's edits bottom-up with
    planDependencyEdit, threading one working copy per note. Prepare
   each source once with its id and the strongest pre-gesture lane among
@@ -3373,9 +3407,13 @@ failed[], pomodoro, blocksFailed }.
    T's own write. Collect failures without rolling back other notes.
 5. **Mirror:** plan each source's BLOCKS edit once from its post-prepare
    content and only Ts that committed. Never list an id not on disk.
-6. **Consume:** run aggregated daily-note cleanup once, folding it into
-   an earlier write if that note was already touched. Cleanup failures
-   add “Pomodoro links not removed” and are not rolled back.
+6. **Consume:** consume Pomodoro links only for T's that committed. Today's
+   daily note, when it is also written here, takes the cleanup of its own
+   T's in that same transaction; every other committed T is cleaned by one
+   cleanup after the writes (so a daily note that is only N's note may take
+   one extra undo entry). The notice counts the links actually removed.
+   Cleanup failures add “Pomodoro links not removed” and are not rolled
+   back.
 7. **Projects:** run the existing sub-project passes for each committed
    project T.
 8. **Finish:** show one notice (§15.7) and continue the review origin.
@@ -3391,8 +3429,10 @@ besides the shared duplicate-preparation fix covered by RBW6.
 
 ### 15.7 Notices and consequence-strip copy
 
-Task names in notices are cleaned and cut at about 40 characters.
-
+Task names in notices are cleaned and cut at about 40 characters. Every
+notice names T, the task that gained or lost a prerequisite, never the
+source N (including the counted forms and the chip ×, which share the
+writer).
 | Outcome | Notice |
 | --- | --- |
 | One add; T was Ready | 🧱 Now blocks “Do cleanup tasks” · Ready → Blocked |
@@ -3431,7 +3471,10 @@ api.blocks.openStage({ path, line }) with the row's 0-based line. Each
 live chip gets a hover × with aria-label “Stop blocking <name>” and
 calls api.blocks.removeDependent. Dashed stale chips and frozen
 “🧱 was blocking” rows get neither control. Without api.blocks, rows
-remain navigation-only. Clicking, Mod-clicking, and hovering chips
+remain navigation-only; those rows and frozen rows (whose owner is closed)
+keep the fallback tooltip “Generated from DEPENDS ON lines · edit on the
+dependent”, since the dependent is then the only end that can edit the
+edge. Clicking, Mod-clicking, and hovering chips
 work as before; controls do not change line height, in Live Preview or
 Reading view.
 
@@ -3476,7 +3519,7 @@ forward gesture or gestures.
 | RBW1 | N's note changes between preflight and source write | Nothing written; changed — reopen |
 | RBW2 | One T note changes between preflight and its write | Other notes land; notice says 1 task not updated (changed — reopen); N's BLOCKS omits T |
 | RBW3 | Every pick is already present or absent | No write and no undo entry |
-| RBW4 | N is in today's daily note and T is linked today | Cleanup folds into N's note transaction |
+| RBW4 | N is in today's daily note and T is linked today | After T commits, the link is removed (one extra undo entry); N's BLOCKS line lands under N |
 | RBW5 | Stage opened from review-walk landing on N | Walk advances only if commit takes N out of today's walk |
 | RBW6 | Existing forward counted gesture with two dependents in different lanes | One preparation; no target-changed |
 
