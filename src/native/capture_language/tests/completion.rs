@@ -750,9 +750,9 @@ fn pomodoro_start_override_reports_sigil_and_suffix_emptiness() {
     assert_eq!(pomodoro_start_override_at("==-2#bugs", 9), Some(false));
     // A drop list does not change the kept ledger.
     assert_eq!(pomodoro_start_override_at("==#bugs~2", 7), Some(true));
-    // Plain `=` names never carry override context.
-    assert_eq!(pomodoro_start_override_at("=#", 2), None);
-    assert_eq!(pomodoro_start_override_at("=3#bugs", 7), None);
+    // Plain `=` names now carry the same keeps_ledger flag.
+    assert_eq!(pomodoro_start_override_at("=#", 2), Some(true));
+    assert_eq!(pomodoro_start_override_at("=3#bugs", 7), Some(false));
     // A cursor on the sigil, suffix, or `#` itself is not a name field.
     assert_eq!(pomodoro_start_override_at("==#bugs", 2), None);
     assert_eq!(pomodoro_start_override_at("==3#bugs", 3), None);
@@ -760,11 +760,12 @@ fn pomodoro_start_override_reports_sigil_and_suffix_emptiness() {
     // Bare tokens and body text offer nothing.
     assert_eq!(pomodoro_start_override_at("==", 2), None);
     assert_eq!(pomodoro_start_override_at("buy milk", 4), None);
-    // Chains report per token: the override name keeps the ledger while
-    // the plain close token reports nothing.
+    // An earlier session operator omits override context.
     let chain = "x ==#de";
-    assert_eq!(pomodoro_start_override_at(chain, chain.len()), Some(true));
+    assert_eq!(pomodoro_start_override_at(chain, chain.len()), None);
     assert_eq!(pomodoro_start_override_at(chain, 1), None);
+    let eq_chain = "x =#";
+    assert_eq!(pomodoro_start_override_at(eq_chain, eq_chain.len()), None);
 }
 
 #[test]

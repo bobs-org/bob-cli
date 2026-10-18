@@ -477,6 +477,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(no_clip_arg())
         .arg(no_ref_arg())
         .arg(pull_in_arg())
+        .arg(refuse_override_arg())
         .arg(require_pull_in_choice_arg())
         .arg(route_arg())
         .arg(section_arg())
@@ -566,6 +567,13 @@ pub(super) fn pull_in_arg() -> Arg {
         .help(
             "Pull in successor offers: all, none, or a comma list of offer numbers and keys ($<N> in TEXT is still priority)",
         )
+}
+
+pub(super) fn refuse_override_arg() -> Arg {
+    Arg::new("refuse-override")
+        .long("refuse-override")
+        .action(ArgAction::SetTrue)
+        .hide(true)
 }
 
 pub(super) fn require_pull_in_choice_arg() -> Arg {
@@ -680,6 +688,7 @@ pub(super) struct CaptureRequest {
     pub(super) no_clip: bool,
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
+    pub(super) refuse_override: bool,
     pub(super) require_pull_in_choice: bool,
     pub(super) template_origin: Option<String>,
     pub(super) raw_text: String,
@@ -749,6 +758,7 @@ impl CaptureRequest {
                 .get_one::<String>("pull-in")
                 .map(|raw| parse_pull_in_picks(raw))
                 .transpose()?,
+            refuse_override: matches.get_flag("refuse-override"),
             require_pull_in_choice: matches.get_flag("require-pull-in-choice"),
             template_origin,
             raw_text: raw_text_from_matches(matches)?,

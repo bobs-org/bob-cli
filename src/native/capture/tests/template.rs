@@ -17,6 +17,7 @@ fn template_request(vault: &Path, raw_text: &str) -> CaptureRequest {
         no_clip: false,
         no_ref: false,
         pull_in: None,
+        refuse_override: false,
         require_pull_in_choice: false,
         template_origin: None,
         raw_text: raw_text.to_string(),

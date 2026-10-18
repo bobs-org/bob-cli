@@ -1158,15 +1158,30 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         "{fresh_json}"
     );
 
-    // Plain `=#` carries no override key.
+    // Plain `=#` carries the same state-based override object.
     let plain = complete("=#");
     assert_success(&plain);
     let plain_json: serde_json::Value =
         serde_json::from_str(stdout(&plain).trim()).expect("json");
     assert_eq!(plain_json["context"], "pomodoro_start_name");
-    assert!(plain_json.get("override").is_none(), "{plain_json}");
+    assert_eq!(
+        plain_json["override"], kept_json["override"],
+        "{plain_json}"
+    );
 
-    // An idle ledger omits the running session but keeps the flag.
+    let eq3 = complete("=3#bu");
+    assert_success(&eq3);
+    let eq3_json: serde_json::Value =
+        serde_json::from_str(stdout(&eq3).trim()).expect("json");
+    assert_eq!(eq3_json["override"]["keeps_ledger"], false);
+
+    let chained = complete("x =#");
+    assert_success(&chained);
+    let chained_json: serde_json::Value =
+        serde_json::from_str(stdout(&chained).trim()).expect("json");
+    assert!(chained_json.get("override").is_none(), "{chained_json}");
+
+    // An idle ledger omits the override object.
     write_file(
         &day_file,
         concat!("## Pomodoros\n", "- [ ] () — BUGS\n", "- [ ] () — SASE\n"),
@@ -1175,11 +1190,12 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
     assert_success(&idle);
     let idle_json: serde_json::Value =
         serde_json::from_str(stdout(&idle).trim()).expect("json");
-    assert_eq!(
-        idle_json["override"],
-        serde_json::json!({ "keeps_ledger": true }),
-        "{idle_json}"
-    );
+    assert!(idle_json.get("override").is_none(), "{idle_json}");
+    let idle_eq = complete("=#");
+    assert_success(&idle_eq);
+    let idle_eq_json: serde_json::Value =
+        serde_json::from_str(stdout(&idle_eq).trim()).expect("json");
+    assert!(idle_eq_json.get("override").is_none(), "{idle_eq_json}");
 
     // A missing daily note behaves the same way.
     let missing_day = vault.join("2026/20261010.md");
@@ -1200,11 +1216,7 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
     let gone_json: serde_json::Value =
         serde_json::from_str(stdout(&gone).trim()).expect("json");
     assert_eq!(gone_json["context"], "pomodoro_start_name");
-    assert_eq!(
-        gone_json["override"],
-        serde_json::json!({ "keeps_ledger": false }),
-        "{gone_json}"
-    );
+    assert!(gone_json.get("override").is_none(), "{gone_json}");
 }
 
 #[test]

@@ -32,6 +32,9 @@ pub(super) fn print_human_pomodoro_start_success(
         "started"
     };
     println!("{prefix} {verb}  {ordinal}{target_label}");
+    if let Some(warning) = override_warning_line(start, result.dry_run) {
+        println!("  {}", styler.yellow(&warning));
+    }
     let name = start
         .pomodoro_name
         .as_deref()
@@ -211,6 +214,38 @@ pub(super) fn print_human_pomodoro_start_success(
     if tasks.is_empty() {
         println!("  {}", styler.dim("nothing queued"));
     }
+}
+
+fn override_warning_line(
+    start: &PomodoroStartSummary,
+    dry_run: bool,
+) -> Option<String> {
+    let outcome = start.r#override.as_ref()?;
+    if !matches!(outcome.action, "restart" | "swap") {
+        return None;
+    }
+    let previous = outcome.previous.as_ref();
+    let overdue = previous.is_some_and(|item| item.overdue);
+    let range = previous.map(|item| item.time_range.as_str()).unwrap_or("");
+    let named = previous
+        .and_then(|item| item.pomodoro_name.as_deref())
+        .filter(|name| !name.is_empty());
+    let verb = if dry_run { "overrides" } else { "overrode" };
+    let subject = match (named, overdue) {
+        (Some(name), false) => format!("the running {name} {range}"),
+        (Some(name), true) => {
+            format!("{name} {range}, still open past its end")
+        }
+        (None, false) => format!("the running session {range}"),
+        (None, true) => {
+            format!("the session {range}, still open past its end")
+        }
+    };
+    let mut line = format!("⚠ {verb} {subject}");
+    if dry_run && let Some(close_first) = outcome.close_first.as_deref() {
+        line.push_str(&format!(" · capture `{close_first}` to close it first"));
+    }
+    Some(line)
 }
 
 fn print_human_start_kept_row(

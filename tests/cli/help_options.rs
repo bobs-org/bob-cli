@@ -78,6 +78,10 @@ fn capture_help_lists_options_alphabetically() {
         "hidden --require-pull-in-choice must stay out of help:\n{help}"
     );
     assert!(
+        !help.contains("--refuse-override"),
+        "hidden --refuse-override must stay out of help:\n{help}"
+    );
+    assert!(
         help.contains("@<route>+<block-id>")
             && help.contains("@<route>+<block-id>#<section>")
             && help.contains("bob capture '@cash+goog-exit'")

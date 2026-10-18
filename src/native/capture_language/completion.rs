@@ -536,11 +536,11 @@ fn pomodoro_start_name_field(
     })
 }
 
-/// For a `pomodoro_start_name` field, whether the name belongs to a `==`
-/// override token: `Some(true)` when the leading `<X>` suffix is empty and
-/// no `@` part was typed (a swap keeps the running ledger) and `Some(false)`
-/// for a fresh `<X>` timing. `None` for plain `=` tokens and when the cursor
-/// is not inside a named-start name part.
+/// For a `pomodoro_start_name` field, whether a swap would keep the
+/// running ledger: `Some(true)` when the leading `<X>` suffix is empty
+/// and no `@` part was typed, `Some(false)` for a fresh `<X>` timing.
+/// `None` when the cursor is not inside a named-start name part, or when
+/// an earlier item or earlier same-line session operator is in the draft.
 pub(crate) fn pomodoro_start_override_at(
     raw_text: &str,
     cursor: usize,
@@ -549,18 +549,31 @@ pub(crate) fn pomodoro_start_override_at(
         return None;
     }
     let draft = split_capture_draft(raw_text);
-    let item = draft.items.iter().find(|item| {
+    let item_index = draft.items.iter().position(|item| {
         item.lines
             .iter()
             .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
     })?;
-    let (is_override, suffix, _, _) = named_start_name_at(item, cursor)?;
-    if !is_override {
+    let item = &draft.items[item_index];
+    for earlier in &draft.items[..item_index] {
+        let Some(parent) = earlier.lines.first() else {
+            continue;
+        };
+        if super::item::is_session_chain_token(parent.raw.text.trim()) {
+            return None;
+        }
+    }
+    let (_, suffix, _, _) = named_start_name_at(item, cursor)?;
+    let parent = item.lines.first()?;
+    let text = parent.raw.text;
+    let leading = text.len() - text.trim_start().len();
+    let named_token_start = parent.raw.start + leading;
+    if tokenize_line_with_spans(&parent.raw).iter().any(|token| {
+        token.end <= named_token_start
+            && super::item::is_session_chain_token(token.text)
+    }) {
         return None;
     }
-    // `keeps_ledger` is true only when the leading suffix is empty and no
-    // `@` part was typed.
-    let parent = item.lines.first()?;
     let trimmed = parent.raw.text.trim();
     let super::item::EqualsToken::Start { timing, .. } =
         super::item::session_equals_token(trimmed)?

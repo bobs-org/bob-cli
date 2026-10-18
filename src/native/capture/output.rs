@@ -3363,6 +3363,19 @@ impl CaptureError {
         }
     }
 
+    /// Hidden `--refuse-override` guard: an I/O-class error (exit 1)
+    /// carrying `pomodoro_override_refused` for subprocess callers.
+    pub(super) fn override_refused(message: impl Into<String>) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: message.into(),
+            code: Some("pomodoro_override_refused".to_string()),
+            extra: None,
+            human_unblocked: Vec::new(),
+            typed: None,
+        }
+    }
+
     pub(crate) fn with_typed(mut self, typed: CaptureFailureKind) -> Self {
         self.typed = Some(typed);
         self

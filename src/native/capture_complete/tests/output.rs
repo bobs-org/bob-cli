@@ -324,12 +324,16 @@ fn override_name_completion_carries_keeps_ledger_and_running() {
     let fresh_json = serde_json::to_value(&fresh).expect("fresh json");
     assert_eq!(fresh_json["override"]["keeps_ledger"], false);
 
-    // Plain `=#` stays byte-identical: no override key anywhere.
+    // Plain `=#` now carries the same state-based override object.
     let plain = complete("=#");
     assert_eq!(plain.context, Some(CompletionContext::PomodoroStartName));
-    assert!(plain.r#override.is_none());
-    let plain_json = serde_json::to_value(&plain).expect("plain json");
-    assert!(plain_json.get("override").is_none(), "{plain_json}");
+    let plain_override = plain.r#override.as_ref().expect("override object");
+    assert!(plain_override.keeps_ledger);
+    assert_eq!(plain_override.running, kept_override.running);
+    let eq3 = complete("=3#bu");
+    assert!(!eq3.r#override.as_ref().expect("override").keeps_ledger);
+    let chained = complete("x =#");
+    assert!(chained.r#override.is_none());
 }
 
 #[test]
@@ -346,25 +350,20 @@ fn override_name_completion_omits_running_without_a_single_runner() {
         })
     };
 
-    // An idle ledger keeps the flag but names no running session.
+    // An idle ledger omits the override object.
     let idle = complete_at(&day_file, "==#");
-    let idle_override = idle.r#override.as_ref().expect("override object");
-    assert!(idle_override.keeps_ledger);
-    assert!(idle_override.running.is_none());
+    assert!(idle.r#override.is_none());
+    let idle_eq = complete_at(&day_file, "=#");
+    assert!(idle_eq.r#override.is_none());
     let idle_json = serde_json::to_value(&idle).expect("idle json");
-    assert_eq!(
-        idle_json["override"],
-        serde_json::json!({"keeps_ledger": true})
-    );
+    assert!(idle_json.get("override").is_none(), "{idle_json}");
 
     // A missing daily note behaves the same way.
     let missing = temp.path().join("2026/20261010.md");
     let gone = complete_at(&missing, "==3#bu");
-    let gone_override = gone.r#override.as_ref().expect("override object");
-    assert!(!gone_override.keeps_ledger);
-    assert!(gone_override.running.is_none());
+    assert!(gone.r#override.is_none());
 
-    // Several runners also omit the session: no single session to keep.
+    // Several runners also omit the object: no single session to keep.
     write_file(
         &day_file,
         concat!(
@@ -374,10 +373,7 @@ fn override_name_completion_omits_running_without_a_single_runner() {
         ),
     );
     let crowded = complete_at(&day_file, "==#");
-    let crowded_override =
-        crowded.r#override.as_ref().expect("override object");
-    assert!(crowded_override.keeps_ledger);
-    assert!(crowded_override.running.is_none());
+    assert!(crowded.r#override.is_none());
 }
 
 #[test]

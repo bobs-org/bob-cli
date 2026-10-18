@@ -781,15 +781,24 @@ fn capture_pomodoro_close_diagnostics() {
     assert_success(&output);
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     // A bare `=` is a start, not an incomplete close: with CAPTURE
-    // running it names the running session and teaches the switch idiom.
-    let error = run_close_expect_error(
-        &vault,
-        &day_file,
-        "2026-09-28 09:37:00",
-        &["="],
-    );
-    assert!(error.contains("is still running at line 5"), "{error}");
-    assert!(error.contains("then `=` to switch sessions"), "{error}");
+    // running it restarts that session. Dry-run leaves the vault intact.
+    let output = bob_command()
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("bare equals restart");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["pomodoro_start"]["override"]["action"], "restart");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A real `x` item with a child bullet lexes it as a Work Log entry:

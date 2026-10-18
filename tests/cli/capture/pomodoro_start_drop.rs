@@ -501,12 +501,21 @@ fn start_drop_batch_chain_and_rollback() {
     assert!(error.contains("names task 99"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("day"), before);
 
-    // The running-session error echoes the full typed token.
+    // `=~2` while a session runs restarts it and drops link 2.
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-running");
     let _started = run_start_json(&vault, &day_file, "=");
-    let error = run_start_expect_error(&vault, &day_file, &["=~2"]);
-    assert!(error.contains("then `=~2` to switch sessions"), "{error}");
+    let restarted = run_start_json(&vault, &day_file, "=~2");
+    assert_eq!(restarted["kind"], "pomodoro_start", "{restarted}");
+    assert_eq!(
+        restarted["pomodoro_start"]["override"]["action"], "restart",
+        "{restarted}"
+    );
+    assert_eq!(
+        restarted["pomodoro_start"]["drop"],
+        serde_json::json!([2]),
+        "{restarted}"
+    );
 }
 
 #[test]

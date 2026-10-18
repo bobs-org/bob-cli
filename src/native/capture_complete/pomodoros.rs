@@ -64,8 +64,8 @@ pub(super) fn pomodoro_name_candidates_at(
 }
 
 /// The single running Pomodoro session, for the `running` half of the
-/// `==` completion `override` object. `None` when the daily note is
-/// missing or holds zero or several timed open entries.
+/// named-start completion `override` object. `None` when the daily note
+/// is missing or holds zero or several timed open entries.
 pub(super) fn running_pomodoro_session(
     bob_dir: &Path,
 ) -> Option<OverrideRunningSession> {

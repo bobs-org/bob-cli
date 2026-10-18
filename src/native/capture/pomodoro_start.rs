@@ -683,49 +683,21 @@ pub(super) fn plan_pomodoro_start_item(
         .collect::<Vec<_>>();
     if timed_open.len() == 1 {
         let running = timed_open[0];
-        if spec.r#override {
-            return plan_override_restart_item(
-                request,
-                parsed,
-                &spec,
-                running,
-                &start,
-                &end,
-                duration_minutes,
-                &time_range,
-                today,
-                planner,
-                warnings,
-                &day_file,
-            );
-        }
-        let range = running.time_range.clone().unwrap_or_default();
-        let subject =
-            match running.name.as_deref().filter(|name| !name.is_empty()) {
-                Some(name) => format!("{name} {range}"),
-                None => format!("the current session {range}"),
-            };
-        // Spell the concrete override of the typed suffix (`=3` teaches
-        // `==3`), like the named still-running hint does.
-        let raw = &spec.raw;
-        let restart_hint =
-            match running.name.as_deref().filter(|name| !name.is_empty()) {
-                Some(name) => {
-                    format!(", or capture `=={raw}` to restart {name} now")
-                }
-                None => {
-                    format!(
-                    ", or capture `=={raw}` to restart the current session now"
-                )
-                }
-            };
-        // Echo the full typed token (including any `~<K>` drop list) so
-        // the taught switch idiom stays copy-pasteable.
-        let token = parsed.body.clone();
-        return Err(CaptureError::io(format!(
-            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `x` first, or capture `x`, a blank line, then `{token}` to switch sessions{restart_hint}",
-            running.line,
-        )));
+        return plan_override_restart_item(
+            request,
+            parsed,
+            &spec,
+            running,
+            &start,
+            &end,
+            duration_minutes,
+            &time_range,
+            now,
+            today,
+            planner,
+            warnings,
+            &day_file,
+        );
     }
     if timed_open.len() > 1 {
         return Err(CaptureError::io(
@@ -797,6 +769,7 @@ pub(super) fn plan_pomodoro_start_item(
         ledger: "fresh",
         previous: None,
         demoted: None,
+        close_first: None,
     });
     let summary = PomodoroStartSummary {
         start,
@@ -902,6 +875,7 @@ fn plan_override_restart_item(
     end: &str,
     duration_minutes: u64,
     time_range: &str,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<String>,
@@ -916,6 +890,14 @@ fn plan_override_restart_item(
     })?;
     let running_name = running.name.clone();
     let running_range = running.time_range.clone().unwrap_or_default();
+    refuse_override_if_requested(
+        request,
+        &parsed,
+        "restart",
+        running_name.as_deref(),
+        &running_range,
+    )?;
+    let overdue = previous_session_is_overdue(&running_range, now, today);
     let (prev_start, prev_end) = running_range
         .split_once('-')
         .map(|(before, after)| (before.to_string(), after.to_string()))
@@ -928,6 +910,7 @@ fn plan_override_restart_item(
         end: prev_end,
         duration_minutes: previous_duration,
         time_range: running_range,
+        overdue,
     };
     let token = parsed.body.clone();
     let owner = match running_name.as_deref().filter(|name| !name.is_empty()) {
@@ -991,6 +974,7 @@ fn plan_override_restart_item(
             ledger: "fresh",
             previous: Some(previous),
             demoted: None,
+            close_first: Some(format!("x {}", parsed.body)),
         }),
     };
     Ok(PlannedCaptureItem {
@@ -1087,6 +1071,7 @@ fn plan_override_swap_item(
     fresh_end: &str,
     fresh_duration: u64,
     fresh_time_range: &str,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<String>,
@@ -1132,6 +1117,7 @@ fn plan_override_swap_item(
         end: prev_end.clone(),
         duration_minutes: previous_duration,
         time_range: running_range.clone(),
+        overdue: previous_session_is_overdue(&running_range, now, today),
     };
     let keeps_ledger = spec.raw.is_empty();
     let is_found_running = matches!(
@@ -1141,20 +1127,21 @@ fn plan_override_swap_item(
     );
     if is_found_running {
         if keeps_ledger {
-            let subject = match running_name
-                .as_deref()
-                .filter(|name| !name.is_empty())
-            {
-                Some(name) => format!("`==#{}` names {name}", selector),
-                None => "the override names the current session".to_string(),
-            };
+            let subject =
+                match running_name.as_deref().filter(|name| !name.is_empty()) {
+                    Some(name) => format!("`{}` names {name}", parsed.body),
+                    None => {
+                        format!("`{}` names the current session", parsed.body)
+                    }
+                };
             let range = if running_range.is_empty() {
                 "the running session".to_string()
             } else {
                 running_range.clone()
             };
+            let sigil = if spec.r#override { "==" } else { "=" };
             return Err(CaptureError::io(format!(
-                "{subject}, which is already running ({range}, line {running_line}); restart it with `==` or `==<X>`, or name another Pomodoro to swap in"
+                "{subject}, which is already running ({range}, line {running_line}): restart it with `{sigil}` or `{sigil}<X>`, close it with `x`, or name another Pomodoro to swap in"
             )));
         }
         return plan_override_restart_item(
@@ -1166,6 +1153,7 @@ fn plan_override_swap_item(
             fresh_end,
             fresh_duration,
             fresh_time_range,
+            now,
             today,
             planner,
             warnings,
@@ -1188,8 +1176,9 @@ fn plan_override_swap_item(
                     Some(name) => name.to_string(),
                     None => "the current session".to_string(),
                 };
+                let sigil = if spec.r#override { "==" } else { "=" };
                 return Err(CaptureError::io(format!(
-                    "cannot read {subject}'s session ledger at line {running_line}; give the new session a timing instead (`==5#{selector}`)"
+                    "cannot read {subject}'s session ledger at line {running_line}; give the new session a timing instead (`{sigil}5#{selector}`)"
                 )));
             }
         }
@@ -1199,6 +1188,13 @@ fn plan_override_swap_item(
     let target_ledger = kept_ledger
         .clone()
         .unwrap_or_else(|| fresh_time_range.to_string());
+    refuse_override_if_requested(
+        request,
+        &parsed,
+        "swap out",
+        running_name.as_deref(),
+        &running_range,
+    )?;
     // A created or "again" named session starts empty, so any drop list
     // fails before any rewrite with the created-session diagnostic.
     if !spec.drop.is_empty() {
@@ -1494,6 +1490,7 @@ fn plan_override_swap_item(
                 task_links: demoted_task_links,
                 has_notes: demoted_has_notes,
             }),
+            close_first: Some(format!("x {}", parsed.body)),
         }),
     };
     let started_ref = match start_before {
@@ -1581,6 +1578,73 @@ fn plan_override_swap_item(
         ],
         task_block_refs: Vec::new(),
     })
+}
+
+fn refuse_override_if_requested(
+    request: &CaptureRequest,
+    parsed: &ParsedCaptureText,
+    verb: &str,
+    running_name: Option<&str>,
+    running_range: &str,
+) -> Result<(), CaptureError> {
+    if !request.refuse_override {
+        return Ok(());
+    }
+    let token = parsed.body.as_str();
+    let subject = match running_name.filter(|name| !name.is_empty()) {
+        Some(name) => format!("the running {name} ({running_range})"),
+        None => format!("the running session ({running_range})"),
+    };
+    Err(CaptureError::override_refused(format!(
+        "refusing capture: `{token}` would {verb} {subject} and --refuse-override is set; capture `x {token}` to close it first"
+    )))
+}
+
+/// True when `now` is at or after R's end: R's start is read on `today`
+/// and R's end is that start plus R's duration. A start later than `now`,
+/// a wrap past midnight that has not ended yet, and an unparsable range
+/// are not overdue.
+fn previous_session_is_overdue(
+    range: &str,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+) -> bool {
+    let Some((before, after)) = range.split_once('-') else {
+        return false;
+    };
+    let parse_hhmm = |text: &str| -> Option<(u32, u32)> {
+        let text = text.trim();
+        if text.len() == 4 && text.bytes().all(|byte| byte.is_ascii_digit()) {
+            let hour = text[..2].parse::<u32>().ok()?;
+            let minute = text[2..].parse::<u32>().ok()?;
+            (hour <= 23 && minute <= 59).then_some((hour, minute))
+        } else if text.len() == 5 && text.as_bytes().get(2) == Some(&b':') {
+            let hour = text[..2].parse::<u32>().ok()?;
+            let minute = text[3..].parse::<u32>().ok()?;
+            (hour <= 23 && minute <= 59).then_some((hour, minute))
+        } else {
+            None
+        }
+    };
+    let Some((start_h, start_m)) = parse_hhmm(before) else {
+        return false;
+    };
+    if parse_hhmm(after).is_none() {
+        return false;
+    }
+    let Some(start_dt) = today.and_hms_opt(start_h, start_m, 0) else {
+        return false;
+    };
+    if start_dt > now {
+        return false;
+    }
+    let duration = previous_range_duration_minutes(range);
+    let Some(end_dt) = start_dt.checked_add_signed(chrono::Duration::minutes(
+        i64::try_from(duration).unwrap_or(i64::MAX),
+    )) else {
+        return false;
+    };
+    now >= end_dt
 }
 
 /// Duration of a plain `HHMM-HHMM` range in minutes, wrapping past
@@ -1848,7 +1912,7 @@ fn plan_named_pomodoro_start_item(
     end: &str,
     duration_minutes: u64,
     time_range: &str,
-    _now: chrono::NaiveDateTime,
+    now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<String>,
@@ -1898,53 +1962,23 @@ fn plan_named_pomodoro_start_item(
         )));
     }
     if let Some(running) = timed_open.first() {
-        if spec.r#override {
-            return plan_override_swap_item(
-                request,
-                parsed,
-                spec,
-                selector,
-                running,
-                start,
-                end,
-                duration_minutes,
-                time_range,
-                today,
-                planner,
-                warnings,
-                day_file,
-                rel,
-            );
-        }
-        let range = running.time_range.clone().unwrap_or_default();
-        let is_found_running = matches!(
-            &selection,
-            capture_pomodoros::NamedSelection::Found(entry)
-                if entry.line == running.line
-        );
-        if is_found_running {
-            return Err(CaptureError::io(format!(
-                "{display_name} is already running ({range} at line {}); use `+N`/`-N` to resize it, `++N`/`--N` to shift it, or `x` to close it, or capture `==` to restart it now",
-                running.line,
-            )));
-        }
-        let subject =
-            match running.name.as_deref().filter(|name| !name.is_empty()) {
-                Some(name) => format!("{name} {range}"),
-                None => format!("the current session {range}"),
-            };
-        let running_short =
-            match running.name.as_deref().filter(|name| !name.is_empty()) {
-                Some(name) => name.to_string(),
-                None => "the current session".to_string(),
-            };
-        return Err(CaptureError::io(format!(
-            "cannot start {display_name}: {subject} is still running at line {}; close it with `x` first, or capture `x {}` to switch sessions, or `=={}#{}` to swap it in and return {running_short} to first future",
-            running.line,
-            parsed.body,
-            spec.raw,
+        return plan_override_swap_item(
+            request,
+            parsed,
+            spec,
             selector,
-        )));
+            running,
+            start,
+            end,
+            duration_minutes,
+            time_range,
+            now,
+            today,
+            planner,
+            warnings,
+            day_file,
+            rel,
+        );
     }
     let start_before = match &selection {
         capture_pomodoros::NamedSelection::Found(entry) => {
@@ -2128,6 +2162,7 @@ fn plan_named_pomodoro_start_item(
         ledger: "fresh",
         previous: None,
         demoted: None,
+        close_first: None,
     });
     let summary = PomodoroStartSummary {
         start: start.to_string(),
@@ -2215,4 +2250,59 @@ fn plan_named_pomodoro_start_item(
         }],
         task_block_refs: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveDateTime};
+
+    fn at(date: &str, time: &str) -> (NaiveDateTime, NaiveDate) {
+        let today = NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("date");
+        let now = NaiveDateTime::parse_from_str(
+            &format!("{date} {time}"),
+            "%Y-%m-%d %H:%M:%S",
+        )
+        .expect("datetime");
+        (now, today)
+    }
+
+    #[test]
+    fn previous_session_overdue_mid_session() {
+        let (now, today) = at("2026-10-09", "09:32:00");
+        assert!(!previous_session_is_overdue("0920-0945", now, today));
+    }
+
+    #[test]
+    fn previous_session_overdue_exactly_at_end() {
+        let (now, today) = at("2026-10-09", "09:45:00");
+        assert!(previous_session_is_overdue("0920-0945", now, today));
+    }
+
+    #[test]
+    fn previous_session_overdue_past_the_end() {
+        let (now, today) = at("2026-10-09", "10:00:00");
+        assert!(previous_session_is_overdue("0920-0945", now, today));
+    }
+
+    #[test]
+    fn previous_session_overdue_overnight_wrap_is_not_overdue() {
+        let (now, today) = at("2026-10-09", "23:55:00");
+        assert!(!previous_session_is_overdue("2350-0015", now, today));
+    }
+
+    #[test]
+    fn previous_session_overdue_start_later_than_now() {
+        let (now, today) = at("2026-10-09", "09:32:00");
+        assert!(!previous_session_is_overdue("1000-1025", now, today));
+    }
+
+    #[test]
+    fn previous_session_overdue_unparsable_range() {
+        let (now, today) = at("2026-10-09", "09:32:00");
+        assert!(!previous_session_is_overdue("not-a-range", now, today));
+        assert!(!previous_session_is_overdue("0920", now, today));
+        assert!(!previous_session_is_overdue("abcd-efgh", now, today));
+        assert!(!previous_session_is_overdue("0920-99xx", now, today));
+    }
 }

@@ -499,10 +499,11 @@ pub(super) struct OverrideRunningSession {
     pub(super) time_range: String,
 }
 
-/// Additive override context for a `==` name field: `keeps_ledger` is true
-/// when the `<X>` suffix is empty (a swap takes over the running ledger
-/// byte-for-byte); `running` is present only when exactly one timed session
-/// runs. Plain `=` name fields never carry this object.
+/// Additive override context for a named-start name field: present when
+/// exactly one timed session runs and no earlier item or same-line chain
+/// token is a whole-item session operator. `keeps_ledger` is true when the
+/// `<X>` suffix is empty (a swap takes over the running ledger
+/// byte-for-byte); `running` is always set when the object is present.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct OverrideCompletion {
     pub(super) keeps_ledger: bool,

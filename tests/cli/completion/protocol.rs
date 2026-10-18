@@ -173,6 +173,10 @@ fn double_dash_offers_long_forms_only() {
         "hidden --require-pull-in-choice must stay out of completion: {names:?}"
     );
     assert!(
+        !names.contains(&"--refuse-override".to_string()),
+        "hidden --refuse-override must stay out of completion: {names:?}"
+    );
+    assert!(
         !names
             .iter()
             .any(|name| name.starts_with('-') && !name.starts_with("--")),

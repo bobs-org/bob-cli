@@ -313,42 +313,35 @@ fn capture_pomodoro_whole_item_start_guards_fail_write_free() {
         "- [ ] () — SASE\n",
     );
 
-    // A named running session names its range and line and teaches the
-    // switch idiom with the user's own token.
+    // A named running session is restarted in place.
     let (output, before, after) =
         run("=3", running_named, "2026-09-28 09:42:00");
-    assert!(!output.status.success());
-    let error = stdout(&output);
-    assert!(
-        error.contains(
-            "cannot start the next Pomodoro: CAPTURE 0920-0950 is still running at line 3; close it with `x` first, or capture `x`, a blank line, then `=3` to switch sessions"
-        ),
-        "{error}"
-    );
-    assert_eq!(before, after);
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["pomodoro_start"]["override"]["action"], "restart");
+    assert_ne!(before, after);
 
-    // The bare token teaches the same idiom with `=`.
-    let (output, before, after) =
+    let (output, _before, after) =
         run("=", running_named, "2026-09-28 09:42:00");
-    assert!(!output.status.success());
-    let error = stdout(&output);
-    assert!(error.contains("then `=` to switch sessions"), "{error}");
-    assert_eq!(before, after);
+    assert_success(&output);
+    assert!(
+        after.contains("(**0945-1010** [t:: 25m]) — CAPTURE"),
+        "{after}"
+    );
 
-    // An unnamed running session reads as the current session, including
-    // one past its nominal end.
+    // An unnamed running session restarts too, including one past its end.
     let running_unnamed = "## Pomodoros\n- [ ] (**0920-0950** [t:: 30m])\n";
     for now in ["2026-09-28 09:42:00", "2026-09-28 10:30:00"] {
         let (output, before, after) = run("=", running_unnamed, now);
-        assert!(!output.status.success(), "{now}");
-        let error = stdout(&output);
-        assert!(
-            error.contains(
-                "the current session 0920-0950 is still running at line 2"
-            ),
-            "{now}: {error}"
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        assert_eq!(
+            json["pomodoro_start"]["override"]["action"], "restart",
+            "{now}: {json}"
         );
-        assert_eq!(before, after, "{now}");
+        assert_ne!(before, after, "{now}");
     }
 
     // More than one open timed entry names the ledger fix.

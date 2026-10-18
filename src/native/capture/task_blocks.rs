@@ -554,6 +554,7 @@ mod tests {
             no_clip: true,
             no_ref: false,
             pull_in: None,
+            refuse_override: false,
             require_pull_in_choice: false,
             template_origin: None,
             raw_text: raw_text.to_string(),

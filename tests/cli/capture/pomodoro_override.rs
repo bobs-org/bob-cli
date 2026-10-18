@@ -552,7 +552,7 @@ fn override_swap_naming_running_refuses() {
     assert!(!output.status.success(), "{}", format_output(&output));
     assert!(
         format_output(&output).contains(
-            "`==#capture` names CAPTURE, which is already running (0920-0945, line 5); restart it with `==` or `==<X>`, or name another Pomodoro to swap in"
+            "`==#capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `==` or `==<X>`, close it with `x`, or name another Pomodoro to swap in"
         ),
         "{}",
         format_output(&output)
@@ -942,35 +942,13 @@ fn override_swap_reports_notes() {
 fn override_swap_teaching_errors() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-teach");
     let before = fs::read_to_string(&day_file).expect("read before");
-    // Unnamed `=<X>` while a session runs teaches the concrete restart
-    // spelling of the typed suffix.
-    for (item, hint) in [
-        ("=", "or capture `==` to restart CAPTURE now"),
-        ("=3", "or capture `==3` to restart CAPTURE now"),
-    ] {
-        let output = run_json_err(&vault, &day_file, &[item]);
-        assert!(!output.status.success(), "{}", format_output(&output));
-        assert!(
-            format_output(&output).contains(hint),
-            "{item}: {}",
-            format_output(&output)
-        );
-    }
-    // Named `=` while another session runs teaches the swap spelling.
-    let output = run_json_err(&vault, &day_file, &["=#bugs"]);
-    assert!(!output.status.success(), "{}", format_output(&output));
-    assert!(
-        format_output(&output).contains(
-            "or `==#bugs` to swap it in and return CAPTURE to first future"
-        ),
-        "{}",
-        format_output(&output)
-    );
-    // Naming the running session teaches the restart spelling.
+    // Naming the running session with an empty timing still refuses.
     let output = run_json_err(&vault, &day_file, &["=#capture"]);
     assert!(!output.status.success(), "{}", format_output(&output));
     assert!(
-        format_output(&output).contains("capture `==` to restart it now"),
+        format_output(&output).contains(
+            "`=#capture` names CAPTURE, which is already running (0920-0945, line 5): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
+        ),
         "{}",
         format_output(&output)
     );
@@ -1137,4 +1115,361 @@ fn override_swap_preserves_crlf_and_missing_newline() {
     let after2 = fs::read_to_string(&day2).expect("read day");
     assert!(!after2.ends_with('\n'), "{after2:?}");
     assert!(after2.contains("- [ ] (**0920-0945** [t:: 25m]) — BUGS"));
+}
+
+fn strip_twin_fields(value: &mut serde_json::Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("text");
+        object.remove("path");
+        object.remove("target");
+        if let Some(start) = object
+            .get_mut("pomodoro_start")
+            .and_then(serde_json::Value::as_object_mut)
+            && let Some(outcome) = start
+                .get_mut("override")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            outcome.remove("close_first");
+        }
+        for child in object.values_mut() {
+            strip_twin_fields(child);
+        }
+    }
+    if let Some(items) = value.as_array_mut() {
+        for item in items {
+            strip_twin_fields(item);
+        }
+    }
+}
+
+fn json_without_twin_fields(value: &serde_json::Value) -> serde_json::Value {
+    let mut cloned = value.clone();
+    strip_twin_fields(&mut cloned);
+    cloned
+}
+
+fn run_capture_flags(
+    vault: &std::path::Path,
+    day_file: &std::path::Path,
+    flags: &[&str],
+    args: &[&str],
+) -> std::process::Output {
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json");
+    command.args(flags).arg("--").args(args);
+    command
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run capture")
+}
+
+#[test]
+fn eq_override_matches_double_eq_twin() {
+    let cases = [
+        "=",
+        "=3",
+        "=-2",
+        "=~2",
+        "=#bugs",
+        "=3#bugs",
+        "=#plan",
+        "=3#capture",
+        "=#bugs +2",
+    ];
+    for token in cases {
+        let twin = format!("={token}");
+        let (_temp_eq, vault_eq, day_eq) =
+            worked_vault("bob-cli-eq-override-twin-eq");
+        let eq_json = run_json(&vault_eq, &day_eq, &[token]);
+        let eq_day = fs::read_to_string(&day_eq).expect("read eq day");
+
+        let (_temp_ov, vault_ov, day_ov) =
+            worked_vault("bob-cli-eq-override-twin-ov");
+        let ov_json = run_json(&vault_ov, &day_ov, &[&twin]);
+        let ov_day = fs::read_to_string(&day_ov).expect("read ov day");
+        assert_eq!(eq_day, ov_day, "{token}");
+        assert_eq!(
+            json_without_twin_fields(&eq_json),
+            json_without_twin_fields(&ov_json),
+            "{token}: {eq_json} vs {ov_json}"
+        );
+        fn find_close_first(value: &serde_json::Value) -> Option<&str> {
+            match value {
+                serde_json::Value::Object(map) => map
+                    .get("close_first")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| map.values().find_map(find_close_first)),
+                serde_json::Value::Array(items) => {
+                    items.iter().find_map(find_close_first)
+                }
+                _ => None,
+            }
+        }
+        let expected_close = if token == "=#bugs +2" {
+            "x =#bugs".to_string()
+        } else {
+            format!("x {token}")
+        };
+        assert_eq!(
+            find_close_first(&eq_json),
+            Some(expected_close.as_str()),
+            "{token}: {eq_json}"
+        );
+    }
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-eq-idle-no-override");
+    let idle_day = worked_day().replace(
+        "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE",
+        "- [ ] () — CAPTURE",
+    );
+    write_file(&day_file, &idle_day);
+    let json = run_json(&vault, &day_file, &["="]);
+    assert!(json["pomodoro_start"].get("override").is_none(), "{json}");
+}
+
+#[test]
+fn eq_override_close_first_and_overdue() {
+    let (_temp, vault, day_file) = worked_vault("bob-cli-eq-close-first");
+    let json = run_json(&vault, &day_file, &["="]);
+    assert_eq!(
+        json["pomodoro_start"]["override"]["close_first"], "x =",
+        "{json}"
+    );
+    assert!(
+        json["pomodoro_start"]["override"]["previous"]
+            .get("overdue")
+            .is_none(),
+        "{json}"
+    );
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-eq-overdue");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-10-09 09:45:00")
+        .output()
+        .expect("run overdue restart");
+    assert_success(&output);
+    let overdue: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(
+        overdue["pomodoro_start"]["override"]["previous"]["overdue"], true,
+        "{overdue}"
+    );
+}
+
+#[test]
+fn eq_override_human_warning_lines() {
+    let warning_cases = [
+        (
+            "=",
+            NOW,
+            "⚠ overrides the running CAPTURE 0920-0945 · capture `x =` to close it first",
+        ),
+        (
+            "=#bugs",
+            NOW,
+            "⚠ overrides the running CAPTURE 0920-0945 · capture `x =#bugs` to close it first",
+        ),
+    ];
+    for (token, now, warning) in warning_cases {
+        let (_temp, vault, day_file) = worked_vault("bob-cli-eq-warning-dry");
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--dry-run")
+            .arg("--")
+            .arg(token)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run warning dry");
+        assert_success(&output);
+        let out = stdout(&output);
+        assert!(out.contains(warning), "{token}: {out}");
+        assert_stdout_has_no_ansi(&output);
+    }
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-eq-warning-real");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run warning real");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("⚠ overrode the running CAPTURE 0920-0945"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("to close it first"),
+        "real runs omit the close-first hint: {out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-eq-warning-overdue");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-10-09 09:45:00")
+        .output()
+        .expect("run overdue warning");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "⚠ overrides CAPTURE 0920-0945, still open past its end · capture `x =` to close it first"
+        ),
+        "{out}"
+    );
+
+    let temp = TempDir::new("bob-cli-eq-warning-unnamed");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0945** [t:: 25m])\n- [ ] () — SASE\n",
+    );
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--")
+        .arg("=")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run unnamed warning");
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "⚠ overrides the running session 0920-0945 · capture `x =` to close it first"
+        ),
+        "{out}"
+    );
+}
+
+#[test]
+fn refuse_override_guard() {
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-restart");
+    let before = fs::read_to_string(&day_file).expect("read before");
+    let output =
+        run_capture_flags(&vault, &day_file, &["--refuse-override"], &["="]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["ok"], false, "{json}");
+    assert_eq!(json["code"], "pomodoro_override_refused", "{json}");
+    assert!(
+        json["error"].as_str().is_some_and(|error| error.contains(
+            "refusing capture: `=` would restart the running CAPTURE (0920-0945) and --refuse-override is set; capture `x =` to close it first"
+        )),
+        "{json}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), before);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-swap");
+    let before = fs::read_to_string(&day_file).expect("read before");
+    let output = run_capture_flags(
+        &vault,
+        &day_file,
+        &["--refuse-override"],
+        &["=#bugs"],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["code"], "pomodoro_override_refused", "{json}");
+    assert!(
+        json["error"].as_str().is_some_and(|error| error
+            .contains("would swap out the running CAPTURE (0920-0945)")),
+        "{json}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), before);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-idle");
+    let idle_day = worked_day().replace(
+        "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE",
+        "- [ ] () — CAPTURE",
+    );
+    write_file(&day_file, &idle_day);
+    let output =
+        run_capture_flags(&vault, &day_file, &["--refuse-override"], &["="]);
+    assert_success(&output);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-close-first");
+    let output =
+        run_capture_flags(&vault, &day_file, &["--refuse-override"], &["x ="]);
+    assert_success(&output);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-batch");
+    let before = fs::read_to_string(&day_file).expect("read before");
+    let bad = run_with_stdin(
+        bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--refuse-override")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", NOW),
+        "buy milk\n\nremember eggs\n\n=\n",
+    );
+    assert_eq!(bad.status.code(), Some(1), "{}", format_output(&bad));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&bad).trim()).expect("json");
+    assert_eq!(json["code"], "pomodoro_override_refused", "{json}");
+    assert_eq!(fs::read_to_string(&day_file).expect("rolled back"), before);
+
+    let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-dry");
+    let before = fs::read_to_string(&day_file).expect("read before");
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("--refuse-override")
+        .arg("--")
+        .arg("=");
+    let output = command
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run refuse dry");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["code"], "pomodoro_override_refused", "{json}");
+    assert_eq!(fs::read_to_string(&day_file).expect("dry day"), before);
 }

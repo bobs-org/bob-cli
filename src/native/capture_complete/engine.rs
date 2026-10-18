@@ -377,14 +377,18 @@ fn build_result_inner(
         picker.relationship =
             apply_relationship_picker(bob_dir, &mut candidates, item);
     }
-    // A `==` name field carries the additive override context (keeps_ledger
-    // plus the running session); plain `=` output stays byte-identical.
+    // A named-start name field carries override context when exactly one
+    // session runs and no earlier session operator is in the draft.
     let override_info = (field.context == CompletionContext::PomodoroStartName)
         .then(|| capture_language::pomodoro_start_override_at(raw_text, cursor))
         .flatten()
-        .map(|keeps_ledger| OverrideCompletion {
-            keeps_ledger,
-            running: running_pomodoro_session(bob_dir),
+        .and_then(|keeps_ledger| {
+            running_pomodoro_session(bob_dir).map(|running| {
+                OverrideCompletion {
+                    keeps_ledger,
+                    running: Some(running),
+                }
+            })
         });
 
     Ok(CaptureCompleteResult {

@@ -183,13 +183,11 @@ fn named_start_running_guards_and_switch_chain() {
         named_vault("bob-cli-named-running", running);
     let output =
         run_capture(&vault, &day_file, &["=#deep-work"], "2026-07-10 09:02:00");
-    assert!(!output.status.success());
-    assert!(
-        stdout(&output).contains("is still running")
-            && stdout(&output).contains("x =#deep-work"),
-        "{}",
-        stdout(&output)
-    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["pomodoro_start"]["override"]["action"], "swap");
+    assert_eq!(json["pomodoro_start"]["pomodoro_name"], "DEEP WORK");
 
     let (_temp, vault, day_file) =
         named_vault("bob-cli-named-already", running);
@@ -197,7 +195,8 @@ fn named_start_running_guards_and_switch_chain() {
         run_capture(&vault, &day_file, &["=#bugs"], "2026-07-10 09:02:00");
     assert!(!output.status.success());
     assert!(
-        stdout(&output).contains("is already running"),
+        stdout(&output).contains("is already running")
+            && stdout(&output).contains("restart it with `=` or `=<X>`"),
         "{}",
         stdout(&output)
     );
