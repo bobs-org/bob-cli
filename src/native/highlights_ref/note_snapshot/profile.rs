@@ -30,6 +30,20 @@ pub(crate) const NOTE_FILTER: &str = include_str!("note.lua");
 /// so those two invocations cannot drift.
 pub(crate) const SNAPSHOT_PANDOC_READER: &str =
     "commonmark_x-tex_math_dollars-emoji";
+/// Text box for A8 scale warnings. Matches
+/// `-V geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper`
+/// in [`render_note_pdf`]: `612 - 2×1.1×72` by `792 - (0.9+1)×72`.
+const SNAPSHOT_LETTER_WIDTH_PT: f64 = 612.0;
+const SNAPSHOT_LETTER_HEIGHT_PT: f64 = 792.0;
+const SNAPSHOT_PT_PER_IN: f64 = 72.0;
+const SNAPSHOT_SIDE_IN: f64 = 1.1;
+const SNAPSHOT_TOP_IN: f64 = 0.9;
+const SNAPSHOT_BOTTOM_IN: f64 = 1.0;
+pub(crate) const SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT: f64 =
+    SNAPSHOT_LETTER_WIDTH_PT - 2.0 * SNAPSHOT_SIDE_IN * SNAPSHOT_PT_PER_IN;
+pub(crate) const SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT: f64 =
+    SNAPSHOT_LETTER_HEIGHT_PT
+        - (SNAPSHOT_TOP_IN + SNAPSHOT_BOTTOM_IN) * SNAPSHOT_PT_PER_IN;
 const ENV_XELATEX_COMMAND: &str = "BOB_XELATEX_COMMAND";
 const GENERATED_TEX: &str = "note.tex";
 const GENERATED_PDF: &str = "note.pdf";
@@ -1684,5 +1698,11 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             log.contains("bob-diagrams-results="),
             "results metadata: {log}"
         );
+    }
+
+    #[test]
+    fn snapshot_diagram_text_box_matches_note_geometry() {
+        assert!((SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT - 453.6).abs() < 1e-9);
+        assert!((SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT - 655.2).abs() < 1e-9);
     }
 }

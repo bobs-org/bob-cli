@@ -2,6 +2,7 @@
 
 mod corpus_gate;
 mod create;
+mod diagrams;
 mod doctor_library;
 pub(crate) mod fake_clip;
 mod jobs;

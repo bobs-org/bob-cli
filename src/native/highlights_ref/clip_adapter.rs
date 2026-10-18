@@ -29,6 +29,17 @@ pub(super) const ENV_TIMEOUT_SECS: &str = "BOB_WEB_CLIP_TIMEOUT_SECS";
 pub(super) const DEFAULT_TIMEOUT_SECS: u64 = 300;
 /// Timeout for the `doctor` health ping.
 pub(super) const PING_TIMEOUT_SECS: u64 = 120;
+/// Per-item adapter budget sent with a `diagrams` request.
+pub(super) const DIAGRAM_ITEM_TIMEOUT_SECS: u64 = 10;
+/// Fixed overhead in the diagrams transport deadline
+/// (`90s + 10s × unique items`, capped at [`DEFAULT_TIMEOUT_SECS`]).
+const DIAGRAM_TIMEOUT_BASE_SECS: u64 = 90;
+const NETWORK_TIMEOUT_HINT: &str =
+    "check your network connection, or raise BOB_WEB_CLIP_TIMEOUT_SECS";
+const DIAGRAM_TIMEOUT_HINT: &str =
+    "a diagram may be too complex; diagrams print as source. Set \
+     BOB_HIGHLIGHTS_DIAGRAMS=off to skip rendering, or raise \
+     BOB_WEB_CLIP_TIMEOUT_SECS";
 
 /// A typed adapter failure: the message goes after `error:`, the hint
 /// after `hint:`.
@@ -142,6 +153,19 @@ impl ClipAdapterClient {
         ))
     }
 
+    /// Resolve a client whose deadline matches the diagrams contract:
+    /// `90s + 10s × unique items`, capped at [`DEFAULT_TIMEOUT_SECS`],
+    /// unless `BOB_WEB_CLIP_TIMEOUT_SECS` is set.
+    pub(super) fn resolve_for_diagrams(
+        item_count: usize,
+    ) -> AdapterResult<Self> {
+        Self::resolve_with(
+            adapter_override(),
+            diagrams_timeout_secs(item_count),
+            &resolve_uv_lookup,
+        )
+    }
+
     /// Check adapter health: no capture, no writes.
     pub(super) fn ping(&self) -> AdapterResult<PingResponse> {
         let (value, stderr_text) = self.run_request(&PingRequest::new())?;
@@ -166,6 +190,16 @@ impl ClipAdapterClient {
         into_success(value, &stderr_text, "compose")
     }
 
+    /// Render unique Mermaid sources in one adapter call.
+    pub(super) fn diagrams(
+        &self,
+        request: &DiagramsRequest,
+    ) -> AdapterResult<DiagramsSuccess> {
+        let (value, stderr_text) =
+            self.run_request_with_hint(request, DIAGRAM_TIMEOUT_HINT)?;
+        into_success(value, &stderr_text, "diagrams")
+    }
+
     /// Spawn the adapter, write one request, and read one response.
     ///
     /// Stdin, stdout, and stderr each drain on their own thread while the
@@ -177,6 +211,14 @@ impl ClipAdapterClient {
     fn run_request(
         &self,
         request: &impl Serialize,
+    ) -> AdapterResult<(serde_json::Value, String)> {
+        self.run_request_with_hint(request, NETWORK_TIMEOUT_HINT)
+    }
+
+    fn run_request_with_hint(
+        &self,
+        request: &impl Serialize,
+        timeout_hint: &str,
     ) -> AdapterResult<(serde_json::Value, String)> {
         let payload =
             serde_json::to_string(request).expect("adapter request serializes");
@@ -214,10 +256,7 @@ impl ClipAdapterClient {
                             "the web clip adapter timed out after {}s",
                             self.timeout.as_secs()
                         ))
-                        .with_hint(
-                            "check your network connection, or raise \
-                             BOB_WEB_CLIP_TIMEOUT_SECS",
-                        ));
+                        .with_hint(timeout_hint));
                     }
                     thread::sleep(Duration::from_millis(10));
                 }
@@ -308,6 +347,9 @@ pub(super) struct PingResponse {
     pub(super) browser: Option<BrowserInfo>,
     #[serde(default)]
     pub(super) headed: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(super) mermaid: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -475,6 +517,70 @@ pub(super) struct CaptureSuccess {
     pub(super) warnings: Vec<String>,
 }
 
+/// One `{id, source}` item in a `diagrams` request.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct DiagramItem {
+    pub(super) id: String,
+    pub(super) source: String,
+}
+
+/// One `diagrams` request: unique Mermaid sources in one Chrome page.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct DiagramsRequest {
+    pub(super) protocol: u32,
+    pub(super) op: &'static str,
+    pub(super) workdir: String,
+    pub(super) items: Vec<DiagramItem>,
+    pub(super) item_timeout_s: u64,
+}
+
+impl DiagramsRequest {
+    pub(super) fn new(workdir: String, items: Vec<DiagramItem>) -> Self {
+        Self {
+            protocol: ADAPTER_PROTOCOL_VERSION,
+            op: "diagrams",
+            workdir,
+            items,
+            item_timeout_s: DIAGRAM_ITEM_TIMEOUT_SECS,
+        }
+    }
+}
+
+/// Per-item result from a successful `diagrams` op.
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct DiagramItemResult {
+    pub(super) id: String,
+    pub(super) ok: bool,
+    #[serde(default)]
+    pub(super) pdf: Option<String>,
+    #[serde(default)]
+    pub(super) width_pt: Option<f64>,
+    #[serde(default)]
+    pub(super) height_pt: Option<f64>,
+    #[serde(default)]
+    pub(super) error: Option<String>,
+}
+
+/// A successful `diagrams` response.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(super) struct DiagramsSuccess {
+    #[serde(default)]
+    pub(super) protocol: u32,
+    #[serde(default)]
+    pub(super) ok: Option<bool>,
+    #[serde(default)]
+    pub(super) op: Option<String>,
+    #[serde(default)]
+    pub(super) mermaid: Option<String>,
+    #[serde(default)]
+    pub(super) browser: Option<BrowserInfo>,
+    #[serde(default)]
+    pub(super) results: Vec<DiagramItemResult>,
+    #[serde(default)]
+    pub(super) warnings: Vec<String>,
+}
+
 /// A successful `compose` response.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
@@ -618,6 +724,22 @@ fn timeout_secs() -> u64 {
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
 }
 
+/// Diagrams transport deadline. `BOB_WEB_CLIP_TIMEOUT_SECS` wins when set.
+pub(super) fn diagrams_timeout_secs(item_count: usize) -> u64 {
+    if bob_env::var_os(ENV_TIMEOUT_SECS)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        return timeout_secs();
+    }
+    DIAGRAM_TIMEOUT_BASE_SECS
+        .saturating_add(
+            DIAGRAM_ITEM_TIMEOUT_SECS.saturating_mul(item_count as u64),
+        )
+        .min(DEFAULT_TIMEOUT_SECS)
+        .max(1)
+}
+
 /// Materialize the embedded adapter scripts and return the cache dir.
 fn materialized_adapter_script() -> AdapterResult<PathBuf> {
     let dir = crate::runner::materialize_scripts().map_err(|error| {
@@ -742,6 +864,7 @@ fn adapter_crash(reason: String, stderr_text: String) -> AdapterFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     fn sample_capture() -> CaptureRequest {
         CaptureRequest::new(
@@ -810,6 +933,67 @@ mod tests {
         assert_eq!(value.pdf_bytes, Some(1234));
         assert_eq!(value.images.kept, 2);
         assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn diagrams_request_json_is_byte_identical() {
+        let request = DiagramsRequest::new(
+            "/abs/scratch/diagrams".into(),
+            vec![DiagramItem {
+                id: "a".repeat(40),
+                source: "flowchart LR\n  A --> B".into(),
+            }],
+        );
+        let json = serde_json::to_string(&request)
+            .expect("serialize diagrams request");
+        assert_eq!(
+            json,
+            format!(
+                r#"{{"protocol":1,"op":"diagrams","workdir":"/abs/scratch/diagrams","items":[{{"id":"{}","source":"flowchart LR\n  A --> B"}}],"item_timeout_s":10}}"#,
+                "a".repeat(40)
+            )
+        );
+    }
+
+    #[test]
+    fn diagrams_success_deserializes_mixed_results() {
+        let value: DiagramsSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"diagrams","mermaid":"12.2.0","browser":{"kind":"chrome","path":"/opt/chrome","version":"129"},"results":[{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ok":true,"pdf":"/abs/a.pdf","width_pt":200.0,"height_pt":100.0},{"id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","ok":false,"error":"Parse error on line 4: bad"}],"warnings":[]}"#,
+        )
+        .expect("deserialize diagrams success");
+        assert_eq!(value.mermaid.as_deref(), Some("12.2.0"));
+        assert_eq!(value.results.len(), 2);
+        assert!(value.results[0].ok);
+        assert_eq!(value.results[0].width_pt, Some(200.0));
+        assert!(!value.results[1].ok);
+        assert_eq!(
+            value.results[1].error.as_deref(),
+            Some("Parse error on line 4: bad")
+        );
+    }
+
+    #[test]
+    fn ping_response_reads_mermaid_version() {
+        let value: PingResponse = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"ping","mermaid":"12.2.0"}"#,
+        )
+        .expect("deserialize ping");
+        assert_eq!(value.mermaid.as_deref(), Some("12.2.0"));
+    }
+
+    #[test]
+    fn diagrams_timeout_uses_item_budget_unless_env_overrides() {
+        let _guard =
+            crate::native::env::TestEnvGuard::set(&[(ENV_TIMEOUT_SECS, None)]);
+        assert_eq!(diagrams_timeout_secs(0), 90);
+        assert_eq!(diagrams_timeout_secs(1), 100);
+        assert_eq!(diagrams_timeout_secs(21), 300);
+        assert_eq!(diagrams_timeout_secs(50), 300);
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            ENV_TIMEOUT_SECS,
+            Some(OsStr::new("12")),
+        )]);
+        assert_eq!(diagrams_timeout_secs(8), 12);
     }
 
     #[test]

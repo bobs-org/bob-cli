@@ -235,8 +235,8 @@ struct CreatePlan {
 /// diagrams swap filter.
 ///
 /// Shared with the note-snapshot print profile, which reuses the same
-/// filters plus its own contract filter. Production callers pass
-/// `diagrams: None` until the wire phase turns this hook on.
+/// filters plus its own contract filter. [`super::diagrams::prepare`]
+/// fills `diagrams` when the pass finds Mermaid blocks.
 pub(crate) struct RenderFilters {
     pub(crate) code_break: PathBuf,
     pub(crate) return_links: PathBuf,
@@ -1246,7 +1246,20 @@ fn create_snapshot_plan(
         )));
     }
     stage_snapshot_assets(&asset_preparation, scratch.path())?;
-    let filters = write_render_filters(scratch.path())?;
+    let mut filters = write_render_filters(scratch.path())?;
+    let diagram_pass = super::diagrams::prepare(
+        pandoc_command().as_deref(),
+        super::diagrams::DiagramSource::Text(&snapshot.projected_markdown),
+        super::diagrams::DiagramRoute {
+            reader: super::diagrams::DiagramReader::Snapshot,
+            text_width_pt:
+                note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT,
+            text_height_pt:
+                note_snapshot::profile::SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT,
+        },
+        scratch.path(),
+    );
+    filters.diagrams = diagram_pass.filter.clone();
     let outcome = note_snapshot::profile::render_note_pdf(
         &snapshot.projected_markdown,
         scratch.path(),
@@ -1335,6 +1348,7 @@ fn create_snapshot_plan(
         &outcome.warnings,
     );
     super::return_links::emit_outcome(&link_outcome, &styler);
+    diagram_pass.emit(&styler);
     print_next_step(&plan.target_plan());
     print_earlier_snapshots(config, &snapshot, &plan.stem, false);
     Ok(())
@@ -1846,7 +1860,18 @@ fn create_markdown_plan(
         Some((.., path)) => path.clone(),
         None => scratch.path().join("render.pdf"),
     };
-    let filters = write_render_filters(scratch.path())?;
+    let mut filters = write_render_filters(scratch.path())?;
+    let diagram_pass = super::diagrams::prepare(
+        Some(pandoc.as_os_str()),
+        super::diagrams::DiagramSource::Path(Path::new(&plan.source)),
+        super::diagrams::DiagramRoute {
+            reader: super::diagrams::DiagramReader::Inferred,
+            text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
+            text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
+        },
+        scratch.path(),
+    );
+    filters.diagrams = diagram_pass.filter.clone();
     let (_audio_created, page_count, link_outcome) = match &listen_setup {
         Some((command, flow, _)) => {
             let link_outcome = render_temp_pdf(
@@ -1973,6 +1998,7 @@ fn create_markdown_plan(
     }
     println!("pages: {page_count}");
     super::return_links::emit_outcome(&link_outcome, &styler);
+    diagram_pass.emit(&styler);
     print_next_step(&plan.target_plan());
     Ok(())
 }
@@ -3199,12 +3225,23 @@ fn plan_audio_copy(
     companion_mod::plan_reused_companion(target_plan, Some(source_md))
 }
 
+/// Letter paper in PostScript points. Generic Markdown uses
+/// `-V geometry:margin=0.85in` below; the diagram scale check uses this
+/// text box (`612 - 2×0.85×72` by `792 - 2×0.85×72`).
+const LETTER_WIDTH_PT: f64 = 612.0;
+const LETTER_HEIGHT_PT: f64 = 792.0;
+const PT_PER_IN: f64 = 72.0;
+const GENERIC_MARGIN_IN: f64 = 0.85;
+pub(crate) const GENERIC_DIAGRAM_TEXT_WIDTH_PT: f64 =
+    LETTER_WIDTH_PT - 2.0 * GENERIC_MARGIN_IN * PT_PER_IN;
+pub(crate) const GENERIC_DIAGRAM_TEXT_HEIGHT_PT: f64 =
+    LETTER_HEIGHT_PT - 2.0 * GENERIC_MARGIN_IN * PT_PER_IN;
+
 /// Audio URIs render through the shared snapshot `obsidian://` helpers
 /// (`note_snapshot::render_uri_template` in `play_uri` above), so both
 /// routes encode vault and path components identically; only the template
 /// source differs (audio keeps its env/config/default precedence,
 /// snapshots use the default template).
-
 fn render_temp_pdf(
     pandoc: &OsStr,
     plan: &CreatePlan,
@@ -4298,6 +4335,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn generic_diagram_text_box_matches_letter_minus_085in_margins() {
+        assert!((GENERIC_DIAGRAM_TEXT_WIDTH_PT - 489.6).abs() < 1e-9);
+        assert!((GENERIC_DIAGRAM_TEXT_HEIGHT_PT - 669.6).abs() < 1e-9);
+    }
+
     fn skip_pandoc_xelatex(test_name: &str) -> bool {
         if pandoc_command().is_none()
             || Command::new("xelatex").arg("--version").output().is_err()
@@ -4539,7 +4582,27 @@ mod tests {
 
     fn write_executable(path: &Path, body: &str) {
         use std::os::unix::fs::PermissionsExt;
-        fs::write(path, body).expect("write fake executable");
+        // Scratch + `cp` so this process never holds a writable descriptor
+        // on the executed inode (ETXTBSY under parallel `cargo test`).
+        let payload = path.with_file_name(format!(
+            ".{}.payload",
+            path.file_name().expect("stub name").to_string_lossy()
+        ));
+        fs::write(&payload, body).expect("write fake executable payload");
+        let _ = fs::remove_file(path);
+        let output = Command::new("cp")
+            .arg("--")
+            .arg(&payload)
+            .arg(path)
+            .output()
+            .expect("copy fake executable");
+        assert!(
+            output.status.success(),
+            "copy fake executable {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::remove_file(&payload).expect("remove payload");
         let mut perms = fs::metadata(path).expect("stat fake").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).expect("chmod fake");

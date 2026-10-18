@@ -1,11 +1,8 @@
-//! Collect and swap Mermaid code blocks for `bob ref create` PDFs.
+//! Collect, render, and swap Mermaid code blocks for `bob ref create` PDFs.
 //!
-//! This phase wires the Lua filters through [`DiagramFilter`] on
-//! [`super::create::RenderFilters`], but every production caller passes
-//! `diagrams: None`, so PDF output stays byte-for-byte unchanged until
-//! the wire phase turns the hook on. The kill switch, fence pre-scan,
-//! collect pass, and results writer live here so that later phase can
-//! orchestrate without growing a second copy of the pandoc contracts.
+//! [`prepare`] never fails the import: a missing renderer, adapter crash,
+//! timeout, or collect error writes fallback notes and warnings. The env
+//! kill switch [`ENV_DIAGRAMS`] skips the pass entirely.
 
 use std::{
     collections::BTreeMap,
@@ -17,11 +14,23 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{CommandError, Result};
+use super::{
+    clip_adapter::{
+        AdapterFailure, ClipAdapterClient, DiagramItem, DiagramsRequest,
+    },
+    CommandError, Result,
+};
+use crate::native::style::Styler;
 
 /// Env kill switch (A6). Values `off`, `0`, `false`, or `no`
 /// (case-insensitive) disable the diagram pass.
 pub(crate) const ENV_DIAGRAMS: &str = "BOB_HIGHLIGHTS_DIAGRAMS";
+
+/// Unique diagrams sent to the adapter; extras degrade with [`LIMIT_ERROR`].
+pub(crate) const MAX_DIAGRAM_ITEMS: usize = 200;
+const LIMIT_ERROR: &str =
+    "too many Mermaid diagrams in one document (limit 200)";
+const SCALE_WARN_BELOW: f64 = 0.5;
 
 /// Pandoc metadata key carrying the collect-pass manifest path.
 pub(crate) const MANIFEST_METADATA_KEY: &str = "bob-diagrams-manifest";
@@ -36,7 +45,7 @@ pub(crate) const COLLECT_FILTER: &str = include_str!("diagrams_collect.lua");
 pub(crate) const SWAP_FILTER: &str = include_str!("diagrams.lua");
 
 /// Paths the swap filter needs when [`super::create::RenderFilters::diagrams`]
-/// is `Some`. Production callers pass `None` until the wire phase.
+/// is `Some`. Both Markdown PDF routes pass this after [`prepare`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiagramFilter {
     pub(crate) filter: PathBuf,
@@ -88,6 +97,56 @@ pub(crate) enum DiagramOutcome {
 pub(crate) struct DiagramResults {
     pub(crate) diagrams: BTreeMap<String, DiagramOutcome>,
     pub(crate) fallback_error: Option<String>,
+}
+
+/// Markdown the collect pass reads: the generic route's source path, or
+/// the snapshot route's projected text (written to `diagrams/input.md`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DiagramSource<'a> {
+    Path(&'a Path),
+    Text(&'a str),
+}
+
+/// Reader flags plus the route's text box for the A8 scale check.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DiagramRoute {
+    pub(crate) reader: DiagramReader,
+    pub(crate) text_width_pt: f64,
+    pub(crate) text_height_pt: f64,
+}
+
+/// Swap-filter paths plus the summary/warning lines for the success block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiagramPass {
+    pub(crate) filter: Option<DiagramFilter>,
+    total: usize,
+    rendered: usize,
+    warnings: Vec<String>,
+}
+
+impl DiagramPass {
+    fn skipped() -> Self {
+        Self {
+            filter: None,
+            total: 0,
+            rendered: 0,
+            warnings: Vec::new(),
+        }
+    }
+
+    /// `diagrams: rendered N of M` on stdout when blocks exist, then
+    /// stderr warnings with [`Styler::warning_prefix`].
+    pub(crate) fn emit(&self, styler: &Styler) {
+        if self.total > 0 {
+            println!(
+                "diagrams: rendered {} of {} Mermaid diagrams",
+                self.rendered, self.total
+            );
+        }
+        for warning in &self.warnings {
+            eprintln!("{}: {warning}", styler.warning_prefix());
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,6 +372,394 @@ pub(crate) fn write_results(
     })
 }
 
+/// Orchestrate collect → adapter → `results.json`. Never returns an error.
+pub(crate) fn prepare(
+    pandoc: Option<&OsStr>,
+    source: DiagramSource<'_>,
+    route: DiagramRoute,
+    scratch: &Path,
+) -> DiagramPass {
+    if !enabled() {
+        return DiagramPass::skipped();
+    }
+    let markdown = match source_markdown(&source) {
+        Ok(text) => text,
+        Err(_) => return DiagramPass::skipped(),
+    };
+    if prescan(&markdown) == 0 {
+        return DiagramPass::skipped();
+    }
+    let workdir = scratch.join("diagrams");
+    if let Err(error) = fs::create_dir_all(&workdir) {
+        return DiagramPass {
+            filter: None,
+            total: 0,
+            rendered: 0,
+            warnings: vec![unavailable_warning(
+                &format!(
+                    "create diagrams workdir {}: {error}",
+                    workdir.display()
+                ),
+                None,
+            )],
+        };
+    }
+    let filter_path = workdir.join("diagrams.lua");
+    if let Err(error) = fs::write(&filter_path, SWAP_FILTER) {
+        return DiagramPass {
+            filter: None,
+            total: 0,
+            rendered: 0,
+            warnings: vec![unavailable_warning(
+                &format!(
+                    "write swap filter {}: {error}",
+                    filter_path.display()
+                ),
+                None,
+            )],
+        };
+    }
+    let results_path = workdir.join("results.json");
+    let collect_path = match collect_source_path(&source, &markdown, &workdir) {
+        Ok(path) => path,
+        Err(reason) => {
+            return fallback_pass(&filter_path, &results_path, reason, None, 0);
+        }
+    };
+    let Some(pandoc) = pandoc else {
+        return fallback_pass(
+            &filter_path,
+            &results_path,
+            "pandoc command not found; install pandoc or set BOB_PANDOC_COMMAND"
+                .to_string(),
+            None,
+            0,
+        );
+    };
+    let blocks = match collect(pandoc, &collect_path, route.reader, &workdir) {
+        Ok(blocks) if blocks.is_empty() => return DiagramPass::skipped(),
+        Ok(blocks) => blocks,
+        Err(error) => {
+            return fallback_pass(
+                &filter_path,
+                &results_path,
+                error.message,
+                None,
+                0,
+            );
+        }
+    };
+    render_collected(blocks, route, &workdir, &filter_path, &results_path)
+}
+
+fn source_markdown(
+    source: &DiagramSource<'_>,
+) -> std::result::Result<String, String> {
+    match source {
+        DiagramSource::Path(path) => fs::read_to_string(path)
+            .map_err(|error| format!("read {}: {error}", path.display())),
+        DiagramSource::Text(text) => Ok((*text).to_string()),
+    }
+}
+
+fn collect_source_path(
+    source: &DiagramSource<'_>,
+    markdown: &str,
+    workdir: &Path,
+) -> std::result::Result<PathBuf, String> {
+    match source {
+        DiagramSource::Path(path) => Ok((*path).to_path_buf()),
+        DiagramSource::Text(_) => {
+            let path = workdir.join("input.md");
+            fs::write(&path, markdown).map_err(|error| {
+                format!("write {}: {error}", path.display())
+            })?;
+            Ok(path)
+        }
+    }
+}
+
+fn fallback_pass(
+    filter: &Path,
+    results: &Path,
+    reason: String,
+    hint: Option<&str>,
+    total: usize,
+) -> DiagramPass {
+    let _ = write_results(
+        results,
+        &DiagramResults {
+            diagrams: BTreeMap::new(),
+            fallback_error: Some(reason.clone()),
+        },
+    );
+    DiagramPass {
+        filter: Some(DiagramFilter {
+            filter: filter.to_path_buf(),
+            results: results.to_path_buf(),
+        }),
+        total,
+        rendered: 0,
+        warnings: vec![unavailable_warning(&reason, hint)],
+    }
+}
+
+fn fallback_from_adapter(
+    filter: &Path,
+    results: &Path,
+    fail: AdapterFailure,
+    total: usize,
+) -> DiagramPass {
+    fallback_pass(filter, results, fail.message, fail.hint.as_deref(), total)
+}
+
+fn render_collected(
+    blocks: Vec<CollectedDiagram>,
+    route: DiagramRoute,
+    workdir: &Path,
+    filter_path: &Path,
+    results_path: &Path,
+) -> DiagramPass {
+    let total = total_occurrences(&blocks);
+    let send = blocks.len().min(MAX_DIAGRAM_ITEMS);
+    let workdir_abs = match workdir.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            return fallback_pass(
+                filter_path,
+                results_path,
+                format!(
+                    "resolve diagrams workdir {}: {error}",
+                    workdir.display()
+                ),
+                None,
+                total,
+            );
+        }
+    };
+    let client = match ClipAdapterClient::resolve_for_diagrams(send) {
+        Ok(client) => client,
+        Err(fail) => {
+            return fallback_from_adapter(
+                filter_path,
+                results_path,
+                fail,
+                total,
+            );
+        }
+    };
+    let items = blocks
+        .iter()
+        .take(send)
+        .map(|block| DiagramItem {
+            id: block.id.clone(),
+            source: block.text.clone(),
+        })
+        .collect();
+    let request =
+        DiagramsRequest::new(workdir_abs.to_string_lossy().into_owned(), items);
+    let success = match client.diagrams(&request) {
+        Ok(success) => success,
+        Err(fail) => {
+            return fallback_from_adapter(
+                filter_path,
+                results_path,
+                fail,
+                total,
+            );
+        }
+    };
+    map_adapter_results(
+        blocks,
+        success,
+        route,
+        filter_path,
+        results_path,
+        total,
+    )
+}
+
+fn map_adapter_results(
+    blocks: Vec<CollectedDiagram>,
+    success: super::clip_adapter::DiagramsSuccess,
+    route: DiagramRoute,
+    filter_path: &Path,
+    results_path: &Path,
+    total: usize,
+) -> DiagramPass {
+    let mut by_id = BTreeMap::new();
+    for item in success.results {
+        by_id.insert(item.id.clone(), item);
+    }
+    let mut diagrams = BTreeMap::new();
+    let mut rendered = 0;
+    let mut fail_warnings = Vec::new();
+    let mut scale_warnings = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        let first = first_occurrence(&blocks, index);
+        if index >= MAX_DIAGRAM_ITEMS {
+            diagrams.insert(
+                block.id.clone(),
+                DiagramOutcome::Error {
+                    error: LIMIT_ERROR.to_string(),
+                },
+            );
+            fail_warnings.push(not_rendered_warning(first, total, LIMIT_ERROR));
+            continue;
+        }
+        match by_id.get(&block.id) {
+            Some(result) if result.ok => {
+                let pdf = result
+                    .pdf
+                    .as_deref()
+                    .filter(|path| Path::new(path).is_file());
+                let Some(pdf) = pdf else {
+                    let error = "rendered PDF missing".to_string();
+                    diagrams.insert(
+                        block.id.clone(),
+                        DiagramOutcome::Error {
+                            error: error.clone(),
+                        },
+                    );
+                    fail_warnings
+                        .push(not_rendered_warning(first, total, &error));
+                    continue;
+                };
+                diagrams.insert(
+                    block.id.clone(),
+                    DiagramOutcome::Pdf {
+                        pdf: pdf.to_string(),
+                    },
+                );
+                rendered += block.occurrences;
+                if let (Some(width_pt), Some(height_pt)) =
+                    (result.width_pt, result.height_pt)
+                    && let Some(scale) = effective_scale(
+                        width_pt,
+                        height_pt,
+                        route.text_width_pt,
+                        route.text_height_pt,
+                    )
+                    && scale < SCALE_WARN_BELOW
+                {
+                    scale_warnings.push(scale_warning(
+                        first,
+                        total,
+                        diagram_label(&block.text),
+                        scale,
+                    ));
+                }
+            }
+            Some(result) => {
+                let error = result
+                    .error
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .unwrap_or("render failed")
+                    .to_string();
+                diagrams.insert(
+                    block.id.clone(),
+                    DiagramOutcome::Error {
+                        error: error.clone(),
+                    },
+                );
+                fail_warnings.push(not_rendered_warning(first, total, &error));
+            }
+            None => {
+                let error = "no result from renderer";
+                diagrams.insert(
+                    block.id.clone(),
+                    DiagramOutcome::Error {
+                        error: error.to_string(),
+                    },
+                );
+                fail_warnings.push(not_rendered_warning(first, total, error));
+            }
+        }
+    }
+    fail_warnings.extend(scale_warnings);
+    let _ = write_results(
+        results_path,
+        &DiagramResults {
+            diagrams,
+            fallback_error: None,
+        },
+    );
+    DiagramPass {
+        filter: Some(DiagramFilter {
+            filter: filter_path.to_path_buf(),
+            results: results_path.to_path_buf(),
+        }),
+        total,
+        rendered,
+        warnings: fail_warnings,
+    }
+}
+
+fn unavailable_warning(reason: &str, hint: Option<&str>) -> String {
+    let mut line = format!("Mermaid diagrams printed as source: {reason}");
+    if let Some(hint) = hint.filter(|hint| !hint.is_empty()) {
+        line.push_str("; ");
+        line.push_str(hint);
+    }
+    line
+}
+
+fn not_rendered_warning(first: usize, total: usize, error: &str) -> String {
+    format!("Mermaid diagram {first} of {total} not rendered: {error}")
+}
+
+fn scale_warning(
+    first: usize,
+    total: usize,
+    label: &str,
+    scale: f64,
+) -> String {
+    let percent = (scale * 100.0).round() as i32;
+    format!(
+        "Mermaid diagram {first} of {total} ({label}) prints at {percent}% scale; labels may be small"
+    )
+}
+
+fn diagram_label(source: &str) -> &str {
+    source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("diagram")
+}
+
+fn first_occurrence(blocks: &[CollectedDiagram], index: usize) -> usize {
+    1 + blocks[..index]
+        .iter()
+        .map(|block| block.occurrences)
+        .sum::<usize>()
+}
+
+fn total_occurrences(blocks: &[CollectedDiagram]) -> usize {
+    blocks.iter().map(|block| block.occurrences).sum()
+}
+
+fn effective_scale(
+    width_pt: f64,
+    height_pt: f64,
+    text_width_pt: f64,
+    text_height_pt: f64,
+) -> Option<f64> {
+    if width_pt <= 0.0
+        || height_pt <= 0.0
+        || text_width_pt <= 0.0
+        || text_height_pt <= 0.0
+    {
+        return None;
+    }
+    Some(
+        1.0_f64
+            .min(text_width_pt / width_pt)
+            .min(text_height_pt / height_pt),
+    )
+}
+
 /// One-page PDF xdvipdfmx can include. Hand-written 7-bit ASCII so tests
 /// do not depend on lopdf's empty-stream output, which XeLaTeX rejects.
 #[cfg(test)]
@@ -363,6 +810,42 @@ mod tests {
             return None;
         };
         Some(pandoc)
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        // Scratch + `cp` so this process never holds a writable descriptor
+        // on the executed inode (ETXTBSY under parallel `cargo test`).
+        let payload = path.with_file_name(format!(
+            ".{}.payload",
+            path.file_name().expect("stub name").to_string_lossy()
+        ));
+        fs::write(&payload, body).expect("write fake executable payload");
+        let _ = fs::remove_file(path);
+        let output = Command::new("cp")
+            .arg("--")
+            .arg(&payload)
+            .arg(path)
+            .output()
+            .expect("copy fake executable");
+        assert!(
+            output.status.success(),
+            "copy fake executable {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::remove_file(&payload).expect("remove payload");
+        let mut perms = fs::metadata(path).expect("stat fake").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake");
+    }
+
+    fn generic_route() -> DiagramRoute {
+        DiagramRoute {
+            reader: DiagramReader::Inferred,
+            text_width_pt: 489.6,
+            text_height_pt: 669.6,
+        }
     }
 
     fn collect_source() -> String {
@@ -452,6 +935,122 @@ plain flowchart LR in a paragraph\n";
             assert_eq!(seq.occurrences, 1);
             assert_ne!(flow.id, seq.id);
         }
+    }
+
+    #[test]
+    fn prepare_skips_adapter_when_kill_switch_or_no_candidates() {
+        let temp = TempDir::new("prepare-skip");
+        let adapter = temp.path.join("adapter.sh");
+        write_executable(
+            &adapter,
+            "#!/bin/sh\necho called > \"$(dirname \"$0\")/called\"\nexit 99\n",
+        );
+        let called = temp.path.join("called");
+        let source = temp.path.join("plain.md");
+        fs::write(&source, "# Hi\n\nNo mermaid.\n").expect("write plain");
+        let _guard = TestEnvGuard::set(&[(
+            super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+            Some(adapter.as_os_str()),
+        )]);
+        let pass = prepare(
+            None,
+            DiagramSource::Path(&source),
+            generic_route(),
+            &temp.path,
+        );
+        assert!(pass.filter.is_none());
+        assert!(!called.exists(), "no mermaid must not spawn");
+
+        let mermaid = temp.path.join("m.md");
+        fs::write(&mermaid, "```mermaid\nflowchart LR\n  A --> B\n```\n")
+            .expect("write mermaid");
+        let _guard = TestEnvGuard::set(&[
+            (ENV_DIAGRAMS, Some(OsStr::new("off"))),
+            (
+                super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+                Some(adapter.as_os_str()),
+            ),
+        ]);
+        let pass = prepare(
+            None,
+            DiagramSource::Path(&mermaid),
+            generic_route(),
+            &temp.path,
+        );
+        assert!(pass.filter.is_none());
+        assert!(!called.exists(), "kill switch must not spawn");
+    }
+
+    #[test]
+    fn prepare_adapter_crash_writes_fallback_and_keeps_filter() {
+        let Some(pandoc) = skip_pandoc("prepare crash") else {
+            return;
+        };
+        let temp = TempDir::new("prepare-crash");
+        let adapter = temp.path.join("adapter.sh");
+        write_executable(&adapter, "#!/bin/sh\necho boom >&2\nexit 3\n");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, "```mermaid\nflowchart LR\n  A --> B\n```\n")
+            .expect("write mermaid");
+        let _guard = TestEnvGuard::set(&[(
+            super::super::clip_adapter::ENV_ADAPTER_OVERRIDE,
+            Some(adapter.as_os_str()),
+        )]);
+        let pass = prepare(
+            Some(pandoc.as_os_str()),
+            DiagramSource::Path(&source),
+            generic_route(),
+            &temp.path,
+        );
+        assert!(pass.filter.is_some());
+        assert!(
+            pass.warnings
+                .iter()
+                .any(|warning| warning.contains("crashed")),
+            "{:?}",
+            pass.warnings
+        );
+        let results =
+            fs::read_to_string(temp.path.join("diagrams/results.json"))
+                .expect("results");
+        assert!(results.contains("fallback_error"), "{results}");
+        assert!(results.contains("web clip adapter crashed"), "{results}");
+    }
+
+    #[test]
+    fn scale_and_occurrence_helpers_match_the_a8_contract() {
+        assert_eq!(effective_scale(200.0, 100.0, 489.6, 669.6), Some(1.0));
+        let scale =
+            effective_scale(1200.0, 100.0, 489.6, 669.6).expect("wide diagram");
+        assert!((scale - 489.6 / 1200.0).abs() < 1e-9);
+        assert!(scale < 0.5);
+        assert_eq!(
+            scale_warning(1, 12, "flowchart LR", 0.46),
+            "Mermaid diagram 1 of 12 (flowchart LR) prints at 46% scale; labels may be small"
+        );
+        assert_eq!(
+            diagram_label("\nflowchart LR\n  A --> B\n"),
+            "flowchart LR"
+        );
+        let blocks = [
+            CollectedDiagram {
+                id: "a".into(),
+                text: "flowchart LR".into(),
+                occurrences: 2,
+            },
+            CollectedDiagram {
+                id: "b".into(),
+                text: "bad".into(),
+                occurrences: 1,
+            },
+        ];
+        assert_eq!(first_occurrence(&blocks, 0), 1);
+        assert_eq!(first_occurrence(&blocks, 1), 3);
+        assert_eq!(total_occurrences(&blocks), 3);
+        assert_eq!(
+            not_rendered_warning(4, 12, "Parse error on line 4: …"),
+            "Mermaid diagram 4 of 12 not rendered: Parse error on line 4: …"
+        );
     }
 
     #[test]

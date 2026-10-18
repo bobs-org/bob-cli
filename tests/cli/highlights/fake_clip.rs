@@ -115,6 +115,100 @@ esac
     }
 }
 
+/// Stub `BOB_WEB_CLIP_ADAPTER` for Mermaid `diagrams` requests.
+///
+/// Writes one-page PDFs for requested ids (XeLaTeX-includable, unlike
+/// the capture fixture), records stdin to `request.json`, and honors
+/// `BOB_FAKE_DIAGRAMS_MODE` (`success`, `partial`, `fail-all`, `crash`,
+/// `invalid`, `sleep`).
+pub(crate) struct FakeDiagrams {
+    pub(crate) root: std::path::PathBuf,
+    pub(crate) path: std::path::PathBuf,
+}
+
+impl FakeDiagrams {
+    pub(crate) fn new(temp: &TempDir, name: &str) -> Self {
+        let root = temp.path().join(name);
+        fs::create_dir_all(&root).expect("create fake diagrams dir");
+        fs::write(
+            root.join("fixture.pdf"),
+            include_bytes!(
+                "../../../src/native/highlights_ref/diagrams_blank.pdf"
+            ),
+        )
+        .expect("write diagrams fixture pdf");
+        let path = root.join("fake-diagrams-adapter.py");
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json, os, shutil, sys, time
+from pathlib import Path
+ROOT = Path({root})
+request = json.load(sys.stdin)
+(ROOT / "request.json").write_text(json.dumps(request))
+mode = os.environ.get("BOB_FAKE_DIAGRAMS_MODE", "success")
+if mode == "crash":
+    sys.stderr.write("boom\n")
+    raise SystemExit(3)
+if mode == "invalid":
+    sys.stdout.write("not-json")
+    raise SystemExit(0)
+if mode == "sleep":
+    time.sleep(float(os.environ.get("BOB_FAKE_DIAGRAMS_SLEEP_SECS", "30")))
+workdir = request["workdir"]
+os.makedirs(workdir, exist_ok=True)
+fixture = ROOT / "fixture.pdf"
+width = float(os.environ.get("BOB_FAKE_DIAGRAMS_WIDTH_PT", "200"))
+height = float(os.environ.get("BOB_FAKE_DIAGRAMS_HEIGHT_PT", "100"))
+results = []
+for item in request.get("items") or []:
+    source = item.get("source") or ""
+    fail = mode in ("fail-all",) or mode == "partial" and "not valid" in source
+    if fail:
+        results.append({{
+            "id": item["id"],
+            "ok": False,
+            "error": "Parse error on line 1: bad",
+        }})
+        continue
+    pdf = os.path.join(workdir, item["id"] + ".pdf")
+    shutil.copy(fixture, pdf)
+    results.append({{
+        "id": item["id"],
+        "ok": True,
+        "pdf": pdf,
+        "width_pt": width,
+        "height_pt": height,
+    }})
+json.dump({{
+    "protocol": 1,
+    "ok": True,
+    "op": "diagrams",
+    "mermaid": "12.2.0",
+    "browser": {{"kind": "chrome", "path": "/fake", "version": "1"}},
+    "results": results,
+    "warnings": [],
+}}, sys.stdout)
+"#,
+            root = json_string(&path_str(&root)),
+        );
+        write_executable(&path, &script);
+        Self { root, path }
+    }
+
+    pub(crate) fn called(&self) -> bool {
+        self.root.join("request.json").exists()
+    }
+
+    pub(crate) fn request(&self) -> String {
+        fs::read_to_string(self.root.join("request.json"))
+            .expect("read saved diagrams request")
+    }
+}
+
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).expect("quote python path")
+}
+
 /// A one-page PDF with no annotations, standing in for the adapter's
 /// fresh render.
 fn write_bare_pdf(path: &std::path::Path) {
