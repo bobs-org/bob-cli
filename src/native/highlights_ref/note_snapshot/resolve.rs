@@ -30,7 +30,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fmt, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use super::classify::{relative_has_dot_directory, vault_member_relative};
@@ -362,10 +362,12 @@ impl VaultNotes {
     }
 
     /// Content-link resolution: member notes first, then a unique file
-    /// that exists in an excluded (non-dot) directory. A member always
-    /// wins over an excluded file, so library copies never shadow real
-    /// notes. Dot-directory hits stay missing. Non-Markdown attachments
-    /// are the caller's third step via [`AttachmentIndex`].
+    /// that exists in an excluded (non-dot) directory, then an exact
+    /// on-disk vault file (Markdown or not). A member always wins over an
+    /// excluded file, so library copies never shadow real notes.
+    /// Dot-directory hits stay missing. Source-relative and unique-basename
+    /// non-Markdown attachments are the caller's next step via
+    /// [`AttachmentIndex`].
     pub(crate) fn resolve_content_target(
         &self,
         current_relative: &Path,
@@ -405,10 +407,21 @@ impl VaultNotes {
                 excluded.sort();
                 excluded.dedup();
                 match excluded.len() {
-                    0 => Err(NoteResolveError::Missing {
-                        display,
-                        suggestions,
-                    }),
+                    0 => {
+                        if let Some((canonical_path, vault_relative_path)) =
+                            self.exact_vault_file(&parsed.note)
+                        {
+                            return Ok(ResolvedNote {
+                                canonical_path,
+                                vault_relative_path,
+                                same_note: false,
+                            });
+                        }
+                        Err(NoteResolveError::Missing {
+                            display,
+                            suggestions,
+                        })
+                    }
                     1 => {
                         let (canonical_path, vault_relative_path) =
                             excluded.into_iter().next().expect("counted one");
@@ -428,6 +441,34 @@ impl VaultNotes {
                 }
             }
         }
+    }
+
+    /// Exact vault-relative file that exists on disk, Markdown or not.
+    /// Parent/absolute components and dot-directory hits are rejected so
+    /// this never answers for a symlink escape or hidden path.
+    fn exact_vault_file(&self, note: &str) -> Option<(PathBuf, PathBuf)> {
+        if note.is_empty() {
+            return None;
+        }
+        let mut relative = PathBuf::new();
+        for component in Path::new(note).components() {
+            match component {
+                Component::Normal(part) => relative.push(part),
+                _ => return None,
+            }
+        }
+        let canonical = self.root.join(&relative).canonicalize().ok()?;
+        if canonical == self.root
+            || !canonical.starts_with(&self.root)
+            || !canonical.is_file()
+        {
+            return None;
+        }
+        let relative = canonical.strip_prefix(&self.root).ok()?.to_path_buf();
+        if relative_has_dot_directory(&relative) {
+            return None;
+        }
+        Some((canonical, relative))
     }
 
     /// Near-stem suggestions restricted to stems with at least one member
@@ -1527,6 +1568,76 @@ mod tests {
             resolve_content(&notes, "Real.md", "gone"),
             Err(NoteResolveError::Missing { .. })
         ));
+    }
+
+    #[test]
+    fn content_targets_resolve_path_qualified_unique_markdown() {
+        let directory = synthetic_vault(&[
+            ("Host.md", "# Host\n"),
+            ("sase_monitor.md", "# Monitor\n"),
+            ("_generated/tag_pages/topic/loc/unami.md", "# Unami\n"),
+            ("_generated/tag_pages/context/habit.md", "# Habit\n"),
+            ("ref/ai/agent_ref/chat_mrps.md", "# Chat\n"),
+        ]);
+        let (_root, notes) = vault_notes(&directory);
+
+        let monitor =
+            resolve_content(&notes, "Host.md", "prompts/sase_monitor")
+                .expect("unique member basename");
+        assert_eq!(
+            monitor.vault_relative_path,
+            PathBuf::from("sase_monitor.md")
+        );
+
+        let unami = resolve_content(&notes, "Host.md", "loc/unami")
+            .expect("unique generated basename");
+        assert_eq!(
+            unami.vault_relative_path,
+            PathBuf::from("_generated/tag_pages/topic/loc/unami.md")
+        );
+
+        let habit =
+            resolve_content(&notes, "2024/20240111_habit.md", "template/habit")
+                .expect("unique generated habit");
+        assert_eq!(
+            habit.vault_relative_path,
+            PathBuf::from("_generated/tag_pages/context/habit.md")
+        );
+
+        let chat = resolve_content(
+            &notes,
+            "ref/ai/agent_ref/chat_mrps.md",
+            "lib/chat/chat_mrps.md",
+        )
+        .expect("unique member after excluded miss");
+        assert_eq!(
+            chat.vault_relative_path,
+            PathBuf::from("ref/ai/agent_ref/chat_mrps.md")
+        );
+    }
+
+    #[test]
+    fn content_targets_resolve_exact_excluded_non_markdown_files() {
+        let directory = synthetic_vault(&[
+            ("Host.md", "# Host\n"),
+            ("lib/chat/report.pdf", "pdf-bytes"),
+            ("lib/docs/readme.pdf", "pdf-bytes"),
+        ]);
+        let (_root, notes) = vault_notes(&directory);
+
+        let report = resolve_content(&notes, "Host.md", "lib/chat/report.pdf")
+            .expect("exact excluded pdf");
+        assert_eq!(
+            report.vault_relative_path,
+            PathBuf::from("lib/chat/report.pdf")
+        );
+
+        let readme = resolve_content(&notes, "sase.md", "lib/docs/readme.pdf")
+            .expect("exact excluded pdf in docs");
+        assert_eq!(
+            readme.vault_relative_path,
+            PathBuf::from("lib/docs/readme.pdf")
+        );
     }
 
     #[test]

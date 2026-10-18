@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Synthetic coverage for scripts/dev/note_snapshot_corpus_gate: run the complete
+# gate with a fake bob, fake PDF tools, and a temporary git vault. Do not copy
+# this helper's matching logic; assert the gate's exit status and summary.md.
+set -euo pipefail
+
+fail() {
+    printf 'note-snapshot-corpus-gate-test: FAIL: %s\n' "$*" >&2
+    exit 1
+}
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || fail "cannot resolve script directory"
+gate=$script_dir/note_snapshot_corpus_gate
+[[ -f $gate ]] || fail "missing gate script: $gate"
+
+root=$(mktemp -d "${TMPDIR:-/tmp}/bob-note-snapshot-gate-test.XXXXXX") || fail "cannot create test root"
+trap 'rm -rf -- "$root"' EXIT
+export TMPDIR=$root/tmp
+mkdir -p "$TMPDIR" "$root/bin"
+
+write_exe() {
+    local path=$1
+    cat >"$path"
+    chmod +x "$path"
+}
+
+write_exe "$root/bin/bob" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output=
+note=
+while (( $# )); do
+    case $1 in
+        --output)
+            output=$2
+            shift 2
+            ;;
+        --bob-dir|--parent|--name)
+            shift 2
+            ;;
+        --dry-run|--no-audio)
+            shift
+            ;;
+        ref|create)
+            shift
+            ;;
+        --*)
+            if (( $# >= 2 )) && [[ $2 != -* ]]; then
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        *)
+            note=$1
+            shift
+            ;;
+    esac
+done
+[[ -n $note && -f $note ]] || exit 0
+if [[ -n $output ]]; then
+    workdir=$(mktemp -d "${TMPDIR:-/tmp}/bob-create-XXXXXX")
+    printf '# projected\n\n- item\n' >"$workdir/projected.md"
+    printf '\\BobTask{open}\ntext\n' >"$workdir/note.tex"
+    mkdir -p -- "$(dirname -- "$output")"
+    printf '%%PDF-1.4\n' >"$output"
+    printf 'workdir: %s\n' "$workdir"
+    printf 'ok created Highlights-ready PDF\n'
+fi
+sed -n 's/^<!-- corpus-gate-warning: \(.*\) -->$/\1/p' "$note" |
+    while IFS= read -r warning; do
+        [[ -n $warning ]] || continue
+        printf 'warning: %s\n' "$warning"
+    done
+printf 'writes: none\n'
+EOF
+
+write_exe "$root/bin/pdfinfo" <<'EOF'
+#!/usr/bin/env bash
+printf 'Pages:          1\n'
+EOF
+
+write_exe "$root/bin/pdffonts" <<'EOF'
+#!/usr/bin/env bash
+cat <<'FONTS'
+name                                 type              encoding         emb sub uni object ID
+------------------------------------ ----------------- ---------------- --- --- --- ---------
+AAAAAA+SourceSerif4                  CID Type 0C       Identity-H       yes yes yes      8  0
+FONTS
+EOF
+
+write_exe "$root/bin/pdftoppm" <<'EOF'
+#!/usr/bin/env bash
+prefix=${!#}
+touch -- "$prefix-1.png"
+EOF
+
+export PATH=$root/bin:$PATH
+export BOB_BIN=$root/bin/bob
+
+write_note() {
+    local path=$1
+    shift
+    mkdir -p -- "$(dirname -- "$path")"
+    cat >"$path"
+}
+
+init_vault() {
+    local vault=$1
+    mkdir -p -- "$vault"
+    git -C "$vault" init -q
+    git -C "$vault" config user.email 'gate-test@example.com'
+    git -C "$vault" config user.name 'Gate Test'
+    git -C "$vault" config commit.gpgsign false
+}
+
+commit_vault() {
+    local vault=$1
+    git -C "$vault" add -A
+    git -C "$vault" commit -qm init
+}
+
+assert_contains() {
+    local haystack=$1 needle=$2
+    [[ $haystack == *"$needle"* ]] || fail "summary missing expected text: $needle"
+}
+
+assert_not_contains() {
+    local haystack=$1 needle=$2
+    [[ $haystack != *"$needle"* ]] || fail "summary unexpectedly contains: $needle"
+}
+
+# --- Fail case: existing files must fail the gate with origin-correct explanations.
+fail_vault=$root/fail-vault
+init_vault "$fail_vault"
+write_note "$fail_vault/area.md" <<'EOF'
+---
+type: [[area]]
+---
+# Area
+
+<!-- corpus-gate-warning: no file or vault note named 'notes/Target.md' -->
+<!-- corpus-gate-warning: no file or vault note named 'twin' -->
+<!-- corpus-gate-warning: no file or vault note named 'totally-absent' -->
+EOF
+write_note "$fail_vault/notes/Target.md" <<'EOF'
+---
+type: [[project]]
+---
+# Target
+EOF
+write_note "$fail_vault/notes/Host.md" <<'EOF'
+# Host
+
+<!-- corpus-gate-warning: no vault attachment named 'img/chart.png' -->
+EOF
+write_note "$fail_vault/notes/img/chart.png" <<'EOF'
+png
+EOF
+write_note "$fail_vault/elsewhere/chart.png" <<'EOF'
+png
+EOF
+write_note "$fail_vault/elsewhere/Last.md" <<'EOF'
+# Last
+
+<!-- corpus-gate-warning: no file or vault note named 'old/Target' -->
+<!-- corpus-gate-warning: no file or vault note named 'old/Target.md' -->
+<!-- corpus-gate-warning: no file or vault note named 'old/TARGET' -->
+EOF
+write_note "$fail_vault/notes/twin.md" <<'EOF'
+# Twin notes
+EOF
+write_note "$fail_vault/elsewhere/twin.md" <<'EOF'
+# Twin elsewhere
+EOF
+commit_vault "$fail_vault"
+
+fail_out=$root/fail-out
+fail_status=0
+"$gate" "$fail_vault" "$fail_out" >"$root/fail.stdout" 2>"$root/fail.stderr" || fail_status=$?
+(( fail_status == 1 )) || fail "existing-file vault exited $fail_status; expected 1"$'\n'"$(cat "$root/fail.stderr")"
+fail_summary=$(cat "$fail_out/summary.md")
+assert_contains "$fail_summary" "False unresolved file warnings: 5"
+assert_contains "$fail_summary" "Vault git status unchanged: yes"
+assert_contains "$fail_summary" "notes/Host.md: warning: no vault attachment named 'img/chart.png' — explanation: FAIL: target matches an existing vault file (source-relative path notes/img/chart.png)."
+assert_contains "$fail_summary" "elsewhere/Last.md: warning: no file or vault note named 'old/Target' — explanation: FAIL: target matches an existing vault file (unique basename Target.md)."
+assert_contains "$fail_summary" "elsewhere/Last.md: warning: no file or vault note named 'old/Target.md' — explanation: FAIL: target matches an existing vault file (unique basename Target.md)."
+assert_contains "$fail_summary" "elsewhere/Last.md: warning: no file or vault note named 'old/TARGET' — explanation: FAIL: target matches an existing vault file (unique basename TARGET.md)."
+assert_contains "$fail_summary" "area.md: warning: no file or vault note named 'notes/Target.md' — explanation: FAIL: target matches an existing vault file (exact path notes/Target.md)."
+assert_contains "$fail_summary" "notes/Host.md: unresolved warning names an existing vault file (source-relative path notes/img/chart.png)"
+assert_contains "$fail_summary" "elsewhere/Last.md: unresolved warning names an existing vault file (unique basename Target.md)"
+assert_not_contains "$fail_summary" "existing vault file ()"
+assert_contains "$fail_summary" "area.md: warning: no file or vault note named 'twin' — explanation: Ambiguous: multiple non-dot-directory files share this basename (ambiguous basename twin.md)."
+assert_contains "$fail_summary" "area.md: warning: no file or vault note named 'totally-absent' — explanation: Genuinely missing: no exact path, matching .md path, or unique non-dot-directory basename exists."
+assert_not_contains "$fail_summary" "notes/Host.md: warning: no vault attachment named 'img/chart.png' — explanation: Genuinely missing"
+assert_not_contains "$fail_summary" "notes/Host.md: warning: no vault attachment named 'img/chart.png' — explanation: Ambiguous"
+
+# --- Pass case: only genuinely missing unresolved files; the gate must exit 0.
+pass_vault=$root/pass-vault
+init_vault "$pass_vault"
+write_note "$pass_vault/area.md" <<'EOF'
+---
+type: [[area]]
+---
+# Area
+EOF
+write_note "$pass_vault/notes/Host.md" <<'EOF'
+# Host
+
+<!-- corpus-gate-warning: no file or vault note named 'old/Missing' -->
+EOF
+write_note "$pass_vault/elsewhere/Last.md" <<'EOF'
+# Last
+
+<!-- corpus-gate-warning: no vault attachment named 'img/absent.png' -->
+EOF
+commit_vault "$pass_vault"
+
+pass_out=$root/pass-out
+pass_status=0
+"$gate" "$pass_vault" "$pass_out" >"$root/pass.stdout" 2>"$root/pass.stderr" || pass_status=$?
+(( pass_status == 0 )) || fail "genuine-missing vault exited $pass_status; expected 0"$'\n'"$(cat "$root/pass.stderr")"$'\n'"$(cat "$pass_out/summary.md")"
+pass_summary=$(cat "$pass_out/summary.md")
+assert_contains "$pass_summary" "False unresolved file warnings: 0"
+assert_contains "$pass_summary" "Render failures: 0"
+assert_contains "$pass_summary" "Dry-run failures: 0"
+assert_contains "$pass_summary" "Vault git status unchanged: yes"
+assert_contains "$pass_summary" "notes/Host.md: warning: no file or vault note named 'old/Missing' — explanation: Genuinely missing: no exact path, matching .md path, or unique non-dot-directory basename exists."
+assert_contains "$pass_summary" "elsewhere/Last.md: warning: no vault attachment named 'img/absent.png' — explanation: Genuinely missing: no exact path, matching .md path, or unique non-dot-directory basename exists."
+assert_not_contains "$pass_summary" "FAIL:"
+
+printf 'note-snapshot-corpus-gate-test: ok\n'

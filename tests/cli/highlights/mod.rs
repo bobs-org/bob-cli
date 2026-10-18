@@ -1,5 +1,6 @@
 //! Highlights reference tests.
 
+mod corpus_gate;
 mod create;
 mod doctor_library;
 pub(crate) mod fake_clip;

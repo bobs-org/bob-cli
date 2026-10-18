@@ -37,7 +37,8 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all scripts/dev/note_snapshot_corpus_gate
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test
+    bash scripts/dev/note_snapshot_corpus_gate_test
 
 # Type-check the pinned Keep adapter and run its offline self-test.
 # Not part of `all`: the first run fetches the pinned Python deps.

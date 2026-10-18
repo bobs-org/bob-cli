@@ -1884,6 +1884,11 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 len,
             ));
         }
+        if rest.starts_with('^') && is_word_boundary(prev) {
+            if let Some((label, len)) = match_caret_residue_label(rest) {
+                return Some((vec![Inline::Text(label)], len));
+            }
+        }
         if rest.starts_with("<http") {
             if let Some(end) = rest.find('>') {
                 let url = rest[1..end].to_string();
@@ -2021,6 +2026,23 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             consumed,
         ))
     }
+}
+
+/// Visible `^id` that is not a trailing block ID still must not leak a
+/// caret: the corpus residue scan treats `^` + `[A-Za-z0-9-]+` outside
+/// code as a raw block-ID label. Underscore-bearing tokens are not
+/// block IDs, so only the matching prefix is consumed and the caret is
+/// dropped.
+fn match_caret_residue_label(rest: &str) -> Option<(String, usize)> {
+    let tail = rest.strip_prefix('^')?;
+    let len = tail
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        .count();
+    if len == 0 {
+        return None;
+    }
+    Some((tail[..len].to_string(), 1 + len))
 }
 
 /// True when `prev` ends a word: start of text, whitespace, or an opening
@@ -2310,11 +2332,13 @@ fn fragment_key(fragment: &LinkFragment) -> String {
     }
 }
 
-/// Readable fragment label for embed sources: heading text or `^id`.
+/// Readable fragment label for embed sources: heading text or the block
+/// id without a caret. Missing-block fallbacks must not leak `^id` into
+/// projected Markdown; the residue scan treats that form as a raw label.
 fn fragment_label(fragment: &LinkFragment) -> String {
     match fragment {
         LinkFragment::Heading(heading) => heading.trim().to_string(),
-        LinkFragment::Block(id) => format!("^{id}"),
+        LinkFragment::Block(id) => id.trim().to_string(),
     }
 }
 
@@ -2495,7 +2519,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                             {
                                 return (
                                     vec![Inline::Text(format!(
-                                        "{stem} › ^{id}"
+                                        "{stem} › {id}"
                                     ))],
                                     None,
                                     Some(warning),
@@ -2512,7 +2536,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                                 vec![Inline::Text(format!("{stem} › {text}"))]
                             }
                             None => {
-                                vec![Inline::Text(format!("{stem} › ^{id}"))]
+                                vec![Inline::Text(format!("{stem} › {id}"))]
                             }
                         };
                         if is_self {
@@ -4095,7 +4119,10 @@ mod tests {
             warnings_of(&projection, SnapshotWarningKind::MissingFragment);
         assert_eq!(missing.len(), 1, "{missing:?}");
         let flat = shapes(&projection.blocks).join("\n");
-        assert!(flat.contains("^missing"), "{flat}");
+        assert!(
+            flat.contains("missing") && !flat.contains("^missing"),
+            "missing-block labels must stay caret-free: {flat}"
+        );
         assert!(!flat.contains("^launch"), "{flat}");
     }
 
@@ -4238,6 +4265,110 @@ mod tests {
         );
         assert_eq!(projection.links_resolved, 5, "{targets:?}");
         assert_eq!(projection.links_unresolved, 2);
+    }
+
+    #[test]
+    fn path_qualified_unique_markdown_and_exact_pdf_content_links_resolve() {
+        let (_dir, projection) = project_host(
+            &[
+                (
+                    "Host.md",
+                    "See [[prompts/sase_monitor]], [[loc/unami]], \
+                     [[lib/chat/chat_mrps.md]], [[template/habit]], \
+                     and [[lib/chat/report.pdf]].\n",
+                ),
+                ("sase_monitor.md", "# Monitor\n"),
+                ("_generated/tag_pages/topic/loc/unami.md", "# Unami\n"),
+                ("_generated/tag_pages/context/habit.md", "# Habit\n"),
+                ("ref/ai/agent_ref/chat_mrps.md", "# Chat\n"),
+                ("lib/chat/report.pdf", "pdf-bytes"),
+            ],
+            "Host.md",
+        );
+        let targets = link_targets(&projection.blocks);
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("sase_monitor=>obs:")
+                    && target.contains("&file=sase_monitor.md")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("unami=>obs:")
+                    && target.contains(
+                        "&file=_generated%2Ftag_pages%2Ftopic%2Floc%2Funami.md",
+                    )
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("chat_mrps=>obs:")
+                    && target
+                        .contains("&file=ref%2Fai%2Fagent_ref%2Fchat_mrps.md")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("habit=>obs:")
+                    && target.contains(
+                        "&file=_generated%2Ftag_pages%2Fcontext%2Fhabit.md",
+                    )
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("report.pdf=>obs:")
+                    && target.contains("&file=lib%2Fchat%2Freport.pdf")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            warnings_of(&projection, SnapshotWarningKind::UnresolvedLink)
+                .is_empty()
+        );
+        assert_eq!(projection.links_resolved, 5);
+        assert_eq!(projection.links_unresolved, 0);
+    }
+
+    #[test]
+    fn missing_block_labels_do_not_emit_raw_carets() {
+        let (_dir, projection) =
+            host_only("See [[#^gone]] and [[#^missing]].\n");
+        let view = syntax_test_view(&projection.parsed.identity, &projection);
+        let serialized =
+            serialize_projected_markdown(&view).expect("serialize");
+        assert!(
+            !serialized.contains("^gone") && !serialized.contains("^missing"),
+            "missing block labels leaked a caret: {serialized}"
+        );
+        super::super::tests::assert_no_obsidian_residue(&serialized);
+        let missing =
+            warnings_of(&projection, SnapshotWarningKind::MissingFragment);
+        assert_eq!(missing.len(), 2, "{missing:?}");
+    }
+
+    #[test]
+    fn underscore_caret_tokens_do_not_emit_raw_carets() {
+        let (_dir, projection) = host_only(
+            "- [ ] Trip #task ^trip\n\
+             \t- | ID::251210_disney_trip ^251210_disney_trip\n",
+        );
+        let view = syntax_test_view(&projection.parsed.identity, &projection);
+        let serialized =
+            serialize_projected_markdown(&view).expect("serialize");
+        assert!(
+            !serialized.contains("^251210"),
+            "underscore caret token leaked a caret: {serialized}"
+        );
+        assert!(
+            serialized.contains("251210") && serialized.contains("disney"),
+            "{serialized}"
+        );
+        super::super::tests::assert_no_obsidian_residue(&serialized);
     }
 
     #[test]

@@ -1030,7 +1030,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
             );
             return None;
         }
-        match self.notes.resolve_note(ref_relative, &parsed) {
+        match self.notes.resolve_content_target(ref_relative, &parsed) {
             Ok(resolved) => Some(resolved.canonical_path),
             Err(error) => {
                 let kind = match &error {
@@ -2022,6 +2022,40 @@ mod tests {
         let restored_md =
             serialize_projected_markdown(&restored.view).expect("serialize");
         assert!(restored_md.contains("#t-gone"), "{restored_md}");
+    }
+
+    #[test]
+    fn source_note_library_pdf_does_not_warn() {
+        let directory = vault(&[
+            (
+                "Host.md",
+                &area("- [ ] Read the paper #task #ref [[Snap]] ^ref\n"),
+            ),
+            (
+                "Snap.md",
+                "---\nsource_note: \"[[lib/chat/report.pdf]]\"\n---\n\n# Snap\n",
+            ),
+            ("lib/chat/report.pdf", "pdf-bytes"),
+        ]);
+        let projection = project(&directory, "Host.md", false);
+        let unresolved: Vec<_> = projection
+            .view
+            .warnings
+            .iter()
+            .filter(|warning| {
+                warning.kind == SnapshotWarningKind::UnresolvedLink
+            })
+            .map(|warning| warning.message.as_str())
+            .collect();
+        assert!(
+            unresolved.is_empty(),
+            "existing library PDF source_note should resolve: {unresolved:?}"
+        );
+        let titles = task_titles(&all_blocks(&projection));
+        assert!(
+            titles.iter().any(|title| title.contains("Read the paper")),
+            "{titles:?}"
+        );
     }
 
     #[test]

@@ -59,6 +59,7 @@ declare -a render_rows=()
 declare -a dry_rows=()
 declare -a render_warnings=()
 declare -a dry_warnings=()
+declare -a dry_warning_explanations=()
 declare -a type3_details=()
 declare -a residue_details=()
 render_failures=0
@@ -135,20 +136,17 @@ find_vault_file_match() {
             fi
         done
     fi
+    # After exact and source-relative misses, the last path component uses
+    # the same case-insensitive basename rules as a bare target: Markdown
+    # names with or without .md, other files with their extension, unique
+    # non-dot-directory candidates. Directory-qualified Markdown follows
+    # VaultLinkResolver's final-component fallback.
     base=${target##*/}
     [[ -n $base ]] || return 1
     extension=${base##*.}
-    if [[ $target == */* || $target == *\\* ]]; then
-        # Markdown note targets with an explicit directory are exact-path
-        # only; the note resolver never falls back to their basename. Other
-        # file links follow AttachmentIndex's unique-filename fallback.
-        [[ ${extension,,} != md ]] || return 1
-        candidate=$base
-    elif [[ $base == *.* && ${extension,,} != md ]]; then
-        # A non-Markdown bare target is an attachment lookup.
+    if [[ $base == *.* && ${extension,,} != md ]]; then
         candidate=$base
     else
-        # A bare note target resolves only to a unique Markdown basename.
         candidate=$base
         [[ ${extension,,} == md ]] || candidate="$candidate.md"
     fi
@@ -157,6 +155,9 @@ find_vault_file_match() {
     if [[ $count == 1 ]]; then
         vault_file_match="unique basename $candidate"
         return 0
+    fi
+    if [[ $count != 0 ]]; then
+        vault_file_match="ambiguous basename $candidate"
     fi
     return 1
 }
@@ -281,6 +282,8 @@ dry_warning_explanation() {
             target=${target%%\'*}
             if find_vault_file_match "$target" "$source_rel"; then
                 printf 'FAIL: target matches an existing vault file (%s).' "$vault_file_match"
+            elif [[ $vault_file_match == ambiguous* ]]; then
+                printf 'Ambiguous: multiple non-dot-directory files share this basename (%s).' "$vault_file_match"
             else
                 printf 'Genuinely missing: no exact path, matching .md path, or unique non-dot-directory basename exists.'
             fi ;;
@@ -498,24 +501,18 @@ while IFS= read -r -d '' note; do
     warning_text=$(grep -i 'warning:' "$log" || true)
     while IFS= read -r line; do
         [[ -n $line ]] || continue
+        explanation=$(dry_warning_explanation "$line" "$rel")
         dry_warnings+=("$rel: $line")
+        dry_warning_explanations+=("$explanation")
         case "$line" in
             *"no file or vault note named "*|*"no vault attachment named "*|*"no #"*|*"no ^"*|*"unresolved"*|*"not found"*)
                 ((dry_unresolved += 1)) ;;
         esac
-        unresolved_target=
-        warning_prefix="no file or vault note named '"
-        attachment_prefix="no vault attachment named '"
-        case "$line" in
-            *"$warning_prefix"*) unresolved_target=${line#*"$warning_prefix"} ;;
-            *"$attachment_prefix"*) unresolved_target=${line#*"$attachment_prefix"} ;;
-        esac
-        if [[ -n $unresolved_target ]]; then
-            unresolved_target=${unresolved_target%%\'*}
-            if find_vault_file_match "$unresolved_target" "$rel"; then
-                ((false_file_warnings += 1))
-                residue_details+=("$rel: unresolved warning names an existing vault file ($vault_file_match)")
-            fi
+        if [[ $explanation == FAIL:* ]]; then
+            ((false_file_warnings += 1))
+            match_kind=${explanation#*existing vault file (}
+            match_kind=${match_kind%)*}
+            residue_details+=("$rel: unresolved warning names an existing vault file ($match_kind)")
         fi
     done <<<"$warning_text"
     (( status == 0 )) || ((dry_failures += 1))
@@ -589,16 +586,20 @@ cat >>"$summary" <<'EOF'
 
 ## Dry-run warning details
 
-Each unresolved file warning is checked against exact paths, the corresponding `.md`
-path, and unique non-dot-directory basenames. Targets that exist fail the gate; absent
-targets are recorded as genuinely missing. Heading and block warnings are retained for
-review. Do not paste note contents into this report.
+Each unresolved file warning is checked against exact paths, source-relative paths, the
+corresponding `.md` path, and unique non-dot-directory basenames, including the last
+component of a directory-qualified target. Targets that exist fail the gate; absent
+targets are recorded as genuinely missing; ambiguous basenames are reported separately.
+Heading and block warnings are retained for review. Do not paste note contents into this
+report.
 
 EOF
 if ((${#dry_warnings[@]})); then
+    idx=0
     for line in "${dry_warnings[@]}"; do
-        explanation=$(dry_warning_explanation "$line" "$rel")
+        explanation=${dry_warning_explanations[idx]}
         printf -- '- %s — explanation: %s\n' "$(markdown_cell "$line")" "$explanation" >>"$summary"
+        ((idx += 1))
     done
 else
     printf -- '- None.\n' >>"$summary"

@@ -710,21 +710,23 @@ resolved-address check. A missing `curl` hints at
 ## Verified on athena and the Mac
 
 The extended note snapshot corpus gate ran on athena on 2026-10-17 from this
-branch (working-tree parent `2ae1251`), with pandoc 3.1.11.1 and XeTeX
+branch (working-tree parent `860f0be` plus working-tree resolver, visibility,
+corpus-gate, and docs changes), with pandoc 3.1.11.1 and XeTeX
 3.141592653-2.6-0.999996 (TeX Live 2025/dev/Debian):
 
-- 102 area/project notes rendered successfully; 5,077 Markdown notes dry-ran
+- 103 area/project notes rendered successfully; 5,081 Markdown notes dry-ran
   successfully.
 - 0 render failures, 0 dry-run failures, 0 missing-glyph warnings, 0 overfull
   warnings, 0 Type 3 fonts, and 0 residue findings (status-chip rows, raw
   block-ID labels, blank lines before task text, false local-heading warnings,
   false unresolved-file warnings). The vault git status was unchanged.
-- Dry runs reported 4,641 unresolved-reference warnings and 4,348 parent
+- Dry runs reported 5,543 unresolved-reference warnings and 4,348 parent
   fallbacks through `body` (plus 1 same-day name fallback). The gate treats an
-  unresolved target as a failure when a matching vault file exists; the
-  remaining warnings are genuine missing notes, attachments, headings, or
-  block fragments, plus cyclic or oversized embed skips. The summary contains
-  no vault note contents.
+  unresolved target as a failure when a matching vault file exists, including
+  unique basename matches for directory-qualified targets; the remaining
+  warnings are genuine missing notes, attachments, headings, or block
+  fragments, plus cyclic or oversized embed skips. The summary contains no
+  vault note contents.
 
 The Mac verification ran on 2026-10-17 at `df4e120`, before these fixes. The
 Mac used pandoc 3.11 and BasicTeX TeX Live 2026, with user-mode `titlesec`,

@@ -24,7 +24,7 @@ bob-glyph-table: glyphs.lua
 bob-return-links: false
 ---
 
-See \^gone\.
+See gone\.
 
 # Tasks {#tasks}
 
