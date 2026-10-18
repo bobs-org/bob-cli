@@ -403,6 +403,11 @@ unchanged.
 4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
 
+Nav applies editor writes as line-level edits, never a whole-note
+replacement, so the cursor stays on the task line the gesture started
+on and the viewport does not move; the review-walk advance on a `]s`
+landing is the one intended exception.
+
 Removing `^prj`'s last reason (the stage, Ctrl+D on the row, or api
 v3) recovers `^prj` and every resident without its own remaining
 reason through the gate in the same write: the tag is stripped and
@@ -3423,6 +3428,11 @@ note has one entry; an open source can have a prepare entry and a later
 mirror entry. Closed notes written by vault.process have no undo entry.
 The toggle from a reverse edge back to its prior state is the Blocks
 stage followed by ↵ on the CURRENT row.
+
+Nav applies editor writes as line-level edits, never a whole-note
+replacement, so the cursor stays on the task line the gesture started
+on and the viewport does not move; the review-walk advance on a `]s`
+landing is the one intended exception.
 
 The forward writer and its existing tests remain byte-identical,
 besides the shared duplicate-preparation fix covered by RBW6.
