@@ -19,12 +19,16 @@ default):
 7. Write the status record used by `bob vault-sync status`.
 
 The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
-`bob task reconcile` runs, and `bob task reroll`, so background sync, nightly
-maintenance, task-status writes, and reroll re-rolls do not mutate the vault
-concurrently. `bob task reroll` holds that lock across a sync-sandwiched scoped
-commit: it runs a vault-sync cycle, writes only the re-rolled notes, commits
-exactly those notes as one `bob task reroll` commit, then runs a second
-vault-sync cycle. See [randomize.md](randomize.md#git-and-vault-sync).
+`bob task reconcile` runs, `bob task reroll`, writing `bob ref scan`, and
+`bob ref rename`, so background sync, nightly maintenance, task-status writes,
+reroll re-rolls, writing scans, and reference renames do not mutate the vault
+concurrently. Writing `bob ref scan` takes `bob_sync.lock` then `scan.lock` and
+holds both through intake and note writes; it never syncs. `bob ref rename`
+already uses that same lock order. `bob task reroll` holds the maintenance lock
+across a sync-sandwiched scoped commit: it runs a vault-sync cycle, writes only
+the re-rolled notes, commits exactly those notes as one `bob task reroll`
+commit, then runs a second vault-sync cycle. See
+[randomize.md](randomize.md#git-and-vault-sync).
 
 ## Conflict policy
 

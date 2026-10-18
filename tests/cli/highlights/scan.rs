@@ -1494,6 +1494,24 @@ fn hold_scan_writer_lock(state_dir: &std::path::Path) -> std::fs::File {
     file
 }
 
+/// Hold `bob_sync.lock` the way vault-sync, nightly, or rename would,
+/// returning the open file so the lock stays held.
+fn hold_vault_maintenance_lock(path: &std::path::Path) -> std::fs::File {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create vault lock dir");
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open vault maintenance lock");
+    fs2::FileExt::try_lock_exclusive(&file)
+        .expect("take vault maintenance lock");
+    file
+}
+
 #[test]
 fn ref_scan_json_success_envelope_names_created_and_updated_notes() {
     let temp = TempDir::new("bob-cli-ref-scan-json-success");
@@ -2044,4 +2062,205 @@ fn ref_scan_human_scan_busy_when_writer_lock_held() {
         "human mode reports the wait and the failure on stderr:\n{}",
         format_output(&output)
     );
+}
+
+#[test]
+fn ref_scan_json_lock_busy_when_maintenance_lock_held() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-lock-busy");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/locked.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Locked\n",
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+    let _held = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("lock-busy json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "lock-busy json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("waiting for another vault maintenance run…"),
+        "the maintenance lock wait line goes to stderr:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "lock_busy");
+    let message = document["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("could not acquire the vault maintenance lock")
+            && message.contains(path_str(&lock_path)),
+        "JSON lock_busy message must name the lock:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        document["error"]["hint"],
+        "vault-sync, nightly, or rename held the maintenance lock; wait for it to finish, then scan again"
+    );
+    assert_eq!(document["error"]["paths"], serde_json::json!([]));
+}
+
+#[test]
+fn ref_scan_json_dry_run_ignores_maintenance_lock() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dry-run-maint-lock");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/preview.pdf");
+    let note = vault.join("ref/chat/preview.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview PDF\n",
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+    let _held = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("dry-run json scan under maintenance lock");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a dry run must ignore the maintenance lock:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("waiting for another vault maintenance run"),
+        "a dry run must not wait on the maintenance lock:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["mode"], "dry_run");
+    assert!(!note.exists(), "dry-run must not create the note");
+}
+
+#[test]
+fn ref_scan_human_lock_busy_when_maintenance_lock_held() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-lock-busy");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/locked.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Locked\n",
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+    let _held = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("lock-busy human scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "lock-busy human scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("waiting for another vault maintenance run…")
+            && err.contains("could not acquire the vault maintenance lock")
+            && err.contains(path_str(&lock_path)),
+        "human mode reports the wait and names the lock on stderr:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn ref_scan_human_dry_run_ignores_maintenance_lock() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-dry-run-maint-lock");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/preview.pdf");
+    let note = vault.join("ref/chat/preview.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview PDF\n",
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+    let _held = hold_vault_maintenance_lock(&lock_path);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("dry-run human scan under maintenance lock");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a dry run must ignore the maintenance lock:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("waiting for another vault maintenance run"),
+        "a dry run must not wait on the maintenance lock:\n{}",
+        format_output(&output)
+    );
+    assert!(!note.exists(), "dry-run must not create the note");
+}
+
+#[test]
+fn ref_scan_writes_when_maintenance_lock_is_free() {
+    let temp = TempDir::new("bob-cli-ref-scan-free-maint-lock");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/free.pdf");
+    let note = vault.join("ref/chat/free.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Free Lock\n",
+    );
+    let lock_path = temp.path().join("bob_sync.lock");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
+        .output()
+        .expect("writing scan with free maintenance lock");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "writing scan with a free maintenance lock should succeed:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("waiting for another vault maintenance run"),
+        "an uncontended scan must not wait on the maintenance lock:\n{}",
+        format_output(&output)
+    );
+    assert!(note.is_file(), "writing scan must still create the note");
 }

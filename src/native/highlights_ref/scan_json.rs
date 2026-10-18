@@ -116,12 +116,38 @@ fn scan_vault_relative(config: &Config, path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().into_owned())
 }
 
+/// Take the shared vault-maintenance lock (`bob_sync.lock`) that writing
+/// scans hold before `scan.lock`. Dry runs never lock. On contention the
+/// wait line goes to stderr once in both modes, then the lock retries
+/// every 250 ms for up to 120 s (`BOB_REF_SCAN_LOCK_WAIT_SECONDS`
+/// overrides both this wait and the scan-lock wait) before failing with
+/// `lock_busy`. The returned file holds the lock until the scan returns.
+pub(super) fn acquire_scan_maintenance_lock(
+    dry_run: bool,
+) -> Result<Option<fs::File>> {
+    if dry_run {
+        return Ok(None);
+    }
+    let timeout = scan_lock_wait_duration();
+    ob::acquire_lock_waiting(timeout, || {
+        eprintln!("waiting for another vault maintenance run…");
+    })
+    .map(Some)
+    .map_err(|error| {
+        CommandError::new(format!(
+            "could not acquire the vault maintenance lock: {error}"
+        ))
+        .with_code("lock_busy")
+    })
+}
+
 /// Take the exclusive writer lock serializing writing scans
 /// (`bob_cli_state_dir()/ref/scan.lock`). Dry runs never lock. On
 /// contention the wait line goes to stderr once in both modes, then the
 /// lock retries every 250 ms for up to 120 s (`BOB_REF_SCAN_LOCK_WAIT_SECONDS`
 /// overrides, for tests) before failing with `scan_busy`. The returned
-/// file holds the lock until the scan returns.
+/// file holds the lock until the scan returns. Callers take
+/// [`acquire_scan_maintenance_lock`] first.
 pub(super) fn acquire_scan_writer_lock(
     dry_run: bool,
 ) -> Result<Option<fs::File>> {
@@ -214,6 +240,15 @@ fn scan_lock_wait_seconds() -> f64 {
         .unwrap_or(SCAN_LOCK_WAIT_SECONDS_DEFAULT)
 }
 
+fn scan_lock_wait_duration() -> std::time::Duration {
+    let secs = scan_lock_wait_seconds();
+    if secs <= 0.0 {
+        std::time::Duration::ZERO
+    } else {
+        std::time::Duration::from_secs_f64(secs)
+    }
+}
+
 /// Run `scan` in JSON mode: print exactly one envelope line and return
 /// the exit code (0, 1, or nothing else; usage errors never reach here).
 pub(super) fn scan_library_json(
@@ -235,6 +270,20 @@ pub(super) fn scan_library_json(
         );
     }
 
+    let _maintenance_lock = match acquire_scan_maintenance_lock(options.dry_run)
+    {
+        Ok(lock) => lock,
+        Err(error) => {
+            return print_scan_error_envelope(
+                config,
+                options,
+                mode,
+                &[],
+                0,
+                &error,
+            );
+        }
+    };
     let _scan_lock = match acquire_scan_writer_lock(options.dry_run) {
         Ok(lock) => lock,
         Err(error) => {
@@ -688,6 +737,13 @@ fn scan_error_parts(
         .map(|path| scan_vault_relative(config, path))
         .collect::<Vec<_>>();
     let (message, hint) = match error.code.unwrap_or("scan_failed") {
+        "lock_busy" => (
+            error.message.clone(),
+            Some(
+                "vault-sync, nightly, or rename held the maintenance lock; wait for it to finish, then scan again"
+                    .to_string(),
+            ),
+        ),
         "scan_busy" => (
             "another bob ref scan is still running".to_string(),
             Some("wait for it to finish, then scan again".to_string()),

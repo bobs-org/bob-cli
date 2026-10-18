@@ -53,7 +53,7 @@ pub(crate) struct CommandError {
     /// interrupted listen command exits 130.
     pub(super) exit_code: Option<i32>,
     /// Machine-readable `ref scan --format json` failure code
-    /// (`scan_busy`, `hook_failed`, `intake_collision`,
+    /// (`lock_busy`, `scan_busy`, `hook_failed`, `intake_collision`,
     /// `output_collision`, `dirty_targets`); `None` means `scan_failed`.
     /// Human rendering ignores it.
     pub(super) code: Option<&'static str>,
