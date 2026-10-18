@@ -168,6 +168,9 @@ pub(crate) struct DoneRecord {
     pub(crate) pdf: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
+    /// `ingested` or `queued` on `created` records written after intake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) intake: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<StoredError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -189,6 +192,7 @@ pub(crate) struct DoneFallback {
 pub(crate) enum JobState {
     Pending,
     Clipping,
+    Ingested,
     Clipped,
     InLibrary,
     AlreadyQueued,
@@ -201,6 +205,7 @@ impl JobState {
         match self {
             JobState::Pending => "pending",
             JobState::Clipping => "clipping",
+            JobState::Ingested => "ingested",
             JobState::Clipped => "clipped",
             JobState::InLibrary => "in_library",
             JobState::AlreadyQueued => "already_queued",
@@ -224,6 +229,7 @@ pub(crate) struct ListedJob {
     pub(crate) finished_at: Option<String>,
     pub(crate) pdf: Option<String>,
     pub(crate) note: Option<String>,
+    pub(crate) intake: Option<String>,
     pub(crate) error: Option<StoredError>,
     pub(crate) fallback_target: Option<String>,
     /// Why the fallback write failed; set on `stuck/` job files only.
@@ -492,6 +498,7 @@ pub(crate) fn append_done(
     outcome: DoneOutcome,
     pdf: Option<String>,
     note: Option<String>,
+    intake: Option<String>,
     error: Option<StoredError>,
     fallback_target: Option<String>,
 ) -> Result<(), String> {
@@ -506,6 +513,7 @@ pub(crate) fn append_done(
         parent: Some(job.effective_parent().to_string()),
         pdf,
         note,
+        intake,
         error,
         fallback: fallback_target
             .map(|relative_target| DoneFallback { relative_target }),
@@ -602,6 +610,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     finished_at: None,
                     pdf: None,
                     note: None,
+                    intake: None,
                     error: None,
                     fallback_target: Some(job.fallback.relative_target.clone()),
                     fallback_error: None,
@@ -629,6 +638,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     finished_at: None,
                     pdf: None,
                     note: None,
+                    intake: None,
                     error: None,
                     fallback_target: Some(job.fallback.relative_target.clone()),
                     fallback_error: None,
@@ -656,6 +666,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     finished_at: None,
                     pdf: None,
                     note: None,
+                    intake: None,
                     error: job.error.clone(),
                     fallback_target: Some(job.fallback.relative_target.clone()),
                     fallback_error: job.fallback_error.clone(),
@@ -670,6 +681,9 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
     }
     for record in read_done_records(root) {
         let state = match record.outcome.as_str() {
+            "created" if record.intake.as_deref() == Some("ingested") => {
+                JobState::Ingested
+            }
             "created" => JobState::Clipped,
             "already_in_library" => JobState::InLibrary,
             "already_queued" => JobState::AlreadyQueued,
@@ -693,6 +707,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
             finished_at: Some(record.finished_at.clone()),
             pdf: record.pdf.clone(),
             note: record.note.clone(),
+            intake: record.intake.clone(),
             error: record.error.clone(),
             fallback_target: record
                 .fallback
@@ -723,6 +738,7 @@ fn unreadable_row(message: String) -> ListedJob {
         finished_at: None,
         pdf: None,
         note: None,
+        intake: None,
         error: Some(StoredError {
             kind: "internal".to_string(),
             message,
@@ -738,11 +754,12 @@ fn state_order(state: JobState) -> u8 {
     match state {
         JobState::Pending => 0,
         JobState::Clipping => 1,
-        JobState::Clipped => 2,
-        JobState::InLibrary => 3,
-        JobState::AlreadyQueued => 4,
-        JobState::FellBack => 5,
-        JobState::Stuck => 6,
+        JobState::Ingested => 2,
+        JobState::Clipped => 3,
+        JobState::InLibrary => 4,
+        JobState::AlreadyQueued => 5,
+        JobState::FellBack => 6,
+        JobState::Stuck => 7,
     }
 }
 
@@ -1000,6 +1017,7 @@ mod tests {
                 &job,
                 DoneOutcome::Created,
                 Some("xlib/blogs/post.pdf".to_string()),
+                None,
                 None,
                 None,
                 None,

@@ -1290,9 +1290,7 @@ fn url_only_pdf_note_clips_and_archives_without_task() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let body = stdout(&out);
     assert!(
-        body.contains(
-            "clipped → xlib/papers/paper.pdf → gkeep_inbox · archived"
-        ),
+        body.contains("queued → xlib/papers/paper.pdf"),
         "clip row:\n{body}"
     );
     assert!(
@@ -1357,6 +1355,7 @@ fn second_note_with_same_url_reports_already_queued() {
     assert_eq!(doc["notes"][0]["action"], "create_ref");
     assert_eq!(doc["notes"][0]["clip"]["outcome"], "created");
     assert_eq!(doc["notes"][0]["clip"]["pdf"], "xlib/papers/paper.pdf");
+    assert_eq!(doc["notes"][0]["clip"]["intake"], "queued");
     assert_eq!(
         doc["notes"][0]["clip"]["url"],
         "https://example.com/paper.pdf"
@@ -1637,9 +1636,7 @@ fn all_clip_pull_needs_no_target() {
     let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stdout(&out).contains(
-            "clipped → xlib/papers/paper.pdf → gkeep_inbox · archived"
-        ),
+        stdout(&out).contains("queued → xlib/papers/paper.pdf"),
         "clip row:\n{}",
         stdout(&out)
     );

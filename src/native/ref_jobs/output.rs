@@ -71,6 +71,7 @@ fn state_label(state: JobState) -> &'static str {
     match state {
         JobState::Pending => "pending",
         JobState::Clipping => "clipping",
+        JobState::Ingested => "filed",
         JobState::Clipped => "clipped",
         JobState::InLibrary => "in library",
         JobState::AlreadyQueued => "already queued",
@@ -83,6 +84,7 @@ fn state_glyph(state: JobState) -> &'static str {
     match state {
         JobState::Pending => "◷",
         JobState::Clipping => "⟳",
+        JobState::Ingested => "✓",
         JobState::Clipped => "✓",
         JobState::InLibrary => "≡",
         JobState::AlreadyQueued => "≡",
@@ -95,6 +97,7 @@ fn header_counts(view: &JobsView) -> Vec<(&'static str, usize)> {
     let order = [
         (JobState::Pending, "pending"),
         (JobState::Clipping, "clipping"),
+        (JobState::Ingested, "filed"),
         (JobState::Clipped, "clipped"),
         (JobState::InLibrary, "in library"),
         (JobState::AlreadyQueued, "already queued"),
@@ -146,10 +149,12 @@ fn print_list_human(view: &JobsView, all: bool) {
         );
         println!("  {glyph} {state}  {display}  {detail}");
     }
-    println!();
-    println!(
-        "next: bob ref scan turns clipped PDFs into ref notes (the Mac runs it every 15 minutes)"
-    );
+    if view.jobs.iter().any(|job| job.state == JobState::Clipped) {
+        println!();
+        println!(
+            "next: bob ref scan -i files queued PDFs (the bob-ref-intake timer drains them on athena and apollo)"
+        );
+    }
 }
 
 /// Paint the state word; plain when color is off.
@@ -158,6 +163,7 @@ fn paint_state(state: JobState, styler: &Styler) -> String {
     match state {
         JobState::Pending => styler.yellow(label),
         JobState::Clipping => styler.cyan(label),
+        JobState::Ingested => styler.green(label),
         JobState::Clipped => styler.green(label),
         JobState::InLibrary => styler.dim(label),
         JobState::AlreadyQueued => styler.dim(label),
@@ -192,6 +198,14 @@ fn row_detail(job: &ListedJob, styler: &Styler) -> String {
         JobState::Clipping => {
             dimmed(format!("started {}{parent_suffix}", started_phrase(job)))
         }
+        JobState::Ingested => dimmed(format!(
+            "{} · {}",
+            job.note.as_deref().unwrap_or("?"),
+            job.finished_at
+                .as_deref()
+                .map(age_phrase)
+                .unwrap_or_else(|| "time unknown".to_string())
+        )),
         JobState::Clipped => dimmed(format!(
             "{} · {}",
             job.pdf.as_deref().unwrap_or("?"),
@@ -299,6 +313,9 @@ fn print_list_json(view: &JobsView) {
             if let Some(note) = &job.note {
                 entry["note"] = json!(note);
             }
+            if let Some(intake) = &job.intake {
+                entry["intake"] = json!(intake);
+            }
             if let Some(error) = &job.error {
                 entry["error"] = json!({
                     "kind": error.kind,
@@ -326,6 +343,7 @@ fn print_list_json(view: &JobsView) {
     let summary = json!({
         "pending": view.counts.get("pending").copied().unwrap_or(0),
         "clipping": view.counts.get("clipping").copied().unwrap_or(0),
+        "ingested": view.counts.get("ingested").copied().unwrap_or(0),
         "clipped": view.counts.get("clipped").copied().unwrap_or(0),
         "in_library": view.counts.get("in_library").copied().unwrap_or(0),
         "already_queued": view.counts.get("already_queued").copied().unwrap_or(0),

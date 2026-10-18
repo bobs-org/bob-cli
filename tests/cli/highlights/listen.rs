@@ -1745,3 +1745,138 @@ fn listen_arxiv_offline_renders_via_sase() {
         "run line is normalized: {report}"
     );
 }
+
+fn seed_listen_git_vault(temp: &TempDir) -> std::path::PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: \"[[area]]\"\n---\n\n# SASE\n",
+    );
+    write_file(&vault.join(".gitignore"), "/xlib/\n");
+    git_in(&vault, ["add", ".gitignore", "sase.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "seed parent"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    vault
+}
+
+fn attach_intake_command<'a>(
+    temp: &'a TempDir,
+    vault: &'a std::path::Path,
+    fake_sase: &'a FakeSase,
+) -> std::process::Command {
+    let mut command = bob_command();
+    command
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-b")
+        .arg(vault)
+        .env("BOB_DIR", vault)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1")
+        .env("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log);
+    command
+}
+
+#[test]
+fn listen_attach_files_audio_for_a_library_capture() {
+    let temp = TempDir::new("bob-cli-listen-attach-ingest-lib");
+    let vault = seed_listen_git_vault(&temp);
+    write_highlights_pdf(
+        &vault.join("lib/papers/ea_graph.pdf"),
+        "- title: EA-Graph Paper\n- status: ready\n- parent: sase\n- source_url: https://arxiv.org/abs/2608.04278\n",
+    );
+    write_file(
+        &vault.join("ref/papers/ea_graph.md"),
+        "---\ntitle: EA-Graph Paper\nsource_pdf: lib/papers/ea_graph.pdf\nsource_url: https://arxiv.org/abs/2608.04278\nstatus: ready\nparent: \"[[sase]]\"\n---\n\n# EA-Graph Paper\n\n- [ ] #task #ref [[lib/papers/ea_graph.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n",
+    );
+    git_in(&vault, ["add", "lib", "ref"]);
+    git_in(&vault, ["commit", "-q", "-m", "seed library capture"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    let fake_sase = listen_for(&temp);
+
+    let output = attach_intake_command(&temp, &vault, &fake_sase)
+        .arg("https://arxiv.org/abs/2608.04278v2")
+        .arg("-L")
+        .output()
+        .expect("attach to library capture");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok attached listen episode to existing capture")
+            && report.contains("ingested:"),
+        "{report}"
+    );
+    assert!(vault.join("lib/papers/ea_graph.mp3").is_file());
+    assert!(!vault.join("xlib/papers/ea_graph.mp3").exists());
+    let note = std::fs::read_to_string(vault.join("ref/papers/ea_graph.md"))
+        .expect("note");
+    assert!(
+        note.contains("audio:") || note.contains("lib/papers/ea_graph.mp3"),
+        "{note}"
+    );
+    let log =
+        String::from_utf8(git_in(&vault, ["log", "-1", "--format=%s"]).stdout)
+            .expect("utf8");
+    assert!(
+        log.contains("bob ref create: attach audio papers/ea_graph"),
+        "{log}"
+    );
+}
+
+#[test]
+fn listen_attach_files_queued_pdf_with_companion_audio() {
+    let temp = TempDir::new("bob-cli-listen-attach-ingest-queued");
+    let vault = seed_listen_git_vault(&temp);
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = listen_for(&temp);
+
+    let queued = attach_intake_command(&temp, &vault, &fake_sase)
+        .arg("https://example.com/paper.pdf")
+        .arg("-k")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("queue intake PDF");
+    assert_success(&queued);
+    assert!(vault.join("xlib/papers/paper.pdf").is_file());
+
+    let output = attach_intake_command(&temp, &vault, &fake_sase)
+        .arg("https://example.com/paper.pdf")
+        .arg("-L")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("attach to queued PDF");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok attached listen episode to existing capture")
+            && report.contains("ingested:"),
+        "{report}"
+    );
+    assert!(vault.join("lib/papers/paper.pdf").is_file());
+    assert!(vault.join("lib/papers/paper.mp3").is_file());
+    assert!(!vault.join("xlib/papers/paper.pdf").exists());
+    assert!(!vault.join("xlib/papers/paper.mp3").exists());
+    assert!(vault.join("ref/papers/paper.md").is_file());
+}

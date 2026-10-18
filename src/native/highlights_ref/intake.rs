@@ -1275,6 +1275,25 @@ pub(super) fn print_outcome(
     outcome: IntakeOutcome,
 ) -> Result<()> {
     match outcome {
+        IntakeOutcome::Kept { why } | IntakeOutcome::WouldKeep { why } => {
+            let _ = why;
+            print_next_step(plan);
+            Ok(())
+        }
+        IntakeOutcome::Incomplete { error } => {
+            print_next_step(plan);
+            Err(CommandError::new(error))
+        }
+        other => print_intake_result(config, other),
+    }
+}
+
+/// Print ingested, queued, or dry-run intake without a create target plan.
+pub(super) fn print_intake_result(
+    config: &Config,
+    outcome: IntakeOutcome,
+) -> Result<()> {
+    match outcome {
         IntakeOutcome::Ingested {
             pdf,
             note,
@@ -1329,11 +1348,6 @@ pub(super) fn print_outcome(
             );
             Ok(())
         }
-        IntakeOutcome::Kept { why } | IntakeOutcome::WouldKeep { why } => {
-            let _ = why;
-            print_next_step(plan);
-            Ok(())
-        }
         IntakeOutcome::WouldIngest { pdf, note } => {
             println!(
                 "intake: would ingest into {} → {} (pull, file note and reading task, commit, push)",
@@ -1342,10 +1356,11 @@ pub(super) fn print_outcome(
             );
             Ok(())
         }
-        IntakeOutcome::Incomplete { error } => {
-            print_next_step(plan);
-            Err(CommandError::new(error))
-        }
+        IntakeOutcome::Kept { .. }
+        | IntakeOutcome::WouldKeep { .. }
+        | IntakeOutcome::Incomplete { .. } => Err(CommandError::new(
+            "internal: kept or incomplete intake needs the create next-step printer",
+        )),
     }
 }
 

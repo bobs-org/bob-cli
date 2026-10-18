@@ -14,8 +14,8 @@ use std::{
 };
 
 use crate::native::highlights_ref::ingest::{
-    fallback_note_for_with_listen, ingest_url, IngestError, IngestOutcome,
-    IngestRequest,
+    fallback_note_for_with_listen, ingest_url, CreatedIntake, IngestError,
+    IngestOutcome, IngestRequest,
 };
 
 use super::fallback::write_fallback;
@@ -97,8 +97,12 @@ struct RunOutcome {
 }
 
 enum OutcomeLine {
+    Filed {
+        note: String,
+    },
     Clipped {
         pdf: String,
+        reason: String,
     },
     AlreadyInLibrary {
         note: String,
@@ -193,6 +197,7 @@ impl<'a> WorkerPass<'a> {
                         DoneOutcome::FellBack,
                         None,
                         None,
+                        None,
                         Some(error),
                         Some(job.fallback.relative_target.clone()),
                     );
@@ -279,30 +284,59 @@ impl<'a> WorkerPass<'a> {
             url: &job.cleaned_url,
             parent: job.effective_parent(),
             listen: job.listen,
+            producer: "bob ref jobs run",
             progress: Some(&progress),
         };
         match ingest_url(&request) {
-            Ok(IngestOutcome::Created { pdf, .. }) => {
-                self.record_done(
-                    job,
-                    DoneOutcome::Created,
-                    Some(pdf.clone()),
-                    None,
-                    None,
-                    None,
-                );
-                let _ = fs::remove_file(running);
-                self.outcomes.push(RunOutcome {
-                    display: job.display.clone(),
-                    line: OutcomeLine::Clipped { pdf },
-                });
-            }
+            Ok(IngestOutcome::Created { pdf, intake, .. }) => match intake {
+                CreatedIntake::Ingested { note, .. } => {
+                    self.record_done(
+                        job,
+                        DoneOutcome::Created,
+                        Some(pdf),
+                        Some(note.clone()),
+                        Some("ingested".to_string()),
+                        None,
+                        None,
+                    );
+                    let _ = fs::remove_file(running);
+                    self.outcomes.push(RunOutcome {
+                        display: job.display.clone(),
+                        line: OutcomeLine::Filed { note },
+                    });
+                }
+                CreatedIntake::Queued { reason, detail } => {
+                    let queued = if detail.is_empty() {
+                        reason.clone()
+                    } else {
+                        format!("{reason}: {detail}")
+                    };
+                    self.record_done(
+                        job,
+                        DoneOutcome::Created,
+                        Some(pdf.clone()),
+                        None,
+                        Some("queued".to_string()),
+                        None,
+                        None,
+                    );
+                    let _ = fs::remove_file(running);
+                    self.outcomes.push(RunOutcome {
+                        display: job.display.clone(),
+                        line: OutcomeLine::Clipped {
+                            pdf,
+                            reason: queued,
+                        },
+                    });
+                }
+            },
             Ok(IngestOutcome::AlreadyInLibrary { note }) => {
                 self.record_done(
                     job,
                     DoneOutcome::AlreadyInLibrary,
                     None,
                     Some(note.clone()),
+                    None,
                     None,
                     None,
                 );
@@ -317,6 +351,7 @@ impl<'a> WorkerPass<'a> {
                     job,
                     DoneOutcome::AlreadyQueued,
                     Some(pdf.clone()),
+                    None,
                     None,
                     None,
                     None,
@@ -373,6 +408,7 @@ impl<'a> WorkerPass<'a> {
                     DoneOutcome::FellBack,
                     None,
                     None,
+                    None,
                     Some(stored),
                     Some(job.fallback.relative_target.clone()),
                 );
@@ -413,6 +449,7 @@ impl<'a> WorkerPass<'a> {
         outcome: DoneOutcome,
         pdf: Option<String>,
         note: Option<String>,
+        intake: Option<String>,
         error: Option<StoredError>,
         fallback_target: Option<String>,
     ) {
@@ -422,6 +459,7 @@ impl<'a> WorkerPass<'a> {
             outcome,
             pdf,
             note,
+            intake,
             error,
             fallback_target,
         ) {
@@ -543,6 +581,7 @@ fn print_run_report(outcomes: &[RunOutcome], quiet: bool) {
         std::collections::BTreeMap::new();
     for outcome in outcomes {
         let key = match &outcome.line {
+            OutcomeLine::Filed { .. } => "filed",
             OutcomeLine::Clipped { .. } => "clipped",
             OutcomeLine::AlreadyInLibrary { .. } => "already in library",
             OutcomeLine::AlreadyQueued { .. } => "already queued",
@@ -564,9 +603,16 @@ fn render_outcome_line(
 ) -> String {
     let display = styler.cyan(&outcome.display);
     match &outcome.line {
-        OutcomeLine::Clipped { pdf } => {
+        OutcomeLine::Filed { note } => {
             format!(
-                "{} clipped {display} → {}",
+                "{} filed {display} → {}",
+                styler.green("✓"),
+                styler.cyan(note)
+            )
+        }
+        OutcomeLine::Clipped { pdf, reason } => {
+            format!(
+                "{} clipped {display} → {} (queued: {reason})",
                 styler.green("✓"),
                 styler.cyan(pdf)
             )

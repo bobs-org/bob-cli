@@ -14,36 +14,26 @@ have written, plus a ⚠️ bullet with the reason and a retry command.
 ## Lifecycle
 
 ```
-pending → clipping → clipped | already in library | already queued
+pending → clipping → ingested | clipped | already in library | already queued
                   ↘ fell back (clip failed, inbox task written)
                   ↘ stuck (the fallback write itself failed)
 ```
 
 One attempt in v1: a retryable failure still falls back instead of
-retrying. `bob ref scan` turns clipped intake PDFs into ref notes
-later. Capture and its worker do not run that scan. The MacBook has an
-installed schedule; the docs also provide an optional setup recipe:
+retrying. A successful clip files the PDF, ref note, and reading task
+inline when intake can run (`ingested` / human `filed`). When intake
+cannot run, the PDF stays in `xlib/` (`clipped` / queued with a reason)
+and a later `bob ref scan -i` files it; the `bob-ref-intake` timer
+drains that queue on athena and apollo. Capture and its worker do not
+run that scan. Human `bob ref jobs` prints the drain footer only when
+queued (`clipped`) rows are visible:
 
-- The installed MacBook cron in the
-  [Highlights bridge](vault-git-sync.md#highlights-bridge) runs
-  `maybe_bob_highlights_sync -w` every 15 minutes. That runs
-  `bob highlights scan -w`, which writes reference notes and permits PDF
-  marker updates. The wrapper can skip a tick when its activity guard or
-  shared scan lock prevents a scan.
-- The [Scheduled Scan](highlights-ref-sync.md#scheduled-scan) recipe is an
-  example LaunchAgent (`StartInterval` 3600) or cron `0 * * * *`. Its
-  example command is `bob highlights scan --dry-run` until you remove
-  `--dry-run` after clean cycles.
+```text
+next: bob ref scan -i files queued PDFs (the bob-ref-intake timer drains them on athena and apollo)
+```
 
-`bob highlights` is a permanent alias of `bob ref`. On another setup, run
-`bob ref scan` yourself or configure a schedule. The footer of a nonempty
-human `bob ref jobs` report prints `the Mac runs it every 15 minutes`.
-That is fixed text describing Bryan's cron, rather than a check of your
-machine's scheduler. The hourly dry-run recipe only previews; remove
-`--dry-run` to create notes. Capture and its worker return no ref-note path
-before a note exists.
-Use `bob ref jobs` to inspect work before the note appears in
-`bob ref list`.
+Use `bob ref jobs` to inspect work before a queued PDF appears in
+`bob ref list`. Filed jobs already have a ref note.
 
 These jobs are created by `bob capture`. `bob ref create` imports inline,
 and [Google Keep URL imports](gkeep.md#url-only-notes-go-to-the-reading-queue)
@@ -69,6 +59,12 @@ ref/jobs/done.jsonl          terminal outcomes (last 1000 once past 2000)
 ref/jobs/worker.lock         single-flight worker lock
 ref/jobs/worker.log          the detached worker's stdout and stderr
 ```
+
+Lock order while a clip files into the library: `ingest.lock` (held for
+the whole `ingest_url` call), then `bob_sync.lock`, then `scan.lock`.
+Intake waits up to 60 s / 30 s for those last two (override both with
+`BOB_REF_INTAKE_LOCK_WAIT_SECONDS`). A busy lock or a vault that cannot
+ingest queues the PDF instead of failing the job.
 
 **Job file** (`schema_version: 1`; temp file, fsync, rename, fsync
 directory):
@@ -111,9 +107,14 @@ the item with routing off, so its `created` date is the capture day.
 ```text
 {schema_version, id, url, cleaned_url, display,
  outcome: created|already_in_library|already_queued|fell_back,
- parent?, pdf?, note?, error?{kind,message,retryable},
+ parent?, pdf?, note?, intake?: ingested|queued,
+ error?{kind,message,retryable},
  fallback?{relative_target}, created_at, started_at, finished_at}
 ```
+
+`intake` is additive on `created` records written after intake. Records
+without it still list as `clipped`. `created` plus `intake: ingested`
+lists as `ingested` (human `filed`).
 
 ## Worker
 
@@ -130,8 +131,11 @@ exits 0. It then:
    `running/` with a `started_at` stamp.
 
 A clip success appends `created`, `already_in_library`, or
-`already_queued` to `done.jsonl`. Human output and JSON `state` say
-`clipped` for a `created` outcome. A clip failure writes the
+`already_queued` to `done.jsonl`. A `created` record that ingested
+carries `intake: ingested` and `note`; one that stayed in `xlib/`
+carries `intake: queued`. Human `run` prints `✓ filed <display> →
+ref/…md` or `✓ clipped <display> → xlib/… (queued: <reason>)`. JSON
+`state` is `ingested` or `clipped`. A clip failure writes the
 fallback task and appends `fell_back`; when the fallback write
 itself fails, the job parks in `stuck/` with both errors and the
 run exits 1. After releasing the lock the worker re-checks
@@ -180,15 +184,18 @@ clipping, and stuck jobs always show. Finished jobs older than 7 days
 need `-a/--all`. When the visible set is empty, the human header reads
 `bob ref · jobs · nothing pending · nothing in the last 7 days`, including
 after `--all`. Human `run` prints one line per job (`⟳ clipping …`, then
-`✓ clipped … → xlib/blogs/post.pdf` or `↩ fell back … → mac_inbox.md
-(blocked: …)`), then a summary (`ok 2 clipped · 1 fell back`, or
-`nothing to do`).
+`✓ filed … → ref/blogs/post.md`, `✓ clipped … → xlib/blogs/post.pdf
+(queued: …)`, or `↩ fell back … → mac_inbox.md (blocked: …)`), then a
+summary (`ok 1 filed · 1 clipped · 1 fell back`, or `nothing to do`).
+JSON `summary` adds `ingested` next to `clipped`.
 
 ## Doctor
 
 `bob ref doctor` prints a `ref jobs:` row with pending, stuck, and
 the oldest pending age. It warns when a pending job is older than 1
-hour or any job is stuck (hint: `bob ref jobs run`).
+hour or any job is stuck (hint: `bob ref jobs run`). Clipped (queued)
+jobs are already terminal in the spool; they wait on `bob ref scan -i`
+rather than another worker pass.
 
 ## Troubleshooting
 

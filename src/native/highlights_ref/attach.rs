@@ -3,10 +3,12 @@
 //! When `--listen` is given and the target is already captured, create
 //! attaches the new episode instead of refusing: it runs the listen
 //! command against the existing PDF and drops the audio at
-//! `xlib/<rel>.mp3`, and scan late-pairs it onto the existing PDF and
-//! ref note. The PDF and the ref note are never touched. Identity is
-//! proven, never guessed: it comes from a source-URL dedupe hit or from
-//! the target path itself being a captured PDF.
+//! `xlib/<rel>.mp3`, then files it through the shared intake session.
+//! A library capture takes an `Audio` unit; a queued capture takes a
+//! `Pdf` unit so the mp3 rides along as a companion. `-k` keeps the
+//! queued attach output. Identity is proven, never guessed: it comes
+//! from a source-URL dedupe hit or from the target path itself being a
+//! captured PDF.
 
 use std::{fs, path::PathBuf};
 
@@ -307,9 +309,31 @@ pub(super) fn attach_audio_dest(
     config.xlib_dir.join(&attach.rel).with_extension("mp3")
 }
 
+/// Intake unit for an attached episode: library captures file audio
+/// onto the existing PDF; queued captures file the PDF with the mp3
+/// as a companion.
+fn attach_intake_unit(
+    config: &Config,
+    attach: &AttachTarget,
+    audio: &std::path::Path,
+) -> super::intake::IntakeUnit {
+    if super::relative_inside(&attach.existing_pdf, &config.lib_dir).is_some() {
+        super::intake::IntakeUnit::Audio {
+            source: audio.to_path_buf(),
+            destination: config.lib_dir.join(&attach.rel).with_extension("mp3"),
+            pdf: attach.existing_pdf.clone(),
+        }
+    } else {
+        super::intake::IntakeUnit::Pdf {
+            source: attach.existing_pdf.clone(),
+            destination: config.lib_dir.join(&attach.rel),
+        }
+    }
+}
+
 /// Run attach mode: refuse existing audio, run the listen command
-/// against the existing PDF, and install the episode at
-/// `xlib/<rel>.mp3`. A dry run prints the plan with
+/// against the existing PDF, install the episode at `xlib/<rel>.mp3`,
+/// then file it through intake. A dry run prints the plan with
 /// `listen: would-run …` and writes nothing.
 pub(super) fn run_attach(
     config: &Config,
@@ -318,6 +342,7 @@ pub(super) fn run_attach(
     source_line: &str,
     target_value: &str,
     dry_run: bool,
+    keep_reason: Option<&str>,
     scratch: &mut super::ScratchDir,
 ) -> Result<()> {
     refuse_existing_audio(config, attach)?;
@@ -379,6 +404,27 @@ pub(super) fn run_attach(
     }
     println!("audio: {} (from --listen)", dest.display());
     println!("title: {}", attach.title);
-    println!("next: bob ref scan");
-    Ok(())
+    let progress = |line: &str| eprintln!("{line}");
+    let outcome = super::intake::finish_intake(
+        config,
+        attach_intake_unit(config, attach, &dest),
+        super::intake::IntakeRequest {
+            producer: "bob ref create",
+            keep_reason,
+            dry_run: false,
+            progress: Some(&progress),
+        },
+    );
+    match outcome {
+        super::intake::IntakeOutcome::Kept { .. }
+        | super::intake::IntakeOutcome::WouldKeep { .. } => {
+            println!("next: bob ref scan");
+            Ok(())
+        }
+        super::intake::IntakeOutcome::Incomplete { error } => {
+            println!("next: bob ref scan");
+            Err(CommandError::new(error))
+        }
+        other => super::intake::print_intake_result(config, other),
+    }
 }

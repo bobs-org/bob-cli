@@ -12,7 +12,10 @@
 //! prints nothing to stderr itself; short status lines go through
 //! [`IngestRequest::progress`] only.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use super::arxiv::ArxivPaper;
 use super::clip_adapter::{
@@ -46,6 +49,8 @@ pub(crate) struct IngestRequest<'a> {
     /// Whether standalone `%` (or the compatible `@` alias) requested
     /// companion audio.
     pub(crate) listen: bool,
+    /// Commit-subject producer, `bob ref jobs run` or `bob gkeep pull`.
+    pub(crate) producer: &'a str,
     /// Short status lines; never stdout.
     pub(crate) progress: Option<&'a dyn Fn(&str)>,
 }
@@ -58,17 +63,31 @@ pub(crate) enum IngestRoute {
     Arxiv,
 }
 
+/// Intake result attached to a newly clipped PDF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CreatedIntake {
+    Ingested {
+        note: String,
+        reading_destination: Option<String>,
+    },
+    Queued {
+        reason: String,
+        detail: String,
+    },
+}
+
 /// The outcome of [`ingest_url`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum IngestOutcome {
     Created {
-        /// Vault-relative intake PDF, e.g. `xlib/blogs/post.pdf`.
+        /// Vault-relative final PDF (`lib/…` when ingested, else `xlib/…`).
         pdf: String,
         ref_type: String,
         title: Option<String>,
         route: IngestRoute,
         /// Vault-relative legacy note superseded by this capture, if any.
         superseded_legacy: Option<String>,
+        intake: CreatedIntake,
     },
     AlreadyInLibrary {
         /// Vault-relative ref note that already records the link.
@@ -636,8 +655,8 @@ pub(crate) fn ingest_url(
         None
     };
 
-    if let Some(paper) = arxiv {
-        return ingest_arxiv_route(
+    let outcome = if let Some(paper) = arxiv {
+        ingest_arxiv_route(
             &config,
             &paper,
             &url,
@@ -646,43 +665,47 @@ pub(crate) fn ingest_url(
             request.parent,
             request.progress,
             listen_command.as_ref(),
-        );
-    }
-    let mut scratch =
-        super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
-    // Ingest stays silent: the TTY `fetching …` line is dropped (None).
-    match super::target::fetch_and_route(url.clone(), &scratch, None)
-        .map_err(command_error)?
-    {
-        super::target::CreateSource::PdfUrl { url, downloaded } => {
-            ingest_pdf_url_route(
-                &config,
-                &url,
-                &downloaded,
-                &mut scratch,
-                &recorded,
-                superseded_legacy,
-                request.parent,
-                request.progress,
-                listen_command.as_ref(),
-            )
+        )?
+    } else {
+        let mut scratch = super::workdir::ScratchDir::create("ingest")
+            .map_err(command_error)?;
+        // Ingest stays silent: the TTY `fetching …` line is dropped (None).
+        match super::target::fetch_and_route(url.clone(), &scratch, None)
+            .map_err(command_error)?
+        {
+            super::target::CreateSource::PdfUrl { url, downloaded } => {
+                ingest_pdf_url_route(
+                    &config,
+                    &url,
+                    &downloaded,
+                    &mut scratch,
+                    &recorded,
+                    superseded_legacy,
+                    request.parent,
+                    request.progress,
+                    listen_command.as_ref(),
+                )?
+            }
+            super::target::CreateSource::WebArticle { url } => {
+                ingest_article_route(
+                    &config,
+                    &url,
+                    &recorded,
+                    superseded_legacy,
+                    request.parent,
+                    request.progress,
+                    listen_command.as_ref(),
+                )?
+            }
+            _ => {
+                return Err(ingest_error(
+                    "unexpected target classification".to_string(),
+                    None,
+                ));
+            }
         }
-        super::target::CreateSource::WebArticle { url } => {
-            ingest_article_route(
-                &config,
-                &url,
-                &recorded,
-                superseded_legacy,
-                request.parent,
-                request.progress,
-                listen_command.as_ref(),
-            )
-        }
-        _ => Err(ingest_error(
-            "unexpected target classification".to_string(),
-            None,
-        )),
-    }
+    };
+    apply_intake(request, &config, outcome)
 }
 
 /// Map a refusing dedupe hit to its typed outcome.
@@ -706,6 +729,168 @@ fn outcome_for_refusing_hit(
         Some(IngestOutcome::AlreadyQueued {
             pdf: vault_relative_path_value(config, &hit.path),
         })
+    }
+}
+
+fn clipped_created(
+    pdf: String,
+    ref_type: String,
+    title: Option<String>,
+    route: IngestRoute,
+    superseded_legacy: Option<String>,
+) -> IngestOutcome {
+    IngestOutcome::Created {
+        pdf,
+        ref_type,
+        title,
+        route,
+        superseded_legacy,
+        intake: CreatedIntake::Queued {
+            reason: String::new(),
+            detail: String::new(),
+        },
+    }
+}
+
+fn apply_intake(
+    request: &IngestRequest,
+    config: &Config,
+    outcome: IngestOutcome,
+) -> Result<IngestOutcome, IngestError> {
+    let IngestOutcome::Created {
+        pdf,
+        ref_type,
+        title,
+        route,
+        superseded_legacy,
+        ..
+    } = outcome
+    else {
+        return Ok(outcome);
+    };
+    let keep_reason = match super::intake::ingest_on_create() {
+        Ok((true, _)) => None,
+        Ok((false, why)) => Some(why),
+        Err(error) => return Err(ingest_error(error.to_string(), None)),
+    };
+    let source = config.bob_dir.join(&pdf);
+    let unit =
+        if let Some(rel) = super::relative_inside(&source, &config.xlib_dir) {
+            super::intake::IntakeUnit::Pdf {
+                source: source.clone(),
+                destination: config.lib_dir.join(rel),
+            }
+        } else if super::relative_inside(&source, &config.lib_dir).is_some() {
+            super::intake::IntakeUnit::LibraryPdf {
+                pdf: source.clone(),
+            }
+        } else {
+            return Ok(IngestOutcome::Created {
+                pdf,
+                ref_type,
+                title,
+                route,
+                superseded_legacy,
+                intake: CreatedIntake::Queued {
+                    reason: "outside_vault".to_string(),
+                    detail: "clipped PDF is outside xlib and lib".to_string(),
+                },
+            });
+        };
+    let intake_outcome = super::intake::finish_intake(
+        config,
+        unit,
+        super::intake::IntakeRequest {
+            producer: request.producer,
+            keep_reason,
+            dry_run: false,
+            progress: request.progress,
+        },
+    );
+    Ok(map_created_intake(
+        config,
+        pdf,
+        ref_type,
+        title,
+        route,
+        superseded_legacy,
+        intake_outcome,
+    ))
+}
+
+fn map_created_intake(
+    config: &Config,
+    original_pdf: String,
+    ref_type: String,
+    title: Option<String>,
+    route: IngestRoute,
+    superseded_legacy: Option<String>,
+    intake_outcome: super::intake::IntakeOutcome,
+) -> IngestOutcome {
+    let (pdf, intake) = match intake_outcome {
+        super::intake::IntakeOutcome::Ingested {
+            pdf,
+            note,
+            task_destination,
+            ..
+        } => (
+            vault_relative_path_value(config, &pdf),
+            CreatedIntake::Ingested {
+                note: vault_relative_path_value(config, &note),
+                reading_destination: task_destination
+                    .as_ref()
+                    .map(|path| vault_relative_path_value(config, path)),
+            },
+        ),
+        super::intake::IntakeOutcome::Queued { reason, detail, .. } => (
+            original_pdf,
+            CreatedIntake::Queued {
+                reason: reason.as_str().to_string(),
+                detail,
+            },
+        ),
+        super::intake::IntakeOutcome::Kept { why } => (
+            original_pdf,
+            CreatedIntake::Queued {
+                reason: "kept".to_string(),
+                detail: why,
+            },
+        ),
+        super::intake::IntakeOutcome::Incomplete { error } => {
+            let lib_pdf = xlib_to_lib_pdf(config, &original_pdf);
+            (
+                vault_relative_path_value(config, &lib_pdf),
+                CreatedIntake::Queued {
+                    reason: "refused".to_string(),
+                    detail: error,
+                },
+            )
+        }
+        super::intake::IntakeOutcome::WouldIngest { .. }
+        | super::intake::IntakeOutcome::WouldKeep { .. } => (
+            original_pdf,
+            CreatedIntake::Queued {
+                reason: "kept".to_string(),
+                detail: "dry run".to_string(),
+            },
+        ),
+    };
+    IngestOutcome::Created {
+        pdf,
+        ref_type,
+        title,
+        route,
+        superseded_legacy,
+        intake,
+    }
+}
+
+fn xlib_to_lib_pdf(config: &Config, relative: &str) -> PathBuf {
+    let source = config.bob_dir.join(relative);
+    if let Some(rel) = super::relative_inside(&source, &config.xlib_dir) {
+        config.lib_dir.join(rel)
+    } else {
+        source
     }
 }
 
@@ -796,13 +981,13 @@ fn ingest_pdf_url_route(
         )
         .map_err(command_error)?;
     }
-    Ok(IngestOutcome::Created {
-        pdf: vault_relative_path_value(config, &target_plan.target),
-        ref_type: INGEST_PDF_REF_TYPE.to_string(),
-        title: Some(pdf_plan.title),
-        route: IngestRoute::Pdf,
+    Ok(clipped_created(
+        vault_relative_path_value(config, &target_plan.target),
+        INGEST_PDF_REF_TYPE.to_string(),
+        Some(pdf_plan.title),
+        IngestRoute::Pdf,
         superseded_legacy,
-    })
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -966,13 +1151,13 @@ fn ingest_arxiv_route(
         )
         .map_err(command_error)?;
     }
-    Ok(IngestOutcome::Created {
-        pdf: vault_relative_path_value(config, &target_plan.target),
-        ref_type: INGEST_PDF_REF_TYPE.to_string(),
-        title: Some(pdf_plan.title),
-        route: IngestRoute::Arxiv,
+    Ok(clipped_created(
+        vault_relative_path_value(config, &target_plan.target),
+        INGEST_PDF_REF_TYPE.to_string(),
+        Some(pdf_plan.title),
+        IngestRoute::Arxiv,
         superseded_legacy,
-    })
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1128,13 +1313,13 @@ fn ingest_article_route(
     }
     // Keep the workdir alive until after install; cleanup via drop.
     let _ = workdir.path();
-    Ok(IngestOutcome::Created {
-        pdf: vault_relative_path_value(config, &plan.target),
-        ref_type: INGEST_ARTICLE_REF_TYPE.to_string(),
-        title: Some(title),
-        route: IngestRoute::Article,
+    Ok(clipped_created(
+        vault_relative_path_value(config, &plan.target),
+        INGEST_ARTICLE_REF_TYPE.to_string(),
+        Some(title),
+        IngestRoute::Article,
         superseded_legacy,
-    })
+    ))
 }
 
 #[cfg(test)]
@@ -1376,6 +1561,7 @@ mod tests {
             url: "https://example.com/post",
             parent: "mac_inbox",
             listen: false,
+            producer: "bob ref jobs run",
             progress: None,
         };
         match ingest_url(&request).expect("ingest library hit") {
@@ -1390,6 +1576,7 @@ mod tests {
             url: "not a url",
             parent: "mac_inbox",
             listen: false,
+            producer: "bob ref jobs run",
             progress: None,
         };
         let error = ingest_url(&bad).expect_err("invalid URL must fail");

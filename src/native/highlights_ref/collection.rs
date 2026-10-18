@@ -112,6 +112,7 @@ fn run_collection(
             &source_line,
             &target,
             prepared.options.dry_run,
+            prepared.options.keep_intake_reason.as_deref(),
             &mut scratch,
         );
     }

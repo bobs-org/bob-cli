@@ -2,8 +2,10 @@
 
 `bob gkeep` drains the Google Keep inbox into Obsidian tasks or inline
 reference clips. Ordinary notes become tasks in `gkeep_inbox.md`. An eligible
-URL-only note is clipped to an intake PDF during `pull`; `bob ref scan`
-writes the note that `bob ref list` shows. Each note is archived in Keep
+URL-only note is clipped during `pull` through the same ingest as
+`bob ref create`: when intake can run, the PDF, ref note, and reading task
+are filed immediately; otherwise the PDF stays in `xlib/` for
+`bob ref scan` to drain. Each note is archived in Keep
 only after its current content is verified in the vault. Typical order:
 `bob gkeep` (or `bob gkeep list`) to see Keep and the vault side by side,
 `bob gkeep pull -d` to preview the exact Markdown, `bob gkeep pull -n` to
@@ -224,11 +226,13 @@ trailing route and listen marker never become part of the clip target.
 parent (the compatible alias form is `URL @ @route`). The listen marker
 must immediately follow the URL.
 Pull messages name the selected parent (`would clip →
-sase`, `clipped → <pdf> → sase`); that means the link was accepted for
-import. A marked clip shows `· Listen` with `· companion audio requested`,
+sase`, `filed → <pdf> → <note> → sase`, `queued → <pdf> (<reason>) → sase`);
+that means the link was accepted for import. A marked clip shows `· Listen`
+with `· companion audio requested`,
 and an already-known marked link shows
 `no new listen job was queued · to attach audio run: bob ref create <URL> -P <parent> -L`.
-The note joins `bob ref list` after `bob ref scan`. Lists, notes
+A filed clip already has a ref note; a queued clip joins `bob ref list`
+after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
 trailing route) or link-plus-prose notes, corporate short links, IP
 literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
@@ -257,7 +261,7 @@ selected parent, announced as `Clipping <display> (i/N)`. The outcomes:
 
 | Outcome | Meaning | Journal | Archive |
 | --- | --- | --- | --- |
-| `created` | A fresh intake PDF was clipped | `ref_created` at once | Archived |
+| `created` | A fresh PDF was clipped; intake either filed it (`intake: ingested` with `note`) or left it queued (`intake: queued` with `queue_reason`) | `ref_created` at once with the final PDF path | Archived |
 | `already_in_library` | A PDF-backed ref note already records the link | `ref_created` at once | Archived |
 | `already_queued` | An intake PDF is already queued | `ref_created` at once | Archived |
 | `failed_retryable` | Network, timeout, browser, dependency, listen config/execution/missing-audio/interruption failure, or HTTP 408, 429, or 5xx | None | Left in Keep; exit 1 |
@@ -563,7 +567,8 @@ generic error document instead. A missing target in JSON gives `tasks: []`.
     // only on URL-only notes:
     // "clip": {"url": "…", "display": "…",
     //   "outcome": "created|already_in_library|already_queued|failed_retryable|failed_permanent|would_clip",
-    //   "pdf": "…", "existing": "…",
+    //   "pdf": "…", "note": "…", "intake": "ingested|queued",
+    //   "queue_reason": "…", "existing": "…",
     //   "error": {"kind": "…", "message": "…", "retryable": true}}
   }],
   "markdown": "…|null",

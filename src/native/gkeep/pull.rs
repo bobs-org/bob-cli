@@ -27,7 +27,7 @@ use super::{
 };
 use super::{GkeepError, PullArgs};
 use crate::native::highlights_ref::ingest::{
-    ingest_url, IngestOutcome, IngestRequest,
+    ingest_url, CreatedIntake, IngestOutcome, IngestRequest,
 };
 use crate::native::url_routing::{
     library_verdicts, LibraryVerdict, RefIntent, UrlRoutingPolicy,
@@ -52,6 +52,8 @@ struct ClipReport {
 enum ClipOutcome {
     Created {
         pdf: String,
+        note: Option<String>,
+        intake: CreatedIntake,
     },
     AlreadyInLibrary {
         note: String,
@@ -1429,14 +1431,21 @@ fn run_clip_pre_pass(
             url: &intent.cleaned,
             parent: parent.as_str(),
             listen: intent.listen,
+            producer: "bob gkeep pull",
             progress,
         };
         // Clone for the error path: `request` borrows `parent`.
         let parent_for_error = parent.clone();
         let outcome = match ingest_url(&request) {
             Ok(ingest) => match ingest {
-                IngestOutcome::Created { pdf, .. } => {
-                    ClipOutcome::Created { pdf }
+                IngestOutcome::Created { pdf, intake, .. } => {
+                    let note = match &intake {
+                        CreatedIntake::Ingested { note, .. } => {
+                            Some(note.clone())
+                        }
+                        CreatedIntake::Queued { .. } => None,
+                    };
+                    ClipOutcome::Created { pdf, note, intake }
                 }
                 IngestOutcome::AlreadyInLibrary { note } => {
                     ClipOutcome::AlreadyInLibrary { note }
@@ -1468,7 +1477,7 @@ fn run_clip_pre_pass(
         // Terminal outcomes join the archive set and journal now, one
         // batch per clip, recording the selected parent for replay.
         match &outcome {
-            ClipOutcome::Created { pdf } => {
+            ClipOutcome::Created { pdf, .. } => {
                 append_ref_created(
                     &planned.note,
                     pdf,
@@ -3004,17 +3013,33 @@ fn print_human_ref_row(
         String::new()
     };
     match &report.outcome {
-        ClipOutcome::Created { pdf } => {
+        ClipOutcome::Created { pdf, note, intake } => {
             let suffix = archive_suffix("archived");
             let audio_suffix = if report.intent.listen {
                 " · companion audio requested"
             } else {
                 ""
             };
-            println!(
-                "  {} {display}{listen_suffix}  clipped → {pdf} → {parent}{audio_suffix}{suffix}",
-                styler.green("✓"),
-            );
+            match intake {
+                CreatedIntake::Ingested { .. } => {
+                    let note = note.as_deref().unwrap_or("ref note");
+                    println!(
+                        "  {} {display}{listen_suffix}  filed → {pdf} → {note} → {parent}{audio_suffix}{suffix}",
+                        styler.green("✓"),
+                    );
+                }
+                CreatedIntake::Queued { reason, detail } => {
+                    let queued = if detail.is_empty() {
+                        reason.clone()
+                    } else {
+                        format!("{reason}: {detail}")
+                    };
+                    println!(
+                        "  {} {display}{listen_suffix}  queued → {pdf} ({queued}) → {parent}{audio_suffix}{suffix}",
+                        styler.green("✓"),
+                    );
+                }
+            }
         }
         ClipOutcome::AlreadyInLibrary { note } => {
             let suffix = archive_suffix("archived");
@@ -3114,7 +3139,22 @@ fn clip_json(report: &ClipReport) -> serde_json::Value {
         }
     }
     match &report.outcome {
-        ClipOutcome::Created { pdf } | ClipOutcome::AlreadyQueued { pdf } => {
+        ClipOutcome::Created { pdf, note, intake } => {
+            value["pdf"] = json!(pdf);
+            match intake {
+                CreatedIntake::Ingested { .. } => {
+                    value["intake"] = json!("ingested");
+                    if let Some(note) = note {
+                        value["note"] = json!(note);
+                    }
+                }
+                CreatedIntake::Queued { reason, .. } => {
+                    value["intake"] = json!("queued");
+                    value["queue_reason"] = json!(reason);
+                }
+            }
+        }
+        ClipOutcome::AlreadyQueued { pdf } => {
             value["pdf"] = json!(pdf);
         }
         ClipOutcome::AlreadyInLibrary { note } => {

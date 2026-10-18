@@ -26,6 +26,7 @@ fn jobs_command(
     let mut command = bob_command();
     command.env("XDG_STATE_HOME", state_dir(temp));
     command.env("BOB_DIR", vault);
+    command.env("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0");
     command.arg("ref").arg("jobs");
     for arg in args {
         command.arg(arg);
@@ -178,6 +179,7 @@ fn ref_jobs_bare_lists_empty_vault_state() {
     for key in [
         "pending",
         "clipping",
+        "ingested",
         "clipped",
         "in_library",
         "already_queued",
@@ -866,4 +868,160 @@ fn ref_jobs_list_shows_the_parent() {
         serde_json::from_str(&stdout(&output)).expect("parse json");
     assert_eq!(parsed["schema_version"], 1);
     assert_eq!(parsed["jobs"][0]["parent"], "mac_inbox");
+}
+
+fn seed_jobs_git_vault(temp: &TempDir) -> std::path::PathBuf {
+    let (vault, _remote, _peer) = init_vault_sync_pair(temp);
+    write_file(
+        &vault.join("mac_inbox.md"),
+        "---\ntype: \"[[area]]\"\n---\n\n# Inbox\n",
+    );
+    write_file(&vault.join(".gitignore"), "/xlib/\n");
+    git_in(&vault, ["add", ".gitignore", "mac_inbox.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "seed parent"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    vault
+}
+
+#[test]
+fn ref_jobs_run_ingests_into_a_synced_vault() {
+    let temp = TempDir::new("bob-cli-ref-jobs-ingest");
+    let vault = seed_jobs_git_vault(&temp);
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
+    let lock = temp.path().join("bob_sync.lock");
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run with intake");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report
+            .contains("✓ filed example.com/post → ref/blogs/symphony_spec.md")
+            && report.contains("ok 1 filed"),
+        "{report}"
+    );
+    assert!(vault.join("lib/blogs/symphony_spec.pdf").is_file());
+    assert!(vault.join("ref/blogs/symphony_spec.md").is_file());
+    assert!(!vault.join("xlib/blogs/symphony_spec.pdf").exists());
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("\"intake\":\"ingested\"")
+            && done.contains("ref/blogs/symphony_spec.md"),
+        "{done}"
+    );
+    let list = jobs_command(&temp, &vault, &["list"])
+        .output()
+        .expect("list ingested job");
+    assert_success(&list);
+    let listed = stdout(&list);
+    assert!(
+        listed.contains("filed") && listed.contains("example.com/post"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains("bob-ref-intake timer"),
+        "filed rows must not show the queued drain footer: {listed}"
+    );
+}
+
+#[test]
+fn ref_jobs_run_queues_when_maintenance_lock_is_held() {
+    let temp = TempDir::new("bob-cli-ref-jobs-ingest-lock");
+    let vault = seed_jobs_git_vault(&temp);
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
+    let lock = temp.path().join("bob_sync.lock");
+    let held = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .expect("open shared lock");
+    {
+        use fs2::FileExt;
+        held.lock_exclusive().expect("hold shared lock");
+    }
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1")
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run with lock held");
+    drop(held);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "✓ clipped example.com/post → xlib/blogs/symphony_spec.pdf (queued:"
+        ) && report.contains("ok 1 clipped"),
+        "{report}"
+    );
+    assert!(vault.join("xlib/blogs/symphony_spec.pdf").is_file());
+    assert!(!vault.join("lib/blogs/symphony_spec.pdf").exists());
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("\"intake\":\"queued\"")
+            && done.contains("xlib/blogs/symphony_spec.pdf"),
+        "{done}"
+    );
+}
+
+#[test]
+fn ref_jobs_old_created_records_still_render_as_clipped() {
+    let temp = TempDir::new("bob-cli-ref-jobs-old-created");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let now = chrono::Local::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let done_path = state_dir(&temp).join("bob-cli/ref/jobs/done.jsonl");
+    fs::create_dir_all(done_path.parent().expect("parent"))
+        .expect("create spool");
+    fs::write(
+        &done_path,
+        format!(
+            "{{\"schema_version\":1,\"id\":\"legacy-1\",\"url\":\"https://example.com/legacy\",\"cleaned_url\":\"https://example.com/legacy\",\"display\":\"example.com/legacy\",\"outcome\":\"created\",\"pdf\":\"xlib/blogs/legacy.pdf\",\"created_at\":\"{now}\",\"finished_at\":\"{now}\"}}\n"
+        ),
+    )
+    .expect("seed old done record");
+
+    let output = jobs_command(&temp, &vault, &[])
+        .output()
+        .expect("list old created record");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("1 clipped")
+            && report.contains("example.com/legacy")
+            && report.contains("xlib/blogs/legacy.pdf")
+            && report.contains("bob-ref-intake timer"),
+        "{report}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(
+        &jobs_command(&temp, &vault, &["-f", "json"])
+            .output()
+            .expect("json list"),
+    ))
+    .expect("parse json");
+    assert_eq!(parsed["summary"]["clipped"], 1);
+    assert_eq!(parsed["summary"]["ingested"], 0);
+    assert!(parsed["jobs"][0].get("intake").is_none());
 }

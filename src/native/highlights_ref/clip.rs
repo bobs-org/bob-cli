@@ -179,6 +179,7 @@ fn run_clip_attach(
     companion: &Companion,
     cleaned: &str,
     dry_run: bool,
+    keep_reason: Option<&str>,
 ) -> std::result::Result<(), ClipError> {
     let Companion::Listen(command) = companion else {
         return Err(ClipError::new("internal: attach needs --listen"));
@@ -192,6 +193,7 @@ fn run_clip_attach(
         &format!("source: {cleaned}"),
         cleaned,
         dry_run,
+        keep_reason,
         &mut scratch,
     )?;
     Ok(())
@@ -241,6 +243,7 @@ pub(super) fn capture_article(
             &companion,
             &web_url.cleaned,
             options.dry_run,
+            options.keep_intake_reason.as_deref(),
         );
     }
     let legacy = legacy_hits(&recorded, &web_url.dedupe_key);
@@ -287,6 +290,7 @@ pub(super) fn capture_article(
             &companion,
             &web_url.cleaned,
             options.dry_run,
+            options.keep_intake_reason.as_deref(),
         );
     }
 
@@ -423,6 +427,7 @@ pub(super) fn capture_article(
             &companion,
             &web_url.cleaned,
             options.dry_run,
+            options.keep_intake_reason.as_deref(),
         );
     }
 

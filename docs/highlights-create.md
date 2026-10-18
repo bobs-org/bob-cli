@@ -586,7 +586,7 @@ bob ref create https://arxiv.org/abs/1706.03762 -L
 The `URL %` shorthand in `bob capture` and `bob gkeep pull` (with `URL @`
 kept as a compatible alias) clips like
 `bob ref create <URL> -P <parent> -L` (same placeholders, same install
-guarantees, same `bob ref scan` pairing). It never adds audio to existing
+guarantees, same create-time intake). It never adds audio to existing
 captures; background ingest runs the command quietly (never stdout) with
 progress on stderr.
 
@@ -663,8 +663,17 @@ field on the ref note: `already has companion audio: <path>`). Otherwise
 it runs the listen command with `{target}` as the cleaned URL (or the PDF
 path), `{pdf}` as the existing PDF, `{title}` as the note or marker
 title, and `{audio}` as `<scratch>/<stem>.mp3`, then installs the episode
-at `xlib/<rel>.mp3`. The PDF and the ref note stay untouched; `scan`
-late-pairs the audio (see `highlights-ref-sync.md`).
+at `xlib/<rel>.mp3`. Intake then files that episode:
+
+- Library capture (`lib/<rel>.pdf`): move the mp3 into `lib/`, re-sync
+  the existing note so it gains `audio:` frontmatter and the embed, and
+  commit the mp3 plus the note (`bob ref create: attach audio …`).
+- Queued capture (`xlib/<rel>.pdf`): file the PDF with the mp3 as a
+  companion, the same as a normal create.
+
+`-k` (or a disabled ingest switch) keeps today's attach output, including
+`next: bob ref scan`. A failed intake prints that same next-step line so
+scan can still pair the queued files.
 
 ```text
 ok attached listen episode to existing capture
@@ -673,7 +682,8 @@ pdf: /home/bryan/bob/lib/papers/ea_graph.pdf (unchanged)
 ref: /home/bryan/bob/ref/papers/ea_graph.md
 audio: /home/bryan/bob/xlib/papers/ea_graph.mp3 (from --listen)
 title: EA-Graph: Artifact-Anchored Verification Memory for Coding Agents under Upstream Drift
-next: bob ref scan
+ingested: lib/papers/ea_graph.pdf → ref/papers/ea_graph.md
+sync: committed abc1234 · pushed
 ```
 
 ## Configuration
