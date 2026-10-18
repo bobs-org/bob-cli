@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, FixedOffset, SecondsFormat};
+
 mod blocked_by;
 pub(crate) mod cli;
 mod coverage;
@@ -395,7 +397,7 @@ fn build_row(
         annotation_counts(parts.region.as_deref());
     diagnostics.extend(region_diagnostics);
 
-    let (added, added_source) = added_date(&front);
+    let (added, added_source, added_at) = added_date(&front);
     let finished_state =
         matches!(outcome.reading_state, "finished" | "dropped");
     let (finished, finished_source) = if finished_state {
@@ -522,6 +524,7 @@ fn build_row(
         captured: front_string(&front, "captured"),
         added,
         added_source,
+        added_at,
         finished,
         finished_source,
         source_pdf: front
@@ -639,20 +642,41 @@ fn annotation_counts(region: Option<&str>) -> (usize, usize, Vec<Diagnostic>) {
 }
 
 /// The `added` date: `captured`, else the date part of `created`, else the
-/// zorg `source_block` date (`^z-YYMMDD-…` → `20YY-MM-DD`).
-fn added_date(front: &ParsedFrontmatter) -> (Option<String>, Option<String>) {
+/// zorg `source_block` date (`^z-YYMMDD-…` → `20YY-MM-DD`). `added_at`
+/// carries a parsed `created` instant only when its own-offset date matches
+/// the selected `added` day.
+fn added_date(
+    front: &ParsedFrontmatter,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let created = front_string(front, "created");
+    let created_instant = created.as_deref().and_then(parse_created_instant);
     if let Some(captured) = front_string(front, "captured") {
-        return (Some(captured), Some("captured".to_string()));
+        let added_day = date_part(&captured);
+        let added_at = created_instant
+            .filter(|instant| instant.date_naive().to_string() == added_day)
+            .map(|instant| instant.to_rfc3339_opts(SecondsFormat::Secs, false));
+        return (Some(captured), Some("captured".to_string()), added_at);
     }
-    if let Some(created) = front_string(front, "created") {
-        return (Some(date_part(&created)), Some("created".to_string()));
+    if let Some(created) = created {
+        let added = date_part(&created);
+        let added_at = created_instant
+            .filter(|instant| instant.date_naive().to_string() == added)
+            .map(|instant| instant.to_rfc3339_opts(SecondsFormat::Secs, false));
+        return (Some(added), Some("created".to_string()), added_at);
     }
     if let Some(block) = front_string(front, "source_block")
         && let Some(date) = zorg_block_date(&block)
     {
-        return (Some(date), Some("zorg_block".to_string()));
+        return (Some(date), Some("zorg_block".to_string()), None);
     }
-    (None, None)
+    (None, None, None)
+}
+
+/// Parse both the scan timestamp (`-0400`) and RFC 3339 offsets.
+fn parse_created_instant(value: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%z"))
+        .ok()
 }
 
 fn date_part(value: &str) -> String {

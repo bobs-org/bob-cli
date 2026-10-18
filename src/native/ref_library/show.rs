@@ -1118,6 +1118,7 @@ mod tests {
                 captured: None,
                 added: Some("2026-10-01".to_string()),
                 added_source: Some("created".to_string()),
+                added_at: None,
                 finished: Some("2026-10-03".to_string()),
                 finished_source: Some("ref_task".to_string()),
                 source_pdf: Some("lib/papers/ea_graph.pdf".to_string()),

@@ -395,6 +395,72 @@ fn added_dates_cover_created_and_zorg_block() {
 }
 
 #[test]
+fn added_at_uses_a_matching_created_instant() {
+    let fields = |lines: &[&str]| {
+        let raw = lines
+            .iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        super::added_date(&ParsedFrontmatter::parse(&raw))
+    };
+
+    assert_eq!(
+        fields(&["created: '2026-10-17T09:12:44-0400'"]),
+        (
+            Some("2026-10-17".to_string()),
+            Some("created".to_string()),
+            Some("2026-10-17T09:12:44-04:00".to_string()),
+        )
+    );
+    assert_eq!(
+        fields(&["created: '2026-10-17T13:12:44Z'"]),
+        (
+            Some("2026-10-17".to_string()),
+            Some("created".to_string()),
+            Some("2026-10-17T13:12:44+00:00".to_string()),
+        )
+    );
+    assert_eq!(
+        fields(&[
+            "captured: '2026-10-17'",
+            "created: '2026-10-17T09:12:44-0400'",
+        ]),
+        (
+            Some("2026-10-17".to_string()),
+            Some("captured".to_string()),
+            Some("2026-10-17T09:12:44-04:00".to_string()),
+        )
+    );
+    assert_eq!(
+        fields(&[
+            "captured: '2026-10-16'",
+            "created: '2026-10-17T09:12:44-0400'",
+        ]),
+        (
+            Some("2026-10-16".to_string()),
+            Some("captured".to_string()),
+            None,
+        )
+    );
+    assert_eq!(
+        fields(&["created: '2026-10-17'"]),
+        (
+            Some("2026-10-17".to_string()),
+            Some("created".to_string()),
+            None,
+        )
+    );
+    assert_eq!(
+        fields(&["source_block: '^z-251231-abcdef'"]),
+        (
+            Some("2025-12-31".to_string()),
+            Some("zorg_block".to_string()),
+            None,
+        )
+    );
+}
+
+#[test]
 fn top_level_note_has_no_status_type_or_tracker() {
     let index = fixture_index();
     let row = row(&index, "ref/toplevel_note.md");

@@ -242,8 +242,7 @@ counted in `hidden.superseded` (`find` and `show` still reach them).
 `project_name_aliases` (`bob-cli` matches `bob`); any other name matches
 the frontmatter parent literally (ASCII case-insensitive, never an
 error). `filters.parent` echoes the canonical route when the input
-resolved, else the normalized input. `-g/--git-dates` never backfills
-v2 rows.
+resolved, else the normalized input.
 
 The row date is `finished` for the finished and dropped states, `added`
 otherwise. `--since` accepts `YYYY-MM-DD` or `<N>d|w|m|y` relative to
@@ -253,11 +252,22 @@ queued, finished, dropped, unknown), modern before legacy, `next` before
 `ready` within queued, row date newest first with undated last, then
 title. `--limit` applies after filtering and ordering.
 
-`-g/--git-dates` fills a missing `added` or `finished` date from one
-`git log` pass over `^ref` tracker lines only on modern notes, with
-source `git`. When Git is missing, the vault is not a repo, or the pass
-fails, `coverage.git_dates` is `"unavailable"` with one stderr warning;
-this is never fatal.
+The `added` date uses this precedence: frontmatter `captured`, the date
+part of frontmatter `created`, a zorg `source_block` date, then (with
+`-g`) the Git birth date. `added_source` is `captured`, `created`,
+`zorg_block`, or `git`. `added_at` is the most precise instant known on
+that `added` day: a full offset-bearing `created` value supplies it when
+its own-offset date matches `added`, including when `captured` wins the
+date precedence. Date-only `created` values, mismatched dates, and zorg
+dates have no `added_at`.
+
+`-g/--git-dates` uses a rename-following file-birth pass to fill missing
+`added` and `added_at` for every modern row, including v2 rows. A separate
+`^ref` tracker pass fills missing `finished` dates for v1 rows only; it
+never backfills a v2 row's `finished`. If Git is missing, the vault is not
+a repo, or either pass fails, `coverage.git_dates` is `"unavailable"`
+with one stderr warning; this is never fatal. Git birth follows file
+renames and reports the oldest commit that added the note.
 
 Human output groups rows under one heading per reading state with its
 count (pre-cap totals), with the status chip, row date (or `—`), title,
@@ -832,7 +842,7 @@ Each `ref` object is the full index row: path, link, title, origin,
 `marker_id` (the frontmatter `id`, or `null` when absent), ref_type, era,
 status, status_sync, legacy_status,
 reading_state and its source, `blocked`, `blocked_by`, parent, `task`, urls, identity
-keys, author/published/captured, added/finished dates and sources,
+keys, author/published/captured, added date/source/instant and finished dates/sources,
 source_pdf, audio, annotation and comment counts, snapshot,
 research_ref, superseded_by, and diagnostics. `task` is always present
 (`null` when there is no task): v2 carries `path` (the residence file),
@@ -841,7 +851,7 @@ research_ref, superseded_by, and diagnostics. `task` is always present
 `block_id: "ref"`, `link: [[ref/…#^ref]]`, `archived: false`, and the
 same `priority`/`scheduled` fields from the tracker line. One
 `(path, block_id)` join works for both eras. `blocked`, `blocked_by`,
-`task`, and `marker_id` are additive under `schema_version` 1.
+`task`, `marker_id`, and `added_at` are additive under `schema_version` 1.
 
 Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
 detail lists `path:line`), `open_ref_task_in_done` (open task under

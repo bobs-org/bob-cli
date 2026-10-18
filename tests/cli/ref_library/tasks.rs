@@ -196,10 +196,11 @@ fn doctor_reports_ref_tasks_and_parents_rows() {
 }
 
 #[test]
-fn git_dates_never_backfills_v2_rows() {
+fn git_dates_never_backfills_v2_finished() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-tasks-git");
     let doc = run_json(&vault, &["list", "-R", "all", "-A", "-g"]);
-    // v2 rows keep their stored dates; the flag must not fail.
+    // The git birth pass applies to v2 rows, but finished remains sourced
+    // only from the stored task/metadata rather than the v1 ^ref pass.
     let archived = row_by_path(&doc, "ref/papers/archived.md");
     assert_eq!(archived["finished"], serde_json::json!("2026-10-12"));
 }

@@ -40,6 +40,7 @@ pub(crate) struct RefRow {
     pub captured: Option<String>,
     pub added: Option<String>,
     pub added_source: Option<String>,
+    pub added_at: Option<String>,
     pub finished: Option<String>,
     pub finished_source: Option<String>,
     pub source_pdf: Option<String>,

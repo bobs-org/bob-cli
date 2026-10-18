@@ -181,6 +181,19 @@ fn list_json_exposes_marker_id_and_null_for_missing_ids() {
 }
 
 #[test]
+fn list_json_always_exposes_added_at_without_git_dates() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-list-added-at-null");
+    let document = run_list_json(&vault, &["-R", "all", "-A"]);
+    let rows = document["refs"].as_array().expect("refs array");
+    assert!(rows.iter().all(|row| row.get("added_at").is_some()));
+    let date_only = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/created_note.md")
+        .expect("date-only created row");
+    assert_eq!(date_only["added_at"], serde_json::Value::Null);
+}
+
+#[test]
 fn list_human_rows_align_dated_and_undated_columns() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-list-align");
     let output = bob_command()
@@ -684,7 +697,7 @@ fn list_git_dates_backfills_modern_notes_only() {
     git_commit(
         &vault,
         "capture modern and legacy notes",
-        "2026-08-01T10:00:00",
+        "2026-08-01T10:00:00-04:00",
         &["ref/papers/modern_note.md", "ref/ai/legacy_note.md"],
     );
     write_git_note(
@@ -695,7 +708,7 @@ fn list_git_dates_backfills_modern_notes_only() {
     git_commit(
         &vault,
         "finish one note",
-        "2026-09-15T10:00:00",
+        "2026-09-15T10:00:00-04:00",
         &["ref/papers/done_note.md"],
     );
 
@@ -712,11 +725,13 @@ fn list_git_dates_backfills_modern_notes_only() {
         .expect("modern row");
     assert_eq!(row["added"], "2026-08-01");
     assert_eq!(row["added_source"], "git");
+    assert_eq!(row["added_at"], "2026-08-01T10:00:00-04:00");
     let row = rows
         .iter()
         .find(|row| row["path"] == "ref/papers/done_note.md")
         .expect("done row");
     assert_eq!(row["added"], "2026-09-15");
+    assert_eq!(row["added_at"], "2026-09-15T10:00:00-04:00");
     assert_eq!(row["finished"], "2026-09-15");
     assert_eq!(row["finished_source"], "git");
     // The legacy note keeps its zorg block date, never Git history.
@@ -726,6 +741,72 @@ fn list_git_dates_backfills_modern_notes_only() {
         .expect("legacy row");
     assert_eq!(row["added"], "2026-01-01");
     assert_eq!(row["added_source"], "zorg_block");
+    assert_eq!(row["added_at"], serde_json::Value::Null);
+}
+
+#[test]
+fn list_git_births_follow_renames_for_v1_and_v2_rows() {
+    let temp = TempDir::new("bob-cli-ref-list-git-birth-rename");
+    let repo = temp.path().join("repo");
+    let vault = repo.join("vault");
+    let old_path = "ref/papers/old name.md";
+    let new_path = "ref/papers/café note.md";
+    write_git_note(
+        &vault,
+        old_path,
+        "---\nstatus: ready\ntitle: Renamed Note\n---\n\n- [ ] #task #ref [[lib/papers/renamed.pdf]] #hide ^ref\n",
+    );
+    write_git_note(
+        &vault,
+        "ref/papers/v2_note.md",
+        "---\nstatus: ready\ntitle: V2 Note\n---\n\n# V2 Note\n\n![[obsidian#^ref-v2-note]]\n",
+    );
+    write_git_note(
+        &vault,
+        "obsidian.md",
+        "# Obsidian\n\n- [ ] #task #ref [[ref/papers/v2_note|V2 Note]] ^ref-v2-note\n",
+    );
+    git_in(&repo, ["init"]);
+    configure_test_git_identity(&repo);
+    git_commit(
+        &vault,
+        "add refs",
+        "2026-08-01T10:00:00-04:00",
+        &[old_path, "ref/papers/v2_note.md", "obsidian.md"],
+    );
+
+    fs::rename(vault.join(old_path), vault.join(new_path))
+        .expect("rename ref note");
+    git_in(&vault, ["add", "-A"]);
+    git_commit(
+        &vault,
+        "rename ref note",
+        "2026-09-15T10:00:00-04:00",
+        &[new_path],
+    );
+
+    let document = run_list_json(&vault, &["-g", "-R", "all", "-A"]);
+    assert!(document["coverage"].get("git_dates").is_none());
+    let renamed = document["refs"]
+        .as_array()
+        .expect("refs array")
+        .iter()
+        .find(|row| row["path"] == new_path)
+        .expect("renamed ref row");
+    assert_eq!(renamed["added"], "2026-08-01");
+    assert_eq!(renamed["added_at"], "2026-08-01T10:00:00-04:00");
+    assert_eq!(renamed["added_source"], "git");
+
+    let v2 = document["refs"]
+        .as_array()
+        .expect("refs array")
+        .iter()
+        .find(|row| row["path"] == "ref/papers/v2_note.md")
+        .expect("v2 ref row");
+    assert_eq!(v2["task"]["path"], "obsidian.md");
+    assert_eq!(v2["added"], "2026-08-01");
+    assert_eq!(v2["added_at"], "2026-08-01T10:00:00-04:00");
+    assert_eq!(v2["added_source"], "git");
 }
 
 #[test]

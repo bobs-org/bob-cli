@@ -1168,6 +1168,28 @@ fn highlights_ref_scan_stamps_created_on_category_and_intake_notes() {
     );
 
     let output = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-R", "all", "-A", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("list freshly scanned refs");
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse ref list JSON");
+    let scanned = document["refs"]
+        .as_array()
+        .expect("refs array")
+        .iter()
+        .find(|row| row["path"] == "ref/books/scan-created.md")
+        .expect("new v1 scan note");
+    assert_eq!(scanned["added"], "2026-10-03");
+    assert_eq!(scanned["added_source"], "created");
+    assert_eq!(scanned["added_at"], "2026-10-03T15:42:18-04:00");
+
+    let output = bob_command()
         .arg("highlights")
         .arg("scan")
         .arg("--verbose")
@@ -1256,6 +1278,8 @@ fn highlights_ref_scan_intakes_pdf_and_mp3_and_embeds_player() {
         .arg("scan")
         .arg("--verbose")
         .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
         .output()
         .expect("scan audio intake");
     assert_success(&output);
@@ -1286,6 +1310,28 @@ fn highlights_ref_scan_intakes_pdf_and_mp3_and_embeds_player() {
         ) && parent_contents.contains("^ref-listen"),
         "v2 birth should file the reading task in the residence:\n{parent_contents}"
     );
+    let refs = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-R", "all", "-A", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-03 15:42:18")
+        .env("TZ", "America/New_York")
+        .output()
+        .expect("list freshly scanned v2 ref");
+    assert_success(&refs);
+    let document: serde_json::Value =
+        serde_json::from_slice(&refs.stdout).expect("parse ref list JSON");
+    let scanned = document["refs"]
+        .as_array()
+        .expect("refs array")
+        .iter()
+        .find(|row| row["path"] == "ref/chat/listen.md")
+        .expect("new v2 scan note");
+    assert_eq!(scanned["task"]["path"], "obsidian.md");
+    assert_eq!(scanned["added"], "2026-10-03");
+    assert_eq!(scanned["added_source"], "created");
+    assert_eq!(scanned["added_at"], "2026-10-03T15:42:18-04:00");
 
     let repeat = bob_command()
         .arg("highlights")

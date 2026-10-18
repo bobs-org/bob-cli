@@ -487,6 +487,7 @@ mod tests {
             captured: None,
             added: None,
             added_source: None,
+            added_at: None,
             finished: None,
             finished_source: None,
             source_pdf: None,

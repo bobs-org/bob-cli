@@ -1034,6 +1034,7 @@ mod tests {
             captured: None,
             added: Some("2026-10-01".to_string()),
             added_source: Some("created".to_string()),
+            added_at: None,
             finished: None,
             finished_source: None,
             source_pdf: None,

@@ -5,8 +5,8 @@
 //! state unless `-R/--reading-state` narrows it. Values within one option
 //! are ORed, different options are ANDed. Superseded notes are always
 //! excluded and counted in `hidden.superseded`. `--limit 50` caps every
-//! format and `-A/--all` lifts it. `-g/--git-dates` backfills missing
-//! modern dates from one vault `git log` pass over `^ref` tracker lines.
+//! format and `-A/--all` lifts it. `-g/--git-dates` fills modern added
+//! dates from file births and v1 finished dates from `^ref` tracker lines.
 
 use std::process::Command;
 
@@ -295,63 +295,182 @@ fn queue_status_rank(status: Option<&str>) -> u8 {
     }
 }
 
-/// Fill missing `added`/`finished` dates from one vault `git log` pass
-/// over `^ref` tracker lines. Only modern notes are filled, only missing
-/// values, with source `git`. Returns the coverage word and an optional
-/// one-line stderr warning; Git trouble is never fatal.
+/// Fill missing modern `added` dates from rename-following file births and
+/// missing v1 `finished` dates from `^ref` tracker history. Git trouble is
+/// never fatal, and a failed pass emits one warning for the whole request.
 pub(crate) fn fill_git_dates(
     config: &LibraryConfig,
     rows: &mut [RefRow],
 ) -> (Option<String>, Option<String>) {
-    let wanted = rows.iter().any(|row| {
+    let needs_added = rows
+        .iter()
+        .any(|row| row.era == "modern" && row.added.is_none());
+    let needs_finished = rows.iter().any(|row| {
         row.era == "modern"
             && !row.v2
-            && (row.added.is_none()
-                || matches!(row.reading_state.as_str(), "finished" | "dropped")
-                    && row.finished.is_none())
+            && matches!(row.reading_state.as_str(), "finished" | "dropped")
+            && row.finished.is_none()
     });
-    if !wanted {
+    if !needs_added && !needs_finished {
         return (None, None);
     }
-    let history = match load_ref_history(config) {
-        Ok(history) => history,
-        Err(reason) => {
-            return (
-                Some("unavailable".to_string()),
-                Some(format!(
-                    "git history unavailable ({reason}); dates left as stored"
-                )),
-            );
-        }
-    };
-    for row in rows.iter_mut().filter(|row| row.era == "modern" && !row.v2) {
-        // `load_ref_history` returns newest-first; the earliest add is
-        // the last record for the path.
-        if row.added.is_none()
-            && let Some(date) = history
-                .iter()
-                .rfind(|(path, _, _)| path == &row.path)
-                .map(|(_, date, _)| date.clone())
-        {
-            row.added = Some(date);
-            row.added_source = Some("git".to_string());
-        }
-        if matches!(row.reading_state.as_str(), "finished" | "dropped")
-            && row.finished.is_none()
-            && let Some(date) =
-                history.iter().find_map(|(path, date, marks)| {
-                    (path == &row.path
-                        && marks.iter().any(|mark| {
-                            ref_task_mark_status(*mark) == row.status.as_deref()
-                        }))
-                    .then_some(date.clone())
-                })
-        {
-            row.finished = Some(date);
-            row.finished_source = Some("git".to_string());
+
+    let mut failures = Vec::new();
+    if needs_added {
+        match load_git_birth_dates(config) {
+            Ok(births) => {
+                for row in rows
+                    .iter_mut()
+                    .filter(|row| row.era == "modern" && row.added.is_none())
+                {
+                    if let Some((date, instant)) = births.get(&row.path) {
+                        row.added = Some(date.clone());
+                        row.added_source = Some("git".to_string());
+                        row.added_at = Some(instant.clone());
+                    }
+                }
+            }
+            Err(reason) => failures.push(format!("birth pass: {reason}")),
         }
     }
-    (None, None)
+    if needs_finished {
+        match load_ref_history(config) {
+            Ok(history) => {
+                for row in
+                    rows.iter_mut().filter(|row| row.era == "modern" && !row.v2)
+                {
+                    if matches!(
+                        row.reading_state.as_str(),
+                        "finished" | "dropped"
+                    ) && row.finished.is_none()
+                        && let Some(date) =
+                            history.iter().find_map(|(path, date, marks)| {
+                                (path == &row.path
+                                    && marks.iter().any(|mark| {
+                                        ref_task_mark_status(*mark)
+                                            == row.status.as_deref()
+                                    }))
+                                .then_some(date.clone())
+                            })
+                    {
+                        row.finished = Some(date);
+                        row.finished_source = Some("git".to_string());
+                    }
+                }
+            }
+            Err(reason) => failures.push(format!("finished pass: {reason}")),
+        }
+    }
+
+    if failures.is_empty() {
+        (None, None)
+    } else {
+        (
+            Some("unavailable".to_string()),
+            Some(format!(
+                "git history unavailable ({}); dates left as stored where unavailable",
+                failures.join("; ")
+            )),
+        )
+    }
+}
+
+/// A birth instant and its commit-date prefix, keyed by vault-relative path.
+type GitBirthDates = std::collections::BTreeMap<String, (String, String)>;
+
+/// Find the first add for each ref file, carrying that birth through every
+/// rename. Commit records are oldest first, so later adds cannot replace a
+/// birth already recorded for the same path.
+fn load_git_birth_dates(
+    config: &LibraryConfig,
+) -> Result<GitBirthDates, String> {
+    let root = git_root(&config.bob_dir)?;
+    let forward =
+        |path: &std::path::Path| path.to_string_lossy().replace('\\', "/");
+    let spec = config
+        .ref_dir
+        .strip_prefix(&config.bob_dir)
+        .map(forward)
+        .unwrap_or_else(|_| forward(&config.ref_dir));
+    let output = Command::new("git")
+        .arg("-c")
+        .arg("core.quotePath=false")
+        .arg("-C")
+        .arg(&config.bob_dir)
+        .arg("log")
+        .arg("--reverse")
+        .arg("--format=%x1e%cI")
+        .arg("--name-status")
+        .arg("-M")
+        .arg("--diff-filter=AR")
+        .arg("--")
+        .arg(&spec)
+        .output()
+        .map_err(|error| format!("could not run git: {error}"))?;
+    if !output.status.success() {
+        return Err("git log over the ref dir failed".to_string());
+    }
+    let prefix = config
+        .bob_dir
+        .strip_prefix(&root)
+        .map(forward)
+        .unwrap_or_default();
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_git_birth_dates(&text)
+        .into_iter()
+        .filter_map(|(path, birth)| {
+            let unprefixed = strip_vault_prefix(&path, &prefix)?;
+            Some((unprefixed, birth))
+        })
+        .collect())
+}
+
+fn strip_vault_prefix(path: &str, prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        Some(path.to_string())
+    } else {
+        path.strip_prefix(prefix)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .map(str::to_string)
+    }
+}
+
+/// Parse oldest-first `%x1e%cI --name-status` records into path births.
+fn parse_git_birth_dates(text: &str) -> GitBirthDates {
+    let mut births = GitBirthDates::new();
+    for record in text.split('\x1e') {
+        let Some((raw_instant, changes)) = record.split_once('\n') else {
+            continue;
+        };
+        let instant = raw_instant.trim();
+        if chrono::DateTime::parse_from_rfc3339(instant).is_err() {
+            continue;
+        }
+        let Some(date) = instant.get(..10) else {
+            continue;
+        };
+        let birth = (date.to_string(), instant.to_string());
+        for line in changes.lines() {
+            let Some((status, paths)) = line.split_once('\t') else {
+                continue;
+            };
+            if status == "A" {
+                if !paths.is_empty() {
+                    births.entry(paths.to_string()).or_insert(birth.clone());
+                }
+            } else if status.starts_with('R')
+                && let Some((old_path, new_path)) = paths.split_once('\t')
+                && !new_path.is_empty()
+            {
+                let inherited = births
+                    .get(old_path)
+                    .cloned()
+                    .unwrap_or_else(|| birth.clone());
+                births.entry(new_path.to_string()).or_insert(inherited);
+            }
+        }
+    }
+    births
 }
 
 /// One `(vault-relative path, commit date, added `^ref` marks)` triple per
@@ -568,5 +687,21 @@ mod tests {
         assert_eq!(history[0].2, vec!['x']);
         assert_eq!(history[1].1, "2026-09-10");
         assert_eq!(history[1].2, vec![' ']);
+    }
+
+    #[test]
+    fn git_births_follow_renames_and_keep_the_first_add() {
+        let text = "\
+\x1e2026-08-01T10:00:00-04:00\nA\tref/papers/first note.md\n\
+\x1e2026-09-01T12:00:00-04:00\nR100\tref/papers/first note.md\tref/papers/café note.md\n\
+\x1e2026-10-01T08:00:00-04:00\nA\tref/papers/café note.md\n";
+        let births = parse_git_birth_dates(text);
+        assert_eq!(
+            births.get("ref/papers/café note.md"),
+            Some(&(
+                "2026-08-01".to_string(),
+                "2026-08-01T10:00:00-04:00".to_string(),
+            ))
+        );
     }
 }
