@@ -377,8 +377,16 @@ pub(super) struct RenderedHighlights {
     pub(super) image_count: usize,
     pub(super) image_note_count: usize,
     pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
+    pub(super) continuation_count: usize,
+    pub(super) dangling_continuations: Vec<DanglingContinuation>,
     pub(super) image_assets: Vec<ImageAssetWrite>,
     pub(super) block_ids_by_annotation_order: BTreeMap<usize, String>,
+}
+
+/// A `<` marker that could not merge because no earlier text highlight exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DanglingContinuation {
+    pub(super) page_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -560,6 +568,8 @@ pub(super) struct SyncWriteReport {
     pub(super) image_count: usize,
     pub(super) image_note_count: usize,
     pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
+    pub(super) continuation_count: usize,
+    pub(super) dangling_continuations: Vec<DanglingContinuation>,
     pub(super) image_assets_written: usize,
     pub(super) image_assets_skipped: usize,
     pub(super) routed_note_actions: usize,

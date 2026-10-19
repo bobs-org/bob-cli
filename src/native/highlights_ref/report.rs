@@ -65,6 +65,18 @@ pub(super) fn print_pdf_sync_report(
     ) {
         println!("{line}");
     }
+    for line in continuation_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.continuation_count)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.dangling_continuations.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("{line}");
+    }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
     println!("annotation_tasks_skip: {}", plan.annotation_tasks_skipped);
     println!(
@@ -90,6 +102,12 @@ pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
     for line in image_note_report_lines(
         report.image_note_count,
         &report.image_notes_unresolved,
+    ) {
+        println!("{line}");
+    }
+    for line in continuation_report_lines(
+        report.continuation_count,
+        &report.dangling_continuations,
     ) {
         println!("{line}");
     }
@@ -739,7 +757,9 @@ impl ScanLine {
                     let styled = details
                         .iter()
                         .map(|detail| {
-                            if detail.ends_with(" unresolved") {
+                            if detail.ends_with(" unresolved")
+                                || detail.contains("dangling continuation")
+                            {
                                 styler.yellow(detail)
                             } else {
                                 styler.dim(detail)
@@ -852,6 +872,25 @@ pub(super) fn scan_details(
             ));
         }
     }
+    if let Some(rendered) = &plan.rendered_highlights
+        && (rendered.continuation_count > 0
+            || !rendered.dangling_continuations.is_empty())
+    {
+        if rendered.continuation_count > 0 {
+            details.push(count_phrase(
+                rendered.continuation_count,
+                "continuation",
+                "continuations",
+            ));
+        }
+        if !rendered.dangling_continuations.is_empty() {
+            details.push(count_phrase(
+                rendered.dangling_continuations.len(),
+                "dangling continuation",
+                "dangling continuations",
+            ));
+        }
+    }
     if annotation_tasks_created > 0 {
         details.push(format!(
             "+{}",
@@ -877,6 +916,23 @@ pub(super) fn image_note_report_lines(
             "image_note_unresolved: {} ({})",
             note.source_text,
             note.state.as_str()
+        ));
+    }
+    lines
+}
+
+pub(super) fn continuation_report_lines(
+    count: usize,
+    dangling: &[DanglingContinuation],
+) -> Vec<String> {
+    if count == 0 && dangling.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!("continuations: {count}")];
+    for item in dangling {
+        let label = item.page_label.as_deref().unwrap_or("no page");
+        lines.push(format!(
+            "continuation_dangling: {label} (no earlier text highlight)"
         ));
     }
     lines
@@ -1116,6 +1172,18 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
         plan.rendered_highlights
             .as_ref()
             .map(|rendered| rendered.image_notes_unresolved.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("  {line}");
+    }
+    for line in continuation_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.continuation_count)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.dangling_continuations.as_slice())
             .unwrap_or(&[]),
     ) {
         println!("  {line}");

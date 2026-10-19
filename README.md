@@ -1029,8 +1029,10 @@ remains a hidden alias of `create`.
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library, including image notes (screenshot paths pasted into highlight
-  comments). Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
-  subcommand as `bob ref --no-hooks scan`, to ignore the hook. By
+  comments) and continuation highlights (a note starting with `<` folds that
+  highlight into the one before it). Pass `-n, --no-hooks` on `scan` or
+  `doctor`, or before the subcommand as `bob ref --no-hooks scan`, to ignore
+  the hook. By
   default it does not write PDF markers; use `scan --dry-run --write-pdfs`,
   review, then
   `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF plan instead

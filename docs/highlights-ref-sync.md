@@ -23,6 +23,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
 - [Generated body contract](#generated-body-contract)
   - [Image notes](#image-notes)
+  - [Continuation highlights (`<`)](#continuation-highlights)
 - [Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2)
 - [MacBook setup guide](#macbook-setup-guide)
 - [Scheduled scan](#scheduled-scan)
@@ -35,7 +36,9 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 
 `bob ref` implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
-copying, image notes (a screenshot path pasted into a highlight comment), recursive library scan with `xlib` intake, prerequisite checks, output
+copying, image notes (a screenshot path pasted into a highlight comment),
+continuation highlights (a `<` note folds a highlight into the one before it),
+recursive library scan with `xlib` intake, prerequisite checks, output
 collision detection, dirty-target refusal, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
@@ -824,6 +827,8 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].title` | The note title the scan wrote |
 | `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
+| `notes[].continuations` | Absorbed follower pieces on this note; omitted when zero |
+| `notes[].continuations_dangling` | `<` markers that could not merge; omitted when zero |
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
@@ -1194,6 +1199,153 @@ Troubleshooting:
 - `bob ref doctor` lists `unresolved_image_note` under library diagnostics
   with example paths.
 
+### Continuation highlights (`<`)
+
+A Highlights note that starts with `<` folds that text highlight into the
+one before it when `bob ref` renders the reference note. Type the marker on
+the **later** piece, while looking at the overflow. The first piece is never
+touched. The fold is stateless and deterministic, and deleting the `<`
+undoes it. Nothing is written to the PDF or the sidecar.
+
+| Note typed on the later highlight                              | Result in the ref note                                  |
+| -------------------------------------------------------------- | ------------------------------------------------------- |
+| `<`                                                            | Joins the previous highlight; adds no comment           |
+| `< PR Merge Master?!`                                          | Joins; comment paragraph `PR Merge Master?!`            |
+| `- < keep going` / `Comment: < keep going`                     | Joins; comment `keep going`                             |
+| `<` then a new line `- #task Check the sheriff`                | Joins; the task imports normally                        |
+| `- < #task Check the sheriff`                                  | Joins; task text has no `<`                             |
+| `<` then a new line `~/tmp/screenshots/x.png`                  | Joins; the image embeds under the merged quote          |
+| `<… why skip this?` / `<... why skip this?`                    | Joins with a forced `[…]` gap; comment `why skip this?` |
+| `\< 5 ms is the target`                                        | No merge; renders `< 5 ms is the target`                |
+| `<div>`, `<-`, `<= 5`, `<3`, `<https://x.org>`, `</tmp/x.png>` | Ordinary note; `<` kept                                 |
+| `…see above`, or a `<` on any later line                       | Ordinary note                                           |
+
+**If you still see a `<`, it did not merge.** A dangling marker keeps its raw
+note, so the `<` stays visible in the generated comment.
+
+The grammar runs only on text highlights, never on sticky notes
+(`StandaloneNote`) or on a TextBundle image selection's caption. Those `<`
+characters are literal text: they are not matched, escaped, or counted.
+
+It reads the highlight's `task_source` after a leading `Comment:`/`Note:`
+label has already been stripped:
+
+1. Take the first line whose trimmed text is non-empty. Every other line stays
+   byte-identical.
+2. Set aside leading whitespace and at most one unordered-list prefix (`-`,
+   `*`, or `+`, then whitespace).
+3. At the start of the remaining body, test tokens in this order. Each token
+   must be followed by whitespace (including NBSP) or the end of the line:
+   - **Gap token:** `<…` (U+2026) or `<...`. macOS smart punctuation turns
+     `...` into `…`, so both spellings match.
+   - **Join token:** `<`. ASCII only.
+   - **Escape:** `\` immediately followed by a gap or join token that meets
+     the same boundary rule. Remove that one backslash and treat the note as
+     ordinary. Only a would-be marker is unescaped, so `\<div>` stays exactly
+     as typed.
+
+The effective first line is the set-aside prefix plus the text after the
+token, with leading whitespace trimmed. If that text is empty, the line is
+dropped. A dangling marker keeps the raw note; the effective note is used
+only when the follower actually merged, or for an escape.
+
+**Previous** is the nearest earlier annotation, in sidecar order (Highlights'
+sidebar order), that is a text highlight and not a marker mirror. The walk
+skips marker mirrors, sticky notes, and image selections; those keep their
+own blocks and render after the group, in sidecar order. If that nearest
+text highlight is itself a follower, the new piece joins the same group, so
+A, `<`B, `<`C is one group. If no earlier text highlight exists, the marker
+dangles and the highlight renders on its own, verbatim. There is no distance
+limit: a wide page jump shows up through the gap and the heading.
+
+The group renders at the head's position. Exporting Highlights sorted by
+color or date changes sidecar order, so "previous" is no longer the visual
+predecessor. That sort is unsupported.
+
+The seam is computed between each member and the member just before it, not
+the head. A next-page pair (`page_index` N then N+1) joins with hyphen
+healing. Same page, skipped pages, and an unknown `page_index` insert
+`[…]`. The gap token (`<…` / `<...`) always forces a gap, even across a
+page turn. The renderer never doubles an existing `[…]` or `[...]`. The
+rule errs toward `[…]` so a same-page split or a missing page number never
+looks like one continuous sentence.
+
+Heading ranges use the members' page labels: `Pages 11–12`, `Pages 11–13`,
+`Pages 11, 14`, `Pages 11–12, 14`. A `p.` prefix becomes `pp.`. A single
+shared label stays as-is. A non-numeric label falls back to the head's
+label.
+
+Page-turn sidecar:
+
+```md
+#### [Page 11](highlights://example#page=11)
+
+> PR Sheriff Standing Orders. On every
+
+***
+
+#### [Page 12](highlights://example#page=12)
+
+> session startup, the sheriff checks open PRs
+
+< PR Merge Master?!
+```
+
+renders as one block:
+
+```md
+### Pages 11–12
+
+> [!quote] PR Sheriff Standing Orders. On every session startup, the sheriff checks open PRs
+>
+> > [!note] Comment PR Merge Master?!
+
+^h-06d27eae3c84
+```
+
+Same-page gap, with `<` on the later piece:
+
+```md
+### Page 11
+
+> [!quote] left words […] right words
+
+^h-headid012345
+```
+
+A previously published follower that is later absorbed keeps a redirect stub
+under `### Removed highlights`, never a tombstone:
+
+```md
+### Removed highlights
+
+> [!info] Merged highlight
+>
+> Now part of [[#^h-06d27eae3c84|the Pages 11–12 highlight]].
+
+^h-434a5e5a2bc4
+```
+
+The head `^h-` ID is unchanged with or without followers. The follower ID is
+the same merged and unmerged. A stub appears only for a follower that was
+already published. Existing tasks never have their 🔖 rewritten: a task
+created before a retroactive merge keeps pointing at the follower ID, whose
+stub forwards to the group. New tasks on a merged piece keep a per-piece
+`[h::]` processed ID and a 🔖 link to the group's head block.
+
+Troubleshooting:
+
+- `bob ref sync <pdf> --dry-run` shows `continuations:` when any follower
+  merged or any marker dangles, then one
+  `continuation_dangling: <page label | no page> (no earlier text highlight)`
+  line per dangling marker.
+- Concise `bob ref scan` adds `1 continuation` / `N continuations` and
+  `1 dangling continuation` / `N dangling continuations` after image-note
+  details.
+- Scan JSON includes `notes[].continuations` and
+  `notes[].continuations_dangling` only when the count is non-zero.
+  `schema_version` stays `1`. `highlights_count` counts a group once.
+
 Annotation text is beautified only while rendering the generated region:
 
 - Consecutive prose lines are reflowed into one line. Blank lines remain
@@ -1375,7 +1527,12 @@ the block without changing its ID. Image IDs use the source PDF path plus image
 bytes instead, so asset renames and nearby annotation order changes do not churn
 the image block. If a previously generated block disappears from the sidecar,
 the command keeps the old block ID under `### Removed highlights` with a
-tombstone message. Previously leaked marker-mirror and preamble blocks are the
+tombstone message. Absorbed continuation followers never tombstone: the group
+keeps the head `^h-` ID, and a previously published follower gets a redirect
+stub under `### Removed highlights` that links to the group. Annotation tasks
+keep a per-piece `[h::]` processed ID (so a `<` toggle does not recreate the
+task) and a 🔖 backlink to the group's head block. Previously leaked
+marker-mirror and preamble blocks are the
 exception: when the existing region shows a vanished block as mirror-shaped or
 sitting before the first page heading, sync drops it without a tombstone and
 every genuine block ID stays stable. Editing text highlight content itself mints a new block ID; a
@@ -1582,6 +1739,9 @@ MacBook validation checklist:
   `~/bob/ref/<type>/<stem>.assets/<safe-stem>-<hash8>.<ext>` and embeds it
   under the quote. `bob ref sync <pdf> --dry-run` reports `image_notes:` /
   `image_note_unresolved:`; `bob ref doctor` lists `unresolved_image_note`.
+- For a continuation highlight (`<` on the later piece), the first real write
+  folds that quote into the previous text highlight. `bob ref sync <pdf>
+  --dry-run` reports `continuations:` / `continuation_dangling:`.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a generated lifecycle-task change require PDF marker
   write-back, a dry run reports `pdf_marker_action: would-update` before any

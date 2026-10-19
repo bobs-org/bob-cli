@@ -264,6 +264,16 @@ pub(super) fn render_sidecar_highlights(
         image_count,
         image_note_count,
         image_notes_unresolved,
+        continuation_count: plan.head_of.len(),
+        dangling_continuations: plan
+            .dangling
+            .iter()
+            .map(|order| DanglingContinuation {
+                page_label: annotations_by_order
+                    .get(order)
+                    .and_then(|annotation| annotation.page_label.clone()),
+            })
+            .collect(),
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
     })

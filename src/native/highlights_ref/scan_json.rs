@@ -62,6 +62,10 @@ struct ScanJsonNote {
     image_notes: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     image_notes_unresolved: Vec<ScanJsonUnresolvedImageNote>,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    continuations: usize,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    continuations_dangling: usize,
 }
 
 /// One unresolved image note on a scanned reference.
@@ -635,7 +639,12 @@ fn scan_note_entry(
     action: &'static str,
     marker: bool,
 ) -> ScanJsonNote {
-    let (image_notes, image_notes_unresolved) = plan
+    let (
+        image_notes,
+        image_notes_unresolved,
+        continuations,
+        continuations_dangling,
+    ) = plan
         .rendered_highlights
         .as_ref()
         .map(|rendered| {
@@ -649,9 +658,11 @@ fn scan_note_entry(
                         state: note.state,
                     })
                     .collect(),
+                rendered.continuation_count,
+                rendered.dangling_continuations.len(),
             )
         })
-        .unwrap_or((0, Vec::new()));
+        .unwrap_or((0, Vec::new(), 0, 0));
     ScanJsonNote {
         action,
         path: scan_vault_relative(config, &plan.note_path),
@@ -661,6 +672,8 @@ fn scan_note_entry(
         marker,
         image_notes,
         image_notes_unresolved,
+        continuations,
+        continuations_dangling,
     }
 }
 
@@ -946,6 +959,13 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                                         state: note.state,
                                     })
                                     .collect(),
+                                continuations: ingested
+                                    .write
+                                    .continuation_count,
+                                continuations_dangling: ingested
+                                    .write
+                                    .dangling_continuations
+                                    .len(),
                             });
                         }
                         reports.push(ingested.write.clone());

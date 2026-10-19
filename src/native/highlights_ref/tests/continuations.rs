@@ -285,6 +285,27 @@ fn continuation_dangling_and_literal_notes() {
     assert!(plan.head_of.is_empty());
     assert!(plan.dangling.is_empty());
     assert!(plan.effective.is_empty());
+
+    let bob_dir = temp_bob_dir("continuation-dangling-render");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let rendered = render_annotations(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![first],
+        &ParsedNote::empty(),
+        false,
+    );
+    assert_eq!(rendered.count, 1);
+    assert_eq!(rendered.continuation_count, 0);
+    assert_eq!(
+        rendered.dangling_continuations,
+        vec![super::DanglingContinuation {
+            page_label: Some("Page 1".to_string()),
+        }]
+    );
+    assert!(rendered.content.contains("<"), "{}", rendered.content);
 }
 
 #[test]
@@ -505,6 +526,8 @@ fn gas_town_golden_merge_stub_and_idempotent_rerender() {
         first.content
     );
     assert_eq!(first.count, 1);
+    assert_eq!(first.continuation_count, 1);
+    assert!(first.dangling_continuations.is_empty());
     assert!(
         !first.content.contains(&format!("^{follower_id}")),
         "{}",
@@ -773,4 +796,37 @@ fn continuation_round_trip_group_and_stub() {
         highlights[0].quote
     );
     assert_eq!(highlights[0].comment.as_deref(), Some("PR Merge Master?!"));
+}
+
+#[test]
+fn continuation_report_lines_cover_merged_and_dangling() {
+    assert!(super::continuation_report_lines(0, &[]).is_empty());
+    assert_eq!(
+        super::continuation_report_lines(1, &[]),
+        vec!["continuations: 1".to_string()]
+    );
+    assert_eq!(
+        super::continuation_report_lines(
+            0,
+            &[super::DanglingContinuation {
+                page_label: Some("Page 11".to_string()),
+            }]
+        ),
+        vec![
+            "continuations: 0".to_string(),
+            "continuation_dangling: Page 11 (no earlier text highlight)"
+                .to_string(),
+        ]
+    );
+    assert_eq!(
+        super::continuation_report_lines(
+            2,
+            &[super::DanglingContinuation { page_label: None }]
+        ),
+        vec![
+            "continuations: 2".to_string(),
+            "continuation_dangling: no page (no earlier text highlight)"
+                .to_string(),
+        ]
+    );
 }
