@@ -1,5 +1,6 @@
 //! Underline classification, matching, emphasis, and render integration.
 use super::*;
+use std::ops::Range;
 
 fn highlight(
     order: usize,
@@ -221,45 +222,53 @@ fn image_selections_and_sticky_notes_cannot_host_underlines() {
     assert!(plan.standalone.contains(&3));
 }
 
+fn unique_emphasis_ranges(quote: &str, underline: &str) -> Vec<Range<usize>> {
+    let start =
+        unique_key_start(quote, underline).expect("unique emphasis key");
+    emphasis_ranges(quote, &[quote.to_string()], 0, underline, start)
+}
+
 #[test]
 fn emphasis_snaps_splits_flanks_and_merges_ranges() {
     let quote = "We didn’t finish the migration.";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "didn’");
+    let ranges = unique_emphasis_ranges(quote, "didn’");
     assert_eq!(
         apply_emphasis(quote, &ranges),
         "We **didn’t** finish the migration."
     );
+    let quote = "what didn’t change";
+    let ranges = unique_emphasis_ranges(quote, "what didn’");
+    assert_eq!(apply_emphasis(quote, &ranges), "**what didn’t** change");
 
     let quote = "integrate the result";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "tegr");
+    let ranges = unique_emphasis_ranges(quote, "tegr");
     assert_eq!(apply_emphasis(quote, &ranges), "**integrate** the result");
 
     let quote = "lead-in words before the marked span";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "mark");
+    let ranges = unique_emphasis_ranges(quote, "mark");
     assert_eq!(
         apply_emphasis(quote, &ranges),
         "lead-in words before the **marked** span"
     );
 
     let quote = "word( text";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "( text");
+    let ranges = unique_emphasis_ranges(quote, "( text");
     assert_eq!(apply_emphasis(quote, &ranges), "**word( text**");
 
     let quote = "foo!bar";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "foo!");
+    let ranges = unique_emphasis_ranges(quote, "foo!");
     assert_eq!(apply_emphasis(quote, &ranges), "**foo!bar**");
 
     let quote = "one two\nthree four";
-    let ranges = emphasis_ranges(quote, &[quote.to_string()], 0, "two three");
+    let ranges = unique_emphasis_ranges(quote, "two three");
     assert_eq!(
         apply_emphasis(quote, &ranges),
         "one **two**\n**three** four"
     );
 
     let quote = "alpha beta gamma delta";
-    let member_texts = vec![quote.to_string()];
-    let mut ranges = emphasis_ranges(quote, &member_texts, 0, "beta");
-    ranges.extend(emphasis_ranges(quote, &member_texts, 0, "delta"));
+    let mut ranges = unique_emphasis_ranges(quote, "beta");
+    ranges.extend(unique_emphasis_ranges(quote, "delta"));
     assert_eq!(
         apply_emphasis(quote, &ranges),
         "alpha **beta** gamma **delta**"
@@ -496,5 +505,196 @@ fn underline_report_lines_explain_standalone_reasons() {
     assert_eq!(
         underline_report_lines(0, &standalone)[0],
         "underlines_merged: 0"
+    );
+}
+
+#[test]
+fn accepted_whole_word_occurrence_renders_inside_the_host() {
+    let quote = "It approves and proves the change.";
+    let host = highlight(1, "Page 1", Some(1), quote, None);
+    let underline = highlight(2, "Page 1", Some(1), "**proves**", None);
+    let plan = plan_underlines(&[host.clone(), underline.clone()], false);
+    let start = *plan.host_key_start.get(&2).expect("accepted occurrence");
+    assert_eq!(plan.host_of.get(&2), Some(&1));
+    assert_eq!(unique_key_start(quote, "proves"), None);
+    let ranges =
+        emphasis_ranges(quote, &[quote.to_string()], 0, "proves", start);
+    assert_eq!(
+        apply_emphasis(quote, &ranges),
+        "It approves and **proves** the change."
+    );
+
+    let bob_dir = temp_bob_dir("underline-whole-word");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![host, underline],
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.count, 1);
+    assert_eq!(rendered.underlines_merged, 1);
+    assert!(rendered.standalone_underlines.is_empty());
+    assert!(
+        rendered
+            .content
+            .contains("It approves and **proves** the change."),
+        "{}",
+        rendered.content
+    );
+    assert_eq!(
+        rendered.content.matches("**proves**").count(),
+        1,
+        "{}",
+        rendered.content
+    );
+}
+
+#[test]
+fn whole_word_emphasis_ignores_subword_order_and_sidecar_order() {
+    let bob_dir = temp_bob_dir("underline-order");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+
+    let host = highlight(
+        2,
+        "Page 1",
+        Some(1),
+        "It proves and approves the change.",
+        None,
+    );
+    let underline = highlight(1, "Page 1", Some(1), "**proves**", None);
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![underline, host],
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.underlines_merged, 1);
+    assert!(
+        rendered
+            .content
+            .contains("It **proves** and approves the change."),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("**approves**"),
+        "{}",
+        rendered.content
+    );
+}
+
+#[test]
+fn repeated_whole_word_and_inside_word_stay_standalone() {
+    let bob_dir = temp_bob_dir("underline-standalone");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+
+    let repeated_host =
+        highlight(1, "Page 1", Some(1), "It proves then proves again.", None);
+    let repeated_underline =
+        highlight(2, "Page 1", Some(1), "**proves**", None);
+    let repeated = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![repeated_host, repeated_underline],
+        &ParsedNote::empty(),
+    );
+    assert_eq!(repeated.underlines_merged, 0);
+    assert_eq!(repeated.standalone_underlines.len(), 1);
+    assert_eq!(
+        repeated.standalone_underlines[0].reason,
+        StandaloneUnderlineReason::RepeatedInHost
+    );
+    assert!(
+        repeated
+            .content
+            .contains("> [!quote] It proves then proves again."),
+        "{}",
+        repeated.content
+    );
+    assert!(
+        repeated.content.contains("> [!quote] **proves**"),
+        "{}",
+        repeated.content
+    );
+
+    let inside_host =
+        highlight(1, "Page 1", Some(1), "It approves the change.", None);
+    let inside_underline = highlight(2, "Page 1", Some(1), "**proves**", None);
+    let inside = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![inside_host, inside_underline],
+        &ParsedNote::empty(),
+    );
+    assert_eq!(inside.underlines_merged, 0);
+    assert_eq!(inside.standalone_underlines.len(), 1);
+    assert_eq!(
+        inside.standalone_underlines[0].reason,
+        StandaloneUnderlineReason::NoHost
+    );
+    assert!(
+        inside
+            .content
+            .contains("> [!quote] It approves the change."),
+        "{}",
+        inside.content
+    );
+    assert!(
+        inside.content.contains("> [!quote] **proves**"),
+        "{}",
+        inside.content
+    );
+}
+
+#[test]
+fn continuation_member_keeps_emphasis_in_the_selected_host_window() {
+    let bob_dir = temp_bob_dir("underline-continuation-window");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let host = highlight(
+        1,
+        "Page 1",
+        Some(1),
+        "It approves and proves the change.",
+        None,
+    );
+    let follower = highlight(
+        2,
+        "Page 3",
+        Some(3),
+        "Later it proves nothing else.",
+        Some("- < continue"),
+    );
+    let underline = highlight(3, "Page 1", Some(1), "**proves**", None);
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![host, follower, underline],
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.count, 1);
+    assert_eq!(rendered.underlines_merged, 1);
+    assert_eq!(rendered.continuation_count, 1);
+    assert!(
+        rendered.content.contains(
+            "It approves and **proves** the change. […] Later it proves nothing else."
+        ),
+        "{}",
+        rendered.content
+    );
+    assert_eq!(
+        rendered.content.matches("**proves**").count(),
+        1,
+        "{}",
+        rendered.content
     );
 }

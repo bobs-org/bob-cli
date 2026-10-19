@@ -7,6 +7,9 @@ use std::ops::Range;
 pub(super) struct UnderlinePlan {
     /// Absorbed underline order -> the host highlight member's order.
     pub(super) host_of: BTreeMap<usize, usize>,
+    /// Absorbed underline order -> key-space start of the occurrence
+    /// accepted by host selection, in the host member's cleaned match key.
+    pub(super) host_key_start: BTreeMap<usize, usize>,
     /// Underline rows that stay as their own blocks, in sidecar order.
     pub(super) standalone: BTreeSet<usize>,
     /// Why each underline stayed standalone, in sidecar order.
@@ -143,17 +146,18 @@ pub(super) fn plan_underlines(
                 single_word,
             );
             if !occurrences.is_empty() {
-                hosts.push((candidate.order, occurrences.len()));
+                hosts.push((candidate.order, occurrences));
             }
         }
 
         let reason = match hosts.as_slice() {
-            [(host_order, 1)] => {
+            [(host_order, occurrences)] if occurrences.len() == 1 => {
                 plan.host_of.insert(annotation.order, *host_order);
+                plan.host_key_start.insert(annotation.order, occurrences[0]);
                 None
             }
             [] => Some(StandaloneUnderlineReason::NoHost),
-            [(_, count)] if *count > 1 => {
+            [(_, occurrences)] if occurrences.len() > 1 => {
                 Some(StandaloneUnderlineReason::RepeatedInHost)
             }
             _ => Some(StandaloneUnderlineReason::AmbiguousHost {
@@ -189,11 +193,15 @@ pub(super) fn plan_annotation_folds(
 }
 
 /// Char ranges in `quote` to embolden for one absorbed underline.
+///
+/// `host_key_start` is the key-space offset accepted by host selection,
+/// relative to the host member's own cleaned match key.
 pub(super) fn emphasis_ranges(
     quote: &str,
     member_texts: &[String],
     host_member: usize,
     underline_text: &str,
+    host_key_start: usize,
 ) -> Vec<Range<usize>> {
     let quote_key = match_key(quote);
     if quote_key.chars.is_empty() || host_member >= member_texts.len() {
@@ -218,14 +226,17 @@ pub(super) fn emphasis_ranges(
 
     let host_window = &member_windows[host_member];
     let underline_key = match_key(underline_text);
-    let Some(match_start) = find_unique_key(
-        &quote_key.chars[host_window.clone()],
-        &underline_key.chars,
-    ) else {
+    if underline_key.chars.is_empty() {
         return Vec::new();
-    };
-    let key_start = host_window.start + match_start;
+    }
+    let key_start = host_window.start + host_key_start;
     let key_end = key_start + underline_key.chars.len();
+    if key_end > host_window.end
+        || quote_key.chars.get(key_start..key_end)
+            != Some(underline_key.chars.as_slice())
+    {
+        return Vec::new();
+    }
     let chars = quote.chars().collect::<Vec<_>>();
     let mut start = quote_key.offsets[key_start];
     let mut end = quote_key.offsets[key_end - 1] + 1;
@@ -441,11 +452,19 @@ fn find_key(haystack: &[char], needle: &[char], start: usize) -> Option<usize> {
         .map(|offset| start + offset)
 }
 
+#[cfg(test)]
 fn find_unique_key(haystack: &[char], needle: &[char]) -> Option<usize> {
     let first = find_key(haystack, needle, 0)?;
     find_key(haystack, needle, first + 1)
         .is_none()
         .then_some(first)
+}
+
+#[cfg(test)]
+pub(super) fn unique_key_start(haystack: &str, needle: &str) -> Option<usize> {
+    let haystack_key = match_key(haystack);
+    let needle_key = match_key(needle);
+    find_unique_key(&haystack_key.chars, &needle_key.chars)
 }
 
 fn is_word_char(character: char) -> bool {

@@ -9,6 +9,7 @@
 
 use clap::ArgMatches;
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 use super::cli::list_config_from_matches;
 use super::output::{
@@ -585,49 +586,128 @@ fn excluded_line(excluded: &ShowExcluded) -> Option<String> {
 /// Word-wrap paragraphs to `width` display columns. Hard-splits words
 /// longer than the width; blank lines stay blank.
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    wrap_text_with_source(text, width)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// Wrap like [`wrap_text`], tracking each output character's source index
+/// in `text`. Inserted spaces between words have no source.
+fn wrap_text_with_source(
+    text: &str,
+    width: usize,
+) -> Vec<(String, Vec<Option<usize>>)> {
     let width = width.max(1);
+    let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
-    for paragraph in text.split('\n') {
-        let mut line = String::new();
-        let mut len = 0usize;
-        for word in paragraph.split_whitespace() {
-            for chunk in split_word(word, width) {
-                let chunk_len = display_width(&chunk);
-                if len == 0 {
-                    line.push_str(&chunk);
-                    len = chunk_len;
-                } else if len + 1 + chunk_len <= width {
-                    line.push(' ');
-                    line.push_str(&chunk);
-                    len += 1 + chunk_len;
-                } else {
-                    out.push(std::mem::take(&mut line));
-                    line.push_str(&chunk);
-                    len = chunk_len;
-                }
-            }
+    let mut start = 0usize;
+    for (index, character) in chars.iter().copied().enumerate() {
+        if character == '\n' {
+            push_wrapped_paragraph(
+                &chars[start..index],
+                start,
+                width,
+                &mut out,
+            );
+            start = index + 1;
         }
-        out.push(line);
     }
+    push_wrapped_paragraph(&chars[start..], start, width, &mut out);
     out
 }
 
-/// Split one word into display-width chunks that fit `width`.
-fn split_word(word: &str, width: usize) -> Vec<String> {
+fn push_wrapped_paragraph(
+    paragraph: &[char],
+    paragraph_start: usize,
+    width: usize,
+    out: &mut Vec<(String, Vec<Option<usize>>)>,
+) {
+    let mut line = String::new();
+    let mut source = Vec::new();
+    let mut len = 0usize;
+    for (word, word_source) in paragraph_words(paragraph, paragraph_start) {
+        for (chunk, chunk_source) in
+            split_word_with_source(&word, &word_source, width)
+        {
+            let chunk_len = display_width(&chunk);
+            if len == 0 {
+                line.push_str(&chunk);
+                source.extend(chunk_source.into_iter().map(Some));
+                len = chunk_len;
+            } else if len + 1 + chunk_len <= width {
+                line.push(' ');
+                source.push(None);
+                line.push_str(&chunk);
+                source.extend(chunk_source.into_iter().map(Some));
+                len += 1 + chunk_len;
+            } else {
+                out.push((
+                    std::mem::take(&mut line),
+                    std::mem::take(&mut source),
+                ));
+                line.push_str(&chunk);
+                source.extend(chunk_source.into_iter().map(Some));
+                len = chunk_len;
+            }
+        }
+    }
+    out.push((line, source));
+}
+
+fn paragraph_words(
+    paragraph: &[char],
+    paragraph_start: usize,
+) -> Vec<(String, Vec<usize>)> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut current_source = Vec::new();
+    for (offset, character) in paragraph.iter().copied().enumerate() {
+        if character.is_whitespace() {
+            if !current.is_empty() {
+                words.push((
+                    std::mem::take(&mut current),
+                    std::mem::take(&mut current_source),
+                ));
+            }
+        } else {
+            current.push(character);
+            current_source.push(paragraph_start + offset);
+        }
+    }
+    if !current.is_empty() {
+        words.push((current, current_source));
+    }
+    words
+}
+
+fn split_word_with_source(
+    word: &str,
+    source: &[usize],
+    width: usize,
+) -> Vec<(String, Vec<usize>)> {
     let chars: Vec<char> = word.chars().collect();
     if display_width(word) <= width {
-        return vec![word.to_string()];
+        return vec![(word.to_string(), source.to_vec())];
     }
+    let width = width.max(1);
     chars
-        .chunks(width.max(1))
-        .map(|chunk| chunk.iter().collect())
+        .chunks(width)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let start = index * width;
+            (
+                chunk.iter().collect(),
+                source[start..start + chunk.len()].to_vec(),
+            )
+        })
         .collect()
 }
 
 /// Render one quote: an opening curly quote on the first line, a hanging
 /// indent after, and the closing quote on the last line.
 fn quote_lines(quote: &str, styler: Styler, width: usize) -> Vec<String> {
-    let wrapped = wrap_text(quote, width.saturating_sub(5).max(1));
+    let wrapped = wrap_text_with_source(quote, width.saturating_sub(5).max(1));
     let mut out = Vec::with_capacity(wrapped.len().max(1));
     let colored_lines = styler_quote_lines(quote, &wrapped, styler);
     for (index, line) in colored_lines.iter().enumerate() {
@@ -645,14 +725,13 @@ fn quote_lines(quote: &str, styler: Styler, width: usize) -> Vec<String> {
 
 fn styler_quote_lines(
     quote: &str,
-    lines: &[String],
+    lines: &[(String, Vec<Option<usize>>)],
     styler: Styler,
 ) -> Vec<String> {
     if !styler.is_color() {
-        return lines.to_vec();
+        return lines.iter().map(|(line, _)| line.clone()).collect();
     }
     let quote_chars = quote.chars().collect::<Vec<_>>();
-    let mut paired = Vec::new();
     let mut markers = Vec::new();
     let mut index = 0;
     while index + 1 < quote_chars.len() {
@@ -663,50 +742,87 @@ fn styler_quote_lines(
             index += 1;
         }
     }
+    let mut paired_firsts = BTreeSet::new();
+    let mut paired_stars = BTreeSet::new();
     for pair in markers.chunks_exact(2) {
-        let valid = pair[1] > pair[0] + 2;
-        paired.push(valid);
-        paired.push(valid);
+        if pair[1] > pair[0] + 2 {
+            for first in [pair[0], pair[1]] {
+                paired_firsts.insert(first);
+                paired_stars.insert(first);
+                paired_stars.insert(first + 1);
+            }
+        }
     }
-    if !paired.iter().any(|value| *value) {
-        return lines.to_vec();
+    if paired_firsts.is_empty() {
+        return lines.iter().map(|(line, _)| line.clone()).collect();
     }
-    let mut delimiter_index = 0usize;
+    let mut consume_second = false;
     let mut active = false;
     lines
         .iter()
-        .map(|line| {
+        .map(|(line, sources)| {
+            let chars: Vec<char> = line.chars().collect();
+            debug_assert_eq!(chars.len(), sources.len());
             let mut rendered = String::new();
             let mut segment = String::new();
             let mut cursor = 0usize;
-            while let Some(relative) = line[cursor..].find("**") {
-                let at = cursor + relative;
-                segment.push_str(&line[cursor..at]);
-                let is_paired =
-                    paired.get(delimiter_index).copied().unwrap_or(false);
-                delimiter_index += 1;
-                if is_paired {
-                    rendered.push_str(&if active {
-                        styler.bold(&segment)
-                    } else {
-                        segment.clone()
-                    });
-                    segment.clear();
-                    active = !active;
-                } else {
-                    segment.push_str("**");
+            while cursor < chars.len() {
+                let character = chars[cursor];
+                let source = sources.get(cursor).copied().flatten();
+                if consume_second {
+                    consume_second = false;
+                    if character == '*'
+                        && source
+                            .is_some_and(|index| paired_stars.contains(&index))
+                    {
+                        cursor += 1;
+                        continue;
+                    }
                 }
-                cursor = at + 2;
+                if character == '*' {
+                    if let Some(first) = source {
+                        if paired_firsts.contains(&first) {
+                            flush_quote_segment(
+                                &mut rendered,
+                                &mut segment,
+                                active,
+                                styler,
+                            );
+                            active = !active;
+                            cursor += 1;
+                            if cursor < chars.len()
+                                && chars[cursor] == '*'
+                                && sources.get(cursor).copied().flatten()
+                                    == Some(first + 1)
+                            {
+                                cursor += 1;
+                            } else {
+                                consume_second = true;
+                            }
+                            continue;
+                        }
+                    }
+                }
+                segment.push(character);
+                cursor += 1;
             }
-            segment.push_str(&line[cursor..]);
-            rendered.push_str(&if active {
-                styler.bold(&segment)
-            } else {
-                segment
-            });
+            flush_quote_segment(&mut rendered, &mut segment, active, styler);
             rendered
         })
         .collect()
+}
+
+fn flush_quote_segment(
+    rendered: &mut String,
+    segment: &mut String,
+    active: bool,
+    styler: Styler,
+) {
+    if segment.is_empty() {
+        return;
+    }
+    let taken = std::mem::take(segment);
+    rendered.push_str(&if active { styler.bold(&taken) } else { taken });
 }
 
 fn image_note_lines(
@@ -1372,7 +1488,7 @@ mod tests {
     #[test]
     fn quote_emphasis_is_bold_only_in_color_output() {
         let quote = "before **bold words** after **unclosed";
-        let wrapped = wrap_text(quote, 200);
+        let wrapped = wrap_text_with_source(quote, 200);
         let plain = styler_quote_lines(quote, &wrapped, Styler::plain());
         assert_eq!(plain, vec![quote]);
         let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
@@ -1385,7 +1501,7 @@ mod tests {
     #[test]
     fn quote_emphasis_reopens_after_wrapping() {
         let quote = "**one two three four**";
-        let wrapped = wrap_text(quote, 7);
+        let wrapped = wrap_text_with_source(quote, 7);
         let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
         assert!(colored.len() > 1, "{colored:?}");
         assert!(colored[0].contains("\u{1b}[1m"), "{colored:?}");
@@ -1394,6 +1510,143 @@ mod tests {
         assert!(colored
             .last()
             .is_some_and(|line| line.ends_with("\u{1b}[0m")));
+    }
+
+    fn strip_ansi(text: &str) -> String {
+        let mut out = String::new();
+        let mut chars = text.chars().peekable();
+        while let Some(character) = chars.next() {
+            if character == '\u{1b}' && chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(character);
+            }
+        }
+        out
+    }
+
+    fn quote_payload(lines: &[String]) -> Vec<String> {
+        let last = lines.len().saturating_sub(1);
+        lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let mut payload = line.as_str();
+                payload = if index == 0 {
+                    payload.strip_prefix("    “").expect("opening quote prefix")
+                } else {
+                    payload.strip_prefix("     ").expect("hanging indent")
+                };
+                if index == last {
+                    payload = payload
+                        .strip_suffix('”')
+                        .expect("closing quote suffix");
+                }
+                payload.to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn quote_lines_preserve_split_emphasis_delimiters() {
+        let quote = format!("**{}** plain after", "a".repeat(72));
+        let plain = quote_lines(&quote, Styler::plain(), 80);
+        let colored = quote_lines(&quote, Styler::colored(), 80);
+        let wrapped = wrap_text(&quote, 75);
+        assert_eq!(quote_payload(&plain), wrapped);
+        assert!(
+            wrapped
+                .iter()
+                .any(|line| line.contains('*') && !line.contains("**")),
+            "closing delimiter should split: {wrapped:?}"
+        );
+
+        let colored_payload = quote_payload(&colored);
+        let stripped: String = colored_payload
+            .iter()
+            .map(|line| strip_ansi(line))
+            .collect();
+        assert_eq!(stripped, "a".repeat(72) + " plain after");
+        assert!(
+            colored.iter().all(|line| !strip_ansi(line).contains("**")),
+            "{colored:?}"
+        );
+        assert_eq!(strip_ansi(&colored_payload[0]), "a".repeat(72));
+        assert!(
+            colored_payload[0].starts_with("\u{1b}[1m")
+                && colored_payload[0].ends_with("\u{1b}[0m"),
+            "{colored_payload:?}"
+        );
+        assert!(
+            !colored_payload[1].contains("\u{1b}[1m"),
+            "plain text after split close must not stay bold: {colored_payload:?}"
+        );
+        assert_eq!(strip_ansi(&colored_payload[1]), " plain after");
+    }
+
+    #[test]
+    fn quote_lines_consume_split_opening_and_later_runs() {
+        let opening = format!("{}**{}** after", "a".repeat(74), "b".repeat(5));
+        let colored = quote_lines(&opening, Styler::colored(), 80);
+        let plain = quote_lines(&opening, Styler::plain(), 80);
+        assert_eq!(quote_payload(&plain), wrap_text(&opening, 75));
+        let payloads = quote_payload(&colored);
+        let stripped: String =
+            payloads.iter().map(|line| strip_ansi(line)).collect();
+        assert_eq!(stripped, "a".repeat(74) + &"b".repeat(5) + " after");
+        assert!(
+            payloads.iter().any(|line| {
+                line.contains("\u{1b}[1m") && strip_ansi(line).contains('b')
+            }),
+            "{colored:?}"
+        );
+        assert!(
+            payloads.iter().any(|line| line.contains("\u{1b}[0m after")),
+            "bold must reset before trailing plain text: {colored:?}"
+        );
+
+        let two_runs = format!("**{}** plain **z**", "a".repeat(72));
+        let colored = quote_lines(&two_runs, Styler::colored(), 80);
+        let plain = quote_lines(&two_runs, Styler::plain(), 80);
+        assert_eq!(quote_payload(&plain), wrap_text(&two_runs, 75));
+        let payloads = quote_payload(&colored);
+        let stripped: String =
+            payloads.iter().map(|line| strip_ansi(line)).collect();
+        assert_eq!(stripped, "a".repeat(72) + " plain z");
+        assert!(
+            payloads[0].contains("\u{1b}[1m")
+                && payloads[0].ends_with("\u{1b}[0m"),
+            "{payloads:?}"
+        );
+        assert_eq!(payloads[1], " plain \u{1b}[1mz\u{1b}[0m", "{payloads:?}");
+    }
+
+    #[test]
+    fn quote_lines_keep_emphasis_at_one_content_column() {
+        let quote = "**ab** x **c**";
+        let plain = quote_lines(quote, Styler::plain(), 1);
+        let colored = quote_lines(quote, Styler::colored(), 1);
+        assert_eq!(quote_payload(&plain), wrap_text(quote, 1));
+        let payloads = quote_payload(&colored);
+        let stripped: String =
+            payloads.iter().map(|line| strip_ansi(line)).collect();
+        assert_eq!(stripped, "abxc");
+        let joined = colored.join("\n");
+        assert!(joined.contains("\u{1b}[1ma\u{1b}[0m"), "{colored:?}");
+        assert!(joined.contains("\u{1b}[1mb\u{1b}[0m"), "{colored:?}");
+        assert!(joined.contains("\u{1b}[1mc\u{1b}[0m"), "{colored:?}");
+        assert!(
+            payloads
+                .iter()
+                .any(|line| strip_ansi(line) == "x"
+                    && !line.contains("\u{1b}[1m")),
+            "{colored:?}"
+        );
     }
 
     #[test]

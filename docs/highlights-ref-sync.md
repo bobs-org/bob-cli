@@ -1371,7 +1371,7 @@ stays separate. Dry-run reasons are `no highlight around it`, `inside N
 highlights`, and `text repeats inside its highlight`.
 
 The run expands to whole words and is split at line breaks. For example,
-underlining `didn’` in `what didn’t change` renders as `what **didn’t** change`.
+underlining `what didn’` in `what didn’t change` renders as `**what didn’t** change`.
 Comments retain member comments first, then absorbed underline comments in run
 order; when multiple sources or runs share the block, underline comments get a
 short quoted run anchor. Image notes follow member images, and tasks retain the

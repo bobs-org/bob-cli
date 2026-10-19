@@ -156,11 +156,19 @@ pub(super) fn render_sidecar_highlights(
                     };
                     let cleaned_inner =
                         clean_for_matching(&inner, strip_return_links);
+                    let host_key_start = *folds
+                        .underlines
+                        .host_key_start
+                        .get(&underline_order)
+                        .expect(
+                            "absorbed underline records its host key start",
+                        );
                     let ranges = emphasis_ranges(
                         &quote,
                         &member_texts,
                         host_member,
                         &cleaned_inner,
+                        host_key_start,
                     );
                     underline_ranges.extend(ranges.iter().cloned());
                     underline_contributions.push(UnderlineContribution {
