@@ -610,7 +610,8 @@ are plain child headings owned by title and shape: a heading directly under a
 `Tasks` container (or under an authored topic inside one) is managed if and
 only if its title is exactly `Next & In Progress`, `Blocked`, or
 `Done & Canceled` **and** its body holds only movable task blocks and blank
-lines:
+lines. `bob capture` section completion, `bob capture-sections`, and `@route#`
+placement skip these headings:
 
 ```markdown
 # Project

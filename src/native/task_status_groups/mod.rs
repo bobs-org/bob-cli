@@ -339,6 +339,40 @@ impl TaskClassification {
     }
 }
 
+/// Zero-based line indexes of the status-group headings the reconciler
+/// reserves: a `Next & In Progress`, `Blocked`, or `Done & Canceled` heading
+/// anywhere below a `Tasks` heading. Capture never offers or targets them as
+/// bullet sections.
+pub(crate) fn reserved_group_heading_lines(contents: &str) -> BTreeSet<usize> {
+    let lines = source_lines(contents);
+    if lines.is_empty() {
+        return BTreeSet::new();
+    }
+    let heading_mask = heading_mask(&lines);
+    let flats = discover_headings(&lines, &heading_mask);
+    let tree = build_tree(contents.len(), flats);
+    let mut reserved = BTreeSet::new();
+    collect_reserved_group_heading_lines(&tree, false, &mut reserved);
+    reserved
+}
+
+fn collect_reserved_group_heading_lines(
+    nodes: &[HeadingNode],
+    under_tasks: bool,
+    reserved: &mut BTreeSet<usize>,
+) {
+    for node in nodes {
+        if under_tasks && GroupKind::from_title(&node.title).is_some() {
+            reserved.insert(node.heading_line - 1);
+        }
+        collect_reserved_group_heading_lines(
+            &node.children,
+            under_tasks || is_tasks_title(&node.title),
+            reserved,
+        );
+    }
+}
+
 pub(crate) fn transform(
     contents: &str,
     classification: &TaskClassification,

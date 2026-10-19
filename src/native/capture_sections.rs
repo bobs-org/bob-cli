@@ -56,7 +56,9 @@ pub(crate) fn build_cli() -> ClapCommand {
             "List the existing non-Tasks Markdown sections of one routable Bob \
 note.\n\n\
 The command is read-only and reports every ATX heading level (H1-H6) that Bob's \
-bullet capture can target, in document order. Missing notes are not errors; \
+bullet capture can target, in document order. Generated status-group headings \
+under a Tasks heading (Next & In Progress, Blocked, Done & Canceled) are omitted. \
+Missing notes are not errors; \
 they return an empty list so picker callers can skip the section chooser.",
         )
         .after_help(

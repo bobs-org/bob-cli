@@ -1,6 +1,8 @@
 //! Markdown section/task/bullet insertion and line spans.
 use super::*;
 
+use std::collections::BTreeSet;
+
 use crate::native::articles::{heading_identity, heading_plain_identity};
 use crate::native::projects::{frontmatter_is_article, parse_frontmatter};
 
@@ -167,12 +169,14 @@ pub(super) fn insert_bullet_line(
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
     let article = destination_is_article(contents);
+    let reserved = task_status_groups::reserved_group_heading_lines(contents);
     let section = target_bullet_section(
         &lines,
         &headings,
         section_prefix,
         exact,
         article,
+        &reserved,
     );
 
     if let Some(index) = last_bullet_block_insert_index_in_range(
@@ -229,9 +233,10 @@ pub(super) fn target_bullet_section(
     section_prefix: Option<&str>,
     exact: bool,
     article: bool,
+    reserved: &BTreeSet<usize>,
 ) -> MarkdownSection {
     let matches = |heading: &MarkdownHeading<'_>| {
-        heading.title != "Tasks"
+        is_bullet_section(heading, reserved)
             && heading_matches_bullet_selector(
                 heading.title,
                 section_prefix,
@@ -253,11 +258,11 @@ pub(super) fn target_bullet_section(
     };
     let target = if article {
         let raw = |heading: &MarkdownHeading<'_>| {
-            heading.title != "Tasks"
+            is_bullet_section(heading, reserved)
                 && raw_heading_matches(heading.title, section_prefix, exact)
         };
         let identity = |heading: &MarkdownHeading<'_>| {
-            heading.title != "Tasks"
+            is_bullet_section(heading, reserved)
                 && section_prefix.is_some_and(|selector| {
                     article_heading_matches(heading.title, selector, exact)
                 })
@@ -368,18 +373,28 @@ pub(crate) struct SectionHeading {
     pub(crate) level: usize,
 }
 
+/// ATX headings capture can target as bullet sections: every heading except
+/// `Tasks` and the generated status-group headings below a `Tasks` heading.
 pub(crate) fn non_tasks_section_headings(
     contents: &str,
 ) -> Vec<SectionHeading> {
+    let reserved = task_status_groups::reserved_group_heading_lines(contents);
     let lines = line_spans(contents);
     markdown_headings(&lines)
         .into_iter()
-        .filter(|heading| heading.title != "Tasks")
+        .filter(|heading| is_bullet_section(heading, &reserved))
         .map(|heading| SectionHeading {
             title: heading.title.to_string(),
             level: heading.level,
         })
         .collect()
+}
+
+fn is_bullet_section(
+    heading: &MarkdownHeading<'_>,
+    reserved: &BTreeSet<usize>,
+) -> bool {
+    heading.title != "Tasks" && !reserved.contains(&heading.line_index)
 }
 
 pub(super) fn last_bullet_block_insert_index_in_range(

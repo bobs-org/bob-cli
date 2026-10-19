@@ -275,3 +275,60 @@ fn non_tasks_section_headings_match_bullet_heading_scan() {
         ]
     );
 }
+
+#[test]
+fn non_tasks_section_headings_skip_generated_status_groups() {
+    let contents = concat!(
+        "# Project\n",
+        "\n",
+        "## Tasks\n",
+        "[`⚪ 1 open`](#Project#Tasks) · [`🔵 1 next/wip`](#Project#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Project#Tasks#Blocked) · [`🟢 1 done/canceled`](#Project#Tasks#Done%20&%20Canceled)\n",
+        "\n",
+        "- [ ] #task Later idea ^idea\n",
+        "\n",
+        "### Next & In Progress\n",
+        "\n",
+        "- [/] #task Finish implementation ^finish\n",
+        "\n",
+        "### Blocked\n",
+        "\n",
+        "- [?] #task Wait for dependency ^wait\n",
+        "\n",
+        "### Done & Canceled\n",
+        "\n",
+        "- [x] #task Agreed scope ^scope\n",
+        "\n",
+        "### Ideas\n",
+        "\n",
+        "keep me\n",
+        "\n",
+        "## Blocked\n",
+        "\n",
+        "authored blocked\n",
+        "\n",
+        "## Requirements\n",
+        "\n",
+        "notes\n",
+    );
+    assert_eq!(
+        non_tasks_section_headings(contents),
+        vec![
+            SectionHeading {
+                title: "Project".to_string(),
+                level: 1,
+            },
+            SectionHeading {
+                title: "Ideas".to_string(),
+                level: 3,
+            },
+            SectionHeading {
+                title: "Blocked".to_string(),
+                level: 2,
+            },
+            SectionHeading {
+                title: "Requirements".to_string(),
+                level: 2,
+            },
+        ]
+    );
+}

@@ -536,6 +536,70 @@ fn capture_complete_section_json_lists_headings_of_the_resolved_route() {
     );
 }
 
+const RECONCILED_NOTES: &str = concat!(
+    "# Notes\n",
+    "\n",
+    "## Tasks\n",
+    "[`⚪ 1 open`](#Notes#Tasks) · [`🔵 1 next/wip`](#Notes#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Notes#Tasks#Blocked) · [`🟢 1 done/canceled`](#Notes#Tasks#Done%20&%20Canceled)\n",
+    "\n",
+    "- [ ] #task Later idea ^idea\n",
+    "\n",
+    "### Next & In Progress\n",
+    "\n",
+    "- [/] #task Finish implementation ^finish\n",
+    "\n",
+    "### Blocked\n",
+    "\n",
+    "- [?] #task Wait for dependency ^wait\n",
+    "\n",
+    "### Done & Canceled\n",
+    "\n",
+    "- [x] #task Agreed scope ^scope\n",
+    "\n",
+    "### Ideas\n",
+    "\n",
+    "keep me\n",
+    "\n",
+    "## Requirements\n",
+    "\n",
+    "notes\n",
+);
+
+#[test]
+fn capture_complete_section_json_skips_generated_status_groups() {
+    let temp = TempDir::new("bob-cli-capture-complete-section-groups");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("notes.md"), RECONCILED_NOTES);
+
+    let draft = "Idea @notes#";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-complete section groups");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-complete JSON");
+    assert_eq!(json["context"], "section");
+    assert_eq!(
+        json["candidates"]
+            .as_array()
+            .expect("candidates array")
+            .iter()
+            .map(|candidate| candidate["title"].as_str().expect("title"))
+            .collect::<Vec<_>>(),
+        vec!["Notes", "Ideas", "Requirements"]
+    );
+}
+
 #[test]
 fn capture_complete_task_json_only_offers_tasks_with_a_block_id() {
     let temp = TempDir::new("bob-cli-capture-complete-task");

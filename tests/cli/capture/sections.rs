@@ -1045,6 +1045,69 @@ fn capture_sections_json_lists_sections_in_order() {
 }
 
 #[test]
+fn capture_sections_json_skips_generated_status_groups() {
+    let temp = TempDir::new("bob-cli-capture-sections-status-groups");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("notes.md"),
+        concat!(
+            "# Notes\n",
+            "\n",
+            "## Tasks\n",
+            "[`⚪ 1 open`](#Notes#Tasks) · [`🔵 1 next/wip`](#Notes#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Notes#Tasks#Blocked) · [`🟢 1 done/canceled`](#Notes#Tasks#Done%20&%20Canceled)\n",
+            "\n",
+            "- [ ] #task Later idea ^idea\n",
+            "\n",
+            "### Next & In Progress\n",
+            "\n",
+            "- [/] #task Finish implementation ^finish\n",
+            "\n",
+            "### Blocked\n",
+            "\n",
+            "- [?] #task Wait for dependency ^wait\n",
+            "\n",
+            "### Done & Canceled\n",
+            "\n",
+            "- [x] #task Agreed scope ^scope\n",
+            "\n",
+            "### Ideas\n",
+            "\n",
+            "keep me\n",
+            "\n",
+            "## Requirements\n",
+            "\n",
+            "notes\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture-sections")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-r")
+        .arg("notes")
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob capture-sections status groups");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["route"], "notes");
+    assert_eq!(json["count"], 3);
+    assert_eq!(json["sections"][0]["title"], "Notes");
+    assert_eq!(json["sections"][0]["level"], 1);
+    assert_eq!(json["sections"][1]["title"], "Ideas");
+    assert_eq!(json["sections"][1]["level"], 3);
+    assert_eq!(json["sections"][2]["title"], "Requirements");
+    assert_eq!(json["sections"][2]["level"], 2);
+}
+
+#[test]
 fn capture_sections_missing_note_returns_empty_json() {
     let temp = TempDir::new("bob-cli-capture-sections-missing");
     let vault = temp.path().join("vault");

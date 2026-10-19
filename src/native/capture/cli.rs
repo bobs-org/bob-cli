@@ -435,7 +435,10 @@ Append '#<section-prefix>' or a bare '#' to an @route token (such as \
 '@notes#Ideas' or '@notes#') to capture an ordinary bullet instead. It renders \
 as '- <body> [created::YYYY-MM-DD]' and is placed in a non-Tasks section whose \
 heading title starts with the prefix (compared case insensitively), or any \
-non-Tasks section for a bare '#'. A matching non-H1 section is preferred; a \
+non-Tasks section for a bare '#'. The Next & In Progress, Blocked, and \
+Done & Canceled status-group headings bob task reconcile generates under a \
+Tasks heading belong to that Tasks section and are never bullet targets. A \
+matching non-H1 section is preferred; a \
 matching H1 heading is used only when no non-H1 heading matches. The marker may \
 lead ('@notes#Ideas jot idea') or trail ('jot idea @notes#Ideas') the body. \
 A standalone terminal '#<section-prefix>' marker (not appended to an @route \
@@ -443,7 +446,8 @@ token) is still not accepted and fails with a usage error; a standalone bare \
 '#' is the Pomodoro-note marker described above, not a bullet marker.\n\n\
 Use --route with --section to force bullet mode while keeping @tokens literal. \
 The section title is matched exactly, case insensitively, against non-Tasks \
-headings; if no heading matches, the bullet falls back to the pre-heading \
+headings (generated status-group headings under Tasks are skipped); if no \
+heading matches, the bullet falls back to the pre-heading \
 section.\n\n\
 Use --route with --task and --task-section TITLE to nest a sub-bullet under \
 the named ALL-CAPS child section of that task. The title is matched exactly, \

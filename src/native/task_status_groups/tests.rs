@@ -1461,3 +1461,111 @@ fn blank_lines_between_tasks_normalize_away() {
     assert!(!result.contents.contains("task-status-group"));
     assert_idempotent(&result.contents);
 }
+
+fn heading_line_index(contents: &str, title: &str) -> usize {
+    contents
+        .lines()
+        .position(|line| {
+            markdown::atx_heading(line)
+                .is_some_and(|(_, heading)| heading == title)
+        })
+        .unwrap_or_else(|| panic!("missing heading {title:?} in:\n{contents}"))
+}
+
+#[test]
+fn reserved_group_heading_lines_reports_generated_groups() {
+    let contents = GOLDEN_OUTPUT;
+    let reserved = reserved_group_heading_lines(contents);
+    assert_eq!(
+        reserved,
+        BTreeSet::from([
+            heading_line_index(contents, TITLE_ACTIVE),
+            heading_line_index(contents, TITLE_BLOCKED),
+            heading_line_index(contents, TITLE_CLOSED),
+        ])
+    );
+}
+
+#[test]
+fn reserved_group_heading_lines_skips_authored_and_outside_tasks() {
+    let contents = "\
+# Project
+
+## Blocked
+
+Authored top-level section.
+
+## Tasks
+
+- [ ] #task later
+
+### Backend
+
+Work.
+
+### Next & In Progress
+
+- [/] #task now
+";
+    let reserved = reserved_group_heading_lines(contents);
+    assert_eq!(
+        reserved,
+        BTreeSet::from([heading_line_index(contents, TITLE_ACTIVE)])
+    );
+    assert!(!reserved.contains(&heading_line_index(contents, "Blocked")));
+    assert!(!reserved.contains(&heading_line_index(contents, "Backend")));
+}
+
+#[test]
+fn reserved_group_heading_lines_includes_nested_group_under_authored_topic() {
+    let contents = "\
+## Tasks
+
+### Backend
+
+#### Blocked
+
+- [?] #task wait
+";
+    let reserved = reserved_group_heading_lines(contents);
+    assert_eq!(
+        reserved,
+        BTreeSet::from([heading_line_index(contents, TITLE_BLOCKED)])
+    );
+}
+
+#[test]
+fn reserved_group_heading_lines_ignores_fenced_and_frontmatter_titles() {
+    let fenced = "\
+## Tasks
+
+```md
+### Blocked
+```
+";
+    assert!(reserved_group_heading_lines(fenced).is_empty());
+
+    let frontmatter = "\
+---
+### Blocked
+---
+## Tasks
+";
+    assert!(reserved_group_heading_lines(frontmatter).is_empty());
+}
+
+#[test]
+fn reserved_group_heading_lines_follows_lowercase_tasks_container() {
+    let contents = "\
+## tasks
+
+### Blocked
+
+- [?] #task wait
+";
+    let reserved = reserved_group_heading_lines(contents);
+    assert_eq!(
+        reserved,
+        BTreeSet::from([heading_line_index(contents, TITLE_BLOCKED)])
+    );
+}

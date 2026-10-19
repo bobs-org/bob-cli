@@ -4299,7 +4299,10 @@ Append `#<section-prefix>` or a bare `#` to an `@route` token, as in
 `@notes#Ideas` or `@notes#`, to capture an ordinary Markdown bullet instead of
 a task. It renders as `- <text> [created::YYYY-MM-DD]` and is placed in a
 non-`Tasks` section whose heading title starts with the prefix (compared case
-insensitively), or any non-`Tasks` section when the marker is a bare `#`. A
+insensitively), or any non-`Tasks` section when the marker is a bare `#`. The
+`Next & In Progress`, `Blocked`, and `Done & Canceled` status-group headings
+`bob task reconcile` generates under a `Tasks` heading belong to that Tasks
+section. They are never bullet targets, so `@note#` and `@note#Bl` skip them. A
 matching non-H1 section is preferred; a matching H1 heading is used only when no
 non-H1 heading matches. If no heading matches, the bullet goes into the
 pre-heading (zeroth) section. When the destination note is an article
@@ -4325,7 +4328,8 @@ still fails, since it conflicts with the `@route` token on the same item.
 
 A `--route` target keeps `@tokens` literal. Add `--section TITLE` with
 `--route` to force bullet mode and place the bullet in a non-`Tasks` heading
-whose title matches `TITLE` exactly, compared case insensitively. If no heading
+whose title matches `TITLE` exactly, compared case insensitively. Generated
+status-group headings under a `Tasks` heading are skipped here too. If no heading
 matches, the bullet goes into the pre-heading (zeroth) section — the same
 fallback typed `@route#prefix` uses when nothing matches. This exact
 section path is intended for picker integrations; typed `@route#prefix` tokens
@@ -6093,7 +6097,9 @@ claims, and shadowed aliases); other omissions remain silent. See
 [`docs/projects.md`](projects.md) §"External names (`project_name_aliases`)".
 
 `capture-sections` lists each parsed ATX heading (H1-H6) except a heading
-titled exactly `Tasks`, in document order. It ignores headings in YAML
+titled exactly `Tasks` and the generated `Next & In Progress`, `Blocked`, and
+`Done & Canceled` status-group headings below a `Tasks` heading, in document
+order. It ignores headings in YAML
 frontmatter and fenced code blocks. Route input is normalized to lowercase,
 and a missing note successfully returns an empty list. JSON output has `ok`,
 the normalized `route`, `count`, and an ordered `sections` array whose entries

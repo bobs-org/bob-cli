@@ -708,6 +708,83 @@ fn unmatched_prefix_falls_back_to_zeroth_section() {
 }
 
 #[test]
+fn bare_bullet_marker_skips_generated_status_group() {
+    let contents = concat!(
+        "# Title\n",
+        "## Tasks\n",
+        "### Next & In Progress\n",
+        "- [/] #task now\n",
+        "## Requirements\n",
+        "notes\n",
+    );
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, None),
+        (
+            format!(
+                "# Title\n## Tasks\n### Next & In Progress\n- [/] #task now\n## Requirements\n\n{BULLET}\nnotes\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn prefix_skips_generated_blocked_group_for_authored_match() {
+    let contents = concat!(
+        "# Title\n",
+        "## Tasks\n",
+        "### Blocked\n",
+        "- [?] #task wait\n",
+        "## Blog Ideas\n",
+        "notes\n",
+    );
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("Bl")),
+        (
+            format!(
+                "# Title\n## Tasks\n### Blocked\n- [?] #task wait\n## Blog Ideas\n\n{BULLET}\nnotes\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn generated_group_prefix_without_authored_match_falls_back() {
+    let contents = concat!(
+        "# Title\n",
+        "## Tasks\n",
+        "### Done & Canceled\n",
+        "- [x] #task old\n",
+    );
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("Done")),
+        (format!("{BULLET}\n{contents}"), Placement::Inserted,)
+    );
+}
+
+#[test]
+fn forced_section_does_not_target_generated_blocked_group() {
+    let contents = concat!(
+        "# Title\n",
+        "## Tasks\n",
+        "### Blocked\n",
+        "- [?] #task wait\n",
+        "## Requirements\n",
+        "notes\n",
+    );
+    assert_eq!(
+        super::super::insert_bullet_line(
+            contents,
+            BULLET,
+            Some("Blocked"),
+            true
+        ),
+        (format!("{BULLET}\n{contents}"), Placement::Inserted,)
+    );
+}
+
+#[test]
 fn zeroth_section_insertion_after_frontmatter() {
     let contents = "---\ntype: area\n---\nIntro\n## Tasks\n- [ ] #task t\n";
     assert_eq!(
