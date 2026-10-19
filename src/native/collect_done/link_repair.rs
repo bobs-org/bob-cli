@@ -10,29 +10,29 @@ pub(super) static DEPENDENCY_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("dependency metadata regex")
 });
-pub(super) type MovedBlockTargets =
+pub(crate) type MovedBlockTargets =
     BTreeMap<(PathBuf, String), MovedBlockTarget>;
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct MovedBlockTarget {
-    pub(super) archive_target: String,
-    pub(super) block_id: String,
-    pub(super) old_dependency_id: String,
-    pub(super) new_dependency_id: String,
+pub(crate) struct MovedBlockTarget {
+    pub(crate) archive_target: String,
+    pub(crate) block_id: String,
+    pub(crate) old_dependency_id: String,
+    pub(crate) new_dependency_id: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct LinkRepairResult {
-    pub(super) contents: String,
-    pub(super) link_count: usize,
-    pub(super) dependency_metadata_count: usize,
+pub(crate) struct LinkRepairResult {
+    pub(crate) contents: String,
+    pub(crate) link_count: usize,
+    pub(crate) dependency_metadata_count: usize,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct NoteIndex {
-    pub(super) relative_paths: BTreeSet<PathBuf>,
-    pub(super) basename_paths: BTreeMap<String, Option<PathBuf>>,
+pub(crate) struct NoteIndex {
+    pub(crate) relative_paths: BTreeSet<PathBuf>,
+    pub(crate) basename_paths: BTreeMap<String, Option<PathBuf>>,
 }
 
 impl NoteIndex {
-    pub(super) fn from_paths<I>(paths: I) -> Self
+    pub(crate) fn from_paths<I>(paths: I) -> Self
     where
         I: IntoIterator<Item = PathBuf>,
     {
@@ -61,7 +61,7 @@ impl NoteIndex {
         }
     }
 
-    pub(super) fn resolve(
+    pub(crate) fn resolve(
         &self,
         current_path: &Path,
         target: &str,
@@ -443,7 +443,7 @@ pub(super) fn frontmatter_wiki_target(value: &str) -> Option<&str> {
             .map_or(without_alias, |(target, _)| target),
     )
 }
-pub(super) fn repair_links_in_note(
+pub(crate) fn repair_links_in_note(
     contents: &str,
     current_path: &Path,
     note_index: &NoteIndex,
@@ -597,11 +597,11 @@ fn qualify_stayed_link(
     Some(format!("{source_target}#^{block_id}{alias}"))
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DependencyMetadataRepair {
-    pub(super) contents: String,
-    pub(super) count: usize,
+pub(crate) struct DependencyMetadataRepair {
+    pub(crate) contents: String,
+    pub(crate) count: usize,
 }
-pub(super) fn repair_dependency_metadata(
+pub(crate) fn repair_dependency_metadata(
     contents: &str,
     moved_targets: &MovedBlockTargets,
 ) -> DependencyMetadataRepair {
@@ -759,7 +759,7 @@ pub(super) fn repair_wiki_links(
         dependency_metadata_count: 0,
     }
 }
-pub(super) fn repair_wiki_link_inner(
+pub(crate) fn repair_wiki_link_inner(
     inner: &str,
     current_path: &Path,
     note_index: &NoteIndex,
@@ -842,7 +842,7 @@ pub(super) fn next_wiki_link_start(
         .find("[[")
         .map(|relative_start| cursor + relative_start)
 }
-pub(super) fn repair_markdown_destination(
+pub(crate) fn repair_markdown_destination(
     destination: &str,
     current_path: &Path,
     note_index: &NoteIndex,
@@ -872,7 +872,7 @@ pub(super) fn repair_markdown_destination(
         moved_target.block_id
     ))
 }
-pub(super) fn split_block_fragment(target: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_block_fragment(target: &str) -> Option<(&str, &str)> {
     let (note_target, fragment) = target.split_once('#')?;
     is_block_fragment(fragment).then_some((note_target, fragment))
 }
@@ -882,7 +882,7 @@ pub(super) fn is_block_fragment(fragment: &str) -> bool {
     };
     !block_id.is_empty() && block_id.bytes().all(is_block_id_byte)
 }
-pub(super) fn is_simple_markdown_destination(destination: &str) -> bool {
+pub(crate) fn is_simple_markdown_destination(destination: &str) -> bool {
     !destination.is_empty()
         && !destination.contains(char::is_whitespace)
         && !destination.contains('(')

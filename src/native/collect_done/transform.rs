@@ -12,10 +12,10 @@ pub(super) struct Transform {
     pub(super) moved_block_id_occurrences: Vec<BlockIdOccurrence>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct BlockIdOccurrence {
-    pub(super) id: String,
-    pub(super) start: usize,
-    pub(super) end: usize,
+pub(crate) struct BlockIdOccurrence {
+    pub(crate) id: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TaskLine {
@@ -27,7 +27,7 @@ pub(super) fn markdown_files(vault: &Path) -> io::Result<Vec<PathBuf>> {
     files.sort();
     Ok(files)
 }
-pub(super) fn link_repair_markdown_files(
+pub(crate) fn link_repair_markdown_files(
     vault: &Path,
 ) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -124,7 +124,7 @@ pub(super) fn vault_relative_wiki_link(
         vault_relative_link_target(relative_path, path_kind)?
     ))
 }
-pub(super) fn vault_relative_link_target(
+pub(crate) fn vault_relative_link_target(
     relative_path: &Path,
     path_kind: &str,
 ) -> io::Result<String> {
@@ -198,7 +198,7 @@ pub(crate) fn trailing_block_id_in_line(text: &str) -> Option<String> {
         .next()
         .map(|occurrence| occurrence.id)
 }
-pub(super) fn block_id_occurrences_in_text(
+pub(crate) fn block_id_occurrences_in_text(
     text: &str,
 ) -> Vec<BlockIdOccurrence> {
     let trimmed = text.trim_end();
@@ -225,7 +225,7 @@ pub(super) fn block_id_occurrences_in_text(
 pub(crate) fn is_block_id_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'-'
 }
-pub(super) fn task_block_end(
+pub(crate) fn task_block_end(
     lines: &[&str],
     start: usize,
     task_indent: usize,
@@ -306,7 +306,7 @@ pub(super) fn strip_list_marker(line: &str) -> Option<&str> {
         .starts_with(char::is_whitespace)
         .then_some(after_marker)
 }
-pub(super) fn has_task_tag(text: &str) -> bool {
+pub(crate) fn has_task_tag(text: &str) -> bool {
     let mut rest = text;
     while let Some(index) = rest.find("#task") {
         let after_index = index + "#task".len();
@@ -322,7 +322,7 @@ pub(super) fn has_task_tag(text: &str) -> bool {
 pub(super) fn is_task_tag_boundary(character: char) -> bool {
     !(character.is_ascii_alphanumeric() || character == '_' || character == '-')
 }
-pub(super) fn leading_indent_len(line: &str) -> usize {
+pub(crate) fn leading_indent_len(line: &str) -> usize {
     line.char_indices()
         .find_map(|(index, character)| {
             (!matches!(character, ' ' | '\t')).then_some(index)

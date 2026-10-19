@@ -36,6 +36,21 @@ pub(crate) use transform::{
     trailing_block_id_in_line,
 };
 
+#[cfg(test)]
+pub(crate) use archive::next_available_block_id;
+#[cfg(test)]
+pub(crate) use link_repair::{
+    is_simple_markdown_destination, repair_dependency_metadata,
+    repair_links_in_note, repair_markdown_destination, repair_wiki_link_inner,
+    split_block_fragment, LinkRepairResult, MovedBlockTarget,
+    MovedBlockTargets, NoteIndex as ArchiveNoteIndex,
+};
+#[cfg(test)]
+pub(crate) use transform::{
+    block_id_occurrences_in_text, has_task_tag, leading_indent_len,
+    link_repair_markdown_files, task_block_end, vault_relative_link_target,
+};
+
 pub(super) const COMMAND_NAME: &str = "bob task archive";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

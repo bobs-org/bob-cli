@@ -88,7 +88,7 @@ pub(super) fn deduplicate_archive_append_block_ids(
         rename_count,
     }
 }
-pub(super) fn next_available_block_id(
+pub(crate) fn next_available_block_id(
     original_id: &str,
     used: &BTreeSet<String>,
     reserved_unchanged_ids: &BTreeSet<String>,

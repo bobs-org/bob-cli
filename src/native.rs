@@ -73,6 +73,8 @@ mod style;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
+#[cfg(test)]
+mod task_move;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;
