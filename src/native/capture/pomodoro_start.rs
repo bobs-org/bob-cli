@@ -880,12 +880,15 @@ fn plan_override_restart_item(
     })?;
     let running_name = running.name.clone();
     let running_range = running.time_range.clone().unwrap_or_default();
+    let running_homes =
+        override_running_homes(request, day_file, &staged, running);
     refuse_override_if_requested(
         request,
         &parsed,
         "restart",
         running_name.as_deref(),
         &running_range,
+        running_homes.as_ref(),
     )?;
     let overdue = previous_session_is_overdue(&running_range, now, today);
     let (prev_start, prev_end) = running_range
@@ -901,6 +904,7 @@ fn plan_override_restart_item(
         duration_minutes: previous_duration,
         time_range: running_range,
         overdue,
+        homes: running_homes,
     };
     let token = parsed.body.clone();
     let owner = match running_name.as_deref().filter(|name| !name.is_empty()) {
@@ -1100,6 +1104,10 @@ fn plan_override_swap_item(
         .map(|(before, after)| (before.to_string(), after.to_string()))
         .unwrap_or_default();
     let previous_duration = previous_range_duration_minutes(&running_range);
+    // The demoted session is this same running block moved intact, so its
+    // links — and therefore its homes — match `previous`.
+    let running_homes =
+        override_running_homes(request, day_file, &staged, running);
     let previous = PomodoroStartPreviousJson {
         pomodoro_name: running_name.clone(),
         pomodoro_line: running_line,
@@ -1108,6 +1116,7 @@ fn plan_override_swap_item(
         duration_minutes: previous_duration,
         time_range: running_range.clone(),
         overdue: previous_session_is_overdue(&running_range, now, today),
+        homes: running_homes.clone(),
     };
     let keeps_ledger = spec.raw.is_empty();
     let is_found_running = matches!(
@@ -1182,6 +1191,7 @@ fn plan_override_swap_item(
         "swap out",
         running_name.as_deref(),
         &running_range,
+        running_homes.as_ref(),
     )?;
     // A created or "again" named session starts empty, so any drop list
     // fails before any rewrite with the created-session diagnostic.
@@ -1476,6 +1486,7 @@ fn plan_override_swap_item(
                 entry_line: demoted_entry_line,
                 task_links: demoted_task_links,
                 has_notes: demoted_has_notes,
+                homes: running_homes,
             }),
             close_first: format!("x {}", parsed.body),
         }),
@@ -1567,12 +1578,68 @@ fn plan_override_swap_item(
     })
 }
 
+/// Derived R9 homes for the running session an override replaces:
+/// `Some` for unnamed sessions (forecast: the session is open), `None`
+/// for named ones, which keep today's fields and do no resolution.
+fn override_running_homes(
+    request: &CaptureRequest,
+    day_file: &Path,
+    contents: &str,
+    running: &capture_pomodoros::PomodoroEntry,
+) -> Option<crate::native::pomodoro_homes::Homes> {
+    if running.name.as_deref().is_some_and(|name| !name.is_empty()) {
+        return None;
+    }
+    let exempt = config::load_plan_config(&config::config_path())
+        .map(|loaded| loaded.exempt().to_vec())
+        .unwrap_or_else(|_| config::PlanConfig::default().exempt().to_vec());
+    let daily_path = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.to_path_buf());
+    let mut resolver = crate::native::pomodoro_homes::HomeResolver::new(
+        crate::native::pomodoro_homes::DiskHomeSource::new(&request.bob_dir),
+    );
+    Some(
+        crate::native::pomodoro_homes::attribute_ledger_entry(
+            contents,
+            running.line,
+            None,
+            false,
+            None,
+            &exempt,
+            &daily_path,
+            &mut resolver,
+        )
+        .homes,
+    )
+}
+
+/// Plain-text ` ○ chip` suffix for error strings, which travel in JSON as
+/// well as human output and must never carry ANSI styling.
+fn plain_homes_chip(
+    homes: Option<&crate::native::pomodoro_homes::Homes>,
+) -> String {
+    let Some(homes) = homes else {
+        return String::new();
+    };
+    let Some(chip) = homes.chip.as_deref() else {
+        return String::new();
+    };
+    let dot = match homes.state {
+        crate::native::pomodoro_homes::SessionState::Attributed => "●",
+        crate::native::pomodoro_homes::SessionState::Forecast => "○",
+    };
+    format!(" {dot} {chip}")
+}
+
 fn refuse_override_if_requested(
     request: &CaptureRequest,
     parsed: &ParsedCaptureText,
     verb: &str,
     running_name: Option<&str>,
     running_range: &str,
+    homes: Option<&crate::native::pomodoro_homes::Homes>,
 ) -> Result<(), CaptureError> {
     if !request.refuse_override {
         return Ok(());
@@ -1580,7 +1647,12 @@ fn refuse_override_if_requested(
     let token = parsed.body.as_str();
     let subject = match running_name.filter(|name| !name.is_empty()) {
         Some(name) => format!("the running {name} ({running_range})"),
-        None => format!("the running session ({running_range})"),
+        None => {
+            format!(
+                "the running session ({running_range}{})",
+                plain_homes_chip(homes)
+            )
+        }
     };
     Err(CaptureError::override_refused(format!(
         "refusing capture: `{token}` would {verb} {subject} and --refuse-override is set; capture `x {token}` to close it first"

@@ -1285,6 +1285,156 @@ fn eq_override_human_warning_lines() {
     );
 }
 
+/// An unnamed running session with links carries derived `homes` on
+/// `override.previous` (restart) and `override.demoted` (swap), and the
+/// human warning, demoted, and `--refuse-override` lines name the chip.
+/// A named running session resolves nothing and prints as before.
+fn unnamed_homes_vault(
+    name: &str,
+) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[gtd]]\n---\n",
+            "- [*] #task Fix it [created::2026-10-01] ^fix-it\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "\n",
+            "- [ ] (**0920-0945** [t:: 25m])\n",
+            "\t- [[sase#^fix-it]]\n",
+            "- [ ] () — BUGS\n",
+        ),
+    );
+    (temp, vault, day_file)
+}
+
+fn run_human(
+    vault: &std::path::Path,
+    day_file: &std::path::Path,
+    flags: &[&str],
+    args: &[&str],
+) -> std::process::Output {
+    let mut command = bob_command();
+    command.arg("capture").arg("-b").arg(vault);
+    command.args(flags).arg("--").args(args);
+    command
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run capture human")
+}
+
+#[test]
+fn override_unnamed_running_session_carries_derived_homes() {
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-restart");
+    let json = run_json(&vault, &day_file, &["="]);
+    let previous = &json["pomodoro_start"]["override"]["previous"];
+    assert!(previous.get("pomodoro_name").is_none(), "{json}");
+    assert_eq!(previous["homes"]["chip"], "sase", "{json}");
+    assert_eq!(previous["homes"]["label"], "sase", "{json}");
+    assert_eq!(previous["homes"]["state"], "forecast", "{json}");
+
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-restart-human");
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["="]);
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "⚠ overrides the running session 0920-0945 ○ sase · capture `x =` to close it first"
+        ),
+        "{out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-swap");
+    let json = run_json(&vault, &day_file, &["=3#bugs"]);
+    let swap = &json["pomodoro_start"]["override"];
+    assert_eq!(swap["action"], "swap", "{json}");
+    assert_eq!(swap["previous"]["homes"]["chip"], "sase", "{json}");
+    let demoted = &swap["demoted"];
+    assert!(demoted.get("pomodoro_name").is_none(), "{json}");
+    assert_eq!(demoted["homes"]["chip"], "sase", "{json}");
+    assert_eq!(demoted["homes"]["state"], "forecast", "{json}");
+
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-swap-human");
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["=3#bugs"]);
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "⚠ overrides the running session 0920-0945 ○ sase · capture `x =3#bugs` to close it first"
+        ),
+        "{out}"
+    );
+    assert!(
+        out.contains("session 0920-0945 ○ sase → first future at line"),
+        "{out}"
+    );
+    assert_stdout_has_no_ansi(&output);
+
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-kept");
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["=#bugs"]);
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("session ○ sase → first future at line"),
+        "{out}"
+    );
+
+    let (_temp, vault, day_file) =
+        unnamed_homes_vault("bob-cli-override-unnamed-refuse");
+    let before = fs::read_to_string(&day_file).expect("read before");
+    let output =
+        run_capture_flags(&vault, &day_file, &["--refuse-override"], &["="]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let refused: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(refused["code"], "pomodoro_override_refused", "{refused}");
+    assert!(
+        refused["error"].as_str().is_some_and(|error| error.contains(
+            "would restart the running session (0920-0945 ○ sase) and --refuse-override is set"
+        )),
+        "{refused}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), before);
+
+    // A named running session resolves nothing: no `homes` key, and the
+    // human lines print exactly as before.
+    let (_temp, vault, day_file) =
+        worked_vault("bob-cli-override-named-keeps-fields");
+    let json = run_json(&vault, &day_file, &["="]);
+    let previous = &json["pomodoro_start"]["override"]["previous"];
+    assert_eq!(previous["pomodoro_name"], "CAPTURE", "{json}");
+    assert!(previous.get("homes").is_none(), "{json}");
+    let (_temp, vault, day_file) = worked_vault("bob-cli-override-named-human");
+    let output = run_human(&vault, &day_file, &["--dry-run"], &["="]);
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "⚠ overrides the running CAPTURE 0920-0945 · capture `x =` to close it first"
+        ),
+        "{out}"
+    );
+}
+
 #[test]
 fn refuse_override_guard() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-refuse-restart");

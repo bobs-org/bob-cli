@@ -1268,7 +1268,7 @@ fn agenda_item_summary(item: &capture_pomodoros_agenda::AgendaItem) -> String {
     parts.join(" · ")
 }
 
-fn homes_chip_suffix(
+pub(crate) fn homes_chip_suffix(
     homes: Option<&pomodoro_homes::Homes>,
     styler: &Styler,
 ) -> String {

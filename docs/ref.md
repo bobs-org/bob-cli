@@ -505,15 +505,19 @@ the change up, as with capture. The tracker change reads
 Human output prints `✓ linked 📖 <title>` (or `would link` on a dry
 run), then capture's pomodoro-link details. `--dry-run` also lists
 open Pomodoros (`●` running, `◆` default, `✓` linked) with `-P
-LINE:DIGEST` so unnamed entries can be targeted.
+LINE:DIGEST` so unnamed entries can be targeted. An unnamed row prints
+its derived homes label (from `homes`) instead of `(untitled)` when its
+chip is non-null.
 
 JSON is schema 1 with `command: "ref today"`. A success envelope
 carries `mode` (`dry_run` or `write`), `changed`, `ref`, `task`,
 `pomodoros` (every open top-level entry, with `running` / `default` /
 `linked` flags), and `capture` (the same item object `bob capture -f
-json` reports for `^route:block-id`). A guarded gesture is `ok: true`
-with `capture.kind == "link_guard"`: it is a real write that promotes
-prerequisites, as in capture.
+json` reports for `^route:block-id`). Each unnamed `pomodoros` row also
+carries the derived R9 `homes` object (forecast: open rows never carry
+minutes); named rows do no resolution and omit it. A guarded gesture is
+`ok: true` with `capture.kind == "link_guard"`: it is a real write that
+promotes prerequisites, as in capture.
 
 ```json
 {"ok":true,"schema_version":1,"command":"ref today","mode":"dry_run","changed":true,"ref":{"path":"ref/papers/attention.md","link":"[[ref/papers/attention]]","title":"Attention Is All You Need","marker_id":"attention"},"task":{"path":"sase.md","block_id":"ref-attention","link":"[[sase#^ref-attention]]","status_symbol":" ","status_name":"Ready"},"pomodoros":[{"ref":"41:0b1c2d3e","line":41,"name":"BUGS","running":true,"default":true,"linked":false}],"capture":{"kind":"pomodoro_link"}}

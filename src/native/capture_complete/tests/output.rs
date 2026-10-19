@@ -363,6 +363,72 @@ fn named_start_completion_carries_keeps_ledger_and_running() {
 }
 
 #[test]
+fn override_running_carries_homes_only_for_unnamed_sessions() {
+    let temp = TempDir::new("bob-cli-capture-complete-override-homes");
+    write_file(
+        &temp.path().join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &temp.path().join("sase.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[gtd]]\n---\n",
+            "- [ ] #task Alpha ^alpha\n",
+        ),
+    );
+    let day_file = temp.path().join("2026/20261009.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0920-0945** [t:: 25m])\n",
+            "  - [[sase#^alpha]]\n",
+            "- [ ] () — BUGS\n",
+        ),
+    );
+    let unnamed =
+        crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), "=#", 2)
+        });
+    let running = unnamed
+        .r#override
+        .as_ref()
+        .expect("override object")
+        .running
+        .clone();
+    assert!(running.pomodoro_name.is_none());
+    let homes = running.homes.as_ref().expect("running homes");
+    assert_eq!(homes.chip.as_deref(), Some("sase"));
+    assert_eq!(homes.label, "sase");
+    let json = serde_json::to_value(&unnamed).expect("unnamed json");
+    assert_eq!(json["override"]["running"]["homes"]["chip"], "sase");
+    assert!(json["override"]["running"].get("pomodoro_name").is_none());
+
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE\n",
+            "  - [[sase#^alpha]]\n",
+            "- [ ] () — BUGS\n",
+        ),
+    );
+    let named = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), "=#", 2)
+    });
+    let running = named
+        .r#override
+        .as_ref()
+        .expect("override object")
+        .running
+        .clone();
+    assert_eq!(running.pomodoro_name.as_deref(), Some("CAPTURE"));
+    assert!(running.homes.is_none());
+    let json = serde_json::to_value(&named).expect("named json");
+    assert!(json["override"]["running"].get("homes").is_none());
+}
+
+#[test]
 fn named_start_completion_omits_context_without_a_single_runner() {
     let temp = TempDir::new("bob-cli-capture-complete-override-idle");
     let day_file = temp.path().join("2026/20261009.md");

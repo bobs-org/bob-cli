@@ -382,7 +382,8 @@ fn overdue_is_false(value: &bool) -> bool {
 /// The running session in the pre-image: name (omitted when unnamed),
 /// 1-based line, and its `HHMM` range plus duration. `overdue` is true
 /// when `now` is at or after the session's end (start on today plus
-/// duration); omitted when false.
+/// duration); omitted when false. `homes` is the derived R9 object for
+/// unnamed sessions only; named sessions do no resolution and omit it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroStartPreviousJson {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -394,9 +395,12 @@ pub(super) struct PomodoroStartPreviousJson {
     pub(super) time_range: String,
     #[serde(skip_serializing_if = "overdue_is_false")]
     pub(super) overdue: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) homes: Option<crate::native::pomodoro_homes::Homes>,
 }
 
-/// The swapped-out session in the post-image: swaps only.
+/// The swapped-out session in the post-image: swaps only. `homes` follows
+/// the same unnamed-only rule as `previous`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroStartDemotedJson {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -405,6 +409,8 @@ pub(super) struct PomodoroStartDemotedJson {
     pub(super) entry_line: String,
     pub(super) task_links: usize,
     pub(super) has_notes: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) homes: Option<crate::native::pomodoro_homes::Homes>,
 }
 
 /// One queued Task Link row on a started Pomodoro, following the close

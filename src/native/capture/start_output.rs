@@ -31,8 +31,9 @@ pub(super) fn print_human_pomodoro_start_success(
         "started"
     };
     println!("{prefix} {verb}  {ordinal}{target_label}");
-    if let Some(warning) = override_warning_line(start, result.dry_run) {
-        println!("  {}", styler.yellow(&warning));
+    if let Some(warning) = override_warning_line(start, result.dry_run, styler)
+    {
+        println!("  {warning}");
     }
     let name = start
         .pomodoro_name
@@ -84,6 +85,24 @@ pub(super) fn print_human_pomodoro_start_success(
                 (false, Some(item)) => format!("{} ", item.time_range),
                 _ => String::new(),
             };
+            // An unnamed demoted session names its derived homes after
+            // the range (`session 0920-0945 ○ sase → …`); unlinked and
+            // named sessions print exactly as before.
+            let chip = demoted
+                .homes
+                .as_ref()
+                .map(|homes| {
+                    capture_pomodoros::homes_chip_suffix(Some(homes), styler)
+                })
+                .unwrap_or_default();
+            let head = {
+                let range = before.trim_end();
+                if range.is_empty() {
+                    format!("{demoted_name}{chip} →")
+                } else {
+                    format!("{demoted_name} {range}{chip} →")
+                }
+            };
             let links = if demoted.task_links == 1 {
                 "keeps 1 Task Link".to_string()
             } else {
@@ -97,7 +116,7 @@ pub(super) fn print_human_pomodoro_start_success(
             println!(
                 "  {}",
                 styler.dim(&format!(
-                    "{demoted_name} {before}→ first future at line {} · {links}{notes}",
+                    "{head} first future at line {} · {links}{notes}",
                     demoted.pomodoro_line,
                 ))
             );
@@ -212,6 +231,7 @@ pub(super) fn print_human_pomodoro_start_success(
 fn override_warning_line(
     start: &PomodoroStartSummary,
     dry_run: bool,
+    styler: &Styler,
 ) -> Option<String> {
     let outcome = start.r#override.as_ref()?;
     if !matches!(outcome.action, "restart" | "swap") {
@@ -234,12 +254,20 @@ fn override_warning_line(
             format!("the session {range}, still open past its end")
         }
     };
-    let mut line = format!("⚠ {verb} {subject}");
+    // An unnamed running session names its derived homes after the range
+    // (`… session 0920-0945 ○ sase`); unlinked and named sessions print
+    // exactly as before.
+    let chip = previous
+        .and_then(|item| item.homes.as_ref())
+        .map(|homes| capture_pomodoros::homes_chip_suffix(Some(homes), styler))
+        .unwrap_or_default();
+    let mut line =
+        format!("{}{chip}", styler.yellow(&format!("⚠ {verb} {subject}")));
     if dry_run {
-        line.push_str(&format!(
+        line.push_str(&styler.yellow(&format!(
             " · capture `{}` to close it first",
             outcome.close_first
-        ));
+        )));
     }
     Some(line)
 }

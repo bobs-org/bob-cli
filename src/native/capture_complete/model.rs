@@ -491,12 +491,16 @@ impl Candidates {
 /// The running Pomodoro a named `=` start would restart or swap. `pomodoro_name`
 /// is absent for an unnamed running session; `line` is the 1-based day-file
 /// line and `time_range` the ledger span the swap keeps (`0920-0945`).
+/// `homes` is the derived R9 object for unnamed sessions only; named
+/// sessions do no resolution and omit it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct OverrideRunningSession {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
     pub(super) line: usize,
     pub(super) time_range: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) homes: Option<crate::native::pomodoro_homes::Homes>,
 }
 
 /// Additive override context for a named-start name field: present when

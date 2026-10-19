@@ -861,6 +861,35 @@ fn listing_flags_and_human_open_pomodoros() {
 }
 
 #[test]
+fn unnamed_rows_carry_derived_homes_and_label() {
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**)\n",
+        "  - [[sase#^ref-attention]]\n",
+        "- [ ] () — READING\n",
+    );
+    let vault = TodayVault::new("bob-cli-ref-today-homes", ready_task(), day);
+    let (output, json) = run_today_json(&vault, &["attention", "-d"]);
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let rows = json["pomodoros"].as_array().expect("pomodoros");
+    assert_eq!(rows.len(), 2, "{json}");
+    assert!(rows[0]["name"].is_null(), "{json}");
+    assert_eq!(rows[0]["homes"]["chip"], "sase", "{json}");
+    assert_eq!(rows[0]["homes"]["label"], "sase", "{json}");
+    assert_eq!(rows[0]["homes"]["state"], "forecast", "{json}");
+    assert_eq!(rows[1]["name"], "READING");
+    assert!(rows[1].get("homes").is_none(), "{json}");
+
+    let human = run_today(&vault, &["attention", "-d"]);
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("Open Pomodoros"), "{text}");
+    assert!(!text.contains("(untitled)"), "{text}");
+    assert!(text.contains("sase"), "{text}");
+}
+
+#[test]
 fn help_lists_today_and_selectors() {
     let output = bob_command()
         .arg("ref")

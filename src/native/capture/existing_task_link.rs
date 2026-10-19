@@ -11,7 +11,9 @@ use chrono::NaiveDate;
 use serde::Serialize;
 use std::path::Path;
 
-/// One open Pomodoro row in the `ref today` envelope.
+/// One open Pomodoro row in the `ref today` envelope. `homes` is the
+/// derived R9 object for unnamed rows (forecast: open rows never carry
+/// minutes); named rows do no resolution and omit it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct TodayPomodoroRow {
     #[serde(rename = "ref")]
@@ -27,6 +29,8 @@ pub(crate) struct TodayPomodoroRow {
     pub default: bool,
     pub linked: bool,
     pub task_link_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub homes: Option<crate::native::pomodoro_homes::Homes>,
 }
 
 /// Result of planning (and optionally committing) one existing-task link.
@@ -101,11 +105,21 @@ pub(crate) fn link_existing_task(
 
 /// Open top-level Pomodoro rows in document order, with `running` /
 /// `default` / `linked` flags from the same rules as the write path.
+/// Unnamed rows also carry their derived forecast `homes`; named rows
+/// do no resolution. `daily_path` is the vault-relative day file.
 pub(crate) fn list_today_link_pomodoros(
+    bob_dir: &Path,
+    daily_path: &Path,
     day_contents: &str,
     block_link: &str,
     today: NaiveDate,
 ) -> Vec<TodayPomodoroRow> {
+    let exempt = config::load_plan_config(&config::config_path())
+        .map(|loaded| loaded.exempt().to_vec())
+        .unwrap_or_else(|_| config::PlanConfig::default().exempt().to_vec());
+    let mut resolver = crate::native::pomodoro_homes::HomeResolver::new(
+        crate::native::pomodoro_homes::DiskHomeSource::new(bob_dir),
+    );
     let scan = capture_pomodoros::scan(day_contents);
     if !scan.has_section {
         return Vec::new();
@@ -141,6 +155,21 @@ pub(crate) fn list_today_link_pomodoros(
                 .find(|open| open.line == entry.line)
                 .map(|open| open.links.len())
                 .unwrap_or(0);
+            let named =
+                entry.name.as_deref().is_some_and(|name| !name.is_empty());
+            let homes = (!named).then(|| {
+                crate::native::pomodoro_homes::attribute_ledger_entry(
+                    day_contents,
+                    entry.line,
+                    None,
+                    false,
+                    None,
+                    &exempt,
+                    daily_path,
+                    &mut resolver,
+                )
+                .homes
+            });
             TodayPomodoroRow {
                 pomodoro_ref: entry.pomodoro_ref.to_string(),
                 line: entry.line,
@@ -154,6 +183,7 @@ pub(crate) fn list_today_link_pomodoros(
                 default: default_line == Some(entry.line),
                 linked: queue_line == Some(entry.line),
                 task_link_count,
+                homes,
             }
         })
         .collect()

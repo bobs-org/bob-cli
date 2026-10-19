@@ -745,6 +745,13 @@ bob plan · Thu 2026-10-01 · 2026/20261001.md
     [/] bob#^capture-stop   Better capture stop
 ```
 
+An unnamed entry prints the same dim homes chip with its dot that
+`capture-pomodoros --tasks` uses, after its `(unnamed)` name:
+
+```text
+  ★ (unnamed) ○ sase  ▶ 1020-1050   1 link
+```
+
 Meters are green within the cap and red when over. ★ is yellow and
 ▶ is cyan; exempt rows are dimmed. When lints occur, they appear below
 the entries in yellow, with the code dimmed. An open inventory label such

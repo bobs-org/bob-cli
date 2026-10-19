@@ -475,10 +475,20 @@ fn list_pomodoros(
         .filter(|task| !task.route.is_empty() && !task.block_id.is_empty())
         .map(|task| format!("[[{}#^{}]]", task.route, task.block_id))
         .unwrap_or_default();
+    let daily_path = day_file
+        .strip_prefix(bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
     std::fs::read_to_string(&day_file)
         .ok()
         .map(|contents| {
-            list_today_link_pomodoros(&contents, &block_link, today)
+            list_today_link_pomodoros(
+                bob_dir,
+                &daily_path,
+                &contents,
+                &block_link,
+                today,
+            )
         })
         .unwrap_or_default()
 }
@@ -494,11 +504,21 @@ fn run_link(
     let day_file = pomodoro::day_file_for(bob_dir);
     let today = bob_env::current_datetime().date();
     let block_link = format!("[[{}#^{}]]", task.route, task.block_id);
+    let daily_path = day_file
+        .strip_prefix(bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.clone());
     let pre_pomodoros = if day_file.is_file() {
         std::fs::read_to_string(&day_file)
             .ok()
             .map(|contents| {
-                list_today_link_pomodoros(&contents, &block_link, today)
+                list_today_link_pomodoros(
+                    bob_dir,
+                    &daily_path,
+                    &contents,
+                    &block_link,
+                    today,
+                )
             })
             .unwrap_or_default()
     } else {
@@ -517,7 +537,13 @@ fn run_link(
             let pomodoros = if dry_run {
                 pre_pomodoros
             } else if let Ok(contents) = std::fs::read_to_string(&day_file) {
-                list_today_link_pomodoros(&contents, &block_link, today)
+                list_today_link_pomodoros(
+                    bob_dir,
+                    &daily_path,
+                    &contents,
+                    &block_link,
+                    today,
+                )
             } else {
                 pre_pomodoros
             };
@@ -634,7 +660,13 @@ fn print_open_pomodoros(pomodoros: &[TodayPomodoroRow], styler: &Styler) {
         let name = row
             .name
             .as_deref()
+            .filter(|name| !name.is_empty())
             .map(|name| name.to_string())
+            .or_else(|| {
+                row.homes.as_ref().and_then(|homes| {
+                    homes.chip.as_deref().map(|_| homes.label.clone())
+                })
+            })
             .unwrap_or_else(|| "(untitled)".to_string());
         let when = row.time_range.as_deref().unwrap_or("planned");
         println!("  {glyph} {name}  {when}  -P {}", row.pomodoro_ref);

@@ -225,6 +225,47 @@ fn plan_json_entries_include_derived_project_homes() {
 }
 
 #[test]
+fn plan_human_shows_derived_chip_for_unnamed_entry() {
+    let temp = TempDir::new("bob-cli-plan-human-chip");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\ntype: [[project]]\nparent: [[gtd]]\n---\n",
+            "- [*] #task Fix it ^fix-it\n",
+        ),
+    );
+    write_file(
+        &vault.join("2026/20260930.md"),
+        concat!(
+            "# 2026-09-30\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0945-1015) — GOALS\n",
+            "    - [[sase#^fix-it]]\n",
+            "- [ ] (1020-1050)\n",
+            "    - [[sase#^fix-it]]\n",
+        ),
+    );
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .output()
+        .expect("run bob plan");
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let human = stdout(&output);
+    assert!(human.contains("(unnamed)"), "{human}");
+    assert!(human.contains("(unnamed) ○ sase"), "{human}");
+    assert!(!human.contains("GOALS ○"), "{human}");
+}
+
+#[test]
 fn plan_counts_only_visible_lane_tasks() {
     // The JSON test above already pins next == 1 and pending == 2:
     // the #hide, future-scheduled, dependency-blocked, _templates,

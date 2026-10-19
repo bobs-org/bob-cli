@@ -2801,6 +2801,17 @@ When the session is overdue, the warning says so:
 ⚠ overrides CAPTURE 0920-0945, still open past its end · capture `x =` to close it first
 ```
 
+For an unnamed running session with Task Links, the warning, the swap
+demoted line, and the `--refuse-override` error name its derived homes
+chip after the range:
+
+```text
+⚠ overrides the running session 0920-0945 ○ sase · capture `x =` to close it first
+session 0920-0945 ○ sase → first future at line 7 · keeps 2 Task Links
+```
+
+An unlinked unnamed session prints exactly as before.
+
 A named start resolves an open whole-slug match first, then a prefix match;
 a completed match starts again with that name, and no match creates it. When
 a different session is running, `=#bugs` swaps `BUGS` in and hands it the
@@ -2824,7 +2835,9 @@ present on the `pomodoro_start` result. Its `action` is `restart` or `swap`;
 `<X>` swap. `previous` describes the running session before the write;
 `pomodoro_name` is omitted for an unnamed session. `overdue` is omitted when
 false and `true` once the current time reaches the session end. `close_first`
-is the draft that would close the running session first:
+is the draft that would close the running session first. An unnamed session
+also carries the derived R9 `homes` object (forecast) on `previous` and, for
+a swap, on `demoted`; named sessions do no resolution and omit it:
 
 ```json
 "override": {
@@ -2864,7 +2877,10 @@ Bob Mac Capture passes hidden `--refuse-override` when the on-screen preview
 for the current draft has not shown an override warning. If the state changes
 before submit, Bob refuses with `code: pomodoro_override_refused`; the client
 shows a fresh preview and requires another Return. This guards the warning
-seen before a commit without adding a confirmation step.
+seen before a commit without adding a confirmation step. For an unnamed
+running session with Task Links the refusal names the derived chip after the
+range (`would restart the running session (0920-0945 ○ sase) and
+--refuse-override is set`); named and unlinked sessions read as before.
 
 Worked example (`BOB_NOW=2026-10-09 09:32:00`, TAB indentation):
 
@@ -5696,7 +5712,9 @@ describe the swap before a name is typed. The additive top-level
 session operator in the draft changes the ledger, `keeps_ledger` is true when
 the typed `<X>` suffix is empty and false for fresh timing, and `running`
 carries the current session (`pomodoro_name`, omitted when unnamed, the
-1-based day-file `line`, and its `time_range`, such as `0920-0945`). It is
+1-based day-file `line`, and its `time_range`, such as `0920-0945`). An
+unnamed running session with Task Links also carries the derived R9 `homes`
+object (forecast); a named one omits it. The whole `override` object is
 omitted unless exactly one timed session runs. This context is state-based
 and applies to ordinary `=#name` as well as counted `=3#name` fields; a
 preceding close in `x =#name` means there is no running session to preview.

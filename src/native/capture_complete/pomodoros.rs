@@ -65,12 +65,14 @@ pub(super) fn pomodoro_name_candidates_at(
 
 /// The single running Pomodoro session, for the `running` half of the
 /// named-start completion `override` object. `None` when the daily note
-/// is missing or holds zero or several timed open entries.
+/// is missing or holds zero or several timed open entries. An unnamed
+/// running session also carries its derived forecast `homes`; a named
+/// one does no resolution.
 pub(super) fn running_pomodoro_session(
     bob_dir: &Path,
 ) -> Option<OverrideRunningSession> {
     let day_file = pomodoro::day_file_for(bob_dir);
-    let contents = fs::read_to_string(day_file).ok()?;
+    let contents = fs::read_to_string(&day_file).ok()?;
     let scan = capture_pomodoros::scan(&contents);
     let mut running = scan.entries.iter().filter(|entry| {
         entry.state == PomodoroState::Open && entry.time_range.is_some()
@@ -79,10 +81,40 @@ pub(super) fn running_pomodoro_session(
     if running.next().is_some() {
         return None;
     }
+    let homes = if entry.name.as_deref().is_some_and(|name| !name.is_empty()) {
+        None
+    } else {
+        let exempt = config::load_plan_config(&config::config_path())
+            .map(|loaded| loaded.exempt().to_vec())
+            .unwrap_or_else(|_| {
+                config::PlanConfig::default().exempt().to_vec()
+            });
+        let daily_path = day_file
+            .strip_prefix(bob_dir)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| day_file.clone());
+        let mut resolver = crate::native::pomodoro_homes::HomeResolver::new(
+            crate::native::pomodoro_homes::DiskHomeSource::new(bob_dir),
+        );
+        Some(
+            crate::native::pomodoro_homes::attribute_ledger_entry(
+                &contents,
+                entry.line,
+                None,
+                false,
+                None,
+                &exempt,
+                &daily_path,
+                &mut resolver,
+            )
+            .homes,
+        )
+    };
     Some(OverrideRunningSession {
         pomodoro_name: entry.name.clone(),
         line: entry.line,
         time_range: entry.time_range.clone().unwrap_or_default(),
+        homes,
     })
 }
 

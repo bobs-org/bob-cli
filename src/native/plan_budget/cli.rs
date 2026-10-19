@@ -16,6 +16,7 @@ use serde_json::json;
 
 use super::{
     super::{
+        capture_pomodoros::homes_chip_suffix,
         config::{self, ConfigError, PlanConfig},
         env as bob_env, pomodoro,
         style::Styler,
@@ -23,6 +24,7 @@ use super::{
     assemble_report, compute_for_daily, count_lanes,
     today::{today_tasks, TodayResult},
     with_entry_homes, Lanes, LedgerBudget, PlanReport, PlanStatus,
+    UNNAMED_THEME,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -401,12 +403,20 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
                 None => " ".repeat(time_width),
             };
             let name = pad(&entry.name, name_width);
+            // An unnamed entry still shows its derived homes: the same
+            // dim chip with its dot that `capture-pomodoros --tasks`
+            // uses. Named entries print exactly as before.
+            let chip = if entry.name == UNNAMED_THEME {
+                homes_chip_suffix(entry.homes.as_ref(), styler)
+            } else {
+                String::new()
+            };
             let links = if entry.links == 1 {
                 "1 link".to_string()
             } else {
                 format!("{} links", entry.links)
             };
-            let row = format!("  {star} {name}  {time_cell}  {links}\n");
+            let row = format!("  {star} {name}{chip}  {time_cell}  {links}\n");
             if entry.exempt {
                 let row = row.replace("\u{1b}[0m", "\u{1b}[0m\u{1b}[2m");
                 output.push_str(&styler.dim(&row));
