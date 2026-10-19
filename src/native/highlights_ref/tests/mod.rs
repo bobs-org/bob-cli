@@ -114,6 +114,7 @@ fn test_png_bytes(
 }
 
 mod audio;
+mod continuations;
 mod image_notes;
 mod marker;
 mod projection;

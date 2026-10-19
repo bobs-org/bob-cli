@@ -22,6 +22,18 @@ pub(super) fn render_sidecar_highlights(
     let mut image_note_count = 0usize;
     let mut image_notes_unresolved = Vec::new();
     let silently_dropped_ids = silently_dropped_block_ids(note);
+    let plan = plan_continuations(&sidecar.annotations);
+    let annotations_by_order: BTreeMap<usize, &SidecarAnnotation> = sidecar
+        .annotations
+        .iter()
+        .map(|ann| (ann.order, ann))
+        .collect();
+    let absorbed_ids = plan
+        .head_of
+        .keys()
+        .filter_map(|order| annotations_by_order.get(order).copied())
+        .map(|ann| annotation_block_id(config, pdf, ann))
+        .collect::<BTreeSet<_>>();
 
     for image_asset in image_assets_by_order.values() {
         image_asset_writes_by_dest
@@ -33,114 +45,205 @@ pub(super) fn render_sidecar_highlights(
         if is_sidecar_marker_mirror(annotation) {
             continue;
         }
-
-        let image_asset = image_assets_by_order.get(&annotation.order);
-        let block_id = match annotation.kind {
-            SidecarAnnotationKind::Image => {
-                image_asset.map(|asset| asset.block_id.clone()).ok_or_else(
-                    || CommandError::new("image annotation was not resolved"),
-                )?
-            }
-            SidecarAnnotationKind::Highlight
-            | SidecarAnnotationKind::StandaloneNote => {
-                annotation_block_id(config, pdf, annotation)
-            }
-        };
-        block_ids_by_annotation_order
-            .insert(annotation.order, block_id.clone());
-        if !current_ids.insert(block_id.clone()) {
+        if plan.head_of.contains_key(&annotation.order) {
             continue;
         }
-        if annotation.kind == SidecarAnnotationKind::Image {
-            image_count += 1;
-        }
 
-        let image_note_source = match annotation.kind {
-            SidecarAnnotationKind::Highlight | SidecarAnnotationKind::Image => {
-                annotation
-                    .task_source
-                    .as_deref()
-                    .or(annotation.comment.as_deref())
-                    .unwrap_or("")
-            }
-            SidecarAnnotationKind::StandaloneNote => annotation.text.as_str(),
-        };
-        let (image_note_refs, remaining_text) =
-            split_image_note_lines(image_note_source);
-        let mut image_note_renders = Vec::new();
-        for image_note in &image_note_refs {
-            image_note_count += 1;
-            match resolve_image_note(
-                config,
-                ref_note_path,
-                image_note,
-                annotation.order,
-                &block_id,
-            )? {
-                ImageNoteResolution::Embedded {
-                    vault_path,
-                    width,
-                    write,
-                } => {
-                    if let Some(write) = write {
-                        image_asset_writes_by_dest
-                            .entry(write.dest_path.clone())
-                            .or_insert(write);
+        match annotation.kind {
+            SidecarAnnotationKind::Highlight => {
+                let followers = plan
+                    .followers
+                    .get(&annotation.order)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let mut members = Vec::with_capacity(followers.len() + 1);
+                members.push(annotation);
+                for (order, _) in followers {
+                    members.push(annotations_by_order[order]);
+                }
+                let block_id = annotation_block_id(config, pdf, annotation);
+                for member in &members {
+                    block_ids_by_annotation_order
+                        .insert(member.order, block_id.clone());
+                }
+                if !current_ids.insert(block_id.clone()) {
+                    continue;
+                }
+
+                let labels: Vec<Option<&str>> = members
+                    .iter()
+                    .map(|member| member.page_label.as_deref())
+                    .collect();
+                let heading_label = group_page_label(&labels)
+                    .or_else(|| annotation.page_label.clone());
+                push_page_heading(
+                    &mut rendered,
+                    &mut current_page,
+                    heading_label.as_deref(),
+                );
+
+                let mut piece_texts = Vec::new();
+                for member in &members {
+                    if strip_return_links {
+                        piece_texts
+                            .push(strip_return_link_glyphs(&member.text));
+                    } else {
+                        piece_texts.push(member.text.clone());
                     }
-                    image_note_renders
-                        .push(ImageNoteRender::Embedded { vault_path, width });
                 }
-                ImageNoteResolution::Unresolved { state } => {
-                    image_notes_unresolved.push(UnresolvedImageNote {
-                        source_text: image_note.source_text.clone(),
-                        state,
-                    });
-                    image_note_renders.push(ImageNoteRender::Unresolved {
-                        source_text: image_note.source_text.clone(),
-                        state,
-                    });
+                let mut pieces = Vec::with_capacity(members.len());
+                pieces.push((piece_texts[0].as_str(), Seam::Join));
+                for (index, (_, seam)) in followers.iter().enumerate() {
+                    pieces.push((piece_texts[index + 1].as_str(), *seam));
                 }
+                let quote = assemble_group_quote(&pieces);
+
+                let mut image_note_renders = Vec::new();
+                let mut comment_parts = Vec::new();
+                for member in &members {
+                    let effective = plan.effective_annotation(member);
+                    let source = effective
+                        .task_source
+                        .as_deref()
+                        .or(effective.comment.as_deref())
+                        .unwrap_or("");
+                    let (image_note_refs, remaining_text) =
+                        split_image_note_lines(source);
+                    append_resolved_image_notes(
+                        config,
+                        ref_note_path,
+                        member.order,
+                        &block_id,
+                        &image_note_refs,
+                        &mut image_note_renders,
+                        &mut image_note_count,
+                        &mut image_notes_unresolved,
+                        &mut image_asset_writes_by_dest,
+                    )?;
+                    let comment = strip_comment_label(
+                        &beautify_annotation_text(&remaining_text),
+                    );
+                    if !comment.trim().is_empty() {
+                        comment_parts.push(comment);
+                    }
+                }
+                rendered.push_str(&render_highlight_group_block(
+                    &quote,
+                    &image_note_renders,
+                    &comment_parts,
+                    &block_id,
+                ));
+            }
+            SidecarAnnotationKind::Image
+            | SidecarAnnotationKind::StandaloneNote => {
+                let image_asset = image_assets_by_order.get(&annotation.order);
+                let block_id = match annotation.kind {
+                    SidecarAnnotationKind::Image => image_asset
+                        .map(|asset| asset.block_id.clone())
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                "image annotation was not resolved",
+                            )
+                        })?,
+                    SidecarAnnotationKind::StandaloneNote => {
+                        annotation_block_id(config, pdf, annotation)
+                    }
+                    SidecarAnnotationKind::Highlight => {
+                        unreachable!("highlights render through the group path")
+                    }
+                };
+                block_ids_by_annotation_order
+                    .insert(annotation.order, block_id.clone());
+                if !current_ids.insert(block_id.clone()) {
+                    continue;
+                }
+                if annotation.kind == SidecarAnnotationKind::Image {
+                    image_count += 1;
+                }
+
+                let image_note_source = match annotation.kind {
+                    SidecarAnnotationKind::Image => annotation
+                        .task_source
+                        .as_deref()
+                        .or(annotation.comment.as_deref())
+                        .unwrap_or(""),
+                    SidecarAnnotationKind::StandaloneNote => {
+                        annotation.text.as_str()
+                    }
+                    SidecarAnnotationKind::Highlight => "",
+                };
+                let (image_note_refs, remaining_text) =
+                    split_image_note_lines(image_note_source);
+                let mut image_note_renders = Vec::new();
+                append_resolved_image_notes(
+                    config,
+                    ref_note_path,
+                    annotation.order,
+                    &block_id,
+                    &image_note_refs,
+                    &mut image_note_renders,
+                    &mut image_note_count,
+                    &mut image_notes_unresolved,
+                    &mut image_asset_writes_by_dest,
+                )?;
+                push_page_heading(
+                    &mut rendered,
+                    &mut current_page,
+                    annotation.page_label.as_deref(),
+                );
+                rendered.push_str(&render_annotation_block(
+                    config,
+                    ref_note_path,
+                    annotation,
+                    &block_id,
+                    image_asset,
+                    &image_note_renders,
+                    &remaining_text,
+                    strip_return_links,
+                ));
             }
         }
-
-        if annotation.page_label != current_page {
-            if let Some(page_label) = &annotation.page_label {
-                if !rendered.is_empty() {
-                    rendered.push('\n');
-                }
-                rendered.push_str("### ");
-                rendered.push_str(page_label);
-                rendered.push_str("\n\n");
-            }
-            current_page = annotation.page_label.clone();
-        }
-
-        rendered.push_str(&render_annotation_block(
-            config,
-            ref_note_path,
-            annotation,
-            &block_id,
-            image_asset,
-            &image_note_renders,
-            &remaining_text,
-            strip_return_links,
-        ));
     }
 
     // Blocks the existing region marks as mirror-shaped or preamble are
     // previously leaked content (bob-cli-4r): drop them without a tombstone.
-    // Every other disappearance still tombstones under Removed highlights.
+    // Absorbed continuation followers never tombstone; a previously
+    // published follower gets a redirect stub instead.
     let removed_ids = existing_ids
         .difference(&current_ids)
-        .filter(|block_id| !silently_dropped_ids.contains(block_id.as_str()))
+        .filter(|block_id| {
+            !silently_dropped_ids.contains(block_id.as_str())
+                && !absorbed_ids.contains(block_id.as_str())
+        })
         .cloned()
         .collect::<Vec<_>>();
-    if !removed_ids.is_empty() {
+    let stubs = continuation_redirect_stubs(
+        config,
+        pdf,
+        &plan,
+        &annotations_by_order,
+        &existing_ids,
+    );
+    if !stubs.is_empty() || !removed_ids.is_empty() {
         if !rendered.is_empty() {
             rendered.push('\n');
         }
         rendered.push_str(REMOVED_HIGHLIGHTS_HEADING);
         rendered.push_str("\n\n");
+        for stub in stubs {
+            let body =
+                format!("\nNow part of [[#^{}|{}]].", stub.head_id, stub.alias);
+            push_callout_block(
+                &mut rendered,
+                1,
+                "[!info] Merged highlight",
+                &body,
+            );
+            rendered.push('\n');
+            rendered.push('^');
+            rendered.push_str(&stub.follower_id);
+            rendered.push_str("\n\n");
+        }
         for block_id in removed_ids {
             push_callout_block(
                 &mut rendered,
@@ -164,6 +267,144 @@ pub(super) fn render_sidecar_highlights(
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
     })
+}
+
+struct ContinuationStub {
+    follower_id: String,
+    head_id: String,
+    alias: String,
+}
+
+fn continuation_redirect_stubs(
+    config: &Config,
+    pdf: &Path,
+    plan: &ContinuationPlan,
+    annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+    existing_ids: &BTreeSet<String>,
+) -> Vec<ContinuationStub> {
+    let mut stubs = Vec::new();
+    for annotation in annotations_by_order.values().copied() {
+        let Some(&head_order) = plan.head_of.get(&annotation.order) else {
+            continue;
+        };
+        let follower_id = annotation_block_id(config, pdf, annotation);
+        if !existing_ids.contains(&follower_id) {
+            continue;
+        }
+        let Some(head) = annotations_by_order.get(&head_order).copied() else {
+            continue;
+        };
+        let mut members = vec![head];
+        if let Some(followers) = plan.followers.get(&head_order) {
+            for (order, _) in followers {
+                if let Some(member) = annotations_by_order.get(order).copied() {
+                    members.push(member);
+                }
+            }
+        }
+        let labels: Vec<Option<&str>> = members
+            .iter()
+            .map(|member| member.page_label.as_deref())
+            .collect();
+        let alias = match group_page_label(&labels) {
+            Some(label) => format!("the {label} highlight"),
+            None => "the merged highlight".to_string(),
+        };
+        stubs.push(ContinuationStub {
+            follower_id,
+            head_id: annotation_block_id(config, pdf, head),
+            alias,
+        });
+    }
+    stubs
+}
+
+fn push_page_heading(
+    rendered: &mut String,
+    current_page: &mut Option<String>,
+    page_label: Option<&str>,
+) {
+    if page_label == current_page.as_deref() {
+        return;
+    }
+    if let Some(page_label) = page_label {
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
+        rendered.push_str("### ");
+        rendered.push_str(page_label);
+        rendered.push_str("\n\n");
+    }
+    *current_page = page_label.map(str::to_string);
+}
+
+fn append_resolved_image_notes(
+    config: &Config,
+    ref_note_path: &Path,
+    annotation_order: usize,
+    block_id: &str,
+    image_note_refs: &[ImageNoteRef],
+    image_note_renders: &mut Vec<ImageNoteRender>,
+    image_note_count: &mut usize,
+    image_notes_unresolved: &mut Vec<UnresolvedImageNote>,
+    image_asset_writes_by_dest: &mut BTreeMap<PathBuf, ImageAssetWrite>,
+) -> Result<()> {
+    for image_note in image_note_refs {
+        *image_note_count += 1;
+        match resolve_image_note(
+            config,
+            ref_note_path,
+            image_note,
+            annotation_order,
+            block_id,
+        )? {
+            ImageNoteResolution::Embedded {
+                vault_path,
+                width,
+                write,
+            } => {
+                if let Some(write) = write {
+                    image_asset_writes_by_dest
+                        .entry(write.dest_path.clone())
+                        .or_insert(write);
+                }
+                image_note_renders
+                    .push(ImageNoteRender::Embedded { vault_path, width });
+            }
+            ImageNoteResolution::Unresolved { state } => {
+                image_notes_unresolved.push(UnresolvedImageNote {
+                    source_text: image_note.source_text.clone(),
+                    state,
+                });
+                image_note_renders.push(ImageNoteRender::Unresolved {
+                    source_text: image_note.source_text.clone(),
+                    state,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn render_highlight_group_block(
+    quote: &str,
+    image_notes: &[ImageNoteRender],
+    comment_parts: &[String],
+    block_id: &str,
+) -> String {
+    let mut rendered = String::new();
+    push_callout_block(&mut rendered, 1, "[!quote]", quote);
+    push_image_note_renders(&mut rendered, image_notes);
+    if !comment_parts.is_empty() {
+        let comment = comment_parts.join("\n\n");
+        rendered.push_str(">\n");
+        push_callout_block(&mut rendered, 2, "[!note] Comment", &comment);
+    }
+    rendered.push('\n');
+    rendered.push('^');
+    rendered.push_str(block_id);
+    rendered.push_str("\n\n");
+    rendered
 }
 
 pub(super) fn annotation_block_id(
@@ -379,9 +620,13 @@ pub(super) fn sidecar_page_heading_details(
         None => (heading, false),
     };
     if is_sidecar_page_label(label) {
+        let page_index = markdown_link_parts(heading)
+            .and_then(|(_, destination)| destination_page_index(destination))
+            .or_else(|| label_page_number(label));
         Some(SidecarPageHeading {
             label: label.to_string(),
             linked_page_style,
+            page_index,
         })
     } else {
         None
@@ -389,11 +634,16 @@ pub(super) fn sidecar_page_heading_details(
 }
 
 pub(super) fn markdown_link_label(text: &str) -> Option<&str> {
+    markdown_link_parts(text).map(|(label, _)| label)
+}
+
+pub(super) fn markdown_link_parts(text: &str) -> Option<(&str, &str)> {
     if !text.starts_with('[') {
         return None;
     }
     let (label, destination) = text[1..].split_once("](")?;
-    destination.ends_with(')').then_some(label)
+    let destination = destination.strip_suffix(')')?;
+    Some((label, destination))
 }
 
 pub(super) fn is_sidecar_page_label(text: &str) -> bool {
@@ -402,6 +652,34 @@ pub(super) fn is_sidecar_page_label(text: &str) -> bool {
         || lower.starts_with("page:")
         || lower.starts_with("p. ")
         || lower.starts_with("p ")
+}
+
+/// Page number after a sidecar page-label prefix (`Page `, `page:`, `p. `,
+/// `p `), parsed as a decimal integer.
+pub(super) fn label_page_number(label: &str) -> Option<u32> {
+    let lower = label.to_ascii_lowercase();
+    let rest = if let Some(rest) = lower.strip_prefix("page ") {
+        rest
+    } else if let Some(rest) = lower.strip_prefix("page:") {
+        rest
+    } else if let Some(rest) = lower.strip_prefix("p. ") {
+        rest
+    } else if let Some(rest) = lower.strip_prefix("p ") {
+        rest
+    } else {
+        return None;
+    };
+    let prefix_len = label.len() - rest.len();
+    label[prefix_len..].trim().parse().ok()
+}
+
+fn destination_page_index(destination: &str) -> Option<u32> {
+    let rest = destination.split_once("#page=")?.1;
+    let digits = rest.split_once('&').map_or(rest, |(digits, _)| digits);
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// Content-based marker-mirror detection shared with the region parser:

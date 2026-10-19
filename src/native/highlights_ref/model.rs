@@ -340,6 +340,7 @@ pub(super) struct SidecarInput {
 pub(super) struct SidecarAnnotation {
     pub(super) kind: SidecarAnnotationKind,
     pub(super) page_label: Option<String>,
+    pub(super) page_index: Option<u32>,
     pub(super) linked_page_style: bool,
     pub(super) text: String,
     pub(super) comment: Option<String>,
@@ -359,6 +360,7 @@ pub(super) struct SidecarImage {
 pub(super) struct SidecarPageHeading {
     pub(super) label: String,
     pub(super) linked_page_style: bool,
+    pub(super) page_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

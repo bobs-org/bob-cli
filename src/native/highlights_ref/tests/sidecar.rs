@@ -402,6 +402,7 @@ fn annotation_block_id_is_stable_across_space_wrapping() {
     let mut first = super::SidecarAnnotation {
         kind: SidecarAnnotationKind::Highlight,
         page_label: Some("Page 2".to_string()),
+        page_index: None,
         linked_page_style: true,
         text: "Stable quoted text continues across\nphysical lines."
             .to_string(),

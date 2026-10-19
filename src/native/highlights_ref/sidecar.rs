@@ -204,6 +204,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
     let mut annotations = Vec::new();
     let mut chunk = Vec::new();
     let mut page_label = None;
+    let mut page_index = None;
     let mut linked_page_style = false;
     let mut order = 0usize;
     let mut page_ordinals: BTreeMap<String, usize> = BTreeMap::new();
@@ -221,6 +222,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
                     &mut annotations,
                     &mut chunk,
                     page_label.as_deref(),
+                    page_index,
                     linked_page_style,
                     &mut order,
                     &mut page_ordinals,
@@ -230,6 +232,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
             }
             seen_page_heading = true;
             page_label = Some(next_page_heading.label);
+            page_index = next_page_heading.page_index;
             linked_page_style = next_page_heading.linked_page_style;
             continue;
         }
@@ -240,6 +243,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
                     &mut annotations,
                     &mut chunk,
                     page_label.as_deref(),
+                    page_index,
                     linked_page_style,
                     &mut order,
                     &mut page_ordinals,
@@ -257,6 +261,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
         &mut annotations,
         &mut chunk,
         page_label.as_deref(),
+        page_index,
         linked_page_style,
         &mut order,
         &mut page_ordinals,
@@ -268,12 +273,13 @@ pub(super) fn flush_sidecar_chunk(
     annotations: &mut Vec<SidecarAnnotation>,
     chunk: &mut Vec<String>,
     page_label: Option<&str>,
+    page_index: Option<u32>,
     linked_page_style: bool,
     order: &mut usize,
     page_ordinals: &mut BTreeMap<String, usize>,
 ) {
     for mut annotation in
-        parse_sidecar_chunk(chunk, page_label, linked_page_style)
+        parse_sidecar_chunk(chunk, page_label, page_index, linked_page_style)
     {
         *order += 1;
         annotation.order = *order;
@@ -289,6 +295,7 @@ pub(super) fn flush_sidecar_chunk(
 pub(super) fn parse_sidecar_chunk(
     chunk: &[String],
     page_label: Option<&str>,
+    page_index: Option<u32>,
     linked_page_style: bool,
 ) -> Vec<SidecarAnnotation> {
     let lines = trim_blank_lines(chunk);
@@ -346,6 +353,7 @@ pub(super) fn parse_sidecar_chunk(
         return vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::Highlight,
             page_label: page_label.map(str::to_string),
+            page_index,
             linked_page_style,
             text,
             comment: (!comment.is_empty()).then_some(comment),
@@ -365,6 +373,7 @@ pub(super) fn parse_sidecar_chunk(
     let image_annotations = parse_image_sidecar_annotations(
         &non_heading_lines,
         page_label,
+        page_index,
         linked_page_style,
     );
     if !image_annotations.is_empty() {
@@ -382,6 +391,7 @@ pub(super) fn parse_sidecar_chunk(
         vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::StandaloneNote,
             page_label: page_label.map(str::to_string),
+            page_index,
             linked_page_style,
             text,
             comment: None,
@@ -410,6 +420,7 @@ pub(super) struct PendingImageAnnotation {
 pub(super) fn parse_image_sidecar_annotations(
     lines: &[String],
     page_label: Option<&str>,
+    page_index: Option<u32>,
     linked_page_style: bool,
 ) -> Vec<SidecarAnnotation> {
     let mut images = Vec::<PendingImageAnnotation>::new();
@@ -475,6 +486,7 @@ pub(super) fn parse_image_sidecar_annotations(
             (!pending.image.target.is_empty()).then(|| SidecarAnnotation {
                 kind: SidecarAnnotationKind::Image,
                 page_label: page_label.map(str::to_string),
+                page_index,
                 linked_page_style,
                 text,
                 comment: (!comment.is_empty()).then_some(comment),

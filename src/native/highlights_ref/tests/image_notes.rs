@@ -9,6 +9,7 @@ fn highlight(
     SidecarAnnotation {
         kind: SidecarAnnotationKind::Highlight,
         page_label: Some("Page 1".to_string()),
+        page_index: None,
         linked_page_style: false,
         text: text.to_string(),
         comment: comment.map(str::to_string),
@@ -304,6 +305,7 @@ fn render_standalone_note_image() {
         vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::StandaloneNote,
             page_label: Some("Page 1".to_string()),
+            page_index: None,
             linked_page_style: false,
             text: source.to_str().expect("utf8").to_string(),
             comment: None,
@@ -338,6 +340,7 @@ fn render_image_selection_plus_image_note() {
         annotations: vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::Image,
             page_label: Some("Page 1".to_string()),
+            page_index: None,
             linked_page_style: false,
             text: "Figure".to_string(),
             comment: Some(shot.to_str().expect("utf8").to_string()),

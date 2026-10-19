@@ -12,6 +12,7 @@ pub(super) fn annotation_task_candidates(
         return Ok(Vec::new());
     };
 
+    let plan = plan_continuations(&sidecar.annotations);
     let mut candidates = Vec::new();
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
@@ -20,15 +21,26 @@ pub(super) fn annotation_task_candidates(
 
         match annotation.kind {
             SidecarAnnotationKind::Highlight => {
-                let Some(source) = annotation.task_source.as_deref() else {
+                let effective = plan.effective_annotation(annotation);
+                let Some(source) = effective.task_source.as_deref() else {
                     continue;
                 };
-                let block_id = annotation_block_id(config, pdf, annotation);
+                let identity_block_id =
+                    annotation_block_id(config, pdf, annotation);
+                let link_block_id = rendered_highlights
+                    .and_then(|rendered| {
+                        rendered
+                            .block_ids_by_annotation_order
+                            .get(&annotation.order)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| identity_block_id.clone());
                 candidates.extend(annotation_task_candidates_from_text(
                     config,
                     ref_note_path,
                     source,
-                    &block_id,
+                    &identity_block_id,
+                    &link_block_id,
                 )?);
             }
             SidecarAnnotationKind::Image => {
@@ -51,6 +63,7 @@ pub(super) fn annotation_task_candidates(
                     ref_note_path,
                     source,
                     block_id,
+                    block_id,
                 )?);
             }
             SidecarAnnotationKind::StandaloneNote => {
@@ -59,6 +72,7 @@ pub(super) fn annotation_task_candidates(
                     config,
                     ref_note_path,
                     &annotation.text,
+                    &block_id,
                     &block_id,
                 )?);
             }
@@ -71,7 +85,8 @@ pub(super) fn annotation_task_candidates_from_text(
     config: &Config,
     ref_note_path: &Path,
     text: &str,
-    source_block_id: &str,
+    identity_block_id: &str,
+    link_block_id: &str,
 ) -> Result<Vec<AnnotationTaskCandidate>> {
     let mut candidates = Vec::new();
     for line in text.lines() {
@@ -79,7 +94,8 @@ pub(super) fn annotation_task_candidates_from_text(
             config,
             ref_note_path,
             line,
-            source_block_id,
+            identity_block_id,
+            link_block_id,
         )? {
             candidates.push(candidate);
         }
@@ -91,7 +107,8 @@ pub(super) fn annotation_task_candidate_from_source_line(
     config: &Config,
     ref_note_path: &Path,
     line: &str,
-    source_block_id: &str,
+    identity_block_id: &str,
+    link_block_id: &str,
 ) -> Result<Option<AnnotationTaskCandidate>> {
     let Some(source) = annotation_task_source_from_source_line(line) else {
         return Ok(None);
@@ -105,14 +122,14 @@ pub(super) fn annotation_task_candidate_from_source_line(
     let processed_id = annotation_task_processed_id(
         config,
         ref_note_path,
-        source_block_id,
+        identity_block_id,
         &source.identity,
     );
 
     Ok(Some(AnnotationTaskCandidate {
         identity: source.identity,
         task_text: source.task_text,
-        source_block_id: source_block_id.to_string(),
+        source_block_id: link_block_id.to_string(),
         target,
         source_ref_note_path: ref_note_path.to_path_buf(),
         processed_id,

@@ -265,6 +265,7 @@ fn annotation_task_candidate_records_route_and_processed_id() {
 - #task Keep unsafe token @alice.md
 ",
         "h-abc123",
+        "h-abc123",
     )
     .expect("extract routed task candidates");
 
@@ -377,6 +378,7 @@ fn processed_task_index_legacy_identity_blocks_recreation() {
         &ref_note,
         "- #task Existing follow-up\n",
         "h-new",
+        "h-new",
     )
     .expect("extract candidate")
     .pop()
@@ -394,6 +396,7 @@ fn processed_task_index_legacy_ht_backlink_blocks_edited_recreation() {
         &config,
         &ref_note,
         "- #task Original follow-up\n",
+        "h-source123456",
         "h-source123456",
     )
     .expect("extract candidate")
@@ -448,6 +451,7 @@ Keep me here.
 - #task Existing cancelled
 - #task New follow-up [due::2026-06-08]
 ",
+        block_id,
         block_id,
     )
     .expect("extract annotation task candidates");

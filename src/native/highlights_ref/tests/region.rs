@@ -12,6 +12,7 @@ fn highlight_annotation(
     SidecarAnnotation {
         kind: SidecarAnnotationKind::Highlight,
         page_label: page_label.map(str::to_string),
+        page_index: None,
         linked_page_style: false,
         text: text.to_string(),
         comment: comment.map(str::to_string),
@@ -87,6 +88,7 @@ fn region_round_trip_standalone_note() {
             SidecarAnnotation {
                 kind: SidecarAnnotationKind::StandaloneNote,
                 page_label: Some("Page 1".to_string()),
+                page_index: None,
                 linked_page_style: false,
                 text: "- status: wip\n- parent: obsidian".to_string(),
                 comment: None,
@@ -98,6 +100,7 @@ fn region_round_trip_standalone_note() {
             SidecarAnnotation {
                 kind: SidecarAnnotationKind::StandaloneNote,
                 page_label: Some("Page 1".to_string()),
+                page_index: None,
                 linked_page_style: false,
                 text: "A personal note".to_string(),
                 comment: None,
@@ -137,6 +140,7 @@ fn region_round_trip_image() {
         annotations: vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::Image,
             page_label: None,
+            page_index: None,
             linked_page_style: false,
             text: String::new(),
             comment: Some("Look closer".to_string()),
@@ -241,6 +245,7 @@ fn region_round_trip_highlight_comment_mirror() {
         vec![SidecarAnnotation {
             kind: SidecarAnnotationKind::Highlight,
             page_label: Some("Page 1".to_string()),
+            page_index: None,
             // Plain highlights render even with a marker-shaped comment; the
             // renderer's marker-mirror skip only applies to linked-page
             // highlights and standalone notes.
@@ -339,6 +344,7 @@ fn region_round_trip_image_notes() {
             SidecarAnnotation {
                 kind: SidecarAnnotationKind::StandaloneNote,
                 page_label: Some("Page 1".to_string()),
+                page_index: None,
                 linked_page_style: false,
                 text: source.to_str().expect("utf8").to_string(),
                 comment: None,
