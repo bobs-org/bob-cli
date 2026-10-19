@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "Bob command-line tools"
 repository = "https://github.com/bobs-org/bob-cli"
+license = "MIT"
 default-run = "bob"
 include = [
     "/Cargo.toml",
     "/Cargo.lock",
+    "/LICENSE*",
     "/README.md",
     "/docs/**",
     "/assets/**",
