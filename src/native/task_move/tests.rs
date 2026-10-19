@@ -886,6 +886,360 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 #[test]
+fn explicit_root_filename_disambiguates_duplicate_stems() {
+    let source = area("\n## Tasks\n\n- [ ] #task A ^a\n");
+    let dest = area("\n## Tasks\n");
+    let nested = area("\n## Tasks\n\n- [ ] #task Nested ^n\n");
+    let notes = [
+        ("source.md", source.as_str()),
+        ("folder/source.md", nested.as_str()),
+        ("dest.md", dest.as_str()),
+    ];
+    match plan_err(&notes, "source", "dest", vec![block("a")]) {
+        PlanError::AmbiguousNote { candidates, .. } => {
+            assert_eq!(
+                candidates,
+                [
+                    PathBuf::from("folder/source.md"),
+                    PathBuf::from("source.md")
+                ]
+            );
+        }
+        other => panic!("expected ambiguous stem, got {other}"),
+    }
+    let root = plan(&notes, "source.md", "dest", vec![block("a")]);
+    assert_eq!(root.moves[0].source_path, PathBuf::from("source.md"));
+    let nested_plan = plan(&notes, "folder/source", "dest", vec![block("n")]);
+    assert_eq!(
+        nested_plan.moves[0].source_path,
+        PathBuf::from("folder/source.md")
+    );
+}
+
+#[test]
+fn missing_explicit_path_does_not_fall_back_to_basename() {
+    let source = area("\n## Tasks\n\n- [ ] #task A ^a\n");
+    let dest = area("\n## Tasks\n");
+    let error = plan_err(
+        &[("source.md", source.as_str()), ("dest.md", dest.as_str())],
+        "missing/source",
+        "dest",
+        vec![block("a")],
+    );
+    assert!(matches!(error, PlanError::MissingNote { .. }), "{error}");
+}
+
+#[test]
+fn case_variants_share_note_identity_for_refusal_and_repair() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Move ^x
+  - ⛓️ **DEPENDS ON:** [[DEST#^prj]]
+",
+    );
+    let dest = project(
+        "wip",
+        "
+- [ ] #task Criteria ^prj
+
+## Tasks
+",
+    );
+    let notes = [("source.md", source.as_str()), ("dest.md", dest.as_str())];
+    assert!(matches!(
+        plan_err(&notes, "SOURCE", "DEST", vec![block("x")]),
+        PlanError::DependsOnDestPrj { .. }
+    ));
+
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Move ^x
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let backlink = "See [[SOURCE#^x]].\n";
+    let result = plan(
+        &[
+            ("source.md", source.as_str()),
+            ("dest.md", dest.as_str()),
+            ("links.md", backlink),
+        ],
+        "source",
+        "dest",
+        vec![block("x")],
+    );
+    assert!(post(&result, "links.md").contains("[[dest#^x]]"));
+    assert!(!post(&result, "links.md").contains("[[SOURCE#^x]]"));
+}
+
+#[test]
+fn intake_appends_after_prose_and_ignores_fenced_tasks_and_headings() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Incoming ^in
+",
+    );
+    let dest = area(
+        r#"
+## Tasks
+
+```markdown
+- [ ] #task Example ^example
+### Fenced group
+```
+
+keep this prose
+
+### Ready
+
+- [ ] #task Grouped ^g
+"#,
+    );
+    let result = plan(
+        &[("src.md", source.as_str()), ("dest.md", dest.as_str())],
+        "src",
+        "dest",
+        vec![block("in")],
+    );
+    let dest_post = post(&result, "dest.md");
+    let fence_at = dest_post.find("```markdown").unwrap();
+    let example_at = dest_post.find("- [ ] #task Example ^example").unwrap();
+    let incoming_at = dest_post.find("- [ ] #task Incoming ^in").unwrap();
+    let prose_at = dest_post.find("keep this prose").unwrap();
+    let ready_at = dest_post.find("### Ready").unwrap();
+    assert!(fence_at < example_at && example_at < incoming_at);
+    assert!(prose_at < incoming_at && incoming_at < ready_at);
+    let closing_fence = dest_post[fence_at + 3..]
+        .find("```")
+        .map(|offset| fence_at + 3 + offset)
+        .unwrap();
+    assert!(
+        !dest_post[fence_at..closing_fence].contains("Incoming"),
+        "incoming task landed inside the fence:\n{dest_post}"
+    );
+}
+
+#[test]
+fn intake_keeps_the_badge_strip_and_appends_after_it() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Incoming ^in
+",
+    );
+    let dest = area(
+        "
+## Tasks
+<!--bob:task-status-badges:v1-->
+`⚪ 1 open` · `🔵 2 next/wip` · `🔴 0 blocked` · `🟢 3 done/canceled`
+
+keep this prose
+
+### Ready
+
+- [ ] #task Grouped ^g
+",
+    );
+    let result = plan(
+        &[("src.md", source.as_str()), ("dest.md", dest.as_str())],
+        "src",
+        "dest",
+        vec![block("in")],
+    );
+    let dest_post = post(&result, "dest.md");
+    let heading_at = dest_post.find("## Tasks").unwrap();
+    let badge_at = dest_post.find("`⚪ 1 open`").unwrap();
+    let prose_at = dest_post.find("keep this prose").unwrap();
+    let incoming_at = dest_post.find("- [ ] #task Incoming ^in").unwrap();
+    let ready_at = dest_post.find("### Ready").unwrap();
+    assert!(heading_at < badge_at && badge_at < prose_at);
+    assert!(prose_at < incoming_at && incoming_at < ready_at);
+}
+
+#[test]
+fn dest_without_final_newline_keeps_original_ending_shape() {
+    let source = area("\n## Tasks\n\n- [ ] #task Incoming ^in\n");
+    let dest = "---\ntype: [[area]]\n---\n\n## Tasks";
+    let result = plan(
+        &[("src.md", source.as_str()), ("dest.md", dest)],
+        "src",
+        "dest",
+        vec![block("in")],
+    );
+    let dest_post = post(&result, "dest.md");
+    assert!(dest_post.contains("- [ ] #task Incoming ^in"));
+    assert!(dest_post.contains("## Tasks\n"));
+    assert!(!dest_post.ends_with("\n\n\n"));
+}
+
+#[test]
+fn fenced_examples_are_not_live_identities_or_rewritten_links() {
+    let source = area(
+        r#"
+## Tasks
+
+- [ ] #task Move ^x
+  - see [[#^x]] and `[[src#^x]]`
+  ```markdown
+  - [ ] #task Example ^example
+  - see [[src#^x]] and [label](src.md#^x)
+  ```
+"#,
+    );
+    let dest = area(
+        r#"
+## Tasks
+
+```
+- [ ] #task Dest example ^x
+```
+"#,
+    );
+    let elsewhere = "```\n[[src#^x]]\n```\n`[[src#^x]]`\n[[src#^x]]\n";
+    let result = plan(
+        &[
+            ("src.md", source.as_str()),
+            ("dest.md", dest.as_str()),
+            ("links.md", elsewhere),
+        ],
+        "src",
+        "dest",
+        vec![block("x")],
+    );
+    let dest_post = post(&result, "dest.md");
+    assert!(dest_post.contains("- [ ] #task Move ^x"));
+    assert!(dest_post.contains("[[#^x]]"));
+    assert!(dest_post.contains("`[[src#^x]]`"));
+    assert!(dest_post.contains("- [ ] #task Example ^example"));
+    assert!(dest_post.contains("[[src#^x]]"));
+    assert!(dest_post.contains("[label](src.md#^x)"));
+    assert!(dest_post.contains("- [ ] #task Dest example ^x"));
+    let links = post(&result, "links.md");
+    assert!(links.contains("```\n[[src#^x]]\n```"));
+    assert!(links.contains("`[[src#^x]]`"));
+    assert!(links.contains("[[dest#^x]]"));
+}
+
+#[test]
+fn encoded_identity_collision_is_refused_before_rewrite() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Nested [id:: a__b__x] ^x
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let other = area(
+        "
+## Tasks
+
+- [ ] #task Flat [id:: a__b__x] ^x
+",
+    );
+    let error = plan_err(
+        &[
+            ("a/b.md", source.as_str()),
+            ("dest.md", dest.as_str()),
+            ("a__b.md", other.as_str()),
+        ],
+        "a/b",
+        "dest",
+        vec![block("x")],
+    );
+    assert!(
+        matches!(error, PlanError::EncodedIdentityCollision { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn unrepresentable_destination_identity_is_refused() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Anchored [id:: source__x] ^x
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let error = plan_err(
+        &[
+            ("source.md", source.as_str()),
+            ("dest space.md", dest.as_str()),
+        ],
+        "source",
+        "dest space",
+        vec![block("x")],
+    );
+    assert!(
+        matches!(error, PlanError::UnrepresentableIdentity { .. }),
+        "{error}"
+    );
+}
+
+#[test]
+fn stale_second_id_field_is_refused() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Nested [id:: src__a] [id:: stale] ^a
+  - [ ] #task Child [id:: src__kid] [id:: also-stale] ^kid
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let error = plan_err(
+        &[("src.md", source.as_str()), ("dest.md", dest.as_str())],
+        "src",
+        "dest",
+        vec![block("a")],
+    );
+    match error {
+        PlanError::NonCanonicalId { found, .. } => {
+            assert!(found == "stale" || found == "also-stale", "{found}");
+        }
+        other => panic!("expected non-canonical second id, got {other}"),
+    }
+}
+
+#[test]
+fn nested_child_anchors_and_co_move_links_keep_review_fields() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Parent [id:: src__p] [fresh:: 2026-10-01] [keeps:: 3] [unblocked:: 2026-10-02] ^p
+  - ⛓️ **DEPENDS ON:** [[#^c]]
+  - [ ] #task Child [id:: src__c] ^c
+- [ ] #task Other [dependsOn:: src__p, src__c] ^o
+",
+    );
+    let dest = area("\n## Tasks\n");
+    let result = plan(
+        &[("src.md", source.as_str()), ("dest.md", dest.as_str())],
+        "src",
+        "dest",
+        vec![block("p")],
+    );
+    let dest_post = post(&result, "dest.md");
+    assert!(dest_post.contains("[id:: dest__p]"));
+    assert!(dest_post.contains("[id:: dest__c]"));
+    assert!(dest_post.contains("[[#^c]]"));
+    assert!(dest_post.contains("[fresh:: 2026-10-01]"));
+    assert!(dest_post.contains("[keeps:: 3]"));
+    assert!(dest_post.contains("[unblocked:: 2026-10-02]"));
+    assert!(post(&result, "src.md").contains("[dependsOn:: dest__p, dest__c]"));
+}
+
+#[test]
 fn no_selectors_is_an_error() {
     let source = area("\n## Tasks\n\n- [ ] #task A ^a\n");
     let dest = area("\n## Tasks\n");

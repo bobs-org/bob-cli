@@ -39,11 +39,13 @@ pub(crate) use transform::{
 pub(crate) use transform::link_repair_markdown_files;
 
 pub(crate) use archive::next_available_block_id;
+#[cfg(test)]
+pub(crate) use link_repair::repair_links_in_note;
 pub(crate) use link_repair::{
     is_simple_markdown_destination, repair_dependency_metadata,
-    repair_links_in_note, repair_markdown_destination, repair_wiki_link_inner,
-    split_block_fragment, LinkRepairResult, MovedBlockTarget,
-    MovedBlockTargets, NoteIndex as ArchiveNoteIndex,
+    repair_links_in_note_with, repair_markdown_destination,
+    repair_wiki_link_inner, split_block_fragment, LinkRepairResult,
+    MovedBlockTarget, MovedBlockTargets,
 };
 pub(crate) use transform::{
     block_id_occurrences_in_text, has_task_tag, leading_indent_len,

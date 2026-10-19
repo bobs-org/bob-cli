@@ -10,13 +10,13 @@ use std::{fs, io};
 use super::super::{
     capture_dependency_tasks::has_prj_is_blocked_tag,
     collect_done::{
-        self, block_id_occurrences_in_text, block_ids_in_markdown,
-        has_task_tag, is_simple_markdown_destination, leading_indent_len,
+        self, block_id_occurrences_in_text, has_task_tag,
+        is_simple_markdown_destination, leading_indent_len,
         next_available_block_id, repair_dependency_metadata,
-        repair_links_in_note, repair_markdown_destination,
+        repair_links_in_note_with, repair_markdown_destination,
         repair_wiki_link_inner, split_block_fragment, split_line_ending,
         task_block_end, trailing_block_id_in_line, vault_relative_link_target,
-        ArchiveNoteIndex, MovedBlockTarget, MovedBlockTargets,
+        MovedBlockTarget, MovedBlockTargets,
     },
     markdown,
     note_tasks::clean_description,
@@ -30,7 +30,7 @@ use super::super::{
     },
     task_fields::inline_fields,
     task_status_groups,
-    vault_links::{self, LinkResolution, NoteIndex},
+    vault_links::{self, NoteIndex},
 };
 
 #[cfg(test)]
@@ -189,6 +189,18 @@ pub(crate) enum PlanError {
         found: String,
         expected: String,
     },
+    EncodedIdentityCollision {
+        token: String,
+        first: PathBuf,
+        first_block: String,
+        second: PathBuf,
+        second_block: String,
+    },
+    UnrepresentableIdentity {
+        path: PathBuf,
+        block_id: String,
+        detail: String,
+    },
 }
 
 impl fmt::Display for PlanError {
@@ -324,6 +336,31 @@ impl fmt::Display for PlanError {
                     format_candidate(candidate)
                 )
             }
+            Self::EncodedIdentityCollision {
+                token,
+                first,
+                first_block,
+                second,
+                second_block,
+            } => {
+                write!(
+                    formatter,
+                    "encoded identity {token} is ambiguous between {}#^{first_block} and {}#^{second_block}",
+                    first.display(),
+                    second.display()
+                )
+            }
+            Self::UnrepresentableIdentity {
+                path,
+                block_id,
+                detail,
+            } => {
+                write!(
+                    formatter,
+                    "cannot encode identity for {}#^{block_id}: {detail}",
+                    path.display()
+                )
+            }
         }
     }
 }
@@ -387,8 +424,6 @@ pub(crate) fn plan_task_move(
     }
 
     let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
-    let archive_index =
-        ArchiveNoteIndex::from_paths(snapshot.notes.keys().cloned());
     let source_path = resolve_note(&note_index, &request.source)?;
     let dest_path = resolve_note(&note_index, &request.dest)?;
     if source_path == dest_path {
@@ -426,7 +461,7 @@ pub(crate) fn plan_task_move(
             task.line_index,
             &source_path,
             &dest_path,
-            &archive_index,
+            &note_index,
         ) {
             return Err(PlanError::DependsOnDestPrj {
                 candidate: task.candidate(),
@@ -441,8 +476,7 @@ pub(crate) fn plan_task_move(
         }
     }
 
-    let source_id_counts = count_block_ids(source_contents);
-    let mut incoming_ids = Vec::new();
+    let source_id_counts = count_live_block_ids(source_contents);
     let mut blocks = Vec::new();
     for task in &selected {
         let end = task_block_end(&source_lines, task.line_index, 0);
@@ -453,9 +487,6 @@ pub(crate) fn plan_task_move(
             &source_id_counts,
             task,
         )?;
-        for id in block_ids_in_markdown(&fragment) {
-            incoming_ids.push(id);
-        }
         blocks.push(SelectedBlock {
             task: task.clone(),
             end,
@@ -464,9 +495,10 @@ pub(crate) fn plan_task_move(
     }
 
     let dest_used: BTreeSet<String> =
-        block_ids_in_markdown(dest_contents).into_iter().collect();
+        live_block_ids(dest_contents).into_iter().collect();
     let (fragments, renames, id_map) =
         rename_incoming_fragments(&blocks, &dest_path, &dest_used)?;
+    validate_mapped_identities(snapshot, &source_path, &dest_path, &id_map)?;
 
     let dest_target = vault_relative_link_target(&dest_path, "destination")
         .map_err(|error| PlanError::InvalidPath {
@@ -479,8 +511,8 @@ pub(crate) fn plan_task_move(
 
     let mut moved_targets = MovedBlockTargets::new();
     for (old_id, new_id) in &id_map {
-        let old_dep = dependency_id(&source_path, old_id).unwrap_or_default();
-        let new_dep = dependency_id(&dest_path, new_id).unwrap_or_default();
+        let old_dep = required_dependency_id(&source_path, old_id)?;
+        let new_dep = required_dependency_id(&dest_path, new_id)?;
         moved_targets.insert(
             (source_path.clone(), old_id.clone()),
             MovedBlockTarget {
@@ -493,12 +525,11 @@ pub(crate) fn plan_task_move(
     }
 
     let moved_old_ids: BTreeSet<String> = id_map.keys().cloned().collect();
-    let stayed_source_ids: BTreeSet<String> = block_ids_in_markdown(
-        &remove_selected_blocks(source_contents, &blocks),
-    )
-    .into_iter()
-    .filter(|id| !moved_old_ids.contains(id))
-    .collect();
+    let stayed_source_ids: BTreeSet<String> =
+        live_block_ids(&remove_selected_blocks(source_contents, &blocks))
+            .into_iter()
+            .filter(|id| !moved_old_ids.contains(id))
+            .collect();
 
     let mut fragment_link_count = 0;
     let mut fragment_dep_count = 0;
@@ -508,7 +539,7 @@ pub(crate) fn plan_task_move(
             fragment,
             &source_path,
             &source_target,
-            &archive_index,
+            &note_index,
             &moved_targets,
             &stayed_source_ids,
             &id_map,
@@ -518,18 +549,20 @@ pub(crate) fn plan_task_move(
         repaired_fragments.push(repaired.contents);
     }
 
-    let dest_existing_repair = repair_links_in_note(
+    let dest_existing_repair = repair_links_in_note_with(
         dest_contents,
         &dest_path,
-        &archive_index,
+        &note_index,
         &moved_targets,
+        true,
     );
     let source_without = remove_selected_blocks(source_contents, &blocks);
-    let source_repair = repair_links_in_note(
+    let source_repair = repair_links_in_note_with(
         &source_without,
         &source_path,
-        &archive_index,
+        &note_index,
         &moved_targets,
+        true,
     );
 
     let dest_with_insert = insert_into_dest(
@@ -560,11 +593,12 @@ pub(crate) fn plan_task_move(
         if path == &source_path || path == &dest_path {
             continue;
         }
-        let repair = repair_links_in_note(
+        let repair = repair_links_in_note_with(
             original,
             path,
-            &archive_index,
+            &note_index,
             &moved_targets,
+            true,
         );
         if repair.link_count > 0 || repair.dependency_metadata_count > 0 {
             add_repair(
@@ -653,16 +687,65 @@ fn resolve_note(index: &NoteIndex, query: &str) -> Result<PathBuf, PlanError> {
             query: query.to_string(),
         });
     }
-    match index.resolve_detailed(None, query) {
-        LinkResolution::Found(path) => Ok(path),
-        LinkResolution::Ambiguous => Err(PlanError::AmbiguousNote {
+    if query_is_explicit_path(query) {
+        let Some(candidate) = vault_links::target_to_markdown_path(query)
+        else {
+            return Err(PlanError::InvalidPath {
+                query: query.to_string(),
+            });
+        };
+        return match exact_path_matches(index, &candidate).as_slice() {
+            [path] => Ok(path.clone()),
+            [] => Err(PlanError::MissingNote {
+                query: query.to_string(),
+            }),
+            _ => Err(PlanError::AmbiguousNote {
+                query: query.to_string(),
+                candidates: exact_path_matches(index, &candidate),
+            }),
+        };
+    }
+    let candidates = index.basename_candidates(query);
+    match candidates.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(PlanError::MissingNote {
             query: query.to_string(),
-            candidates: index.basename_candidates(query),
         }),
-        LinkResolution::Missing => Err(PlanError::MissingNote {
+        _ => Err(PlanError::AmbiguousNote {
             query: query.to_string(),
+            candidates,
         }),
     }
+}
+
+fn query_is_explicit_path(query: &str) -> bool {
+    query.contains('/')
+        || Path::new(query)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+fn exact_path_matches(index: &NoteIndex, candidate: &Path) -> Vec<PathBuf> {
+    let exact: Vec<PathBuf> = index
+        .relative_paths()
+        .filter(|path| *path == candidate)
+        .map(Path::to_path_buf)
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    index
+        .relative_paths()
+        .filter(|path| paths_eq_ignore_ascii_case(path, candidate))
+        .map(Path::to_path_buf)
+        .collect()
+}
+
+fn paths_eq_ignore_ascii_case(left: &Path, right: &Path) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
 }
 
 fn refuse_archive_path(
@@ -919,7 +1002,7 @@ fn task_depends_on_dest_prj(
     task_line: usize,
     source_path: &Path,
     dest_path: &Path,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
 ) -> bool {
     let Some(child) = parse::dependency_child_of(lines, fenced, task_line)
     else {
@@ -932,7 +1015,9 @@ fn task_depends_on_dest_prj(
         if link.struck || link.block_id != "prj" {
             return false;
         }
-        note_index.resolve(source_path, &link.target).as_deref()
+        note_index
+            .resolve(Some(source_path), &link.target)
+            .as_deref()
             == Some(dest_path)
     })
 }
@@ -947,12 +1032,130 @@ fn dest_prj_is_blocked(contents: &str) -> bool {
     })
 }
 
-fn count_block_ids(contents: &str) -> BTreeMap<String, usize> {
+fn count_live_block_ids(contents: &str) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
-    for id in block_ids_in_markdown(contents) {
+    for id in live_block_ids(contents) {
         *counts.entry(id).or_insert(0) += 1;
     }
     counts
+}
+
+fn live_block_ids(contents: &str) -> Vec<String> {
+    let lines: Vec<&str> = contents.split_inclusive('\n').collect();
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let hidden = hidden_markdown_indexes(&logical);
+    logical
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !hidden.contains(index))
+        .filter_map(|(_, line)| trailing_block_id_in_line(line))
+        .collect()
+}
+
+fn hidden_markdown_indexes(logical: &[&str]) -> BTreeSet<usize> {
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(logical);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let mut hidden = markdown::fenced_lines(logical, scan_start..logical.len());
+    if let Some(end) = frontmatter_end {
+        hidden.extend(0..=end);
+    }
+    hidden
+}
+
+fn live_id_fields(line: &str) -> Vec<crate::native::task_fields::InlineField> {
+    let spans = inline_code_spans(line);
+    inline_fields(line, "id")
+        .into_iter()
+        .filter(|field| {
+            !spans
+                .iter()
+                .any(|span| field.start < span.end && field.end > span.start)
+        })
+        .collect()
+}
+
+fn required_dependency_id(
+    path: &Path,
+    block_id: &str,
+) -> Result<String, PlanError> {
+    dependency_id(path, block_id).map_err(|error| {
+        PlanError::UnrepresentableIdentity {
+            path: path.to_path_buf(),
+            block_id: block_id.to_string(),
+            detail: error.to_string(),
+        }
+    })
+}
+
+fn validate_mapped_identities(
+    snapshot: &VaultSnapshot,
+    source_path: &Path,
+    dest_path: &Path,
+    id_map: &BTreeMap<String, String>,
+) -> Result<(), PlanError> {
+    let mut mapped = Vec::new();
+    for (old_id, new_id) in id_map {
+        mapped.push((
+            old_id.clone(),
+            new_id.clone(),
+            required_dependency_id(source_path, old_id)?,
+            required_dependency_id(dest_path, new_id)?,
+        ));
+    }
+
+    let mut owners: BTreeMap<String, Vec<(PathBuf, String)>> = BTreeMap::new();
+    for (path, contents) in &snapshot.notes {
+        for block_id in live_block_ids(contents) {
+            if let Ok(token) = dependency_id(path, &block_id) {
+                owners
+                    .entry(token)
+                    .or_default()
+                    .push((path.clone(), block_id));
+            }
+        }
+        let logical: Vec<&str> = contents
+            .split_inclusive('\n')
+            .map(|line| split_line_ending(line).0)
+            .collect();
+        let hidden = hidden_markdown_indexes(&logical);
+        for (index, line) in logical.iter().enumerate() {
+            if hidden.contains(&index) || parse_task_line(line).is_none() {
+                continue;
+            }
+            let block_id = trailing_block_id_in_line(line).unwrap_or_default();
+            for field in live_id_fields(line) {
+                owners
+                    .entry(field.value)
+                    .or_default()
+                    .push((path.clone(), block_id.clone()));
+            }
+        }
+    }
+
+    for (old_id, _new_id, old_dep, new_dep) in mapped {
+        for token in [old_dep, new_dep] {
+            let Some(list) = owners.get(&token) else {
+                continue;
+            };
+            let foreign: Vec<&(PathBuf, String)> = list
+                .iter()
+                .filter(|(path, block_id)| {
+                    !(path == source_path && block_id == &old_id)
+                })
+                .collect();
+            if let Some((path, block_id)) = foreign.first() {
+                return Err(PlanError::EncodedIdentityCollision {
+                    token,
+                    first: source_path.to_path_buf(),
+                    first_block: old_id,
+                    second: (*path).clone(),
+                    second_block: (*block_id).clone(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_fragment_identities(
@@ -962,11 +1165,16 @@ fn validate_fragment_identities(
     owner: &ScannedTask,
 ) -> Result<(), PlanError> {
     let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
-    for (offset, line) in lines.iter().enumerate() {
-        let (content, _) = split_line_ending(line);
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let hidden = hidden_markdown_indexes(&logical);
+    for (offset, content) in logical.iter().enumerate() {
+        if hidden.contains(&offset) {
+            continue;
+        }
         let Some(block_id) = trailing_block_id_in_line(content) else {
-            if let Some(field) = inline_fields(content, "id").into_iter().next()
-                && parse_task_line(content).is_some()
+            if parse_task_line(content).is_some()
+                && let Some(field) = live_id_fields(content).into_iter().next()
             {
                 return Err(PlanError::NonCanonicalId {
                     candidate: candidate_from_line(
@@ -985,39 +1193,22 @@ fn validate_fragment_identities(
                 block_id,
             });
         }
-        let Some(task) = parse_task_line(content) else {
+        if parse_task_line(content).is_none() {
             continue;
-        };
-        let expected = dependency_id(source_path, &block_id).map_err(|_| {
-            PlanError::NonCanonicalId {
-                candidate: candidate_from_line(
-                    owner.line_index + offset,
-                    content,
-                ),
-                found: inline_fields(content, "id")
-                    .into_iter()
-                    .next()
-                    .map(|field| field.value)
-                    .unwrap_or_default(),
-                expected: format!(
-                    "dependency_id({}, {block_id})",
-                    source_path.display()
-                ),
-            }
-        })?;
-        if let Some(field) = inline_fields(content, "id").into_iter().next()
-            && field.value != expected
-        {
-            return Err(PlanError::NonCanonicalId {
-                candidate: candidate_from_line(
-                    owner.line_index + offset,
-                    content,
-                ),
-                found: field.value,
-                expected,
-            });
         }
-        let _ = task;
+        let expected = required_dependency_id(source_path, &block_id)?;
+        for field in live_id_fields(content) {
+            if field.value != expected {
+                return Err(PlanError::NonCanonicalId {
+                    candidate: candidate_from_line(
+                        owner.line_index + offset,
+                        content,
+                    ),
+                    found: field.value,
+                    expected,
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -1110,16 +1301,22 @@ struct Occurrence {
 }
 
 fn fragment_occurrences(fragment: &str) -> Vec<Occurrence> {
+    let lines: Vec<&str> = fragment.split_inclusive('\n').collect();
+    let logical: Vec<&str> =
+        lines.iter().map(|line| split_line_ending(line).0).collect();
+    let hidden = hidden_markdown_indexes(&logical);
     let mut occurrences = Vec::new();
     let mut offset = 0;
-    for line in fragment.split_inclusive('\n') {
+    for (index, line) in lines.iter().enumerate() {
         let (content, _) = split_line_ending(line);
-        for occurrence in block_id_occurrences_in_text(content) {
-            occurrences.push(Occurrence {
-                id: occurrence.id,
-                start: offset + occurrence.start,
-                end: offset + occurrence.end,
-            });
+        if !hidden.contains(&index) {
+            for occurrence in block_id_occurrences_in_text(content) {
+                occurrences.push(Occurrence {
+                    id: occurrence.id,
+                    start: offset + occurrence.start,
+                    end: offset + occurrence.end,
+                });
+            }
         }
         offset += line.len();
     }
@@ -1136,7 +1333,7 @@ fn repair_moved_fragment(
     fragment: &str,
     source_path: &Path,
     source_target: &str,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
     stayed_source_ids: &BTreeSet<String>,
     id_map: &BTreeMap<String, String>,
@@ -1172,7 +1369,7 @@ fn repair_fragment_wiki_links(
     contents: &str,
     source_path: &Path,
     source_target: &str,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
     stayed_source_ids: &BTreeSet<String>,
     id_map: &BTreeMap<String, String>,
@@ -1239,7 +1436,7 @@ fn repair_fragment_wiki_inner(
     inner: &str,
     source_path: &Path,
     source_target: &str,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
     stayed_source_ids: &BTreeSet<String>,
     id_map: &BTreeMap<String, String>,
@@ -1266,11 +1463,16 @@ fn repair_fragment_markdown_links(
     contents: &str,
     source_path: &Path,
     source_target: &str,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
     stayed_source_ids: &BTreeSet<String>,
     id_map: &BTreeMap<String, String>,
 ) -> collect_done::LinkRepairResult {
+    let lines: Vec<&str> = contents
+        .split_inclusive('\n')
+        .map(|line| split_line_ending(line).0)
+        .collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -1296,15 +1498,30 @@ fn repair_fragment_markdown_links(
         let destination_end = destination_start + relative_close;
         repaired.push_str(&contents[cursor..destination_start]);
         let destination = &contents[destination_start..destination_end];
-        if let Some(new_destination) = repair_fragment_markdown_destination(
-            destination,
-            source_path,
-            source_target,
-            note_index,
-            moved_targets,
-            stayed_source_ids,
-            id_map,
-        ) {
+        let line_index = contents[..open].matches('\n').count();
+        let line = lines.get(line_index).copied().unwrap_or("");
+        let line_start =
+            contents[..open].rfind('\n').map_or(0, |index| index + 1);
+        let code_spans = inline_code_spans(line);
+        let relative_in_line = open.saturating_sub(line_start);
+        let skip = fenced.contains(&line_index)
+            || code_spans.iter().any(|span| {
+                relative_in_line < span.end
+                    && destination_end + 1 - line_start > span.start
+            });
+        if skip {
+            repaired.push_str(destination);
+        } else if let Some(new_destination) =
+            repair_fragment_markdown_destination(
+                destination,
+                source_path,
+                source_target,
+                note_index,
+                moved_targets,
+                stayed_source_ids,
+                id_map,
+            )
+        {
             repaired.push_str(&new_destination);
             link_count += 1;
         } else {
@@ -1325,7 +1542,7 @@ fn repair_fragment_markdown_destination(
     destination: &str,
     source_path: &Path,
     source_target: &str,
-    note_index: &ArchiveNoteIndex,
+    note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
     stayed_source_ids: &BTreeSet<String>,
     id_map: &BTreeMap<String, String>,
@@ -1470,8 +1687,12 @@ fn tasks_intake_insert_byte(contents: &str) -> Option<usize> {
     {
         body_start += 1;
     }
+    let fenced = markdown::fenced_lines(&logical, body_start..logical.len());
     let mut intake_end = logical.len();
     for (index, line) in logical.iter().enumerate().skip(body_start) {
+        if fenced.contains(&index) {
+            continue;
+        }
         if let Some((level, _)) = markdown::atx_heading(line)
             && level <= 3
         {
@@ -1479,15 +1700,7 @@ fn tasks_intake_insert_byte(contents: &str) -> Option<usize> {
             break;
         }
     }
-    let mut last_task_end = None;
-    for index in body_start..intake_end {
-        if parse_task_line(logical[index]).is_some_and(|task| task.indent == 0)
-        {
-            last_task_end = Some(task_block_end(&lines, index, 0));
-        }
-    }
-    let insert_line = last_task_end.unwrap_or(body_start);
-    Some(lines.iter().take(insert_line).map(|line| line.len()).sum())
+    Some(lines.iter().take(intake_end).map(|line| line.len()).sum())
 }
 
 fn insert_at_byte(contents: &str, index: usize, insertion: &str) -> String {

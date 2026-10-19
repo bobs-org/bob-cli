@@ -17,7 +17,8 @@ use crate::native::{
     style::Styler,
     task_status_hooks_write::{
         apply_plan, capture_required, planned_write, ApplyOutcome,
-        ApplySession, InputKind, InputSnapshot, ReasonCode, WritePlan,
+        ApplySession, CaptureError, InputKind, InputSnapshot, ReasonCode,
+        WritePlan,
     },
     vault_sync::{self, CycleReport},
 };
@@ -99,7 +100,12 @@ pub(crate) fn build_cli() -> ClapCommand {
         .arg(Arg::new("match").long("match").short('m').value_name("TEXT").action(ArgAction::Append).help("Select the task whose line contains this literal text; repeatable"))
         .arg(Arg::new("offline").long("offline").short('o').action(ArgAction::SetTrue).help("Skip both sync cycles; commit locally without pushing"))
         .arg(Arg::new("retry-timeout").long("retry-timeout").short('r').value_name("SECONDS").value_parser(clap::value_parser!(u64)).default_value("60").help("Lock wait and re-plan budget after concurrent edits; 0 fails fast"))
-        .group(ArgGroup::new("selector").args(["block", "match"]).required(true))
+        .group(
+            ArgGroup::new("selector")
+                .args(["block", "match"])
+                .required(true)
+                .multiple(true),
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,13 +236,16 @@ impl Report {
         message: impl Into<String>,
         hint: Option<&str>,
     ) {
+        let message = message.into();
         if self.error.is_none() {
             self.error = Some(StageError {
                 stage,
-                message: message.into(),
+                message,
                 hint: hint.map(str::to_string),
             });
+            return;
         }
+        self.warn(format!("also failed during {stage}: {message}"));
     }
 
     fn warn(&mut self, warning: impl Into<String>) {
@@ -258,6 +267,28 @@ struct Scan {
     snapshot: VaultSnapshot,
     inputs: Vec<InputSnapshot>,
     scan_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+enum ScanError {
+    Retryable(String),
+    Fatal(String),
+}
+
+impl ScanError {
+    fn message(self) -> String {
+        match self {
+            Self::Retryable(message) | Self::Fatal(message) => message,
+        }
+    }
+
+    fn from_capture(relative: &str, error: CaptureError) -> Self {
+        let message = format!("read note {relative}: {}", error.message());
+        match error {
+            CaptureError::Unstable(_) => Self::Retryable(message),
+            _ => Self::Fatal(message),
+        }
+    }
 }
 
 fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
@@ -337,14 +368,30 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
         return if report.error.is_some() { 1 } else { 0 };
     }
 
+    finish_after_writes(report, &applied, partial, worktree, &child_env)
+}
+
+fn finish_after_writes(
+    report: &mut Report,
+    applied: &[PathBuf],
+    partial: bool,
+    worktree: bool,
+    child_env: &ChildEnv,
+) -> i32 {
     if worktree {
-        match commit_applied(report, &applied, &child_env) {
+        match commit_applied(report, applied, child_env) {
             Ok(commit) => report.commit = commit,
-            Err(error) => report.fail("commit", format!("commit moved notes: {error}"), Some("the local files are written; resolve the Git failure before retrying")),
+            Err(error) => report.fail(
+                "commit",
+                format!("commit moved notes: {error}"),
+                Some(
+                    "the local files are written; resolve the Git failure before retrying",
+                ),
+            ),
         }
     }
     if worktree && !report.offline && (report.error.is_none() || partial) {
-        let _ = post_sync(report, &child_env);
+        let _ = post_sync(report, child_env);
     }
     if report.error.is_some() {
         1
@@ -357,50 +404,51 @@ fn plan_once(
     vault: &Path,
     request: &MoveRequest,
 ) -> Result<(Scan, MovePlan), String> {
-    let scan = scan_vault(vault)?;
-    let plan = plan_task_move(&scan.snapshot, request)
-        .map_err(|error| error.to_string())?;
-    Ok((scan, plan))
+    let scan = scan_vault(vault).map_err(ScanError::message)?;
+    plan_from_scan(&scan, request).map(|plan| (scan, plan))
 }
 
-fn scan_vault(vault: &Path) -> Result<Scan, String> {
-    let files = link_repair_markdown_files(vault)
-        .map_err(|error| format!("scan vault {}: {error}", vault.display()))?;
+fn plan_from_scan(
+    scan: &Scan,
+    request: &MoveRequest,
+) -> Result<MovePlan, String> {
+    plan_task_move(&scan.snapshot, request).map_err(|error| error.to_string())
+}
+
+fn scan_vault(vault: &Path) -> Result<Scan, ScanError> {
+    let files = link_repair_markdown_files(vault).map_err(|error| {
+        ScanError::Fatal(format!("scan vault {}: {error}", vault.display()))
+    })?;
     let mut notes = Vec::with_capacity(files.len());
     let mut inputs = Vec::with_capacity(files.len());
     let mut scan_paths = Vec::with_capacity(files.len());
     for path in files {
-        let input =
-            capture_required(&path, InputKind::Note).map_err(|error| {
-                format!(
-                    "read note {}: {}",
-                    relative_display(vault, &path),
-                    error.message()
-                )
-            })?;
-        let contents = input
-            .utf8_contents()
-            .map_err(|error| {
-                format!(
-                    "read note {}: {}",
-                    relative_display(vault, &path),
-                    error.message()
-                )
-            })?
-            .ok_or_else(|| {
-                format!(
-                    "read note {}: file does not exist",
-                    relative_display(vault, &path)
-                )
-            })?;
-        let relative = path.strip_prefix(vault).map_err(|error| {
-            format!(
+        let relative = relative_display(vault, &path);
+        let input = match capture_required(&path, InputKind::Note) {
+            Ok(input) => input,
+            Err(error) => {
+                return Err(ScanError::from_capture(&relative, error))
+            }
+        };
+        let contents = match input.utf8_contents() {
+            Ok(Some(contents)) => contents,
+            Ok(None) => {
+                return Err(ScanError::Fatal(format!(
+                    "read note {relative}: file does not exist"
+                )));
+            }
+            Err(error) => {
+                return Err(ScanError::from_capture(&relative, error));
+            }
+        };
+        let relative_path = path.strip_prefix(vault).map_err(|error| {
+            ScanError::Fatal(format!(
                 "note {} is outside vault {}: {error}",
                 path.display(),
                 vault.display()
-            )
+            ))
         })?;
-        notes.push((relative.to_path_buf(), contents));
+        notes.push((relative_path.to_path_buf(), contents));
         scan_paths.push(path.clone());
         inputs.push(input);
     }
@@ -422,24 +470,58 @@ fn plan_and_apply(
             link_repair_markdown_files(&rescan_vault)
         }))
     };
-    plan_and_apply_with_session_factory(
+    plan_and_apply_with_hooks(
         report,
         request,
         retry_timeout,
         &mut session_factory,
+        &mut scan_vault,
     )
 }
 
+#[cfg(test)]
 fn plan_and_apply_with_session_factory(
     report: &mut Report,
     request: &MoveRequest,
     retry_timeout: &Duration,
     session_factory: &mut impl FnMut(&Path) -> ApplySession,
 ) -> Option<(Vec<PathBuf>, bool)> {
+    plan_and_apply_with_hooks(
+        report,
+        request,
+        retry_timeout,
+        session_factory,
+        &mut scan_vault,
+    )
+}
+
+fn plan_and_apply_with_hooks(
+    report: &mut Report,
+    request: &MoveRequest,
+    retry_timeout: &Duration,
+    session_factory: &mut impl FnMut(&Path) -> ApplySession,
+    scan_factory: &mut impl FnMut(&Path) -> Result<Scan, ScanError>,
+) -> Option<(Vec<PathBuf>, bool)> {
     let started = Instant::now();
     loop {
-        let (scan, plan) = match plan_once(&report.vault, request) {
-            Ok(value) => value,
+        let scan = match scan_factory(&report.vault) {
+            Ok(scan) => scan,
+            Err(ScanError::Retryable(message))
+                if started.elapsed() < *retry_timeout =>
+            {
+                report.progress(
+                    "vault changed during scan; rescanning and retrying",
+                );
+                let _ = message;
+                continue;
+            }
+            Err(error) => {
+                report.fail("plan", error.message(), None);
+                return None;
+            }
+        };
+        let plan = match plan_from_scan(&scan, request) {
+            Ok(plan) => plan,
             Err(error) => {
                 report.fail("plan", error, None);
                 return None;
@@ -863,10 +945,12 @@ fn short_sha(sha: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs, io,
+        os::unix::fs::PermissionsExt,
         path::Path,
+        process::{Command, Stdio},
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
         time::Duration,
@@ -1016,5 +1100,480 @@ mod tests {
         assert!(fs::read_to_string(root.join("dest.md"))
             .unwrap()
             .contains("Move safely"));
+    }
+
+    #[test]
+    fn clap_accepts_mixed_repeated_block_and_match_selectors() {
+        let matches = build_cli()
+            .try_get_matches_from([
+                COMMAND_NAME,
+                "src",
+                "dest",
+                "-b",
+                "c",
+                "-m",
+                "Alpha",
+                "-b",
+                "a",
+                "-b",
+                "b",
+            ])
+            .expect("mixed selectors");
+        assert_eq!(
+            selectors_from_matches(&matches),
+            vec![
+                MoveSelector::Block("c".into()),
+                MoveSelector::Block("a".into()),
+                MoveSelector::Block("b".into()),
+                MoveSelector::Match("Alpha".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn clap_still_requires_at_least_one_selector() {
+        let error = build_cli()
+            .try_get_matches_from([COMMAND_NAME, "src", "dest"])
+            .expect_err("missing selector");
+        assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn fail_keeps_the_primary_error_and_warns_about_later_failures() {
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.fail("apply", "partial write", Some("inspect recovery"));
+        report.fail("commit", "hook rejected the commit", Some("fix git"));
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("apply")
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("also failed during commit")),
+            "{:?}",
+            report.warnings
+        );
+        let json = json_document(&report);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["stage"], "apply");
+        assert!(json["warnings"].as_array().unwrap().iter().any(|warning| {
+            warning
+                .as_str()
+                .unwrap()
+                .contains("also failed during commit")
+        }));
+    }
+
+    #[test]
+    fn retryable_scan_is_retried_until_a_fresh_snapshot_succeeds() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_scan = Arc::clone(&attempts);
+        let state_for_factory = state_home.clone();
+        let mut session_factory =
+            move |vault: &Path| session(vault, &state_for_factory);
+        let mut scan_factory = move |vault: &Path| {
+            let attempt = attempts_for_scan.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                return Err(ScanError::Retryable(
+                    "read note source.md: file changed while it was being read"
+                        .into(),
+                ));
+            }
+            scan_vault(vault)
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+
+        let (applied, partial) = plan_and_apply_with_hooks(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut session_factory,
+            &mut scan_factory,
+        )
+        .expect("retryable scan then apply");
+
+        assert!(!partial);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert!(applied.iter().any(|path| path.ends_with("dest.md")));
+        assert!(fs::read_to_string(root.join("dest.md"))
+            .unwrap()
+            .contains("Move safely"));
+    }
+
+    #[test]
+    fn fatal_scan_does_not_retry_even_with_budget() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_scan = Arc::clone(&attempts);
+        let state_for_factory = state_home.clone();
+        let mut session_factory =
+            move |vault: &Path| session(vault, &state_for_factory);
+        let mut scan_factory = move |_vault: &Path| {
+            attempts_for_scan.fetch_add(1, Ordering::SeqCst);
+            Err(ScanError::Fatal(
+                "read note source.md: permission denied".into(),
+            ))
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+
+        let outcome = plan_and_apply_with_hooks(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut session_factory,
+            &mut scan_factory,
+        );
+
+        assert!(outcome.is_none());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("plan")
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("source.md")).unwrap(),
+            "---\ntype: [[area]]\n---\n\n## Tasks\n\n- [ ] #task Move safely ^move-me\n"
+        );
+    }
+
+    #[test]
+    fn zero_budget_makes_a_retryable_scan_terminal() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_scan = Arc::clone(&attempts);
+        let state_for_factory = state_home.clone();
+        let mut session_factory =
+            move |vault: &Path| session(vault, &state_for_factory);
+        let mut scan_factory = move |_vault: &Path| {
+            attempts_for_scan.fetch_add(1, Ordering::SeqCst);
+            Err(ScanError::Retryable("unstable".into()))
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 0);
+        report.vault = root.clone();
+
+        let outcome = plan_and_apply_with_hooks(
+            &mut report,
+            &request(),
+            &Duration::ZERO,
+            &mut session_factory,
+            &mut scan_factory,
+        );
+
+        assert!(outcome.is_none());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("plan")
+        );
+    }
+
+    #[test]
+    fn staging_failure_writes_no_notes_and_keeps_recovery() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        let source_before = fs::read(root.join("source.md")).unwrap();
+        let dest_before = fs::read(root.join("dest.md")).unwrap();
+        let backlinks_before = fs::read(root.join("backlinks.md")).unwrap();
+        let state_for_factory = state_home.clone();
+        let mut factory = move |vault: &Path| {
+            let mut session = session(vault, &state_for_factory);
+            session.fail_staging = Some(Box::new(|_| {
+                Err(io::Error::other("injected staging failure"))
+            }));
+            session
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+
+        let outcome = plan_and_apply_with_session_factory(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut factory,
+        );
+
+        assert!(outcome.is_none());
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("apply")
+        );
+        assert!(report.applied_paths.is_empty());
+        assert_eq!(
+            report.deferred_paths,
+            vec!["dest.md", "backlinks.md", "source.md"]
+        );
+        assert!(
+            report
+                .recovery_directory
+                .as_ref()
+                .is_some_and(|path| Path::new(path).is_dir()),
+            "{:?}",
+            report.recovery_directory
+        );
+        assert_eq!(fs::read(root.join("source.md")).unwrap(), source_before);
+        assert_eq!(fs::read(root.join("dest.md")).unwrap(), dest_before);
+        assert_eq!(
+            fs::read(root.join("backlinks.md")).unwrap(),
+            backlinks_before
+        );
+        let json = json_document(&report);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["stage"], "apply");
+        assert!(json["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("no move files were written"));
+    }
+
+    #[test]
+    fn failure_after_destination_leaves_later_files_deferred() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        let backlinks = root.join("backlinks.md");
+        let backlinks_for_callback = backlinks.clone();
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let interrupted_for_callback = Arc::clone(&interrupted);
+        let state_for_factory = state_home.clone();
+        let mut factory = move |vault: &Path| {
+            let mut session = session(vault, &state_for_factory);
+            let backlinks = backlinks_for_callback.clone();
+            let interrupted = Arc::clone(&interrupted_for_callback);
+            session.before_replace = Some(Box::new(move |path| {
+                if path == backlinks
+                    && !interrupted.swap(true, Ordering::SeqCst)
+                {
+                    let existing =
+                        fs::read_to_string(path).expect("read backlinks");
+                    fs::write(path, format!("{existing}concurrent edit\n"))
+                        .expect("change backlinks before replacement");
+                }
+            }));
+            session
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+
+        let (applied, partial) = plan_and_apply_with_session_factory(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut factory,
+        )
+        .expect("partial application is reported");
+
+        assert!(partial);
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("apply")
+        );
+        assert_eq!(report.applied_paths, vec!["dest.md"]);
+        assert_eq!(report.deferred_paths, vec!["backlinks.md", "source.md"]);
+        assert_eq!(applied.len(), 1);
+        assert!(
+            report
+                .recovery_directory
+                .as_ref()
+                .is_some_and(|path| Path::new(path).is_dir()),
+            "{:?}",
+            report.recovery_directory
+        );
+        assert!(fs::read_to_string(root.join("dest.md"))
+            .unwrap()
+            .contains("Move safely"));
+        assert!(fs::read_to_string(root.join("source.md"))
+            .unwrap()
+            .contains("Move safely ^move-me"));
+        assert!(fs::read_to_string(&backlinks)
+            .unwrap()
+            .contains("[[source#^move-me]]"));
+        assert!(fs::read_to_string(&backlinks)
+            .unwrap()
+            .contains("concurrent edit"));
+        let json = json_document(&report);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["applied_paths"][0], "dest.md");
+        assert!(json["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("selectors are not replayed automatically"));
+    }
+
+    #[test]
+    fn ordinary_commit_failure_skips_post_sync_and_keeps_the_write() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        init_repo(&root);
+        reject_commits(&root);
+        let state_for_factory = state_home.clone();
+        let mut factory =
+            move |vault: &Path| session(vault, &state_for_factory);
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+        let (applied, partial) = plan_and_apply_with_session_factory(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut factory,
+        )
+        .expect("apply before commit");
+        assert!(!partial);
+
+        let exit = finish_after_writes(
+            &mut report,
+            &applied,
+            partial,
+            true,
+            &Vec::new(),
+        );
+
+        assert_eq!(exit, 1);
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("commit")
+        );
+        assert!(report.post_sync.is_none());
+        assert!(report.commit.is_none());
+        assert!(fs::read_to_string(root.join("dest.md"))
+            .unwrap()
+            .contains("Move safely"));
+        assert!(!fs::read_to_string(root.join("source.md"))
+            .unwrap()
+            .contains("Move safely"));
+        assert_eq!(git_subject(&root), "initial");
+    }
+
+    #[test]
+    fn secondary_commit_failure_after_partial_apply_is_a_warning() {
+        let temp = tempfile::tempdir().expect("temp directory");
+        let root = temp.path().join("vault");
+        let state_home = temp.path().join("state");
+        write_fixture(&root);
+        init_repo(&root);
+        let source = root.join("source.md");
+        let source_for_callback = source.clone();
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let interrupted_for_callback = Arc::clone(&interrupted);
+        let state_for_factory = state_home.clone();
+        let mut factory = move |vault: &Path| {
+            let mut session = session(vault, &state_for_factory);
+            let source = source_for_callback.clone();
+            let interrupted = Arc::clone(&interrupted_for_callback);
+            session.before_replace = Some(Box::new(move |path| {
+                if path == source && !interrupted.swap(true, Ordering::SeqCst) {
+                    let existing =
+                        fs::read_to_string(path).expect("read source");
+                    fs::write(path, format!("{existing}\nconcurrent edit\n"))
+                        .expect("change source before replacement");
+                }
+            }));
+            session
+        };
+        let mut report = Report::new(OutputFormat::Json, false, true, 5);
+        report.vault = root.clone();
+        let (applied, partial) = plan_and_apply_with_session_factory(
+            &mut report,
+            &request(),
+            &Duration::from_secs(5),
+            &mut factory,
+        )
+        .expect("partial application is reported");
+        assert!(partial);
+        reject_commits(&root);
+
+        let exit = finish_after_writes(
+            &mut report,
+            &applied,
+            partial,
+            true,
+            &Vec::new(),
+        );
+
+        assert_eq!(exit, 1);
+        assert_eq!(
+            report.error.as_ref().map(|error| error.stage),
+            Some("apply")
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("also failed during commit")),
+            "{:?}",
+            report.warnings
+        );
+        assert!(report.post_sync.is_none());
+        assert_eq!(report.applied_paths, vec!["dest.md", "backlinks.md"]);
+        assert_eq!(report.deferred_paths, vec!["source.md"]);
+        assert!(fs::read_to_string(root.join("dest.md"))
+            .unwrap()
+            .contains("Move safely"));
+        assert!(fs::read_to_string(&source)
+            .unwrap()
+            .contains("concurrent edit"));
+        let json = json_document(&report);
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"]["stage"], "apply");
+        assert!(json["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("selectors are not replayed automatically"));
+    }
+
+    fn init_repo(vault: &Path) {
+        let run = |args: &[&str]| {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(vault)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "test@example.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["config", "commit.gpgsign", "false"]);
+        run(&["add", "-A"]);
+        run(&["commit", "-q", "-m", "initial"]);
+    }
+
+    fn reject_commits(vault: &Path) {
+        let hook = vault.join(".git/hooks/commit-msg");
+        fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write commit-msg hook");
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
+            .expect("chmod commit-msg hook");
+    }
+
+    fn git_subject(vault: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["log", "-1", "--format=%s"])
+            .output()
+            .expect("git log");
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 }

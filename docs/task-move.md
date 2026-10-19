@@ -18,14 +18,18 @@ bob task move [OPTIONS] <SOURCE> <DEST> (-b ID | -m TEXT)...
 ```
 
 `SOURCE` and `DEST` accept a note stem or vault-relative path, with or without
-`.md`. Paths must resolve uniquely inside `BOB_DIR`; when a stem matches more
-than one note, use a relative path to choose the intended note.
+`.md`. Paths must resolve uniquely inside `BOB_DIR`. A bare stem that matches
+more than one note is ambiguous and lists every candidate; an explicit root
+filename (`source.md`) or directory path (`folder/source`) selects one of them.
+A missing explicit path such as `missing/source` fails; it does not fall back
+to another note with the same basename.
 
-Selectors can be combined. Each one must identify exactly one top-level open
-task line with checkbox `[ ]`, `[*]`, `[/]`, or `[?]`. `--match` is literal and
-case-sensitive. Repeated and overlapping selectors are deduplicated, and
-selected blocks move in source order. A match can select a task without an
-Obsidian block id; the command does not create one.
+Selectors can be combined (`-b` and `-m` together). Each one must identify
+exactly one top-level open task line with checkbox `[ ]`, `[*]`, `[/]`, or
+`[?]`. `--match` is literal and case-sensitive. Repeated and overlapping
+selectors are deduplicated, and selected blocks move in source order. A match
+can select a task without an Obsidian block id; the command does not create
+one.
 
 ```bash
 bob task move --dry-run -f json inbox projects/launch -b draft -m 'Check readiness'
@@ -38,13 +42,19 @@ The command validates every selector and destination before writing. It refuses
 missing or ambiguous notes, absolute or escaping paths, unsupported filesystem
 objects, identical source and destination, and either note under `done/`. It
 also refuses closed, nested, non-task, and `^prj` selections; an ambiguous block
-identity; a non-canonical existing `[id::]`; and a selected task whose managed
-Depends-On child targets the destination's `^prj`.
+identity; a non-canonical existing `[id::]`, including a stale extra field on
+the same task; an encoded identity that collides with another live note
+(`a/b.md#^x` and `a__b.md#^x` both encode `a__b__x`); an unrepresentable
+required identity such as a path that cannot be encoded; and a selected task
+whose managed Depends-On child targets the destination's `^prj`. Code fences,
+frontmatter, and inline code are not live identities.
 
 The destination must be an area, or a project with frontmatter status `wip` or
 `waiting`. A project needs an existing `## Tasks` section. An area without one
-gets `## Tasks` appended. Moved tasks are inserted at the end of that section,
-before its first status-group heading or the next `##` section. Deeper-indented
+gets `## Tasks` appended. Moved tasks are inserted at the end of the unfenced
+`## Tasks` intake, after existing tasks, trailing prose, and the badge strip,
+and before the first real `###` status-group heading or the next `##` section.
+Fenced example tasks and headings do not count as intake. Deeper-indented
 children, nested tasks, managed child blocks, and child anchors travel with the
 selected task.
 
@@ -93,7 +103,10 @@ After a successful write, a Git vault commits exactly the changed paths in one
 committed separately by vault-sync. `--offline` keeps the lock and scoped local
 commit but skips both sync cycles. A non-Git vault is written safely with a
 warning and no commit or sync. Commit or post-sync errors leave the local write
-in place and are reported.
+in place and are reported. If a write already stopped partway through, a later
+commit or sync failure is added as a warning on that same report; the primary
+partial-apply error stays in `error`, the exit status stays nonzero, and the
+command does not imply the move completed.
 
 ## Output
 

@@ -92,6 +92,43 @@ impl NoteIndex {
             .and_then(|path| path.clone())
     }
 }
+
+/// Note-path resolver used by vault-wide moved-block link repair.
+///
+/// Archive discovery keeps the case-sensitive [`NoteIndex`] above. The mover
+/// supplies the shared case-insensitive vault index without changing archive
+/// lookup rules.
+pub(crate) trait ResolveMovedNote {
+    fn resolve_moved_note(
+        &self,
+        current_path: &Path,
+        target: &str,
+    ) -> Option<PathBuf>;
+}
+
+impl ResolveMovedNote for NoteIndex {
+    fn resolve_moved_note(
+        &self,
+        current_path: &Path,
+        target: &str,
+    ) -> Option<PathBuf> {
+        self.resolve(current_path, target)
+    }
+}
+
+impl ResolveMovedNote for crate::native::vault_links::NoteIndex {
+    fn resolve_moved_note(
+        &self,
+        current_path: &Path,
+        target: &str,
+    ) -> Option<PathBuf> {
+        crate::native::vault_links::NoteIndex::resolve(
+            self,
+            Some(current_path),
+            target,
+        )
+    }
+}
 pub(super) fn apply_link_repairs_to_plan(
     vault: &Path,
     files: &mut [FilePlan],
@@ -449,13 +486,39 @@ pub(crate) fn repair_links_in_note(
     note_index: &NoteIndex,
     moved_targets: &MovedBlockTargets,
 ) -> LinkRepairResult {
-    let wiki_repair =
-        repair_wiki_links(contents, current_path, note_index, moved_targets);
+    repair_links_in_note_with(
+        contents,
+        current_path,
+        note_index,
+        moved_targets,
+        false,
+    )
+}
+
+/// Vault-wide moved-block repair with an explicit resolver and code-context flag.
+///
+/// `skip_code` leaves fenced blocks, frontmatter, and inline code spans
+/// untouched. Archive callers keep `skip_code = false`.
+pub(crate) fn repair_links_in_note_with<R: ResolveMovedNote>(
+    contents: &str,
+    current_path: &Path,
+    note_index: &R,
+    moved_targets: &MovedBlockTargets,
+    skip_code: bool,
+) -> LinkRepairResult {
+    let wiki_repair = repair_wiki_links(
+        contents,
+        current_path,
+        note_index,
+        moved_targets,
+        skip_code,
+    );
     let markdown_repair = repair_markdown_links(
         &wiki_repair.contents,
         current_path,
         note_index,
         moved_targets,
+        skip_code,
     );
     let metadata_repair =
         repair_dependency_metadata(&markdown_repair.contents, moved_targets);
@@ -716,12 +779,19 @@ pub(crate) fn repair_dependency_metadata(
         count,
     }
 }
-pub(super) fn repair_wiki_links(
+pub(super) fn repair_wiki_links<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
-    note_index: &NoteIndex,
+    note_index: &R,
     moved_targets: &MovedBlockTargets,
+    skip_code: bool,
 ) -> LinkRepairResult {
+    let lines: Vec<&str> = contents
+        .split_inclusive('\n')
+        .map(|line| split_line_ending(line).0)
+        .collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -736,12 +806,30 @@ pub(super) fn repair_wiki_links(
 
         repaired.push_str(&contents[cursor..start]);
         let inner = &contents[inner_start..end];
-        if let Some(new_inner) = repair_wiki_link_inner(
-            inner,
-            current_path,
-            note_index,
-            moved_targets,
-        ) {
+        let line_index = contents[..start].matches('\n').count();
+        let line = lines.get(line_index).copied().unwrap_or("");
+        let line_start =
+            contents[..start].rfind('\n').map_or(0, |index| index + 1);
+        let skip = skip_repaired_span(
+            skip_code,
+            line_index,
+            line,
+            start.saturating_sub(line_start),
+            end + 2 - line_start,
+            &fenced,
+            frontmatter_end,
+        );
+        let replacement = if skip {
+            None
+        } else {
+            repair_wiki_link_inner(
+                inner,
+                current_path,
+                note_index,
+                moved_targets,
+            )
+        };
+        if let Some(new_inner) = replacement {
             repaired.push_str("[[");
             repaired.push_str(&new_inner);
             repaired.push_str("]]");
@@ -759,10 +847,10 @@ pub(super) fn repair_wiki_links(
         dependency_metadata_count: 0,
     }
 }
-pub(crate) fn repair_wiki_link_inner(
+pub(crate) fn repair_wiki_link_inner<R: ResolveMovedNote>(
     inner: &str,
     current_path: &Path,
-    note_index: &NoteIndex,
+    note_index: &R,
     moved_targets: &MovedBlockTargets,
 ) -> Option<String> {
     let (target_with_fragment, alias) = match inner.find('|') {
@@ -770,7 +858,7 @@ pub(crate) fn repair_wiki_link_inner(
         None => (inner, ""),
     };
     let (target, fragment) = split_block_fragment(target_with_fragment)?;
-    let resolved_path = note_index.resolve(current_path, target)?;
+    let resolved_path = note_index.resolve_moved_note(current_path, target)?;
     let block_id = fragment.strip_prefix('^')?;
     let moved_target =
         moved_targets.get(&(resolved_path, block_id.to_string()))?;
@@ -779,12 +867,19 @@ pub(crate) fn repair_wiki_link_inner(
         moved_target.archive_target, moved_target.block_id, alias
     ))
 }
-pub(super) fn repair_markdown_links(
+pub(super) fn repair_markdown_links<R: ResolveMovedNote>(
     contents: &str,
     current_path: &Path,
-    note_index: &NoteIndex,
+    note_index: &R,
     moved_targets: &MovedBlockTargets,
+    skip_code: bool,
 ) -> LinkRepairResult {
+    let lines: Vec<&str> = contents
+        .split_inclusive('\n')
+        .map(|line| split_line_ending(line).0)
+        .collect();
+    let fenced = markdown::fenced_lines(&lines, 0..lines.len());
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
     let mut repaired = String::with_capacity(contents.len());
     let mut link_count = 0;
     let mut cursor = 0;
@@ -812,7 +907,22 @@ pub(super) fn repair_markdown_links(
 
         repaired.push_str(&contents[cursor..destination_start]);
         let destination = &contents[destination_start..destination_end];
-        if let Some(new_destination) = repair_markdown_destination(
+        let line_index = contents[..open].matches('\n').count();
+        let line = lines.get(line_index).copied().unwrap_or("");
+        let line_start =
+            contents[..open].rfind('\n').map_or(0, |index| index + 1);
+        let skip = skip_repaired_span(
+            skip_code,
+            line_index,
+            line,
+            open.saturating_sub(line_start),
+            destination_end + 1 - line_start,
+            &fenced,
+            frontmatter_end,
+        );
+        if skip {
+            repaired.push_str(destination);
+        } else if let Some(new_destination) = repair_markdown_destination(
             destination,
             current_path,
             note_index,
@@ -834,6 +944,28 @@ pub(super) fn repair_markdown_links(
         dependency_metadata_count: 0,
     }
 }
+
+fn skip_repaired_span(
+    skip_code: bool,
+    line_index: usize,
+    line: &str,
+    start_in_line: usize,
+    end_in_line: usize,
+    fenced: &BTreeSet<usize>,
+    frontmatter_end: Option<usize>,
+) -> bool {
+    if !skip_code {
+        return false;
+    }
+    if fenced.contains(&line_index)
+        || frontmatter_end.is_some_and(|end| line_index <= end)
+    {
+        return true;
+    }
+    super::super::task_dependencies::inline_code_spans(line)
+        .iter()
+        .any(|span| start_in_line < span.end && end_in_line > span.start)
+}
 pub(super) fn next_wiki_link_start(
     contents: &str,
     cursor: usize,
@@ -842,10 +974,10 @@ pub(super) fn next_wiki_link_start(
         .find("[[")
         .map(|relative_start| cursor + relative_start)
 }
-pub(crate) fn repair_markdown_destination(
+pub(crate) fn repair_markdown_destination<R: ResolveMovedNote>(
     destination: &str,
     current_path: &Path,
-    note_index: &NoteIndex,
+    note_index: &R,
     moved_targets: &MovedBlockTargets,
 ) -> Option<String> {
     if !is_simple_markdown_destination(destination) {
@@ -857,7 +989,7 @@ pub(crate) fn repair_markdown_destination(
         return None;
     }
 
-    let resolved_path = note_index.resolve(current_path, target)?;
+    let resolved_path = note_index.resolve_moved_note(current_path, target)?;
     let block_id = fragment.strip_prefix('^')?;
     let moved_target =
         moved_targets.get(&(resolved_path, block_id.to_string()))?;
