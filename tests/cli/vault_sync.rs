@@ -195,6 +195,94 @@ fn vault_sync_same_line_edit_quarantines_local_copy_and_keeps_remote() {
 }
 
 #[test]
+fn vault_sync_conflict_copy_on_ignored_path_still_commits_merge() {
+    let temp = TempDir::new("bob-cli-vault-sync-ignored-copy");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    let journal = Path::new(".bob/stats/review/2026-10.peer.jsonl");
+    write_file(
+        &vault.join(".gitignore"),
+        "*\n!.gitignore\n!.gitattributes\n!*/\n!*.md\n!/.bob/stats/**/*.jsonl\n",
+    );
+    write_file(&vault.join(journal), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add review journal"]);
+    git_in(&vault, ["push", "-q", "-u", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join(journal), "local journal line\n");
+    write_file(&peer.join(journal), "remote journal line\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote journal edit"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+    let peer_sha = stdout(&git_in(&peer, ["rev-parse", "HEAD"]));
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run ignored-copy vault-sync");
+
+    assert_success(&output);
+    assert!(!vault.join(".git/MERGE_HEAD").exists());
+    let head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(
+        head,
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ])),
+        "local HEAD should match the pushed merge"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD^2"])),
+        peer_sha,
+        "the merge's second parent should be the peer commit"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(journal)).expect("read journal"),
+        "remote journal line\n"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        "local journal line\n"
+    );
+    let copy_relative = copies[0]
+        .strip_prefix(&vault)
+        .expect("copy under vault")
+        .to_string_lossy()
+        .into_owned();
+    assert!(copy_relative.starts_with("_conflicts/.bob/stats/review/"));
+    assert_eq!(
+        stdout(&git_in(
+            &vault,
+            ["ls-files", "--error-unmatch", &copy_relative]
+        )),
+        format!("{copy_relative}\n"),
+        "ignored conflict copy should be force-added"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            &format!("master:{copy_relative}")
+        ])),
+        "local journal line\n",
+        "conflict copy should reach the remote"
+    );
+
+    let second = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run second ignored-copy vault-sync");
+    assert_success(&second);
+    assert_eq!(stdout(&git_in(&vault, ["rev-parse", "HEAD"])), head);
+    assert_eq!(quarantined_conflict_files(&vault), copies);
+}
+
+#[test]
 fn vault_sync_both_added_file_quarantines_local_copy() {
     let temp = TempDir::new("bob-cli-vault-sync-both-added");
     let (vault, _remote, peer) = init_vault_sync_pair(&temp);
@@ -358,6 +446,215 @@ fn vault_sync_recovers_interrupted_merge_and_finishes_cycle() {
     );
     let status = read_vault_sync_status(&temp);
     assert_eq!(status["interrupted_merge_recovered"], true);
+    assert_eq!(status["aborted_merge_head"], serde_json::Value::Null);
+}
+
+#[test]
+fn vault_sync_halts_on_repeated_interrupted_merge_of_same_remote() {
+    let temp = TempDir::new("bob-cli-vault-sync-halted-merge");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("note.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add note"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&vault.join("note.md"), "local\n");
+    write_file(&peer.join("note.md"), "remote\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote note"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+    let remote_sha = stdout(&git_in(&peer, ["rev-parse", "HEAD"]));
+    write_executable(
+        &vault.join(".git/hooks/pre-commit"),
+        "#!/bin/sh\nmerge_head=$(git rev-parse --git-path MERGE_HEAD) || exit 1\nif test -f \"$merge_head\"; then\n  echo 'reject interrupted merge commit for test' >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    let first = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run first interrupted-merge cycle");
+    assert_eq!(
+        first.status.code(),
+        Some(1),
+        "first commit must fail:\n{}",
+        format_output(&first)
+    );
+    assert!(vault.join(".git/MERGE_HEAD").exists());
+
+    let second = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run second interrupted-merge cycle");
+    assert_eq!(
+        second.status.code(),
+        Some(1),
+        "second merge commit must fail:\n{}",
+        format_output(&second)
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["interrupted_merge_recovered"], true);
+    assert_eq!(
+        status["aborted_merge_head"].as_str().unwrap(),
+        remote_sha.trim()
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "MERGE_HEAD"])),
+        remote_sha
+    );
+    assert!(vault.join(".git/MERGE_HEAD").exists());
+
+    let head_before_halt = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    let merge_head_before_halt =
+        stdout(&git_in(&vault, ["rev-parse", "MERGE_HEAD"]));
+    let copies_before_halt = quarantined_conflict_files(&vault);
+    for cycle in 3..=4 {
+        let halted = vault_sync_command(&vault, &temp).output().unwrap_or_else(
+            |error| panic!("run halted cycle {cycle}: {error}"),
+        );
+        assert_eq!(halted.status.code(), Some(1));
+        let status = read_vault_sync_status(&temp);
+        assert!(
+            status["last_error"]
+                .as_str()
+                .is_some_and(|error| error.starts_with("halted:")),
+            "cycle {cycle} should record the halt: {status}"
+        );
+        assert_eq!(
+            status["halted_merge_head"].as_str().unwrap(),
+            remote_sha.trim()
+        );
+        assert_eq!(
+            stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+            head_before_halt
+        );
+        assert_eq!(
+            stdout(&git_in(&vault, ["rev-parse", "MERGE_HEAD"])),
+            merge_head_before_halt
+        );
+        assert_eq!(quarantined_conflict_files(&vault), copies_before_halt);
+    }
+
+    fs::remove_file(vault.join(".git/hooks/pre-commit"))
+        .expect("remove rejecting hook");
+    git_in(&vault, ["commit", "--no-edit"]);
+    let fifth = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run recovery cycle");
+    assert_success(&fifth);
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["aborted_merge_head"], serde_json::Value::Null);
+    assert_eq!(status["halted_merge_head"], serde_json::Value::Null);
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ]))
+    );
+}
+
+#[test]
+fn vault_sync_completes_fast_forward_left_by_head_lock() {
+    let temp = TempDir::new("bob-cli-vault-sync-interrupted-ff");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("note.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add note"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+
+    write_file(&peer.join("note.md"), "remote first\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "first remote edit"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+    git_in(&vault, ["fetch", "-q", "origin", "master"]);
+    write_file(&vault.join(".git/HEAD.lock"), "held by test\n");
+    let interrupted =
+        git_maybe_in(&vault, ["merge", "--ff-only", "origin/master"]);
+    assert!(
+        !interrupted.status.success(),
+        "ff should fail while HEAD.lock exists:\n{}",
+        format_output(&interrupted)
+    );
+    fs::remove_file(vault.join(".git/HEAD.lock")).expect("remove HEAD.lock");
+
+    write_file(&peer.join("note.md"), "remote second\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "second remote edit"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let output = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run interrupted-ff recovery cycle");
+    assert_success(&output);
+    let head = stdout(&git_in(&vault, ["rev-parse", "HEAD"]));
+    assert_eq!(
+        head,
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ]))
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["log", "-1", "--format=%s"])),
+        "second remote edit\n",
+        "recovery should not create a local or merge commit"
+    );
+    assert!(quarantined_conflict_files(&vault).is_empty());
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["interrupted_fast_forward_recovered"], true);
+    assert_eq!(status["files_committed"], 0);
+}
+
+#[test]
+fn vault_sync_retries_fast_forward_blocked_by_head_lock() {
+    let temp = TempDir::new("bob-cli-vault-sync-retry-ff");
+    let (vault, remote, peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join("note.md"), "base\n");
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "add note"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    git_in(&peer, ["pull", "-q", "--ff-only", "origin", "master"]);
+    write_file(&peer.join("note.md"), "remote edit\n");
+    git_in(&peer, ["add", "."]);
+    git_in(&peer, ["commit", "-q", "-m", "remote edit"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let marker = temp.path().join("reference-transaction-marker");
+    // NOTE: git leaves GIT_DIR empty for reference-transaction hooks and runs
+    // them with the worktree root as cwd, so use .git/HEAD.lock directly.
+    write_executable(
+        &vault.join(".git/hooks/reference-transaction"),
+        "#!/bin/sh\n[ \"$1\" = committed ] || exit 0\nwhile read old new ref; do\n  [ \"$ref\" = ORIG_HEAD ] || continue\n  if [ ! -e \"$RACE_MARKER\" ]; then\n    : > \"$RACE_MARKER\"\n    : > \".git/HEAD.lock\"\n  else\n    rm -f \".git/HEAD.lock\"\n  fi\ndone\nexit 0\n",
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("RACE_MARKER", &marker)
+        .output()
+        .expect("run lock-retry vault-sync");
+
+    assert_success(&output);
+    assert!(
+        stderr(&output)
+            .contains("fast-forward blocked by a git lock; retrying (1/5)"),
+        "expected retry warning:\n{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])),
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "rev-parse",
+            "master"
+        ]))
+    );
+    assert!(quarantined_conflict_files(&vault).is_empty());
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["files_committed"], 0);
 }
 
 #[test]

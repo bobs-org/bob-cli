@@ -27,7 +27,9 @@ The vault `.gitignore` must allow `!/.bob/stats/**/*.jsonl`, following the
 `.bob/gkeep/imports/*.json` exception. That allowance is part of the Git
 sync runbook
 ([vault-git-sync.md](vault-git-sync.md#stats-review-journal)). Readers
-union the host files; they never rewrite them. Duplicate events are
+union the host files; the vault `.gitattributes` also union-merges the journals so
+concurrent appends from different hosts survive a Git merge. Readers never rewrite
+them. Duplicate events are
 harmless because `reviewed` counts distinct row keys per day.
 
 One line records one row answered by a committed review gesture:

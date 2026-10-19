@@ -192,6 +192,12 @@ struct StatusRecord {
     duration_ms: u64,
     conflicts: Vec<String>,
     interrupted_merge_recovered: bool,
+    #[serde(default)]
+    aborted_merge_head: Option<String>,
+    #[serde(default)]
+    halted_merge_head: Option<String>,
+    #[serde(default)]
+    interrupted_fast_forward_recovered: bool,
     last_error: Option<String>,
 }
 
@@ -265,6 +271,8 @@ fn run_cycle_with_env_report(
     status.duration_ms = 0;
     status.conflicts.clear();
     status.interrupted_merge_recovered = false;
+    status.halted_merge_head = None;
+    status.interrupted_fast_forward_recovered = false;
     status.last_error = None;
 
     let outcome =
@@ -289,6 +297,7 @@ fn run_cycle_with_env_report(
                 print_log(&options, "dry-run complete; status file unchanged");
                 return (0, report_of(true, 0, None));
             }
+            status.aborted_merge_head = None;
             status.last_success_at = status.last_attempt_at.clone();
             status.last_error = None;
             if let Err(error) = write_status_record(&state_file, &status) {
@@ -348,8 +357,12 @@ fn run_cycle_inner(
         &format!("reconciling Bob vault at {}", vault.display()),
     );
 
-    status.interrupted_merge_recovered =
-        recover_interrupted_operation(vault, child_env, options, styler)?;
+    let interrupted_merge_recovered = recover_interrupted_operation(
+        vault, child_env, options, styler, status,
+    )?;
+    status.interrupted_merge_recovered = interrupted_merge_recovered;
+    status.interrupted_fast_forward_recovered =
+        complete_interrupted_fast_forward(vault, child_env, options, styler)?;
 
     let changed_paths = working_tree_status(vault, child_env)?;
     if changed_paths.is_empty() {
@@ -375,7 +388,7 @@ fn run_cycle_inner(
         return Ok(());
     }
 
-    if git_diff_cached(vault, child_env)? {
+    if git_diff_cached(vault, child_env, None)? {
         let paths = cached_diff_paths(vault, child_env)?;
         let name_status = cached_diff_name_status(vault, child_env)?;
         let message = options
@@ -427,15 +440,30 @@ fn recover_interrupted_operation(
     child_env: &ChildEnv,
     options: &RunOptions,
     styler: &Styler,
+    status: &mut StatusRecord,
 ) -> Result<bool, CycleError> {
     let mut recovered = false;
 
     if git_path_exists(vault, child_env, "MERGE_HEAD")? {
         recovered = true;
+        let merge_head = rev_parse(vault, child_env, "MERGE_HEAD")?
+            .ok_or_else(|| {
+                CycleError::fatal(
+                    "MERGE_HEAD exists but its SHA could not be read",
+                )
+            })?;
+        if status.aborted_merge_head.as_deref() == Some(merge_head.as_str()) {
+            let short_sha = short_sha(&merge_head);
+            status.halted_merge_head = Some(merge_head);
+            return Err(CycleError::fatal(format!(
+                "halted: interrupted merge of origin/master {short_sha} was already aborted and retried once; resolve it by hand (docs/vault-git-sync.md#halted-sync)"
+            )));
+        }
         if options.dry_run {
             warn(styler, "would abort interrupted merge before reconciling");
         } else {
             warn(styler, "aborting interrupted merge before reconciling");
+            status.aborted_merge_head = Some(merge_head);
             git_success(vault, child_env, ["merge", "--abort"])?;
         }
     }
@@ -467,6 +495,43 @@ fn recover_interrupted_operation(
     }
 
     Ok(recovered)
+}
+
+fn complete_interrupted_fast_forward(
+    vault: &Path,
+    child_env: &ChildEnv,
+    options: &RunOptions,
+    styler: &Styler,
+) -> Result<bool, CycleError> {
+    const ORIGIN_MASTER: &str = "refs/remotes/origin/master";
+
+    let Some(remote_sha) = cached_origin_master(vault, child_env)? else {
+        return Ok(false);
+    };
+    let Some(local_sha) = rev_parse(vault, child_env, "HEAD")? else {
+        return Ok(false);
+    };
+    if local_sha == remote_sha
+        || !is_ancestor(vault, child_env, "HEAD", ORIGIN_MASTER)?
+        || !git_diff_cached(vault, child_env, None)?
+        || git_diff_cached(vault, child_env, Some(ORIGIN_MASTER))?
+    {
+        return Ok(false);
+    }
+
+    if options.dry_run {
+        warn(
+            styler,
+            "would complete a fast-forward to origin/master that a git lock interrupted",
+        );
+    } else {
+        warn(
+            styler,
+            "completing a fast-forward to origin/master that a git lock interrupted",
+        );
+        fast_forward_to_origin_master(vault, child_env, styler)?;
+    }
+    Ok(true)
 }
 
 fn working_tree_status(
@@ -696,11 +761,7 @@ fn reconcile_origin_master(
 
     if is_ancestor(vault, child_env, "HEAD", "refs/remotes/origin/master")? {
         print_log(options, "fast-forwarding to origin/master");
-        return git_success(
-            vault,
-            child_env,
-            ["merge", "--ff-only", "refs/remotes/origin/master"],
-        );
+        return fast_forward_to_origin_master(vault, child_env, styler);
     }
 
     print_log(options, "merging origin/master");
@@ -853,7 +914,6 @@ fn resolve_conflicts(
                     "conflict_state: unhandled conflict {other} at {path_display}"
                 );
                 let _ = git_success(vault, child_env, ["merge", "--abort"]);
-                run_notify(child_env, styler);
                 return Err(CycleError::fatal(message));
             }
         }
@@ -866,8 +926,47 @@ fn resolve_conflicts(
     for path in paths_to_add {
         git_add_path(vault, child_env, &path)?;
     }
-    run_notify(child_env, styler);
     Ok(())
+}
+
+fn fast_forward_to_origin_master(
+    vault: &Path,
+    child_env: &ChildEnv,
+    styler: &Styler,
+) -> Result<(), CycleError> {
+    const RETRY_DELAYS: [Duration; 5] = [
+        Duration::from_millis(250),
+        Duration::from_millis(500),
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+        Duration::from_secs(4),
+    ];
+
+    let mut retries = 0;
+    loop {
+        match git_success(
+            vault,
+            child_env,
+            ["merge", "--ff-only", "refs/remotes/origin/master"],
+        ) {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if error.is_lock_contention()
+                    && retries < RETRY_DELAYS.len() =>
+            {
+                retries += 1;
+                warn(
+                    styler,
+                    &format!(
+                        "fast-forward blocked by a git lock; retrying ({retries}/{})",
+                        RETRY_DELAYS.len()
+                    ),
+                );
+                thread::sleep(RETRY_DELAYS[retries - 1]);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn conflict_kind(conflict: &StatusEntry) -> &'static str {
@@ -1021,7 +1120,7 @@ fn git_add_path(
     git_success_os(
         vault,
         child_env,
-        &[OsStr::new("add"), OsStr::new("--")],
+        &[OsStr::new("add"), OsStr::new("-f"), OsStr::new("--")],
         relative_path,
     )
 }
@@ -1036,12 +1135,20 @@ fn push_origin_master(
 fn git_diff_cached(
     vault: &Path,
     child_env: &ChildEnv,
+    treeish: Option<&str>,
 ) -> Result<bool, CycleError> {
-    let output = git_output(
-        vault,
-        child_env,
-        ["diff", "--cached", "--quiet", "--exit-code"],
-    )?;
+    let mut command = ob::git_command(vault, child_env);
+    command.args(["diff", "--cached", "--quiet", "--exit-code"]);
+    if let Some(treeish) = treeish {
+        command.arg(treeish);
+    }
+    let output = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            CycleError::fatal(format!("failed to run git: {error}"))
+        })?;
     match output.status.code() {
         Some(0) => Ok(false),
         Some(1) => Ok(true),
@@ -1346,30 +1453,6 @@ fn git_output<const N: usize>(
         })
 }
 
-fn run_notify(child_env: &ChildEnv, styler: &Styler) {
-    match Command::new("bob")
-        .arg("notify")
-        .envs(child_env.iter().cloned())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            warn(
-                styler,
-                "bob notify command not found; conflict notification skipped",
-            );
-        }
-        Err(error) => {
-            warn(
-                styler,
-                &format!("failed to run bob notify after conflict resolution: {error}"),
-            );
-        }
-    }
-}
-
 fn run_status(matches: &ArgMatches) -> i32 {
     let state_file = state_file_path();
     let status = match read_status_record(&state_file) {
@@ -1441,6 +1524,24 @@ fn print_status_panel(state_file: &Path, status: &StatusRecord) {
     println!(
         "interrupted_merge_recovered: {}",
         status.interrupted_merge_recovered
+    );
+    println!(
+        "aborted_merge_head: {}",
+        status
+            .aborted_merge_head
+            .as_deref()
+            .map(short_sha)
+            .unwrap_or_else(|| "-".to_string())
+    );
+    match status.halted_merge_head.as_deref() {
+        Some(sha) => {
+            println!("halted_merge_head: {}", styler.red(&short_sha(sha)))
+        }
+        None => println!("halted_merge_head: -"),
+    }
+    println!(
+        "interrupted_fast_forward_recovered: {}",
+        status.interrupted_fast_forward_recovered
     );
     if status.conflicts.is_empty() {
         println!("conflicts: none");
@@ -1522,6 +1623,12 @@ impl CycleError {
         lower.contains("non-fast-forward")
             || lower.contains("fetch first")
             || lower.contains("rejected")
+    }
+
+    fn is_lock_contention(&self) -> bool {
+        let lower = self.message.to_ascii_lowercase();
+        lower.contains("cannot lock ref")
+            || lower.contains(".lock': file exists")
     }
 }
 
@@ -1628,4 +1735,50 @@ fn display_path(path: &Path) -> String {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fatal(message: &str) -> CycleError {
+        CycleError::fatal(message)
+    }
+
+    #[test]
+    fn lock_contention_detection_matches_ref_and_index_locks() {
+        assert!(fatal(
+            "git merge --ff-only failed: fatal: cannot lock ref 'HEAD': Unable to create '/home/bryan/bob/.git/HEAD.lock': File exists."
+        )
+        .is_lock_contention());
+        assert!(fatal(
+            "git add failed: fatal: Unable to create '/vault/.git/index.lock': File exists."
+        )
+        .is_lock_contention());
+        assert!(!fatal("git push failed: rejected non-fast-forward update")
+            .is_lock_contention());
+    }
+
+    #[test]
+    fn legacy_status_record_defaults_new_fields() {
+        let status: StatusRecord = serde_json::from_str(
+            r#"{
+                "last_attempt_at": null,
+                "last_success_at": null,
+                "local_sha": null,
+                "remote_sha": null,
+                "files_committed": 0,
+                "push_retries": 0,
+                "duration_ms": 0,
+                "conflicts": [],
+                "interrupted_merge_recovered": false,
+                "last_error": null
+            }"#,
+        )
+        .expect("legacy status should deserialize");
+
+        assert_eq!(status.aborted_merge_head, None);
+        assert_eq!(status.halted_merge_head, None);
+        assert!(!status.interrupted_fast_forward_recovered);
+    }
 }

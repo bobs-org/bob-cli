@@ -23,7 +23,16 @@ pub(crate) type ChildEnv = Vec<(OsString, OsString)>;
 /// pushes are non-interactive under cron.
 pub(crate) fn git_command(vault: &Path, child_env: &ChildEnv) -> Command {
     let mut command = Command::new("git");
-    command.arg("-C").arg(vault).envs(child_env.iter().cloned());
+    // Keep auto-maintenance in this process: a detached maintenance child can
+    // hold HEAD.lock while the next vault operation updates refs.
+    command
+        .arg("-c")
+        .arg("maintenance.autoDetach=false")
+        .arg("-c")
+        .arg("gc.autoDetach=false")
+        .arg("-C")
+        .arg(vault)
+        .envs(child_env.iter().cloned());
     command
 }
 
@@ -401,6 +410,25 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+
+    #[test]
+    fn git_command_runs_auto_maintenance_in_foreground() {
+        let child_env: ChildEnv = Vec::new();
+        let command = git_command(Path::new("/tmp/vault"), &child_env);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            &args[..4],
+            [
+                "-c",
+                "maintenance.autoDetach=false",
+                "-c",
+                "gc.autoDetach=false"
+            ]
+        );
+    }
 
     /// Run `f` with the lock file pointed at a unique temp path.
     ///

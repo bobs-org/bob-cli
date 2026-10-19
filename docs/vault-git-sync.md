@@ -8,13 +8,16 @@ the MacBook. Obsidian Sync is no longer the automation path for `~/bob`.
 `bob vault-sync` runs one lock-protected reconcile cycle against `BOB_DIR` (`~/bob` by
 default):
 
-1. Recover an interrupted merge, rebase, or cherry-pick before doing new work.
+1. Recover an interrupted merge, rebase, or cherry-pick before doing new work, and
+   complete a fast-forward whose index and worktree were updated before a Git lock
+   prevented `HEAD` from moving.
 2. Read `git status --porcelain`; only stage when there are local changes.
 3. Refuse any file at or above 95 MiB before staging, and warn at or above 50 MiB.
 4. Commit staged local changes with a generated `vault(<host>): ...` message, unless
    `--message` supplies one.
-5. Check `origin/master`, fetch only when needed, fast-forward or merge, and
-   auto-resolve supported conflicts into `_conflicts/`.
+5. Check `origin/master`, fetch only when needed, fast-forward or merge, retry a
+   fast-forward blocked by a Git lock, and auto-resolve supported conflicts into
+   `_conflicts/`.
 6. Push, retrying bounded non-fast-forward races.
 7. Write the status record used by `bob vault-sync status`.
 
@@ -30,10 +33,25 @@ the re-rolled notes, commits exactly those notes as one `bob task reroll`
 commit, then runs a second vault-sync cycle. See
 [randomize.md](randomize.md#git-and-vault-sync).
 
+Every Git command bob runs for vault work disables detached auto-maintenance with
+`maintenance.autoDetach=false` and `gc.autoDetach=false`. Git's detached maintenance
+child can hold `.git/HEAD.lock` while a later vault operation updates refs; running
+maintenance in the foreground keeps those operations serialized.
+
+Set the same options in each vault repository for Git commands that bypass bob. Run on
+athena, apollo, and the MacBook:
+
+```bash
+git -C ~/bob config maintenance.autoDetach false
+git -C ~/bob config gc.autoDetach false
+```
+
 ## Conflict policy
 
 Remote content wins in-place during supported conflicts. The local version is kept as a
 conflict copy under `_conflicts/`, and `_conflicts/sync_conflicts.md` records the event.
+Conflict copies are force-added, including paths ignored by `.gitignore`, so every
+logged copy is committed and reaches the other hosts.
 The conflict directory is excluded from Bob's vault walkers, the Tasks global query, and
 Dataview's excluded folders, so quarantined copies do not appear in task dashboards.
 
@@ -47,6 +65,31 @@ bob vault-sync status --json
 
 Unhandled conflicts leave the merge aborted and the status record's `last_error` set. Do
 not use `reset --hard`, force-push, or `-X ours/theirs` to clear the vault.
+
+## Halted sync
+
+If vault-sync encounters the same interrupted merge after it already aborted and retried
+that merge once, it stops before changing the vault again. `last_error` starts with
+`halted:`, and `halted_merge_head` records the SHA that triggered the halt. Later cycles
+keep halting on the same in-progress merge until it is resolved by hand.
+
+Inspect the merge and fix its cause:
+
+```bash
+git -C ~/bob status
+```
+
+Then either finish the merge or abort it:
+
+```bash
+git -C ~/bob add <resolved-paths>
+git -C ~/bob commit --no-edit
+# or, if the merge should be discarded:
+git -C ~/bob merge --abort
+```
+
+Never use `reset --hard` or force-push. A successful later vault-sync clears the breaker
+fields.
 
 ## Credentials
 
@@ -225,6 +268,20 @@ its absence is expected until then. Do not move or delete host files to
 make a metric look complete. The journal contract lives in
 [stats.md](stats.md#review-journal).
 
+The vault root `.gitattributes` also unions concurrent journal appends:
+
+```gitattributes
+.bob/stats/**/*.jsonl merge=union
+```
+
+Check the attribute with:
+
+```bash
+git -C ~/bob check-attr merge -- .bob/stats/review/2026-10.probe.jsonl
+```
+
+The expected output ends with `merge: union`.
+
 ## Highlights intake
 
 `lit_review/` and `xlib/` are gitignored. `lit_review/` is out-of-band storage: copy it
@@ -287,8 +344,9 @@ ssh mac 'bob vault-sync status --json'
 ```
 
 The record includes attempt and success timestamps, local and remote SHAs, files
-committed, push retries, duration, conflict-copy paths, interrupted-merge recovery, and
-the last error.
+committed, push retries, duration, conflict-copy paths, interrupted-merge recovery,
+`aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, and the
+last error. The halted SHA is shown in red in the human status panel.
 
 ## Rollback
 

@@ -172,10 +172,7 @@ pub(crate) fn init_vault_sync_pair(
 
 pub(crate) fn vault_sync_command(vault: &Path, temp: &TempDir) -> Command {
     let home = temp.path().join("home");
-    let stub_bin = temp.path().join("vault-sync-bin");
     fs::create_dir_all(&home).expect("create vault-sync home");
-    fs::create_dir_all(&stub_bin).expect("create vault-sync stub bin");
-    write_executable(&stub_bin.join("bob"), "#!/bin/sh\nexit 0\n");
 
     let mut command = bob_command();
     command
@@ -185,7 +182,6 @@ pub(crate) fn vault_sync_command(vault: &Path, temp: &TempDir) -> Command {
         .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
         .env("HOME", home)
         .env("NO_COLOR", "1")
-        .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"));
     command
 }
