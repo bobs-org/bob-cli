@@ -539,8 +539,8 @@ first (the running entry's first). A new blocker is capped at Next.
 Quote `*` on the shell; zsh globs it.
 
 Incomplete `&`, `*`, and `+query` selectors must be resolved before capture. See
-[dependency capture](docs/capture.md#adding-prerequisites-with-),
-[blocking existing tasks](docs/capture.md#blocking-existing-tasks-with-), and
+[dependency capture](docs/capture.md#adding-prerequisites-with),
+[blocking existing tasks](docs/capture.md#blocking-existing-tasks-with), and
 [task dependencies](docs/task-dependencies.md).
 
 ```bash

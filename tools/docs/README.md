@@ -116,3 +116,48 @@ time, and installed tool versions, and injects them plus the contract registry
 into the assembled config as `extra.build` / `extra.contracts`. The site build
 copies the manifest to `/build.json`. Build time may change between runs;
 generated tracked content stays deterministic.
+
+## Published URLs (`bob-docs urls`)
+
+`bob-docs urls` verifies every published-URL obligation against the built
+site (run `just docs-build` first so `target/docs/site/` exists):
+
+1. It writes sorted `target/docs/site/urls.txt` from the built content and
+   redirect pages (support outputs and the error page excluded), then compares
+   the live org-root `/urls.txt` against the new build: every previously
+   published page URL must still resolve. An unreachable site or a 404 warns
+   explicitly (offline machine, first publish); a reachable but malformed list
+   or a missing previously published page fails.
+2. It scans every literal `docs/<path>.md(#fragment)` mention in `src/`,
+   `tests/`, the root `README.md`, and `docs/`, plus every absolute site URL in
+   the assembled docs and each discovered source repo's README, and resolves
+   each against an index built from the actual output HTML paths and
+   `id`/`name` anchors. Directory URLs, index pages, percent-encoded
+   paths/fragments, and redirects (with bounded loop detection) resolve; path
+   escapes and broken targets fail with `path:line:` provenance.
+3. It resolves every curated absolute site URL in
+   `docs/_meta/url_contract.txt`.
+
+`docs/_meta/url_mentions_ignore.txt` holds narrowly scoped
+`MATCH | SCOPE | REASON` exclusions for demonstrated non-public references
+(the excluded repository hub, fixture-vault paths). Never exclude a real path
+printed by bob, a broken anchor, or an entire subtree; stale entries fail.
+`bob-docs urls --refresh` (`-r`) validates the contract and appends newly
+observed resolving site URLs deterministically; it never deletes obligations.
+
+## Offline link check (`bob-docs links`)
+
+`bob-docs links` checks the built site with a pinned lychee release:
+
+```bash
+lychee --offline --no-progress --root-dir <site> \
+  --remap "https://bobs-org.github.io/ file://<site>/" <site>
+```
+
+Lychee resolves from `$LYCHEE`, then `PATH`, then `docs/_meta/lychee.yml`'s
+pinned release (Linux x86_64/aarch64, macOS arm64), downloaded into
+`~/.cache/bob-docs/bin/` and SHA-256 verified before extraction or execution.
+A missing or corrupt checker fails; it is never a green skip. Fragment
+checking stays with `bob-docs urls`: lychee cannot check fragments on
+`file://` directory URLs, while the `urls` resolver indexes them precisely.
+Online external checks belong to the weekly publish phase, not this gate.

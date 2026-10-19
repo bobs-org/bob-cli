@@ -11,6 +11,8 @@ from .assemble import assemble
 from .build import build, serve
 from .errors import DocsError
 from .gen_contracts import check_or_generate
+from .links import run_links
+from .urls import run_urls
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,7 +41,23 @@ def _parser() -> argparse.ArgumentParser:
     gen_parser = subparsers.add_parser("gen", help="generate tracked contract indexes")
     gen_parser.add_argument("-c", "--check", action="store_true", help="check generated files without writing")
 
+    subparsers.add_parser(
+        "links",
+        help="check built-site links offline with the pinned lychee release",
+    )
+
     subparsers.add_parser("serve", help="assemble and serve the site with Zensical")
+
+    urls_parser = subparsers.add_parser("urls", help="verify published URLs and page mentions")
+    urls_parser.add_argument(
+        "-p", "--production", action="store_true", help="verify pinned production sources"
+    )
+    urls_parser.add_argument(
+        "-r", "--refresh", action="store_true", help="add observed site URLs to the curated contract"
+    )
+    urls_parser.add_argument(
+        "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
+    )
     return parser
 
 
@@ -55,8 +73,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return build(root, material=args.material, production=args.production, sources=args.sources)
         if args.command == "gen":
             return check_or_generate(root, check=args.check)
+        if args.command == "links":
+            return run_links(root)
         if args.command == "serve":
             return serve(root)
+        if args.command == "urls":
+            return run_urls(
+                root, refresh=args.refresh, production=args.production, sources=args.sources
+            )
     except DocsError as error:
         print(f"bob-docs: error: {error}", file=sys.stderr)
         return 2

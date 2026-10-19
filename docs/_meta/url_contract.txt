@@ -1,0 +1,7 @@
+# Curated inbound site URLs: absolute https://bobs-org.github.io links with
+# optional fragments, one per line. `#` comment lines and blanks are skipped.
+# Every entry must resolve in the built site. `bob-docs urls --refresh`
+# validates these entries and appends newly observed site URLs; it never
+# deletes an obligation.
+# Code-emitted deep link printed by src/native/vault_sync.rs on a halted sync.
+https://bobs-org.github.io/vault-git-sync/#halted-sync
