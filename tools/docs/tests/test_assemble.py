@@ -59,7 +59,7 @@ def test_assemble_rebases_paths_and_injects_provenance(tmp_path: Path) -> None:
     assert manifest["built_at"].endswith("Z")
 
 
-def test_assemble_rejects_nonempty_mount_table(tmp_path: Path) -> None:
+def test_assemble_rejects_invalid_mount_table(tmp_path: Path) -> None:
     root = _minimal_root(tmp_path, mounts="- repo: bob-plugins\n")
-    with pytest.raises(DocsError, match="mounts phase must implement"):
+    with pytest.raises(DocsError, match="missing keys"):
         assemble(root)

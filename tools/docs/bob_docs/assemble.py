@@ -15,7 +15,19 @@ from typing import Any
 from .context import DocsContext, context_from_root
 from .contracts import load_contract_registry, registry_extra
 from .errors import DocsError
-from .yaml_tools import dump_yaml, load_yaml
+from .mounts import (
+    discover_repo,
+    expand_mount_nav,
+    load_mounts,
+    load_production_sources,
+    plan_mounts,
+    reject_production_env_overrides,
+    repo_git_info,
+    sync_mount_copies,
+    validate_mount_targets,
+    verify_production_clean,
+)
+from .yaml_tools import dump_yaml
 
 
 def _git(root: Path, *args: str) -> str | None:
@@ -42,19 +54,28 @@ def _tool_version(name: str, fallback: str) -> str:
         return fallback
 
 
-def build_manifest(root: Path) -> dict[str, Any]:
+def build_manifest(root: Path, mounted: dict[str, Path] | None = None) -> dict[str, Any]:
     sha = _git(root, "rev-parse", "HEAD")
     branch = _git(root, "branch", "--show-current")
     status = _git(root, "status", "--porcelain", "--untracked-files=all")
+    sources: dict[str, Any] = {
+        "bob-cli": {
+            "path": ".",
+            "sha": sha,
+            "dirty": bool(status),
+            "branch": branch or None,
+        }
+    }
+    for repo in sorted((mounted or {})):
+        repo_dir = mounted[repo] if mounted else Path()
+        info = repo_git_info(repo_dir)
+        try:
+            shown = (repo_dir.resolve().relative_to(root.resolve())).as_posix()
+        except ValueError:
+            shown = str(repo_dir.resolve())
+        sources[repo] = {"path": shown, **info}
     return {
-        "sources": {
-            "bob-cli": {
-                "path": ".",
-                "sha": sha,
-                "dirty": bool(status),
-                "branch": branch or None,
-            }
-        },
+        "sources": sources,
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "tools": {
             "bob-docs": _tool_version("bob-docs", "0.1.0"),
@@ -110,32 +131,47 @@ def _stage_docs(context: DocsContext) -> None:
     shutil.copytree(context.docs_root, stage, symlinks=False)
 
 
-def _validate_mounts(context: DocsContext) -> None:
-    path = context.docs_root / "_meta/mounts.yml"
-    mounts = load_yaml(path)
-    if not isinstance(mounts, list):
-        raise DocsError(f"{path}: expected an ordered list")
-    if mounts:
-        raise DocsError(
-            f"{path}: nonempty mounts are not supported by the foundation assembler; "
-            "the mounts phase must implement them before they can be used"
-        )
-
-
-def assemble(root: Path) -> tuple[DocsContext, Path]:
+def assemble(
+    root: Path, *, production: bool = False, sources: Path | str | None = None
+) -> tuple[DocsContext, Path]:
     """Write target/docs/mkdocs.yml and build.json without editing tracked sources."""
 
+    if bool(sources) != production:
+        if sources is not None:
+            raise DocsError("--sources FILE requires --production")
+        raise DocsError("--production requires --sources FILE")
     context = context_from_root(root)
-    _validate_mounts(context)
+    mounts = load_mounts(context.repo_root)
     registry = load_contract_registry(context.repo_root)
+    repo_dirs: dict[str, Path] = {}
+    production_sources = None
+    if production:
+        assert sources is not None
+        reject_production_env_overrides()
+        production_sources = load_production_sources(
+            Path(sources), root=context.repo_root, repos=sorted({mount.repo for mount in mounts})
+        )
+        repo_dirs = {source.name: source.path for source in production_sources if source.name != "bob-cli"}
+        verify_production_clean(production_sources)
+    else:
+        for mount in mounts:
+            if mount.repo not in repo_dirs:
+                repo_dir, _ = discover_repo(mount, root=context.repo_root)
+                repo_dirs[mount.repo] = repo_dir
+    plans = plan_mounts(mounts, repo_dirs)
+    validate_mount_targets(plans, root=context.repo_root, docs_root=context.docs_root)
+    sync_mount_copies(plans, root=context.repo_root, docs_root=context.docs_root)
+    if production_sources is not None:
+        verify_production_clean(production_sources)
     context.output_dir.mkdir(parents=True, exist_ok=True)
     _stage_docs(context)
     config = context.config.copy()
+    expand_mount_nav(config, plans, docs_root=context.output_dir / "docs")
     _rebase_paths(context, config)
     extra = config.setdefault("extra", {})
     if not isinstance(extra, dict):
         raise DocsError("mkdocs.yml: extra must be a mapping")
-    manifest = build_manifest(context.repo_root)
+    manifest = build_manifest(context.repo_root, repo_dirs)
     extra["build"] = manifest
     extra["contracts"] = registry_extra(registry)
 

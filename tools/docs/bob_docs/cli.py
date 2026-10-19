@@ -20,9 +20,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("assemble", help="assemble config and source provenance")
+    assemble_parser = subparsers.add_parser("assemble", help="assemble config and source provenance")
+    assemble_parser.add_argument(
+        "-p", "--production", action="store_true", help="verify pinned production sources"
+    )
+    assemble_parser.add_argument(
+        "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
+    )
     build_parser = subparsers.add_parser("build", help="build the strict documentation site")
     build_parser.add_argument("-m", "--material", action="store_true", help="build with Material 9.7")
+    build_parser.add_argument(
+        "-p", "--production", action="store_true", help="verify pinned production sources"
+    )
+    build_parser.add_argument(
+        "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
+    )
 
     gen_parser = subparsers.add_parser("gen", help="generate tracked contract indexes")
     gen_parser.add_argument("-c", "--check", action="store_true", help="check generated files without writing")
@@ -36,11 +48,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = Path.cwd()
     try:
         if args.command == "assemble":
-            context, _manifest = assemble(root)
+            context, _manifest = assemble(root, production=args.production, sources=args.sources)
             print(f"assembled config: {context.assembled_config}")
             return 0
         if args.command == "build":
-            return build(root, material=args.material)
+            return build(root, material=args.material, production=args.production, sources=args.sources)
         if args.command == "gen":
             return check_or_generate(root, check=args.check)
         if args.command == "serve":

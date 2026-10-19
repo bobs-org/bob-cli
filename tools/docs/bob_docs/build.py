@@ -10,8 +10,10 @@ from .assemble import assemble
 from .errors import DocsError
 
 
-def build(root: Path, *, material: bool = False) -> int:
-    context, manifest = assemble(root)
+def build(
+    root: Path, *, material: bool = False, production: bool = False, sources: Path | str | None = None
+) -> int:
+    context, manifest = assemble(root, production=production, sources=sources)
     executable = "mkdocs" if material else "zensical"
     command = [executable, "build", "--strict", "--config-file", str(context.assembled_config)]
     print("running: " + " ".join(command))
