@@ -54,32 +54,6 @@ impl Hue {
         }
     }
 
-    pub(crate) const fn light_hex(self) -> &'static str {
-        match self {
-            Self::Blue => "#2a78d6",
-            Self::Orange => "#eb6834",
-            Self::Aqua => "#1baf7a",
-            Self::Yellow => "#eda100",
-            Self::Magenta => "#e87ba4",
-            Self::Green => "#008300",
-            Self::Violet => "#6250d6",
-            Self::Red => "#e34948",
-        }
-    }
-
-    pub(crate) const fn dark_hex(self) -> &'static str {
-        match self {
-            Self::Blue => "#3987e5",
-            Self::Orange => "#d95926",
-            Self::Aqua => "#199e70",
-            Self::Yellow => "#c98500",
-            Self::Magenta => "#d55181",
-            Self::Green => "#008300",
-            Self::Violet => "#9085e9",
-            Self::Red => "#e66767",
-        }
-    }
-
     pub(crate) const fn xterm(self) -> u8 {
         match self {
             Self::Blue => 33,

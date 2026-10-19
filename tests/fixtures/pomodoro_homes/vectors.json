@@ -20,65 +20,897 @@
     "done/task_done.md": "---\ntype: [[done]]\nparent: [[hack]]\n---\n",
     "Archive/duplicate.md": "---\ntype: [[project]]\nparent: [[dev]]\n---\n",
     "Other/duplicate.md": "---\ntype: [[project]]\nparent: [[gtd]]\n---\n",
-    "2026/20261018.md": "## Pomodoros\n"
+    "2026/20261018.md": "## Pomodoros\n",
+    "2026/20261017.md": "# 2026-10-17\n\n- [ ] #task Daily GTD [created:: 2026-10-17] ^gtd\n\n## Pomodoros\n",
+    "sase_direct_child.md": "---\ntype: [[project]]\nparent: [[sase]]\n---\n",
+    "sase_grandchild.md": "---\ntype: [[project]]\nparent: [[sase_direct_child]]\n---\n",
+    "list_parent.md": "---\ntype: [[article]]\nparent: [[dev], [gtd]]\n---\n",
+    "self_parent.md": "---\ntype: [[article]]\nparent: [[self_parent]]\n---\n",
+    "unquoted_parent.md": "---\ntype: [[article]]\nparent: [[dev]]\n---\n",
+    "depth0.md": "---\ntype: [[article]]\nparent: [[depth1]]\n---\n",
+    "depth1.md": "---\ntype: [[article]]\nparent: [[depth2]]\n---\n",
+    "depth2.md": "---\ntype: [[article]]\nparent: [[depth3]]\n---\n",
+    "depth3.md": "---\ntype: [[article]]\nparent: [[depth4]]\n---\n",
+    "depth4.md": "---\ntype: [[article]]\nparent: [[depth5]]\n---\n",
+    "depth5.md": "---\ntype: [[article]]\nparent: [[depth6]]\n---\n",
+    "depth6.md": "---\ntype: [[article]]\nparent: [[depth7]]\n---\n",
+    "depth7.md": "---\ntype: [[article]]\nparent: [[depth8]]\n---\n",
+    "depth8.md": "---\ntype: [[article]]\nparent: [[depth9]]\n---\n",
+    "depth9.md": "---\ntype: [[article]]\nparent: [[depth10]]\n---\n",
+    "depth10.md": "---\ntype: [[article]]\nparent: [[depth11]]\n---\n",
+    "depth11.md": "---\ntype: [[article]]\nparent: [[depth12]]\n---\n",
+    "depth12.md": "---\ntype: [[article]]\nparent: [[depth13]]\n---\n",
+    "depth13.md": "---\ntype: [[article]]\nparent: [[depth14]]\n---\n",
+    "depth14.md": "---\ntype: [[article]]\nparent: [[depth15]]\n---\n",
+    "depth15.md": "---\ntype: [[article]]\nparent: [[depth16]]\n---\n",
+    "depth16.md": "---\ntype: [[area]]\n---\n"
   },
   "cases": [
     {
-      "name": "outermost rollup, archive/ref chain, struck links and de-duplication",
+      "name": "rollup-archive-review",
       "daily_path": "2026/20261018.md",
-      "exempt": ["GTD"],
-      "expected_lead_homes": ["sase.md"],
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "sase.md"
+      ],
       "pomodoros": "- [x] (0800-0805 5m) — HACK\n  - [[sase_blog_notes#^one]]\n  - ![[hack#^two]]\n  - ~~[[bob#^three]]~~\n  - [[sase_blog_notes#^one]]\n",
       "expected": [
-        {"state":"attributed","kind":"work","label":"sase · bob","chip":"sase · bob","hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":2,"share":80,"minutes":4},{"key":"bob.md","label":"bob","kind":"project","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":1,"share":20,"minutes":1}]}
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase · bob",
+          "chip": "sase · bob",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 2,
+              "share": 80,
+              "minutes": 4
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 20,
+              "minutes": 1
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "review decisions and a daily GTD link in a work session",
+      "name": "review-decisions",
       "daily_path": "2026/20261018.md",
-      "exempt": ["GTD"],
-      "expected_lead_homes": ["@review:GTD", "@review:GTD", "@review:GTD"],
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "@review:GTD",
+        "@review:GTD",
+        "@review:GTD"
+      ],
       "pomodoros": "- [x] (0900-0925 25m) — GTD\n  - ~~[[bob#^foreign]]~~\n- [x] (0930-0950 20m)\n  - [[#^gtd]]\n  - [[bob#^foreign]]\n- [x] (1000-1005 5m) — GTD + BOB\n  - [[#^gtd]]\n  - [[bob#^work]]\n",
       "expected": [
-        {"state":"attributed","kind":"review","label":"GTD review","chip":null,"hue":"orange","parts":[{"key":"@review:GTD","label":"GTD review","kind":"bucket","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":0,"share":100,"minutes":25}]},
-        {"state":"attributed","kind":"review","label":"GTD review","chip":"GTD review","hue":"orange","parts":[{"key":"@review:GTD","label":"GTD review","kind":"bucket","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":0,"share":100,"minutes":20}]},
-        {"state":"attributed","kind":"work","label":"GTD review · bob","chip":"GTD review · bob","hue":"orange","parts":[{"key":"@review:GTD","label":"GTD review","kind":"bucket","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":1,"share":60,"minutes":3},{"key":"bob.md","label":"bob","kind":"project","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":1,"share":40,"minutes":2}]}
+        {
+          "state": "attributed",
+          "kind": "review",
+          "label": "GTD review",
+          "chip": null,
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 0,
+              "share": 100,
+              "minutes": 25
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "review",
+          "label": "GTD review",
+          "chip": "GTD review",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 0,
+              "share": 100,
+              "minutes": 20
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "GTD review · bob",
+          "chip": "GTD review · bob",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 60,
+              "minutes": 3
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 40,
+              "minutes": 2
+            }
+          ]
+        }
       ]
     },
     {
-      "name": "residence resolution, closed and area homes, cycles, invalid config and ambiguity",
+      "name": "ambiguous-basename",
       "daily_path": "2026/20261018.md",
-      "exempt": ["GTD"],
+      "exempt": [
+        "GTD"
+      ],
       "rust_only": true,
-      "expected_lead_homes": ["sase.md", "story.md", "closed.md", "cycle_a.md", "@unfiled", "@unfiled", "invalid_project.md", "love.md"],
-      "pomodoros": "- [x] (1100-1110 10m)\n  - [[done/task_done#^done]]\n- [x] (1120-1127 7m)\n  - [[ref#^ref]]\n- [x] (1130-1134 4m)\n  - [[closed#^prj]]\n- [x] (1140-1144 4m)\n  - [[cycle_a#^a]]\n- [x] (1150-1154 4m)\n  - [[unfiled#^u]]\n- [x] (1200-1204 4m)\n  - [[duplicate#^d]]\n- [x] (1210-1212 2m)\n  - [[invalid_project#^i]]\n  - [[invalid_project#^again]]\n- [x] (1220-1224 4m)\n  - [[love#^resident]]\n",
-      "expected_health": {"unfiled_links":2,"ambiguous_links":1,"unresolved_links":0,"rollup_invalid":2,"area_color_invalid":1},
+      "expected_health": {
+        "unfiled_links": 1,
+        "ambiguous_links": 1,
+        "unresolved_links": 0,
+        "rollup_invalid": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "@unfiled"
+      ],
+      "pomodoros": "- [x] (1200-1204 4m)\n  - [[duplicate#^d]]\n",
       "expected": [
-        {"state":"attributed","kind":"work","label":"sase","chip":"sase","hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":100,"minutes":10}]},
-        {"state":"attributed","kind":"work","label":"story","chip":"story","hue":"yellow","parts":[{"key":"story.md","label":"story","kind":"project","area":"love.md","area_label":"love","hue":"yellow","tasks":1,"share":100,"minutes":7}]},
-        {"state":"attributed","kind":"work","label":"closed","chip":"closed","hue":"blue","parts":[{"key":"closed.md","label":"closed","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":100,"minutes":4}]},
-        {"state":"attributed","kind":"work","label":"cycle_a","chip":"cycle_a","hue":null,"parts":[{"key":"cycle_a.md","label":"cycle_a","kind":"project","area":"@unfiled","area_label":"unfiled","hue":null,"tasks":1,"share":100,"minutes":4}]},
-        {"state":"attributed","kind":"work","label":"unfiled","chip":"unfiled","hue":null,"parts":[{"key":"@unfiled","label":"unfiled","kind":"bucket","area":"@unfiled","area_label":"unfiled","hue":null,"tasks":1,"share":100,"minutes":4}]},
-        {"state":"attributed","kind":"work","label":"unfiled","chip":"unfiled","hue":null,"parts":[{"key":"@unfiled","label":"unfiled","kind":"bucket","area":"@unfiled","area_label":"unfiled","hue":null,"tasks":1,"share":100,"minutes":4}]},
-        {"state":"attributed","kind":"work","label":"invalid_project","chip":"invalid_project","hue":"magenta","parts":[{"key":"invalid_project.md","label":"invalid_project","kind":"project","area":"job.md","area_label":"job","hue":"magenta","tasks":2,"share":100,"minutes":2}]},
-        {"state":"attributed","kind":"work","label":"love","chip":"love","hue":"yellow","parts":[{"key":"love.md","label":"love","kind":"area","area":"love.md","area_label":"love","hue":"yellow","tasks":1,"share":100,"minutes":4}]}
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "resolution-and-lints",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "sase.md",
+        "story.md",
+        "closed.md",
+        "cycle_a.md",
+        "@unfiled",
+        "invalid_project.md",
+        "love.md"
+      ],
+      "pomodoros": "- [x] (1100-1110 10m)\n  - [[done/task_done#^done]]\n- [x] (1120-1127 7m)\n  - [[ref#^ref]]\n- [x] (1130-1134 4m)\n  - [[closed#^prj]]\n- [x] (1140-1144 4m)\n  - [[cycle_a#^a]]\n- [x] (1150-1154 4m)\n  - [[unfiled#^u]]\n- [x] (1210-1212 2m)\n  - [[invalid_project#^i]]\n  - [[invalid_project#^again]]\n- [x] (1220-1224 4m)\n  - [[love#^resident]]\n",
+      "expected_health": {
+        "unfiled_links": 1,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "rollup_invalid": 2,
+        "area_color_invalid": 1
+      },
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 10
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "story",
+          "chip": "story",
+          "hue": "yellow",
+          "parts": [
+            {
+              "key": "story.md",
+              "label": "story",
+              "kind": "project",
+              "area": "love.md",
+              "area_label": "love",
+              "hue": "yellow",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 7
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "closed",
+          "chip": "closed",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "closed.md",
+              "label": "closed",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 4
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "cycle_a",
+          "chip": "cycle_a",
+          "hue": null,
+          "parts": [
+            {
+              "key": "cycle_a.md",
+              "label": "cycle_a",
+              "kind": "project",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 4
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 4
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "invalid_project",
+          "chip": "invalid_project",
+          "hue": "magenta",
+          "parts": [
+            {
+              "key": "invalid_project.md",
+              "label": "invalid_project",
+              "kind": "project",
+              "area": "job.md",
+              "area_label": "job",
+              "hue": "magenta",
+              "tasks": 2,
+              "share": 100,
+              "minutes": 2
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "love",
+          "chip": "love",
+          "hue": "yellow",
+          "parts": [
+            {
+              "key": "love.md",
+              "label": "love",
+              "kind": "area",
+              "area": "love.md",
+              "area_label": "love",
+              "hue": "yellow",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 4
+            }
+          ]
+        }
       ]
     },
     {
       "name": "chips, forecast shares, empty forecasts, and session identity",
       "daily_path": "2026/20261018.md",
-      "exempt": ["GTD"],
-      "expected_health": {"unfiled_links":1,"ambiguous_links":0,"unresolved_links":0,"rollup_invalid":0,"area_color_invalid":0},
-      "expected_lead_homes": ["sase.md", "sase.md", "@unfiled", "@unlinked", "@unlinked", "sase.md", "sase.md"],
+      "exempt": [
+        "GTD"
+      ],
+      "expected_health": {
+        "unfiled_links": 1,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "rollup_invalid": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "sase.md",
+        "sase.md",
+        "@unfiled",
+        "@unlinked",
+        "@unlinked",
+        "sase.md",
+        "sase.md"
+      ],
       "pomodoros": "- [x] (1300-1303 3m) — SASE\n  - [[sase_blog_notes#^one]]\n- [x] (1310-1314 4m) — SASE + BOB\n  - [[sase_blog_notes#^two]]\n  - [[bob#^two]]\n- [ ] (1320-1325)\n  - [[unfiled#^forecast]]\n- [x] (1330-1335 5m)\n- [ ] ()\n- [ ] (1340-1350) — SASE\n  - [[sase_blog_notes#^forecast]]\n- [ ] (1400-1410) — TIE\n  - [[sase_blog_notes#^tie]]\n  - [[bob#^tie]]\n",
       "expected": [
-        {"state":"attributed","kind":"work","label":"sase","chip":null,"hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":100,"minutes":3}]},
-        {"state":"attributed","kind":"work","label":"sase · bob","chip":null,"hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":50,"minutes":2},{"key":"bob.md","label":"bob","kind":"project","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":1,"share":50,"minutes":2}]},
-        {"state":"forecast","kind":"work","label":"unfiled","chip":"unfiled","hue":null,"parts":[{"key":"@unfiled","label":"unfiled","kind":"bucket","area":"@unfiled","area_label":"unfiled","hue":null,"tasks":1,"share":100}]},
-        {"state":"attributed","kind":"unlinked","label":"","chip":null,"hue":null,"parts":[{"key":"@unlinked","label":"unlinked","kind":"bucket","area":"@unlinked","area_label":"unlinked","hue":null,"tasks":0,"share":100,"minutes":5}]},
-        {"state":"forecast","kind":"unlinked","label":"","chip":null,"hue":null,"parts":[]},
-        {"state":"forecast","kind":"work","label":"sase","chip":null,"hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":100}]},
-        {"state":"forecast","kind":"work","label":"sase · bob","chip":"sase · bob","hue":"blue","parts":[{"key":"sase.md","label":"sase","kind":"project","area":"dev.md","area_label":"dev","hue":"blue","tasks":1,"share":50},{"key":"bob.md","label":"bob","kind":"project","area":"gtd.md","area_label":"gtd","hue":"orange","tasks":1,"share":50}]}
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": null,
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 3
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase · bob",
+          "chip": null,
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 2
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 2
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "unlinked",
+          "label": "",
+          "chip": null,
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unlinked",
+              "label": "unlinked",
+              "kind": "bucket",
+              "area": "@unlinked",
+              "area_label": "unlinked",
+              "hue": null,
+              "tasks": 0,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "unlinked",
+          "label": "",
+          "chip": null,
+          "hue": null,
+          "parts": []
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase",
+          "chip": null,
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase · bob",
+          "chip": "sase · bob",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 50
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "split-rounding-and-duration",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "sase.md",
+        "bob.md"
+      ],
+      "pomodoros": "- [x] (0800-0850 50m)\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (0900-0950 50m) [t:: 40m]\n  - [[bob#^duration]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase · bob +1",
+          "chip": "sase · bob +1",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 36,
+              "minutes": 18
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 32,
+              "minutes": 16
+            },
+            {
+              "key": "dev.md",
+              "label": "dev",
+              "kind": "area",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 32,
+              "minutes": 16
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "bob",
+          "chip": "bob",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 40
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "share-rounding",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "sase.md"
+      ],
+      "pomodoros": "- [ ] ()\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n",
+      "expected": [
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase · bob +1",
+          "chip": "sase · bob +1",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 34
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 33
+            },
+            {
+              "key": "dev.md",
+              "label": "dev",
+              "kind": "area",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 33
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "daily-review-link",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "@review:GTD"
+      ],
+      "pomodoros": "- [x] (1000-1010 10m)\n  - [[2026/20261017#^gtd]]\n  - [[bob#^work]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "GTD review · bob",
+          "chip": "GTD review · bob",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "rollup-depth-and-parent-shapes",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_health": {
+        "unfiled_links": 3,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "rollup_invalid": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "sase.md",
+        "@unfiled",
+        "dev.md",
+        "@unfiled"
+      ],
+      "pomodoros": "- [x] (1100-1110 10m)\n  - [[sase_direct_child#^a]]\n  - [[sase_grandchild#^b]]\n- [x] (1120-1121 1m)\n  - [[list_parent#^c]]\n  - [[self_parent#^d]]\n- [x] (1130-1131 1m)\n  - [[unquoted_parent#^e]]\n- [x] (1140-1141 1m)\n  - [[depth0#^cap]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 2,
+              "share": 100,
+              "minutes": 10
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 2,
+              "share": 100,
+              "minutes": 1
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "dev",
+          "chip": "dev",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "dev.md",
+              "label": "dev",
+              "kind": "area",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 1
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unresolved-and-closed-zero",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_health": {
+        "unfiled_links": 1,
+        "ambiguous_links": 0,
+        "unresolved_links": 1,
+        "rollup_invalid": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "sase.md",
+        "@unfiled"
+      ],
+      "pomodoros": "- [x] ()\n  - [[sase#^a]]\n  - [[bob#^b]]\n  - [[dev#^c]]\n- [x] (1200-1205 5m)\n  - [[not_a_note#^missing]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase · bob +1",
+          "chip": "sase · bob +1",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 34,
+              "minutes": 0
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 33,
+              "minutes": 0
+            },
+            {
+              "key": "dev.md",
+              "label": "dev",
+              "kind": "area",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 33,
+              "minutes": 0
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        }
       ]
     }
   ]

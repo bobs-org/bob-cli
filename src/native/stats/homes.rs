@@ -72,6 +72,7 @@ impl<'a> HomesEngine<'a> {
         let attributed = attribute_session(
             session.name.as_deref(),
             &session.links,
+            true,
             counted_minutes,
             &self.exempt,
             daily_path,
@@ -646,6 +647,11 @@ mod tests {
                 "      kind: pomodoro",
                 "      measure: minutes",
                 "      in: [sase]",
+                "    sase_count_in:",
+                "      label: SASE session count",
+                "      kind: pomodoro",
+                "      measure: count",
+                "      in: [sase]",
                 "    sase_blog_in:",
                 "      label: SASE blog in",
                 "      kind: pomodoro",
@@ -660,6 +666,11 @@ mod tests {
                 "      label: Review only",
                 "      kind: pomodoro",
                 "      measure: minutes",
+                "      review: only",
+                "    review_count:",
+                "      label: Review session count",
+                "      kind: pomodoro",
+                "      measure: count",
                 "      review: only",
                 "",
             ]
@@ -682,6 +693,7 @@ mod tests {
                 "done",
                 "sase_time",
                 "sase_in",
+                "sase_count_in",
                 "sase_blog_in",
                 "exclude_sase",
                 "review_only",
@@ -773,13 +785,17 @@ mod tests {
 
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
+        assert_eq!(dimension_total(sessions, "area"), 8);
         assert_eq!(dimension_total(sessions, "project"), 8);
         assert_eq!(part_value(sessions, "project", "sase.md"), 2);
         assert_eq!(part_value(sessions, "project", "@review:GTD"), 2);
 
         let done = metric(&report, "done");
         assert_eq!(done.summary.total.as_ref().unwrap().value, Some(7));
+        assert_eq!(dimension_total(done, "kind"), 7);
+        assert_eq!(dimension_total(done, "area"), 7);
         assert_eq!(dimension_total(done, "project"), 7);
+        assert_eq!(dimension_total(done, "note"), 7);
         assert_eq!(part_value(done, "project", "sase.md"), 2);
         assert_eq!(part_value(done, "project", "@unfiled"), 1);
         assert_eq!(
@@ -806,6 +822,15 @@ mod tests {
         assert_eq!(dimension_total(sase_in, "area"), 80);
         assert_eq!(dimension_total(sase_in, "project"), 80);
         assert_eq!(part_value(sase_in, "project", "sase.md"), 80);
+
+        // H14 count mode keeps a session once any linked task matches in:.
+        let sase_count_in = metric(&report, "sase_count_in");
+        assert_eq!(
+            sase_count_in.summary.total.as_ref().unwrap().value,
+            Some(3)
+        );
+        assert_eq!(dimension_total(sase_count_in, "area"), 3);
+        assert_eq!(dimension_total(sase_count_in, "project"), 3);
 
         // H10 in:[sase_blog] still measures blog time under rollup.
         let sase_blog_in = metric(&report, "sase_blog_in");
@@ -849,6 +874,8 @@ mod tests {
         );
 
         assert_eq!(report.homes["sase.md"].rolled_up, Some(1));
+        assert!(!report.homes.contains_key("body.md"));
+        assert!(!report.homes.contains_key("invalid.md"));
         assert_eq!(report.health.homes.unlinked_sessions, 1);
         assert_eq!(report.health.homes.unlinked_minutes, 10);
         assert_eq!(report.health.homes.unfiled_links, 1);
@@ -864,5 +891,34 @@ mod tests {
         let second = compute(&homes_request(homes_vault(), write_config(&dir)))
             .expect("repeat compute");
         assert_eq!(first, serde_json::to_vec(&second).unwrap());
+    }
+
+    #[test]
+    fn h_vector_review_time_includes_a_gtd_share_inside_work() {
+        let dir = TempDir::new().unwrap();
+        let config = write_config(&dir);
+        let today = NaiveDate::from_ymd_opt(2026, 10, 18)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let mut request = StatsRequest::at(homes_vault(), config, today);
+        request.selection = MetricSelection::Explicit(
+            ["worked", "review_time", "review_count"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        );
+        request.range = Some("2026-10-14..2026-10-14".to_string());
+        request.grouping = Grouping::Day;
+        let report = compute(&request).expect("review share vector computes");
+        let worked = metric(&report, "worked");
+        let review_time = metric(&report, "review_time");
+        let review_count = metric(&report, "review_count");
+        assert_eq!(worked.summary.total.as_ref().unwrap().value, Some(50));
+        assert_eq!(part_value(worked, "project", "@review:GTD"), 25);
+        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
+        assert_eq!(part_value(review_time, "project", "@review:GTD"), 25);
+        assert_eq!(review_count.summary.total.as_ref().unwrap().value, Some(1));
+        assert_eq!(part_value(review_count, "project", "@review:GTD"), 1);
     }
 }

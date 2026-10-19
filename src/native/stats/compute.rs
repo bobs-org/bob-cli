@@ -123,7 +123,7 @@ pub(crate) fn compute(
     let collect_sessions = selected
         .iter()
         .any(|def| matches!(def.spec, MetricSpec::Pomodoro { .. }));
-    let (catalog, homes_health, homes_warnings, sessions) = homes.finish(
+    let (mut catalog, homes_health, homes_warnings, sessions) = homes.finish(
         &index,
         resolved.report.start,
         health_end,
@@ -172,6 +172,8 @@ pub(crate) fn compute(
         });
     }
 
+    prune_home_catalog(&mut catalog, &metrics, &sessions);
+
     let mut health = index_health(&index);
     health.homes = homes_health;
     Ok(StatsReport {
@@ -195,6 +197,58 @@ pub(crate) fn compute(
         homes: catalog,
         sessions,
     })
+}
+
+fn prune_home_catalog(
+    catalog: &mut BTreeMap<String, super::report::HomeCatalogEntry>,
+    metrics: &[MetricReport],
+    sessions: &[super::report::SessionFact],
+) {
+    let mut used = BTreeSet::new();
+    for metric in metrics {
+        for (dimension, parts) in &metric.parts_summary {
+            if dimension == "area" || dimension == "project" {
+                used.extend(parts.iter().map(|part| part.key.clone()));
+            }
+        }
+        for point in metric
+            .points
+            .iter()
+            .chain(&metric.prior_points)
+            .chain(&metric.daily_points)
+        {
+            for dimension in ["area", "project"] {
+                if let Some(parts) = point.parts.get(dimension) {
+                    used.extend(parts.keys().cloned());
+                }
+                if let Some(parts) = point.apportioned.get(dimension) {
+                    used.extend(parts.keys().cloned());
+                }
+            }
+        }
+    }
+    for session in sessions {
+        for part in &session.homes.parts {
+            used.insert(part.key.clone());
+            if let Some(area) = &part.area {
+                used.insert(area.clone());
+            }
+        }
+    }
+    let referenced = used
+        .iter()
+        .filter_map(|key| catalog.get(key))
+        .flat_map(|entry| {
+            entry
+                .area
+                .iter()
+                .chain(&entry.subarea)
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    used.extend(referenced);
+    catalog.retain(|key, _| used.contains(key));
 }
 
 /// Selected metrics plus their dependencies in evaluation order. Journal

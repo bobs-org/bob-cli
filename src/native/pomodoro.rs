@@ -393,6 +393,7 @@ fn unnamed_home_chip(
         contents,
         entry.line,
         None,
+        false,
         None,
         &exempt,
         daily_path,

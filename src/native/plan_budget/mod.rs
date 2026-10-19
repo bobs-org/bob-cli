@@ -223,16 +223,13 @@ pub(crate) fn with_entry_homes(
         pomodoro_homes::DiskHomeSource::new(bob_dir),
     );
     for entry in &mut report.entries {
-        let name = scan
-            .entries
-            .iter()
-            .find(|found| found.line == entry.line)
-            .and_then(|found| found.name.as_deref());
+        let found = scan.entries.iter().find(|found| found.line == entry.line);
         entry.homes = Some(
             pomodoro_homes::attribute_ledger_entry(
                 contents,
                 entry.line,
-                name,
+                found.and_then(|found| found.name.as_deref()),
+                false,
                 None,
                 config.exempt(),
                 daily_path,

@@ -375,6 +375,7 @@ fn list_capture_pomodoros(
                 &contents,
                 entry.line,
                 entry.name.as_deref(),
+                entry.state == PomodoroState::Completed,
                 attributed_minutes(&entry, &contents),
                 &exempt,
                 &daily_path,

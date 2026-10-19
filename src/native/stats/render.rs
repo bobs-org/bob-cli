@@ -857,6 +857,21 @@ fn parts_lines(
             cells.join(&format!(" {sep} ")),
         ));
     }
+    if metric
+        .parts_summary
+        .get("area")
+        .is_some_and(|parts| !parts.is_empty())
+        || metric
+            .parts_summary
+            .get("project")
+            .is_some_and(|parts| !parts.is_empty())
+    {
+        out.push_str(&format!(
+            " {:<8} {}\n",
+            "",
+            styler.dim("grouped by today's note tree · from Task Links"),
+        ));
+    }
     if metric.unit == "minutes" {
         if let Some(project) = metric.parts_summary.get("project") {
             let total: i64 = project.iter().map(|part| part.value).sum();
@@ -979,6 +994,11 @@ fn format_part_cell(
         return body;
     }
     if bucket {
+        if part.key.starts_with("@review:")
+            && let Some(hue) = entry.and_then(|entry| entry.hue)
+        {
+            return format!("{} {body}", hue_dot(styler, hue));
+        }
         return styler.dim(&body);
     }
     let hue = entry.and_then(|entry| entry.hue);
@@ -1176,6 +1196,19 @@ mod tests {
                 apportioned_display: None,
             }],
         );
+        report.homes.insert(
+            "@review:GTD".to_string(),
+            HomeCatalogEntry {
+                label: "GTD review".to_string(),
+                kind: HomeKind::Bucket,
+                area: Some("gtd.md".to_string()),
+                subarea: None,
+                path: None,
+                hue: Some(Hue::Orange),
+                project_label: None,
+                rolled_up: None,
+            },
+        );
         report.metrics[0].parts_summary.insert(
             "theme".to_string(),
             vec![PartSummary {
@@ -1201,11 +1234,14 @@ mod tests {
             text.contains("theme") && text.contains("GTD 25m 78%"),
             "{text:?}"
         );
+        assert!(text.contains("grouped by today's note tree · from Task Links"));
         let area_idx = text.find("area").expect("area dimension");
         let project_idx = text.find("project").expect("project dimension");
         let theme_idx = text.find("theme").expect("theme dimension");
         assert!(area_idx < project_idx && project_idx < theme_idx);
         assert!(!text.contains("●"));
+        let colored = detail(&report, &Styler::colored());
+        assert!(colored.contains("\u{1b}[38;5;208m●"), "{colored:?}");
     }
 
     #[test]

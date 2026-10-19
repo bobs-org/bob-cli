@@ -67,7 +67,8 @@ the same link rule. Open homes are forecasts and never count as worked time.
 A named session is a review session when every `+`-separated name component is
 in `plan.exempt` (default `[GTD]`). Its minutes go to one `@review:<NAME>` part
 per exempt component; composite names split their minutes evenly, with any
-remainder going to the first component. Its task links do not attribute.
+remainder going to the first component. The bucket label is `<NAME> review`.
+Its task links do not attribute.
 
 An unnamed session is also a review session when one of its dedicated links is
 that day's `^gtd` row. This historical bridge uses the first configured exempt
@@ -82,9 +83,11 @@ the bucket itself is the area key. Review parts inherit that area's hue.
 ## R5 — Splitting and lead home
 
 For a closed session, divide its counted minutes evenly among distinct linked
-tasks. Each task receives the floor of the split; leftover minutes go to the
-first task links in ledger order. Sum those shares by home. In an open session,
-parts instead use the number of distinct task links.
+tasks. Each task receives the floor of the split; the entire remainder goes to
+the first task in ledger order (8m over 3 tasks is 4/2/2; 5m is 3/1/1). Sum
+those shares by home. In an open session, parts instead use the number of
+distinct task links. A closed entry without a recorded or range duration is
+still attributed: its parts carry 0 minutes and task-based shares.
 
 Count-mode Stats assigns the whole session to its lead home: the home with the
 most distinct tasks, with ties decided by the first task in ledger order.
@@ -183,11 +186,14 @@ Every emitting surface uses this additive shape:
 }
 ```
 
-`state` is `attributed` or `forecast`; `kind` is `work`, `review`, or
+`state` is `attributed` for every closed entry and `forecast` for every open
+entry; `kind` is `work`, `review`, or
 `unlinked`. `chip` and `hue` are nullable. Each part's kind is `project`,
 `area`, or `bucket`. `share` is a whole percentage: minute-based for attributed
-sessions and task-based for forecasts. `minutes` is present only for
-attributed sessions. An unlinked forecast has an empty `parts` array.
+sessions with a duration, and task-based when a closed entry has no duration or
+for forecasts. `minutes` is present on every attributed part; it is `0` when a
+closed entry has no duration. An unlinked closed entry has one `@unlinked` part;
+an unlinked forecast has an empty `parts` array.
 
 ## R10 — Current note tree
 
@@ -200,13 +206,23 @@ Links”. V1 does not store snapshots.
 
 [`tests/fixtures/pomodoro_homes/vectors.json`](../tests/fixtures/pomodoro_homes/vectors.json)
 contains a raw mini-vault and hand-calculated ledger expectations. The Rust
-tests run every case against both indexed and disk sources. It covers nested
-rollup and its pre-rollup chain, exact and ambiguous resolution, archived and
-reference notes, area and closed-project homes, parent cycles and aliases,
-review bridges and composites, struck and embedded links, de-duplication,
-minute and lead-home splits, chip suppression, forecast entries, explicit and
-fallback hues, and lints. `rust_only` marks ambiguity cases that the JavaScript
-mirror cannot reproduce with Obsidian's resolver.
+tests run every case against both indexed and disk sources. The shared cases
+are also the JavaScript mirror's contract; only ambiguous basename resolution
+is marked `rust_only` because Obsidian's resolver owns that behavior.
+
+| Case | What it proves |
+| --- | --- |
+| `rollup-archive-review` | nested rollup, archive/ref chain, struck links, de-duplication, review sessions and same-day bridge |
+| `resolution-and-lints` | archived/ref/project/area homes, cycles, invalid config, explicit and fallback hues |
+| `ambiguous-basename` | duplicate basename resolves to `@unfiled`; the sole `rust_only` case |
+| `chips, forecast shares, empty forecasts, and session identity` | chip suppression, forecast and unlinked shapes, ties, named sessions |
+| `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
+| `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
+| `daily-review-link` | another day's canonical `^gtd` is a review-home task share; only a same-day link triggers the unnamed review bridge |
+| `rollup-depth-and-parent-shapes` | direct child and grandchild rollup, list/self parents stop, the depth cap is 16, and unquoted `parent: [[x]]` resolves |
+| `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
+| `review-decisions` | named review sessions, same-day bridge, and mixed named work |
+| `resolution-and-lints` | archive/ref/project/area homes, cycles, invalid config, explicit and fallback hues |
 
 ## Limits and rejected alternatives
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     fs,
     path::{Path, PathBuf},
 };
@@ -24,9 +24,10 @@ pub(crate) struct IndexedHomeSource<'a> {
 }
 
 impl<'a> IndexedHomeSource<'a> {
+    #[cfg(test)]
     pub(crate) fn new(
         note_index: &'a NoteIndex,
-        contents: &'a BTreeMap<PathBuf, String>,
+        contents: &'a std::collections::BTreeMap<PathBuf, String>,
     ) -> Self {
         Self {
             note_index,
@@ -63,7 +64,7 @@ impl HomeSource for IndexedHomeSource<'_> {
     fn read_facts(&self, path: &Path) -> Option<NoteFacts> {
         self.contents
             .get(path)
-            .map(|contents| NoteFacts::parse(path, contents))
+            .map(|contents| NoteFacts::parse(contents))
     }
 }
 
@@ -91,7 +92,7 @@ impl HomeSource for DiskHomeSource {
 
     fn read_facts(&self, path: &Path) -> Option<NoteFacts> {
         let contents = fs::read_to_string(self.root.join(path)).ok()?;
-        Some(NoteFacts::parse(path, &contents))
+        Some(NoteFacts::parse(&contents))
     }
 }
 

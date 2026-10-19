@@ -60,18 +60,22 @@ pub(crate) fn attribute_ledger_entry<S: HomeSource>(
     contents: &str,
     entry_line: usize,
     name: Option<&str>,
+    closed: bool,
     minutes: Option<u32>,
     exempt: &[String],
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
     let links = session_links(contents, entry_line.saturating_sub(1));
-    attribute_session(name, &links, minutes, exempt, daily_path, resolver)
+    attribute_session(
+        name, &links, closed, minutes, exempt, daily_path, resolver,
+    )
 }
 
 pub(crate) fn attribute_session<S: HomeSource>(
     name: Option<&str>,
     links: &[SessionLink],
+    closed: bool,
     minutes: Option<u32>,
     exempt: &[String],
     daily_path: &Path,
@@ -107,6 +111,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
         return review_session(
             name,
             &names,
+            closed,
             minutes,
             named_review,
             daily_path,
@@ -114,16 +119,18 @@ pub(crate) fn attribute_session<S: HomeSource>(
         );
     }
 
-    let state = if minutes.is_some() {
+    let state = if closed {
         SessionState::Attributed
     } else {
         SessionState::Forecast
     };
     if resolved.is_empty() {
         let home = unlinked_home();
-        let parts = minutes
-            .map(|minutes| vec![home_part(&home, 0, 100, Some(minutes))])
-            .unwrap_or_default();
+        let parts = if closed {
+            vec![home_part(&home, 0, 100, Some(minutes.unwrap_or(0)))]
+        } else {
+            Vec::new()
+        };
         return SessionHomes {
             homes: Homes {
                 state,
@@ -151,7 +158,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
         })
         .collect::<Vec<_>>();
     let per_task_minutes =
-        minutes.map(|minutes| split_minutes(minutes, task_homes.len()));
+        closed.then(|| split_minutes(minutes.unwrap_or(0), task_homes.len()));
     let mut grouped = Vec::<HomeGroup>::new();
     let mut indices = HashMap::<String, usize>::new();
     for (index, home) in task_homes.iter().enumerate() {
@@ -174,7 +181,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
             group.minutes += shares[index];
         }
     }
-    let weights = if minutes.is_some() {
+    let weights = if closed && minutes.is_some() {
         let weights = grouped
             .iter()
             .map(|group| u64::from(group.minutes))
@@ -196,7 +203,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
                 &group.home,
                 group.tasks,
                 share,
-                minutes.map(|_| group.minutes),
+                closed.then_some(group.minutes),
             )
         })
         .collect::<Vec<_>>();
@@ -236,18 +243,19 @@ struct HomeGroup {
 fn review_session<S: HomeSource>(
     name: Option<&str>,
     names: &[String],
+    closed: bool,
     minutes: Option<u32>,
     named_review: bool,
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
-    let state = if minutes.is_some() {
+    let state = if closed {
         SessionState::Attributed
     } else {
         SessionState::Forecast
     };
     let minute_shares =
-        minutes.map(|minutes| split_minutes(minutes, names.len()));
+        closed.then(|| split_minutes(minutes.unwrap_or(0), names.len()));
     let mut weights = names
         .iter()
         .enumerate()
@@ -362,6 +370,6 @@ pub(crate) fn split_minutes(minutes: u32, count: usize) -> Vec<u32> {
     let quotient = minutes / count as u32;
     let remainder = minutes % count as u32;
     (0..count)
-        .map(|index| quotient + u32::from(index < remainder as usize))
+        .map(|index| quotient + if index == 0 { remainder } else { 0 })
         .collect()
 }

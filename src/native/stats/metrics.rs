@@ -253,7 +253,7 @@ fn evaluate_pomodoros(
                 .as_ref()
                 .map(|(minutes, _, _)| u32::try_from(*minutes).unwrap_or(0));
             let attributed = homes.attribute(session, daily_path, counted_u32);
-            if !review_kept(attributed.homes.kind, *review) {
+            if !review_kept_session(attributed.homes.kind, *review) {
                 continue;
             }
             let bucket = matches!(
@@ -270,6 +270,7 @@ fn evaluate_pomodoros(
                     &attributed.task_homes,
                     in_notes,
                     exclude_in,
+                    *review,
                     index,
                 );
                 if kept.is_empty() {
@@ -309,7 +310,9 @@ fn evaluate_pomodoros(
                         continue;
                     };
                     let (contrib, theme_parts, split) = match &kept {
-                        Some(kept) => {
+                        Some(kept)
+                            if kept.len() < attributed.task_homes.len() =>
+                        {
                             let shares = split_minutes(
                                 counted_u32.unwrap_or(0),
                                 attributed.task_homes.len(),
@@ -335,7 +338,7 @@ fn evaluate_pomodoros(
                                 split_from_kept(&pairs, true),
                             )
                         }
-                        None => (
+                        _ => (
                             counted,
                             original_theme_parts,
                             split_from_homes(&attributed, true),
@@ -504,11 +507,11 @@ fn theme_matches(
     has_included && !excluded
 }
 
-fn review_kept(kind: SessionKind, review: ReviewFilter) -> bool {
-    match review {
-        ReviewFilter::Include => true,
-        ReviewFilter::Only => kind == SessionKind::Review,
-        ReviewFilter::Exclude => kind != SessionKind::Review,
+fn review_kept_session(kind: SessionKind, review: ReviewFilter) -> bool {
+    match kind {
+        SessionKind::Review => review != ReviewFilter::Exclude,
+        SessionKind::Unlinked => review != ReviewFilter::Only,
+        SessionKind::Work => true,
     }
 }
 
@@ -516,17 +519,24 @@ fn kept_task_indices(
     task_homes: &[Home],
     in_notes: &[String],
     exclude_in: &[String],
+    review: ReviewFilter,
     index: &StatsIndex,
 ) -> Vec<usize> {
     task_homes
         .iter()
         .enumerate()
         .filter(|(_, home)| {
+            let is_review_share = home.key.starts_with("@review:");
+            let review_included = match review {
+                ReviewFilter::Include => true,
+                ReviewFilter::Only => is_review_share,
+                ReviewFilter::Exclude => !is_review_share,
+            };
             let included = in_notes.is_empty()
                 || home_chain_matches(home, in_notes, index);
             let excluded = !exclude_in.is_empty()
                 && home_chain_matches(home, exclude_in, index);
-            included && !excluded
+            review_included && included && !excluded
         })
         .map(|(index, _)| index)
         .collect()
@@ -1435,6 +1445,43 @@ mod tests {
         assert_eq!(value.parts["theme"]["GTD"], 28);
         assert_eq!(value.quality, DataQuality::Partial);
         assert_eq!(result.since, Some(date(10)));
+    }
+
+    #[test]
+    fn theme_shares_keep_the_original_split_without_a_home_filter() {
+        let mut index = StatsIndex::default();
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                has_pomodoros_heading: true,
+                closed_pomodoros: vec![super::super::index::PomodoroSession {
+                    name: Some("A + B + C".to_string()),
+                    recorded_minutes: Some(50),
+                    range_minutes: Some(50),
+                    time_range: Some("0800-0850".to_string()),
+                    line: 2,
+                    links: vec![crate::native::pomodoro_homes::SessionLink {
+                        target: "task".to_string(),
+                        block_id: "one".to_string(),
+                        line: 3,
+                        embedded: false,
+                    }],
+                }],
+                ..DailyNoteInputs::default()
+            },
+        );
+        let metric = custom_metric(
+            "label: AC themes\nkind: pomodoro\nmeasure: minutes\nthemes: [A, C]\nunit: minutes",
+            "ac_themes",
+        );
+        let result =
+            evaluate_metric(&metric, &index, &[date(10)], date(11), None)
+                .unwrap();
+        let value = &result.values[0];
+        assert_eq!(value.value, Some(34));
+        assert_eq!(value.parts["theme"]["A"], 18);
+        assert_eq!(value.parts["theme"]["C"], 16);
     }
 
     #[test]

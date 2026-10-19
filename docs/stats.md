@@ -132,12 +132,16 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   its first matching component so parts add up to the total. `in:` /
   `exclude_in:` match a linked task's pre-rollup home chain with the same
   path, basename, and parent-ancestry rules as task `in:`. Minutes mode
-  keeps those tasks' even shares and re-splits theme parts over that
-  contribution; count mode keeps the session when any task matches and
-  picks the lead home among kept tasks. Review and unlinked sessions never
+  keeps those tasks' even shares and re-splits theme parts only when a filter
+  removes a task share; count mode keeps the session when any task matches and
+  picks the lead home among kept tasks. Whole review and unlinked sessions never
   match `in:` and are never removed by `exclude_in`. `review: include`
-  (default), `only`, or `exclude` selects by the review-session predicate.
-  Home and review filters AND with `themes` / `exclude_themes`.
+  (default), `only`, or `exclude` selects review-bucket shares: whole named or
+  bridged review sessions are all review, while a work session's `^gtd` task
+  share is review and its other task shares are not. `only` keeps those review
+  shares; `exclude` drops them. Count mode counts a session once if any share
+  remains and chooses the lead home among the kept tasks. Home and review
+  filters AND with `themes` / `exclude_themes`.
 - `tasks`: `event: created` (any status on its created date), `done`
   (status type `DONE` with a completion date), or `dropped` (status type
   `CANCELLED` with a cancelled date). `recurring: exclude` (default), `only`,
@@ -190,7 +194,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
-| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Worked minutes in GTD review sessions. |
+| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Minutes attributed to the GTD review row, including `^gtd` task shares inside work sessions. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
 
 ## `stats:` config
@@ -528,8 +532,10 @@ labels; under color they prefix a `●` in the area's xterm hue, and
 buckets render dim. The project line shows the top five homes plus
 `other`, with buckets always shown outside those five. When apportioned
 minutes are non-zero, a dim `split` line reports the share of project
-minutes that came from sessions with several homes. Metrics is a catalog
-table with a dim definition line per id.
+minutes that came from sessions with several homes. Review bucket dots use
+their area's hue; `@unlinked` and `@unfiled` stay dim. Reports with area or
+project parts add the dim line `grouped by today's note tree · from Task Links`.
+Metrics is a catalog table with a dim definition line per id.
 
 Plain text under `NO_COLOR` or a non-TTY (`Styler::detect()`) drops the
 glyphs.
@@ -623,7 +629,11 @@ metric total.
 | H11 | exclude_sase | `exclude_in: [sase]` is 87m (167 − 80); review 35m and unlinked 10m stay |
 | H12 | review_only | `review: only` is 35m on `@review:GTD` (named 25 + unnamed bridge 10) |
 | H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
+| H14 | sase_count_in | `measure: count`, `in: [sase]` keeps 3 complete-window sessions when any linked task matches |
+| H15 | review_time / review_count | Oct 14 work session splits 50m into 25m `@review:GTD` and 25m `bob`; review-only minutes and count keep the review share/session |
 
+Oct 14 adds the separate H15 check: an unnamed 50m work session links the
+Oct 15 `^gtd` row and `bob`; it is not treated as the same-day review bridge.
 Oct 15: named GTD review 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
 sase_blog (rolls to sase), HACK 30m split bob/sase/dev, JOB 7m split 4/3,
 MISC 15m on an article (@unfiled), GTD+SASE 20m all on sase (theme remainder
@@ -710,11 +720,12 @@ Homes-parts measurement (athena, live `~/bob`, this checkout,
 | --- | --- |
 | Before (4w JSON baseline) | 174 ms (plan); 168 ms median on this host |
 | Homes-parts after (median / min / max) | 200 ms / 193 ms / 209 ms |
-| Stats-drilldown after (median / min / max) | 199 ms / 194 ms / 217 ms |
+| Stats-drilldown final release check (median / min / max) | 182.2 ms / 178.5 ms / 188.1 ms |
 
-The stats-drilldown median stays within 15% of the 174 ms baseline
-(budget 200 ms). The same clock's `-r all` JSON is 1,945,299 bytes
-(1.90 MiB; 1,093 closed sessions).
+The final stats-drilldown median is 4.7% above the 174 ms plan baseline,
+within its 15% budget (200.1 ms). The measured 4-week JSON is 220,827 bytes.
+The same clock's `-r all` JSON is 1,945,299 bytes (1.90 MiB; 1,093
+closed sessions).
 
 ## Obsidian Stats block
 

@@ -266,7 +266,7 @@ fn projects_list_marks_reporting_rollup_and_warns_without_failure() {
     assert_stdout_has_no_ansi(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("Opted   rollup"),
+        out.contains("Opted rollup"),
         "missing rollup marker:\n{out}"
     );
     assert!(
@@ -277,6 +277,22 @@ fn projects_list_marks_reporting_rollup_and_warns_without_failure() {
         !out.contains("Invalid  rollup"),
         "invalid value was rendered:\n{out}"
     );
+    let status_column = out
+        .lines()
+        .find(|line| line.contains("PROJECT") && line.contains("STATUS"))
+        .and_then(|line| line.find("STATUS"))
+        .expect("status header column");
+    for name in ["Invalid", "Off", "Opted"] {
+        let row = out
+            .lines()
+            .find(|line| line.trim_start().starts_with(name))
+            .unwrap_or_else(|| panic!("missing project row {name}:\n{out}"));
+        assert_eq!(
+            row.find("wip"),
+            Some(status_column),
+            "STATUS column shifted for {name}:\n{out}"
+        );
+    }
     let err = stderr(&output);
     assert_eq!(
         err.lines().count(),

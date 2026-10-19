@@ -66,8 +66,8 @@ fn shared_vectors_match_indexed_and_disk_sources() {
     for case in &vectors.cases {
         assert_eq!(
             case.rust_only,
-            case.name.contains("ambiguity"),
-            "rust_only marker should identify language-specific cases: {}",
+            case.name == "ambiguous-basename",
+            "only ambiguous-basename should be rust_only: {}",
             case.name,
         );
         let daily = format!("## Pomodoros\n{}", case.pomodoros);
@@ -117,14 +117,15 @@ fn session_link_sibling_includes_struck_and_embedded_bare_links_only() {
 
 #[test]
 fn split_minutes_uses_ledger_order_for_remainder() {
-    assert_eq!(split_minutes(5, 3), vec![2, 2, 1]);
+    assert_eq!(split_minutes(8, 3), vec![4, 2, 2]);
+    assert_eq!(split_minutes(5, 3), vec![3, 1, 1]);
     assert_eq!(split_minutes(3, 0), Vec::<u32>::new());
 }
 
 #[test]
 fn fallback_palette_fnv_vector_is_pinned() {
     assert_eq!(fallback_hue("job"), Hue::Magenta);
-    assert_eq!(super::fnv1a32(b"job"), 3_721_670_620);
+    assert_eq!(super::palette::fnv1a32(b"job"), 3_721_670_620);
 }
 
 #[test]
@@ -177,10 +178,17 @@ fn evaluate_case<S: HomeSource>(
         .map(|entry| {
             let links = session_links(daily, entry.line - 1);
             let minutes = if entry.state == PomodoroState::Completed {
-                entry
-                    .time_range
-                    .as_deref()
-                    .and_then(capture_pomodoros_agenda::range_minutes)
+                let raw_line = daily
+                    .lines()
+                    .nth(entry.line.saturating_sub(1))
+                    .unwrap_or("");
+                crate::native::capture::duration_from_range_text(raw_line)
+                    .or_else(|| {
+                        entry
+                            .time_range
+                            .as_deref()
+                            .and_then(capture_pomodoros_agenda::range_minutes)
+                    })
                     .and_then(|minutes| u32::try_from(minutes).ok())
             } else {
                 None
@@ -188,6 +196,7 @@ fn evaluate_case<S: HomeSource>(
             let homes = attribute_session(
                 entry.name.as_deref(),
                 &links,
+                entry.state == PomodoroState::Completed,
                 minutes,
                 &case.exempt,
                 &case.daily_path,
