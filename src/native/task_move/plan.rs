@@ -1,19 +1,21 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs, io,
+    fmt,
     path::{Component, Path, PathBuf},
 };
+
+#[cfg(test)]
+use std::{fs, io};
 
 use super::super::{
     capture_dependency_tasks::has_prj_is_blocked_tag,
     collect_done::{
         self, block_id_occurrences_in_text, block_ids_in_markdown,
         has_task_tag, is_simple_markdown_destination, leading_indent_len,
-        link_repair_markdown_files, next_available_block_id,
-        repair_dependency_metadata, repair_links_in_note,
-        repair_markdown_destination, repair_wiki_link_inner,
-        split_block_fragment, split_line_ending, task_block_end,
-        trailing_block_id_in_line, vault_relative_link_target,
+        next_available_block_id, repair_dependency_metadata,
+        repair_links_in_note, repair_markdown_destination,
+        repair_wiki_link_inner, split_block_fragment, split_line_ending,
+        task_block_end, trailing_block_id_in_line, vault_relative_link_target,
         ArchiveNoteIndex, MovedBlockTarget, MovedBlockTargets,
     },
     markdown,
@@ -30,6 +32,9 @@ use super::super::{
     task_status_groups,
     vault_links::{self, LinkResolution, NoteIndex},
 };
+
+#[cfg(test)]
+use super::super::collect_done::link_repair_markdown_files;
 
 const OPEN_CHECKBOXES: [char; 4] = [' ', '*', '/', '?'];
 const GLOBAL_FILTER: &str = "#task";
@@ -346,6 +351,7 @@ fn write_candidates(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn load_vault_snapshot(vault: &Path) -> io::Result<VaultSnapshot> {
     let files = link_repair_markdown_files(vault)?;
     let mut notes = BTreeMap::new();

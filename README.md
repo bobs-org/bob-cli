@@ -276,7 +276,7 @@ Bob's workflow commands are:
 | Command | Purpose |
 | --- | --- |
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
-| [`task`](#task-maintenance) | Vault-wide task maintenance: reconcile, reroll, archive |
+| [`task`](#task-maintenance) | Vault-wide task maintenance: archive, move, reconcile, reroll |
 
 ### Vault
 
@@ -708,6 +708,30 @@ commits exactly the rewritten notes as one `bob task reroll` commit, and
 syncs again. `--offline` skips both sync cycles and still commits locally.
 Undo with `git -C ~/bob revert <sha> && bob vault-sync`. The full contract
 lives in [`docs/randomize.md`](docs/randomize.md).
+
+### bob task move
+
+```bash
+bob task move [OPTIONS] <SOURCE> <DEST> (-b ID | -m TEXT)...
+```
+
+Moves selected open task blocks into an area or eligible project note, preserving
+their status, schedules, priorities, freshness, keeps, and authored child blocks.
+Selectors can identify a trailing block id (`-b`) or literal task-line text
+(`-m`); multiple selectors are deduplicated and applied in source order. The
+planner repairs matching wiki, embed, Markdown, daily-note, reference, archive,
+and dependency links, renaming a colliding destination block id when needed.
+
+Preview with `--dry-run -f json`. Dry runs do not acquire the maintenance lock,
+sync, probe Git, create recovery state, or write. Live Git runs hold the shared
+maintenance lock, pre-sync, apply through guarded snapshots, commit exactly the
+changed notes as one `bob task move …` commit, and post-sync. `--offline` skips
+both sync cycles while retaining the lock and scoped local commit. A non-Git
+vault is written safely without a commit. Partial writes stop for inspection and
+include the applied/deferred paths and recovery directory in the report. When
+project blocking may need to be propagated or reversed, run `bob task reconcile`
+explicitly after reviewing the move. See [`docs/task-move.md`](docs/task-move.md)
+for selection rules, refusals, output fields, and recovery details.
 
 ### bob task archive
 
@@ -1582,3 +1606,4 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Google Keep inbox drain into Obsidian tasks | [`docs/gkeep.md`](docs/gkeep.md) |
 | Pomodoro-driven task status sync | [`docs/task-status-hooks.md`](docs/task-status-hooks.md) |
 | Task dependency links: Depends-On line and project-dependency contract, plus conformance vectors | [`docs/task-dependencies.md`](docs/task-dependencies.md) |
+| Moving open tasks across notes and repairing vault references | [`docs/task-move.md`](docs/task-move.md) |

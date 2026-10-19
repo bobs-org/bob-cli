@@ -426,7 +426,7 @@ fn randomize_help_lists_options_alphabetically() {
     let top_help = stdout(&top);
     assert!(
         top_help.contains(
-            "task        Vault-wide task maintenance: reconcile, reroll, archive"
+            "task        Vault-wide task maintenance: archive, move, reconcile, reroll"
         ),
         "expected top-level help to list task reroll:\n{}",
         format_output(&top)

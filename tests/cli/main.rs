@@ -20,5 +20,6 @@ mod ready;
 mod ref_library;
 mod stats;
 mod support;
+mod task_move;
 mod task_status_hooks;
 mod vault_sync;

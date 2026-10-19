@@ -1214,6 +1214,12 @@ inbox, and the notice ends with `· still in <inbox>` (recoverable with
 destination or parks the walk: the cursor stays in the inbox note on the
 next inbox line.
 
+For batch or headless moves, `bob task move SOURCE DEST` selects open tasks by
+block id or literal line text. It preserves task status and freshness fields,
+repairs vault links and dependency identities, and reports when `bob task
+reconcile` should run for project-blocking changes. See
+[`task-move.md`](task-move.md).
+
 **Notices.** Task Card off the walk: the action's rich notice card, then
 `Moved to <dest>` (`Moved <N> tasks to <dest>` counted). On a landing: the
 rich card, then the walk toast with `Moved to <dest>` first. `Ctrl+Shift+Enter`:

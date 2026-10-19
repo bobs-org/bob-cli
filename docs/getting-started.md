@@ -335,6 +335,7 @@ The path above is illustrative; use the actual note path Bob reports.
 | `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed`, `ref today` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `URL %` asks that job for companion audio; `capture --dry-run` is offline |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
+| `task move` | Move open tasks and repair vault references; `--dry-run` previews without state changes; live Git runs sync before/after and commit touched notes; `--offline` commits locally |
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups. `-f json` prints one object instead of the table |
 | `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip. A valid note `@route` chooses a clip's parent ahead of `-P` |

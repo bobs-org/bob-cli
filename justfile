@@ -142,6 +142,7 @@ install-smoke:
     "${root}/bin/bob" pomodoro tmux --help >/dev/null
     "${root}/bin/bob" task --help >/dev/null
     "${root}/bin/bob" task archive --help >/dev/null
+    "${root}/bin/bob" task move --help >/dev/null
     "${root}/bin/bob" task reconcile --help >/dev/null
     "${root}/bin/bob" task reroll --help >/dev/null
     "${root}/bin/bob" help plan >/dev/null

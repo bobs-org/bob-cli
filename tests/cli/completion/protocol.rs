@@ -123,6 +123,30 @@ fn saved_template_group_and_format_complete_as_commands_and_static_choices() {
 }
 
 #[test]
+fn task_move_is_discoverable_with_its_options() {
+    let group = complete(&["bob", "task", ""]);
+    assert_success(&group);
+    assert!(values(&group).contains(&"move".to_string()));
+
+    let options = complete(&["bob", "task", "move", "--"]);
+    assert_success(&options);
+    let names = values(&options);
+    for option in [
+        "--block",
+        "--dry-run",
+        "--format",
+        "--match",
+        "--offline",
+        "--retry-timeout",
+    ] {
+        assert!(
+            names.contains(&option.to_string()),
+            "missing {option}: {names:?}"
+        );
+    }
+}
+
+#[test]
 fn alias_completion_uses_canonical_path_and_freshness_seed_is_hidden() {
     let alias = complete(&["bob", "task-status-setter", "--"]);
     assert_success(&alias);

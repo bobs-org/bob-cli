@@ -157,6 +157,14 @@ const TASK_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "move",
+        about: "Move open tasks between notes and repair vault links",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskMove,
+            script_command: None,
+        },
+    },
+    Member {
         name: "reconcile",
         about:
             "Reconcile task statuses from the Pomodoro ledger and dependencies",
@@ -204,9 +212,10 @@ const POMODORO_MEMBERS: &[Member] = &[
 
 const TASK_AFTER_HELP: &str = "\
 Examples:
+  bob task archive               Archive done and canceled tasks
+  bob task move --dry-run        Preview moving tasks and repairing links
   bob task reconcile --dry-run   Preview task status reconciliation
   bob task reroll --dry-run      Preview re-rolling due prioritized tasks
-  bob task archive               Archive done and canceled tasks
 
 See also: bob plan, bob ready, bob freshness, bob projects, bob query
 Run 'bob task <command> --help' for more information on a command.";
@@ -372,7 +381,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "task",
-        about: "Vault-wide task maintenance: reconcile, reroll, archive",
+        about: "Vault-wide task maintenance: archive, move, reconcile, reroll",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: TASK_MEMBERS,
@@ -1503,6 +1512,7 @@ mod tests {
             NativeCommand::Query,
             NativeCommand::Highlights,
             NativeCommand::MoveDoneTasks,
+            NativeCommand::TaskMove,
             NativeCommand::Nightly,
             NativeCommand::NoteReady,
             NativeCommand::Notify,

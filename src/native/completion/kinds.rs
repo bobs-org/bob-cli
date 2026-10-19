@@ -106,6 +106,28 @@ const TABLE: &[Entry] = &[
         arg: "parent",
         kind: Kind::Route,
     },
+    // `bob task move` selects vault notes by stem/path, and task selectors
+    // remain literal values because they are resolved against SOURCE.
+    Entry {
+        path: &["task", "move"],
+        arg: "source",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["task", "move"],
+        arg: "dest",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["task", "move"],
+        arg: "block",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["task", "move"],
+        arg: "match",
+        kind: Kind::FreeText,
+    },
     // Directories.
     Entry {
         path: &[],

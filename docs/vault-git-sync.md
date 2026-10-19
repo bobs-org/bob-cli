@@ -22,7 +22,7 @@ default):
 7. Write the status record used by `bob vault-sync status`.
 
 The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
-`bob task reconcile` runs, `bob task reroll`, writing `bob ref scan`, and
+`bob task reconcile` runs, `bob task reroll`, `bob task move`, writing `bob ref scan`, and
 `bob ref rename`, so background sync, nightly maintenance, task-status writes,
 reroll re-rolls, writing scans, and reference renames do not mutate the vault
 concurrently. Writing `bob ref scan` takes `bob_sync.lock` then `scan.lock` and
@@ -31,7 +31,11 @@ already uses that same lock order. `bob task reroll` holds the maintenance lock
 across a sync-sandwiched scoped commit: it runs a vault-sync cycle, writes only
 the re-rolled notes, commits exactly those notes as one `bob task reroll`
 commit, then runs a second vault-sync cycle. See
-[randomize.md](randomize.md#git-and-vault-sync).
+[randomize.md](randomize.md#git-and-vault-sync). `bob task move` follows the
+same sync-sandwiched scoped-commit pattern while repairing references to moved
+task blocks. Its dry run skips the lock and every Git operation; `--offline`
+keeps the lock and local scoped commit but skips both sync cycles. See
+[`task-move.md`](task-move.md).
 
 Every Git command bob runs for vault work disables detached auto-maintenance with
 `maintenance.autoDetach=false` and `gc.autoDetach=false`. Git's detached maintenance

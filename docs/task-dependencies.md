@@ -2959,7 +2959,7 @@ reconcile.
 | capture `&` (and Bob Mac Capture through bob) | Stage each added target's BLOCKS entry and the dependent's minted `^id` in the same batch, using the shared Rust planner. The target's block is reported as a `dependency_target` task block. |
 | capture `*` (and Bob Mac Capture through bob) | Stage N's BLOCKS entry on T in the same batch when T gains N as a prerequisite. N is reported as a `dependency_target` task block; T is reported as a `dependency` task block. A minted N id is `minted_blocker_block_id`, not `minted_dependent_block_id`. |
 | capture dependency drop (§13.5.1) | Stage the dependent's removal from each dropped prerequisite's line. Prerequisite task lines are still never edited. |
-| Ctrl+Shift+M, `bob task archive`, project conversion | The moved owner's line moves with it; generic link rebasing applies. Conversion never copies a BLOCKS line as a user child. Links into a moved or converted dependent are left to reconcile. |
+| Ctrl+Shift+M, `bob task move`, `bob task archive`, project conversion | The moved owner's line moves with it; generic link rebasing applies. `bob task move` repairs the moved owner's dependency identity and inbound references, then leaves BLOCKS/status reconciliation explicit. Conversion never copies a BLOCKS line as a user child. Links into a moved or converted dependent are left to reconcile. |
 | Closes, cancels, reopens (capture `x` / `!`, Ctrl+Enter, Alt+], Mac Capture, hand edits) | **None.** The owner's line freezes; a closed dependent drops off at the next reconcile. Chips hide the lag. |
 
 All writers share one planner, implemented as a Rust function with a

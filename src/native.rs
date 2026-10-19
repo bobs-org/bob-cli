@@ -73,7 +73,6 @@ mod style;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
-#[cfg(test)]
 mod task_move;
 mod task_status_groups;
 mod task_status_hooks;
@@ -107,6 +106,7 @@ pub(crate) enum NativeCommand {
     Query,
     Highlights,
     MoveDoneTasks,
+    TaskMove,
     Nightly,
     NoteReady,
     Notify,
@@ -169,6 +169,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),
         NativeCommand::MoveDoneTasks => collect_done::run(args),
+        NativeCommand::TaskMove => task_move::run(args),
         NativeCommand::Nightly => nightly::run(args),
         NativeCommand::NoteReady => note_ready::cli::run(args),
         NativeCommand::Notify => notify::run(args),

@@ -16,7 +16,7 @@ Daily workflow:
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
-  task        Vault-wide task maintenance: reconcile, reroll, archive
+  task        Vault-wide task maintenance: archive, move, reconcile, reroll
 
 Vault:
   articles    Format and inspect article notes with bob-owned section numbers
