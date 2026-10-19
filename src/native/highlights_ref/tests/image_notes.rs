@@ -450,6 +450,7 @@ fn block_ids_and_tasks_ignore_image_note_lines() {
         &pdf,
         Some(&sidecar_without),
         Some(&without),
+        false,
     )
     .expect("tasks without");
     let tasks_with = super::annotation_task_candidates(
@@ -458,6 +459,7 @@ fn block_ids_and_tasks_ignore_image_note_lines() {
         &pdf,
         Some(&sidecar_with),
         Some(&with),
+        false,
     )
     .expect("tasks with");
     assert_eq!(tasks_without.len(), 1);

@@ -125,3 +125,4 @@ mod seams;
 mod sidecar;
 mod status;
 mod tasks;
+mod underlines;

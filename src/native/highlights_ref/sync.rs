@@ -412,6 +412,7 @@ pub(super) fn plan_pdf_sync(
             pdf,
             sidecar.as_ref(),
             rendered_highlights.as_ref(),
+            strip_return_links,
         )?
     } else {
         Vec::new()
@@ -820,6 +821,7 @@ fn plan_pdf_sync_v2(
             pdf,
             sidecar.as_ref(),
             rendered_highlights.as_ref(),
+            strip_return_links,
         )?
     } else {
         Vec::new()

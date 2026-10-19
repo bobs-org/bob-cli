@@ -662,6 +662,7 @@ fn continuation_tasks_keep_piece_identity() {
         &pdf,
         Some(&sidecar),
         Some(&rendered),
+        false,
     )
     .expect("merged tasks");
     assert_eq!(merged.len(), 1);
@@ -686,6 +687,7 @@ fn continuation_tasks_keep_piece_identity() {
         &pdf,
         Some(&unmerged_sidecar),
         None,
+        false,
     )
     .expect("unmerged tasks");
     assert_eq!(unmerged[0].processed_id, merged_processed);
@@ -702,6 +704,7 @@ fn continuation_tasks_keep_piece_identity() {
         &pdf,
         Some(&sticky_sidecar),
         None,
+        false,
     )
     .expect("sticky tasks");
     let sticky_id = super::annotation_block_id(&config, &pdf, &sticky_note);

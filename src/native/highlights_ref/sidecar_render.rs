@@ -22,7 +22,8 @@ pub(super) fn render_sidecar_highlights(
     let mut image_note_count = 0usize;
     let mut image_notes_unresolved = Vec::new();
     let silently_dropped_ids = silently_dropped_block_ids(note);
-    let plan = plan_continuations(&sidecar.annotations);
+    let folds = plan_annotation_folds(&sidecar.annotations, strip_return_links);
+    let plan = &folds.continuations;
     let annotations_by_order: BTreeMap<usize, &SidecarAnnotation> = sidecar
         .annotations
         .iter()
@@ -33,6 +34,14 @@ pub(super) fn render_sidecar_highlights(
         .keys()
         .filter_map(|order| annotations_by_order.get(order).copied())
         .map(|ann| annotation_block_id(config, pdf, ann))
+        .chain(
+            folds
+                .underlines
+                .host_of
+                .keys()
+                .filter_map(|order| annotations_by_order.get(order).copied())
+                .map(|ann| annotation_block_id(config, pdf, ann)),
+        )
         .collect::<BTreeSet<_>>();
 
     for image_asset in image_assets_by_order.values() {
@@ -46,6 +55,9 @@ pub(super) fn render_sidecar_highlights(
             continue;
         }
         if plan.head_of.contains_key(&annotation.order) {
+            continue;
+        }
+        if folds.underlines.host_of.contains_key(&annotation.order) {
             continue;
         }
 
@@ -65,6 +77,18 @@ pub(super) fn render_sidecar_highlights(
                 for member in &members {
                     block_ids_by_annotation_order
                         .insert(member.order, block_id.clone());
+                }
+                let member_index_by_order = members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| (member.order, index))
+                    .collect::<BTreeMap<_, _>>();
+                for (&underline_order, &host_order) in &folds.underlines.host_of
+                {
+                    if member_index_by_order.contains_key(&host_order) {
+                        block_ids_by_annotation_order
+                            .insert(underline_order, block_id.clone());
+                    }
                 }
                 if !current_ids.insert(block_id.clone()) {
                     continue;
@@ -96,10 +120,65 @@ pub(super) fn render_sidecar_highlights(
                 for (index, (_, seam)) in followers.iter().enumerate() {
                     pieces.push((piece_texts[index + 1].as_str(), *seam));
                 }
-                let quote = assemble_group_quote(&pieces);
+                let standalone_underline = members.len() == 1
+                    && followers.is_empty()
+                    && folds.underlines.standalone.contains(&annotation.order);
+                let quote = if standalone_underline {
+                    let inner = underline_inner(&annotation.text)
+                        .expect("planned underline has an inner quote");
+                    standalone_underline_quote(&clean_for_matching(
+                        &inner,
+                        strip_return_links,
+                    ))
+                } else {
+                    assemble_group_quote(&pieces)
+                };
+                let member_texts = piece_texts
+                    .iter()
+                    .map(|text| beautify_annotation_text(text))
+                    .collect::<Vec<_>>();
+                let mut underline_ranges = Vec::new();
+                let mut underline_contributions = Vec::new();
+                for (&underline_order, &host_order) in &folds.underlines.host_of
+                {
+                    let Some(&host_member) =
+                        member_index_by_order.get(&host_order)
+                    else {
+                        continue;
+                    };
+                    let Some(underline) =
+                        annotations_by_order.get(&underline_order).copied()
+                    else {
+                        continue;
+                    };
+                    let Some(inner) = underline_inner(&underline.text) else {
+                        continue;
+                    };
+                    let cleaned_inner =
+                        clean_for_matching(&inner, strip_return_links);
+                    let ranges = emphasis_ranges(
+                        &quote,
+                        &member_texts,
+                        host_member,
+                        &cleaned_inner,
+                    );
+                    underline_ranges.extend(ranges.iter().cloned());
+                    underline_contributions.push(UnderlineContribution {
+                        order: underline_order,
+                        ranges,
+                        inner: cleaned_inner,
+                    });
+                }
+                let quote_chars = quote.chars().collect::<Vec<_>>();
+                let merged_run_count = merge_emphasis_ranges(
+                    &quote_chars,
+                    underline_ranges.clone(),
+                )
+                .len();
+                let quote = apply_emphasis(&quote, &underline_ranges);
 
                 let mut image_note_renders = Vec::new();
-                let mut comment_parts = Vec::new();
+                let mut comment_parts = Vec::<(String, Option<String>)>::new();
                 for member in &members {
                     let effective = plan.effective_annotation(member);
                     let source = effective
@@ -124,9 +203,62 @@ pub(super) fn render_sidecar_highlights(
                         &beautify_annotation_text(&remaining_text),
                     );
                     if !comment.trim().is_empty() {
-                        comment_parts.push(comment);
+                        comment_parts.push((comment, None));
                     }
                 }
+                underline_contributions.sort_by_key(|contribution| {
+                    (
+                        contribution
+                            .ranges
+                            .first()
+                            .map_or(usize::MAX, |range| range.start),
+                        contribution.order,
+                    )
+                });
+                for contribution in underline_contributions {
+                    let underline = annotations_by_order[&contribution.order];
+                    let source = effective_underline_source(underline);
+                    let (image_note_refs, remaining_text) =
+                        split_image_note_lines(&source);
+                    append_resolved_image_notes(
+                        config,
+                        ref_note_path,
+                        contribution.order,
+                        &block_id,
+                        &image_note_refs,
+                        &mut image_note_renders,
+                        &mut image_note_count,
+                        &mut image_notes_unresolved,
+                        &mut image_asset_writes_by_dest,
+                    )?;
+                    let comment = strip_comment_label(
+                        &beautify_annotation_text(&remaining_text),
+                    );
+                    if !comment.trim().is_empty() {
+                        let anchor = contribution
+                            .ranges
+                            .first()
+                            .map(|range| {
+                                quote_chars[range.clone()]
+                                    .iter()
+                                    .copied()
+                                    .collect::<String>()
+                            })
+                            .unwrap_or(contribution.inner);
+                        comment_parts.push((comment, Some(anchor)));
+                    }
+                }
+                let add_anchors =
+                    comment_parts.len() >= 2 || merged_run_count >= 2;
+                let comment_parts = comment_parts
+                    .into_iter()
+                    .map(|(comment, anchor)| match (add_anchors, anchor) {
+                        (true, Some(anchor)) => {
+                            format!("{}{}", emphasis_anchor(&anchor), comment)
+                        }
+                        _ => comment,
+                    })
+                    .collect::<Vec<_>>();
                 rendered.push_str(&render_highlight_group_block(
                     &quote,
                     &image_note_renders,
@@ -207,8 +339,7 @@ pub(super) fn render_sidecar_highlights(
 
     // Blocks the existing region marks as mirror-shaped or preamble are
     // previously leaked content (bob-cli-4r): drop them without a tombstone.
-    // Absorbed continuation followers never tombstone; a previously
-    // published follower gets a redirect stub instead.
+    // Absorbed continuation followers and underlines never tombstone.
     let removed_ids = existing_ids
         .difference(&current_ids)
         .filter(|block_id| {
@@ -217,20 +348,58 @@ pub(super) fn render_sidecar_highlights(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let stubs = continuation_redirect_stubs(
+    let continuation_stubs = continuation_redirect_stubs(
         config,
         pdf,
-        &plan,
+        plan,
         &annotations_by_order,
         &existing_ids,
     );
-    if !stubs.is_empty() || !removed_ids.is_empty() {
+    let previously_removed = note
+        .managed_region()?
+        .map(parse_managed_region)
+        .map(|region| region.removed.into_iter().collect::<BTreeSet<_>>())
+        .unwrap_or_default();
+    let newly_absorbed_published = folds
+        .underlines
+        .host_of
+        .keys()
+        .filter_map(|order| annotations_by_order.get(order).copied())
+        .map(|annotation| annotation_block_id(config, pdf, annotation))
+        .filter(|block_id| {
+            existing_ids.contains(block_id)
+                && !previously_removed.contains(block_id)
+        })
+        .collect::<BTreeSet<_>>();
+    let linked_absorbed =
+        crate::native::vault_links::markdown_links_to_block_ids(
+            &config.bob_dir,
+            &newly_absorbed_published,
+        )
+        .map_err(|error| {
+            CommandError::new(format!(
+                "could not scan vault Markdown for underline links: {error}"
+            ))
+        })?;
+    let emphasis_stubs = underline_redirect_stubs(
+        config,
+        pdf,
+        &folds,
+        &annotations_by_order,
+        &existing_ids,
+        &previously_removed,
+        &linked_absorbed,
+    );
+    if !continuation_stubs.is_empty()
+        || !emphasis_stubs.is_empty()
+        || !removed_ids.is_empty()
+    {
         if !rendered.is_empty() {
             rendered.push('\n');
         }
         rendered.push_str(REMOVED_HIGHLIGHTS_HEADING);
         rendered.push_str("\n\n");
-        for stub in stubs {
+        for stub in continuation_stubs {
             let body =
                 format!("\nNow part of [[#^{}|{}]].", stub.head_id, stub.alias);
             push_callout_block(
@@ -242,6 +411,22 @@ pub(super) fn render_sidecar_highlights(
             rendered.push('\n');
             rendered.push('^');
             rendered.push_str(&stub.follower_id);
+            rendered.push_str("\n\n");
+        }
+        for stub in emphasis_stubs {
+            let body = format!(
+                "\nNow emphasized in [[#^{}|{}]].",
+                stub.host_id, stub.alias
+            );
+            push_callout_block(
+                &mut rendered,
+                1,
+                "[!info] Merged emphasis",
+                &body,
+            );
+            rendered.push('\n');
+            rendered.push('^');
+            rendered.push_str(&stub.underline_id);
             rendered.push_str("\n\n");
         }
         for block_id in removed_ids {
@@ -279,10 +464,98 @@ pub(super) fn render_sidecar_highlights(
     })
 }
 
+struct UnderlineContribution {
+    order: usize,
+    ranges: Vec<std::ops::Range<usize>>,
+    inner: String,
+}
+
+fn effective_underline_source(annotation: &SidecarAnnotation) -> String {
+    let source = annotation
+        .task_source
+        .as_deref()
+        .or(annotation.comment.as_deref())
+        .unwrap_or("");
+    match scan_continuation_marker(source) {
+        MarkerScan::Escaped { task_source } => task_source,
+        _ => source.to_string(),
+    }
+}
+
+fn emphasis_anchor(run: &str) -> String {
+    let words = run.split_whitespace().collect::<Vec<_>>();
+    let anchor = words.iter().take(6).copied().collect::<Vec<_>>().join(" ");
+    let ellipsis = if words.len() > 6 { "…" } else { "" };
+    format!("“{anchor}{ellipsis}” — ")
+}
+
 struct ContinuationStub {
     follower_id: String,
     head_id: String,
     alias: String,
+}
+
+struct EmphasisStub {
+    underline_id: String,
+    host_id: String,
+    alias: String,
+}
+
+fn underline_redirect_stubs(
+    config: &Config,
+    pdf: &Path,
+    folds: &AnnotationFolds,
+    annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+    existing_ids: &BTreeSet<String>,
+    previously_removed: &BTreeSet<String>,
+    linked_absorbed: &BTreeSet<String>,
+) -> Vec<EmphasisStub> {
+    let mut stubs = Vec::new();
+    for (&underline_order, &host_order) in &folds.underlines.host_of {
+        let Some(underline) =
+            annotations_by_order.get(&underline_order).copied()
+        else {
+            continue;
+        };
+        let underline_id = annotation_block_id(config, pdf, underline);
+        if !existing_ids.contains(&underline_id)
+            || (!previously_removed.contains(&underline_id)
+                && !linked_absorbed.contains(&underline_id))
+        {
+            continue;
+        }
+        let head_order = folds
+            .continuations
+            .head_of
+            .get(&host_order)
+            .copied()
+            .unwrap_or(host_order);
+        let Some(head) = annotations_by_order.get(&head_order).copied() else {
+            continue;
+        };
+        let mut members = vec![head];
+        if let Some(followers) = folds.continuations.followers.get(&head_order)
+        {
+            for (order, _) in followers {
+                if let Some(member) = annotations_by_order.get(order).copied() {
+                    members.push(member);
+                }
+            }
+        }
+        let labels = members
+            .iter()
+            .map(|member| member.page_label.as_deref())
+            .collect::<Vec<_>>();
+        let alias = group_page_label(&labels)
+            .map(|label| format!("the {label} highlight"))
+            .unwrap_or_else(|| "the merged highlight".to_string());
+        stubs.push(EmphasisStub {
+            underline_id,
+            host_id: annotation_block_id(config, pdf, head),
+            alias,
+        });
+    }
+    stubs
 }
 
 fn continuation_redirect_stubs(

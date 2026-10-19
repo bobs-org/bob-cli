@@ -126,6 +126,7 @@ Comment: Compare this figure.
         &pdf,
         Some(&sidecar),
         Some(&rendered),
+        false,
     )
     .expect("extract image comment task");
     assert_eq!(candidates.len(), 1);

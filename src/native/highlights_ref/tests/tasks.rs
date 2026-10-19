@@ -181,6 +181,7 @@ Note:
         pdf,
         Some(&sidecar),
         None,
+        false,
     )
     .expect("extract annotation task candidates");
 

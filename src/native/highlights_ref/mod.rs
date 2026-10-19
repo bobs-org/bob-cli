@@ -82,6 +82,7 @@ mod target;
 #[cfg(test)]
 mod tests;
 mod text;
+mod underline;
 mod workdir;
 
 use annotation_tasks::*;
@@ -110,6 +111,7 @@ use sidecar_render::*;
 use stamp::*;
 use sync::*;
 use text::*;
+use underline::*;
 use workdir::*;
 
 pub(crate) const COMMAND_NAME: &str = "bob ref";

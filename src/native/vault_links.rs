@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
-    fs,
+    fs, io,
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
@@ -296,6 +296,45 @@ fn collect_markdown_paths(
             paths.push(relative.to_path_buf());
         }
     }
+}
+
+/// Return the requested block IDs referenced anywhere in vault Markdown.
+/// This shares the link resolver's deterministic, hidden-directory-aware walk.
+pub(crate) fn markdown_links_to_block_ids(
+    root: &Path,
+    block_ids: &BTreeSet<String>,
+) -> io::Result<BTreeSet<String>> {
+    if block_ids.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let mut paths = Vec::new();
+    collect_markdown_paths(root, root, &mut paths);
+    let mut linked = BTreeSet::new();
+    for relative_path in paths {
+        let contents = fs::read(root.join(relative_path))?;
+        let contents = String::from_utf8_lossy(&contents);
+        for block_id in block_ids {
+            if !linked.contains(block_id)
+                && contains_block_reference(&contents, block_id)
+            {
+                linked.insert(block_id.clone());
+            }
+        }
+        if linked.len() == block_ids.len() {
+            break;
+        }
+    }
+    Ok(linked)
+}
+
+fn contains_block_reference(contents: &str, block_id: &str) -> bool {
+    let needle = format!("#^{block_id}");
+    contents.match_indices(&needle).any(|(start, matched)| {
+        let end = start + matched.len();
+        contents[end..].chars().next().is_none_or(|character| {
+            !character.is_ascii_alphanumeric() && character != '-'
+        })
+    })
 }
 
 pub(crate) fn markdown_basename(path: &Path) -> Option<&str> {

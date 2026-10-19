@@ -7,12 +7,14 @@ pub(super) fn annotation_task_candidates(
     pdf: &Path,
     sidecar: Option<&SidecarInput>,
     rendered_highlights: Option<&RenderedHighlights>,
+    strip_return_links: bool,
 ) -> Result<Vec<AnnotationTaskCandidate>> {
     let Some(sidecar) = sidecar else {
         return Ok(Vec::new());
     };
 
-    let plan = plan_continuations(&sidecar.annotations);
+    let folds = plan_annotation_folds(&sidecar.annotations, strip_return_links);
+    let plan = &folds.continuations;
     let mut candidates = Vec::new();
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
@@ -21,8 +23,21 @@ pub(super) fn annotation_task_candidates(
 
         match annotation.kind {
             SidecarAnnotationKind::Highlight => {
-                let effective = plan.effective_annotation(annotation);
-                let Some(source) = effective.task_source.as_deref() else {
+                let source = if folds
+                    .underlines
+                    .host_of
+                    .contains_key(&annotation.order)
+                {
+                    annotation.task_source.clone().map(|source| {
+                        match scan_continuation_marker(&source) {
+                            MarkerScan::Escaped { task_source } => task_source,
+                            _ => source,
+                        }
+                    })
+                } else {
+                    plan.effective_annotation(annotation).task_source.clone()
+                };
+                let Some(source) = source.as_deref() else {
                     continue;
                 };
                 let identity_block_id =
