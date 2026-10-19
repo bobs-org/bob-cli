@@ -139,6 +139,9 @@ task-line field, or a file-path filter.
 6. Dependency targets do **not** inherit Today; the hooks
    still promote them to Next.
 
+Today marks show this set on eligible task lines as a display-only 🍅;
+see the [Today marks display contract](today-marks.md).
+
 The daily and dashboard TODAY badge shares the Work badge colors with
 PENDING, NEXT, and READY: it colors `budget.links.count /
 budget.links.cap` with the same grey/blue/green/yellow/orange/magenta/red bands,

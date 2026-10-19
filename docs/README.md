@@ -9,7 +9,8 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md),
 [Freshness review](freshness.md), and [Daily Stats](stats.md). For the
 Obsidian interface, read [Dashboard navigation](dashboard.md) (including
 the STATS page), the [Task Card](projects.md#task-card),
-[task date marks](date-marks.md), and [task tag marks](task-tag-marks.md).
+[task date marks](date-marks.md), [task tag marks](task-tag-marks.md), and
+[Today marks](today-marks.md).
 
 For reading, start with the [reference-library guide](ref.md). Import material
 with [`bob ref create`](highlights-create.md), or save bare links with
@@ -44,6 +45,7 @@ then creates the notes that `bob ref list` shows. The
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill |
+| [today-marks.md](today-marks.md) | Today marks: a display-only tomato on task lines linked under today's open Pomodoros |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |
 
 `bob <command> --help` is the concise usage source for that command, and
