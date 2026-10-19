@@ -43,7 +43,10 @@
     "depth13.md": "---\ntype: [[article]]\nparent: [[depth14]]\n---\n",
     "depth14.md": "---\ntype: [[article]]\nparent: [[depth15]]\n---\n",
     "depth15.md": "---\ntype: [[article]]\nparent: [[depth16]]\n---\n",
-    "depth16.md": "---\ntype: [[area]]\n---\n"
+    "depth16.md": "---\ntype: [[area]]\n---\n",
+    "quoted_parent.md": "---\ntype: [[article]]\nparent: \"[[dev]]\"\n---\n",
+    "single_list_parent.md": "---\ntype: [[article]]\nparent: [\"[[dev]]\"]\n---\n",
+    "bare_parent.md": "---\ntype: [[article]]\nparent: dev\n---\n"
   },
   "cases": [
     {
@@ -908,6 +911,88 @@
               "tasks": 1,
               "share": 100,
               "minutes": 5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parent-scalar-shapes",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_health": {
+        "unfiled_links": 2,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "rollup_invalid": 0,
+        "area_color_invalid": 0
+      },
+      "expected_lead_homes": [
+        "dev.md",
+        "@unfiled",
+        "@unfiled"
+      ],
+      "pomodoros": "- [x] (1500-1501 1m)\n  - [[quoted_parent#^a]]\n- [x] (1510-1511 1m)\n  - [[single_list_parent#^b]]\n- [x] (1520-1521 1m)\n  - [[bare_parent#^c]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "dev",
+          "chip": "dev",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "dev.md",
+              "label": "dev",
+              "kind": "area",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 1
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 1
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "unfiled",
+          "chip": "unfiled",
+          "hue": null,
+          "parts": [
+            {
+              "key": "@unfiled",
+              "label": "unfiled",
+              "kind": "bucket",
+              "area": "@unfiled",
+              "area_label": "unfiled",
+              "hue": null,
+              "tasks": 1,
+              "share": 100,
+              "minutes": 1
             }
           ]
         }

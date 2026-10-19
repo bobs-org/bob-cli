@@ -219,10 +219,10 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
 | `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
 | `daily-review-link` | another day's canonical `^gtd` is a review-home task share; only a same-day link triggers the unnamed review bridge |
-| `rollup-depth-and-parent-shapes` | direct child and grandchild rollup, list/self parents stop, the depth cap is 16, and unquoted `parent: [[x]]` resolves |
+| `rollup-depth-and-parent-shapes` | direct child and grandchild rollup, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |
+| `parent-scalar-shapes` | quoted scalar wikilinks resolve; single-item YAML lists and bare strings do not |
 | `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
 | `review-decisions` | named review sessions, same-day bridge, and mixed named work |
-| `resolution-and-lints` | archive/ref/project/area homes, cycles, invalid config, explicit and fallback hues |
 
 ## Limits and rejected alternatives
 
