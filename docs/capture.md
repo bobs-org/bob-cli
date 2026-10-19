@@ -5689,7 +5689,9 @@ last. A completed-only match never also offers a duplicate create row, and
 `again` rows resurface the most recent session first on an empty query. The
 new and again rows carry the plan-budget preview with `plan_themes_after`
 and `plan_themes_cap`. A named-start name field keeps context `pomodoro_start_name` and its
-candidates when exactly one timed session runs. The additive top-level
+candidates when exactly one timed session runs. The object is reported as soon
+as the name field exists, including an empty `=#` or `=3#`, so a picker can
+describe the swap before a name is typed. The additive top-level
 `override` object then previews that state: it is present only when no earlier
 session operator in the draft changes the ledger, `keeps_ledger` is true when
 the typed `<X>` suffix is empty and false for fresh timing, and `running`

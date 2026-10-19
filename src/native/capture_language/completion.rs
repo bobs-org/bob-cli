@@ -559,12 +559,7 @@ pub(crate) fn pomodoro_start_override_at(
             return None;
         }
     }
-    let (suffix, name, _) = named_start_name_at(item, cursor)?;
-    // While the name picker may expose an empty insertion point after `#`,
-    // the override banner only applies once the draft names its destination.
-    if name.is_empty() {
-        return None;
-    }
+    let (suffix, _, _) = named_start_name_at(item, cursor)?;
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let leading = text.len() - text.trim_start().len();

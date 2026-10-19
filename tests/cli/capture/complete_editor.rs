@@ -1127,14 +1127,32 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
             .expect("run named-start completion")
     };
 
-    // A completed `=#name` field keeps the running ledger. An empty name
-    // still offers the name picker but does not yet describe a destination.
+    // The name picker reports the running ledger as soon as its name field
+    // exists, even while the name is empty.
     let empty = complete("=#");
     assert_success(&empty);
     let empty_json: serde_json::Value =
         serde_json::from_str(stdout(&empty).trim()).expect("json");
     assert_eq!(empty_json["context"], "pomodoro_start_name");
-    assert!(empty_json.get("override").is_none(), "{empty_json}");
+    assert_eq!(
+        empty_json["override"],
+        serde_json::json!({
+            "keeps_ledger": true,
+            "running": {
+                "pomodoro_name": "CAPTURE",
+                "line": 4,
+                "time_range": "0920-0945",
+            },
+        }),
+        "{empty_json}"
+    );
+
+    let fresh_empty = complete("=3#");
+    assert_success(&fresh_empty);
+    let fresh_empty_json: serde_json::Value =
+        serde_json::from_str(stdout(&fresh_empty).trim()).expect("json");
+    assert_eq!(fresh_empty_json["context"], "pomodoro_start_name");
+    assert_eq!(fresh_empty_json["override"]["keeps_ledger"], false);
 
     let kept = complete("=#CAPTURE");
     assert_success(&kept);

@@ -723,8 +723,10 @@ fn pomodoro_start_name_context_reports_ledger_behavior() {
     assert_eq!(pomodoro_start_override_at("=-2#bugs", 4), Some(false));
     // A drop list does not change the kept ledger.
     assert_eq!(pomodoro_start_override_at("=#bugs~2", 6), Some(true));
-    // An empty name, or a cursor before the name field, has no override context.
-    assert_eq!(pomodoro_start_override_at("=#", 2), None);
+    // A cursor before the name field has no context; an empty name field
+    // already reports whether the running ledger is kept.
+    assert_eq!(pomodoro_start_override_at("=#", 2), Some(true));
+    assert_eq!(pomodoro_start_override_at("=3#", 3), Some(false));
     assert_eq!(pomodoro_start_override_at("=#bugs", 1), None);
     // The cursor immediately after `#` is inside the non-empty name field.
     assert_eq!(pomodoro_start_override_at("=#bugs", 2), Some(true));
