@@ -641,7 +641,7 @@ its own; `context` names what surrounds it. `verdict` is one of
 `accept(n)` (a line with n targets), `empty` (label but no links),
 `malformed`, or `not-a-line`. Project-dependency vectors (PDR, PDB,
 PDL, PDG, PDC, PDF, PDT) live in §13. Unblock (`[unblocked::]`)
-vectors (UB) live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
+vectors (UB) live in [freshness.md §10b](freshness.md#10b-ub-unblocked-vectors).
 BLOCKS parse, reconcile, write, and chip vectors (BK, BR, BW, BC) live
 in §14. Managed-child-line vectors (MC) live in §11.8.
 
@@ -2051,7 +2051,7 @@ inherit its `^prj` reasons through `parent:` (§13.1, §13.3).
 Implementations copy the PD tables in this section into their tests,
 citing the vector id in a comment. If an implementation disagrees with
 a vector, fix this section first in the same change. `[unblocked::]`
-vectors live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
+vectors live in [freshness.md §10b](freshness.md#10b-ub-unblocked-vectors).
 
 ### 13.1 Vocabulary
 

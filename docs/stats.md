@@ -9,7 +9,7 @@ the terminal and Obsidian views consume the same JSON model.
 by the `bob-stats` block; see [dashboard.md](dashboard.md#child-pages).
 Journal files under `.bob/stats/review/` travel with the vault; see
 [vault-git-sync.md](vault-git-sync.md#stats-review-journal). The root
-[README](../README.md#stats) indexes the command.
+[README](https://github.com/bobs-org/bob-cli/blob/master/README.md#stats) indexes the command.
 
 This document defines the v1 review journal written by `bob-ledger-tools` and
 `bob-navigation-hotkeys`. The journal is append-only and per host. It contains no
@@ -101,7 +101,7 @@ writer signal.
 ## Conformance vectors
 
 The machine-readable vectors live in
-[`tests/fixtures/stats/review_answers.json`](../tests/fixtures/stats/review_answers.json).
+[`tests/fixtures/stats/review_answers.json`](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/stats/review_answers.json).
 They pin the writer's outcome mapping and which recorded events contribute to
 `reviewed`; the stats reader uses the same fixture. Navigation tests mirror the
 same cases. `reviewed` excludes PRE/POST checklist events while still retaining

@@ -31,12 +31,12 @@ workflow guide.
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
   - [Starting the session atomically](#starting-the-session-atomically)
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
-  - [Picking any open task with ':'](#picking-any-open-task-with-)
-  - [Going to a task with '/'](#going-to-a-task-with-)
-  - [Adding prerequisites with '&'](#adding-prerequisites-with-)
-  - [Blocking existing tasks with '*'](#blocking-existing-tasks-with-)
+  - [Picking any open task with ':'](#picking-any-open-task-with)
+  - [Going to a task with '/'](#going-to-a-task-with)
+  - [Adding prerequisites with '&'](#adding-prerequisites-with)
+  - [Blocking existing tasks with '*'](#blocking-existing-tasks-with)
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
-  - [Completing tasks with '!'](#completing-tasks-with-)
+  - [Completing tasks with '!'](#completing-tasks-with)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
@@ -1284,7 +1284,7 @@ Type `/` as the whole capture draft to fuzzy-search the same catalog `:` uses:
 linkable open tasks (Ready `[ ]`, Blocked `[?]`, Next `[*]`, or In Progress
 `[/]`) in the routable inbox, area, and non-terminal project notes listed by
 `bob capture-targets`, as described in [Picking any open
-task](#picking-any-open-task-with-). Picking a row opens that task in Obsidian
+task](#picking-any-open-task-with). Picking a row opens that task in Obsidian
 at its home note — caret at column 0, line centred — instead of inserting a
 link. Go To never writes: no block-ID minting, no freshness stamps, no lane
 changes, no ledger edits, no walk moves, no Task Card opens, no completions.
@@ -1542,7 +1542,7 @@ the same write. Capture consumption is one shared path for `&`, `*`,
 and the link-guard Consume branches: match by identity, keep authored
 notes under a consumed link-only bullet, delete only Pomodoro entries
 this capture emptied, and report `consumed_links[]` plus `removed`
-Pomodoro blocks ([Blocking existing tasks with '*'](#blocking-existing-tasks-with-);
+Pomodoro blocks ([Blocking existing tasks with '*'](#blocking-existing-tasks-with);
 [task-dependencies.md §13.5](task-dependencies.md#135-consumption),
 PDL8–PDL11). Reconcile and plugins keep removing the whole subtree
 (PDL7). Human output prints the structured `−` consumption lines and
@@ -4759,7 +4759,7 @@ producer reports the deleted entry this way, not just consumption.
 Dry-run JSON equals real-run JSON except
 for `dry_run`. Human output names a deleted session on the structured
 `−` consumption lines
-([Blocking existing tasks with '*'](#blocking-existing-tasks-with-)).
+([Blocking existing tasks with '*'](#blocking-existing-tasks-with)).
 
 #### Task blocks
 
@@ -4945,7 +4945,7 @@ Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
   older clients. Human output prints the structured `−` lines instead,
   so the same fact is never printed twice.
 
-See [Blocking existing tasks with '*'](#blocking-existing-tasks-with-)
+See [Blocking existing tasks with '*'](#blocking-existing-tasks-with)
 for the human lines and a full JSON example.
 
 ### Interactive editor markers
@@ -5360,7 +5360,7 @@ item so older clients retain a useful preview. `blocked_tasks` is the `*`
 twin of `dependencies[]`: the same `{raw, note, block_id, quoted, range}`
 shape, emitted at the top level and per item, omitted when empty. Never put
 a direction flag on `dependencies[]`. A partial `*` needs `blocked_task`;
-see [Blocking existing tasks with '*'](#blocking-existing-tasks-with-).
+see [Blocking existing tasks with '*'](#blocking-existing-tasks-with).
 
 When the draft has a `@@` declaration, `global_destination` is an optional
 object with the declaration `range`, one-based physical `line`, effective
@@ -5844,7 +5844,7 @@ ranks by match score first, then that order. Replacements use `*`
 (`replacement_for_sigil`). ID-less and guarded rows resolve through
 `capture-task-id`'s `blocked_task_replacement`. Shell completion adds a
 `blocked tasks` group. See
-[Blocking existing tasks with '*'](#blocking-existing-tasks-with-).
+[Blocking existing tasks with '*'](#blocking-existing-tasks-with).
 For `task_dependency` and `blocked_task`, `owner` remains the lexical
 `dependency_target`; when it resolves to an existing task, it also carries
 the additive `text`, `note_path`, `status_symbol`, and `status_name` display
@@ -5927,7 +5927,7 @@ contains the selector text after its sigil (and a decoded locator for a
 dependency or blocked-task query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,
 and the open-editable pool documented under
-[Blocking existing tasks with '*'](#blocking-existing-tasks-with-). Both parent-task contexts include an
+[Blocking existing tasks with '*'](#blocking-existing-tasks-with). Both parent-task contexts include an
 additive `picker` descriptor: `kind` is `parent_task`; `scope` is `vault`
 with `scope_token: "+"` for the bare selector, or `note` with the canonical
 `@route+` / `@@route+` scope token for scoped selection. `note_target` is
@@ -6368,4 +6368,4 @@ A `$<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
 captures remain `[ ]`, and unscheduled Pomodoro-linked tasks remain `[*]`.
 Project notes and their `^prj` lifecycle tasks are covered in
 [projects.md](projects.md). The command index and environment variables live in
-the [root README](../README.md).
+the [root README](https://github.com/bobs-org/bob-cli/blob/master/README.md).

@@ -164,3 +164,19 @@ install-smoke:
     ${smoke_env} "${root}/bin/bob" completion status -j > /dev/null
     ${smoke_env} "${root}/bin/bob" completion uninstall zsh
     test ! -e "${root}/zfunc/_bob"
+
+# Build and serve Bob's documentation site.
+docs-serve: (_banner "36" "📖" "DOCS SERVE")
+    uv run --project tools/docs bob-docs serve
+
+# Strict Zensical documentation build.
+docs-build: (_banner "34" "📖" "DOCS BUILD")
+    uv run --project tools/docs bob-docs build
+
+# Strict Material 9.7 compatibility build.
+docs-build-material: (_banner "34" "📖" "DOCS BUILD · MATERIAL")
+    uv run --project tools/docs --group material bob-docs build --material
+
+# Regenerate committed contract indexes and navigation.
+docs-gen: (_banner "35" "⚙️" "DOCS GENERATE")
+    uv run --project tools/docs bob-docs gen

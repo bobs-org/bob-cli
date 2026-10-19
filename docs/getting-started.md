@@ -19,7 +19,7 @@ cargo install --path . --locked
 bob completion install
 ```
 
-See the [installation guide](../README.md#installation) for remote installation
+See the [installation guide](https://github.com/bobs-org/bob-cli/blob/master/README.md#installation) for remote installation
 and [completion](completion.md) for Bash/Zsh setup. Completion installation
 does not edit shell rc files.
 
@@ -68,7 +68,7 @@ discover the inbox, area notes, and non-terminal project notes.
 Give area/project notes the appropriate frontmatter `type`
 (`"[[area]]"` or `"[[project]]"`) to include them in those catalogs and in
 per-note Ready reports. Nested prerequisites use a separate path-aware `&`
-syntax; see [dependency capture](capture.md#adding-prerequisites-with-).
+syntax; see [dependency capture](capture.md#adding-prerequisites-with).
 
 For the desktop interface, use the [plugin deployment guide](plugins.md):
 select a local `bob-plugins` source checkout, deploy with `bob plugins sync`,
@@ -364,5 +364,5 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | A link stays a task | Extra prose, unsupported markers, children, a parent-task destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config. A simple `@route` parent and a `%` listen marker immediately after the URL are supported |
 | Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`. Missing packages produce one `tlmgr install` line in the warnings section. Doctor does not check fonts; install DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono when XeLaTeX cannot find them |
 
-Use `bob <command> --help` for accepted options and the [guide index](README.md)
+Use `bob <command> --help` for accepted options and the [contract index](develop/contracts.md)
 for detailed behavior, output formats, and recovery steps.

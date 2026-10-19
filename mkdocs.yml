@@ -1,0 +1,108 @@
+site_name: Bob
+site_url: https://bobs-org.github.io/
+repo_url: https://github.com/bobs-org/bob-cli
+repo_name: bobs-org/bob-cli
+edit_uri: edit/master/docs/
+docs_dir: docs
+site_dir: target/docs/site
+strict: true
+use_directory_urls: true
+
+validation:
+  absolute_links: warn
+  anchors: warn
+  omitted_files: warn
+  unrecognized_links: warn
+  nav:
+    not_found: warn
+  links:
+    anchors: warn
+    not_found: warn
+
+exclude_docs: |
+  README.md
+  _meta/
+  _templates/
+  overrides/
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  variant: classic
+  font: false
+  features:
+    - content.action.edit
+    - content.code.copy
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+plugins:
+  - search
+  - redirects: {}
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.emoji
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format ''
+  - github-callouts
+
+nav:
+  - Home: index.md
+  - Develop:
+      - Overview: develop/index.md
+      - Build: develop/build.md
+      - Contracts:
+          - Overview: develop/contracts.md
+          # BEGIN GENERATED: contracts nav
+          - "Capture and integrations":
+              - "Article notes": articles.md
+              - "Capture": capture.md
+              - "Shell completion": completion.md
+              - "Getting started": getting-started.md
+              - "Bob Gkeep": gkeep.md
+              - "Web article capture (`bob ref create <URL> [<URL>…]`)": highlights-clip.md
+              - "`bob ref create` — vault notes, Markdown, PDF, and URL targets": highlights-create.md
+              - "Highlights Reference Note Sync": highlights-ref-sync.md
+              - "Bob Plugins": plugins.md
+          - "Tasks and projects":
+              - "Dashboard navigation and child pages": dashboard.md
+              - "Task date marks": date-marks.md
+              - "Task freshness": freshness.md
+              - "Plan budget, Today, and lanes": plan.md
+              - "Project Task Sync": projects.md
+              - "Pomodoro homes": pomodoro-homes.md
+              - "Randomize": randomize.md
+              - "Daily Stats": stats.md
+              - "Task dependency links": task-dependencies.md
+              - "Move open tasks between notes": task-move.md
+              - "Task Status Hooks": task-status-hooks.md
+              - "Task tag marks": task-tag-marks.md
+              - "Today marks": today-marks.md
+          - "References":
+              - "bob query": dataview.md
+              - "Reference library (`bob ref`)": ref.md
+              - "Ref jobs (`bob ref jobs`)": ref-jobs.md
+          - "Vault":
+              - "Obsidian Sync folder exclusions (historical)": obsidian-sync-exclusions.md
+              - "Bob vault Git sync runbook": vault-git-sync.md
+          # END GENERATED: contracts nav

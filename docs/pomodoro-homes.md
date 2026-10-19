@@ -204,7 +204,7 @@ Links”. V1 does not store snapshots.
 
 ## Shared conformance vectors
 
-[`tests/fixtures/pomodoro_homes/vectors.json`](../tests/fixtures/pomodoro_homes/vectors.json)
+[`tests/fixtures/pomodoro_homes/vectors.json`](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/pomodoro_homes/vectors.json)
 contains a raw mini-vault and hand-calculated ledger expectations. The Rust
 tests run every case against both indexed and disk sources. The shared cases
 are also the JavaScript mirror's contract; only ambiguous basename resolution

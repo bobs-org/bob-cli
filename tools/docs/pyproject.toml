@@ -1,0 +1,34 @@
+[project]
+name = "bob-docs"
+version = "0.1.0"
+description = "Build and validate Bob's documentation site"
+requires-python = ">=3.11"
+dependencies = [
+    "markdown-callouts>=0.4",
+    "pyyaml>=6.0",
+    "zensical==0.0.71",
+]
+
+[project.scripts]
+bob-docs = "bob_docs.cli:main"
+
+[dependency-groups]
+a11y = ["playwright>=1.50"]
+dev = ["pytest>=8.3"]
+fonts = ["brotli>=1.1", "fonttools>=4.55"]
+material = [
+    "mkdocs-material==9.7.*",
+    "mkdocs-redirects",
+    "mkdocs-llmstxt",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"

@@ -1,0 +1,91 @@
+groups:
+  - title: "Capture and integrations"
+    entries:
+      - stem: articles
+        summary: "`bob articles` formatting, list, outline, adopt, and ArticlePlan JSON"
+        order: 1
+      - stem: capture
+        summary: "Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)"
+        order: 2
+      - stem: completion
+        summary: "Shell completion: the runtime model, protocol 1, and what completes"
+        order: 3
+      - stem: getting-started
+        summary: "Vault requirements, first capture/session, command effects, and troubleshooting"
+        order: 8
+      - stem: gkeep
+        summary: "`bob gkeep` Keep inbox drain into tasks or inline reference clips"
+        order: 9
+      - stem: highlights-clip
+        summary: "Web article and collection capture into Highlights intake PDFs"
+        order: 10
+      - stem: highlights-create
+        summary: "`bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections"
+        order: 11
+      - stem: highlights-ref-sync
+        summary: "`bob ref` PDF intake and reference notes"
+        order: 12
+      - stem: plugins
+        summary: "`bob plugins` list and vault deploy"
+        order: 15
+  - title: "Tasks and projects"
+    entries:
+      - stem: dashboard
+        summary: "Dashboard Review / Work / Browse navigation and collection pages"
+        order: 5
+      - stem: date-marks
+        summary: "Task date marks: calendar-label display contract for canonical task dates"
+        order: 6
+      - stem: freshness
+        summary: "Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14"
+        order: 7
+      - stem: plan
+        summary: "Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples"
+        order: 14
+      - stem: projects
+        summary: "`bob projects` `^prj` lifecycle, schedules, and reporting-only rollup"
+        order: 16
+      - stem: pomodoro-homes
+        summary: "Derived Pomodoro homes, rollup, labels, chips, hues, and JSON contract"
+        order: 17
+      - stem: randomize
+        summary: "`bob task reroll` bulk re-roll of due prioritized tasks"
+        order: 18
+      - stem: stats
+        summary: "Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page"
+        order: 21
+      - stem: task-dependencies
+        summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
+        order: 22
+      - stem: task-move
+        summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
+        order: 23
+      - stem: task-status-hooks
+        summary: "`bob task reconcile` Pomodoro-driven task status"
+        order: 24
+      - stem: task-tag-marks
+        summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill"
+        order: 25
+      - stem: today-marks
+        summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
+        order: 26
+  - title: "References"
+    entries:
+      - stem: dataview
+        summary: "`bob query` Dataview and Tasks"
+        order: 4
+      - stem: ref
+        summary: "Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback"
+        order: 19
+      - stem: ref-jobs
+        summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
+        order: 20
+  - title: "Vault"
+    entries:
+      - stem: obsidian-sync-exclusions
+        summary: "Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only"
+        order: 13
+        historical: true
+      - stem: vault-git-sync
+        summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
+        order: 27

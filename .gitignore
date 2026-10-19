@@ -1,5 +1,10 @@
 /target/
 /.build/
+/tools/docs/.venv/
+/docs/reference/plugins/
+/docs/reference/mac-capture/
+/docs/develop/plugins/
+/docs/develop/mac-capture/
 __pycache__/
 *.py[cod]
 /sase/repos/

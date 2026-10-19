@@ -19,6 +19,7 @@ produce intake PDFs in the background; [`bob ref scan`](highlights-ref-sync.md)
 then creates the notes that `bob ref list` shows. The
 [job guide](ref-jobs.md) explains progress, failures, and recovery.
 
+<!-- BEGIN GENERATED: contract table -->
 | Guide | What it covers |
 | --- | --- |
 | [articles.md](articles.md) | `bob articles` formatting, list, outline, adopt, and ArticlePlan JSON |
@@ -48,6 +49,7 @@ then creates the notes that `bob ref list` shows. The
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill |
 | [today-marks.md](today-marks.md) | Today marks: a display-only tomato on task lines linked under today's open Pomodoros |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |
+<!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and
 these guides follow it. The one-line labels in `bob --help` are a short
