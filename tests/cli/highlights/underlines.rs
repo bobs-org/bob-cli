@@ -35,6 +35,29 @@ Comment: Carry this thought forward.
 ",
     );
 
+    let dry_run = bob_command()
+        .args(["ref", "sync"])
+        .arg(&pdf)
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref sync dry-run");
+    assert_success(&dry_run);
+    let report = stdout(&dry_run);
+    assert!(report.contains("underlines_merged: 1"), "{report}");
+
+    let json_scan = bob_command()
+        .args(["ref", "scan", "--dry-run", "--no-hooks", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref scan json dry-run");
+    assert_success(&json_scan);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&json_scan)).expect("scan json");
+    let entry = &json["notes"][0];
+    assert_eq!(entry["underlines_merged"], 1);
+    assert!(entry.get("underlines_standalone").is_none(), "{entry}");
+
     let first = scan(&vault);
     assert_success(&first);
     let note_path = vault.join("ref/blogs/example.md");
@@ -85,4 +108,51 @@ Comment: Carry this thought forward.
             .is_some_and(|quote| quote.contains("**important phrase**")),
         "{highlights:?}"
     );
+}
+
+#[test]
+fn standalone_underline_reason_appears_in_sync_and_scan_json() {
+    let temp = TempDir::new("bob-cli-highlights-standalone-underline");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/blogs/standalone.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Standalone\n",
+    );
+    write_file(
+        &pdf.with_extension("md"),
+        "\
+#### [Page 2](highlights://standalone#page=2)
+
+> **a standalone phrase**
+",
+    );
+
+    let dry_run = bob_command()
+        .args(["ref", "sync"])
+        .arg(&pdf)
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref sync dry-run");
+    assert_success(&dry_run);
+    let report = stdout(&dry_run);
+    assert!(report.contains("underlines_merged: 0"), "{report}");
+    assert!(
+        report
+            .contains("underline_standalone: Page 2 (no highlight around it)"),
+        "{report}"
+    );
+
+    let scan = bob_command()
+        .args(["ref", "scan", "--dry-run", "--no-hooks", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref scan json dry-run");
+    assert_success(&scan);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&scan)).expect("scan json");
+    let entry = &document["notes"][0];
+    assert!(entry.get("underlines_merged").is_none(), "{entry}");
+    assert_eq!(entry["underlines_standalone"], 1);
 }

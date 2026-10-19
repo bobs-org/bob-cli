@@ -1030,7 +1030,8 @@ remains a hidden alias of `create`.
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library, including image notes (screenshot paths pasted into highlight
   comments) and continuation highlights (a note starting with `<` folds that
-  highlight into the one before it). Pass `-n, --no-hooks` on `scan` or
+    highlight into the one before it); an underline drawn inside a highlight
+    renders as bold emphasis inside that highlight. Pass `-n, --no-hooks` on `scan` or
   `doctor`, or before the subcommand as `bob ref --no-hooks scan`, to ignore
   the hook. By
   default it does not write PDF markers; use `scan --dry-run --write-pdfs`,

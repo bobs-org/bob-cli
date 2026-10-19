@@ -52,6 +52,10 @@ impl Styler {
         self.paint("34;1", text)
     }
 
+    pub(crate) fn bold(&self, text: &str) -> String {
+        self.paint("1", text)
+    }
+
     pub(crate) fn red(&self, text: &str) -> String {
         self.paint("31;1", text)
     }

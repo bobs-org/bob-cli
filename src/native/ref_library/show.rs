@@ -626,10 +626,11 @@ fn split_word(word: &str, width: usize) -> Vec<String> {
 
 /// Render one quote: an opening curly quote on the first line, a hanging
 /// indent after, and the closing quote on the last line.
-fn quote_lines(quote: &str, width: usize) -> Vec<String> {
+fn quote_lines(quote: &str, styler: Styler, width: usize) -> Vec<String> {
     let wrapped = wrap_text(quote, width.saturating_sub(5).max(1));
     let mut out = Vec::with_capacity(wrapped.len().max(1));
-    for (index, line) in wrapped.iter().enumerate() {
+    let colored_lines = styler_quote_lines(quote, &wrapped, styler);
+    for (index, line) in colored_lines.iter().enumerate() {
         if index == 0 {
             out.push(format!("    “{line}"));
         } else {
@@ -640,6 +641,72 @@ fn quote_lines(quote: &str, width: usize) -> Vec<String> {
         last.push('”');
     }
     out
+}
+
+fn styler_quote_lines(
+    quote: &str,
+    lines: &[String],
+    styler: Styler,
+) -> Vec<String> {
+    if !styler.is_color() {
+        return lines.to_vec();
+    }
+    let quote_chars = quote.chars().collect::<Vec<_>>();
+    let mut paired = Vec::new();
+    let mut markers = Vec::new();
+    let mut index = 0;
+    while index + 1 < quote_chars.len() {
+        if quote_chars[index] == '*' && quote_chars[index + 1] == '*' {
+            markers.push(index);
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    for pair in markers.chunks_exact(2) {
+        let valid = pair[1] > pair[0] + 2;
+        paired.push(valid);
+        paired.push(valid);
+    }
+    if !paired.iter().any(|value| *value) {
+        return lines.to_vec();
+    }
+    let mut delimiter_index = 0usize;
+    let mut active = false;
+    lines
+        .iter()
+        .map(|line| {
+            let mut rendered = String::new();
+            let mut segment = String::new();
+            let mut cursor = 0usize;
+            while let Some(relative) = line[cursor..].find("**") {
+                let at = cursor + relative;
+                segment.push_str(&line[cursor..at]);
+                let is_paired =
+                    paired.get(delimiter_index).copied().unwrap_or(false);
+                delimiter_index += 1;
+                if is_paired {
+                    rendered.push_str(&if active {
+                        styler.bold(&segment)
+                    } else {
+                        segment.clone()
+                    });
+                    segment.clear();
+                    active = !active;
+                } else {
+                    segment.push_str("**");
+                }
+                cursor = at + 2;
+            }
+            segment.push_str(&line[cursor..]);
+            rendered.push_str(&if active {
+                styler.bold(&segment)
+            } else {
+                segment
+            });
+            rendered
+        })
+        .collect()
 }
 
 fn image_note_lines(
@@ -696,7 +763,7 @@ fn annotation_lines(
             if let Some(quote) = annotation.quote.as_deref()
                 && !quote.is_empty()
             {
-                out.extend(quote_lines(quote, width));
+                out.extend(quote_lines(quote, styler, width));
             }
             out.extend(image_note_lines(annotation, styler, width));
             if let Some(comment) = annotation.comment.as_deref()
@@ -1300,6 +1367,33 @@ mod tests {
     fn wrap_hard_splits_long_words_and_keeps_blanks() {
         let lines = wrap_text("ab\n\nsupercalifragilistic", 5);
         assert_eq!(lines, vec!["ab", "", "super", "calif", "ragil", "istic"]);
+    }
+
+    #[test]
+    fn quote_emphasis_is_bold_only_in_color_output() {
+        let quote = "before **bold words** after **unclosed";
+        let wrapped = wrap_text(quote, 200);
+        let plain = styler_quote_lines(quote, &wrapped, Styler::plain());
+        assert_eq!(plain, vec![quote]);
+        let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
+        assert_eq!(
+            colored,
+            vec!["before \u{1b}[1mbold words\u{1b}[0m after **unclosed"]
+        );
+    }
+
+    #[test]
+    fn quote_emphasis_reopens_after_wrapping() {
+        let quote = "**one two three four**";
+        let wrapped = wrap_text(quote, 7);
+        let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
+        assert!(colored.len() > 1, "{colored:?}");
+        assert!(colored[0].contains("\u{1b}[1m"), "{colored:?}");
+        assert!(colored[0].ends_with("\u{1b}[0m"), "{colored:?}");
+        assert!(colored[1].starts_with("\u{1b}[1m"), "{colored:?}");
+        assert!(colored
+            .last()
+            .is_some_and(|line| line.ends_with("\u{1b}[0m")));
     }
 
     #[test]

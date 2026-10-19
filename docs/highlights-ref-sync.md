@@ -24,6 +24,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Generated body contract](#generated-body-contract)
   - [Image notes](#image-notes)
   - [Continuation highlights (`<`)](#continuation-highlights)
+  - [Underline emphasis](#underline-emphasis)
 - [Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2)
 - [MacBook setup guide](#macbook-setup-guide)
 - [Scheduled scan](#scheduled-scan)
@@ -368,6 +369,10 @@ on the MacBook before enabling PDF marker write-back:
   target PDFs.
 - Scheduled `scan` should stay dry-run or note-only unless bulk PDF marker
   writes are intentionally wanted and backed up.
+- Confirm a real underline renders as bold inside its host quote in
+  `bob ref show`; verify ANSI bold in a color terminal and literal `**` in
+  plain output. Enable `ref-highlights` in Obsidian and check the quote ink in
+  both light and dark themes.
 
 ## Default Paths
 
@@ -829,6 +834,8 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
 | `notes[].continuations` | Absorbed follower pieces on this note; omitted when zero |
 | `notes[].continuations_dangling` | `<` markers that could not merge; omitted when zero |
+| `notes[].underlines_merged` | Underline annotations folded into host quotes; omitted when zero |
+| `notes[].underlines_standalone` | Underlines that stayed separate; omitted when zero |
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
@@ -1346,6 +1353,63 @@ Troubleshooting:
   `notes[].continuations_dangling` only when the count is non-zero.
   `schema_version` stays `1`. `highlights_count` counts a group once.
 
+### Underline emphasis
+
+A Highlights underline whose exported quote is fully wrapped in `**` is
+treated as emphasis when its cleaned text occurs exactly once in exactly one
+text highlight on the same page. The underline's words become a bold run in
+that highlight's quote; its comment, image notes, and `#task` join the host
+block. A whole-quote underline still produces one block. The simple rule:
+**a bold run inside a quote means an underline merged; a whole bold quote means
+an underline stayed standalone.**
+
+For multi-word text, the cleaned underline key must occur in exactly one
+candidate highlight. Single-word underlines additionally require word
+boundaries, so `proves` does not match inside `approves`. If no host matches,
+more than one host matches, or the text repeats in its only host, the underline
+stays separate. Dry-run reasons are `no highlight around it`, `inside N
+highlights`, and `text repeats inside its highlight`.
+
+The run expands to whole words and is split at line breaks. For example,
+underlining `didn’` in `what didn’t change` renders as `what **didn’t** change`.
+Comments retain member comments first, then absorbed underline comments in run
+order; when multiple sources or runs share the block, underline comments get a
+short quoted run anchor. Image notes follow member images, and tasks retain the
+underline's own processed identity while linking to the host block. A leading
+`<` continuation marker always wins: that underline remains standalone and
+renders as it does today. Escaped `\\<` is an ordinary note.
+
+An absorbed underline keeps its original ID out of `current_ids` and is never
+tombstoned. A `Merged emphasis` redirect stub appears only when the ID is in
+the existing region and either already has a `Removed highlights` entry or is
+linked from a Markdown file in the vault. It points to the host quote, and
+remains a tombstone if the underline is later deleted.
+
+Use `bob ref sync <pdf> --dry-run` to inspect `underlines_merged` and each
+`underline_standalone` reason before rescanning. Concise scans report merged
+and standalone counts; JSON adds `notes[].underlines_merged` and
+`notes[].underlines_standalone` only when nonzero. `schema_version` remains 1.
+
+In Obsidian, enable the `ref-highlights` CSS snippet to give bold quote text
+full ink in quote callouts, while leaving nested Comment callouts alone:
+
+```css
+/* bob ref: an underline drawn in a Highlights quote renders as bold.
+   Nested Comment callouts are not affected. */
+.callout[data-callout="quote"] > .callout-title strong,
+.callout[data-callout="quote"] > .callout-content > p strong {
+  color: var(--text-normal);
+}
+```
+
+The source snippet is `~/bob/.obsidian/snippets/ref-highlights.css`; add
+`"ref-highlights"` to `enabledCssSnippets` in `appearance.json`. This rule
+applies to bold text in all quote callouts. A known limitation tracked by
+`bob-cli-9o`: underlines still count toward the per-page annotation ordinal,
+so underlining a published passage can change IDs for later blocks on that
+page, or the host ID when the underline sorts first. The separate identity
+migration will address that churn.
+
 Annotation text is beautified only while rendering the generated region:
 
 - Consecutive prose lines are reflowed into one line. Blank lines remain
@@ -1532,6 +1596,10 @@ keeps the head `^h-` ID, and a previously published follower gets a redirect
 stub under `### Removed highlights` that links to the group. Annotation tasks
 keep a per-piece `[h::]` processed ID (so a `<` toggle does not recreate the
 task) and a 🔖 backlink to the group's head block. Previously leaked
+absorbed underlines are never tombstoned. A `Merged emphasis` stub is emitted
+only when the underline ID is in the existing region and is already listed in
+`Removed highlights` or linked from a Markdown file in the vault; it points to
+the host block.
 marker-mirror and preamble blocks are the
 exception: when the existing region shows a vanished block as mirror-shaped or
 sitting before the first page heading, sync drops it without a tombstone and

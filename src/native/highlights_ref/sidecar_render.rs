@@ -459,6 +459,18 @@ pub(super) fn render_sidecar_highlights(
                     .and_then(|annotation| annotation.page_label.clone()),
             })
             .collect(),
+        underlines_merged: folds.underlines.host_of.len(),
+        standalone_underlines: folds
+            .underlines
+            .standalone_reasons
+            .iter()
+            .map(|(order, reason)| StandaloneUnderline {
+                page_label: annotations_by_order
+                    .get(order)
+                    .and_then(|annotation| annotation.page_label.clone()),
+                reason: reason.clone(),
+            })
+            .collect(),
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
     })

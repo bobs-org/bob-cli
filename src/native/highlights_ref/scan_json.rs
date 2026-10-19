@@ -66,6 +66,10 @@ struct ScanJsonNote {
     continuations: usize,
     #[serde(skip_serializing_if = "is_zero_usize")]
     continuations_dangling: usize,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    underlines_merged: usize,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    underlines_standalone: usize,
 }
 
 /// One unresolved image note on a scanned reference.
@@ -644,6 +648,8 @@ fn scan_note_entry(
         image_notes_unresolved,
         continuations,
         continuations_dangling,
+        underlines_merged,
+        underlines_standalone,
     ) = plan
         .rendered_highlights
         .as_ref()
@@ -660,9 +666,11 @@ fn scan_note_entry(
                     .collect(),
                 rendered.continuation_count,
                 rendered.dangling_continuations.len(),
+                rendered.underlines_merged,
+                rendered.standalone_underlines.len(),
             )
         })
-        .unwrap_or((0, Vec::new(), 0, 0));
+        .unwrap_or((0, Vec::new(), 0, 0, 0, 0));
     ScanJsonNote {
         action,
         path: scan_vault_relative(config, &plan.note_path),
@@ -674,6 +682,8 @@ fn scan_note_entry(
         image_notes_unresolved,
         continuations,
         continuations_dangling,
+        underlines_merged,
+        underlines_standalone,
     }
 }
 
@@ -965,6 +975,13 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                                 continuations_dangling: ingested
                                     .write
                                     .dangling_continuations
+                                    .len(),
+                                underlines_merged: ingested
+                                    .write
+                                    .underlines_merged,
+                                underlines_standalone: ingested
+                                    .write
+                                    .standalone_underlines
                                     .len(),
                             });
                         }

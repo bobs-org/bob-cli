@@ -465,3 +465,36 @@ fn absorbed_identity_and_link_aware_stub_are_reversible() {
         .contains("> [!quote] **unique passage**"));
     assert!(host_deleted.content.contains(&format!("^{underline_id}")));
 }
+
+#[test]
+fn underline_report_lines_explain_standalone_reasons() {
+    let standalone = vec![
+        StandaloneUnderline {
+            page_label: Some("Page 2".into()),
+            reason: underline::StandaloneUnderlineReason::NoHost,
+        },
+        StandaloneUnderline {
+            page_label: None,
+            reason: underline::StandaloneUnderlineReason::AmbiguousHost {
+                hosts: 2,
+            },
+        },
+        StandaloneUnderline {
+            page_label: Some("Page 4".into()),
+            reason: underline::StandaloneUnderlineReason::RepeatedInHost,
+        },
+    ];
+    assert_eq!(
+        underline_report_lines(3, &standalone),
+        vec![
+            "underlines_merged: 3",
+            "underline_standalone: Page 2 (no highlight around it)",
+            "underline_standalone: no page (inside 2 highlights)",
+            "underline_standalone: Page 4 (text repeats inside its highlight)",
+        ]
+    );
+    assert_eq!(
+        underline_report_lines(0, &standalone)[0],
+        "underlines_merged: 0"
+    );
+}

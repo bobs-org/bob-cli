@@ -379,6 +379,8 @@ pub(super) struct RenderedHighlights {
     pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
     pub(super) continuation_count: usize,
     pub(super) dangling_continuations: Vec<DanglingContinuation>,
+    pub(super) underlines_merged: usize,
+    pub(super) standalone_underlines: Vec<StandaloneUnderline>,
     pub(super) image_assets: Vec<ImageAssetWrite>,
     pub(super) block_ids_by_annotation_order: BTreeMap<usize, String>,
 }
@@ -387,6 +389,12 @@ pub(super) struct RenderedHighlights {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DanglingContinuation {
     pub(super) page_label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StandaloneUnderline {
+    pub(super) page_label: Option<String>,
+    pub(super) reason: super::underline::StandaloneUnderlineReason,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -570,6 +578,8 @@ pub(super) struct SyncWriteReport {
     pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
     pub(super) continuation_count: usize,
     pub(super) dangling_continuations: Vec<DanglingContinuation>,
+    pub(super) underlines_merged: usize,
+    pub(super) standalone_underlines: Vec<StandaloneUnderline>,
     pub(super) image_assets_written: usize,
     pub(super) image_assets_skipped: usize,
     pub(super) routed_note_actions: usize,

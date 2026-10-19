@@ -1395,6 +1395,16 @@ fn execute_pdf_sync_v1(
             .as_ref()
             .map(|rendered| rendered.dangling_continuations.clone())
             .unwrap_or_default(),
+        underlines_merged: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.underlines_merged)
+            .unwrap_or(0),
+        standalone_underlines: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.standalone_underlines.clone())
+            .unwrap_or_default(),
         image_assets_written,
         image_assets_skipped,
         routed_note_actions,
@@ -1745,6 +1755,16 @@ fn execute_pdf_sync_v2(
             .rendered_highlights
             .as_ref()
             .map(|rendered| rendered.dangling_continuations.clone())
+            .unwrap_or_default(),
+        underlines_merged: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.underlines_merged)
+            .unwrap_or(0),
+        standalone_underlines: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.standalone_underlines.clone())
             .unwrap_or_default(),
         image_assets_written,
         image_assets_skipped,

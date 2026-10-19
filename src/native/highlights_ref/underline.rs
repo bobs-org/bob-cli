@@ -9,6 +9,15 @@ pub(super) struct UnderlinePlan {
     pub(super) host_of: BTreeMap<usize, usize>,
     /// Underline rows that stay as their own blocks, in sidecar order.
     pub(super) standalone: BTreeSet<usize>,
+    /// Why each underline stayed standalone, in sidecar order.
+    pub(super) standalone_reasons: BTreeMap<usize, StandaloneUnderlineReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum StandaloneUnderlineReason {
+    NoHost,
+    AmbiguousHost { hosts: usize },
+    RepeatedInHost,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -116,6 +125,8 @@ pub(super) fn plan_underlines(
         let needle = match_key(cleaned);
         if needle.chars.is_empty() {
             plan.standalone.insert(annotation.order);
+            plan.standalone_reasons
+                .insert(annotation.order, StandaloneUnderlineReason::NoHost);
             continue;
         }
         let single_word = !inner.trim().chars().any(char::is_whitespace);
@@ -136,13 +147,22 @@ pub(super) fn plan_underlines(
             }
         }
 
-        match hosts.as_slice() {
+        let reason = match hosts.as_slice() {
             [(host_order, 1)] => {
                 plan.host_of.insert(annotation.order, *host_order);
+                None
             }
-            _ => {
-                plan.standalone.insert(annotation.order);
+            [] => Some(StandaloneUnderlineReason::NoHost),
+            [(_, count)] if *count > 1 => {
+                Some(StandaloneUnderlineReason::RepeatedInHost)
             }
+            _ => Some(StandaloneUnderlineReason::AmbiguousHost {
+                hosts: hosts.len(),
+            }),
+        };
+        if let Some(reason) = reason {
+            plan.standalone.insert(annotation.order);
+            plan.standalone_reasons.insert(annotation.order, reason);
         }
     }
 

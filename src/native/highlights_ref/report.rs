@@ -77,6 +77,18 @@ pub(super) fn print_pdf_sync_report(
     ) {
         println!("{line}");
     }
+    for line in underline_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.underlines_merged)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.standalone_underlines.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("{line}");
+    }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
     println!("annotation_tasks_skip: {}", plan.annotation_tasks_skipped);
     println!(
@@ -108,6 +120,12 @@ pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
     for line in continuation_report_lines(
         report.continuation_count,
         &report.dangling_continuations,
+    ) {
+        println!("{line}");
+    }
+    for line in underline_report_lines(
+        report.underlines_merged,
+        &report.standalone_underlines,
     ) {
         println!("{line}");
     }
@@ -891,6 +909,22 @@ pub(super) fn scan_details(
             ));
         }
     }
+    if let Some(rendered) = &plan.rendered_highlights {
+        if rendered.underlines_merged > 0 {
+            details.push(count_phrase(
+                rendered.underlines_merged,
+                "merged underline",
+                "merged underlines",
+            ));
+        }
+        if !rendered.standalone_underlines.is_empty() {
+            details.push(count_phrase(
+                rendered.standalone_underlines.len(),
+                "standalone underline",
+                "standalone underlines",
+            ));
+        }
+    }
     if annotation_tasks_created > 0 {
         details.push(format!(
             "+{}",
@@ -934,6 +968,35 @@ pub(super) fn continuation_report_lines(
         lines.push(format!(
             "continuation_dangling: {label} (no earlier text highlight)"
         ));
+    }
+    lines
+}
+
+pub(super) fn underline_report_lines(
+    merged: usize,
+    standalone: &[StandaloneUnderline],
+) -> Vec<String> {
+    if merged == 0 && standalone.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    if merged > 0 || !standalone.is_empty() {
+        lines.push(format!("underlines_merged: {merged}"));
+    }
+    for item in standalone {
+        let label = item.page_label.as_deref().unwrap_or("no page");
+        let reason = match &item.reason {
+            underline::StandaloneUnderlineReason::NoHost => {
+                "no highlight around it".to_string()
+            }
+            underline::StandaloneUnderlineReason::AmbiguousHost { hosts } => {
+                format!("inside {hosts} highlights")
+            }
+            underline::StandaloneUnderlineReason::RepeatedInHost => {
+                "text repeats inside its highlight".to_string()
+            }
+        };
+        lines.push(format!("underline_standalone: {label} ({reason})"));
     }
     lines
 }
@@ -1184,6 +1247,18 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
         plan.rendered_highlights
             .as_ref()
             .map(|rendered| rendered.dangling_continuations.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("  {line}");
+    }
+    for line in underline_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.underlines_merged)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.standalone_underlines.as_slice())
             .unwrap_or(&[]),
     ) {
         println!("  {line}");
