@@ -161,6 +161,8 @@ launchd starts that command through `/bin/sh -c`, which `exec`s
 Apple-signed `/bin/sh` instead of the ad-hoc `bob` binary that `cargo install` replaces.
 `launchctl print` shows `program = /bin/sh`.
 
+Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttled to one pull per 5 s) and before a ⌘R refresh, so references pushed from athena or apollo show up without waiting for the 15 s LaunchAgent.
+
 ## Mac scheduled maintenance
 
 The MacBook also runs three independent 15-minute cron jobs, staggered five minutes
@@ -296,7 +298,7 @@ commit those paths as one change. If intake is kept or cannot safely run, the PD
 in that host's `xlib/`; no other host is needed to finish it.
 
 On athena and apollo, chezmoi installs and enables `bob-ref-intake.timer`. It runs
-`bob ref scan --intake-only` two minutes after boot and every ten minutes after that.
+`bob ref scan --intake-only` two minutes after boot and every two minutes after that.
 The timer drains only that host's queue; an empty queue takes no lock and performs no
 sync. Recover or drain a queue manually with:
 

@@ -1877,7 +1877,7 @@ athena's or apollo's queue. See
 managed schedule; do not replace it with a LaunchAgent.
 
 On athena and apollo, chezmoi enables `bob-ref-intake.timer`, which runs
-`bob ref scan --intake-only` two minutes after boot and every ten minutes.
+`bob ref scan --intake-only` two minutes after boot and every two minutes.
 Each timer drains only its host's local queue. Check or recover a queue with:
 
 ```bash
