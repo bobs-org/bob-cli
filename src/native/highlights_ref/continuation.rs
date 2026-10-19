@@ -219,7 +219,9 @@ fn seam_between(
         return Seam::Gap;
     }
     match (previous.page_index, next.page_index) {
-        (Some(prev), Some(next)) if next == prev + 1 => Seam::Join,
+        (Some(prev), Some(next)) if prev.checked_add(1) == Some(next) => {
+            Seam::Join
+        }
         _ => Seam::Gap,
     }
 }

@@ -799,6 +799,85 @@ fn continuation_round_trip_group_and_stub() {
 }
 
 #[test]
+fn continuation_page_index_boundary_never_joins_on_overflow() {
+    let head = highlight(1, "Page 4294967295", Some(u32::MAX), "head", None);
+    let wrap = highlight(2, "Page 0", Some(0), "wrapped", Some("<"));
+    let plan = super::plan_continuations(&[head.clone(), wrap]);
+    assert_eq!(
+        plan.followers.get(&1).map(Vec::as_slice),
+        Some([(2, super::Seam::Gap)].as_slice())
+    );
+
+    let same_max =
+        highlight(1, "Page 4294967295", Some(u32::MAX), "head", None);
+    let same_max_next =
+        highlight(2, "Page 4294967295", Some(u32::MAX), "same", Some("<"));
+    let plan = super::plan_continuations(&[same_max, same_max_next]);
+    assert_eq!(
+        plan.followers.get(&1).map(Vec::as_slice),
+        Some([(2, super::Seam::Gap)].as_slice())
+    );
+
+    let before_max =
+        highlight(1, "Page 4294967294", Some(u32::MAX - 1), "head", None);
+    let at_max =
+        highlight(2, "Page 4294967295", Some(u32::MAX), "tail", Some("<"));
+    let plan = super::plan_continuations(&[before_max, at_max]);
+    assert_eq!(
+        plan.followers.get(&1).map(Vec::as_slice),
+        Some([(2, super::Seam::Join)].as_slice())
+    );
+
+    let linked = parse_sidecar_markdown(
+        "#### [Page 4294967295](highlights://example#page=4294967295)\n\n> head text\n\n***\n\n#### [Page 0](highlights://example#page=0)\n\n> tail text\n\n< joining note\n\n***\n",
+    );
+    assert_eq!(linked.len(), 2);
+    assert_eq!(linked[0].page_index, Some(u32::MAX));
+    assert_eq!(linked[1].page_index, Some(0));
+    let plan = super::plan_continuations(&linked);
+    let head_order = linked[0].order;
+    let tail_order = linked[1].order;
+    assert_eq!(
+        plan.followers.get(&head_order).map(Vec::as_slice),
+        Some([(tail_order, super::Seam::Gap)].as_slice())
+    );
+}
+
+#[test]
+fn continuation_short_page_labels_merge_into_plural_group() {
+    let bob_dir = temp_bob_dir("continuation-short-labels");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let rendered = render_annotations(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![
+            highlight(1, "p. 11", Some(11), "On every", None),
+            highlight(2, "p. 12", Some(12), "session startup", Some("<")),
+        ],
+        &ParsedNote::empty(),
+        false,
+    );
+    assert!(
+        rendered.content.contains("### pp. 11–12"),
+        "{}",
+        rendered.content
+    );
+    assert_eq!(rendered.count, 1);
+    assert_eq!(rendered.continuation_count, 1);
+    let parsed = super::parse_managed_region(&rendered.content);
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    let highlights: Vec<_> = parsed
+        .blocks
+        .iter()
+        .filter(|block| block.kind == super::RegionBlockKind::Highlight)
+        .collect();
+    assert_eq!(highlights.len(), 1);
+    assert_eq!(highlights[0].page_label.as_deref(), Some("pp. 11–12"));
+}
+
+#[test]
 fn continuation_report_lines_cover_merged_and_dangling() {
     assert!(super::continuation_report_lines(0, &[]).is_empty());
     assert_eq!(
