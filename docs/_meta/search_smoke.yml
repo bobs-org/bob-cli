@@ -36,6 +36,8 @@
   location: /reference/capture-syntax/#at-route-colon-named
 - query: "@route:block-id=<X>"
   location: /reference/capture-syntax/#at-route-colon-start
+- query: "@route:block-id=name"
+  location: /reference/capture-syntax/#at-route-colon-start
 - query: "@route:block-id with no other text"
   location: /reference/capture-syntax/#link-existing
 - query: "^route:block-id"
@@ -89,6 +91,8 @@
 - query: "=<X>"
   location: /reference/capture-syntax/#equals-start
 - query: "=<X>#pomodoro"
+  location: /reference/capture-syntax/#equals-named
+- query: "=name"
   location: /reference/capture-syntax/#equals-named
 - query: "~<K>"
   location: /reference/capture-syntax/#tilde-drop

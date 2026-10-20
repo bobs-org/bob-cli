@@ -16,6 +16,7 @@ Examples below were captured from this checkout's `bob` in an isolated
 fixture. Session examples need today's daily note with an open
 `## Pomodoros` entry. Dependency writes need Obsidian Tasks settings that
 define Blocked as `?`. Quote tokens in Zsh (`*`, `!`, `?`, and `#` glob).
+Zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted: always single-quote (`'=focus'`, `'x =focus'`).
 Network, clipboard, sync, and hook execution are not used here.
 
 ## Token index
@@ -38,7 +39,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
 | `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
 | `@route:block-id#pomodoro` | Same, under a named Pomodoro | [`@route:block-id#pomodoro`](#at-route-colon-named) |
-| `@route:block-id=<X>` | Same, and start that session | [`@route:block-id=<X>`](#at-route-colon-start) |
+| `@route:block-id=<X>` / `@route:block-id=name` | Same, and start that session (`@work:outline=bugs` links under `BUGS` and starts it) | [`@route:block-id=<X>`](#at-route-colon-start) |
 | `@route:block-id` with no other text | Link an existing task into today's ledger | [Link an existing task](#link-existing) |
 | `^route:block-id` | Active-task spelling of a link | [`^route:block-id`](#caret-active-task) |
 | `:<query>` | **Picker:** choose any open task to link | [`:<query>`](#colon-picker) |
@@ -61,7 +62,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `++[N]` | Shift the running session later | [`++[N]`](#plus-plus-shift) |
 | `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
 | `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
-| `=<X>#pomodoro` | Start a named Pomodoro | [`=<X>#pomodoro`](#equals-named) |
+| `=name` | Start a named Pomodoro (`=bugs`, same token as `=#bugs`) | [`=name`](#equals-named) |
 | `~<K>` | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
 | `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
 | `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
@@ -98,10 +99,10 @@ what they attach to, not as one global operator.
 | `#` | trailing bare `#` | Pomodoro note |
 | `#` | `@route#Section` | Heading in that note |
 | `#` | `@route+id#section` with body text | ALL-CAPS task section |
-| `#` | `@route:id#pomodoro` / `=#name` | Named Pomodoro |
+| `#` | `@route:id#pomodoro` / `=name` | Named Pomodoro (`=bugs` and `=#bugs` are one token) |
 | `@` | `@route…` | Route / destination token |
 | `@` | `@@route` | Draft-wide destination |
-| `@` | `x@<N>` / `=#name@<X>` | Timing or keep-list typed last |
+| `@` | `x@<N>` / `=name@<X>` | Timing or keep-list typed last (`=bugs@3` means `=3#bugs`) |
 | `@` | `URL @route` | Explicit reference parent |
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
@@ -120,14 +121,16 @@ Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
 **Mnemonic: `~` on its own ties two tasks; `~` inside `x` / `=` drops.**
 
+**`=` then a word starts that Pomodoro; `#` only after a number.** `=bugs` and `=#bugs` are one token; write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x2`).
+
 ## Incomplete input versus executable syntax
 
 A picker token is a draft state, not a capture. `bob capture` and
 `bob capture-parse` refuse it with a teaching error until the selection
 becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`,
 `~note:id`, `~~note:id`, or
-`@route+id`. Session tokens that still need a number (`x~`, `=~`, `x@`,
-`=#`) are the same kind of incomplete input.
+`@route+id`. Session tokens that still need a number or name (`x~`, `=~`, `x@`,
+`=#`) are the same kind of incomplete input. A bare `=name` start is complete (`=bugs`); only the empty `=#` needs `pomodoro_name`.
 
 A signed count with extra prose (`+2 more`, `=3 more`) is an error, not a
 task. A sign or `=` followed by prose (`Plan +5`, `= foo`) stays ordinary
@@ -140,12 +143,12 @@ These are not valid commands. Bob teaches the replacement.
 
 | Typed | What happens |
 | --- | --- |
-| `==`, `==<X>`, `==#name` | Retired restart/swap; write one `=` (`=`, `=3`, `=#bugs`) |
+| `==`, `==<X>`, `==#name` | Retired restart/swap; write one `=` (`=`, `=3`, `=bugs`) |
 | `==x` | Error: close with `x` |
 | `@route:id+` / `@route:id+#pomodoro` | Retired project-note forms; write `@route^id+` |
 | `@route::id` | Retired ordinary block-ID form; write `@route^id` |
 | `#now` / a free `#tag` next to `@route` | Retired; heading and Pomodoro `#` attach to the route token |
-| `x#bugs` | Error: `x` always closes the running session; write `x =#bugs` to close then start |
+| `x#bugs` | Error: `x` always closes the running session; write `x =bugs` to close then start |
 
 Contract: [Retired close spellings](../capture.md#retired-close-spellings).
 
@@ -378,13 +381,17 @@ bob capture 'Write an outline @work:outline#focus'
 
 Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
 
-### `@route:block-id=<X>` {#at-route-colon-start}
+### `@route:block-id=<X>` / `@route:block-id=name` {#at-route-colon-start}
 
 Same, and atomically start the selected session. `<X>` mirrors the `se<X>`
-snippet (empty is 25 minutes). Combine with `#pomodoro`.
+snippet (empty is 25 minutes). Combine with `#pomodoro`, or write the short suffix name (`@work:outline=bugs`, same as `@work:outline#bugs=`).
 
 ```bash
 bob capture '@work:outline=3'
+```
+
+```bash
+bob capture '@work:outline=bugs'
 ```
 
 Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
@@ -806,16 +813,16 @@ bob capture '=3'
 
 Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro).
 
-### `=<X>#pomodoro` {#equals-named}
+### `=name` / `=<X>#pomodoro` {#equals-named}
 
-Start the named Pomodoro now. An open match (whole slug, else prefix)
+Start the named Pomodoro now (`=focus`, same token as `=#focus`; equivalent spellings `=<X>#pomodoro`, `=name@<X>`). An open match (whole slug, else prefix)
 starts in place; a completed match starts a new session with that name
 ("again"); otherwise a new named session is created and started. While
 another session runs, a different named target swaps in. Empty `<X>` keeps
-the running ledger.
+the running ledger. Write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x2`).
 
 ```bash
-bob capture '=#focus'
+bob capture '=focus'
 ```
 
 ```text { .no-copy title="Output" }
@@ -829,7 +836,7 @@ Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro).
 ### `~<K>` {#tilde-drop}
 
 On a start token, drop the queued Task Links in `<K>` (`=~2`, `=3~2,4`,
-`=#bugs~2`). `~` always comes last. `=~` and `=~2,` are incomplete
+`=bugs~2`). `~` always comes last. `=~` and `=~2,` are incomplete
 (`pomodoro_start_task`). A start cannot complete links; `!` belongs on `x`.
 
 ```bash
@@ -959,7 +966,7 @@ Contract: [Logging work while closing](../capture.md#logging-work-while-closing)
 ### `+2 x` / `x =` {#operator-chain}
 
 Whitespace-separated session tokens on one line run left to right exactly
-like blank-line items (`+2 x`, `x =`, `x =#bugs`, `=#bugs +2`). An inline
+like blank-line items (`+2 x`, `x =`, `x =bugs`, `=bugs +2`). An inline
 Work Log entry sits right after its close, with operators trailing
 (`x wired the lexer =`). Child bullets attach to that line's `x`.
 

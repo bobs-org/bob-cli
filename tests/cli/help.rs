@@ -531,11 +531,12 @@ fn capture_named_start_help_mentions_start_forms() {
     assert_success(&capture);
     let help = stdout(&capture);
     for needle in [
-        "=<X>#<pomodoro>",
-        "bob capture '=#deep-work'",
+        "=name",
+        "bob capture '=bugs'",
         "bob capture '=3#bugs'",
-        "bob capture '=#bugs@3'",
-        "bob capture 'x =#bugs'",
+        "bob capture '=bugs@3'",
+        "bob capture 'x =bugs'",
+        "bob capture '@sase:deep-fix=bugs'",
     ] {
         assert!(
             help.contains(needle),
