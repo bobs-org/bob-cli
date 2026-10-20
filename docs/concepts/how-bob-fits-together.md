@@ -7,9 +7,9 @@ search:
 
 # How Bob fits together
 
-The vault owns the state. The CLI owns capture semantics and vault writes.
-Obsidian plugins render the desktop review, and Mac Capture is a sibling
-program that submits drafts through the CLI.
+The vault owns the state. The CLI owns capture grammar, planning, and vault writes.
+Obsidian plugins render the desktop review and write review gestures directly, and
+Mac Capture is a sibling program that submits drafts through the CLI.
 
 ## The idea in one picture
 

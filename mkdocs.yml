@@ -105,6 +105,12 @@ nav:
   - Understand:
       - Overview: concepts/index.md
       - How Bob fits together: concepts/how-bob-fits-together.md
+      - Tasks and lanes: concepts/tasks-and-lanes.md
+      - Today and the Pomodoro ledger: concepts/today-and-the-pomodoro-ledger.md
+      - Freshness and the review walk: concepts/freshness-and-the-review-walk.md
+      - Projects and dependencies: concepts/projects-and-dependencies.md
+      - The reference library: concepts/reference-library.md
+      - Why the vault syncs through git: concepts/why-the-vault-syncs-through-git.md
   - Reference:
       - Overview: reference/index.md
       - Obsidian plugins: reference/plugins/index.md

@@ -54,9 +54,12 @@ The panel is illustrative; the Mac phase owns the real screenshot.
 
 ## A Bob day
 
-[Morning review](freshness.md) clears the queue, [capture](capture.md) takes the next
-thought, [Pomodoros](pomodoro-homes.md) hold today's work, [close](task-dependencies.md)
-links what unblocked, and [sync](vault-git-sync.md) keeps the vault honest.
+[Morning review](concepts/freshness-and-the-review-walk.md) clears the queue,
+[capture](concepts/tasks-and-lanes.md#capture-makes-a-task) takes the next thought,
+[Pomodoros](concepts/today-and-the-pomodoro-ledger.md) hold today's work,
+[close](concepts/projects-and-dependencies.md#finishing-a-prerequisite) finishes work
+and chooses what comes next, and [sync](concepts/why-the-vault-syncs-through-git.md)
+keeps the vault honest.
 
 ## Doors
 

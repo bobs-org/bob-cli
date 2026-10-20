@@ -159,3 +159,15 @@
   location: /concepts/how-bob-fits-together/
 - query: "Yank absolute path with tilde"
   location: /reference/plugins/bob-navigation-hotkeys/#registered-commands
+- query: tasks and lanes
+  location: /concepts/tasks-and-lanes/
+- query: Today and the Pomodoro ledger
+  location: /concepts/today-and-the-pomodoro-ledger/
+- query: freshness and the review walk
+  location: /concepts/freshness-and-the-review-walk/
+- query: projects and dependencies
+  location: /concepts/projects-and-dependencies/
+- query: reference library
+  location: /concepts/reference-library/
+- query: vault syncs through git
+  location: /concepts/why-the-vault-syncs-through-git/
