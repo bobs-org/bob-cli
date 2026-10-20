@@ -1,9 +1,8 @@
 //! Relation capture grammar contract (`~` / `~~`): lexer, guards,
-//! labels, ownership, spans, additive JSON, and the temporary execution
-//! refusal (plan:202610/task_relations.md capture-parse phase, LP1-LP18).
+//! labels, ownership, spans, and additive JSON (plan:202610/task_relations.md
+//! capture-parse phase, LP1-LP18).
 
 use crate::support::*;
-use std::fs;
 
 fn parse_json(draft: &str) -> serde_json::Value {
     let output = bob_command()
@@ -307,30 +306,4 @@ fn relation_grammar_absent_without_tilde() {
     let json = parse_json("Fix bug");
     assert!(json.get("relations").is_none());
     assert!(json.get("relation_grammar").is_none());
-}
-
-// Temporary execution refusal: half-landed epics never write `~` as text.
-#[test]
-fn relation_capture_refuses_with_temporary_error() {
-    let temp = TempDir::new("bob-cli-capture-relation-temp-guard");
-    let vault = temp.path().join("vault");
-    fs::create_dir_all(&vault).expect("create vault");
-    let output = bob_command()
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("--")
-        .arg("Fix bug ~work:foo")
-        .output()
-        .expect("run bob capture");
-    assert!(
-        !output.status.success(),
-        "capture with relations should fail:\n{}",
-        format_output(&output)
-    );
-    let combined = format!("{}{}", stdout(&output), stderr(&output));
-    assert!(
-        combined.contains("`~` task links are not supported yet"),
-        "temporary guard message missing:\n{combined}"
-    );
 }

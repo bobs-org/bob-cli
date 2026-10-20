@@ -292,7 +292,7 @@ pub(super) fn mint_staged_dependent_id(
     mint_staged_block_id(ctx, planner, absolute, dep_relative, task_line)
 }
 
-fn edit_line_index(edit: &blocks_mod::BlocksEdit) -> usize {
+pub(super) fn edit_line_index(edit: &blocks_mod::BlocksEdit) -> usize {
     match edit {
         blocks_mod::BlocksEdit::Insert { line_index, .. }
         | blocks_mod::BlocksEdit::Replace { line_index, .. }
@@ -302,7 +302,7 @@ fn edit_line_index(edit: &blocks_mod::BlocksEdit) -> usize {
 
 /// Apply shared-planner edits to note text, preserving the note's
 /// line ending and final-newline state.
-fn apply_blocks_edits(
+pub(super) fn apply_blocks_edits(
     contents: &str,
     edits: Vec<blocks_mod::BlocksEdit>,
 ) -> String {

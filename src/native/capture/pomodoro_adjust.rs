@@ -444,6 +444,10 @@ pub(super) fn plan_pomodoro_adjust_item(
             minted_dependent_block_id: None,
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -619,6 +623,10 @@ pub(super) fn plan_pomodoro_shift_item(
             minted_dependent_block_id: None,
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(

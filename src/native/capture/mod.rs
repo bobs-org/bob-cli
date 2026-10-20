@@ -22,10 +22,10 @@ use super::{
         is_block_id, unused_project_note_pomodoro_error, AuthoredSubBullet,
         CaptureKind, CaptureParseOptions, ClipRequest, ParsedCaptureItem,
         ParsedCaptureText, ParsedDependencyTarget, ParsedDependencyTargetKind,
-        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
-        PomodoroStartSpec, SubBulletTarget, TaskSectionSelector,
-        TaskToggleIntent, POMODORO_CLOSE_INTERNAL_BULLETS_ERROR,
-        POMODORO_START_FORCED_ERROR,
+        ParsedRelation, PomodoroAdjustSpec, PomodoroCloseSpec,
+        PomodoroShiftSpec, PomodoroStartSpec, RelationDirection,
+        SubBulletTarget, TaskSectionSelector, TaskToggleIntent,
+        POMODORO_CLOSE_INTERNAL_BULLETS_ERROR, POMODORO_START_FORCED_ERROR,
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
     capture_project_note, capture_schedule_log, capture_task_sections,
@@ -73,6 +73,8 @@ mod pomodoro_start;
 mod project_deps;
 mod project_note;
 mod pull_in;
+mod relations;
+mod relations_mirror;
 mod sections;
 mod start_output;
 mod sub_bullet;
@@ -105,6 +107,8 @@ use pomodoro_start::*;
 use project_deps::*;
 use project_note::*;
 use pull_in::*;
+use relations::*;
+use relations_mirror::*;
 use sections::*;
 use start_output::*;
 use sub_bullet::*;

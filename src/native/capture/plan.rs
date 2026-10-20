@@ -187,6 +187,11 @@ pub(super) fn plan_capture_batch(
     {
         warnings.push(warning);
     }
+    if let Some(warning) = dependency_ctx.linked_from_lines_warning()
+        && !warnings.contains(&warning)
+    {
+        warnings.push(warning);
+    }
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
@@ -488,6 +493,10 @@ fn plan_ref_item(
             minted_dependent_block_id: None,
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -508,15 +517,6 @@ pub(super) fn plan_capture_item(
     dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
-    // Temporary execution refusal for the capture-parse phase: the lexer,
-    // needs, spans, and JSON land first, and execution (same-batch mirror)
-    // lands in the capture-execute phase. This keeps a half-landed epic
-    // from writing `~` as body text.
-    if !parsed.relations.is_empty() {
-        return Err(CaptureError::usage(
-            "`~` task links are not supported yet",
-        ));
-    }
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
     // It never flows through the toggle/link planners below. Inherited
@@ -600,7 +600,10 @@ pub(super) fn plan_capture_item(
         };
         // A forced sub-bullet parent owns the item's modifiers like an
         // explicit marker does; a picker-ref target cannot.
-        if !parsed.dependencies.is_empty() || !parsed.blocked_tasks.is_empty() {
+        if !parsed.dependencies.is_empty()
+            || !parsed.blocked_tasks.is_empty()
+            || !parsed.relations.is_empty()
+        {
             match target {
                 SubBulletTarget::BlockId(block_id) => {
                     let Some(route) = parsed.route.clone() else {
@@ -760,6 +763,10 @@ pub(super) fn plan_capture_item(
                 minted_dependent_block_id: None,
                 dependency_updates: Vec::new(),
                 minted_blocker_block_id: None,
+                relation_updates: Vec::new(),
+                linked_from_line_updates: Vec::new(),
+                minted_relation_block_ids: Vec::new(),
+                mirror_skipped: Vec::new(),
             },
             clip_plan: None,
             pomodoro_refs,
@@ -861,10 +868,17 @@ pub(super) fn plan_capture_item(
         .transpose()?;
     // A9: reserve N's ID before the capture line is built, even when
     // `dependencies.blocks_lines` is off. Typed `^id` / `:id` win.
+    // `~~` always mints N so the source's LINKS entry can name it.
     let mut minted_blocker_block_id: Option<MintedDependentBlockIdJson> = None;
-    if !parsed.blocked_tasks.is_empty()
-        && matches!(parsed.kind, CaptureKind::Task)
-    {
+    let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
+        Vec::new();
+    let needs_new_task_id = matches!(parsed.kind, CaptureKind::Task)
+        && (!parsed.blocked_tasks.is_empty()
+            || parsed
+                .relations
+                .iter()
+                .any(|relation| relation.direction == RelationDirection::From));
+    if needs_new_task_id {
         let dest = relative_target(parsed.route.as_deref());
         let absolute = request.bob_dir.join(&dest);
         let minted = mint_staged_block_id(
@@ -874,11 +888,25 @@ pub(super) fn plan_capture_item(
             &dest,
             &format!("- [ ] #task {}", parsed.body),
         )?;
-        minted_blocker_block_id = Some(MintedDependentBlockIdJson {
-            path: display_relative(&dest),
-            line: 0,
-            block_id: minted.clone(),
-        });
+        if !parsed.blocked_tasks.is_empty() {
+            minted_blocker_block_id = Some(MintedDependentBlockIdJson {
+                path: display_relative(&dest),
+                line: 0,
+                block_id: minted.clone(),
+            });
+        }
+        if parsed
+            .relations
+            .iter()
+            .any(|relation| relation.direction == RelationDirection::From)
+        {
+            minted_relation_block_ids.push(MintedRelationBlockIdJson {
+                path: display_relative(&dest),
+                line: 0,
+                block_id: minted.clone(),
+                role: MintedRelationRole::Target,
+            });
+        }
         parsed.kind = CaptureKind::TaskWithBlockId {
             block_id: minted.clone(),
         };
@@ -1442,6 +1470,69 @@ pub(super) fn plan_capture_item(
             }
         }
     }
+    let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
+    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
+    if !parsed.relations.is_empty() {
+        let owner = locate_relation_owner(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &parsed,
+            &relative_target,
+            task_block_id.as_deref(),
+            minted_dependent_block_id.as_ref(),
+            minted_blocker_block_id.as_ref(),
+            &block_first_line,
+        )?;
+        let existing_owner = matches!(
+            parsed.dependency_target.as_ref().map(|target| target.kind),
+            Some(ParsedDependencyTargetKind::ExistingTask)
+        );
+        let reports = plan_relation_writes(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.relations,
+            warnings,
+            existing_owner,
+        )?;
+        relation_updates = reports.updates;
+        linked_from_line_updates = reports.linked_from;
+        minted_relation_block_ids.extend(reports.minted);
+        mirror_skipped = reports.skipped;
+        dependency_block_refs.extend(reports.source_refs);
+        if let Some(block_id) = reports.owner_block_id.as_deref() {
+            let relocated = locate_task_by_block_id(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                &owner.relative,
+                block_id,
+            )?;
+            for minted in &mut minted_relation_block_ids {
+                if minted.block_id == block_id {
+                    minted.line = relocated.line + 1;
+                    minted.path = relocated.relative_target.clone();
+                }
+            }
+            if matches!(
+                parsed.kind,
+                CaptureKind::Task
+                    | CaptureKind::TaskWithBlockId { .. }
+                    | CaptureKind::Pomodoro { .. }
+            ) {
+                let contents = current_note_text(planner, &relocated.target)?;
+                if let Some(line) = contents.lines().nth(relocated.line) {
+                    block_first_line = line.to_string();
+                }
+                if task_block_id.is_none() {
+                    task_block_id = relocated.block_id.clone();
+                }
+            }
+        }
+    }
     // Sub-bullet `under` uses the parent's final status, including `&`
     // writes that never enter the `*` block above.
     if let Some(details) = note_plan.sub_bullet.as_mut()
@@ -1613,6 +1704,10 @@ pub(super) fn plan_capture_item(
             minted_dependent_block_id,
             dependency_updates,
             minted_blocker_block_id,
+            relation_updates,
+            linked_from_line_updates,
+            minted_relation_block_ids,
+            mirror_skipped,
         },
         clip_plan,
         pomodoro_refs,
@@ -1748,14 +1843,35 @@ pub(super) fn resolve_priority(
 }
 
 fn typed_relationship_phrase(parsed: &ParsedCaptureText) -> String {
-    match (
-        parsed.dependencies.is_empty(),
-        parsed.blocked_tasks.is_empty(),
-    ) {
-        (false, false) => "'&' and '*'".to_string(),
-        (false, true) => "'&'".to_string(),
-        (true, false) => "'*'".to_string(),
-        (true, true) => "task dependencies".to_string(),
+    let mut parts = Vec::new();
+    if !parsed.dependencies.is_empty() {
+        parts.push("'&'");
+    }
+    if !parsed.blocked_tasks.is_empty() {
+        parts.push("'*'");
+    }
+    if parsed
+        .relations
+        .iter()
+        .any(|relation| relation.direction == RelationDirection::To)
+    {
+        parts.push("'~'");
+    }
+    if parsed
+        .relations
+        .iter()
+        .any(|relation| relation.direction == RelationDirection::From)
+    {
+        parts.push("'~~'");
+    }
+    match parts.as_slice() {
+        [] => "task dependencies".to_string(),
+        [one] => (*one).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        _ => {
+            let (last, rest) = parts.split_last().expect("len>=3");
+            format!("{} and {last}", rest.join(", "))
+        }
     }
 }
 

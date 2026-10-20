@@ -2328,12 +2328,14 @@ Pomodoro link exactly as it was, apart from a minted `^id`.
 dependency style, for example:
 
 ```text
-✓ Fix flaky capture retries  mac_inbox.md ^fix-flaky-capture-retries   [ ] Ready
+✓ captured  mac_inbox.md
+  - [ ] #task Fix flaky capture retries [created::2026-10-14]
   🪢 links to "Capture * blocks existing tasks" · follow-up of   done/bob_done.md ^capture-star · archived
 ```
 
-An unchanged rerun reports `unchanged`; a new label reports
-`relabeled`. Dry runs say `would …`.
+An existing-owner rerun of the same edge reports `🪢 unchanged`; a
+new label reports `🪢 relabeled`. Dry runs say `would link to` /
+`would now link here` / `would relabel`.
 
 **JSON.** Every `schema_version` stays 1 and every field is
 additive. `capture-parse` adds `relations[]` (top-level and per

@@ -487,6 +487,22 @@ pub(super) struct CaptureItemResult {
     /// dependent. Additive: omitted when the ID was typed, not minted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) minted_blocker_block_id: Option<MintedDependentBlockIdJson>,
+    /// Per-item `~` / `~~` writes (`docs/task-relations.md` LX). Additive:
+    /// omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_updates: Vec<RelationUpdateJson>,
+    /// Courtesy LINKED FROM rows staged by this item. Same shape as
+    /// `blocks_line_updates`. Additive: omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) linked_from_line_updates: Vec<BlocksLineUpdateJson>,
+    /// Block ids minted so a relation edge can name the source or the
+    /// `~~` target. Additive: omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) minted_relation_block_ids: Vec<MintedRelationBlockIdJson>,
+    /// LINKED FROM courtesy writes this item skipped. Additive: omitted
+    /// when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) mirror_skipped: Vec<MirrorSkippedJson>,
 }
 
 impl CaptureItemResult {
@@ -925,6 +941,60 @@ pub(super) struct MintedDependentBlockIdJson {
     pub(super) path: String,
     pub(super) line: usize,
     pub(super) block_id: String,
+}
+
+/// One `~` / `~~` edge this item wrote or confirmed
+/// (`docs/task-relations.md` Rule 12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationUpdateJson {
+    pub(super) direction: RelationDirection,
+    pub(super) source: RelationEndpointJson,
+    pub(super) target: RelationEndpointJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_label: Option<String>,
+    pub(super) action: RelationAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationEndpointJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) archived: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationAction {
+    Added,
+    Relabeled,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum MintedRelationRole {
+    Source,
+    Target,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct MintedRelationBlockIdJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) role: MintedRelationRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct MirrorSkippedJson {
+    pub(super) path: String,
+    pub(super) block_id: String,
+    pub(super) reason: &'static str,
 }
 
 /// BLOCKS-mirror side effects staged inside one capture batch item:
@@ -1596,6 +1666,7 @@ pub(super) fn print_human_item_success(
         println!("  {}", styler.dim(line));
     }
     print_human_dependency_updates(result, &styler);
+    print_human_relation_updates(result);
     if let Some(clip) = &result.clip {
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
@@ -2195,6 +2266,7 @@ pub(super) fn print_human_task_dependency_success(
     println!("{prefix} {verb}  {ordinal}{target_label}");
     print_human_owner_status_row(result, styler);
     print_human_dependency_updates(result, styler);
+    print_human_relation_updates(result);
 }
 
 fn print_human_owner_status_row(result: &CaptureItemResult, styler: &Styler) {
@@ -2285,6 +2357,60 @@ fn parent_previous_status(
             && previous != current)
             .then_some(previous)
     })
+}
+
+fn print_human_relation_updates(result: &CaptureItemResult) {
+    for update in &result.relation_updates {
+        println!("  {}", human_relation_line(result.dry_run, update));
+    }
+}
+
+fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
+    let label = update
+        .label
+        .as_deref()
+        .map(|label| format!(" · {label}"))
+        .unwrap_or_default();
+    let archived = if update.target.archived == Some(true) {
+        " · archived"
+    } else {
+        ""
+    };
+    let locator = format!(
+        "   {} ^{}{archived}",
+        update.target.path, update.target.block_id
+    );
+    let quoted = format!("\"{}\"", update.target.text);
+    let verb = match (update.direction, update.action, dry_run) {
+        (RelationDirection::To, RelationAction::Added, false) => {
+            format!("🪢 links to {quoted}{label}{locator}")
+        }
+        (RelationDirection::To, RelationAction::Added, true) => {
+            format!("🪢 would link to {quoted}{label}{locator}")
+        }
+        (RelationDirection::From, RelationAction::Added, false) => {
+            format!(
+                "🪢 {quoted} now links here{label}   {} ^{}",
+                update.source.path, update.source.block_id
+            )
+        }
+        (RelationDirection::From, RelationAction::Added, true) => {
+            format!(
+                "🪢 {quoted} would now link here{label}   {} ^{}",
+                update.source.path, update.source.block_id
+            )
+        }
+        (_, RelationAction::Relabeled, false) => {
+            format!("🪢 relabeled {quoted}{label}{locator}")
+        }
+        (_, RelationAction::Relabeled, true) => {
+            format!("🪢 would relabel {quoted}{label}{locator}")
+        }
+        (_, RelationAction::Unchanged, _) => {
+            format!("🪢 unchanged {quoted}{locator}")
+        }
+    };
+    verb
 }
 
 fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {

@@ -53,6 +53,7 @@ pub(super) struct DependencyContext {
     dependents: OnceLock<DependentsSnapshot>,
     link_unblocked: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
+    linked_from_lines: OnceLock<(bool, Option<String>)>,
     block_reservations: BTreeMap<PathBuf, BTreeSet<String>>,
     #[cfg(test)]
     graph_builds: AtomicUsize,
@@ -76,6 +77,7 @@ impl DependencyContext {
             dependents: OnceLock::new(),
             link_unblocked: OnceLock::new(),
             blocks_lines: OnceLock::new(),
+            linked_from_lines: OnceLock::new(),
             block_reservations: BTreeMap::new(),
             #[cfg(test)]
             graph_builds: AtomicUsize::new(0),
@@ -150,6 +152,24 @@ impl DependencyContext {
     /// Plain captures never touch the config and never warn.
     pub(super) fn blocks_lines_warning(&self) -> Option<String> {
         self.blocks_lines
+            .get()
+            .and_then(|(_, warning)| warning.clone())
+    }
+
+    /// LINKED FROM kill switch (`docs/task-relations.md` §12), read
+    /// once per batch: `relations.linked_from_lines`, defaulting to
+    /// `true`. An invalid value falls back to `true`; the warning
+    /// surfaces once per batch through [`Self::linked_from_lines_warning`].
+    pub(super) fn linked_from_lines_enabled(&self) -> bool {
+        self.linked_from_lines
+            .get_or_init(load_linked_from_lines_enabled)
+            .0
+    }
+
+    /// The invalid-config warning for [`Self::linked_from_lines_enabled`],
+    /// when the batch consulted the switch and the value was invalid.
+    pub(super) fn linked_from_lines_warning(&self) -> Option<String> {
+        self.linked_from_lines
             .get()
             .and_then(|(_, warning)| warning.clone())
     }
@@ -3191,6 +3211,33 @@ pub(super) fn plan_dependency_only_item(
             );
         }
     }
+    let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
+    let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
+        Vec::new();
+    let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
+    if !parsed.relations.is_empty() {
+        let relation_owner = RelationOwner::from_dependent(
+            ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+        )?;
+        let reports = plan_relation_writes(
+            ctx,
+            planner,
+            &request.bob_dir,
+            &relation_owner,
+            &parsed.relations,
+            warnings,
+            true,
+        )?;
+        relation_updates = reports.updates;
+        linked_from_line_updates = reports.linked_from;
+        minted_relation_block_ids = reports.minted;
+        mirror_skipped = reports.skipped;
+        task_block_refs.extend(reports.source_refs);
+    }
     let relocated = locate_task_by_block_id(
         ctx,
         planner,
@@ -3279,6 +3326,10 @@ pub(super) fn plan_dependency_only_item(
             minted_dependent_block_id: None,
             dependency_updates,
             minted_blocker_block_id: None,
+            relation_updates,
+            linked_from_line_updates,
+            minted_relation_block_ids,
+            mirror_skipped,
         },
         clip_plan: None,
         pomodoro_refs,

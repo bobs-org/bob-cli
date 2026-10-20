@@ -21,6 +21,7 @@ pub(super) enum TaskBlockRole {
     DependencyDropped,
     Completed,
     Unblocked,
+    RelationSource,
 }
 
 /// One sub-bullet touch of a parent task. `line` is the 0-based parent

@@ -103,6 +103,7 @@ pub(crate) use self::model::ParsedCaptureText;
 pub(crate) use self::model::ParsedDependency;
 pub(crate) use self::model::ParsedDependencyTarget;
 pub(crate) use self::model::ParsedDependencyTargetKind;
+pub(crate) use self::model::ParsedRelation;
 pub(crate) use self::model::PomodoroAdjustSpec;
 pub(crate) use self::model::PomodoroCloseSpec;
 pub(crate) use self::model::PomodoroLinkSpelling;

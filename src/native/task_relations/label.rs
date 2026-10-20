@@ -42,6 +42,7 @@ pub(crate) fn normalize_relation_label(
 }
 
 /// Capture spelling of a canonical label: `|label` or `|"multi word"`.
+#[allow(dead_code)] // capture-complete replacement spelling
 pub(crate) fn relation_label_quoted_form(label: &str) -> String {
     if label.contains(' ') {
         format!("|\"{label}\"")
