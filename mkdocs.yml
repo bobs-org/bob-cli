@@ -140,6 +140,7 @@ nav:
               - "bob capture-templates": reference/cli/capture-templates.md
           # END GENERATED: cli nav
       - Configuration: reference/configuration.md
+      - JSON outputs: reference/json-outputs.md
       - Glossary: reference/glossary.md
   - Develop:
       - Overview: develop/index.md

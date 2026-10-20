@@ -258,6 +258,10 @@ See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.
 See [`bob completion`](cli/completion.md), [plugin deployment](../plugins.md),
 and the [bob-plugins README](https://github.com/bobs-org/bob-plugins#readme).
 
+To install plugins, run `bob plugins sync` from a checkout of the
+[bob-plugins](https://github.com/bobs-org/bob-plugins#readme) repo and enable
+them in Obsidian; `bob plugins list` reports the sync state first.
+
 ## Other runtime environment
 
 | Variable | Use |
@@ -287,6 +291,16 @@ Google Keep. Clipboard tools are platform-specific. Native execution does
 not require Bash or Perl; the compatibility fallback may. See the
 [runtime dependency list](https://github.com/bobs-org/bob-cli#runtime-dependencies) and the
 individual command references for command-specific requirements.
+
+## Mac Capture hotkeys
+
+Bob CLI owns no hotkey. When the Mac menu-bar app reports a hotkey conflict,
+free the shortcut shown in its Diagnostics and choose Recheck Bob, or switch
+between the production and rollback bindings in Settings. The exact keys and
+recovery steps live in the public
+[Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme):
+read Hotkey Registry, Conflicts, and Launch at Login for the registry and
+conflict recovery, and Keyboard for the capture editor keys.
 
 ## Related
 

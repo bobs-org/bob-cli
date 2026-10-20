@@ -112,4 +112,10 @@
   location: /reference/vault-format/#pending
 - query: Next
   location: /reference/vault-format/#next
+- query: complete a task
+  location: /reference/capture-syntax/#bang-complete
+- query: install plugins
+  location: /reference/configuration/#plugins-and-shell-completion
+- query: hotkey conflict
+  location: /reference/configuration/#mac-capture-hotkeys
 
