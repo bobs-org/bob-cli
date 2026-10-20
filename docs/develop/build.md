@@ -112,21 +112,25 @@ just docs-check
 
 The gate assembles source context once, then checks the docs contract, generated-file
 drift including the plugin inventory, a strict Zensical build, published URLs, offline
-links, search smoke cases, and the documentation package tests. For a pinned production
-build, use `uv run --project tools/docs bob-docs check --production --sources FILE`;
-production requires an explicit clean SHA for bob-cli and every mounted source and never
+links, search smoke cases, the executable tutorial, CLI media determinism, and the
+documentation package tests. For a pinned production build, use
+`uv run --project tools/docs bob-docs check --production --sources FILE`; production
+requires an explicit clean SHA for bob-cli and every mounted source and never
 rediscovers plugin checkouts from the environment or cache.
 
-Generate the local fonts and identity assets after changing the bundled sources or the
-mark geometry:
+Generate the local fonts, identity assets, and CLI captures after changing the bundled
+sources, the mark geometry, or Bob's human output:
 
 ```bash
 just docs-fonts    # subset OFL fonts to WOFF2 with --group fonts
 just docs-assets   # mark, favicons, and social card
+just docs-media    # PTY-capture Bob and render docs/assets/media/cli/*.svg
 ```
 
-Both commands accept `-c/--check` to compare without writing. The WOFF2 total stays
-under 450,000 bytes; record the sizes when regenerating.
+Those commands accept `-c/--check` to compare without writing (`just docs-media` is the
+write form; check with `uv run --project tools/docs bob-docs media -c`). The WOFF2 total
+stays under 450,000 bytes; record the sizes when regenerating. Media `--check` renders
+twice and must not refresh `docs/_meta/media.yml`.
 
 Audit the built site for accessibility after theme or homepage changes:
 
@@ -139,8 +143,8 @@ Install browsers once with
 Audits are dev-only and are not part of `just docs-check`.
 
 The generated site is written to `target/docs/site/`. Building does not regenerate
-tracked pages; run `just docs-gen`, `just docs-fonts`, or `just docs-assets`
-explicitly and review their changes.
+tracked pages; run `just docs-gen`, `just docs-fonts`, `just docs-assets`, or
+`just docs-media` explicitly and review their changes.
 
 ## Publish the public site
 

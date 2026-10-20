@@ -13,3 +13,9 @@ assets/favicon.png:
 assets/social-card.png:
   source: "bob-docs social-card (deterministic Pillow 1200x630 social card)"
   date: 2026-10-20
+assets/media/cli/capture.svg:
+  source: "bob-docs media (PTY bob capture \"Review the queue input\"; examples/demo-vault; Rich SVG; bundled JetBrains Mono WOFF2)"
+  date: 2026-10-20
+assets/media/cli/plan.svg:
+  source: "bob-docs media (PTY bob plan after linking Today; examples/demo-vault; Rich SVG; bundled JetBrains Mono WOFF2)"
+  date: 2026-10-20

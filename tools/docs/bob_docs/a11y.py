@@ -14,13 +14,16 @@ from .errors import DocsError
 WIDTHS = (360, 768, 1280)
 SCHEMES = ("light", "dark")
 
-# Default audit matrix: homepage, short contract, long contract, plus the
-# generated CLI reference when a later phase lands it.
+# Default audit matrix: homepage, short contract, long contract, Learn pages,
+# plus the generated CLI reference when a later phase lands it.
 PAGES: tuple[tuple[str, str], ...] = (
     ("homepage", "/"),
     ("today-marks", "/today-marks/"),
     ("capture", "/capture/"),
     ("cli-reference", "/reference/cli/"),
+    ("first-bob-day", "/start/first-bob-day/"),
+    ("compatibility", "/reference/compatibility/"),
+    ("how-bob-fits-together", "/concepts/how-bob-fits-together/"),
 )
 
 CAPTURE_DEEP_ANCHOR = "/capture/"
@@ -131,6 +134,90 @@ def _fixture_html() -> str:
     )
 
 
+# Zensical injects `md-code__button`; Material uses `md-clipboard`.
+_COPY_BUTTON_COUNT = (
+    "document.querySelectorAll("
+    "  'button.md-code__button, button.md-clipboard, button[data-md-type=\"copy\"], "
+    "   [data-md-clipboard], .md-clipboard'"
+    ").length"
+)
+
+
+def _overflow(page) -> dict:
+    return page.evaluate(
+        "(() => { const de = document.documentElement; return "
+        "{scrollWidth: de.scrollWidth, clientWidth: de.clientWidth}; })()"
+    )
+
+
+def _learn_surface_checks(browser, base: str, failures: list[str], report: dict) -> None:
+    """Copy buttons, footer links, overflow, and compatibility wrapping."""
+
+    context = browser.new_context(viewport={"width": 1280, "height": 800})
+    page = context.new_page()
+    try:
+        page.goto(base + "/", wait_until="networkidle", timeout=30000)
+        copy_buttons = page.evaluate(_COPY_BUTTON_COUNT)
+        if copy_buttons < 1:
+            failures.append("copy: homepage has no copy buttons on the capture command")
+        footer_hrefs = page.evaluate(
+            "[...document.querySelectorAll('a[href]')].map(a => a.getAttribute('href') || '')"
+        )
+        has_for_me = any("is-bob-for-me" in href for href in footer_hrefs)
+        has_compat = any("compatibility" in href for href in footer_hrefs)
+        if not has_for_me or not has_compat:
+            failures.append("footer: homepage is missing Is Bob for me? or compatibility links")
+        report["homepage_copy_buttons"] = copy_buttons
+        report["homepage_footer_links"] = {"is_bob_for_me": has_for_me, "compatibility": has_compat}
+    finally:
+        context.close()
+
+    context = browser.new_context(viewport={"width": 360, "height": 800})
+    page = context.new_page()
+    try:
+        for key, path in (
+            ("homepage", "/"),
+            ("first-bob-day", "/start/first-bob-day/"),
+            ("compatibility", "/reference/compatibility/"),
+        ):
+            page.goto(base + path, wait_until="networkidle", timeout=30000)
+            overflow = _overflow(page)
+            if overflow["scrollWidth"] > overflow["clientWidth"] + 2:
+                failures.append(
+                    f"overflow: {key} scrolls horizontally at 360px "
+                    f"({overflow['scrollWidth']} > {overflow['clientWidth']})"
+                )
+            report.setdefault("overflow_360", {})[key] = overflow
+            if key == "compatibility":
+                wrapping = page.evaluate(
+                    """(() => {
+                      const root = document.querySelector(
+                        'section.bob-compatibility-snapshot, .bob-compatibility-snapshot, '
+                        + 'article.md-typeset table, article.md-typeset'
+                      );
+                      if (!root) return null;
+                      return {
+                        scrollWidth: root.scrollWidth,
+                        clientWidth: root.clientWidth,
+                        className: String(root.className || '').slice(0, 80),
+                      };
+                    })()"""
+                )
+                report["compatibility_wrap"] = wrapping
+                if wrapping and wrapping["scrollWidth"] > wrapping["clientWidth"] + 24:
+                    failures.append(
+                        "compatibility: snapshot/table does not wrap at 360px "
+                        f"({wrapping['scrollWidth']} > {wrapping['clientWidth']})"
+                    )
+        page.goto(base + "/start/first-bob-day/", wait_until="networkidle", timeout=30000)
+        tutorial_copy = page.evaluate(_COPY_BUTTON_COUNT)
+        if tutorial_copy < 1:
+            failures.append("copy: first-day tutorial has no copy buttons")
+        report["first_day_copy_buttons"] = tutorial_copy
+    finally:
+        context.close()
+
+
 def run_a11y(root: Path, *, builder: str | None = None, site: str | Path | None = None) -> int:
     _require_playwright()
     from playwright.sync_api import sync_playwright
@@ -196,6 +283,13 @@ def run_a11y(root: Path, *, builder: str | None = None, site: str | Path | None 
                             page = context.new_page()
                             try:
                                 page.goto(url, wait_until="networkidle", timeout=30000)
+                                if key == "how-bob-fits-together":
+                                    try:
+                                        page.wait_for_selector(
+                                            ".mermaid svg, svg[id*='mermaid']", timeout=8000
+                                        )
+                                    except Exception:
+                                        pass
                                 # Long capture: viewport shots at top and a deep section.
                                 if key == "capture":
                                     shot_top = out_dir / f"{key}-{width}-{scheme}-top.png"
@@ -261,8 +355,9 @@ def run_a11y(root: Path, *, builder: str | None = None, site: str | Path | None 
                     page.evaluate("document.body.style.zoom = '200%'")
                     page.wait_for_timeout(300)
                     overflow = page.evaluate(
-                        "(() => { const de = document.documentElement; return "
-                        "{scrollWidth: de.scrollWidth, clientWidth: de.clientWidth}; })()"
+                        "(() => { const root = document.querySelector('article.md-content__inner, article') "
+                        "|| document.documentElement; return "
+                        "{scrollWidth: root.scrollWidth, clientWidth: root.clientWidth}; })()"
                     )
                     if overflow["scrollWidth"] > overflow["clientWidth"] + 2:
                         failures.append(
@@ -308,6 +403,8 @@ def run_a11y(root: Path, *, builder: str | None = None, site: str | Path | None 
                     report["nojs"] = {"links_sample": hrefs}
                 finally:
                     nojs.close()
+
+                _learn_surface_checks(browser, base, failures, report)
             finally:
                 browser.close()
     finally:

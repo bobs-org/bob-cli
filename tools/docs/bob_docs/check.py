@@ -14,6 +14,7 @@ from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
 from .lint import run_lint
+from .media import run_media
 from .publish_drill import (
     DRILL_MARKER,
     drill_link_built,
@@ -21,7 +22,7 @@ from .publish_drill import (
     inject_drill_link,
 )
 from .search_smoke import run_search_smoke
-from .sandbox import resolve_bob_binary
+from .sandbox import MISSING_BOB_RUNTIME, resolve_bob_binary
 from .tutorial import run_tutorial
 from .urls import run_urls
 
@@ -54,7 +55,6 @@ def _report_unimplemented_gates() -> None:
 
     print("\ndocs-check: follow-on gates")
     print("skipped: CLI reference golden is a cargo test, not a docs-check gate")
-    print("skipped: media checks not implemented in this slice")
 
 
 def run_check(
@@ -83,12 +83,19 @@ def run_check(
     def tutorial_gate() -> int:
         nonlocal tutorial_binary
         if "BOB_BIN" not in os.environ and shutil.which("cargo") is None:
-            print(
-                "skipped: tutorial needs Cargo or BOB_BIN pointing to an executable Bob"
-            )
+            print(f"skipped: tutorial {MISSING_BOB_RUNTIME}")
             return 0
         tutorial_binary = resolve_bob_binary(repo_root)
         return run_tutorial(repo_root, bob_bin=tutorial_binary)
+
+    def media_gate() -> int:
+        nonlocal tutorial_binary
+        if "BOB_BIN" not in os.environ and shutil.which("cargo") is None:
+            print(f"skipped: media {MISSING_BOB_RUNTIME}")
+            return 0
+        if tutorial_binary is None:
+            tutorial_binary = resolve_bob_binary(repo_root)
+        return run_media(repo_root, check=True, bob_bin=tutorial_binary)
 
     def unit_tests() -> int:
         return _run_unit_tests(repo_root, bob_bin=tutorial_binary)
@@ -112,6 +119,7 @@ def run_check(
         ),
         ("search smoke", lambda: run_search_smoke(repo_root, context=context)),
         ("executable first-day tutorial", tutorial_gate),
+        ("CLI media determinism", media_gate),
         ("documentation unit tests", unit_tests),
     ]
     for label, run in gates:

@@ -191,6 +191,10 @@ docs-check: (_banner "32" "✅" "DOCS CHECK")
 docs-tutorial:
     uv run --project tools/docs bob-docs tutorial
 
+# Capture deterministic CLI SVGs from the isolated tutorial environment.
+docs-media:
+    uv run --project tools/docs bob-docs media
+
 # Subset bundled OFL fonts to deterministic WOFF2.
 docs-fonts: (_banner "35" "🔤" "DOCS FONTS")
     uv run --project tools/docs --group fonts bob-docs fonts

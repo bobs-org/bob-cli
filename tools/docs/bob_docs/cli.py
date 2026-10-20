@@ -73,7 +73,8 @@ def _parser() -> argparse.ArgumentParser:
         help="run the complete local documentation gate",
         description=(
             "Assemble once, then run lint, generated drift, strict Zensical build, "
-            "URL and link checks, search smoke, and the bob-docs unit tests. "
+            "URL and link checks, search smoke, the executable tutorial, media "
+            "determinism, and the bob-docs unit tests. "
             "--drill injects a staged-only broken link after the clean gates and "
             "requires the link gate to fail; a drill never succeeds or deploys."
         ),
@@ -183,6 +184,21 @@ def _parser() -> argparse.ArgumentParser:
         "--fix",
         action="store_true",
         help="lower page ceilings and drop obsolete privacy baseline hits; never raise limits",
+    )
+
+    media_parser = subparsers.add_parser(
+        "media",
+        help="capture deterministic CLI SVGs from a synthetic vault",
+        description=(
+            "Run a small declared set of Bob commands under a POSIX PTY in the "
+            "isolated tutorial environment, render ANSI through Rich, and write "
+            "docs/assets/media/cli/. --check renders twice from independent "
+            "sandboxes and compares the committed assets without writing tracked "
+            "files. Requires Cargo or BOB_BIN."
+        ),
+    )
+    media_parser.add_argument(
+        "-c", "--check", action="store_true", help="check generated SVGs without writing"
     )
 
     publish_parser = subparsers.add_parser(
@@ -477,6 +493,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "lint":
             context, _manifest = assemble(root)
             return run_lint(root, fix=args.fix, docs_context=context)
+        if args.command == "media":
+            from .media import run_media
+
+            return run_media(root, check=args.check)
         if args.command == "publish":
             return run_publish(force=args.force, drill=args.drill, pinned=args.pinned)
         if args.command == "publish-plan":

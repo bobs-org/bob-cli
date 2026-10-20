@@ -29,10 +29,7 @@ Linux and macOS · Obsidian
 bob capture "Review the queue input"
 ```
 
-```text { .no-copy title="Output" }
-✓ captured  mac_inbox.md
-  - [ ] #task Review the queue input [created::2026-10-20]
-```
+![Colored CLI output of bob capture writing Review the queue input into mac_inbox.md](assets/media/cli/capture.svg)
 
 The inbox note holds `- [ ] #task Review the queue input [created::2026-10-20]`,
 verified against a synthetic scratch vault with a fixed clock.

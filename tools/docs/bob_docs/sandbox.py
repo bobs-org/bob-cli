@@ -21,6 +21,7 @@ from .errors import DocsError
 
 
 DEFAULT_NOW = "2026-10-20T09:02:00"
+MISSING_BOB_RUNTIME = "needs Cargo or BOB_BIN pointing to an executable Bob"
 _DESKTOP_ENV = (
     "DISPLAY",
     "WAYLAND_DISPLAY",
@@ -89,7 +90,7 @@ def resolve_bob_binary(repo_root: Path, *, source_env: Mapping[str, str] | None 
 
     cargo = shutil.which("cargo", path=env.get("PATH"))
     if cargo is None:
-        raise DocsError("the tutorial needs Cargo or BOB_BIN pointing to an executable Bob")
+        raise DocsError(MISSING_BOB_RUNTIME)
     try:
         built = subprocess.run(
             [cargo, "build", "--locked", "--bin", "bob"],

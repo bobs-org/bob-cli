@@ -58,6 +58,11 @@ def test_check_runs_ordered_gates_with_one_source_context(
     )
     monkeypatch.setattr(
         check,
+        "run_media",
+        lambda root, *, check, bob_bin: order.append(("media", check, bob_bin)) or 0,
+    )
+    monkeypatch.setattr(
+        check,
         "_run_unit_tests",
         lambda root, *, bob_bin=None: order.append(("pytest", bob_bin)) or 0,
     )
@@ -72,13 +77,15 @@ def test_check_runs_ordered_gates_with_one_source_context(
         "links",
         "search",
         "tutorial",
+        "media",
         "pytest",
     ]
     assert order[0] == ("assemble", True, "sources.json")
     assert order[2] == ("gen", True, context.source_dirs, True)
     assert order[3] == ("build", context, manifest)
     assert order[7] == ("tutorial", fake_bob)
-    assert order[8] == ("pytest", fake_bob)
+    assert order[8] == ("media", True, fake_bob)
+    assert order[9] == ("pytest", fake_bob)
 
 
 def test_check_stops_after_first_failing_gate(tmp_path, monkeypatch) -> None:
@@ -122,7 +129,9 @@ def test_check_reports_tutorial_capability_skip_without_cargo_or_bob(
     )
 
     assert check.run_check(tmp_path) == 0
-    assert "skipped: tutorial needs Cargo or BOB_BIN" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "skipped: tutorial needs Cargo or BOB_BIN" in output
+    assert "skipped: media needs Cargo or BOB_BIN" in output
 
 
 def test_unimplemented_gate_skips_are_explicit_and_report_missing_cargo(
@@ -137,4 +146,4 @@ def test_unimplemented_gate_skips_are_explicit_and_report_missing_cargo(
         "skipped: CLI reference golden is a cargo test, not a docs-check gate" in output
     )
     assert "tutorial not implemented" not in output
-    assert "skipped: media checks not implemented in this slice" in output
+    assert "media checks not implemented" not in output

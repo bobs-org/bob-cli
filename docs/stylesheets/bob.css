@@ -145,8 +145,27 @@ html .md-footer .md-copyright a {
 }
 
 /* Homepage and wide navigation use the available width. */
-body:has(.bob-home) .md-content__inner.md-typeset {
+body:has(.bob-home) .md-content__inner.md-typeset,
+body:has(.bob-home-cards) .md-content__inner.md-typeset {
   max-width: none;
+}
+
+/* Real CLI captures stay readable as images, including on a dark page. */
+.md-typeset img[src*="assets/media/cli/"] {
+  display: block;
+  width: 100%;
+  max-width: 42rem;
+  height: auto;
+  margin: 1em 0;
+  border: 1px solid color-mix(in srgb, var(--bob-ink) 14%, transparent);
+  border-radius: 8px;
+  background-color: #fbf8f2;
+}
+
+@media screen and (max-width: 47.99em) {
+  .md-typeset img[src*="assets/media/cli/"] {
+    max-width: 100%;
+  }
 }
 
 /* Prose links are underlined; focus stays visible and teal. */

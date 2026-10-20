@@ -18,8 +18,9 @@ just docs-gen             # regenerate tracked contract indexes and plugin inven
 just docs-serve           # assemble and serve locally with live reload
 just docs-build           # strict Zensical build of the assembled site
 just docs-build-material  # strict Material 9.7 fallback build
-just docs-check           # lint, drift, build, links, search smoke, and tests
+just docs-check           # lint, drift, build, links, search smoke, tutorial, media, and tests
 just docs-tutorial        # execute the published first-day Bash tutorial in isolation
+just docs-media           # capture deterministic CLI SVGs (or bob-docs media -c)
 just docs-fonts           # subset bundled OFL fonts to WOFF2 (needs --group fonts)
 just docs-assets          # generate identity assets: mark, favicons, social card
 just docs-a11y            # Playwright + axe audit of the built site (dev only)
@@ -29,6 +30,8 @@ just docs-status          # host manifest, live build, runs, workflows, hold, is
 uv run --project tools/docs bob-docs lint
 uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
 uv run --project tools/docs bob-docs tutorial     # direct tutorial replay
+uv run --project tools/docs bob-docs media        # write CLI captures
+uv run --project tools/docs bob-docs media -c     # compare without writing
 ```
 
 Install audit browsers once with
@@ -231,7 +234,8 @@ Assembly never edits tracked sources. Generated output lives under `target/docs/
 the assembled `mkdocs.yml`, `build.json` provenance manifest, and the built site.
 Tracked files are written only by `just docs-gen`, the explicit asset generators
 (`just docs-fonts` for WOFF2, `just docs-assets` for the mark, favicons, and
-social card), and explicit `bob-docs lint --fix` ceiling/baseline ratchets.
+social card, `just docs-media` for CLI SVGs), and explicit `bob-docs lint --fix`
+ceiling/baseline ratchets.
 Normal lint never writes. Browser audits (`just docs-a11y`) are dev-only and are
 not part of `just docs-check`.
 
@@ -253,6 +257,21 @@ the effects before the next fence runs. Keep network, install, and GUI steps
 complete for readers, and mark them skipped only when replay cannot safely
 exercise the step. The runner rejects malformed, unknown, unused, and missing
 required checkpoint markers, and rejects start pages omitted from navigation.
+
+## CLI media (`bob-docs media`)
+
+`just docs-media` reuses the tutorial sandbox and prepared Bob binary. It runs a
+small declared command list under a POSIX PTY (fixed 80×24, `TERM=xterm-256color`,
+UTC clock, fresh `examples/demo-vault`), converts ANSI through Rich, and writes
+`docs/assets/media/cli/capture.svg` and `plan.svg`. The SVGs embed the bundled
+JetBrains Mono face as a data URI so they render when loaded as images, with no
+remote font request.
+
+`bob-docs media -c` (`--check`) renders twice from independent sandboxes and
+byte-compares both runs with the committed files. It never writes tracked files
+and never refreshes the media.yml date. Drift names the path and
+`just docs-media`. Docs-check runs this check when Cargo or `BOB_BIN` is
+available, otherwise it reports the same missing-runtime reason as the tutorial.
 
 ## Task fences (`bob-task`)
 

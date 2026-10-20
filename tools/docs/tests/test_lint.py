@@ -1095,6 +1095,7 @@ def test_cli_help_lists_lint_and_fix() -> None:
         "host-bootstrap",
         "links",
         "lint",
+        "media",
         "publish",
         "publish-plan",
         "publish-record",
