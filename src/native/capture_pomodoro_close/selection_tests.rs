@@ -183,6 +183,8 @@ fn managed_dependency_lines_are_not_numbered_for_close_or_agenda() {
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
         "\t- ⛓️ **DEPENDS ON:** [[bob#^prerequisite]]",
         "\t- 🧱 **BLOCKS:** [[bob#^dependent]]",
+        "\t- 🪢 **LINKS:** [[bob#^related]]",
+        "\t- 🪢 **LINKED FROM:** [[bob#^source]]",
     ]);
     let running = running_of(&contents);
     assert!(number_task_links(&contents, &running).is_empty());

@@ -42,6 +42,11 @@ pub(crate) fn canonical_link(
     if target == source {
         return format!("[[#^{block_id}]]");
     }
+    // Basename links do not search `done/`, so archive targets always
+    // keep the explicit path (`docs/task-dependencies.md` §3).
+    if super::is_archive_path(target) {
+        return format!("[[{}#^{block_id}]]", path_without_extension(target));
+    }
     if let Some(basename) = target.file_stem().and_then(OsStr::to_str)
         && index.resolve(None, basename).as_deref() == Some(target)
     {

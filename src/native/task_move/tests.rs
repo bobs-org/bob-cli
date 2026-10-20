@@ -551,6 +551,8 @@ fn pathless_stayed_and_co_moved_links_and_unresolved_links() {
 - [ ] #task Stay ^stay
 - [ ] #task Move ^m
   - ⛓️ **DEPENDS ON:** [[#^stay]] • [[#^m]] • [[#^ghost]]
+  - 🪢 **LINKS:** [[#^stay]] • [[#^m]]
+  - 🪢 **LINKED FROM:** [[#^stay]]
 ",
     );
     let dest = area("\n## Tasks\n");
@@ -564,6 +566,8 @@ fn pathless_stayed_and_co_moved_links_and_unresolved_links() {
     assert!(dest_post.contains("[[src#^stay]]"));
     assert!(dest_post.contains("[[#^m]]"));
     assert!(dest_post.contains("[[#^ghost]]"));
+    assert!(dest_post.contains("- 🪢 **LINKS:** [[src#^stay]] • [[#^m]]"));
+    assert!(dest_post.contains("- 🪢 **LINKED FROM:** [[src#^stay]]"));
 }
 
 #[test]

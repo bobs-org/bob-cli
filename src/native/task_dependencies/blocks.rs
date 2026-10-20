@@ -5,6 +5,7 @@
 //! scanner so aliases, embeds, and struck links are understood without
 //! splitting on separators that may occur inside an alias.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::task_status_hooks::{
@@ -265,16 +266,18 @@ pub(crate) fn blocks_children_of(
     children
 }
 
-fn has_task_tag(line: &str) -> bool {
+pub(crate) fn has_task_tag(line: &str) -> bool {
     line.split_whitespace().any(|token| token == "#task")
 }
 
+pub(crate) fn cmp_blocks_links(left: &str, right: &str) -> Ordering {
+    ascii_fold(left)
+        .cmp(&ascii_fold(right))
+        .then_with(|| left.cmp(right))
+}
+
 pub(crate) fn sort_blocks_links(links: &mut [String]) {
-    links.sort_by(|left, right| {
-        ascii_fold(left)
-            .cmp(&ascii_fold(right))
-            .then_with(|| left.cmp(right))
-    });
+    links.sort_by(|left, right| cmp_blocks_links(left, right));
 }
 
 fn ascii_fold(value: &str) -> Vec<u8> {
@@ -344,7 +347,7 @@ pub(crate) fn blocks_insert_slot(
     }
 }
 
-fn direct_child_lines(
+pub(crate) fn direct_child_lines(
     lines: &[&str],
     fenced: &BTreeSet<usize>,
     task_line: usize,
@@ -365,7 +368,7 @@ fn direct_child_lines(
         .collect()
 }
 
-fn subtree_end(lines: &[&str], root: usize) -> usize {
+pub(crate) fn subtree_end(lines: &[&str], root: usize) -> usize {
     let root_indent = leading_indentation_width(lines[root]);
     let mut index = root + 1;
     while index < lines.len() {
@@ -390,7 +393,7 @@ fn subtree_end(lines: &[&str], root: usize) -> usize {
     index
 }
 
-fn is_cancel_log(line: &str) -> bool {
+pub(crate) fn is_cancel_log(line: &str) -> bool {
     let indent = line
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
@@ -402,7 +405,7 @@ fn is_cancel_log(line: &str) -> bool {
     body.starts_with('❌') && body.contains("CANCEL LOG")
 }
 
-fn leading_whitespace(line: &str) -> &str {
+pub(crate) fn leading_whitespace(line: &str) -> &str {
     let end = line
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))

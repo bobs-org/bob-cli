@@ -547,7 +547,7 @@ fn collect_entry_links(
         if fenced.contains(&index) {
             continue;
         }
-        if task_dependencies::is_managed_dependency_line(line) {
+        if task_dependencies::is_managed_link_line(line) {
             continue;
         }
         if !line.is_empty() && !line.starts_with([' ', '\t']) {
@@ -729,6 +729,8 @@ mod tests {
             - [ ] () — GOALS\n\
             \x20   - ⛓️ **DEPENDS ON:** [[task#^prerequisite]]\n\
             \x20   - 🧱 **BLOCKS:** [[task#^dependent]]\n\
+            \x20   - 🪢 **LINKS:** [[task#^related]]\n\
+            \x20   - 🪢 **LINKED FROM:** [[task#^source]]\n\
             \x20   - Worked [[task#^worked]]\n",
         );
         assert_eq!(ledger.links.count, 1);

@@ -31,6 +31,14 @@ pub(crate) fn is_managed_dependency_line(line: &str) -> bool {
     is_dependency_line(line) || blocks::is_blocks_line(line)
 }
 
+/// Whether `line` is a machine-owned dependency or relation child.
+/// Every verdict except not-a-line counts, so malformed LINKS /
+/// LINKED FROM rows stay out of Task Link scans too.
+pub(crate) fn is_managed_link_line(line: &str) -> bool {
+    is_managed_dependency_line(line)
+        || crate::native::task_relations::is_relation_line(line)
+}
+
 /// One `[[...]]` occurrence in a line of Markdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WikilinkSpan {

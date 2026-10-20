@@ -74,6 +74,7 @@ mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
 mod task_move;
+pub(crate) mod task_relations;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;

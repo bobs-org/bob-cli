@@ -5,9 +5,9 @@
 
 use super::super::super::vault_links::NoteIndex;
 use super::super::successors::{
-    insert_successor_links, plan_successors, CompletedTask, EntryRole,
-    OfferGroup, SuccessorInput, SuccessorPlacement, SuccessorSelection,
-    SuccessorTarget,
+    insert_successor_links, live_link_keys, plan_successors, CompletedTask,
+    EntryRole, OfferGroup, SuccessorInput, SuccessorPlacement,
+    SuccessorSelection, SuccessorTarget,
 };
 use super::*;
 
@@ -869,6 +869,23 @@ fn sl28_day_file_successor_names_note() {
     assert_eq!(plan.unblocked.len(), 1);
     let link = plan.unblocked[0].link.as_ref().expect("linked");
     assert_eq!(link.block_link, "[[20261005#^day-job]]");
+}
+
+#[test]
+fn relation_lines_are_not_successor_slot_anchors() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+        "  - 🪢 **LINKS:** [[sase#^fix-apollo]]\n",
+        "  - 🪢 **LINKED FROM:** [[sase#^other]]\n",
+        "  - [[sase#^real]]\n",
+    );
+    let keys = live_link_keys(day, Path::new("20261005.md"), &vault_index);
+    assert_eq!(
+        keys,
+        BTreeSet::from([(PathBuf::from("sase.md"), "real".to_string())])
+    );
 }
 
 // Successors under one anchor keep successor order; the target entry

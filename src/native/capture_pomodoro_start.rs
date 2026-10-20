@@ -587,11 +587,15 @@ mod lineup_tests {
 
     #[test]
     fn managed_dependency_lines_are_not_start_lineup_items() {
+        // Start lineup uses `bare_plain_link`, so labelled LINKS /
+        // LINKED FROM bullets are already skipped by shape.
         let contents = concat!(
             "## Pomodoros\n",
             "- [ ] (**0945-1010** [t:: 25m]) — CAPTURE\n",
             "\t- ⛓️ **DEPENDS ON:** [[bob#^prerequisite]]\n",
             "\t- 🧱 **BLOCKS:** [[bob#^dependent]]\n",
+            "\t- 🪢 **LINKS:** [[bob#^related]]\n",
+            "\t- 🪢 **LINKED FROM:** [[bob#^source]]\n",
             "\t- [[bob#^real-task]]\n",
         );
         let links = list_queued_links(contents, 1);

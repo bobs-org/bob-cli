@@ -294,6 +294,8 @@ fn both_managed_dependency_lines_are_not_pomodoro_task_links() {
         "- [ ] Open (0900-0930)",
         "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
         "  - 🧱 **BLOCKS:** [[#^dependent]]",
+        "  - 🪢 **LINKS:** [[#^related]]",
+        "  - 🪢 **LINKED FROM:** [[#^source]]",
         "  - [[#^worked]]",
     ];
     let model = scan_pomodoros(&lines, 0..lines.len());
@@ -313,6 +315,24 @@ fn blocks_lines_are_recognized_as_managed_not_legacy_children() {
         assert_eq!(task_dependencies::legacy_child_reference(line), None);
         assert!(task_dependencies::blocks::is_blocks_line(line));
         assert!(task_dependencies::is_managed_dependency_line(line));
+        assert!(task_dependencies::is_managed_link_line(line));
+    }
+}
+
+#[test]
+fn relation_lines_are_managed_link_lines_not_dependency_lines() {
+    for line in [
+        "  - 🪢 **LINKS:** [[#^related]]",
+        "  - 🪢 **LINKED FROM:** [[#^source]]",
+        "  - **BACKLINKS:** [[#^source]]",
+        "  - 🪢 **LINKS:** [[#^a]] extra",
+    ] {
+        assert_eq!(task_dependencies::legacy_child_reference(line), None);
+        assert!(
+            !task_dependencies::is_managed_dependency_line(line),
+            "{line}"
+        );
+        assert!(task_dependencies::is_managed_link_line(line), "{line}");
     }
 }
 

@@ -18,7 +18,7 @@ use super::super::{
     },
     capture_task_toggle::set_task_line_status,
     note_tasks::{self, NoteTask, NoteTaskSettings, TaskStatusType},
-    task_dependencies::is_managed_dependency_line,
+    task_dependencies::is_managed_link_line,
 };
 
 use super::is_recurring_task_line;
@@ -186,10 +186,10 @@ pub(crate) fn embedded_children(
         if span.end > task.block_end {
             break;
         }
-        // Closing a dependent never closes its prerequisites: Depends-On
-        // lines are not embedded-tree edges
-        // (`docs/task-dependencies.md` §5).
-        if is_managed_dependency_line(span.text) {
+        // Closing a dependent never closes its prerequisites, and a
+        // relation is not an embedded-tree edge
+        // (`docs/task-dependencies.md` §§5, 11.8).
+        if is_managed_link_line(span.text) {
             continue;
         }
         children.extend(
@@ -838,6 +838,8 @@ mod managed_dependency_tests {
             "- [ ] #task Root ^root\n",
             "  - ⛓️ **DEPENDS ON:** ![[#^prerequisite]]\n",
             "  - 🧱 **BLOCKS:** ![[#^dependent]]\n",
+            "  - 🪢 **LINKS:** ![[#^related]]\n",
+            "  - 🪢 **LINKED FROM:** ![[#^source]]\n",
             "  - user child ![[#^subtask]]\n",
         );
         let task = NoteTask {
@@ -849,7 +851,7 @@ mod managed_dependency_tests {
             description: "Root".to_string(),
             block_id: Some("root".to_string()),
             section: None,
-            child_count: 3,
+            child_count: 5,
             block_end: contents.len(),
             digest: "00000000".to_string(),
             task_kind: Some("task"),

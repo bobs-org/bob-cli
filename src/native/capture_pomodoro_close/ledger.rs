@@ -582,7 +582,7 @@ fn classify_sub_bullets(
             });
             continue;
         }
-        if task_dependencies::is_managed_dependency_line(&stripped) {
+        if task_dependencies::is_managed_link_line(&stripped) {
             bullets.push(ClassifiedBullet {
                 line: index,
                 kind: BulletKind::Note,
@@ -920,6 +920,8 @@ mod managed_dependency_tests {
         let lines = [
             "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
             "  - 🧱 **BLOCKS:** ![[#^dependent]]",
+            "  - 🪢 **LINKS:** [[#^related]]",
+            "  - 🪢 **LINKED FROM:** ![[#^source]]",
         ];
         let bullets =
             classify_sub_bullets(&lines, &(0..lines.len()), &BTreeSet::new());

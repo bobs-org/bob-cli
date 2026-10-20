@@ -99,6 +99,8 @@ fn fixture(root: &Path) -> std::path::PathBuf {
             "\t- ![[sase#^outline]]\n",
             "\t- ~~[[sase#^ignored]]~~\n",
             "\t- 🧱 **BLOCKS:** [[sase#^ignored]]\n",
+            "\t- 🪢 **LINKS:** [[sase#^ignored]]\n",
+            "\t- 🪢 **LINKED FROM:** [[sase#^ignored]]\n",
             "- [x] (0800-0830) \u{2014} PLAN\n",
             "\t- [[sase#^outline]]\n",
             "\t- [[cash#^call-bank]]\n",
@@ -240,7 +242,7 @@ fn struck_fenced_and_depends_on_links_never_place() {
         .expect("ignored task lists");
     assert_eq!(
         ignored.today, None,
-        "struck, fenced, Depends-On, and BLOCKS links never place"
+        "struck, fenced, Depends-On, BLOCKS, and relation links never place"
     );
     assert_eq!(ignored.group, CompletableGroup::Open);
 }

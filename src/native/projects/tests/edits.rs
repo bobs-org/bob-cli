@@ -276,6 +276,33 @@ fn project_changes_move_subproject_marker_after_depends_on() {
 }
 
 #[test]
+fn project_changes_do_not_anchor_or_move_relation_lines() {
+    let desired = [open_subproject("Child")];
+    let inserted = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - 🧱 **BLOCKS:** [[#^dependent]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[other#^src]]\n  - user notes\n",
+        &[ProjectChange::AddSubprojectLink {
+            stem: "Child".to_string(),
+            state: SubprojectState::Open,
+        }],
+        &desired,
+    );
+    assert_eq!(
+        inserted,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[other#^src]]\n  - user notes\n"
+    );
+
+    let moved = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🪢 **LINKS:** [[#^related]]\n",
+        &[ProjectChange::NormalizeSubprojects],
+        &desired,
+    );
+    assert_eq!(
+        moved,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- 🪢 **LINKS:** [[#^related]]\n"
+    );
+}
+
+#[test]
 fn project_changes_insert_subproject_line_above_user_bullets() {
     let desired = [open_subproject("Beta")];
     let output = apply_subproject_changes(

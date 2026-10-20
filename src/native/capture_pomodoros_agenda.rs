@@ -1143,6 +1143,27 @@ mod tests {
     }
 
     #[test]
+    fn relation_lines_are_not_agenda_task_links() {
+        // Agenda numbers through `number_task_links_in_range`, which
+        // already skips labelled bullets by shape (`bare_plain_link`).
+        let temp = TempDir::new("bob-cli-agenda-relations");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(&vault.join("tasks.md"), "- [ ] #task Solo ^solo\n");
+        write_file(&vault.join("bob.md"), "- [ ] #task Related ^related\n");
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- 🪢 **LINKS:** [[bob#^related]]\n",
+            "\t- 🪢 **LINKED FROM:** [[bob#^related]]\n",
+            "\t- [[tasks#^solo]]\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        assert_eq!(entries[0].items.len(), 1);
+        assert_eq!(entries[0].items[0].block_id, "solo");
+    }
+
+    #[test]
     fn resolutions_cover_every_failure_mode() {
         let temp = TempDir::new("bob-cli-agenda-resolution");
         let vault = temp.path().to_path_buf();

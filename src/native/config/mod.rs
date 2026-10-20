@@ -11,12 +11,15 @@ pub(crate) mod capture;
 pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod plan;
+pub(crate) mod relations;
 pub(crate) mod stats;
 
 pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
+#[allow(unused_imports)]
+pub(crate) use relations::load_relations_config;
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 
@@ -368,6 +371,8 @@ pub(crate) struct RawConfig {
     pub(crate) dependencies: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) freshness: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) relations: Option<serde_yaml::Value>,
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) stats: Option<serde_yaml::Value>,

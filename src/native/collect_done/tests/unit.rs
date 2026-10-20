@@ -431,19 +431,27 @@ fn pathless_archive_links_gain_the_source_note_path() {
         "open".to_string(),
         "held".to_string(),
         "blocks".to_string(),
+        "related".to_string(),
+        "source".to_string(),
     ]);
     let repair = repair_pathless_archive_links(
-        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - 🧱 **BLOCKS:** [[#^blocks]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
+        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - 🧱 **BLOCKS:** [[#^blocks]]\n  - 🪢 **LINKS:** [[#^related]]\n  - 🪢 **LINKED FROM:** [[#^source]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
         "projects/Work",
         &stayed,
     );
-    assert_eq!(repair.link_count, 3);
+    assert_eq!(repair.link_count, 5);
     assert!(repair.contents.contains(
         "- ⛓️ **DEPENDS ON:** [[projects/Work#^open]] • [[#^moved]]"
     ));
     assert!(repair
         .contents
         .contains("- 🧱 **BLOCKS:** [[projects/Work#^blocks]]"));
+    assert!(repair
+        .contents
+        .contains("- 🪢 **LINKS:** [[projects/Work#^related]]"));
+    assert!(repair
+        .contents
+        .contains("- 🪢 **LINKED FROM:** [[projects/Work#^source]]"));
     assert!(repair.contents.contains("- ![[projects/Work#^held]]"));
     assert!(repair.contents.contains("- [[other#^open]]"));
     assert!(repair.contents.contains("```\n- [[#^open]]\n```"));
