@@ -289,7 +289,6 @@ def run_publish_report(
     run: RunFn = default_run,
     title: str = PUBLISH_BLOCKED_TITLE,
     label: str = PUBLISH_BLOCKED_LABEL,
-    ensure_managed_label: bool = True,
     mode: str,
     step: str = "",
     run_url: str = "",
@@ -300,16 +299,15 @@ def run_publish_report(
 ) -> int | None:
     """Open/update (``mode="open"``) or close (``mode="close"``) the managed issue."""
 
-    if ensure_managed_label:
-        if label == WEEKLY_BLOCKED_LABEL:
-            ensure_label(
-                run,
-                label=label,
-                color=WEEKLY_LABEL_COLOR,
-                description=WEEKLY_LABEL_DESCRIPTION,
-            )
-        else:
-            ensure_label(run, label=label)
+    if label == WEEKLY_BLOCKED_LABEL:
+        ensure_label(
+            run,
+            label=label,
+            color=WEEKLY_LABEL_COLOR,
+            description=WEEKLY_LABEL_DESCRIPTION,
+        )
+    else:
+        ensure_label(run, label=label)
     if mode == "open":
         body = build_blocked_body(
             step=step, run_url=run_url, reason=reason, fingerprint=fingerprint,

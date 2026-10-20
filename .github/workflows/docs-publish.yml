@@ -51,6 +51,7 @@ jobs:
       should_record: ${{ steps.plan.outputs.should_record }}
       reason: ${{ steps.plan.outputs.reason }}
       fingerprint: ${{ steps.plan.outputs.fingerprint }}
+      deploy_sha: ${{ steps.deploy-sha.outputs.deploy_sha }}
       stage: ${{ steps.handoff.outputs.stage || steps.gates.outputs.stage || steps.plan.outputs.stage || steps.guard.outputs.stage || 'start' }}
     steps:
       - name: Guard caller repository and branch
@@ -75,6 +76,10 @@ jobs:
           repository: ${{ github.repository }}
           ref: ${{ github.ref }}
           path: deploy
+
+      - name: Record the planned deploy SHA
+        id: deploy-sha
+        run: echo "deploy_sha=$(git -C "$GITHUB_WORKSPACE/deploy" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Check out bob-cli tooling
         uses: actions/checkout@v6
@@ -102,7 +107,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "stage=plan" >> "$GITHUB_OUTPUT"
-          blocked="$(gh issue list --state open --label docs-publish --repo '${{ github.repository }}' --json number --jq length)"
+          blocked="$(gh issue list --state open --label docs-publish --repo '${{ github.repository }}' --json number,title --jq '[.[] | select(.title == "Docs publish blocked")] | length')"
           plan_args=(
             --manifest "$GITHUB_WORKSPACE/deploy/published.json"
             --output-dir "$GITHUB_WORKSPACE/.publish-plan"
@@ -194,6 +199,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ needs.publish.outputs.deploy_sha }}
 
       - name: Download the publication handoff
         uses: actions/download-artifact@v4
@@ -213,7 +219,7 @@ jobs:
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "Record documentation publication" \
             -m "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          git push
+          git push origin "HEAD:refs/heads/${{ github.ref_name }}"
 
   verify:
     name: Verify the live site

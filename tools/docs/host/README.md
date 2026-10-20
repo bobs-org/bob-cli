@@ -37,24 +37,36 @@ dispatching and watches the run it actually started.
 
 ## Rollback with held pinned SHAs
 
-1. Edit `published.json` in this repository: set `"hold": true` and the source
-   SHAs you want to serve.
-2. Dispatch a pinned publish from bob-cli:
+Hand-editing source SHAs in `published.json` is rejected: the planner rebuilds
+the inputs at those SHAs and requires them to match the stored fingerprint.
+Restore a previous recorded manifest whole instead.
+
+1. In this repository, find the manifest commit to roll back to:
+
+   ```bash
+   git log --format='%h %ad %s' -- published.json
+   ```
+
+   Each `Record documentation publication` commit names its run.
+2. Restore that record whole: `git show <commit>:published.json > published.json`.
+   Then set `"hold": true`, commit only `published.json`, and push.
+3. Dispatch a pinned publish from bob-cli:
 
    ```bash
    just -- docs-publish --pinned
    ```
 
-3. Scheduled and ordinary unpinned runs skip while `hold` is true, including
-   force. Pinned builds those exact SHAs and leaves the hold in place.
-4. Clear the hold by setting `"hold": false` after the rollback is done.
+   Pinned builds those exact SHAs and keeps the hold. Scheduled and unpinned
+   runs, including `--force`, skip while held.
+4. Release the hold by setting `"hold": false`, commit, and push. The next
+   ordinary run publishes the current heads.
 
 ## Recovery
 
 A failing publish opens or updates one issue titled `Docs publish blocked`
-(label `docs-publish`). The live site stays on the last good deploy. The next
-ordinary dispatch sees that open issue and re-runs the gates even when the
-docs fingerprint is unchanged. Recover with a normal publish:
+(label `docs-publish`). The next ordinary dispatch sees that open issue and
+re-runs the gates even when the docs fingerprint is unchanged. Recover with a
+normal publish:
 
 ```bash
 just docs-publish
@@ -76,22 +88,35 @@ that issue.
 
 ## Inactivity
 
-GitHub disables scheduled workflows on a public repository after 60 days
-without a run (`disabled_inactivity`). `just docs-publish` runs
+GitHub disables scheduled workflows in a public repository after 60 days
+with no repository activity (`disabled_inactivity`). No-op publish runs
+commit nothing, so they do not count as activity. `just docs-publish` runs
 `gh workflow enable` before dispatch. `just docs-status` reports that state.
 
 ## Failure boundaries
 
 **Before deploy.** Planner skip, a held unpinned run, or a gate failure
 uploads nothing, deploys nothing, and does not rewrite `published.json`. The
-last good site stays live. A gate failure opens the blocked issue.
+last good site and manifest stay untouched. A gate failure opens the blocked
+issue.
 
 **Drill.** `--drill` runs the real gates against a staged-only broken link.
 It must fail before upload, leave the live site and manifest untouched, and
 open the blocked issue. Recover with a normal publish.
 
 **After deploy.** Upload, Pages deploy, recording `published.json`, and live
-verification run only after the gates pass. A failure in deploy or record
-keeps the previous live site. A failure in live verification means the new
-site may already be serving; the blocked issue opens so the next ordinary
-run revalidates.
+verification run only after the gates pass. Only failures before deploy
+promise that the last good site and manifest are untouched.
+
+- A Pages deploy failure normally leaves the previous deployment serving,
+  but the workflow does not prove it. Check `just docs-status`, which reads
+  live `/build.json`.
+- A record failure happens after a successful deploy. The new site is live,
+  but `published.json` still names the previous publication. This includes
+  a compare-and-swap rejection: `record` refuses to overwrite a deploy-repo
+  change made after planning.
+- A live-verification failure means the new site may be serving.
+
+All of these keep the blocked issue open. The next ordinary run takes the
+recovery path: it rebuilds, deploys, records, verifies, and closes the
+issue.

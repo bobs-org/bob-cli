@@ -16,7 +16,6 @@ from .links import run_links
 from .lint import run_lint
 from .media import run_media
 from .publish_drill import (
-    DRILL_MARKER,
     drill_link_built,
     drill_marker_present,
     inject_drill_link,

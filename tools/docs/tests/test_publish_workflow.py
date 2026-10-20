@@ -231,11 +231,15 @@ def test_record_script_pushes_only_manifest_and_preserves_remote_changes(
         git(operator, "commit", "-m", "Hold publication")
         git(operator, "push", "origin", "main")
 
+    deploy_sha = git(checkout, "rev-parse", "HEAD")
+    git(checkout, "checkout", "--detach", deploy_sha)
+
     script = _step_by_name(
         document["jobs"]["record"], "Commit only the publication manifest"
     )["run"]
     script = script.replace("${{ github.repository }}", EXPECTED_CALLER)
     script = script.replace("${{ github.run_id }}", "42")
+    script = script.replace("${{ github.ref_name }}", "main")
 
     def record() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -275,6 +279,89 @@ def test_record_script_pushes_only_manifest_and_preserves_remote_changes(
     assert git(remote, "rev-parse", "main") == previous
 
 
+def test_record_checks_out_the_planned_deploy_sha(document: dict) -> None:
+    assert "deploy_sha" in document["jobs"]["publish"]["outputs"]
+    checkout = next(
+        step
+        for step in _steps(document["jobs"]["record"])
+        if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["ref"] == "${{ needs.publish.outputs.deploy_sha }}"
+    assert checkout["with"]["fetch-depth"] == 0
+
+
+def test_record_script_succeeds_when_queued_behind_an_earlier_recorder(
+    document: dict, tmp_path: Path
+) -> None:
+    """A queued run records on the planned deploy SHA, not the stale trigger."""
+    env = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    }
+
+    def git(cwd: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, env=env, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
+
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "--bare", "--initial-branch=main", str(remote))
+    operator = tmp_path / "operator"
+    git(tmp_path, "clone", str(remote), str(operator))
+    (operator / "README.md").write_text("host\n")
+    git(operator, "add", "README.md")
+    git(operator, "commit", "-m", "Seed synthetic host")
+    git(operator, "push", "origin", "main")
+    trigger = git(operator, "rev-parse", "HEAD")
+
+    earlier = '{"hold":false,"fingerprint":"earlier"}\n'
+    (operator / "published.json").write_text(earlier)
+    git(operator, "add", "published.json")
+    git(operator, "commit", "-m", "Record documentation publication")
+    git(operator, "push", "origin", "main")
+    deploy_sha = git(operator, "rev-parse", "HEAD")
+    assert deploy_sha != trigger
+
+    checkout = tmp_path / "record"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    git(checkout, "checkout", "--detach", deploy_sha)
+    (checkout / "handoff").mkdir()
+    manifest = '{"hold":false,"fingerprint":"queued"}\n'
+    (checkout / "handoff/published.json").write_text(manifest)
+
+    script = _step_by_name(
+        document["jobs"]["record"], "Commit only the publication manifest"
+    )["run"]
+    script = script.replace("${{ github.repository }}", EXPECTED_CALLER)
+    script = script.replace("${{ github.run_id }}", "42")
+    script = script.replace("${{ github.ref_name }}", "main")
+    result = subprocess.run(
+        ["bash", "-e", "-c", script], cwd=checkout,
+        env={
+            key: value for key, value in env.items()
+            if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))
+        },
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert git(remote, "show", "main:published.json") == manifest.strip()
+    assert git(remote, "rev-parse", "main^") == deploy_sha
+    assert git(remote, "diff-tree", "--no-commit-id", "--name-only", "-r", "main") == (
+        "published.json"
+    )
+    assert git(remote, "log", "-1", "--format=%B").splitlines() == [
+        "Record documentation publication",
+        "",
+        f"Run: https://github.com/{EXPECTED_CALLER}/actions/runs/42",
+    ]
+
+
 def test_guard_names_caller_repo_and_default_branch(document: dict) -> None:
     guard = _step_by_name(document["jobs"]["publish"], "Guard caller repository and branch")
     run = guard.get("run", "")
@@ -304,6 +391,8 @@ def test_plan_reads_blocked_issues_and_recovers(document: dict) -> None:
     run = plan.get("run", "")
     refs = _refs_of(plan)
     assert "docs-publish" in run
+    assert "--json number,title" in run
+    assert 'select(.title == "Docs publish blocked")' in run
     assert "--recovery" in run
     assert {"inputs.force", "inputs.drill", "inputs.pinned"} <= refs
 

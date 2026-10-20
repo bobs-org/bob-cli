@@ -349,7 +349,7 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     verify_parser.add_argument(
-        "-e", "--expected", metavar="FILE", required=True, help="planner next-publication.json"
+        "-e", "--expected", metavar="FILE", required=True, help="recorded published.json from the publication handoff"
     )
     verify_parser.add_argument(
         "-o", "--origin", metavar="URL", required=True, help="live site origin to verify"

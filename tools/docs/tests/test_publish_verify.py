@@ -166,13 +166,20 @@ def test_run_publish_verify_requires_reachable_live_manifest(
         encoding="utf-8",
     )
     monkeypatch.setattr(publish_verify, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    sleeps: list[float] = []
 
     assert (
         run_publish_verify(
-            tmp_path, origin=ORIGIN, site_urls_file=site_urls, expected_file=expected
+            tmp_path,
+            origin=ORIGIN,
+            site_urls_file=site_urls,
+            expected_file=expected,
+            retries=0,
+            sleep=sleeps.append,
         )
         == 1
     )
+    assert sleeps == []
 
 
 def test_run_publish_verify_wires_helpers(
@@ -206,6 +213,90 @@ def test_run_publish_verify_wires_helpers(
     )
     assert seen["expected_urls"] == [f"{ORIGIN}/"]
     assert "OK" in capsys.readouterr().out
+
+
+def test_run_publish_verify_retries_urls_precheck_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json as jsonlib
+
+    site_urls = tmp_path / "urls.txt"
+    site_urls.write_text(f"{ORIGIN}/\n", encoding="utf-8")
+    expected = tmp_path / "next.json"
+    expected.write_text(
+        jsonlib.dumps({"sources": {"bob-cli": {"sha": "c" * 40}}, "fingerprint": "f"}),
+        encoding="utf-8",
+    )
+    outcomes: list = [
+        ("offline", "down"),
+        DocsError("503 from origin"),
+        ("first-publish", None),
+        ("ok", [f"{ORIGIN}/"]),
+    ]
+
+    def fake_fetch(origin: str, **_: object):
+        assert origin == ORIGIN
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, DocsError):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(publish_verify, "fetch_published_urls", fake_fetch)
+    monkeypatch.setattr(publish_verify, "load_url_contract", lambda root, origin: [])
+    monkeypatch.setattr(publish_verify, "verify_live", lambda **kwargs: [])
+    sleeps: list[float] = []
+
+    assert (
+        run_publish_verify(
+            tmp_path,
+            origin=ORIGIN,
+            site_urls_file=site_urls,
+            expected_file=expected,
+            retries=3,
+            sleep=sleeps.append,
+        )
+        == 0
+    )
+    assert outcomes == []
+    assert sleeps == [2.0, 4.0, 6.0]
+    assert "OK" in capsys.readouterr().out
+
+
+def test_run_publish_verify_urls_precheck_persistent_failure_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json as jsonlib
+
+    site_urls = tmp_path / "urls.txt"
+    site_urls.write_text(f"{ORIGIN}/\n", encoding="utf-8")
+    expected = tmp_path / "next.json"
+    expected.write_text(
+        jsonlib.dumps({"sources": {"bob-cli": {"sha": "c" * 40}}, "fingerprint": "f"}),
+        encoding="utf-8",
+    )
+    calls = {"n": 0}
+
+    def fake_fetch(origin: str, **_: object):
+        calls["n"] += 1
+        return ("first-publish", None)
+
+    monkeypatch.setattr(publish_verify, "fetch_published_urls", fake_fetch)
+    sleeps: list[float] = []
+
+    assert (
+        run_publish_verify(
+            tmp_path,
+            origin=ORIGIN,
+            site_urls_file=site_urls,
+            expected_file=expected,
+            retries=2,
+            sleep=sleeps.append,
+        )
+        == 1
+    )
+    assert calls["n"] == 3
+    assert sleeps == [2.0, 4.0]
+    assert "first-publish" in capsys.readouterr().out
 
 
 def test_run_publish_verify_rejects_bad_origin(tmp_path: Path) -> None:

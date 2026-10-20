@@ -186,48 +186,73 @@ status. GitHub authentication failure is an error.
 
 ### Rollback with held pinned SHAs
 
-Edit `published.json` in the deploy repository: set `"hold": true` and the
-source SHAs to serve. Dispatch a pinned publish:
+Hand-editing source SHAs in `published.json` is rejected: the planner rebuilds
+the inputs at those SHAs and requires them to match the stored fingerprint.
+Restore a previous recorded manifest whole instead.
 
-```bash
-just -- docs-publish --pinned
-```
+1. In the deploy repository, find the manifest commit to roll back to:
 
-Scheduled and ordinary unpinned runs skip while hold is true, including force.
-Pinned builds those exact SHAs and leaves the hold in place. Set `"hold": false`
-when the rollback is finished.
+   ```bash
+   git log --format='%h %ad %s' -- published.json
+   ```
+
+   Each `Record documentation publication` commit names its run.
+2. Restore that record whole: `git show <commit>:published.json > published.json`.
+   Then set `"hold": true`, commit only `published.json`, and push.
+3. Dispatch a pinned publish:
+
+   ```bash
+   just -- docs-publish --pinned
+   ```
+
+   Pinned builds those exact SHAs and keeps the hold. Scheduled and unpinned
+   runs, including `--force`, skip while held.
+4. Release the hold by setting `"hold": false`, commit, and push. The next
+   ordinary run publishes the current heads.
 
 ### Recovery
 
-A gate or deploy failure opens one `Docs publish blocked` issue
-(`docs-publish`) and leaves the last good site live. The next ordinary
-dispatch sees that issue and re-runs the gates even when the fingerprint is
-unchanged:
+A failing publish opens or updates one `Docs publish blocked` issue
+(`docs-publish`). The next ordinary dispatch sees that issue and re-runs the
+gates even when the fingerprint is unchanged:
 
 ```bash
 just docs-publish
 ```
 
 Do not use `--force` to recover. Force rebuilds unchanged inputs when nothing
-is held. A successful live verification closes the issue.
+is held; recovery is the blocked-issue path. A successful live verification
+closes the issue.
 
 ### Inactivity
 
-GitHub disables scheduled workflows on a public repository after 60 days
-without a run (`disabled_inactivity`). `just docs-publish` enables the workflow
-before dispatch. `just docs-status` reports that state.
+GitHub disables scheduled workflows in a public repository after 60 days with
+no repository activity (`disabled_inactivity`). No-op publish runs commit
+nothing, so they do not count as activity. `just docs-publish` enables the
+workflow before dispatch. `just docs-status` reports that state.
 
 ### Failure boundaries
 
 Before deploy, a planner skip, a held unpinned run, or a gate failure uploads
-nothing and does not rewrite `published.json`. The last good site stays live.
-`--drill` runs the real gates against a staged-only broken link, must fail
-before upload, and opens the blocked issue.
+nothing and does not rewrite `published.json`. The last good site and manifest
+stay untouched. `--drill` runs the real gates against a staged-only broken
+link, must fail before upload, and opens the blocked issue.
 
 After the gates pass, upload, Pages deploy, recording `published.json`, and
-live verification run in that order. A deploy or record failure keeps the
-previous live site. A live-verification failure means the new site may already
-be serving; the blocked issue opens so the next ordinary run revalidates.
+live verification run in that order. Only failures before deploy promise that
+the last good site and manifest are untouched.
+
+- A Pages deploy failure normally leaves the previous deployment serving, but
+  the workflow does not prove it. Check `just docs-status`, which reads live
+  `/build.json`.
+- A record failure happens after a successful deploy. The new site is live, but
+  `published.json` still names the previous publication. This includes a
+  compare-and-swap rejection: `record` refuses to overwrite a deploy-repo
+  change made after planning.
+- A live-verification failure means the new site may be serving.
+
+All of these keep the blocked issue open. The next ordinary run takes the
+recovery path: it rebuilds, deploys, records, verifies, and closes the issue.
 
 ### Weekly checks
 

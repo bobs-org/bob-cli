@@ -471,6 +471,44 @@ def test_pinned_drill_never_deploys_or_records(tmp_path: Path) -> None:
     assert plan["should_record"] is False
 
 
+def test_pinned_rollback_restores_recorded_manifest_and_rejects_hand_edited_shas(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(tmp_path)
+    plan_a = _plan(fixture)
+    _record_publication(fixture, plan_a)
+    manifest_a = json.loads(Path(fixture["manifest"]).read_text(encoding="utf-8"))
+    sha_a = plan_a["sources"]["bob-cli"]["sha"]
+
+    bob_working = Path(fixture["bob_working"])
+    (bob_working / "docs/index.md").write_text("# Later docs\n", encoding="utf-8")
+    _commit_and_push(bob_working, "add", "docs/index.md")
+
+    plan_b = _plan(fixture)
+    _record_publication(fixture, plan_b)
+    manifest_b = json.loads(Path(fixture["manifest"]).read_text(encoding="utf-8"))
+    sha_b = plan_b["sources"]["bob-cli"]["sha"]
+    assert sha_b != sha_a
+
+    restored = json.loads(json.dumps(manifest_a))
+    restored["hold"] = True
+    Path(fixture["manifest"]).write_text(json.dumps(restored), encoding="utf-8")
+
+    pinned = _plan(fixture, pinned=True)
+    assert pinned["should_build"] is True
+    assert pinned["reason"] == "pinned"
+    assert pinned["sources"]["bob-cli"]["sha"] == sha_a
+    candidate = json.loads(Path(str(pinned["next_publication_file"])).read_text(encoding="utf-8"))
+    assert candidate["hold"] is True
+
+    hand_edit = json.loads(json.dumps(manifest_b))
+    hand_edit["hold"] = True
+    hand_edit["sources"]["bob-cli"]["sha"] = sha_a
+    Path(fixture["manifest"]).write_text(json.dumps(hand_edit), encoding="utf-8")
+    with pytest.raises(DocsError, match="pinned source contents do not match the published fingerprint"):
+        _plan(fixture, pinned=True)
+
+
 def test_pinned_uses_recorded_sources_after_the_default_branch_moves(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
     first = _plan(fixture)

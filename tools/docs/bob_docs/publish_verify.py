@@ -32,8 +32,6 @@ DEFAULT_RETRIES = 5
 DEFAULT_TIMEOUT_SECONDS = 15
 USER_AGENT = "bob-docs/publish-verify"
 
-_FRAGMENT_PATTERNS = ("id=\"{fragment}\"", "name=\"{fragment}\"")
-
 
 @dataclass(frozen=True)
 class FetchedPage:
@@ -246,6 +244,35 @@ def _compare_provenance(
     return failures
 
 
+def _fetch_live_urls(
+    origin: str,
+    *,
+    timeout: int,
+    retries: int,
+    sleep: Callable[[float], None],
+) -> tuple[str, list[str] | str | None]:
+    """Fetch live ``/urls.txt`` with the same bounded retry policy as page GETs."""
+
+    if retries < 0:
+        raise DocsError("--retries must be zero or more")
+    attempts = retries + 1
+    last_status = "offline"
+    last_payload: list[str] | str | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            status, payload = fetch_published_urls(origin, timeout=timeout)
+        except DocsError as error:
+            status, payload = "error", str(error)
+        if status == "ok" and isinstance(payload, list):
+            return status, payload
+        last_status, last_payload = status, payload
+        if attempt < attempts and status in {"offline", "first-publish", "error"}:
+            sleep(min(2.0 * attempt, 10.0))
+            continue
+        break
+    return last_status, last_payload
+
+
 def run_publish_verify(
     root: Path,
     *,
@@ -254,6 +281,7 @@ def run_publish_verify(
     expected_file: Path,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     retries: int = DEFAULT_RETRIES,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Verify the deployed site; return 0 only when every check passes."""
 
@@ -267,7 +295,9 @@ def run_publish_verify(
         except DocsError as error:
             raise DocsError(f"expected site URLs {site_urls_file}: {error}") from error
     expected = _read_expected_publication(expected_file)
-    status, payload = fetch_published_urls(origin, timeout=timeout)
+    status, payload = _fetch_live_urls(
+        origin, timeout=timeout, retries=retries, sleep=sleep
+    )
     if status != "ok" or not isinstance(payload, list):
         print(f"verify: live {origin}/urls.txt is {status} ({payload}); failing the deploy")
         return 1
@@ -279,6 +309,7 @@ def run_publish_verify(
         expected_sources=expected["sources"],
         timeout=timeout,
         retries=retries,
+        sleep=sleep,
     )
     if failures:
         print(f"verify: {len(failures)} live check(s) failed:")

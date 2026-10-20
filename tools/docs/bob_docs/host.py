@@ -44,8 +44,6 @@ HOST_DESCRIPTION = (
 )
 CALLER_WORKFLOW = "publish.yml"
 WEEKLY_CALLER_WORKFLOW = "weekly.yml"
-REUSABLE_WORKFLOW = "bobs-org/bob-cli/.github/workflows/docs-publish.yml@master"
-WEEKLY_REUSABLE_WORKFLOW = "bobs-org/bob-cli/.github/workflows/docs-weekly.yml@master"
 PUBLISH_WORKFLOW_PATH = ".github/workflows/publish.yml"
 WEEKLY_WORKFLOW_PATH = ".github/workflows/weekly.yml"
 MANIFEST_PATH = "published.json"
@@ -344,14 +342,6 @@ def _workflow_states(run: RunFn) -> dict[str, str | None]:
     return states
 
 
-def inspect_workflow_state(run: RunFn) -> str | None:
-    return _workflow_states(run).get(CALLER_WORKFLOW)
-
-
-def inspect_weekly_state(run: RunFn) -> str | None:
-    return _workflow_states(run).get(WEEKLY_CALLER_WORKFLOW)
-
-
 def _file_syncs(
     templates: dict[str, str],
     current: dict[str, str | None],
@@ -543,7 +533,10 @@ def _commit_host_files(run: RunFn, repo: Path, paths: list[str], branch: str) ->
     if not paths:
         return False
     _git(run, repo, "add", "--", *paths, action="stage host files")
-    cached = run(["git", "-C", str(repo), "diff", "--cached", "--quiet"], None)
+    cached = run(
+        ["git", "-C", str(repo), "diff", "--cached", "--quiet", "--", *paths],
+        None,
+    )
     if cached.returncode == 0:
         return False
     _git(
@@ -556,6 +549,8 @@ def _commit_host_files(run: RunFn, repo: Path, paths: list[str], branch: str) ->
         "commit",
         "-m",
         "Sync documentation host templates",
+        "--",
+        *paths,
         action="commit host files",
     )
     has_commit = run(["git", "-C", str(repo), "rev-parse", "HEAD"], None)

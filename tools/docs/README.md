@@ -166,13 +166,14 @@ bob-docs publish-record \
 
 `bob-docs publish-verify` checks every built page URL live, resolves curated
 fragments against live pages with bounded retries, and confirms the live
-`/build.json` matches the deployed source SHAs with clean working trees:
+`/build.json` matches the deployed source SHAs with clean working trees.
+`--expected` is the recorded `published.json` from the publication handoff:
 
 ```bash
 bob-docs publish-verify \
   --origin https://bobs-org.github.io \
   --site-urls target/docs/site/urls.txt \
-  --expected target/docs/publish-plan/next-publication.json
+  --expected published.json
 ```
 
 `bob-docs publish-report --open` creates (or comments on and reopens) the one

@@ -396,6 +396,48 @@ def test_apply_is_idempotent_and_preserves_unrelated_files(tmp_path: Path) -> No
     assert any("no file commit" in chunk for chunk in second_chunks)
 
 
+def test_apply_commits_only_maintained_files_when_index_is_dirty(tmp_path: Path) -> None:
+    templates = load_host_templates(ROOT)
+    published = MANIFEST
+    _bare, working = _init_deploy(
+        tmp_path / "deploy",
+        {
+            MANIFEST_PATH: published,
+            "README.md": "stale readme\n",
+        },
+    )
+    (working / MANIFEST_PATH).write_text(
+        published.replace('"hold": true', '"hold": false'),
+        encoding="utf-8",
+    )
+    _run_git(working, "git", "add", MANIFEST_PATH)
+    assert MANIFEST_PATH in _run_git(working, "git", "diff", "--cached", "--name-only")
+
+    host = FakeHost()
+    host.pages_status = 404
+    host.actions = {"enabled": False, "allowed_actions": "all"}
+    status = run_host_bootstrap(
+        ROOT,
+        yes=True,
+        deploy_dir=working,
+        run=host,
+        sleep=lambda _seconds: None,
+        stdout_write=lambda _text: None,
+    )
+    assert status == 0
+    committed = _run_git(
+        working, "git", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"
+    ).splitlines()
+    assert MANIFEST_PATH not in committed
+    assert "README.md" in committed
+    assert (working / "README.md").read_text(encoding="utf-8") == templates["README.md"]
+    staged = _run_git(working, "git", "diff", "--cached", "--name-only").splitlines()
+    assert MANIFEST_PATH in staged
+    assert '"hold": false' in (working / MANIFEST_PATH).read_text(encoding="utf-8")
+    remote_manifest = _run_git(working, "git", "show", f"origin/master:{MANIFEST_PATH}")
+    assert remote_manifest == published.strip()
+
+
 def test_partial_bootstrap_recovers_missing_files(tmp_path: Path) -> None:
     templates = load_host_templates(ROOT)
     _bare, working = _init_deploy(
