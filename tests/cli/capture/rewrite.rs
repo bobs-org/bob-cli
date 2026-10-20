@@ -72,6 +72,36 @@ fn capture_rewrite_json_absorbs_a_local_marker() {
 }
 
 #[test]
+fn capture_rewrite_json_starts_a_template() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("3")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@@@")
+        .output()
+        .expect("run capture-rewrite template start");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "@@template:\n");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 12);
+    assert_eq!(json["rule"], "start_template");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 0, "end": 3 }, "replacement": "@@template:\n" }
+        ])
+    );
+    assert_eq!(json["summary"], "Started a @@template: draft");
+}
+
+#[test]
 fn capture_rewrite_json_reports_a_rule_a5_notice_without_changing_text() {
     let output = bob_command()
         .arg("capture-rewrite")

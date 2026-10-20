@@ -516,6 +516,9 @@ A draft whose first nonblank line is `@@template:` expands one capture item per
 row. The planner receives the same text that `bob capture -E` prints, so a
 template capture has the same results, ordering, and all-or-nothing writes as
 capturing that expansion directly.
+Editors that run [`capture-rewrite`](#bob-capture-rewrite), including the Mac
+capture panel, turn a typed `@@@` at the very start of a draft into the template
+header and place the caret on the next line.
 
 ```text
 @@template:
@@ -5482,8 +5485,8 @@ clean.
 bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
-Applies the capture grammar's automatic draft rewrites -- the block-ID
-separator toggle and the bare `@@` absorption rule -- and reports the
+Applies the capture grammar's automatic draft rewrites -- template start, the
+block-ID separator toggle, and the bare `@@` absorption rule -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
@@ -5497,6 +5500,20 @@ inside a UTF-8 character return exit 2. Other draft text succeeds, with
 Template drafts are never rewritten: `capture-rewrite` returns
 `changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
 template marker.
+
+**Template start.** Typing a third `@` at byte 3 when the first physical line
+is exactly `@@@` replaces it with `@@template:` and a line ending. The existing
+LF or CRLF is reused, and the cursor moves to a fresh blank line. This typing
+gesture requires `--cursor`; without it, the rule is skipped.
+
+```bash
+bob capture-rewrite -c 3 -f json -- '@@@'
+```
+
+The result is `@@template:\n` with cursor 12 and summary
+`Started a @@template: draft`. If the draft already has following lines, they
+move down so the cursor still lands on a blank line. Feeding the result back
+through the command is a no-op.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id`, or `:` immediately after `@route^id`, consumes that
@@ -5610,11 +5627,12 @@ JSON output is a single versioned object:
 }
 ```
 
-`rule` is `switch_block_id_separator`, `absorb_local_marker`, or
-`absorb_declaration`, omitted when nothing changed. `cursor` is present only
-when `--cursor` was supplied, mapped through every edit so it lands just
-past the rewritten token (`@file^id` / `@file:id` for a separator toggle, or
-the rewritten `@@<payload>` token for absorption).
+`rule` is `start_template`, `switch_block_id_separator`, `absorb_local_marker`,
+or `absorb_declaration`, omitted when nothing changed. `cursor` is present
+only when `--cursor` was supplied and is mapped through every edit. For
+`start_template`, it lands at the start of the fresh line; separator toggles
+land just past the unchanged ID, and absorption lands just past the rewritten
+`@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`

@@ -76,7 +76,12 @@ pub(crate) fn build_cli() -> ClapCommand {
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is purely lexical and completely read-only: it never opens the \
 vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. It implements two rules.\n\n\
+--bob-dir. It implements three rules.\n\n\
+Template start (requires --cursor): typing a third '@' at byte 3 when the \
+first physical line is exactly '@@@' replaces it with '@@template:' and a \
+line ending, then places the caret on a fresh blank line. Existing LF or \
+CRLF is reused, and the result is idempotent (`start_template`). Without \
+--cursor this typing gesture is skipped.\n\n\
 Block-ID separator toggle (requires --cursor): typing '^' immediately after \
 a complete plain '@route:id', or ':' immediately after '@route^id', consumes \
 that character and switches the separator so '@file:id^' becomes '@file^id' \
@@ -112,7 +117,7 @@ missing TEXT or a bad flag is an error; every other input succeeds with \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 3 -f json -- '@@@'\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())

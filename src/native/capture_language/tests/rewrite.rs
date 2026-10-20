@@ -127,6 +127,68 @@ fn rewrite_draft_leaves_template_drafts_untouched() {
 }
 
 #[test]
+fn rewrite_draft_starts_a_template_at_the_first_line() {
+    for (raw, expected) in [
+        ("@@@", "@@template:\n"),
+        ("@@@\nApply {0}", "@@template:\n\nApply {0}"),
+    ] {
+        let rewrite = rewrite_draft(raw, Some(3));
+        assert_eq!(rewrite.rule, Some(RewriteRule::StartTemplate));
+        assert_eq!(rewrite.text, expected);
+        assert_eq!(rewrite.cursor, Some(12));
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Started a @@template: draft")
+        );
+        assert!(rewrite.notices.is_empty());
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: 0,
+                end: 3,
+                replacement: "@@template:\n".to_string(),
+            }]
+        );
+    }
+}
+
+#[test]
+fn rewrite_draft_starts_a_template_reusing_crlf() {
+    let rewrite = rewrite_draft("@@@\r\nApply {0}", Some(3));
+    assert_eq!(rewrite.rule, Some(RewriteRule::StartTemplate));
+    assert_eq!(rewrite.text, "@@template:\r\n\r\nApply {0}");
+    assert_eq!(rewrite.cursor, Some(13));
+    assert_eq!(rewrite.edits[0].replacement, "@@template:\r\n");
+}
+
+#[test]
+fn rewrite_draft_template_start_requires_the_exact_typing_gesture() {
+    for (raw, cursor) in [
+        ("@@@", None),
+        ("@@@", Some(1)),
+        ("@@@", Some(2)),
+        (" @@@", Some(5)),
+        ("\n@@@", Some(4)),
+        ("@@@@", Some(3)),
+        ("@@@ x", Some(3)),
+        ("x\n@@@", Some(5)),
+    ] {
+        let rewrite = rewrite_draft(raw, cursor);
+        assert_ne!(rewrite.rule, Some(RewriteRule::StartTemplate), "{raw:?}");
+        assert_eq!(rewrite.text, raw, "{raw:?}");
+    }
+}
+
+#[test]
+fn rewrite_draft_template_start_is_idempotent() {
+    let first = rewrite_draft("@@@", Some(3));
+    let second = rewrite_draft(&first.text, first.cursor);
+    assert_eq!(first.rule, Some(RewriteRule::StartTemplate));
+    assert_eq!(second.rule, None);
+    assert_eq!(second.text, first.text);
+}
+
+#[test]
 fn rewrite_draft_selects_the_bare_at_at_under_the_cursor_else_the_last() {
     let raw = "Buy milk @dev @@ @@";
     let claimed_start = |rewrite: &DraftRewrite| {

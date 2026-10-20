@@ -40,6 +40,7 @@ pub(crate) struct TextEdit {
 pub(crate) enum RewriteRule {
     AbsorbLocalMarker,
     AbsorbDeclaration,
+    StartTemplate,
     SwitchBlockIdSeparator,
 }
 
@@ -48,6 +49,7 @@ impl RewriteRule {
         match self {
             Self::AbsorbLocalMarker => "absorb_local_marker",
             Self::AbsorbDeclaration => "absorb_declaration",
+            Self::StartTemplate => "start_template",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
         }
     }
@@ -61,7 +63,8 @@ impl RewriteRule {
 /// appended trigger is dropped. That rule never searches the draft: no
 /// cursor means absorption-only, matching the historical `@@` contract.
 ///
-/// Otherwise apply Rule A1's absorption to the bare `@@` at (or before, when
+/// With an explicit cursor at byte 3, a first-line `@@@` starts a template
+/// draft. Otherwise apply Rule A1's absorption to the bare `@@` at (or before, when
 /// no cursor is given, the last one in source order at) `cursor`: claim the
 /// item's own absorbable local destination marker, or else the draft's one
 /// other declaration token, rewriting the bare token to `@@<payload>` and
@@ -76,6 +79,11 @@ pub(crate) fn rewrite_draft(
     if super::template::analyze(raw_text).header.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
     }
+    if let Some(3) = cursor
+        && let Some(rewrite) = start_template(raw_text)
+    {
+        return rewrite;
+    }
     if let Some(position) = cursor
         && let Some(rewrite) = switch_block_id_separator(raw_text, position)
     {
@@ -83,6 +91,37 @@ pub(crate) fn rewrite_draft(
     }
 
     absorb_bare_declaration(raw_text, cursor)
+}
+
+/// Typing the third `@` at the start of an otherwise empty first line starts
+/// a template. The output adds a fresh line for the template body while
+/// preserving the draft's existing line ending and following text.
+fn start_template(raw_text: &str) -> Option<DraftRewrite> {
+    let rest = raw_text.strip_prefix("@@@")?;
+    let terminator = if rest.starts_with("\r\n") {
+        "\r\n"
+    } else if rest.starts_with('\n') {
+        "\n"
+    } else if rest.is_empty() {
+        "\n"
+    } else {
+        return None;
+    };
+    let replacement = format!("@@template:{terminator}");
+    let edits = vec![TextEdit {
+        start: 0,
+        end: 3,
+        replacement,
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::StartTemplate),
+        edits,
+        text,
+        cursor: Some(11 + terminator.len()),
+        summary: Some("Started a @@template: draft".to_string()),
+        notices: Vec::new(),
+    })
 }
 
 fn absorb_bare_declaration(
