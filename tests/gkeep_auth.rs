@@ -128,6 +128,21 @@ fn run_doctor(
     extra_args: &[&str],
 ) -> Output {
     let mut command = auth_command(env, fake);
+    let root = root_of(env);
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("create test bin directory");
+    let uv = bin.join("uv");
+    fs::write(&uv, "#!/bin/sh\nprintf '%s\\n' 'uv 0.9.0'\n")
+        .expect("write uv stub");
+    chmod_exec(&uv);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&path)),
+        )
+        .expect("join test PATH"),
+    );
     command.arg("gkeep").arg("doctor");
     for arg in extra_args {
         command.arg(arg);

@@ -568,6 +568,19 @@ mod tests {
             .expect("plan capture batch")
     }
 
+    fn plan_with_config(
+        vault: &Path,
+        raw_text: &str,
+        config_path: &Path,
+    ) -> PlannedCaptureBatch {
+        plan_capture_batch_with_config_path(
+            &dry_request(vault, raw_text, None, None),
+            None,
+            Some(config_path),
+        )
+        .expect("plan capture batch")
+    }
+
     fn row_tuples(
         block: &TaskBlockJson,
     ) -> Vec<(&str, usize, BlockLineChange)> {
@@ -681,6 +694,12 @@ mod tests {
     #[test]
     fn authored_children_and_schedule_log_are_added_in_order() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.yml");
+        std::fs::write(
+            &config_path,
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\n",
+        )
+        .expect("write test priority config");
         let vault = write_vault(
             &dir,
             &[(
@@ -688,7 +707,11 @@ mod tests {
                 concat!("- [/] #task Parent ^capture\n", "\t- keep\n",),
             )],
         );
-        let batch = plan(&vault, "new note @sase+capture $1\n- child one");
+        let batch = plan_with_config(
+            &vault,
+            "new note @sase+capture $1\n- child one",
+            &config_path,
+        );
         assert_eq!(batch.task_blocks.len(), 1);
         let block = &batch.task_blocks[0];
         assert_eq!(block.lines[0].change, BlockLineChange::Unchanged);

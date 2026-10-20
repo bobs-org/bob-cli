@@ -97,6 +97,7 @@ pub(super) fn plan_project_note_item(
             number,
             parsed.scheduled_offset,
             item_roll_seed(roll_seed, item_index),
+            None,
         )?),
         None => None,
     };

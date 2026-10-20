@@ -126,6 +126,7 @@ fn run_stubbed(
         // The host may export NO_COLOR; the adapter then uses the plain
         // header. Tests that want that path export it in `pre`.
         .env_remove("NO_COLOR")
+        .env("LC_ALL", utf8_locale())
         .output()
         .expect("run stubbed zsh driver");
     let read_lines = |name: &str| {
@@ -142,6 +143,33 @@ fn run_stubbed(
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         bob_stderr: fs::read_to_string(dir.join("bob-stderr.txt"))
             .unwrap_or_default(),
+    }
+}
+
+/// Choose a UTF-8 locale installed on both supported CI hosts.
+fn utf8_locale() -> &'static str {
+    let locales = Command::new("locale")
+        .arg("-a")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout).to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+    if locales
+        .lines()
+        .any(|locale| locale.trim() == "c.utf-8" || locale.trim() == "c.utf8")
+    {
+        "C.UTF-8"
+    } else if locales.lines().any(|locale| {
+        locale.trim() == "en_us.utf-8" || locale.trim() == "en_us.utf8"
+    }) {
+        "en_US.UTF-8"
+    } else {
+        // Locale names differ across libc implementations. The zsh output
+        // assertions below accept its escaped representation as well.
+        "C"
     }
 }
 
@@ -433,7 +461,7 @@ fn no_color_uses_plain_header() {
         out.stdout
     );
     assert!(
-        out.stdout.contains("format '"),
+        out.stdout.contains("format "),
         "a plain header is still set, stdout:\n{}",
         out.stdout
     );

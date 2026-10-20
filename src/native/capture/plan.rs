@@ -39,6 +39,14 @@ pub(super) fn plan_capture_batch(
     request: &CaptureRequest,
     routing: Option<&UrlRoutingPolicy>,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
+    plan_capture_batch_with_config_path(request, routing, None)
+}
+
+pub(super) fn plan_capture_batch_with_config_path(
+    request: &CaptureRequest,
+    routing: Option<&UrlRoutingPolicy>,
+    config_path: Option<&Path>,
+) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
     // A forced `-r` route is an allowed explicit ref parent; every other
     // forced destination or clip flag keeps the item a task.
@@ -141,6 +149,7 @@ pub(super) fn plan_capture_batch(
             &mut clip_reservations,
             &mut warnings,
             &mut dependency_ctx,
+            config_path,
         )
         .map_err(|mut error| {
             error.message = format!("{error_context}: {}", error.message);
@@ -515,6 +524,7 @@ pub(super) fn plan_capture_item(
     clip_reservations: &mut capture_clip::ClipReservations,
     warnings: &mut Vec<String>,
     dependency_ctx: &mut DependencyContext,
+    config_path: Option<&Path>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
@@ -841,6 +851,7 @@ pub(super) fn plan_capture_item(
             number,
             parsed.scheduled_offset,
             item_roll_seed(roll_seed, parsed_item.index),
+            config_path,
         )?),
         None => None,
     };
@@ -1814,9 +1825,13 @@ pub(super) fn resolve_priority(
     number: u64,
     explicit_scheduled_offset: Option<u64>,
     roll_seed: u64,
+    config_path: Option<&Path>,
 ) -> Result<ResolvedPriority, CaptureError> {
-    let property = config::load_priority_property(&config::config_path())
-        .map_err(|error| match error {
+    let path = config_path
+        .map(Path::to_path_buf)
+        .unwrap_or_else(config::config_path);
+    let property =
+        config::load_priority_property(&path).map_err(|error| match error {
             config::ConfigError::Read(message) => CaptureError::io(message),
             config::ConfigError::Invalid(message) => {
                 CaptureError::usage(message)
