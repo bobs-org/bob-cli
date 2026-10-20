@@ -42,6 +42,21 @@ is a valid empty plan, not an error.
 You have printed the read-only plan budget from a vault. Tutorials teach one path;
 options, alternatives, and reasons belong in guides, concepts, or reference pages.
 
+## Executable fences
+
+Get started tutorials replay every `bash` fence in nav order inside one persistent
+shell, so variables and `cd` survive across fences. Keep fences ordered and
+idempotent. Mark GUI, network, installation, and plugin-sync steps with a skip
+and a reason on the line before the fence:
+
+```html
+<!-- tutorial-test: skip opening Obsidian needs the desktop app -->
+```
+
+Add a checkpoint comment on the line after a fence only when the runner must
+validate state there. Every new `start/` page joins the replay through its nav
+entry; an unmarked `bash` fence always executes.
+
 ## Next
 
 - [Getting started](../getting-started.md)

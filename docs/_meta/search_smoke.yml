@@ -119,3 +119,19 @@
 - query: hotkey conflict
   location: /reference/configuration/#mac-capture-hotkeys
 
+- query: first Bob day
+  location: /start/first-bob-day/
+- query: Install Bob
+  location: /start/install/
+- query: Is Bob for me
+  location: /start/is-bob-for-me/
+- query: Continue in Obsidian
+  location: /start/obsidian/
+- query: Mac Capture
+  location: /start/mac-capture/
+- query: compatibility
+  location: /reference/compatibility/
+- query: minimum requirements
+  location: /reference/compatibility/#minimum-requirements
+- query: how Bob fits together
+  location: /concepts/how-bob-fits-together/

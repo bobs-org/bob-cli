@@ -1,0 +1,65 @@
+{# Compatibility snapshot: tested rolling snapshot from the assembled build manifest. #}
+{% if config.extra and config.extra.build %}
+{% set build = config.extra.build %}
+{% set sources = build.sources | d({}, true) %}
+{% set tools = build.tools | d({}, true) %}
+<section class="bob-compatibility-snapshot" aria-label="Tested rolling snapshot">
+  <h2 id="tested-snapshot">Tested snapshot</h2>
+  <p>
+    This site was built from the rolling sources below. They name the exact
+    revisions the checks ran against; the minimum supported versions follow in
+    <a href="#minimum-requirements">Minimum requirements</a>.
+  </p>
+  <ul>
+    {% for repo in sources %}
+    {% set info = sources[repo] %}
+    {% set sha = info.sha | d('', true) %}
+    <li>
+      <code>{{ repo | e }}</code>
+      {% if sha %}
+      {% set short = sha[:7] %}
+      {% if repo == "bob-cli" and config.repo_url %}
+      <a href="{{ (config.repo_url ~ '/commit/' ~ sha) | e }}">{{ short | e }}</a>
+      {% elif config.extra and config.extra.bob_mounts %}
+      {% set ns = namespace(base='') %}
+      {% for mount in config.extra.bob_mounts %}
+      {% if mount.repo == repo %}
+      {% set ns.base = mount.remote | replace('.git', '') %}
+      {% endif %}
+      {% endfor %}
+      {% if ns.base %}
+      <a href="{{ (ns.base ~ '/commit/' ~ sha) | e }}">{{ short | e }}</a>
+      {% else %}
+      {{ short | e }}
+      {% endif %}
+      {% else %}
+      {{ short | e }}
+      {% endif %}
+      {% if info.dirty %} (dirty){% endif %}
+      {% else %}
+      unknown revision{% if info.dirty %} (dirty){% endif %}
+      {% endif %}
+      {% if info.branch %} · {{ info.branch | e }}{% endif %}
+      {% if info.path %} · {{ info.path | e }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p>
+    {% set built_at = build.built_at | d('', true) %}
+    {% set builder = build.builder | d('', true) %}
+    {% set bob_docs_version = tools["bob-docs"] | d('', true) %}
+    {% set python_version = tools["python"] | d('', true) %}
+    {% set zensical_version = tools["zensical"] | d('', true) %}
+    {% set mkdocs_version = tools["mkdocs"] | d('', true) %}
+    {% set material_version = tools["mkdocs-material"] | d('', true) %}
+    {% if built_at %}Built {{ built_at | e }}{% endif %}
+    {% if builder %} ({{ builder | e }}){% endif %}
+    {% if bob_docs_version %} · bob-docs {{ bob_docs_version | e }}{% endif %}
+    {% if python_version %} · Python {{ python_version | e }}{% endif %}
+    {% if zensical_version %} · Zensical {{ zensical_version | e }}{% endif %}
+    {% if mkdocs_version %} · MkDocs {{ mkdocs_version | e }}{% endif %}
+    {% if material_version %} · Material {{ material_version | e }}{% endif %}
+    · <a href="{{ 'build.json' | url }}">build.json</a>
+  </p>
+</section>
+{% endif %}

@@ -97,7 +97,14 @@ nav:
   - Home: index.md
   - Get started:
       - Overview: start/index.md
+      - Is Bob for me?: start/is-bob-for-me.md
+      - Install Bob: start/install.md
       - Your first Bob day: start/first-bob-day.md
+      - Continue in Obsidian: start/obsidian.md
+      - Continue with Mac Capture: start/mac-capture.md
+  - Understand:
+      - Overview: concepts/index.md
+      - How Bob fits together: concepts/how-bob-fits-together.md
   - Reference:
       - Overview: reference/index.md
       - Capture syntax: reference/capture-syntax.md
@@ -141,6 +148,7 @@ nav:
           # END GENERATED: cli nav
       - Configuration: reference/configuration.md
       - JSON outputs: reference/json-outputs.md
+      - Requirements and compatibility: reference/compatibility.md
       - Glossary: reference/glossary.md
   - Develop:
       - Overview: develop/index.md

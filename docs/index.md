@@ -16,7 +16,7 @@ Git; the Mac panel only submits drafts and never owns the workflow.
 
 Linux and macOS · Obsidian
 
-[Is Bob for me? Start with getting started](getting-started.md).
+[Is Bob for me? Start with Get started](start/is-bob-for-me.md).
 [Read the behavior contracts](develop/contracts.md).
 
 ## One thought · three surfaces · one vault
@@ -63,6 +63,11 @@ links what unblocked, and [sync](vault-git-sync.md) keeps the vault honest.
 
 <div class="bob-doors" markdown="1">
 
+**Learn.** Follow the tested path.
+
+- [Get started](start/index.md) for the first day, installs, and continuations.
+- [Understand Bob](concepts/index.md) for the nouns and the system diagram.
+
 **Develop.** Build and maintain the site.
 
 - [Build the docs](develop/build.md)
@@ -71,7 +76,7 @@ links what unblocked, and [sync](vault-git-sync.md) keeps the vault honest.
 
 **Look up.** Reference that never drifts from the tools it describes.
 
-- [Look up Bob](reference/index.md) for the CLI reference, glossary, and design decisions.
+- [Look up Bob](reference/index.md) for the CLI reference, glossary, and compatibility.
 
 </div>
 
@@ -81,3 +86,6 @@ Bob lives in three public repositories: [bob-cli](https://github.com/bobs-org/bo
 [bob-plugins](https://github.com/bobs-org/bob-plugins), and
 [bob-mac-capture](https://github.com/bobs-org/bob-mac-capture), under the
 [MIT license](https://github.com/bobs-org/bob-cli/blob/master/LICENSE).
+
+New here? [Is Bob for me?](start/is-bob-for-me.md) ·
+[Requirements and compatibility](reference/compatibility.md).

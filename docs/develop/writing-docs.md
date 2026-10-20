@@ -107,6 +107,28 @@ conformance cases. Use temporary directories or a temporary `HOME` for commands 
 write files or inspect user state. Run `just docs-check` for the complete documentation
 gate, and run the repository checks for code changes.
 
+### Executable Get started fences
+
+The tutorial runner replays every `bash` fence in `start/` pages in Get started
+nav order inside one persistent shell with `set -euo pipefail`. Variables and
+`cd` survive across fences, so keep fences ordered, copyable, and safe to
+paste. The runner discovers pages from nav: every `start/*.md` file needs a
+nav entry and every nav entry needs its file.
+
+An unmarked `bash` fence executes. Skip only fences a sandbox cannot run:
+GUI steps, network installs, host toolchain changes, writes outside the
+sandbox, and plugin syncs that need Obsidian. Put the skip with a nonempty
+reason on the line before the fence:
+
+```html
+<!-- tutorial-test: skip opening Obsidian needs the desktop app -->
+```
+
+Put a checkpoint on the line after a fence only when the runner must validate
+state there. Checkpoints use registered IDs; inventing one fails the gate.
+Skipped fences stay real, complete instructions for readers, and the runner
+reports each skip with its source.
+
 ### Portable Markdown
 
 Lint rejects markup that only one builder renders. Follow these rules on every page:
