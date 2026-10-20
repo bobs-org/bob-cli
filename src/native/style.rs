@@ -56,6 +56,12 @@ impl Styler {
         self.paint("1", text)
     }
 
+    /// Bold plus underline (SGR `1;4`) for Highlights underline ink.
+    /// Works in every terminal, unlike colored-underline SGR 58.
+    pub(crate) fn underline_ink(&self, text: &str) -> String {
+        self.paint("1;4", text)
+    }
+
     pub(crate) fn red(&self, text: &str) -> String {
         self.paint("31;1", text)
     }

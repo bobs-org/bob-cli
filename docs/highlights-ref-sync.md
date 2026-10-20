@@ -369,10 +369,10 @@ on the MacBook before enabling PDF marker write-back:
   target PDFs.
 - Scheduled `scan` should stay dry-run or note-only unless bulk PDF marker
   writes are intentionally wanted and backed up.
-- Confirm a real underline renders as bold inside its host quote in
-  `bob ref show`; verify ANSI bold in a color terminal and literal `**` in
-  plain output. Enable `ref-highlights` in Obsidian and check the quote ink in
-  both light and dark themes.
+- Confirm a real underline renders as underlined bold inside its host quote in
+  `bob ref show`; verify SGR `1;4` in a color terminal and literal `**` in
+  plain output. Enable `ref-highlights` in Obsidian and check the gold
+  underline in both light and dark themes.
 
 ## Default Paths
 
@@ -1357,11 +1357,11 @@ Troubleshooting:
 
 A Highlights underline whose exported quote is fully wrapped in `**` is
 treated as emphasis when its cleaned text occurs exactly once in exactly one
-text highlight on the same page. The underline's words become a bold run in
+text highlight on the same page. The underline's words become a `**` run in
 that highlight's quote; its comment, image notes, and `#task` join the host
 block. A whole-quote underline still produces one block. The simple rule:
-**a bold run inside a quote means an underline merged; a whole bold quote means
-an underline stayed standalone.**
+**an underlined run inside a quote means an underline merged; a wholly
+underlined quote means it stayed standalone; the note stores both as `**`.**
 
 For multi-word text, the cleaned underline key must occur in exactly one
 candidate highlight. Single-word underlines additionally require word
@@ -1390,21 +1390,36 @@ Use `bob ref sync <pdf> --dry-run` to inspect `underlines_merged` and each
 and standalone counts; JSON adds `notes[].underlines_merged` and
 `notes[].underlines_standalone` only when nonzero. `schema_version` remains 1.
 
-In Obsidian, enable the `ref-highlights` CSS snippet to give bold quote text
-full ink in quote callouts, while leaving nested Comment callouts alone:
+In Obsidian, enable the `ref-highlights` CSS snippet so underlined runs in
+quote callouts draw as semibold full-ink words over a thick gold rule,
+matching the Bob Mac Capture Refs inspector, while leaving nested Comment
+callouts alone:
 
 ```css
-/* bob ref: an underline drawn in a Highlights quote renders as bold.
-   Nested Comment callouts are not affected. */
+/* bob ref: Highlights exports an underline as **bold**, and bob ref merges it
+   into its highlight's [!quote] callout. Draw it as the underline it was:
+   full-ink semibold words over a thick gold rule that passes under
+   descenders, matching the Bob Mac Capture Refs inspector. Nested Comment
+   callouts are not affected. */
 .callout[data-callout="quote"] > .callout-title strong,
 .callout[data-callout="quote"] > .callout-content > p strong {
   color: var(--text-normal);
+  font-weight: var(--font-semibold, 600);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--color-yellow) 65%,
+    var(--color-orange)
+  );
+  text-decoration-thickness: 0.15em;
+  text-underline-offset: 0.12em;
+  text-decoration-skip-ink: none;
 }
 ```
 
 The source snippet is `~/bob/.obsidian/snippets/ref-highlights.css`; add
 `"ref-highlights"` to `enabledCssSnippets` in `appearance.json`. This rule
-applies to bold text in all quote callouts. A known limitation tracked by
+applies to `strong` text in quote callouts. A known limitation tracked by
 `bob-cli-9o`: underlines still count toward the per-page annotation ordinal,
 so underlining a published passage can change IDs for later blocks on that
 page, or the host ID when the underline sorts first. The separate identity

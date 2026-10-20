@@ -822,7 +822,22 @@ fn flush_quote_segment(
         return;
     }
     let taken = std::mem::take(segment);
-    rendered.push_str(&if active { styler.bold(&taken) } else { taken });
+    if !active {
+        rendered.push_str(&taken);
+        return;
+    }
+    let inner = taken.trim();
+    if inner.is_empty() {
+        rendered.push_str(&taken);
+        return;
+    }
+    let prefix_len = taken.len() - taken.trim_start().len();
+    let suffix_len = taken.len() - taken.trim_end().len();
+    rendered.push_str(&taken[..prefix_len]);
+    rendered.push_str(
+        &styler.underline_ink(&taken[prefix_len..taken.len() - suffix_len]),
+    );
+    rendered.push_str(&taken[taken.len() - suffix_len..]);
 }
 
 fn image_note_lines(
@@ -1486,7 +1501,7 @@ mod tests {
     }
 
     #[test]
-    fn quote_emphasis_is_bold_only_in_color_output() {
+    fn quote_emphasis_is_underlined_bold_in_color_output() {
         let quote = "before **bold words** after **unclosed";
         let wrapped = wrap_text_with_source(quote, 200);
         let plain = styler_quote_lines(quote, &wrapped, Styler::plain());
@@ -1494,7 +1509,7 @@ mod tests {
         let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
         assert_eq!(
             colored,
-            vec!["before \u{1b}[1mbold words\u{1b}[0m after **unclosed"]
+            vec!["before \u{1b}[1;4mbold words\u{1b}[0m after **unclosed"]
         );
     }
 
@@ -1504,12 +1519,57 @@ mod tests {
         let wrapped = wrap_text_with_source(quote, 7);
         let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
         assert!(colored.len() > 1, "{colored:?}");
-        assert!(colored[0].contains("\u{1b}[1m"), "{colored:?}");
+        assert!(colored[0].contains("\u{1b}[1;4m"), "{colored:?}");
         assert!(colored[0].ends_with("\u{1b}[0m"), "{colored:?}");
-        assert!(colored[1].starts_with("\u{1b}[1m"), "{colored:?}");
+        assert!(colored[1].starts_with("\u{1b}[1;4m"), "{colored:?}");
         assert!(colored
             .last()
             .is_some_and(|line| line.ends_with("\u{1b}[0m")));
+    }
+
+    #[test]
+    fn quote_emphasis_keeps_edge_whitespace_unpainted() {
+        let quote = "**  one two three four  **";
+        let wrapped = wrap_text_with_source(quote, 9);
+        let colored = styler_quote_lines(quote, &wrapped, Styler::colored());
+        assert!(colored.len() > 1, "{colored:?}");
+        for line in &colored {
+            assert_painted_inner_has_no_edge_whitespace(line);
+        }
+        let one_line = styler_quote_lines(
+            quote,
+            &wrap_text_with_source(quote, 200),
+            Styler::colored(),
+        );
+        assert_eq!(one_line.len(), 1, "{one_line:?}");
+        assert_painted_inner_has_no_edge_whitespace(&one_line[0]);
+        assert!(
+            one_line[0].contains(" \u{1b}[1;4m")
+                || one_line[0].starts_with("\u{1b}[1;4m"),
+            "leading edge sits outside or at paint start: {one_line:?}"
+        );
+        assert!(
+            one_line[0].contains("\u{1b}[0m ")
+                || one_line[0].ends_with("\u{1b}[0m"),
+            "trailing edge sits outside or at paint end: {one_line:?}"
+        );
+    }
+
+    fn assert_painted_inner_has_no_edge_whitespace(line: &str) {
+        let mut rest = line;
+        while let Some(start) = rest.find("\u{1b}[1;4m") {
+            rest = &rest[start + "\u{1b}[1;4m".len()..];
+            let end = rest
+                .find("\u{1b}[0m")
+                .unwrap_or_else(|| panic!("unclosed paint in {line}"));
+            let inner = &rest[..end];
+            assert_eq!(
+                inner,
+                inner.trim(),
+                "edge whitespace inside paint: {line}"
+            );
+            rest = &rest[end + "\u{1b}[0m".len()..];
+        }
     }
 
     fn strip_ansi(text: &str) -> String {
@@ -1578,12 +1638,12 @@ mod tests {
         );
         assert_eq!(strip_ansi(&colored_payload[0]), "a".repeat(72));
         assert!(
-            colored_payload[0].starts_with("\u{1b}[1m")
+            colored_payload[0].starts_with("\u{1b}[1;4m")
                 && colored_payload[0].ends_with("\u{1b}[0m"),
             "{colored_payload:?}"
         );
         assert!(
-            !colored_payload[1].contains("\u{1b}[1m"),
+            !colored_payload[1].contains("\u{1b}[1;4m"),
             "plain text after split close must not stay bold: {colored_payload:?}"
         );
         assert_eq!(strip_ansi(&colored_payload[1]), " plain after");
@@ -1601,7 +1661,7 @@ mod tests {
         assert_eq!(stripped, "a".repeat(74) + &"b".repeat(5) + " after");
         assert!(
             payloads.iter().any(|line| {
-                line.contains("\u{1b}[1m") && strip_ansi(line).contains('b')
+                line.contains("\u{1b}[1;4m") && strip_ansi(line).contains('b')
             }),
             "{colored:?}"
         );
@@ -1619,11 +1679,11 @@ mod tests {
             payloads.iter().map(|line| strip_ansi(line)).collect();
         assert_eq!(stripped, "a".repeat(72) + " plain z");
         assert!(
-            payloads[0].contains("\u{1b}[1m")
+            payloads[0].contains("\u{1b}[1;4m")
                 && payloads[0].ends_with("\u{1b}[0m"),
             "{payloads:?}"
         );
-        assert_eq!(payloads[1], " plain \u{1b}[1mz\u{1b}[0m", "{payloads:?}");
+        assert_eq!(payloads[1], " plain \u{1b}[1;4mz\u{1b}[0m", "{payloads:?}");
     }
 
     #[test]
@@ -1637,14 +1697,14 @@ mod tests {
             payloads.iter().map(|line| strip_ansi(line)).collect();
         assert_eq!(stripped, "abxc");
         let joined = colored.join("\n");
-        assert!(joined.contains("\u{1b}[1ma\u{1b}[0m"), "{colored:?}");
-        assert!(joined.contains("\u{1b}[1mb\u{1b}[0m"), "{colored:?}");
-        assert!(joined.contains("\u{1b}[1mc\u{1b}[0m"), "{colored:?}");
+        assert!(joined.contains("\u{1b}[1;4ma\u{1b}[0m"), "{colored:?}");
+        assert!(joined.contains("\u{1b}[1;4mb\u{1b}[0m"), "{colored:?}");
+        assert!(joined.contains("\u{1b}[1;4mc\u{1b}[0m"), "{colored:?}");
         assert!(
             payloads
                 .iter()
                 .any(|line| strip_ansi(line) == "x"
-                    && !line.contains("\u{1b}[1m")),
+                    && !line.contains("\u{1b}[1;4m")),
             "{colored:?}"
         );
     }
