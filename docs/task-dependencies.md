@@ -11,6 +11,11 @@ has its own reason to be Blocked, every open task in its note is
 Blocked; that inheritance, `#prj_is_blocked`, and blocked-link
 consumption are in §13.
 
+Directed, optionally labelled task relations live on
+`🪢 **LINKS:**` / `🪢 **LINKED FROM:**` lines beside these
+dependency lines. They are inert and never block anything; see
+[Task relations](task-relations.md).
+
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_dependencies/` (parser, formatter, link form, legacy
 children) plus the reconciliation step in `bob task reconcile`
@@ -112,6 +117,8 @@ target.
 | `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage and Blocks stage (§15), capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
 | `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` / `*` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
 | `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
+| `🪢 **LINKS:**` | any `#task` with outgoing relations | nav Links stage, capture `~` / `~~` ([task-relations.md](task-relations.md) §8) | after the last direct-child subtree of Cancel Log, Depends-On, BLOCKS, or Sub-projects, else first | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `🪢 **LINKED FROM:**` | any writable `#task` that other tasks relate to | reconcile (authority); nav and capture courtesy writes ([task-relations.md](task-relations.md) §6–§8) | after the LINKS subtree, else in the LINKS slot | same as LINKS, plus the LINKS parser |
 | `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
 | `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
 
@@ -871,6 +878,14 @@ tests.
 | MC7 | section titles, Schedule / Cancel / Work Log, and Sub-projects recognisers | never claim a BLOCKS line; the BLOCKS parser never claims theirs |
 | MC8 | `bob projects sync` on `^prj` with Depends-On and BLOCKS | marker after both subtrees; a marker before BLOCKS moves after it |
 | MC9 | `bob task archive` of a closed T with a frozen `[[#^d]]` | link qualified to `[[note#^d]]` |
+| MC10 | a task under an open Pomodoro entry has LINKS / LINKED FROM lines | no Task Link effects: promotion, consumption, successor anchor, plan budget, completable sighting, close / cleanup (Rust and JS) |
+| MC11 | `🪢 **LINKS:** ![[#^t]]` under S; S closes via capture `x` or Ctrl+Enter | T never closed (tree close skips relation lines) |
+| MC12 | T closes or reopens elsewhere | strike / restore never touches relation lines |
+| MC13 | `!` / Ctrl+Shift+Enter on either line | refused with the [task-relations.md](task-relations.md#9-gestures-on-relation-lines) §9 notices |
+| MC14 | Ctrl+Enter / Alt+] on a link in either line | acts on the linked task root-only, without reformatting the bullet |
+| MC15 | R8 and the section-title, Schedule / Cancel / Work Log, Sub-projects, Depends-On, and BLOCKS recognisers | never claim relation lines; relation parsers never claim theirs |
+| MC16 | `bob projects sync`; nav project conversion | never moves or anchors on relation lines; conversion keeps LINKS with its task and drops LINKED FROM |
+| MC17 | `bob task archive`, `bob task move`, Ctrl+Shift+M | relation-line links rebased; LINKS moves with its task; never two LINKS lines |
 
 ## 12. Successor offers
 

@@ -129,8 +129,26 @@ Writer form: `⛓️` (U+26D3 U+FE0F), space, `**DEPENDS ON:**`, space, then
 plain Task Links joined by ` • `. No aliases, embeds, or strikes. An empty
 list deletes the line and the field.
 
+A task's directed relations live on one authored line, with a generated
+mirror maintained by reconcile:
+
+```markdown
+- [ ] #task Fix flaky capture retries ^fix-retries
+	- 🪢 **LINKS:** follow-up of [[done/bob_done#^capture-star]] • [[sase#^retry-design]]
+- [ ] #task Design a retry policy ^retry-design
+	- 🪢 **LINKED FROM:** [[#^fix-retries]] (follow-up of)
+```
+
+Writer form: `🪢` (U+1FAA2, no VS16), space, `**LINKS:**` or
+`**LINKED FROM:**`, space, then entries joined by ` • `. A LINKS entry
+is an optional label plus a block link to a task
+(`[<label> ][[note#^id]]`); a LINKED FROM entry appends the label in
+parentheses (`[[note#^id]] (<label>)`). An empty list deletes the line.
+Relations never block, count as Pomodoro Task Links, or change status.
+
 Other machine-owned direct children (closed registry): `❌ **CANCEL LOG**`,
-`🧱 **BLOCKS:**`, `🧩 **Sub-projects:**` on `^prj`, `🗓️ **SCHEDULE LOG**`,
+`🧱 **BLOCKS:**`, `🧩 **Sub-projects:**` on `^prj`,
+`🪢 **LINKS:**`, `🪢 **LINKED FROM:**`, `🗓️ **SCHEDULE LOG**`,
 `🛠️ **WORK LOG**`. None of these is a Pomodoro Task Link.
 
 Contract: [Task dependency links](../task-dependencies.md).

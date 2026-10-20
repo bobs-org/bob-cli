@@ -46,6 +46,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 - [Usage](#usage)
 - [Sync rules](#sync-rules)
 - [Dependency lines](#dependency-lines)
+- [Relation lines](#relation-lines)
 - [Derived Blocked status](#derived-blocked-status)
 - [Blocked task links are consumed](#blocked-task-links-are-consumed)
 - [Status grouping](#status-grouping)
@@ -375,6 +376,36 @@ line on an open task and mints nothing. JSON reports the additive
 `blocks_line_updates` (`{path, line, task, kind, added[], removed[]}`)
 and `minted_dependent_block_ids` (`{path, line, block_id}`) arrays;
 human output adds a `🧱 BLOCKS lines` group.
+
+## Relation lines
+
+A third pass maintains the generated `🪢 **LINKED FROM:**` mirror from
+the authored `🪢 **LINKS:**` lines, as [Task relations](task-relations.md)
+§6–§7 specifies. It collects relation edges from every active note
+plus the previous daily note and every `done/**/*.md` (read-only),
+byte-prefiltered for `LINKS`. Sources resolve through the note index;
+explicit `done/` targets resolve through the loaded archives — the
+same narrow `done/` read shape as the exact-`done/`-target exception
+above, documented here because the contract requires it. Open or
+closed writable targets gain, rewrite, canonicalise, deduplicate, or
+lose the line; targets in `done/` or the previous daily note are never
+written. Sources without a `^block-id` are minted silently in the same
+pass (no `[id::]`, no `[fresh::]`), except when the owning note is
+quiet-deferred — that source is skipped until the next run and never
+listed on uncertainty (malformed LINKS, duplicate block ids).
+Reconcile never edits a LINKS line: it only reads, warns, and mints.
+
+`relations.linked_from_lines: false` removes every LINKED FROM line on
+a writable task, mints nothing, and leaves LINKS alone.
+
+JSON reports the additive `linked_from_line_updates`,
+`minted_relation_source_block_ids`, and `relation_warnings[]`
+(`{kind, path, line, message}`) arrays. Warning kinds are
+`malformed_links_line`, `malformed_linked_from_line`,
+`unresolved_relation_link`, `relation_target_not_task`,
+`self_relation`, and `duplicate_block_id`. Human output adds a `🪢`
+group in the dependency style, and `--dry-run` previews all of it. A
+second run over a reconciled vault reports no relation changes.
 
 ## Derived Blocked Status
 

@@ -439,6 +439,13 @@ another thin client of that service (see `docs/capture.md`
   (`blocked_task`); a line-initial bare `*` is never this marker. Shell
   completion offers identified, enabled `*note:block-id` values,
   grouped `blocked tasks`. Quote `*` on the shell; zsh globs it.
+- **`~` / `~~` complete relation targets.** A leading-run or trailing
+  `~` / `~~` token opens the relation picker (`relation_to` /
+  `relation_from`); a label position completes labels
+  (`relation_label`). Shell completion offers identified, enabled
+  `~note:block-id` / `~~note:block-id` values, grouped `links to` /
+  `linked from`. Quote `~` on the shell; zsh globs it. See
+  [Linking tasks](capture.md#linking-tasks).
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human

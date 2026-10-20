@@ -67,19 +67,22 @@ groups:
         summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
         order: 22
         reader: guides/add-prerequisites.md
+      - stem: task-relations
+        summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, and `~` / `~~` capture"
+        order: 23
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
-        order: 23
+        order: 24
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
-        order: 24
+        order: 25
         reader: concepts/tasks-and-lanes.md
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill"
-        order: 25
+        order: 26
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 26
+        order: 27
         reader: concepts/today-and-the-pomodoro-ledger.md
   - title: "References"
     entries:
@@ -102,5 +105,5 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 27
+        order: 28
         reader: guides/sync-vault-across-machines.md

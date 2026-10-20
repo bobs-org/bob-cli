@@ -219,6 +219,7 @@ nav:
               - "Randomize": randomize.md
               - "Daily Stats": stats.md
               - "Task dependency links": task-dependencies.md
+              - "Task relations": task-relations.md
               - "Move open tasks between notes": task-move.md
               - "Task Status Hooks": task-status-hooks.md
               - "Task tag marks": task-tag-marks.md

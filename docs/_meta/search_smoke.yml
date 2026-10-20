@@ -64,6 +64,12 @@
   location: /reference/capture-syntax/#star-picker
 - query: "^route:block-id *note:id"
   location: /reference/capture-syntax/#star-existing
+- query: "~note:block-id"
+  location: /reference/capture-syntax/#tilde-link
+- query: "~~note:block-id"
+  location: /reference/capture-syntax/#tilde-tilde-link
+- query: "^route:block-id ~note:id"
+  location: /reference/capture-syntax/#tilde-existing
 - query: "!"
   location: /reference/capture-syntax/#bang-picker
 - query: "!query"

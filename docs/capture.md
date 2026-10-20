@@ -36,6 +36,7 @@ workflow guide.
   - [Adding prerequisites with '&'](#adding-prerequisites-with)
   - [Blocking existing tasks with '*'](#blocking-existing-tasks-with)
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
+  - [Linking tasks with '~' and '~~'](#linking-tasks)
   - [Completing tasks with '!'](#completing-tasks-with)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
@@ -105,6 +106,11 @@ anything is written, and any failure rolls the whole batch back.
 | `*note:block-id` with no owner | Incomplete: a blocked task is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
 | `*note:block-id +query` | Incomplete: choose the existing owner with the `task_parent` picker; execution refuses until the selection is complete |
 | `+query *note:block-id` | Incomplete: choose the blocking owner with the `task_parent` picker |
+| `~note:block-id[\|"label"]` | Relation link: the captured (or explicitly selected) task links to `note.md`'s `^block-id` task, with an optional label; nested notes use `~projects/foo:bar`, notes with spaces use `~"Shopping List":bar`, labels use `~note:id\|see` or `~note:id\|"follow-up of"`. Quote `~` on shells that expand it |
+| `~`, `~query`, `~note:`, `~~note:block-id` | Incomplete: the relation picker is still open (`capture-parse` needs `relation_target`); a label position needs `relation_label`; execution refuses with a teaching error |
+| `~~note:block-id[\|"label"]` | Reverse relation: the named task links to the captured (or explicitly selected) task; the captured task is the target, so it is always minted; the named task's LINKS line must be editable |
+| `^route:block-id ~note:id`, `~note:id ^route:block-id`, `^route:block-id ~~note:id` | Relate an existing owner; `^route:id` is a bare owner alias here and does not create a Pomodoro link |
+| `~note:block-id` with no owner | Incomplete: a relation target is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
 | `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
 | `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
 | `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `x!N` would, retires its Task Links, and unblocks dependents |
@@ -2008,7 +2014,11 @@ bullet.
 
 The aliases stay narrow: `@route:id` and `^route:id` name an owner only when
 used bare with relationship modifiers. Without `&` or `*`, their existing
-Pomodoro-link behavior remains unchanged. The familiar two-item form still
+Pomodoro-link behavior remains unchanged. `&`, `*`, `~`, and `~~` are all
+**relationship modifiers**: the first two change status and lanes, while
+`~` / `~~` only write inert relation lines
+([Linking tasks with '~' and '~~'](#linking-tasks)). The
+familiar two-item form still
 keeps a blocked task in a session while it takes over the blocker’s slot:
 
 ```text
@@ -2255,6 +2265,87 @@ selection and typed modifier, without diagnostics:
   "diagnostics": []
 }
 ```
+
+### Linking tasks with '~' and '~~' {#linking-tasks}
+
+`~` links the item's task to another task; `~~` links another task to
+the item's task. Both write entries on `🪢 **LINKS:**` lines and let
+reconcile maintain the `🪢 **LINKED FROM:**` mirrors, exactly as
+[Task relations](task-relations.md) specifies. Owners use exactly the
+`&` / `*` spellings: task text creates the owner, `@route+id` names an
+existing owner, `@@route+id` is inherited, and bare `@route:id` /
+`^route:id` alias without linking. A relation-only existing-owner item
+uses mode `task_dependency` and reports `relationship_needs_text`, as
+`&` does.
+
+```text
+Fix flaky capture retries ~bob_done:capture-star|"follow-up of"
+Write the outline ~~sase_blog:prj|"next step"
+@bob+fix-retries ~sase:retry-design|see
+```
+
+**Meaning.** `~note:block-id` means this item's task relates to that
+task. `~~note:block-id` means that task relates to this item's task.
+A label after `|` is phrased from the source's side
+(`S — ‹label› → T`); write `|"follow-up of"` for multi-word labels.
+Labels obey the [relation label rules](task-relations.md#32-labels).
+
+**Guards.** A `~` / `~~` token is a directive only when it sits in the
+same leading or trailing run as `&` / `*`, whitespace-delimited. A
+mid-line `~foo:bar` stays body text. The byte after the sigil is not
+whitespace or `/` (so `~/Downloads` stays literal), and not a digit
+when the token has no `:` (so `~5m`, `~2h`, `~5pm` stay literal).
+`~~old~~` is strikethrough, `x~~1` / `=~~2` teach "use one `~` list",
+and `=~2` / `x~1` keep their drop-list meaning. `\~` escapes the
+sigil where it would otherwise be a directive; `[[…]]` and backtick
+spans are never scanned. An unresolved bare or partial sigil refuses
+on submit with `` `~` needs a task; choose one, or write `\~` for a
+literal tilde ``.
+
+**Targets.** A `~` target is any task with a block id: open, closed,
+any active note, a daily note, or `done/`. A mirror is skipped for
+archived and previous-daily targets. A `~~` target's LINKS line is
+written, so it must be editable: the refusal set is the same as
+`*`'s (daily notes, `done/`, `_templates`, `_generated`,
+`_conflicts`, dot-directories, fenced code). Self-relations,
+non-task targets, and id-less targets are refused with a teaching
+error.
+
+**Refusals.** A relation after `x` is an `operator_relation_error`.
+Suffixed owners (`#name`, `=…`, `!`) keep the existing "must be bare"
+refusal. A relation-only item cannot carry `$<N>`, `s:<N>`, `%…`, or
+authored child bullets (`relationship_needs_text`).
+
+**Shell quoting.** Quote `~` where the shell expands it
+(`bob capture 'Fix it ~work:foo'`). In zsh, `~` at a word start can
+glob; single-quote the draft.
+
+**Inertness.** Relations never block, consume, schedule, stamp, or
+route anything. `Fix it ~work:foo` leaves every status, lane, and
+Pomodoro link exactly as it was, apart from a minted `^id`.
+
+**Human output.** Successful captures print `🪢` rows in the
+dependency style, for example:
+
+```text
+✓ Fix flaky capture retries  mac_inbox.md ^fix-flaky-capture-retries   [ ] Ready
+  🪢 links to "Capture * blocks existing tasks" · follow-up of   done/bob_done.md ^capture-star · archived
+```
+
+An unchanged rerun reports `unchanged`; a new label reports
+`relabeled`. Dry runs say `would …`.
+
+**JSON.** Every `schema_version` stays 1 and every field is
+additive. `capture-parse` adds `relations[]` (top-level and per
+item), the `relation_target` / `relation_label` needs, the five
+`relation_*` span kinds, and top-level `relation_grammar: 1` whenever
+the draft contains a `~` byte. `capture-complete` adds the
+`relation_to` / `relation_from` / `relation_label` contexts.
+`capture-task-id` adds `relation_to_replacement` and
+`relation_from_replacement`. `capture` adds, per item,
+`relation_updates[]`, `linked_from_line_updates[]`,
+`minted_relation_block_ids[]`, and `mirror_skipped[]` (all omitted
+when empty). See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
 
 ### Completing tasks with '!'
 
@@ -4520,6 +4611,18 @@ or `⛓️ dropped N dependencies: …` after the status line (`would drop` in a
 dry run). The batch-level `task_blocks` entry for the dependent includes role
 `"dependency_dropped"` and shows the changed task and Depends-On lines.
 
+Relation captures keep kind `"task_dependency"` and add, per item,
+`relation_updates[]` (`{direction, source, target, label,
+previous_label, action: added|relabeled|unchanged}`),
+`linked_from_line_updates[]`, `minted_relation_block_ids[]`, and
+`mirror_skipped[]` (`{reason:
+archived_target|previous_daily_target|malformed_line|disabled}`), all
+omitted when empty. An existing task whose LINKS line changed is
+reported as a task block with role `relation_source`; mirror-only
+changes report rows, not task blocks. Human output prints the `🪢`
+rows shown in [Linking tasks with '~' and
+'~~'](#linking-tasks).
+
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
 route-based clients keep working, while `relative_target` and `target` point
@@ -5365,6 +5468,22 @@ shape, emitted at the top level and per item, omitted when empty. Never put
 a direction flag on `dependencies[]`. A partial `*` needs `blocked_task`;
 see [Blocking existing tasks with '*'](#blocking-existing-tasks-with).
 
+`relations[]` is the `~` / `~~` analogue: `{raw, direction: "to"|"from",
+note, block_id, quoted, label, label_range, range}`, emitted at the top
+level and per item, omitted when empty. Labels come from `|label` /
+`|"label text"` suffixes and are validated against the
+[relation label rules](task-relations.md#32-labels). A partial `~` /
+`~~` needs `relation_target`; a label position needs `relation_label`.
+An ownerless item reuses `dependency_target`, mode stays
+`task_dependency`, and `relationship_needs_text` covers `~` / `~~`
+exactly as it covers `&` / `*`. Span kinds `relation_sigil`,
+`relation_note`, `relation_block_id`, `relation_label_separator`, and
+`relation_label` mark each part. Top-level `relation_grammar: 1`
+appears whenever the draft contains a `~` byte; drafts without `~`
+are byte-identical to today, and relations never appear in
+`dependencies[]` or `blocked_tasks[]`. See
+[Linking tasks with '~' and '~~'](#linking-tasks).
+
 When the draft has a `@@` declaration, `global_destination` is an optional
 object with the declaration `range`, one-based physical `line`, effective
 `mode`, `route`, `block_id`, and `needs`. It is omitted when no declaration is
@@ -5870,6 +5989,22 @@ fields. A `new_task` owner carries its non-empty draft `text`. These additions
 are omitted when absent, and responses for drafts without relationship
 modifiers remain byte-identical.
 
+`~` / `~~` add the `relation_to` and `relation_from` contexts and the
+`relation_label` context. Both task contexts reuse the whole `discover`
+catalog with direction-specific eligibility, ranking, and badges, and
+rows carry `already_linked`, `existing_label`, and the information
+badge `also_prerequisite` plus `disabled_reason` (`the owner task
+itself`, the duplicate-block-ID reason, `archived tasks can't get an
+id`, and — for `relation_from` only — `read-only note` and `its LINKS
+line is malformed`). Label suggestions scan every LINKS line,
+`done/` included, and return `suggestions[] {label, count,
+replacement}`; a non-empty typed label adds a first `{label, typed:
+true, replacement}` row with bob's canonical `|label` /
+`|"multi word"` spelling. `picker.relationship` gains `relations[]`
+(direction, text) for the owner picker, and shell completion gains
+`links to` / `linked from` groups. See
+[Linking tasks with '~' and '~~'](#linking-tasks).
+
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
@@ -6330,7 +6465,10 @@ mode), `relative_target`, the backend-formatted `dependency_replacement`
 `blocked_task_replacement` (`*note:id`, quoted when the locator needs it),
 the backend-formatted
 `complete_replacement` (`!note:id`, quoted when the locator needs it, in
-both modes) for splicing the new ID into the Complete picker, the canonical
+both modes) for splicing the new ID into the Complete picker, the
+backend-formatted `relation_to_replacement` (`~note:id`) and
+`relation_from_replacement` (`~~note:id`), quoted when the locator needs
+it, for splicing the new ID into the relation pickers, the canonical
 `block_id`,
 the updated one-based `line`, the updated `ref`, and a `task` object with
 the same picker metadata as `capture-tasks` after the assignment. In `--route`

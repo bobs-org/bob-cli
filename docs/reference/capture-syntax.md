@@ -51,6 +51,9 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `*note:block-id` | Named open task depends on the captured task | [`*note:block-id`](#star-blocks) |
 | `*query` | **Picker:** choose a blocked task | [`*query`](#star-picker) |
 | `^route:block-id *note:id` | Existing owner blocks an existing task | [Block from an existing owner](#star-existing) |
+| `~note:block-id` | This task links to that task, with an optional label | [`~note:block-id`](#tilde-link) |
+| `~~note:block-id` | That task links to this task, with an optional label | [`~~note:block-id`](#tilde-tilde-link) |
+| `^route:block-id ~note:id` | Relate an existing owner | [Relate an existing owner](#tilde-existing) |
 | `!` / `!query` | **Picker:** choose a task to complete | [`!`](#bang-picker) |
 | `!note:block-id` | Complete that existing open task | [`!note:block-id`](#bang-complete) |
 | `+[N]` | Extend today's current timed Pomodoro | [`+[N]`](#plus-adjust) |
@@ -103,6 +106,11 @@ what they attach to, not as one global operator.
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
 | `*` | line-initial bare `*` | Never a blocked-task marker |
+| `~` | `~note:block-id[\|"label"]` | Relation link ([`~`](#tilde-link)) |
+| `~` | `x~` / `=~` | Drop Task Links on close / drop on start |
+| `~` | `~/path`, `~5m`, mid-line `~x:y` | Never a relation marker |
+| `~~` | `~~note:block-id[\|"label"]` | Reverse relation link ([`~~`](#tilde-tilde-link)) |
+| `~~` | `~~old~~` | Strikethrough, never a relation marker |
 | `!` | `!note:block-id` | Complete an existing task |
 | `!` | `x!` | Complete Task Links on close |
 | `%` | `URL %` | Request companion audio |
@@ -110,11 +118,14 @@ what they attach to, not as one global operator.
 
 Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
 
+**Mnemonic: `~` on its own ties two tasks; `~` inside `x` / `=` drops.**
+
 ## Incomplete input versus executable syntax
 
 A picker token is a draft state, not a capture. `bob capture` and
 `bob capture-parse` refuse it with a teaching error until the selection
-becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`, or
+becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`,
+`~note:id`, `~~note:id`, or
 `@route+id`. Session tokens that still need a number (`x~`, `=~`, `x@`,
 `=#`) are the same kind of incomplete input.
 
@@ -615,6 +626,61 @@ bob capture '^work:dump *work:queue'
 ```
 
 Contract: [Relating existing tasks](../capture.md#relating-existing-tasks).
+
+## Relation links
+
+### `~note:block-id[|"label"]` {#tilde-link}
+
+The captured (or explicitly selected) task links to `note.md`'s
+`^block-id` task, with an optional source-side label. Nested notes use
+`~projects/foo:bar`; notes with spaces use `~"Shopping List":bar`;
+labels use `~note:id|see` or `~note:id|"follow-up of"`. Quote `~` on
+the shell. The target may be open, closed, in any active note, a daily
+note, or `done/` (a mirror is skipped for archived and previous-daily
+targets). Relations are inert: no status, lane, Pomodoro, or field
+changes.
+
+```bash
+bob capture 'Fix flaky capture retries ~sase:retry-design|see'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  mac_inbox.md
+  🪢 links to "Design a retry policy" · see   sase.md ^retry-design  [ ] Ready
+```
+
+A selected `~note:block-id` with no owner is incomplete
+(`dependency_target`): type task text or `+` to choose an existing
+owner. A bare `~` / `~query` / `~note:` needs `relation_target`; a
+label position needs `relation_label`.
+
+Contract: [Linking tasks with '~' and '~~'](../capture.md#linking-tasks).
+
+### `~~note:block-id[|"label"]` {#tilde-tilde-link}
+
+The named task links to the captured (or explicitly selected) task.
+The captured task is the target, so it is always minted; the named
+task's LINKS line must be editable (the same refusal set as `*`: daily
+notes, `done/`, `_templates`, `_generated`, `_conflicts`,
+dot-directories, fenced code).
+
+```bash
+bob capture 'Write the outline ~~sase_blog:prj|"next step"'
+```
+
+Contract: [Linking tasks with '~' and '~~'](../capture.md#linking-tasks).
+
+### `^route:block-id ~note:id` {#tilde-existing}
+
+Relate an existing owner. `^route:id` is a bare owner alias here and
+does not create a Pomodoro link. `~note:id ^route:block-id` and
+`^route:block-id ~~note:id` are the same family.
+
+```bash
+bob capture '^bob:fix-retries ~sase:retry-design|see'
+```
+
+Contract: [Linking tasks with '~' and '~~'](../capture.md#linking-tasks).
 
 ## Completion
 

@@ -106,6 +106,15 @@ See the [plan configuration contract](../plan.md#config) and
 
 See [task dependency links](../task-dependencies.md#14-blocks-lines).
 
+### `relations`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `relations.linked_from_lines` | Boolean | `true` | Write `🪢 LINKED FROM` mirrors ([task relations](../task-relations.md)). `false` removes every LINKED FROM line on writable tasks, mints nothing, and leaves LINKS alone. |
+
+An invalid `relations.linked_from_lines` value falls back to `true` and
+warns. See [Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
+
 ### `freshness`
 
 Intervals are integer days from 1 through 365. The two lane intervals also
