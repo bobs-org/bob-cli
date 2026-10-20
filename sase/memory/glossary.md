@@ -17,6 +17,7 @@ Capture; Inbox File (inbox note); Keep Streak (keeps); Mac Menu Bar Pomodoro Ind
 (mac pom); Morning GTD Review Footer (review footer); Pomodoro; Project Note (prj note);
 Project Task (prj task); Reference Note (ref note); Reference Task (ref task); Schedule
 Log; Successor Offer; Task Dependency Link (task dep link, dep link); Task Freshness
-(freshness); Task Link (task block link); Work Log
+(freshness); Task Link (task block link); Task Relation (relation, LINKS line, LINKED
+FROM line); Work Log
 
 <!-- /sase:strands -->

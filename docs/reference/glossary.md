@@ -255,7 +255,18 @@ The local calendar date a human last confirmed that an open task still needs doi
 
 *Aliases: task block link.*
 
-A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s.
+A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s. Entries on a task's 🪢 **LINKS:** line are [Task Relation](#task-relation)s, never Pomodoro Task Links.
+
+### Task Relation {#task-relation}
+
+*Aliases: relation, LINKS line, LINKED FROM line.*
+
+*Requested · project*
+
+A directed, optional labelled edge between two tasks, authored as a task block link on
+the source task's 🪢 **LINKS:** line. Its generated 🪢 **LINKED FROM:** entry appears on
+the target task. A relation is distinct from a Pomodoro [Task Link](#task-link) and never blocks a
+task or changes its status, schedule, priority, or freshness.
 
 ### Work Log {#work-log}
 
