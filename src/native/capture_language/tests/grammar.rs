@@ -1596,6 +1596,47 @@ fn pomodoro_link_suffixes_teach_about_drops_duplicate_names_and_glued_timing() {
 }
 
 #[test]
+fn pomodoro_link_suffix_shared_timing_validation_matches_standalone() {
+    // Duplicate timing in both positions refuses like `=3#bugs@2`, for both
+    // sigils and legacy `@!` where shared.
+    for raw in [
+        "@work:outline=3#bugs@2",
+        "^work:outline=3#bugs@2",
+        "@!work:outline=3#bugs@2",
+        "@work:outline=3#bugs@",
+        "^work:outline=3#bugs@",
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains("gives the timing twice"), "{raw}: {error}");
+    }
+    // Dangling timing refuses execution (the editor reports incomplete).
+    for raw in ["@work:outline=bugs@", "^work:outline=bugs@"] {
+        let error = execute(raw).expect_err(raw);
+        assert!(
+            error.contains("is incomplete: type the timing after `@`"),
+            "{raw}: {error}"
+        );
+    }
+    // Name-once suggestions use the shared spelling helper and preserve
+    // start intent: digit-led and close-like names keep `#`.
+    for (raw, suggestion) in [
+        ("@work:outline#bugs=#2fa", "@work:outline=#2fa"),
+        ("^work:outline#bugs=#x2", "^work:outline=#x2"),
+    ] {
+        let error = execute(raw).expect_err(raw);
+        assert!(
+            error.contains(suggestion),
+            "{raw} should suggest {suggestion}: {error}"
+        );
+        assert!(
+            !error.contains("=2fa") || error.contains("=#2fa"),
+            "{raw}: {error}"
+        );
+        execute(suggestion).expect("suggested start stays executable");
+    }
+}
+
+#[test]
 fn execution_rejects_project_note_shape_errors() {
     // A `#pomodoro` name with no ` :` task is unused.
     let error = execute("Finish it @cash^goog-exit+#bugs")

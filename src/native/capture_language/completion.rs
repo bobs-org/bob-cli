@@ -636,6 +636,12 @@ pub(super) fn caret_completion_field_at(
             cursor,
         )
         .filter(|_| {
+            // A suffix name used to discard the link part: admit cursors in
+            // the link part as well as the suffix name, while keeping
+            // timing bytes (`=`, `=3`, `@3`) non-completable.
+            if cursor <= first.start + link_end {
+                return true;
+            }
             start_offset.is_none_or(|offset| {
                 if let Some((name_start, name_end)) = name_range
                     && first.start + name_start >= first.start + offset
@@ -647,6 +653,35 @@ pub(super) fn caret_completion_field_at(
                 }
             })
         }),
+        CaretTokenShape::TimingIncomplete {
+            route,
+            block_id,
+            link_end,
+            name_range,
+            ..
+        } => {
+            if item.lines.len() != 1 {
+                return None;
+            }
+            caret_link_field(
+                first,
+                route,
+                block_id,
+                link_end,
+                Some(name_range),
+                false,
+                cursor,
+            )
+            .filter(|_| {
+                // Like a complete suffix name: link part and name are
+                // completable, the dangling `@` is not.
+                if cursor <= first.start + link_end {
+                    return true;
+                }
+                cursor >= first.start + name_range.0
+                    && cursor <= first.start + name_range.1
+            })
+        }
     }
 }
 

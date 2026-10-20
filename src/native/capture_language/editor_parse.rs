@@ -2168,6 +2168,7 @@ pub(super) fn parse_editor_item_with<'a>(
                 name_range,
                 start_offset: _,
                 start_ranges,
+                start: partial_start,
             } => {
                 mode = EditorMode::Incomplete;
                 body = String::new();
@@ -2175,7 +2176,7 @@ pub(super) fn parse_editor_item_with<'a>(
                 section = None;
                 block_id = Some(partial_block);
                 needs = vec![Need::PomodoroName];
-                pomodoro_start = None;
+                pomodoro_start = partial_start;
                 pomodoro_close = None;
                 let route_end =
                     token_start + 1 + route.as_deref().unwrap_or("").len();
@@ -2201,6 +2202,56 @@ pub(super) fn parse_editor_item_with<'a>(
                 spans.push(Span {
                     start: token_start + name_range.0 - 1,
                     end: token_start + name_range.0,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+            }
+            CaretItemKind::TimingIncomplete {
+                route: timing_route,
+                block_id: timing_block,
+                pomodoro_name: timing_name,
+                link_end: timing_link_end,
+                name_range: timing_name_range,
+                start_offset: _,
+                start_ranges: timing_ranges,
+                separator_range,
+            } => {
+                mode = EditorMode::Incomplete;
+                body = String::new();
+                route = Some(timing_route);
+                section = Some(timing_name);
+                block_id = Some(timing_block);
+                needs = vec![Need::PomodoroStartTiming];
+                pomodoro_start = None;
+                pomodoro_close = None;
+                let route_end =
+                    token_start + 1 + route.as_deref().unwrap_or("").len();
+                spans.push(Span {
+                    start: token_start,
+                    end: route_end,
+                    kind: SpanKind::ActiveTaskRoute,
+                });
+                spans.push(Span {
+                    start: route_end + 1,
+                    end: token_start + timing_link_end,
+                    kind: SpanKind::ActiveTaskBlockId,
+                });
+                for (start, end) in timing_ranges {
+                    if end > start {
+                        spans.push(Span {
+                            start: token_start + start,
+                            end: token_start + end,
+                            kind: SpanKind::PomodoroStart,
+                        });
+                    }
+                }
+                spans.push(Span {
+                    start: token_start + timing_name_range.0,
+                    end: token_start + timing_name_range.1,
+                    kind: SpanKind::PomodoroName,
+                });
+                spans.push(Span {
+                    start: token_start + separator_range.0,
+                    end: token_start + separator_range.1,
                     kind: SpanKind::InteractivePlaceholder,
                 });
             }

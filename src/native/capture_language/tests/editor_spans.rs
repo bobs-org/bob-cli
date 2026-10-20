@@ -561,6 +561,68 @@ fn editor_spans_pomodoro_link_names_after_the_equal_suffix() {
 }
 
 #[test]
+fn editor_link_suffix_incomplete_states_keep_timing_and_placeholders() {
+    // Dangling timing reports incomplete with no spec, like `=bugs@`.
+    for raw in ["@work:outline=bugs@", "^work:outline=bugs@"] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.needs, vec![Need::PomodoroStartTiming], "{raw}");
+        assert!(parse.pomodoro_start.is_none(), "{raw}");
+        assert_eq!(parse.section.as_deref(), Some("bugs"), "{raw}");
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+        let spans = ranges(&parse);
+        assert!(
+            spans.contains(&(18, 19, SpanKind::InteractivePlaceholder)),
+            "{raw}: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|(_, _, kind)| *kind == SpanKind::PomodoroName),
+            "{raw}: {spans:?}"
+        );
+    }
+    // Empty names keep valid timing visible with a partial spec.
+    for (raw, timing) in [
+        ("@work:outline#=3", "3"),
+        ("@work:outline=#@3", "3"),
+        ("@work:outline=3#", "3"),
+        ("^work:outline#=3", "3"),
+        ("^work:outline=#@3", "3"),
+        ("^work:outline=3#", "3"),
+        ("@!work:outline#=3", "3"),
+    ] {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parse.needs, vec![Need::PomodoroName], "{raw}");
+        let spec = parse.pomodoro_start.as_ref().expect(raw);
+        assert_eq!(spec.raw, timing, "{raw}");
+        assert!(
+            parse
+                .spans
+                .iter()
+                .any(|span| span.kind == SpanKind::InteractivePlaceholder),
+            "{raw}"
+        );
+        assert!(
+            parse
+                .spans
+                .iter()
+                .any(|span| span.kind == SpanKind::PomodoroStart),
+            "{raw}"
+        );
+        assert!(parse.diagnostics.is_empty(), "{raw}");
+        // Spans stay disjoint and sorted.
+        let mut sorted = parse.spans.clone();
+        sorted.sort_by_key(|span| (span.start, span.end));
+        assert_eq!(parse.spans, sorted, "{raw}");
+        for window in parse.spans.windows(2) {
+            assert!(window[0].end <= window[1].start, "{raw}");
+        }
+    }
+}
+
+#[test]
 fn editor_reports_caret_partials_as_incomplete() {
     for raw in ["^", "^frag", "^sase:"] {
         let parse = editor(raw);

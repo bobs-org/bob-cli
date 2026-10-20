@@ -1,6 +1,6 @@
 //! Route, caret, and selector parsers.
 
-use super::bare_name::NameSpelling;
+use super::bare_name::{start_name_spelling, NameSpelling};
 use super::close_selection::*;
 use super::dependencies::*;
 use super::draft::*;
@@ -698,11 +698,6 @@ fn parse_link_start_suffix(
         }
         return Err(POMODORO_START_SHAPE_ERROR.to_string());
     }
-    if let Some((_, list)) = drop {
-        return Err(format!(
-            "Pomodoro link start `{typed_token}` takes a name and timing, not a `~` drop list; remove `~{list}`"
-        ));
-    }
     if name.as_deref() == Some("") {
         return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
     }
@@ -714,7 +709,50 @@ fn parse_link_start_suffix(
     }
 
     let effective = effective_start_timing(&suffix, &timing);
-    let spec = parse_pomodoro_start_suffix(&effective)?;
+    // Overflow and invalid timing win over duplicate/dangling checks,
+    // mirroring `parse_pomodoro_equals_item`'s `named_token_error` order.
+    let spec = parse_pomodoro_start_suffix(&effective).map_err(|message| {
+        // A glued timing (`=3bugs`) already returned above via the length
+        // check; any remaining effective failure is overflow/invalid timing.
+        message
+    })?;
+    // Both timings win over the dangling-`@` incomplete state, including a
+    // dangling second timing (`=3#bugs@`). Reuse the standalone teaching
+    // rule rather than drifting.
+    if !suffix.is_empty()
+        && let Some((_, timing_text)) = timing.as_ref()
+    {
+        let effective_twice = if !timing_text.is_empty() {
+            timing_text.as_str()
+        } else {
+            suffix.as_str()
+        };
+        if let Some(name_str) = name.as_deref() {
+            return Err(start_timing_twice_error(
+                typed_token,
+                "=",
+                effective_twice,
+                name_str,
+            ));
+        }
+        return Err(start_timing_twice_unnamed_error(
+            typed_token,
+            "=",
+            effective_twice,
+            "",
+        ));
+    }
+    // Dangling `@` never produces an executable default spec.
+    if let Some((_, timing_text)) = timing.as_ref()
+        && timing_text.is_empty()
+    {
+        return Err(start_timing_incomplete_error(typed_token));
+    }
+    if let Some((_, list)) = drop {
+        return Err(format!(
+            "Pomodoro link start `{typed_token}` takes a name and timing, not a `~` drop list; remove `~{list}`"
+        ));
+    }
     let name_range =
         name.as_ref().zip(name_spelling).map(|(name, spelling)| {
             let start =
@@ -891,9 +929,20 @@ pub(super) fn parse_colon_link_tail(
             .and_then(|parsed| parsed.name.as_ref())
             .is_some()
     {
+        let suffix_name = parsed_suffix
+            .as_ref()
+            .and_then(|parsed| parsed.name.as_deref())
+            .unwrap_or_default();
+        let sigil = if typed_token.starts_with('^') {
+            "^"
+        } else if typed_token.starts_with("@!") {
+            "@!"
+        } else {
+            "@"
+        };
         return Err(format!(
-            "`{typed_token}` names the Pomodoro both before and after `=`; name it once, for example `@{route}:{block_id}={}` or `@{route}:{block_id}#{}=`",
-            parsed_suffix.as_ref().and_then(|parsed| parsed.name.as_deref()).unwrap_or_default(),
+            "`{typed_token}` names the Pomodoro both before and after `=`; name it once, for example `{sigil}{route}:{block_id}={}` or `{sigil}{route}:{block_id}#{}=`",
+            start_name_spelling(suffix_name),
             prefix_name.as_deref().unwrap_or_default(),
         ));
     }
@@ -1119,6 +1168,20 @@ pub(super) enum CaretTokenShape {
         name_range: (usize, usize),
         start_offset: Option<usize>,
         start_ranges: Vec<(usize, usize)>,
+        start: Option<PomodoroStartSpec>,
+    },
+    /// A `^route:block-id=bugs@` token with a dangling `@`: an editing
+    /// state, not a mistake. The typed name stays visible, no executable
+    /// spec is produced, and one placeholder covers the `@`.
+    TimingIncomplete {
+        route: String,
+        block_id: String,
+        pomodoro_name: String,
+        link_end: usize,
+        name_range: (usize, usize),
+        start_offset: usize,
+        start_ranges: Vec<(usize, usize)>,
+        separator_range: (usize, usize),
     },
     /// A complete `^route:block-id[#name][=<X>]` token. `link_end` ends the
     /// `route:block-id` part (before any `#`/`=`); `name_range` covers the
@@ -1241,11 +1304,89 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             }
         }
         Err(message) => {
+            if message.contains("is incomplete: type the timing after `@`") {
+                let (before_eq, raw_after) = match tail.split_once('=') {
+                    Some((before, after)) => (before, Some(after)),
+                    None => (tail, None),
+                };
+                let block = before_eq
+                    .split_once('#')
+                    .map(|(block, _)| block)
+                    .unwrap_or(before_eq);
+                if block.is_empty()
+                    || !is_block_id(block)
+                    || raw_after.is_none()
+                {
+                    return CaretTokenShape::Invalid(message);
+                }
+                let raw = raw_after.expect("has suffix");
+                let start_token = format!("={raw}");
+                let Some(
+                    crate::native::capture_language::item::EqualsToken::Start {
+                        suffix,
+                        name,
+                        name_spelling,
+                        timing,
+                        ..
+                    },
+                ) = crate::native::capture_language::item::session_equals_token(
+                    &start_token,
+                )
+                else {
+                    return CaretTokenShape::Invalid(message);
+                };
+                if !timing.as_ref().is_some_and(|(_, text)| text.is_empty())
+                    || !suffix.is_empty()
+                {
+                    return CaretTokenShape::Invalid(message);
+                }
+                let name_text = name.unwrap_or_default();
+                if name_text.is_empty()
+                    || !is_pomodoro_selector_component(&name_text)
+                {
+                    return CaretTokenShape::Invalid(message);
+                }
+                let spelling = name_spelling.expect("named spelling");
+                let link_end = link_base + block.len();
+                let start_offset = link_base + before_eq.len();
+                let name_start = start_offset
+                    + crate::native::capture_language::item::named_start_name_offset(
+                        suffix.len(),
+                        spelling,
+                    );
+                let name_range = (name_start, name_start + name_text.len());
+                let mut start_ranges = Vec::new();
+                if start_offset < name_start {
+                    let prefix_end = match spelling {
+                        crate::native::capture_language::bare_name::NameSpelling::Hash => {
+                            name_start - 1
+                        }
+                        crate::native::capture_language::bare_name::NameSpelling::Bare => {
+                            name_start
+                        }
+                    };
+                    if start_offset < prefix_end {
+                        start_ranges.push((start_offset, prefix_end));
+                    }
+                }
+                let separator_range =
+                    (text.len().saturating_sub(1), text.len());
+                return CaretTokenShape::TimingIncomplete {
+                    route: route_part.to_ascii_lowercase(),
+                    block_id: block.to_string(),
+                    pomodoro_name: name_text,
+                    link_end,
+                    name_range,
+                    start_offset,
+                    start_ranges,
+                    separator_range,
+                };
+            }
             if message == POMODORO_NAME_REQUIRED_ERROR {
-                let before_start = tail
-                    .split_once('=')
-                    .map(|(before, _)| before)
-                    .unwrap_or(tail);
+                let (before_start, raw_after) = match tail.split_once('=') {
+                    Some((before, after)) => (before, Some(after)),
+                    None => (tail, None),
+                };
                 let block = before_start
                     .split_once('#')
                     .map(|(block, _)| block)
@@ -1271,17 +1412,93 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
                     }
                     None => (link_base + block.len(), None),
                 };
-                let start_ranges = start_offset
-                    .map(|offset| {
+                // An empty name must not discard a valid timing prefix or
+                // suffix. Lex the `=` suffix so `=3`, `=`, and `@3` stay
+                // visible, mirroring the `@` incomplete path.
+                let mut start_ranges: Vec<(usize, usize)> = Vec::new();
+                let mut partial_start: Option<PomodoroStartSpec> = None;
+                if let (Some(offset), Some(raw)) = (start_offset, raw_after) {
+                    let start_token = format!("={raw}");
+                    if let Some(
+                        crate::native::capture_language::item::EqualsToken::Start {
+                            suffix,
+                            timing,
+                            ..
+                        },
+                    ) = crate::native::capture_language::item::session_equals_token(
+                        &start_token,
+                    ) {
+                        if !suffix.is_empty() {
+                            start_ranges.push((
+                                offset,
+                                offset + 1 + suffix.len(),
+                            ));
+                        } else if raw.starts_with('#')
+                            || raw.starts_with('@')
+                            || raw.is_empty()
+                        {
+                            let prefix_empty = before_start.contains('#');
+                            if !prefix_empty {
+                                start_ranges.push((offset, offset + 1));
+                            } else if !suffix.is_empty() {
+                                start_ranges.push((
+                                    offset,
+                                    offset + 1 + suffix.len(),
+                                ));
+                            } else {
+                                // Prefix-empty `#=3` paints `=3` here via
+                                // the suffix length below; when the suffix
+                                // itself is empty (`#=#` edge) keep `=`.
+                                start_ranges.push((offset, offset + 1));
+                            }
+                            // For prefix-empty `#=3` the `=3` span was not
+                            // pushed above (suffix non-empty branch missed
+                            // because we took the bare `=` branch). Push it
+                            // now when the raw timing is a plain suffix.
+                            if prefix_empty
+                                && !suffix.is_empty()
+                                && start_ranges.len() == 1
+                                && start_ranges[0].1 == offset + 1
+                            {
+                                start_ranges[0].1 = offset + 1 + suffix.len();
+                            }
+                        }
+                        if let Some((timing_offset, timing_text)) =
+                            timing.as_ref()
+                            && !timing_text.is_empty()
+                        {
+                            start_ranges.push((
+                                offset + timing_offset,
+                                offset + timing_offset + 1 + timing_text.len(),
+                            ));
+                        }
+                        // Prefix-empty `#=3` with a plain numeric suffix
+                        // (`suffix` non-empty, no `@` timing) still needs its
+                        // `=3` span when the bare-`=` branch above skipped it.
+                        if start_ranges.is_empty()
+                            && !suffix.is_empty()
+                            && let Some(off) = start_offset
+                        {
+                            start_ranges.push((off, off + 1 + suffix.len()));
+                        }
+                        let effective =
+                            crate::native::capture_language::item::effective_start_timing(
+                                &suffix, &timing,
+                            );
+                        partial_start =
+                            parse_pomodoro_start_suffix(&effective).ok();
+                    } else {
+                        // Unlexable suffix: keep the old single-span fallback
+                        // so missing-route/block states stay intact.
                         let end = tail
                             .find('#')
                             .map(|hash| link_base + hash)
                             .unwrap_or(offset + 1);
-                        (offset < end).then_some((offset, end))
-                    })
-                    .flatten()
-                    .into_iter()
-                    .collect();
+                        if offset < end {
+                            start_ranges.push((offset, end));
+                        }
+                    }
+                }
                 return CaretTokenShape::NamePartial {
                     route: route_part.to_ascii_lowercase(),
                     block_id: block.to_string(),
@@ -1289,6 +1506,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
                     name_range: (hash_offset + 1, hash_offset + 1),
                     start_offset,
                     start_ranges,
+                    start: partial_start,
                 };
             }
             CaretTokenShape::Invalid(message)
@@ -1348,6 +1566,7 @@ fn classify_caret_close_suffix(
                 ),
                 start_offset: None,
                 start_ranges: Vec::new(),
+                start: None,
             };
         }
         Some(name) if !is_pomodoro_selector_component(name) => {
@@ -1525,6 +1744,17 @@ pub(super) enum CaretItemKind {
         name_range: (usize, usize),
         start_offset: Option<usize>,
         start_ranges: Vec<(usize, usize)>,
+        start: Option<PomodoroStartSpec>,
+    },
+    TimingIncomplete {
+        route: String,
+        block_id: String,
+        pomodoro_name: String,
+        link_end: usize,
+        name_range: (usize, usize),
+        start_offset: usize,
+        start_ranges: Vec<(usize, usize)>,
+        separator_range: (usize, usize),
     },
     Invalid {
         message: String,
@@ -1582,6 +1812,7 @@ pub(super) fn classify_caret_item<'a>(
             name_range,
             start_offset,
             start_ranges,
+            start,
         } => {
             if solo_parent && single_line {
                 Some(CaretItem {
@@ -1594,6 +1825,36 @@ pub(super) fn classify_caret_item<'a>(
                         name_range,
                         start_offset,
                         start_ranges,
+                        start,
+                    },
+                })
+            } else {
+                None
+            }
+        }
+        CaretTokenShape::TimingIncomplete {
+            route,
+            block_id,
+            pomodoro_name,
+            link_end,
+            name_range,
+            start_offset,
+            start_ranges,
+            separator_range,
+        } => {
+            if solo_parent && single_line {
+                Some(CaretItem {
+                    token: *first,
+                    solo_parent,
+                    kind: CaretItemKind::TimingIncomplete {
+                        route,
+                        block_id,
+                        pomodoro_name,
+                        link_end,
+                        name_range,
+                        start_offset,
+                        start_ranges,
+                        separator_range,
                     },
                 })
             } else {

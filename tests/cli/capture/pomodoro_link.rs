@@ -144,6 +144,86 @@ fn bare_named_link_suffix_writes_the_same_result_as_hash_before_equals() {
 }
 
 #[test]
+fn link_suffix_timing_errors_leave_notes_byte_identical() {
+    for invalid in [
+        "@cash:work=3#focus@2",
+        "@cash:work=focus@",
+        "^cash:work=3#focus@2",
+        "^cash:work=focus@",
+    ] {
+        let temp = TempDir::new("bob-cli-capture-link-timing-no-write");
+        let vault = temp.path().join("vault");
+        let target = vault.join("cash.md");
+        let day_file = vault.join("day.md");
+        let target_before =
+            "# Cash\n## Tasks\n- [ ] #task Work [id:: cash__work] ^work\n";
+        let day_before = "## Pomodoros\n- [ ] () — CURRENT\n  - context\n";
+        write_file(&target, target_before);
+        write_file(&day_file, day_before);
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg(invalid)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:00:00")
+            .output()
+            .expect("run invalid link timing");
+        assert!(
+            !output.status.success(),
+            "{invalid}: {}",
+            format_output(&output)
+        );
+        assert_eq!(
+            fs::read_to_string(&target).expect("read untouched target"),
+            target_before,
+            "{invalid}"
+        );
+        assert_eq!(
+            fs::read_to_string(&day_file).expect("read untouched day"),
+            day_before,
+            "{invalid}"
+        );
+    }
+    // A batch with an earlier valid item still writes nothing when a later
+    // link timing fails.
+    let temp = TempDir::new("bob-cli-capture-link-timing-batch-no-write");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    let target_before =
+        "# Cash\n## Tasks\n- [ ] #task Work [id:: cash__work] ^work\n";
+    let day_before = "## Pomodoros\n- [ ] () — CURRENT\n  - context\n";
+    write_file(&target, target_before);
+    write_file(&day_file, day_before);
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash:work=focus@5")
+        .arg("")
+        .arg("@cash:work=3#focus@2")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:00:00")
+        .output()
+        .expect("run batch with invalid link timing");
+    assert!(!output.status.success(), "{}", format_output(&output));
+    assert_eq!(
+        fs::read_to_string(&target).expect("read untouched target"),
+        target_before
+    );
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read untouched day"),
+        day_before
+    );
+}
+
+#[test]
 fn pomodoro_link_guard_consumes_an_aliased_live_link_by_identity() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-link-consume-alias");
     let vault = temp.path().join("vault");

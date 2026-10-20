@@ -2,6 +2,9 @@
 
 use super::close_selection::*;
 use super::editor_model::*;
+use super::item::{
+    effective_start_timing, named_start_name_offset, session_equals_token,
+};
 use super::line::*;
 use super::markers::*;
 use super::model::*;
@@ -916,14 +919,14 @@ fn classify_pomodoro_link_start_suffix(
             TokenParse::Marker(parsed)
         }
         Err(message) if message == POMODORO_NAME_REQUIRED_ERROR => {
-            let prefix = rest
-                .split_once('=')
-                .map(|(before, _)| before)
-                .unwrap_or(rest);
-            let block_id = prefix
+            let (before_eq, raw_suffix) = match rest.split_once('=') {
+                Some((before, suffix)) => (before, Some(suffix)),
+                None => (rest, None),
+            };
+            let block_id = before_eq
                 .split_once('#')
                 .map(|(block, _)| block)
-                .unwrap_or(prefix);
+                .unwrap_or(before_eq);
             if block_id.is_empty() || !is_block_id(block_id) {
                 return TokenParse::Invalid(token_diagnostic(
                     token,
@@ -946,27 +949,240 @@ fn classify_pomodoro_link_start_suffix(
                     suffix: None,
                 },
             );
-            let equals = token.text.find('=').unwrap_or(token.text.len());
-            let hash = token.text.rfind('#').unwrap_or(token.text.len());
-            if equals < hash {
-                parsed.spans.push(Span {
-                    start: token.start + equals,
-                    end: token.start + hash,
-                    kind: SpanKind::PomodoroStart,
+            // An empty name must not discard a valid timing prefix or
+            // suffix. Lex the `=` suffix for its `<X>` parts so the typed
+            // timing stays visible and the partial spec is retained,
+            // mirroring the pre-links `MarkerThird` plus start-suffix
+            // preservation for legacy `@!` shapes.
+            let equals_rel = token.text.find('=').unwrap_or(token.text.len());
+            let mut partial_spec = None;
+            let mut extra_spans: Vec<Span> = Vec::new();
+            // Prefix empty (`#=3`): placeholder on the prefix `#`, timing
+            // span for the `=<X>` suffix.
+            let prefix_empty = before_eq
+                .split_once('#')
+                .is_some_and(|(_, name)| name.is_empty())
+                && before_eq.contains('#');
+            if prefix_empty {
+                let prefix_hash_rel =
+                    token.text.find('#').unwrap_or(token.text.len());
+                extra_spans.push(Span {
+                    start: token.start + prefix_hash_rel,
+                    end: token.start + prefix_hash_rel + 1,
+                    kind: SpanKind::InteractivePlaceholder,
                 });
             }
-            // An empty suffix name is a one-byte placeholder on its `#`.
-            // The start token may precede it (`=3#`) or use a bare `#` form
-            // (`=#`), but the typed timing remains visible as a start span.
-            parsed.spans.push(Span {
-                start: token.start + hash,
-                end: token.start + hash + 1,
-                kind: SpanKind::InteractivePlaceholder,
-            });
+            if let Some(raw) = raw_suffix {
+                let start_token = format!("={raw}");
+                if let Some(super::item::EqualsToken::Start {
+                    suffix,
+                    timing,
+                    ..
+                }) = session_equals_token(&start_token)
+                {
+                    // Typed timing prefix (`=3`) stays visible.
+                    if !suffix.is_empty() {
+                        extra_spans.push(Span {
+                            start: token.start + equals_rel,
+                            end: token.start + equals_rel + 1 + suffix.len(),
+                            kind: SpanKind::PomodoroStart,
+                        });
+                    } else if raw.starts_with('#')
+                        || raw.starts_with('@')
+                        || raw.is_empty()
+                    {
+                        // Bare `=` with no leading timing still paints `=`
+                        // when the name is empty after it (`=#`, `=#@3`).
+                        // A prefix-empty `#=3` already paints `=3` above;
+                        // avoid duplicating it here.
+                        if !prefix_empty {
+                            extra_spans.push(Span {
+                                start: token.start + equals_rel,
+                                end: token.start + equals_rel + 1,
+                                kind: SpanKind::PomodoroStart,
+                            });
+                        }
+                    }
+                    // Trailing `@<X>` timing stays visible.
+                    if let Some((timing_offset, timing_text)) = timing.as_ref()
+                    {
+                        if !timing_text.is_empty() {
+                            extra_spans.push(Span {
+                                start: token.start + equals_rel + timing_offset,
+                                end: token.start
+                                    + equals_rel
+                                    + timing_offset
+                                    + 1
+                                    + timing_text.len(),
+                                kind: SpanKind::PomodoroStart,
+                            });
+                        }
+                    }
+                    let effective = effective_start_timing(&suffix, &timing);
+                    // An empty effective (`=#`) still yields the default
+                    // 25-minute spec, like standalone `=3#` keeps `3`.
+                    partial_spec = parse_pomodoro_start_suffix(&effective).ok();
+                }
+                // Suffix empty (`=3#`, `=#`, `=#@3`): placeholder on its `#`.
+                // The lexer reports `Some("")` for these; a missing `#`
+                // (prefix-only `#=3`) has no suffix placeholder.
+                let suffix_has_hash = raw.contains('#');
+                if suffix_has_hash {
+                    // The suffix `#` is the last `#` when both prefix and
+                    // suffix contain one; otherwise it is the only one.
+                    let hash_rel = if prefix_empty {
+                        token.text.rfind('#').unwrap_or(token.text.len())
+                    } else {
+                        token.text.find('#').unwrap_or(token.text.len())
+                    };
+                    // Avoid double-pushing the prefix placeholder when the
+                    // token holds a single `#` (prefix-only `#=3` has no
+                    // suffix `#` beyond the prefix one).
+                    let already = extra_spans.iter().any(|span| {
+                        span.kind == SpanKind::InteractivePlaceholder
+                            && span.start == token.start + hash_rel
+                    });
+                    if !already {
+                        extra_spans.push(Span {
+                            start: token.start + hash_rel,
+                            end: token.start + hash_rel + 1,
+                            kind: SpanKind::InteractivePlaceholder,
+                        });
+                    }
+                }
+            }
+            // Fallback for shapes without a lexable suffix (prefix-only
+            // `#=` with no raw, or unlexable): keep the old single
+            // placeholder so missing-route/block states stay intact.
+            if extra_spans
+                .iter()
+                .all(|span| span.kind != SpanKind::InteractivePlaceholder)
+            {
+                let hash = token.text.rfind('#').unwrap_or(token.text.len());
+                extra_spans.push(Span {
+                    start: token.start + hash,
+                    end: token.start + hash + 1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                if equals_rel < hash && raw_suffix.is_none() {
+                    extra_spans.push(Span {
+                        start: token.start + equals_rel,
+                        end: token.start + hash,
+                        kind: SpanKind::PomodoroStart,
+                    });
+                }
+            }
+            for span in extra_spans {
+                if span.end > span.start {
+                    parsed.spans.push(span);
+                }
+            }
+            parsed.spans.sort_by_key(|span| (span.start, span.end));
             parsed.mode = EditorMode::Incomplete;
             parsed.section = None;
             parsed.block_id = Some(block_id.to_string());
+            parsed.pomodoro_start = partial_spec;
             parsed.needs = vec![Need::PomodoroName];
+            // Keep spans disjoint: the `#` placeholder never overlaps a
+            // `pomodoro_start` span, and `merge_spans` never drops one.
+            TokenParse::Marker(parsed)
+        }
+        Err(message)
+            if message.contains("is incomplete: type the timing after `@`") =>
+        {
+            // Dangling `@` never produces an executable default spec. Report
+            // incomplete needing `pomodoro_start_timing` with the typed name
+            // as `section`, no spec, and a placeholder on the dangling `@`,
+            // like standalone `=bugs@`.
+            let (before_eq, raw_suffix) = match rest.split_once('=') {
+                Some((before, suffix)) => (before, Some(suffix)),
+                None => (rest, None),
+            };
+            let block_id = before_eq
+                .split_once('#')
+                .map(|(block, _)| block)
+                .unwrap_or(before_eq);
+            if block_id.is_empty() || !is_block_id(block_id) {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_pomodoro_block_id",
+                    POMODORO_BLOCK_ID_ERROR,
+                ));
+            }
+            let raw = raw_suffix.unwrap_or_default();
+            let start_token = format!("={raw}");
+            let (suffix_len, name_text, spelling) =
+                match session_equals_token(&start_token) {
+                    Some(super::item::EqualsToken::Start {
+                        suffix,
+                        name,
+                        name_spelling,
+                        ..
+                    }) => {
+                        (suffix.len(), name.unwrap_or_default(), name_spelling)
+                    }
+                    _ => (0, String::new(), None),
+                };
+            let mut parsed = marker_parse(
+                token,
+                MarkerShape {
+                    sigil_len,
+                    route_part,
+                    separator_len: 1,
+                    right_part: block_id,
+                    route_kind: SpanKind::PomodoroRoute,
+                    right_kind: SpanKind::PomodoroBlockId,
+                    complete_mode: EditorMode::PomodoroTask,
+                    right_need: Need::PomodoroId,
+                    third: None,
+                    suffix: None,
+                },
+            );
+            let equals_rel = token.text.find('=').unwrap_or(token.text.len());
+            // `=` span.
+            if suffix_len > 0 {
+                parsed.spans.push(Span {
+                    start: token.start + equals_rel,
+                    end: token.start + equals_rel + 1 + suffix_len,
+                    kind: SpanKind::PomodoroStart,
+                });
+            } else {
+                parsed.spans.push(Span {
+                    start: token.start + equals_rel,
+                    end: token.start + equals_rel + 1,
+                    kind: SpanKind::PomodoroStart,
+                });
+            }
+            // Name span (bare or hash, `#` itself never in a span).
+            if !name_text.is_empty()
+                && let Some(spelling) = spelling
+            {
+                let name_start = token.start
+                    + equals_rel
+                    + named_start_name_offset(suffix_len, spelling);
+                parsed.spans.push(Span {
+                    start: name_start,
+                    end: name_start + name_text.len(),
+                    kind: SpanKind::PomodoroName,
+                });
+            }
+            // Placeholder on the dangling `@` (last byte).
+            let at_rel = token.text.len().saturating_sub(1);
+            parsed.spans.push(Span {
+                start: token.start + at_rel,
+                end: token.start + at_rel + 1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            parsed.spans.sort_by_key(|span| (span.start, span.end));
+            parsed.mode = EditorMode::Incomplete;
+            parsed.section = if name_text.is_empty() {
+                None
+            } else {
+                Some(name_text)
+            };
+            parsed.block_id = Some(block_id.to_string());
+            parsed.pomodoro_start = None;
+            parsed.needs = vec![Need::PomodoroStartTiming];
             TokenParse::Marker(parsed)
         }
         Err(message) => {

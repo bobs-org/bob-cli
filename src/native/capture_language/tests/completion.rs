@@ -201,6 +201,36 @@ fn pomodoro_link_suffix_names_complete_without_replacing_the_link_start() {
 }
 
 #[test]
+fn caret_suffix_names_preserve_the_link_part_for_completion() {
+    // Route/block cursors keep `active_task` with a replacement ending
+    // before `=`, even with a suffix name present.
+    for raw in ["^work:outline=bugs", "^work:outline=3#bugs"] {
+        for cursor in [4, 10] {
+            let completion = field(raw, cursor).expect(raw);
+            assert_eq!(
+                completion.context,
+                CompletionContext::ActiveTask,
+                "{raw}@{cursor}"
+            );
+            assert_eq!(completion.replacement, (1, 13), "{raw}@{cursor}");
+        }
+    }
+    // Suffix names still replace only the name.
+    let raw = "^work:outline=bugs";
+    let completion = field(raw, 16).expect("suffix name");
+    assert_eq!(completion.context, CompletionContext::PomodoroName);
+    assert_eq!(completion.replacement, (14, 18));
+    // Timing bytes stay non-completable.
+    for (raw, cursor) in [
+        ("^work:outline=3#bugs", 14),
+        ("^work:outline=3#bugs", 15),
+        ("^work:outline=bugs@", 19),
+    ] {
+        assert_eq!(field(raw, cursor), None, "{raw}@{cursor}");
+    }
+}
+
+#[test]
 fn task_block_id_route_and_authored_id_both_complete() {
     let route = field("Do work @Dev^new-id", 12).expect("route field");
     assert_eq!(route.context, CompletionContext::Route);
