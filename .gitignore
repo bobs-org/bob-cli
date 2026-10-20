@@ -2,11 +2,9 @@
 /.build/
 /tools/docs/.venv/
 /docs/reference/plugins/*
-!/docs/reference/plugins/index.md
 /docs/reference/mac-capture/*
 !/docs/reference/mac-capture/index.md
 /docs/develop/plugins/*
-!/docs/develop/plugins/index.md
 /docs/develop/mac-capture/*
 !/docs/develop/mac-capture/index.md
 __pycache__/

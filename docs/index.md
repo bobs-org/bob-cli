@@ -37,7 +37,9 @@ bob capture "Review the queue input"
 The inbox note holds `- [ ] #task Review the queue input [created::2026-10-20]`,
 verified against a synthetic scratch vault with a fixed clock.
 
-**Obsidian.** The same line renders as a task card.
+**Obsidian.** The same line renders as a task card. Commands, settings, and
+extra keyboard behavior live in the [Obsidian plugins](reference/plugins/index.md)
+reference.
 
 ```bob-task
 - [ ] #task Review the queue input [created:: 2026-10-20]

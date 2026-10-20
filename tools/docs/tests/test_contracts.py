@@ -35,7 +35,9 @@ def test_current_registry_and_generated_nav_are_complete_and_unique() -> None:
     registry = load_contract_registry(ROOT)
     assert len(registry.entries) == 27
     assert sum(entry.historical for entry in registry.entries) == 1
-    assert next(entry for entry in registry.entries if entry.stem == "obsidian-sync-exclusions").historical
+    assert next(
+        entry for entry in registry.entries if entry.stem == "obsidian-sync-exclusions"
+    ).historical
 
     config = load_yaml(ROOT / "mkdocs.yml")
     nav_pages = _nav_pages(config["nav"])
@@ -44,7 +46,9 @@ def test_current_registry_and_generated_nav_are_complete_and_unique() -> None:
 
 
 def test_readme_table_matches_original_contract_index_snapshot() -> None:
-    table = _generated_region((ROOT / "docs/README.md").read_text(encoding="utf-8"), "contract table")
+    table = _generated_region(
+        (ROOT / "docs/README.md").read_text(encoding="utf-8"), "contract table"
+    )
     assert hashlib.sha256(table.encode()).hexdigest() == README_TABLE_SHA256
 
 
@@ -52,13 +56,18 @@ def test_generated_outputs_have_no_drift() -> None:
     assert generate_contracts(ROOT, check=True) == []
 
 
-def test_check_mode_reports_generated_page_drift_without_writing(tmp_path: Path, capsys) -> None:
+def test_check_mode_reports_generated_page_drift_without_writing(
+    tmp_path: Path, capsys
+) -> None:
     shutil.copytree(ROOT / "docs", tmp_path / "docs")
     shutil.copy2(ROOT / "mkdocs.yml", tmp_path / "mkdocs.yml")
     shutil.copytree(ROOT / "sase" / "memory", tmp_path / "sase" / "memory")
+    (tmp_path / "docs/_meta/mounts.yml").write_text("[]\n", encoding="utf-8")
     page = tmp_path / "docs/develop/contracts.md"
     original = page.read_text(encoding="utf-8")
-    changed = original.replace("These pages specify behavior", "Drifted pages specify behavior")
+    changed = original.replace(
+        "These pages specify behavior", "Drifted pages specify behavior"
+    )
     page.write_text(changed, encoding="utf-8")
 
     assert check_or_generate(tmp_path, check=True) == 1
@@ -69,9 +78,21 @@ def test_check_mode_reports_generated_page_drift_without_writing(tmp_path: Path,
 @pytest.mark.parametrize(
     ("entries", "expected_error"),
     [
-        ([{"stem": "one", "summary": "One", "order": 1}, {"stem": "one", "summary": "Again", "order": 2}], "duplicate contract stem"),
-        ([{"stem": "missing", "summary": "Missing", "order": 1}], "missing or unsafe contract page"),
-        ([{"stem": "../escape", "summary": "Unsafe", "order": 1}], "safe lowercase Markdown stem"),
+        (
+            [
+                {"stem": "one", "summary": "One", "order": 1},
+                {"stem": "one", "summary": "Again", "order": 2},
+            ],
+            "duplicate contract stem",
+        ),
+        (
+            [{"stem": "missing", "summary": "Missing", "order": 1}],
+            "missing or unsafe contract page",
+        ),
+        (
+            [{"stem": "../escape", "summary": "Unsafe", "order": 1}],
+            "safe lowercase Markdown stem",
+        ),
     ],
 )
 def test_registry_rejects_duplicate_missing_and_unsafe_stems(

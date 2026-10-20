@@ -74,8 +74,8 @@ app targets. See that repository's README for signing and installation steps.
 The tools and authored pages live in bob-cli. The documentation-specific commands below
 build this site and check its contracts. They do not install Bob or change a vault.
 
-Regenerate the contract index, navigation, and README table after changing the contract
-registry:
+Regenerate the contract index, navigation, README table, and mounted plugin
+inventory after changing the contract registry or plugin facts:
 
 ```bash
 just docs-gen
@@ -111,10 +111,11 @@ just docs-check
 ```
 
 The gate assembles source context once, then checks the docs contract, generated-file
-drift, a strict Zensical build, published URLs, offline links, search smoke cases, and
-the documentation package tests. For a pinned production build, use
-`uv run --project tools/docs bob-docs check --production --sources FILE`; production
-requires an explicit clean SHA for bob-cli and every mounted source.
+drift including the plugin inventory, a strict Zensical build, published URLs, offline
+links, search smoke cases, and the documentation package tests. For a pinned production
+build, use `uv run --project tools/docs bob-docs check --production --sources FILE`;
+production requires an explicit clean SHA for bob-cli and every mounted source and never
+rediscovers plugin checkouts from the environment or cache.
 
 Generate the local fonts and identity assets after changing the bundled sources or the
 mark geometry:

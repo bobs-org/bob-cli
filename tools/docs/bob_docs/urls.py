@@ -42,7 +42,16 @@ MENTIONS_IGNORE_FILE = "url_mentions_ignore.txt"
 URL_CONTRACT_FILE = "url_contract.txt"
 
 SKIP_SCAN_DIR_NAMES = frozenset(
-    {".git", "node_modules", "dist", "coverage", ".venv", "target", "__pycache__", "vendor"}
+    {
+        ".git",
+        "node_modules",
+        "dist",
+        "coverage",
+        ".venv",
+        "target",
+        "__pycache__",
+        "vendor",
+    }
 )
 _WILDCARD_ONLY_RE = re.compile(r"^[*?]+$")
 
@@ -51,9 +60,10 @@ _MENTION_RE = re.compile(
     r"(?P<page>[A-Za-z0-9_][A-Za-z0-9_./-]*\.md)"
     r"(?P<fragment>#[^\s)'\"<>`]+)?"
 )
-_SITE_URL_RE = re.compile(
-    r"https?://[A-Za-z0-9.-]+(?::\d+)?(?:/[^\s)'\"<>`]*)?"
-)
+# Copied mount pages stamp `source: <repo>:<repo-relative-path>`. That path is
+# ownership metadata, not a bob-cli docs-page mention.
+_PROVENANCE_STAMP_RE = re.compile(r"^\s*source:\s+[^\s:]+:docs/")
+_SITE_URL_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?(?:/[^\s)'\"<>`]*)?")
 _TRAILING_PUNCTUATION = ".,;:!?"
 
 
@@ -62,7 +72,9 @@ def site_origin(site_url: str) -> str:
 
     parsed = urllib.parse.urlsplit(site_url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise DocsError(f"mkdocs.yml: site_url must be an absolute http(s) URL, got {site_url!r}")
+        raise DocsError(
+            f"mkdocs.yml: site_url must be an absolute http(s) URL, got {site_url!r}"
+        )
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://{parsed.hostname.lower()}{port}"
 
@@ -197,7 +209,9 @@ class SiteResolver:
         if "://" in text or text.lower().startswith("http"):
             parsed = urllib.parse.urlsplit(text)
             if parsed.scheme not in ("http", "https"):
-                raise DocsError(f"{url}: only http(s) site URLs resolve, not {parsed.scheme!r}")
+                raise DocsError(
+                    f"{url}: only http(s) site URLs resolve, not {parsed.scheme!r}"
+                )
             candidate = f"{parsed.scheme}://{(parsed.hostname or '').lower()}"
             if parsed.port:
                 candidate += f":{parsed.port}"
@@ -206,11 +220,15 @@ class SiteResolver:
                     f"{url}: external URL is not part of the {self._index.origin} URL contract"
                 )
             if parsed.query:
-                raise DocsError(f"{url}: query strings are not part of the published URL contract")
+                raise DocsError(
+                    f"{url}: query strings are not part of the published URL contract"
+                )
             path, fragment = parsed.path, (parsed.fragment or None)
         else:
             if "?" in text:
-                raise DocsError(f"{url}: query strings are not part of the published URL contract")
+                raise DocsError(
+                    f"{url}: query strings are not part of the published URL contract"
+                )
             path, hash_mark, fragment_text = text.partition("#")
             if hash_mark and "#" in fragment_text:
                 raise DocsError(f"{url}: only one fragment marker is allowed")
@@ -220,10 +238,14 @@ class SiteResolver:
         try:
             path = urllib.parse.unquote(path, encoding="utf-8", errors="strict")
         except (UnicodeDecodeError, ValueError) as error:
-            raise DocsError(f"{url}: path is not valid percent-encoded UTF-8: {error}") from error
+            raise DocsError(
+                f"{url}: path is not valid percent-encoded UTF-8: {error}"
+            ) from error
         if fragment is not None:
             try:
-                fragment = urllib.parse.unquote(fragment, encoding="utf-8", errors="strict")
+                fragment = urllib.parse.unquote(
+                    fragment, encoding="utf-8", errors="strict"
+                )
             except (UnicodeDecodeError, ValueError) as error:
                 raise DocsError(
                     f"{url}: fragment is not valid percent-encoded UTF-8: {error}"
@@ -251,7 +273,11 @@ class SiteResolver:
 
     def _page_file(self, path: str) -> Path | None:
         site_dir = self._index.site_dir
-        candidates = [path, f"{path}/index.html", f"{path}.html"] if not path.endswith("/") else [path, f"{path}index.html"]
+        candidates = (
+            [path, f"{path}/index.html", f"{path}.html"]
+            if not path.endswith("/")
+            else [path, f"{path}index.html"]
+        )
         seen: set[str] = set()
         for candidate in candidates:
             if candidate in seen:
@@ -265,15 +291,21 @@ class SiteResolver:
                 try:
                     resolved = file_path.resolve(strict=True)
                 except OSError as error:
-                    raise DocsError(f"{candidate}: destination symlink is broken: {error}") from error
+                    raise DocsError(
+                        f"{candidate}: destination symlink is broken: {error}"
+                    ) from error
                 if not resolved.is_relative_to(site_dir):
-                    raise DocsError(f"{candidate}: destination symlink escapes the built site")
+                    raise DocsError(
+                        f"{candidate}: destination symlink escapes the built site"
+                    )
                 file_path = resolved
             if file_path.is_file():
                 return file_path
         return None
 
-    def _follow(self, path: str, url: str, visited: list[str]) -> tuple[str, str | None]:
+    def _follow(
+        self, path: str, url: str, visited: list[str]
+    ) -> tuple[str, str | None]:
         file_path = self._page_file(path)
         if file_path is None:
             raise DocsError(f"{url}: no built page for {path}")
@@ -290,7 +322,9 @@ class SiteResolver:
             )
         if len(visited) > MAX_REDIRECT_HOPS:
             raise DocsError(f"{url}: redirect chain exceeds {MAX_REDIRECT_HOPS} hops")
-        final_path, final_fragment = self._follow(target_path, url, [*visited, target_path])
+        final_path, final_fragment = self._follow(
+            target_path, url, [*visited, target_path]
+        )
         return final_path, fragment if fragment else final_fragment
 
     def _page_path_for_file(self, file_path: Path) -> str:
@@ -304,19 +338,29 @@ class SiteResolver:
             if parsed.port:
                 candidate += f":{parsed.port}"
             if candidate != self._index.origin:
-                raise DocsError(f"{url}: redirect from {page_path} leaves the site: {target}")
+                raise DocsError(
+                    f"{url}: redirect from {page_path} leaves the site: {target}"
+                )
             if parsed.query:
-                raise DocsError(f"{url}: query strings are not part of the published URL contract")
+                raise DocsError(
+                    f"{url}: query strings are not part of the published URL contract"
+                )
             return parsed.path + (f"#{parsed.fragment}" if parsed.fragment else "")
         if target.startswith("/"):
             if "?" in target:
-                raise DocsError(f"{url}: query strings are not part of the published URL contract")
+                raise DocsError(
+                    f"{url}: query strings are not part of the published URL contract"
+                )
             return self._normalise_path(target.split("#", 1)[0], url) + (
                 f"#{target.split('#', 1)[1]}" if "#" in target else ""
             )
-        base = page_path if page_path.endswith("/") else page_path.rsplit("/", 1)[0] + "/"
+        base = (
+            page_path if page_path.endswith("/") else page_path.rsplit("/", 1)[0] + "/"
+        )
         if "?" in target:
-            raise DocsError(f"{url}: query strings are not part of the published URL contract")
+            raise DocsError(
+                f"{url}: query strings are not part of the published URL contract"
+            )
         head, hash_mark, tail = target.partition("#")
         joined = self._normalise_path(base + head, url)
         return joined + (f"#{tail}" if hash_mark else "")
@@ -443,7 +487,9 @@ def _scan_source_files(root: Path) -> list[Path]:
         for path in sorted(base.rglob("*")):
             if not path.is_file() or path.is_symlink():
                 continue
-            if any(part in SKIP_SCAN_DIR_NAMES for part in path.relative_to(root).parts):
+            if any(
+                part in SKIP_SCAN_DIR_NAMES for part in path.relative_to(root).parts
+            ):
                 continue
             files.append(path)
     readme = root / "README.md"
@@ -480,10 +526,14 @@ def scan_source_mentions(root: Path) -> list[UrlMention]:
         if text is None:
             continue
         for line_number, line in enumerate(text.splitlines(), start=1):
+            if _PROVENANCE_STAMP_RE.match(line):
+                continue
             for match in _MENTION_RE.finditer(line):
                 mention = strip_trailing_punctuation(match.group(0))
                 mentions.append(
-                    UrlMention(source=path, line=line_number, text=mention, kind="docs-mention")
+                    UrlMention(
+                        source=path, line=line_number, text=mention, kind="docs-mention"
+                    )
                 )
     return mentions
 
@@ -504,7 +554,12 @@ def scan_site_urls(paths: list[Path], origin: str) -> list[UrlMention]:
                 candidate = strip_trailing_punctuation(match.group(0))
                 if candidate == origin or candidate.startswith(f"{origin}/"):
                     mentions.append(
-                        UrlMention(source=path, line=line_number, text=candidate, kind="site-url")
+                        UrlMention(
+                            source=path,
+                            line=line_number,
+                            text=candidate,
+                            kind="site-url",
+                        )
                     )
     return mentions
 
@@ -553,7 +608,9 @@ def load_mentions_ignore(root: Path) -> list[IgnoreEntry]:
         match, scope, reason = parts
         _validate_ignore_match(match, path, line_number)
         _validate_ignore_scope(scope, path, line_number)
-        entries.append(IgnoreEntry(match=match, scope=scope, reason=reason, line=line_number))
+        entries.append(
+            IgnoreEntry(match=match, scope=scope, reason=reason, line=line_number)
+        )
     return entries
 
 
@@ -612,7 +669,9 @@ def apply_ignores(
             relative = mention.source.as_posix()
         ignored = False
         for entry in entries:
-            if entry.match in mention.text and fnmatch.fnmatchcase(relative, entry.scope):
+            if entry.match in mention.text and fnmatch.fnmatchcase(
+                relative, entry.scope
+            ):
                 uses[entry.line] += 1
                 ignored = True
         if not ignored:
@@ -651,7 +710,9 @@ def load_url_contract(root: Path, origin: str) -> list[str]:
     return urls
 
 
-def refresh_url_contract(root: Path, origin: str, observed: list[str]) -> tuple[int, int, list[str]]:
+def refresh_url_contract(
+    root: Path, origin: str, observed: list[str]
+) -> tuple[int, int, list[str]]:
     """Validate the curated contract, append resolving observed candidates.
 
     Never removes existing obligations. Returns ``(before, after, added)``.
@@ -695,11 +756,15 @@ def _source_readmes(
 
     repo_dirs: dict[str, Path] = {}
     if source_dirs is not None:
-        repo_dirs = {name: path for name, path in source_dirs.items() if name != "bob-cli"}
+        repo_dirs = {
+            name: path for name, path in source_dirs.items() if name != "bob-cli"
+        }
     elif production:
         assert sources is not None
         for source in load_production_sources(
-            Path(sources), root=root, repos=sorted({mount.repo for mount in load_mounts(root)})
+            Path(sources),
+            root=root,
+            repos=sorted({mount.repo for mount in load_mounts(root)}),
         ):
             if source.name != "bob-cli":
                 repo_dirs[source.name] = source.path
@@ -747,16 +812,22 @@ def run_urls(
 
     status, payload = fetch_published_urls(origin)
     if status == "offline":
-        print(f"warning: live {origin}/{URLS_TXT_NAME} unreachable ({payload}); skipping comparison")
+        print(
+            f"warning: live {origin}/{URLS_TXT_NAME} unreachable ({payload}); skipping comparison"
+        )
     elif status == "first-publish":
-        print(f"warning: live {origin}/{URLS_TXT_NAME} is not published yet; skipping comparison")
+        print(
+            f"warning: live {origin}/{URLS_TXT_NAME} is not published yet; skipping comparison"
+        )
     else:
         assert payload is not None
         for published in payload:
             try:
                 resolver.resolve(published)
             except DocsError as error:
-                failures.append(f"published URL no longer resolves: {published} -> {error}")
+                failures.append(
+                    f"published URL no longer resolves: {published} -> {error}"
+                )
 
     mentions = scan_source_mentions(repo_root)
     site_url_mentions = scan_site_urls(
@@ -784,7 +855,9 @@ def run_urls(
             )
 
     if refresh:
-        observed = sorted({mention.text for mention in kept if mention.kind == "site-url"})
+        observed = sorted(
+            {mention.text for mention in kept if mention.kind == "site-url"}
+        )
         before, after, added = refresh_url_contract(
             repo_root, origin, [url for url in observed if _check_url(resolver, url)]
         )

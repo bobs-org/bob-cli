@@ -137,7 +137,11 @@ def test_clean_fixture_passes(tmp_path: Path) -> None:
 def test_environment_guard_runs_in_normal_lint(tmp_path: Path) -> None:
     root = _site(tmp_path)
     _write(root / "src/main.rs", 'const ENV: &str = "BOB_LINT_DISCOVERY";\n')
-    findings = [item for item in check_tree(build_lint_context(root)) if item.rule == "environment"]
+    findings = [
+        item
+        for item in check_tree(build_lint_context(root))
+        if item.rule == "environment"
+    ]
     assert len(findings) == 1
     assert findings[0].path == "docs/reference/configuration.md"
     assert "missing configuration reference" in findings[0].explanation
@@ -156,8 +160,10 @@ def test_real_site_passes_lint() -> None:
 def test_documented_mount_destinations_are_gitignored() -> None:
     for target in (
         "docs/reference/plugins/page.md",
+        "docs/reference/plugins/index.md",
         "docs/reference/mac-capture/page.md",
         "docs/develop/plugins/page.md",
+        "docs/develop/plugins/index.md",
         "docs/develop/mac-capture/page.md",
     ):
         result = subprocess.run(
@@ -167,9 +173,7 @@ def test_documented_mount_destinations_are_gitignored() -> None:
         )
         assert result.returncode == 0, target
     for landing in (
-        "docs/reference/plugins/index.md",
         "docs/reference/mac-capture/index.md",
-        "docs/develop/plugins/index.md",
         "docs/develop/mac-capture/index.md",
     ):
         result = subprocess.run(
@@ -260,6 +264,12 @@ def test_forged_source_fails(tmp_path: Path) -> None:
 
 def test_verified_mount_source_passes(tmp_path: Path) -> None:
     root = _mounted_fixture(_site(tmp_path))
+    assert _errors(root) == []
+
+
+def test_unassembled_lint_skips_gitignored_mount_residue(tmp_path: Path) -> None:
+    root = _mounted_fixture(_site(tmp_path))
+    (root / "target/docs/mount-manifest.json").unlink()
     assert _errors(root) == []
 
 
@@ -706,7 +716,9 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
 
     staged_config = context.output_dir / "docs/reference/configuration.md"
     staged_config.write_text(
-        staged_config.read_text(encoding="utf-8").replace("BOB_ASSEMBLED_DISCOVERY", ""),
+        staged_config.read_text(encoding="utf-8").replace(
+            "BOB_ASSEMBLED_DISCOVERY", ""
+        ),
         encoding="utf-8",
     )
     findings = check_tree(build_lint_context(root, docs_context=context))
@@ -1104,7 +1116,9 @@ def test_cli_help_lists_lint_and_fix() -> None:
     assert "-f, --fix" in lint_help
 
     publish_plan = parser._subparsers._group_actions[0].choices["publish-plan"]
-    publish_flags = [flag for action in publish_plan._actions for flag in action.option_strings]
+    publish_flags = [
+        flag for action in publish_plan._actions for flag in action.option_strings
+    ]
     assert publish_flags == [
         "-h",
         "--help",
@@ -1127,7 +1141,9 @@ def test_cli_help_lists_lint_and_fix() -> None:
     ]
 
     record = parser._subparsers._group_actions[0].choices["publish-record"]
-    record_flags = [flag for action in record._actions for flag in action.option_strings]
+    record_flags = [
+        flag for action in record._actions for flag in action.option_strings
+    ]
     assert record_flags == [
         "-h",
         "--help",
@@ -1144,7 +1160,9 @@ def test_cli_help_lists_lint_and_fix() -> None:
     ]
 
     report = parser._subparsers._group_actions[0].choices["publish-report"]
-    report_flags = [flag for action in report._actions for flag in action.option_strings]
+    report_flags = [
+        flag for action in report._actions for flag in action.option_strings
+    ]
     assert report_flags == [
         "-h",
         "--help",
@@ -1171,7 +1189,9 @@ def test_cli_help_lists_lint_and_fix() -> None:
     ]
 
     verify = parser._subparsers._group_actions[0].choices["publish-verify"]
-    verify_flags = [flag for action in verify._actions for flag in action.option_strings]
+    verify_flags = [
+        flag for action in verify._actions for flag in action.option_strings
+    ]
     assert verify_flags == [
         "-h",
         "--help",

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .contracts import Contract, ContractGroup, ContractRegistry, load_contract_registry
 from .errors import DocsError
+from .gen_plugins import run_plugin_inventory
 from .gen_reference import generate_reference
 from .generated import first_heading, replace_generated_region
 
@@ -51,10 +52,14 @@ def _nav_block(root: Path, registry: ContractRegistry) -> str:
     for group in registry.groups:
         lines.append(f"          - {json.dumps(group.title, ensure_ascii=False)}:")
         for entry in sorted(group.entries, key=lambda item: item.order):
-            title = first_heading((root / "docs" / f"{entry.stem}.md").read_text(encoding="utf-8"))
+            title = first_heading(
+                (root / "docs" / f"{entry.stem}.md").read_text(encoding="utf-8")
+            )
             if entry.historical:
                 title += " (historical)"
-            lines.append(f"              - {json.dumps(title, ensure_ascii=False)}: {entry.stem}.md")
+            lines.append(
+                f"              - {json.dumps(title, ensure_ascii=False)}: {entry.stem}.md"
+            )
     return "\n".join(lines)
 
 
@@ -66,7 +71,9 @@ def generate_contracts(root: Path, *, check: bool = False) -> list[Path]:
     config_path = root / "mkdocs.yml"
     generated_page_path = root / "docs/develop/contracts.md"
     desired_readme = replace_generated_region(
-        readme_path.read_text(encoding="utf-8"), "contract table", _readme_table(registry)
+        readme_path.read_text(encoding="utf-8"),
+        "contract table",
+        _readme_table(registry),
     )
     desired_config = replace_generated_region(
         config_path.read_text(encoding="utf-8"),
@@ -95,16 +102,28 @@ def generate_contracts(root: Path, *, check: bool = False) -> list[Path]:
     return drift
 
 
-def check_or_generate(root: Path, *, check: bool) -> int:
+def check_or_generate(
+    root: Path,
+    *,
+    check: bool,
+    source_dirs: dict[str, Path] | None = None,
+    production: bool = False,
+) -> int:
     drift = generate_contracts(root, check=check)
     drift.extend(generate_reference(root, check=check))
+    plugin_status = run_plugin_inventory(
+        root, check=check, source_dirs=source_dirs, production=production
+    )
+    status = 0
     if check and drift:
         for path in drift:
             print(f"out of date: {path.relative_to(root)} (run just docs-gen)")
-        return 1
-    if not check:
+        status = 1
+    elif not check:
         for path in drift:
             print(f"generated: {path.relative_to(root)}")
     elif not drift:
         print("generated contract content is up to date")
-    return 0
+    if plugin_status:
+        return plugin_status
+    return status

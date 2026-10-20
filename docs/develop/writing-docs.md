@@ -82,9 +82,9 @@ them.
 
 Generated blocks use matching `BEGIN GENERATED: name` and `END GENERATED: name`
 markers. Preserve their markers and run `just docs-gen` to regenerate contract indexes,
-navigation, and the README contract table. Use the generator's check mode when reviewing
-drift; do not hand-edit generated output. Whole generated pages identify their generator
-at the top.
+navigation, the README contract table, and the mounted plugin inventory. Use the
+generator's check mode when reviewing drift; do not hand-edit generated output. Whole
+generated pages identify their generator at the top.
 
 The contract registry in `docs/_meta/contracts.yml` owns contract titles and summaries.
 Mounted reference pages are owned by their source repository. Edit a mounted page in

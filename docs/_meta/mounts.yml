@@ -1,1 +1,13 @@
-[]
+- repo: bob-plugins
+  remote: https://github.com/bobs-org/bob-plugins
+  branch: master
+  source: docs
+  target: reference/plugins
+  nav_title: Obsidian plugins
+- repo: bob-plugins
+  remote: https://github.com/bobs-org/bob-plugins
+  branch: master
+  source: docs/develop
+  target: develop/plugins
+  nav_title: Plugin development
+

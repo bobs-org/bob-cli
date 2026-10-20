@@ -14,7 +14,7 @@ process controls need exact, specific reasons in
 configuration page instead of that exception list.
 
 ```bash
-just docs-gen             # regenerate tracked contract indexes
+just docs-gen             # regenerate tracked contract indexes and plugin inventory
 just docs-serve           # assemble and serve locally with live reload
 just docs-build           # strict Zensical build of the assembled site
 just docs-build-material  # strict Material 9.7 fallback build
@@ -256,16 +256,22 @@ literal. Unknown lines appear as escaped text and never fail the build.
 
 ## Mount table (`docs/_meta/mounts.yml`)
 
-The table starts empty. Each entry mounts one source directory from a sibling
-repository into the site:
+Each entry mounts one source directory from a sibling repository into the site.
+The plugin mounts are:
 
 ```yaml
 - repo: bob-plugins
-  remote: https://github.com/bobs-org/bob-plugins.git
-  branch: main
+  remote: https://github.com/bobs-org/bob-plugins
+  branch: master
   source: docs
   target: reference/plugins
   nav_title: Obsidian plugins
+- repo: bob-plugins
+  remote: https://github.com/bobs-org/bob-plugins
+  branch: master
+  source: docs/develop
+  target: develop/plugins
+  nav_title: Plugin development
 ```
 
 A repo may have several mounts (for example `docs/` → `reference/plugins/` and

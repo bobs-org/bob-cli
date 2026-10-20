@@ -137,7 +137,7 @@
 - query: complete a task
   location: /reference/capture-syntax/#bang-complete
 - query: install plugins
-  location: /reference/configuration/#plugins-and-shell-completion
+  location: /reference/plugins/#install
 - query: hotkey conflict
   location: /reference/configuration/#mac-capture-hotkeys
 
@@ -157,3 +157,5 @@
   location: /reference/compatibility/#minimum-requirements
 - query: how Bob fits together
   location: /concepts/how-bob-fits-together/
+- query: "Yank absolute path with tilde"
+  location: /reference/plugins/bob-navigation-hotkeys/#registered-commands

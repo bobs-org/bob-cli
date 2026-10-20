@@ -250,7 +250,10 @@ def test_fetch_published_urls_validates_body(monkeypatch) -> None:
         return _FakeResponse(body=f"{ORIGIN}/\n{ORIGIN}/guide/#part\n".encode())
 
     monkeypatch.setattr(urls.urllib.request, "urlopen", ok)
-    assert fetch_published_urls(ORIGIN) == ("ok", [f"{ORIGIN}/", f"{ORIGIN}/guide/#part"])
+    assert fetch_published_urls(ORIGIN) == (
+        "ok",
+        [f"{ORIGIN}/", f"{ORIGIN}/guide/#part"],
+    )
 
     def bad(request, timeout=None):
         return _FakeResponse(body=b"https://example.com/\n")
@@ -331,6 +334,23 @@ def test_scan_source_mentions_without_swallowing_punctuation(tmp_path) -> None:
     ]
 
 
+def test_scan_source_mentions_skips_mount_provenance_stamps(tmp_path) -> None:
+    from pathlib import Path
+
+    assert isinstance(tmp_path, Path)
+    copied = tmp_path / "docs" / "reference" / "plugins"
+    copied.mkdir(parents=True)
+    (copied / "copied.md").write_text(
+        "---\nsource: bob-plugins:docs/block-id-prompt.md\ntitle: Copied\n---\n\n"
+        "See docs/plan.md for the contract.\n",
+        encoding="utf-8",
+    )
+    mentions = scan_source_mentions(tmp_path)
+    assert [(m.source.name, m.line, m.text) for m in mentions] == [
+        ("copied.md", 6, "docs/plan.md"),
+    ]
+
+
 def test_scan_site_urls_keeps_only_origin(tmp_path) -> None:
     from pathlib import Path
 
@@ -359,12 +379,17 @@ def test_ignore_entries_are_narrow_and_fresh(tmp_path) -> None:
     meta = tmp_path / "docs/_meta"
     meta.mkdir(parents=True)
     (meta / "url_mentions_ignore.txt").write_text(
-        "# comment\n\ndocs/hub.md | README.md | Hub excluded from the site.\n", encoding="utf-8"
+        "# comment\n\ndocs/hub.md | README.md | Hub excluded from the site.\n",
+        encoding="utf-8",
     )
     entries = load_mentions_ignore(tmp_path)
     assert len(entries) == 1
-    mention = urls.UrlMention(source=tmp_path / "README.md", line=3, text="docs/hub.md", kind="x")
-    other = urls.UrlMention(source=tmp_path / "docs/other.md", line=1, text="docs/hub.md", kind="x")
+    mention = urls.UrlMention(
+        source=tmp_path / "README.md", line=3, text="docs/hub.md", kind="x"
+    )
+    other = urls.UrlMention(
+        source=tmp_path / "docs/other.md", line=1, text="docs/hub.md", kind="x"
+    )
     kept = apply_ignores([mention, other], entries, root=tmp_path)
     assert kept == [other]
 
@@ -417,11 +442,17 @@ def test_url_contract_parsing_and_refresh(tmp_path) -> None:
 
     contract.write_text(f"{ORIGIN}/guide/#part\n", encoding="utf-8")
     before, after, added = refresh_url_contract(
-        tmp_path, ORIGIN, [f"{ORIGIN}/zeta/", f"{ORIGIN}/guide/#part", f"{ORIGIN}/alpha/"]
+        tmp_path,
+        ORIGIN,
+        [f"{ORIGIN}/zeta/", f"{ORIGIN}/guide/#part", f"{ORIGIN}/alpha/"],
     )
     assert (before, after, added) == (1, 3, [f"{ORIGIN}/alpha/", f"{ORIGIN}/zeta/"])
     text = contract.read_text(encoding="utf-8")
-    assert text.splitlines() == [f"{ORIGIN}/guide/#part", f"{ORIGIN}/alpha/", f"{ORIGIN}/zeta/"]
+    assert text.splitlines() == [
+        f"{ORIGIN}/guide/#part",
+        f"{ORIGIN}/alpha/",
+        f"{ORIGIN}/zeta/",
+    ]
     again = refresh_url_contract(tmp_path, ORIGIN, [f"{ORIGIN}/zeta/"])
     assert again == (3, 3, [])
     assert contract.read_text(encoding="utf-8") == text
@@ -442,8 +473,12 @@ def _fixture_root(root) -> object:
         encoding="utf-8",
     )
     (root / "docs/_meta/mounts.yml").write_text("[]\n", encoding="utf-8")
-    (root / "docs/_meta/url_mentions_ignore.txt").write_text("# none\n", encoding="utf-8")
-    (root / "docs/_meta/url_contract.txt").write_text(f"{ORIGIN}/guide/#part\n", encoding="utf-8")
+    (root / "docs/_meta/url_mentions_ignore.txt").write_text(
+        "# none\n", encoding="utf-8"
+    )
+    (root / "docs/_meta/url_contract.txt").write_text(
+        f"{ORIGIN}/guide/#part\n", encoding="utf-8"
+    )
     (root / "mkdocs.yml").write_text(
         f"""\
 site_name: Test
@@ -477,19 +512,25 @@ def test_run_urls_green_fixture_root(tmp_path, monkeypatch, capsys) -> None:
 
     assert isinstance(tmp_path, Path)
     root = _fixture_root(tmp_path)
-    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    monkeypatch.setattr(
+        urls, "fetch_published_urls", lambda origin, **_: ("offline", "down")
+    )
     assert run_urls(root) == 0
     out = capsys.readouterr().out
     assert "urls: OK" in out
 
 
-def test_run_urls_reports_broken_mention_with_provenance(tmp_path, monkeypatch, capsys) -> None:
+def test_run_urls_reports_broken_mention_with_provenance(
+    tmp_path, monkeypatch, capsys
+) -> None:
     from pathlib import Path
 
     assert isinstance(tmp_path, Path)
     root = _fixture_root(tmp_path)
     (root / "README.md").write_text("See docs/guide.md#absent.\n", encoding="utf-8")
-    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    monkeypatch.setattr(
+        urls, "fetch_published_urls", lambda origin, **_: ("offline", "down")
+    )
     assert run_urls(root) == 1
     out = capsys.readouterr().out
     assert "README.md:1: docs/guide.md#absent" in out
@@ -512,15 +553,24 @@ def test_run_urls_refresh_adds_observed_site_url(tmp_path, monkeypatch, capsys) 
 
     assert isinstance(tmp_path, Path)
     root = _fixture_root(tmp_path)
-    (root / "docs/guide.md").write_text(f"# Guide\n\nSee {ORIGIN}/guide/.\n", encoding="utf-8")
-    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    (root / "docs/guide.md").write_text(
+        f"# Guide\n\nSee {ORIGIN}/guide/.\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        urls, "fetch_published_urls", lambda origin, **_: ("offline", "down")
+    )
     assert run_urls(root, refresh=True) == 0
     out = capsys.readouterr().out
     assert "url_contract.txt: 1 -> 2 (+1)" in out
-    assert load_url_contract(root, ORIGIN) == [f"{ORIGIN}/guide/#part", f"{ORIGIN}/guide/"]
+    assert load_url_contract(root, ORIGIN) == [
+        f"{ORIGIN}/guide/#part",
+        f"{ORIGIN}/guide/",
+    ]
 
 
-def test_run_urls_refresh_skips_ignored_site_urls(tmp_path, monkeypatch, capsys) -> None:
+def test_run_urls_refresh_skips_ignored_site_urls(
+    tmp_path, monkeypatch, capsys
+) -> None:
     from pathlib import Path
 
     assert isinstance(tmp_path, Path)
@@ -533,7 +583,9 @@ def test_run_urls_refresh_skips_ignored_site_urls(tmp_path, monkeypatch, capsys)
         f"{ORIGIN}/guide/ | README.md | Template example, not a live obligation.\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    monkeypatch.setattr(
+        urls, "fetch_published_urls", lambda origin, **_: ("offline", "down")
+    )
     assert run_urls(root, refresh=True) == 0
     out = capsys.readouterr().out
     assert "url_contract.txt: 1 -> 2 (+1)" in out
@@ -545,7 +597,11 @@ def test_run_urls_broken_contract_link_fails(tmp_path, monkeypatch, capsys) -> N
 
     assert isinstance(tmp_path, Path)
     root = _fixture_root(tmp_path)
-    (root / "docs/_meta/url_contract.txt").write_text(f"{ORIGIN}/gone/#x\n", encoding="utf-8")
-    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    (root / "docs/_meta/url_contract.txt").write_text(
+        f"{ORIGIN}/gone/#x\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        urls, "fetch_published_urls", lambda origin, **_: ("offline", "down")
+    )
     assert run_urls(root) == 1
     assert "url_contract.txt" in capsys.readouterr().out

@@ -76,14 +76,16 @@ def run_check(
     print("docs-check: assemble and validate source context", flush=True)
     context, manifest = assemble(repo_root, production=production, sources=sources)
     if drill:
-        return _run_drill_gates(repo_root, context, manifest)
+        return _run_drill_gates(repo_root, context, manifest, production=production)
 
     tutorial_binary: Path | None = None
 
     def tutorial_gate() -> int:
         nonlocal tutorial_binary
         if "BOB_BIN" not in os.environ and shutil.which("cargo") is None:
-            print("skipped: tutorial needs Cargo or BOB_BIN pointing to an executable Bob")
+            print(
+                "skipped: tutorial needs Cargo or BOB_BIN pointing to an executable Bob"
+            )
             return 0
         tutorial_binary = resolve_bob_binary(repo_root)
         return run_tutorial(repo_root, bob_bin=tutorial_binary)
@@ -93,10 +95,21 @@ def run_check(
 
     gates: list[tuple[str, Callable[[], int]]] = [
         ("lint", lambda: run_lint(repo_root, docs_context=context)),
-        ("generated drift", lambda: check_or_generate(repo_root, check=True)),
+        (
+            "generated drift",
+            lambda: check_or_generate(
+                repo_root,
+                check=True,
+                source_dirs=context.source_dirs,
+                production=production,
+            ),
+        ),
         ("strict Zensical build", lambda: build_assembled(context, manifest)),
         ("published URLs", lambda: run_urls(repo_root, context=context)),
-        ("offline lychee with fragments", lambda: run_links(repo_root, context=context)),
+        (
+            "offline lychee with fragments",
+            lambda: run_links(repo_root, context=context),
+        ),
         ("search smoke", lambda: run_search_smoke(repo_root, context=context)),
         ("executable first-day tutorial", tutorial_gate),
         ("documentation unit tests", unit_tests),
@@ -110,12 +123,22 @@ def run_check(
     return 0
 
 
-def _run_drill_gates(root: Path, context, manifest: Path) -> int:
+def _run_drill_gates(
+    root: Path, context, manifest: Path, *, production: bool = False
+) -> int:
     """Run the clean gates, inject the staged probe, and require link failure."""
 
     for label, run in [
         ("lint", lambda: run_lint(root, docs_context=context)),
-        ("generated drift", lambda: check_or_generate(root, check=True)),
+        (
+            "generated drift",
+            lambda: check_or_generate(
+                root,
+                check=True,
+                source_dirs=context.source_dirs,
+                production=production,
+            ),
+        ),
     ]:
         status = _gate(label, run)
         if status:

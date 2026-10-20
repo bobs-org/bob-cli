@@ -69,7 +69,9 @@ JS_TEST_SUFFIXES = (
     ".spec.cjs",
     ".spec.ts",
 )
-SKIP_DIR_NAMES = frozenset({".git", "node_modules", "dist", "coverage", ".venv", "target"})
+SKIP_DIR_NAMES = frozenset(
+    {".git", "node_modules", "dist", "coverage", ".venv", "target"}
+)
 BEAD_ID_RE = re.compile(
     r"\b(?:bob-cli|bob-plugins|bob-mac-capture)-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*\b"
 )
@@ -87,8 +89,16 @@ PROMPT_RE = re.compile(r"(?m)^[ \t]*\$[ \t]+\S")
 GUIDE_HYGIENE = (
     ("bead-id", BEAD_ID_RE, "reader pages must not name bead IDs ({hit})"),
     ("src-path", SRC_PATH_RE, "reader pages must not cite src/ paths ({hit})"),
-    ("phase-label", PHASE_LABEL_RE, "reader pages must not carry epic or phase labels ({hit})"),
-    ("history-phrase", HISTORY_RE, "reader pages must not carry history phrases ({hit})"),
+    (
+        "phase-label",
+        PHASE_LABEL_RE,
+        "reader pages must not carry epic or phase labels ({hit})",
+    ),
+    (
+        "history-phrase",
+        HISTORY_RE,
+        "reader pages must not carry history phrases ({hit})",
+    ),
 )
 REFERENCE_HYGIENE = (
     ("bead-id", BEAD_ID_RE, "reference pages must not name bead IDs ({hit})"),
@@ -146,7 +156,9 @@ class LintContext:
     assembled: bool
 
 
-def _finding(path: str, line: int, rule: str, explanation: str, *, severity: str = "error") -> Finding:
+def _finding(
+    path: str, line: int, rule: str, explanation: str, *, severity: str = "error"
+) -> Finding:
     return Finding(path, line, rule, explanation, severity)
 
 
@@ -160,11 +172,15 @@ def load_exclude_globs(config: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _is_support(rel: str) -> bool:
-    return rel in EXCLUDED_NAMES or any(rel.startswith(prefix) for prefix in SUPPORT_PREFIXES)
+    return rel in EXCLUDED_NAMES or any(
+        rel.startswith(prefix) for prefix in SUPPORT_PREFIXES
+    )
 
 
 def _is_excluded(rel: str, globs: tuple[str, ...]) -> bool:
-    return any(fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, glob) for glob in globs)
+    return any(
+        fnmatch.fnmatch(rel, glob) or fnmatch.fnmatch("/" + rel, glob) for glob in globs
+    )
 
 
 def _tier_of(rel: str) -> str | None:
@@ -224,7 +240,11 @@ def _is_verified_copy(
     if mount is None:
         return False
     expected = source_stamps.get(rel)
-    return expected is not None and source == expected and source.partition(":")[0] == mount.repo
+    return (
+        expected is not None
+        and source == expected
+        and source.partition(":")[0] == mount.repo
+    )
 
 
 def publishable_markdown(docs: Path, exclude_globs: tuple[str, ...]) -> list[str]:
@@ -239,6 +259,28 @@ def publishable_markdown(docs: Path, exclude_globs: tuple[str, ...]) -> list[str
             continue
         pages.append(rel)
     return pages
+
+
+def _unassembled_mount_residue(ctx: LintContext, rel: str) -> bool:
+    """Gitignored mount copies left in the working tree after assemble.
+
+    Unassembled lint does not authenticate those copies. Skip them unless a
+    fixture injected ``source_stamps`` so stamp-forgery tests still run.
+    """
+
+    if ctx.assembled or rel in ctx.source_stamps:
+        return False
+    if _under_mount(rel, ctx.mounts) is None:
+        return False
+    return _path_ignored(ctx.root, f"docs/{rel}")
+
+
+def lint_pages(ctx: LintContext) -> list[str]:
+    return [
+        rel
+        for rel in publishable_markdown(ctx.docs, ctx.exclude_globs)
+        if not _unassembled_mount_residue(ctx, rel)
+    ]
 
 
 def _read(path: Path) -> str | None:
@@ -306,7 +348,9 @@ def load_privacy_patterns(path: Path) -> tuple[PrivacyPattern, ...]:
     placeholders = raw.get("placeholders", {})
     if placeholders is None:
         placeholders = {}
-    if not isinstance(placeholders, dict) or not all(isinstance(key, str) for key in placeholders):
+    if not isinstance(placeholders, dict) or not all(
+        isinstance(key, str) for key in placeholders
+    ):
         raise DocsError(f"{path}: placeholders must be a string mapping")
     patterns_raw = raw.get("patterns")
     if not isinstance(patterns_raw, list) or not patterns_raw:
@@ -336,16 +380,22 @@ def load_privacy_patterns(path: Path) -> tuple[PrivacyPattern, ...]:
         allow_raw = item.get("allow", [])
         if allow_raw is None:
             allow_raw = []
-        if not isinstance(allow_raw, list) or not all(isinstance(entry, str) for entry in allow_raw):
+        if not isinstance(allow_raw, list) or not all(
+            isinstance(entry, str) for entry in allow_raw
+        ):
             raise DocsError(f"{where}: allow must be a list of regex strings")
         allow: list[re.Pattern[str]] = []
         for allow_index, allow_pat in enumerate(allow_raw, start=1):
             try:
                 allow.append(re.compile(allow_pat))
             except re.error as error:
-                raise DocsError(f"{where}: allow[{allow_index}] invalid regex: {error}") from error
+                raise DocsError(
+                    f"{where}: allow[{allow_index}] invalid regex: {error}"
+                ) from error
         placeholder = item.get("placeholder", placeholders.get(ident))
-        if placeholder is not None and (not isinstance(placeholder, str) or not placeholder.strip()):
+        if placeholder is not None and (
+            not isinstance(placeholder, str) or not placeholder.strip()
+        ):
             raise DocsError(f"{where}: placeholder must be a nonempty string")
         extra = set(item) - {"id", "description", "regex", "allow", "placeholder"}
         if extra:
@@ -376,7 +426,9 @@ def load_privacy_baseline(path: Path) -> dict[tuple[str, str, str], int]:
             continue
         parts = line.split("\t")
         if len(parts) != 4:
-            raise DocsError(f"{path}:{lineno}: expected path, rule, count, matched columns")
+            raise DocsError(
+                f"{path}:{lineno}: expected path, rule, count, matched columns"
+            )
         rel, rule, count_text, matched = parts
         if not rel or not rule:
             raise DocsError(f"{path}:{lineno}: path and rule must be nonempty")
@@ -466,7 +518,9 @@ def _nav_sections(nav: Any) -> list[tuple[str, list[str]]]:
     return sections
 
 
-def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -> LintContext:
+def build_lint_context(
+    root: Path, *, docs_context: DocsContext | None = None
+) -> LintContext:
     docs_context = docs_context or context_from_root(root)
     registry = load_contract_registry(docs_context.repo_root)
     mounts = load_mounts(docs_context.repo_root)
@@ -477,7 +531,9 @@ def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -
         docs = docs_context.output_dir / "docs"
         assembled_config = load_yaml(docs_context.assembled_config)
         if not isinstance(assembled_config, dict):
-            raise DocsError(f"{docs_context.assembled_config}: assembled config must be a mapping")
+            raise DocsError(
+                f"{docs_context.assembled_config}: assembled config must be a mapping"
+            )
         config = assembled_config
         if not docs.is_dir():
             raise DocsError(f"assembled docs tree is missing: {docs}")
@@ -486,12 +542,17 @@ def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except OSError as error:
-            raise DocsError(f"cannot read assembled mount manifest {manifest_path}: {error}") from error
+            raise DocsError(
+                f"cannot read assembled mount manifest {manifest_path}: {error}"
+            ) from error
         except ValueError as error:
-            raise DocsError(f"assembled mount manifest {manifest_path} is invalid JSON: {error}") from error
+            raise DocsError(
+                f"assembled mount manifest {manifest_path} is invalid JSON: {error}"
+            ) from error
         raw_stamps = manifest.get("sources") if isinstance(manifest, dict) else None
         if not isinstance(raw_stamps, dict) or not all(
-            isinstance(key, str) and isinstance(value, str) for key, value in raw_stamps.items()
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in raw_stamps.items()
         ):
             raise DocsError(
                 f"assembled mount manifest {manifest_path} must map copied paths to source stamps"
@@ -543,18 +604,53 @@ def check_registry(ctx: LintContext) -> list[Finding]:
     for stem in sorted(stems):
         if stem in typed:
             findings.append(
-                _finding(path, 1, "registry", f"contract stem {stem!r} collides with a typed directory")
+                _finding(
+                    path,
+                    1,
+                    "registry",
+                    f"contract stem {stem!r} collides with a typed directory",
+                )
             )
         if stem in mount_roots:
             findings.append(
-                _finding(path, 1, "registry", f"contract stem {stem!r} collides with a mount root")
+                _finding(
+                    path,
+                    1,
+                    "registry",
+                    f"contract stem {stem!r} collides with a mount root",
+                )
             )
         page = ctx.docs / f"{stem}.md"
         if not page.is_file():
             findings.append(
-                _finding(path, 1, "registry", f"registered contract page docs/{stem}.md is missing")
+                _finding(
+                    path,
+                    1,
+                    "registry",
+                    f"registered contract page docs/{stem}.md is missing",
+                )
             )
     return findings
+
+
+def _source_owned_hub(ctx: LintContext, mount: Mount) -> bool:
+    """Whether this mount's hub is the source ``index.md``.
+
+    Assembled runs use stamps or the resolved source tree. Unassembled lint
+    infers a source-owned hub from a gitignored landing page so activating
+    those hubs does not require a prior assemble.
+    """
+
+    if source_owns_index(
+        mount,
+        repo_dir=ctx.source_dirs.get(mount.repo),
+        source_stamps=ctx.source_stamps,
+    ):
+        return True
+    if ctx.source_dirs.get(mount.repo) is not None or ctx.source_stamps:
+        return False
+    landing = f"docs/{mount.target.as_posix()}/index.md"
+    return _path_ignored(ctx.root, landing)
 
 
 def check_mount_gitignores(ctx: LintContext) -> list[Finding]:
@@ -572,11 +668,7 @@ def check_mount_gitignores(ctx: LintContext) -> list[Finding]:
                     "copied pages must be ignored apart from an authored index.md",
                 )
             )
-        owned_by_source = source_owns_index(
-            mount,
-            repo_dir=ctx.source_dirs.get(mount.repo),
-            source_stamps=ctx.source_stamps,
-        )
+        owned_by_source = _source_owned_hub(ctx, mount)
         if owned_by_source:
             if not _path_ignored(ctx.root, landing):
                 findings.append(
@@ -633,8 +725,14 @@ def check_front_matter(
     if head is None:
         head = {}
         if not contract:
-            findings.append(_finding(label, 1, "front-matter", "missing front matter key 'title'"))
-            findings.append(_finding(label, 1, "front-matter", "missing front matter key 'description'"))
+            findings.append(
+                _finding(label, 1, "front-matter", "missing front matter key 'title'")
+            )
+            findings.append(
+                _finding(
+                    label, 1, "front-matter", "missing front matter key 'description'"
+                )
+            )
             return findings
         return findings
     source = head.get("source")
@@ -665,7 +763,12 @@ def check_front_matter(
     title = head.get("title")
     if not isinstance(title, str) or not title.strip():
         findings.append(
-            _finding(label, 1, "front-matter", "missing front matter key 'title' (must be a string)")
+            _finding(
+                label,
+                1,
+                "front-matter",
+                "missing front matter key 'title' (must be a string)",
+            )
         )
     description = head.get("description")
     if not isinstance(description, str) or not description.strip():
@@ -707,11 +810,21 @@ def check_budget(
     ceiling = ceilings.get(rel)
     if _is_homepage(rel) and words > HOMEPAGE_CAP:
         findings.append(
-            _finding(label, 1, "budget", f"homepage is over its {HOMEPAGE_CAP}-word cap (it is {words})")
+            _finding(
+                label,
+                1,
+                "budget",
+                f"homepage is over its {HOMEPAGE_CAP}-word cap (it is {words})",
+            )
         )
     if _is_hub(rel) and words > HUB_CAP:
         findings.append(
-            _finding(label, 1, "budget", f"hub pages hold at most {HUB_CAP} words (it is {words})")
+            _finding(
+                label,
+                1,
+                "budget",
+                f"hub pages hold at most {HUB_CAP} words (it is {words})",
+            )
         )
     if tier is not None:
         page_cap, _tier_cap, severity = PAGE_BUDGETS[tier]
@@ -739,12 +852,16 @@ def check_budget(
         tier_totals[tier] = tier_totals.get(tier, 0) + words
     if ceiling is not None and words > ceiling:
         findings.append(
-            _finding(label, 1, "budget", f"over budget at {words} words (ceiling {ceiling})")
+            _finding(
+                label, 1, "budget", f"over budget at {words} words (ceiling {ceiling})"
+            )
         )
     return findings
 
 
-def _hygiene_hits(text: str, patterns: Iterable[tuple[str, re.Pattern[str], str]]) -> list[tuple[int, str]]:
+def _hygiene_hits(
+    text: str, patterns: Iterable[tuple[str, re.Pattern[str], str]]
+) -> list[tuple[int, str]]:
     masked = blank_link_destinations(mask_for_hygiene(text))
     hits: list[tuple[int, str]] = []
     for lineno, line in enumerate(masked.splitlines(), start=1):
@@ -846,7 +963,9 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
     nav = ctx.config.get("nav")
     label = ctx.config_path.name
     if not isinstance(nav, list) or not nav:
-        findings.append(_finding(label, 1, "nav", "mkdocs.yml nav must be a nonempty list"))
+        findings.append(
+            _finding(label, 1, "nav", "mkdocs.yml nav must be a nonempty list")
+        )
         return findings
     leaves = _nav_paths(nav)
     redirects = _redirect_sources(ctx.config)
@@ -862,11 +981,7 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
                     for item in ctx.mounts
                     if f"{item.target.as_posix()}/index.md" == leaf
                 )
-                source_hub = source_owns_index(
-                    mount,
-                    repo_dir=ctx.source_dirs.get(mount.repo),
-                    source_stamps=ctx.source_stamps,
-                )
+                source_hub = _source_owned_hub(ctx, mount)
                 if ctx.assembled or not source_hub:
                     findings.append(
                         _finding(
@@ -888,10 +1003,14 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
                     )
                 )
             else:
-                findings.append(_finding(label, 1, "nav", f"nav target {leaf!r} does not exist"))
+                findings.append(
+                    _finding(label, 1, "nav", f"nav target {leaf!r} does not exist")
+                )
     for leaf, count in seen.items():
         if count > 1:
-            findings.append(_finding(label, 1, "nav", f"page {leaf!r} appears {count} times in nav"))
+            findings.append(
+                _finding(label, 1, "nav", f"page {leaf!r} appears {count} times in nav")
+            )
     nav_set = set(leaves)
     for rel in pages:
         if rel in redirects:
@@ -909,7 +1028,12 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
                 )
                 continue
             findings.append(
-                _finding(_docs_path(rel), 1, "nav", "page is missing from nav (Zensical does not report this)")
+                _finding(
+                    _docs_path(rel),
+                    1,
+                    "nav",
+                    "page is missing from nav (Zensical does not report this)",
+                )
             )
     for mount in ctx.mounts:
         placeholder = f"{mount.target.as_posix()}/index.md"
@@ -923,7 +1047,11 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
                 )
             )
     for title, section_pages in _nav_sections(nav):
-        non_hubs = [page for page in section_pages if page != "index.md" and not page.endswith("/index.md")]
+        non_hubs = [
+            page
+            for page in section_pages
+            if page != "index.md" and not page.endswith("/index.md")
+        ]
         prefixes = {page.split("/", 1)[0] for page in section_pages if "/" in page}
         typed = prefixes & set(TYPED_DIRS)
         if not typed:
@@ -941,7 +1069,9 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
     return findings
 
 
-def collect_privacy_hits(rel: str, text: str, patterns: tuple[PrivacyPattern, ...]) -> dict[tuple[str, str], int]:
+def collect_privacy_hits(
+    rel: str, text: str, patterns: tuple[PrivacyPattern, ...]
+) -> dict[tuple[str, str], int]:
     counts: dict[tuple[str, str], int] = {}
     for pattern in patterns:
         for match in pattern.regex.finditer(text):
@@ -953,7 +1083,9 @@ def collect_privacy_hits(rel: str, text: str, patterns: tuple[PrivacyPattern, ..
     return counts
 
 
-def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> list[Finding]:
+def check_privacy(
+    rel: str, text: str, ctx: LintContext, *, contract: bool
+) -> list[Finding]:
     findings: list[Finding] = []
     label = _docs_path(rel)
     hits = collect_privacy_hits(rel, text, ctx.privacy_patterns)
@@ -963,11 +1095,15 @@ def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> l
             matched = match.group(0).replace("\t", " ")
             if any(allow.search(matched) for allow in pattern.allow):
                 continue
-            first_lines.setdefault((pattern.ident, matched), line_at(text, match.start()))
+            first_lines.setdefault(
+                (pattern.ident, matched), line_at(text, match.start())
+            )
     for (rule, matched), count in sorted(hits.items()):
         line = first_lines[(rule, matched)]
         if not contract:
-            placeholder = next((p.placeholder for p in ctx.privacy_patterns if p.ident == rule), None)
+            placeholder = next(
+                (p.placeholder for p in ctx.privacy_patterns if p.ident == rule), None
+            )
             hint = f"; use placeholder {placeholder}" if placeholder else ""
             findings.append(
                 _finding(
@@ -1059,7 +1195,8 @@ def _js_test_files(repo_dir: Path) -> list[Path]:
         if path.suffix not in {".js", ".mjs", ".cjs", ".ts", ".tsx"}:
             continue
         if name.endswith(JS_TEST_SUFFIXES) or any(
-            part in {"test", "tests", "__tests__"} for part in path.relative_to(repo_dir).parts
+            part in {"test", "tests", "__tests__"}
+            for part in path.relative_to(repo_dir).parts
         ):
             files.append(path)
     return files
@@ -1129,9 +1266,11 @@ def check_tree(ctx: LintContext) -> list[Finding]:
     findings.extend(check_portability_config(ctx))
     findings.extend(
         _finding(path, line, rule, explanation)
-        for path, line, rule, explanation in check_environment_coverage(ctx.root, ctx.docs)
+        for path, line, rule, explanation in check_environment_coverage(
+            ctx.root, ctx.docs
+        )
     )
-    pages = publishable_markdown(ctx.docs, ctx.exclude_globs)
+    pages = lint_pages(ctx)
     findings.extend(check_nav(ctx, pages))
     findings.extend(check_stale_ceilings(ctx, set(pages)))
     stems = _contract_stems(ctx.registry)
@@ -1187,7 +1326,7 @@ def check_tree(ctx: LintContext) -> list[Finding]:
 def ratchet_ceilings(ctx: LintContext) -> list[str]:
     ceilings = dict(ctx.ceilings)
     changed: list[str] = []
-    pages = set(publishable_markdown(ctx.docs, ctx.exclude_globs))
+    pages = set(lint_pages(ctx))
     stale = _stale_ceilings(ctx, pages)
     for rel in sorted(list(ceilings)):
         if rel in stale:
@@ -1203,7 +1342,9 @@ def ratchet_ceilings(ctx: LintContext) -> list[str]:
             ceilings[rel] = shrunk_to
             changed.append(f"{rel}: {ceilings[rel]}")
     if changed:
-        payload: dict[str, Any] = {"ceilings": dict(sorted(ceilings.items())) if ceilings else {}}
+        payload: dict[str, Any] = {
+            "ceilings": dict(sorted(ceilings.items())) if ceilings else {}
+        }
         ctx.budgets_path.parent.mkdir(parents=True, exist_ok=True)
         header = (
             "# Optional per-page word ceilings. bob-docs lint fails a page that grows\n"
@@ -1218,13 +1359,15 @@ def ratchet_ceilings(ctx: LintContext) -> list[str]:
 def ratchet_privacy_baseline(ctx: LintContext) -> list[str]:
     stems = _contract_stems(ctx.registry)
     current: dict[tuple[str, str, str], int] = {}
-    for rel in publishable_markdown(ctx.docs, ctx.exclude_globs):
+    for rel in lint_pages(ctx):
         if not _is_contract(rel, stems) or _under_mount(rel, ctx.mounts) is not None:
             continue
         text = _read(ctx.docs / rel)
         if text is None:
             continue
-        for (rule, matched), count in collect_privacy_hits(rel, text, ctx.privacy_patterns).items():
+        for (rule, matched), count in collect_privacy_hits(
+            rel, text, ctx.privacy_patterns
+        ).items():
             current[(rel, rule, matched)] = count
     changed: list[str] = []
     updated = dict(ctx.baseline)
@@ -1243,7 +1386,9 @@ def ratchet_privacy_baseline(ctx: LintContext) -> list[str]:
     return changed
 
 
-def run_lint(root: Path, *, fix: bool = False, docs_context: DocsContext | None = None) -> int:
+def run_lint(
+    root: Path, *, fix: bool = False, docs_context: DocsContext | None = None
+) -> int:
     ctx = build_lint_context(root, docs_context=docs_context)
     if fix:
         for line in ratchet_ceilings(ctx):

@@ -107,6 +107,7 @@ nav:
       - How Bob fits together: concepts/how-bob-fits-together.md
   - Reference:
       - Overview: reference/index.md
+      - Obsidian plugins: reference/plugins/index.md
       - Capture syntax: reference/capture-syntax.md
       - Vault format: reference/vault-format.md
       - CLI:
@@ -152,6 +153,7 @@ nav:
       - Glossary: reference/glossary.md
   - Develop:
       - Overview: develop/index.md
+      - Plugin development: develop/plugins/index.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
       - Design decisions: develop/decisions.md

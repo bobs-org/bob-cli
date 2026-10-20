@@ -9,6 +9,8 @@ Hand-written lookups for capture tokens, vault structure, configuration, and
 machine-readable output, plus generated CLI, glossary, and decision pages
 that stay in lockstep with the tools.
 
+- [Obsidian plugins](plugins/index.md) for each plugin's commands, settings,
+  and topics.
 - [Capture syntax](capture-syntax.md) for every `bob capture` token.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
 - [Configuration](configuration.md) for config keys, environment, and runtimes.
