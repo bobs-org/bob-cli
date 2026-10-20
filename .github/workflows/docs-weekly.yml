@@ -87,6 +87,7 @@ jobs:
       - name: Close the managed weekly issue
         id: close
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd "$GITHUB_WORKSPACE/tooling"
@@ -123,6 +124,7 @@ jobs:
 
       - name: Create or update the blocked issue
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           failed="weekly (${{ needs.weekly.outputs.stage || 'build' }})"

@@ -100,7 +100,7 @@ def _list_issues(
             "--label",
             label,
             "--json",
-            "number,title,url",
+            "number,title,url,state",
             "--limit",
             "100",
         ],
@@ -140,7 +140,7 @@ def find_latest_issue(
     matches = _list_issues(run, title=title, label=label, state="all")
     numbered = sorted(
         (
-            (issue["number"], issue.get("state", "open") != "closed")
+            (issue["number"], str(issue.get("state", "open")).lower() != "closed")
             for issue in matches
             if isinstance(issue.get("number"), int)
         ),

@@ -101,6 +101,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "stage=plan" >> "$GITHUB_OUTPUT"
           blocked="$(gh issue list --state open --label docs-publish --repo '${{ github.repository }}' --json number --jq length)"
           plan_args=(
             --manifest "$GITHUB_WORKSPACE/deploy/published.json"
@@ -114,14 +115,15 @@ jobs:
             && [ "${{ inputs.drill }}" != "true" ] && [ "${{ inputs.pinned }}" != "true" ]; then
             plan_args+=(--recovery)
           fi
+          cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs publish-plan "${plan_args[@]}"
-          echo "stage=plan" >> "$GITHUB_OUTPUT"
 
       - name: Run the gated production checks
         id: gates
         if: steps.plan.outputs.should_build == 'true'
         run: |
+          echo "stage=gates" >> "$GITHUB_OUTPUT"
           check_args=(
             --production
             --sources "$GITHUB_WORKSPACE/.publish-plan/production-sources.json"
@@ -130,7 +132,6 @@ jobs:
           cd "$GITHUB_WORKSPACE/.publish-work/bob-cli"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs check "${check_args[@]}"
-          echo "stage=gates" >> "$GITHUB_OUTPUT"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -246,6 +247,7 @@ jobs:
 
       - name: Verify live pages, fragments, and provenance
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd "$GITHUB_WORKSPACE/tooling"
@@ -291,6 +293,7 @@ jobs:
 
       - name: Create or update the blocked issue
         env:
+          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           failed="publish (${{ needs.publish.outputs.stage || 'guard' }})"

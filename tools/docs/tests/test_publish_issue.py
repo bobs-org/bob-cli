@@ -38,7 +38,15 @@ class FakeGh:
         if argv[:2] == ["gh", "issue"] and argv[2] == "list":
             state = argv[argv.index("--state") + 1]
             issues = self.open_issues if state == "open" else self.all_issues
-            return CommandResult(0, json.dumps(issues), "")
+            fields = argv[argv.index("--json") + 1].split(",")
+            return CommandResult(
+                0,
+                json.dumps([
+                    {key: value for key, value in issue.items() if key in fields}
+                    for issue in issues
+                ]),
+                "",
+            )
         if argv[2] == "create":
             if "create" in self.fail:
                 return CommandResult(1, "", self.fail["create"])
@@ -109,9 +117,10 @@ def test_open_comments_on_existing_issue_without_creating() -> None:
     assert len(comment) == 1 and comment[0][1] == "still blocked\n"
 
 
-def test_open_reopens_a_closed_issue() -> None:
+@pytest.mark.parametrize("state", ["closed", "CLOSED"])
+def test_open_reopens_a_closed_issue(state: str) -> None:
     gh = FakeGh()
-    gh.all_issues = [{"number": 5, "title": TITLE, "url": "u5", "state": "closed"}]
+    gh.all_issues = [{"number": 5, "title": TITLE, "url": "u5", "state": state}]
 
     assert open_or_update_blocked(gh, body="blocked again\n") == 5
 

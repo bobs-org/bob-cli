@@ -220,6 +220,70 @@ def test_plan_reads_blocked_issues_and_recovers(document: dict) -> None:
     assert {"inputs.force", "inputs.drill", "inputs.pinned"} <= refs
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_plan_runs_from_tooling_checkout(
+    document: dict, tmp_path: Path, fail: bool
+) -> None:
+    """Run the actual plan script from the Actions workspace, outside either repo."""
+    (tmp_path / "tooling").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "from pathlib import Path\n"
+        "from bob_docs import cli\n"
+        "from bob_docs.errors import DocsError\n"
+        "def plan(root, **kwargs):\n"
+        "    assert root == Path(os.environ['GITHUB_WORKSPACE']) / 'tooling', root\n"
+        "    assert kwargs['manifest'].is_absolute()\n"
+        f"    if {fail!r}: raise DocsError('unavailable source')\n"
+        "    return {'should_build': True}\n"
+        "cli.run_publish_plan = plan\n"
+        "sys.exit(cli.main(sys.argv[sys.argv.index('bob-docs') + 1:]))\n"
+    )
+    uv.chmod(0o755)
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nprintf '0\\n'\n")
+    gh.chmod(0o755)
+    step = _step_by_name(
+        document["jobs"]["publish"], "Plan immutable publication sources"
+    )
+    script = step["run"].replace("${{ github.repository }}", EXPECTED_CALLER)
+    for flag in ("force", "drill", "pinned"):
+        script = script.replace("${{ inputs." + flag + " }}", "false")
+    result = subprocess.run(
+        ["bash", "-e", "-c", script],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "PYTHONPATH": str(ROOT / "tools/docs"),
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == (2 if fail else 0), result.stderr
+    assert "stage=plan" in (tmp_path / "outputs").read_text()
+
+
+@pytest.mark.parametrize("workflow", ["docs-publish.yml", "docs-weekly.yml"])
+def test_issue_reporting_targets_caller_despite_tooling_checkout(workflow: str) -> None:
+    document = yaml.safe_load((WORKFLOW.parent / workflow).read_text())
+    reporting_steps = [
+        step
+        for job in document["jobs"].values()
+        for step in _steps(job)
+        if "bob-docs publish-report" in step.get("run", "")
+    ]
+    assert len(reporting_steps) == 2  # open on failure and close on verified success
+    for step in reporting_steps:
+        assert step["env"].get("GH_REPO") == "${{ github.repository }}", step["name"]
+
+
 def test_verify_checks_live_site_then_closes_the_issue(document: dict) -> None:
     verify_steps = _steps(document["jobs"]["verify"])
     runs = " ".join(step.get("run", "") for step in verify_steps)
