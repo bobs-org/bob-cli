@@ -146,14 +146,14 @@ jobs:
         id: handoff
         if: steps.plan.outputs.should_record == 'true'
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.publish-handoff"
+          mkdir -p "$GITHUB_WORKSPACE/publish-handoff"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs publish-record \
             --next "$GITHUB_WORKSPACE/.publish-plan/next-publication.json" \
-            --output "$GITHUB_WORKSPACE/.publish-handoff/published.json" \
+            --output "$GITHUB_WORKSPACE/publish-handoff/published.json" \
             --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           cp "$GITHUB_WORKSPACE/.publish-work/bob-cli/target/docs/site/urls.txt" \
-            "$GITHUB_WORKSPACE/.publish-handoff/urls.txt"
+            "$GITHUB_WORKSPACE/publish-handoff/urls.txt"
           echo "stage=upload" >> "$GITHUB_OUTPUT"
 
       - name: Upload the publication handoff
@@ -161,7 +161,7 @@ jobs:
         if: steps.plan.outputs.should_record == 'true'
         with:
           name: publish-handoff
-          path: .publish-handoff
+          path: publish-handoff
           if-no-files-found: error
           retention-days: 7
 
@@ -253,7 +253,7 @@ jobs:
             bob-docs publish-verify \
             --origin "https://bobs-org.github.io" \
             --site-urls "$GITHUB_WORKSPACE/handoff/urls.txt" \
-            --expected "$GITHUB_WORKSPACE/handoff/next-publication.json"
+            --expected "$GITHUB_WORKSPACE/handoff/published.json"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs publish-report --close \
             --comment "Live verification passed for run https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}."
@@ -302,8 +302,8 @@ jobs:
             if [ "${{ inputs.drill }}" = "true" ]; then reason="drill"; else reason="gate failure"; fi
           fi
           fingerprint=""
-          if [ -f handoff/next-publication.json ]; then
-            fingerprint="$(python3 -c "import json; print(json.load(open('handoff/next-publication.json'))['fingerprint'])")"
+          if [ -f handoff/published.json ]; then
+            fingerprint="$(python3 -c "import json; print(json.load(open('handoff/published.json'))['fingerprint'])")"
           fi
           cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \

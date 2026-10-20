@@ -23,11 +23,11 @@ pass `--yes` only when you intend to mutate the host.
 
 ```bash
 just docs-host-bootstrap
-just docs-host-bootstrap -- --yes
+just -- docs-host-bootstrap --yes
 just docs-publish
-just docs-publish -- --force
-just docs-publish -- --drill
-just docs-publish -- --pinned
+just -- docs-publish --force
+just -- docs-publish --drill
+just -- docs-publish --pinned
 just docs-status
 ```
 
@@ -42,7 +42,7 @@ dispatching and watches the run it actually started.
 2. Dispatch a pinned publish from bob-cli:
 
    ```bash
-   just docs-publish -- --pinned
+   just -- docs-publish --pinned
    ```
 
 3. Scheduled and ordinary unpinned runs skip while `hold` is true, including

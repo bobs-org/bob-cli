@@ -24,7 +24,8 @@ just docs-media           # capture deterministic CLI SVGs (or bob-docs media -c
 just docs-fonts           # subset bundled OFL fonts to WOFF2 (needs --group fonts)
 just docs-assets          # generate identity assets: mark, favicons, social card
 just docs-a11y            # Playwright + axe audit of the built site (dev only)
-just docs-host-bootstrap  # preview the public host; pass -- --yes to apply
+just docs-host-bootstrap  # preview the public host
+just -- docs-host-bootstrap --yes  # apply the previewed changes
 just docs-publish         # enable, dispatch, and watch the host publish workflow
 just docs-status          # host manifest, live build, runs, workflows, hold, issues
 uv run --project tools/docs bob-docs lint
@@ -125,8 +126,8 @@ Standalone apply clones the host over SSH into a temporary directory; pass
 
 ```bash
 just docs-host-bootstrap
-just docs-host-bootstrap -- --yes
-just docs-host-bootstrap -- --yes --deploy-dir /path/to/bobs-org.github.io
+just -- docs-host-bootstrap --yes
+just -- docs-host-bootstrap --yes --deploy-dir /path/to/bobs-org.github.io
 ```
 
 `bob-docs publish` (`just docs-publish`) enables the caller workflow, dispatches

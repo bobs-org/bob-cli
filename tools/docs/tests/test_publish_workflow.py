@@ -4,7 +4,12 @@ Conditions are inspected as parsed YAML data (including the YAML `on` key,
 which parses as boolean True), never by matching raw file text.
 """
 
+import json
+import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -221,6 +226,99 @@ def test_verify_checks_live_site_then_closes_the_issue(document: dict) -> None:
     assert "publish-verify" in runs
     assert EXPECTED_ORIGIN in runs
     assert "publish-report" in runs and "--close" in runs
+
+
+def test_publication_handoff_supplies_live_verification_inputs(
+    document: dict, tmp_path: Path
+) -> None:
+    """Run the producer and consumer scripts with network operations stubbed."""
+    from bob_docs.publish_plan import fingerprint_inputs
+
+    inputs = [
+        {"repo": "bob-cli", "path": "docs", "kind": "tree", "object_id": "a" * 40}
+    ]
+    candidate = {
+        "schema_version": 1,
+        "hold": False,
+        "sources": {
+            "bob-cli": {
+                "remote": "https://example.invalid/bob-cli.git",
+                "branch": "master",
+                "sha": "b" * 40,
+            }
+        },
+        "inputs": inputs,
+        "fingerprint": fingerprint_inputs(inputs),
+    }
+    plan = tmp_path / ".publish-plan"
+    plan.mkdir()
+    (plan / "next-publication.json").write_text(json.dumps(candidate))
+    site = tmp_path / ".publish-work/bob-cli/target/docs/site"
+    site.mkdir(parents=True)
+    (site / "urls.txt").write_text(EXPECTED_ORIGIN + "/\n")
+    (tmp_path / "tooling").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "from bob_docs import cli\n"
+        "from bob_docs.publish_verify import _read_expected_publication, _read_expected_urls\n"
+        "def verify(root, *, expected_file, site_urls_file, **kwargs):\n"
+        "    assert _read_expected_publication(expected_file)['sources']['bob-cli']['sha'] == 'b' * 40\n"
+        f"    assert _read_expected_urls(site_urls_file) == [{EXPECTED_ORIGIN + '/'!r}]\n"
+        "    print('handoff verified')\n"
+        "    return 0\n"
+        "cli.run_publish_verify = verify\n"
+        "args = sys.argv[sys.argv.index('bob-docs') + 1:]\n"
+        "if args[0] == 'publish-report':\n"
+        "    assert '--close' in args\n"
+        "    sys.exit(0)\n"
+        "sys.exit(cli.main(args))\n"
+    )
+    uv.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "PYTHONPATH": str(ROOT / "tools/docs"),
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "GITHUB_OUTPUT": str(tmp_path / "outputs"),
+    }
+    prepare = _step_by_name(
+        document["jobs"]["publish"], "Prepare the publication record"
+    )["run"]
+    prepare = prepare.replace("${{ github.repository }}", EXPECTED_CALLER)
+    prepare = prepare.replace("${{ github.run_id }}", "42")
+    subprocess.run(
+        ["bash", "-e", "-c", prepare], cwd=tmp_path, env=env, check=True,
+        capture_output=True, text=True,
+    )
+    upload = _step_by_name(
+        document["jobs"]["publish"], "Upload the publication handoff"
+    )
+    # upload-artifact v4 excludes dot directories unless explicitly enabled.
+    if not upload["with"].get("include-hidden-files", False):
+        assert not any(
+            part.startswith(".") for part in Path(upload["with"]["path"]).parts
+        ), "publication handoff would be excluded from the artifact"
+    download = _step_by_name(
+        document["jobs"]["verify"], "Download the publication handoff"
+    )
+    shutil.copytree(
+        tmp_path / upload["with"]["path"], tmp_path / download["with"]["path"]
+    )
+    verify = _step_by_name(
+        document["jobs"]["verify"], "Verify live pages, fragments, and provenance"
+    )["run"]
+    verify = verify.replace("${{ github.repository }}", EXPECTED_CALLER)
+    verify = verify.replace("${{ github.run_id }}", "42")
+    result = subprocess.run(
+        ["bash", "-e", "-c", verify], cwd=tmp_path, env=env,
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "handoff verified" in result.stdout
 
 
 def test_report_opens_the_managed_issue(document: dict) -> None:

@@ -1,8 +1,12 @@
 """YAML-aware contract tests for the thin host publish caller."""
 
 import re
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -28,14 +32,28 @@ def test_caller_and_callee_files_exist() -> None:
     assert (ROOT / "tools/docs/host/README.md").is_file()
 
 
-def test_host_readme_passes_just_args_after_double_dash() -> None:
-    text = (ROOT / "tools/docs/host/README.md").read_text(encoding="utf-8")
-    assert "just docs-host-bootstrap -- --yes" in text
-    assert "just docs-publish -- --force" in text
-    assert "just docs-publish -- --drill" in text
-    assert "just docs-publish -- --pinned" in text
-    assert "just docs-host-bootstrap --yes\n" not in text
-    assert "just docs-publish --force\n" not in text
+@pytest.mark.parametrize(
+    "document", ["tools/docs/host/README.md", "tools/docs/README.md", "docs/develop/build.md"]
+)
+def test_documented_host_commands_forward_parseable_arguments(document: str) -> None:
+    from bob_docs.cli import _parser
+
+    if shutil.which("just") is None:
+        pytest.skip("just is required to exercise documented recipe arguments")
+    text = (ROOT / document).read_text(encoding="utf-8")
+    commands = re.findall(r"^\s*(just (?:-- )?docs-(?:host-bootstrap|publish)\b.*)$", text, re.M)
+    assert commands
+    for command in commands:
+        result = subprocess.run(
+            ["just", "--dry-run", *shlex.split(command, comments=True)[1:]],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        )
+        forwarded = next(
+            line for line in result.stderr.splitlines()
+            if line.startswith("uv run --project tools/docs bob-docs ")
+        )
+        args = shlex.split(forwarded)[5:]
+        _parser().parse_args(args)
 
 
 def test_caller_schedule_and_dispatch_only() -> None:

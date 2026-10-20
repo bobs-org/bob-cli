@@ -159,13 +159,13 @@ the deploy repository. Bootstrap never writes `published.json`.
 
 ```bash
 just docs-host-bootstrap
-just docs-host-bootstrap -- --yes
+just -- docs-host-bootstrap --yes
 ```
 
 Pass `--deploy-dir` when an agent already opened the deploy checkout:
 
 ```bash
-just docs-host-bootstrap -- --yes --deploy-dir /path/to/bobs-org.github.io
+just -- docs-host-bootstrap --yes --deploy-dir /path/to/bobs-org.github.io
 ```
 
 Dispatch a publish and watch the run that dispatch started. The command enables
@@ -173,9 +173,9 @@ the workflow first so a 60-day inactivity disable does not block it.
 
 ```bash
 just docs-publish
-just docs-publish -- --force
-just docs-publish -- --drill
-just docs-publish -- --pinned
+just -- docs-publish --force
+just -- docs-publish --drill
+just -- docs-publish --pinned
 just docs-status
 ```
 
@@ -190,7 +190,7 @@ Edit `published.json` in the deploy repository: set `"hold": true` and the
 source SHAs to serve. Dispatch a pinned publish:
 
 ```bash
-just docs-publish -- --pinned
+just -- docs-publish --pinned
 ```
 
 Scheduled and ordinary unpinned runs skip while hold is true, including force.
