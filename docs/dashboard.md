@@ -48,7 +48,8 @@ marks a lane that is exactly full, and no other Bob chip uses that hue.
 Daily `bob-plan` PENDING/NEXT/READY badges use the same live section counts and colors,
 including on older daily notes; older notes retain their own TODAY ledger but use current
 live PENDING/NEXT/READY counts. CLI warnings and navigation notices continue to check
-the whole lane, including TODAY. An unavailable count remains `–` with neutral styling
+the whole lane, including TODAY, while daily `bob-plan` cap lint lines follow the
+displayed section counts. An unavailable count remains `–` with neutral styling
 and unavailable accessibility text; it is never converted into numeric zero. Missing
 ledger data or a missing Pomodoros section remains unavailable, rather than a synthetic
 `0/limit`.
