@@ -11,7 +11,9 @@ ledger. This page is the lookup for the stored forms. Behavior contracts own
 the rules.
 
 Examples use a synthetic vault and `BOB_NOW=2026-10-20`. Default paths are
-relative to `BOB_DIR` (`~/bob` unless you set it or pass `--bob-dir`).
+relative to `BOB_DIR` (`~/bob` unless you set it or pass `--bob-dir`). Copy
+the bundled demo with the [first Bob day tutorial](../start/first-bob-day.md)
+when you need that fixture.
 
 ## Task-line anatomy
 
@@ -370,6 +372,7 @@ Contract: [Reference library default paths](../highlights-ref-sync.md#default-pa
 
 ## Related
 
+- [Your first Bob day](../start/first-bob-day.md)
 - [Capture syntax](capture-syntax.md)
 - [Plan budget, Today, and lanes](../plan.md)
 - [Task freshness](../freshness.md)

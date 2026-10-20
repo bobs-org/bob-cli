@@ -22,14 +22,27 @@ stdout counts below.
 
 ## Framing
 
-JSON envelopes print to stdout. Warnings and progress lines print to stderr
-so a JSON pipe stays parseable. A success envelope carries `ok: true` plus
-the payload; a failure envelope carries `ok: false` plus an `error` object
-or message. Usage errors exit 2. The exact stderr wording and exit codes live
-with each command's contract and `--help`.
+JSON reports print to stdout. Warnings, progress, and hook chatter print to
+stderr so a JSON pipe stays parseable. Usage errors exit 2.
 
-Representative envelopes below were captured in the isolated fixture; the
-shapes, not the vault contents, are the contract.
+Success and failure envelopes are per command family. Commands do not share
+one `ok` / `error` / `schema_version` shape:
+
+- Versioned helpers such as `capture-parse`, `plan`, `freshness`, and most
+  `ref` commands print `ok: true` plus a payload on success. Many of those
+  success envelopes carry `schema_version`.
+- Capture-helper error envelopes are often `{"ok":false,"error":"…"}` and
+  need not repeat the success `schema_version`.
+- `bob capture -f json` is unversioned (`ok`, no `schema_version`).
+- `bob vault-sync status -j` prints the status record directly, with no `ok`
+  and no `schema_version`.
+- A failing command may print JSON, a human message on stderr, or both; see
+  that command's contract.
+
+The `bob capture-parse` envelope below is a verbatim captured line from the
+isolated fixture. The `bob plan` illustration after it is a shortened excerpt
+of the schema-2 keys from a synthetic vault with no daily note yet; `…` marks
+omitted nested numbers.
 
 ```bash
 bob capture-parse -f json -- 'Buy milk @dev'
@@ -40,29 +53,32 @@ bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```bash
-bob plan -f json -b ~/bob
+bob plan -f json -b /path/to/synthetic-vault
 ```
 
-```text { .no-copy title="Output" }
-{"ok":true,"schema_version":2,"date":"2026-10-20","status":"ok","caps":{},"today":{"count":0},"today_tasks":[],"themes":{},"links":{},"next":{},"pending":{},"warnings":[]}
+```text { .no-copy title="Output (excerpt)" }
+{"ok":true,"schema_version":2,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_themes":…,"max_links":…,"max_next":…,"max_pending":…,"max_ready":…,"strict":false},"today":{"count":0},"today_tasks":[],"themes":{"count":0,"cap":…,"over":false},"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
 ## Capture and protocol helpers
 
-`bob capture` writes the vault; the `capture-*` helpers are read-only
+`bob capture` writes the vault. Most `capture-*` helpers are read-only
 previews, pickers, and discovery calls for the Mac app and editors.
+`capture-task-id` and `capture-pomodoro-name` write by default (`-d` /
+`--dry-run` plans without writing). `capture-templates save`, `delete`, and
+`clear` mutate the saved-template shelf; `list` and `show` are read-only.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob capture` | `-f json` | One result per item: routing, task line, placement, plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, and `pull_in` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-pomodoro-name` | `-f json` | Name write plan for one open Pomodoro | `schema_version: 1` | [Capture](../capture.md) |
+| `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoros` | `-f json` | Ledger entries for the day plus `warnings` | `schema_version: 1` | [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-rewrite` | `-f json` | `input`, rewritten `text`, `changed`, `cursor`, `rule`, and `edits` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
-| `bob capture-task-id` | `-f json` | ID write plan plus `note_path` and picker `*_replacement` strings | `schema_version: 1` | [Capture](../capture.md) |
+| `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-task-sections` | `-f json` | ALL-CAPS child sections of one task | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
@@ -108,7 +124,8 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob ref find` | `-f json` | Library verdicts and title candidates | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref list` | `-f json` | Notes by reading state with dates and parents | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref show` | `-f json` | One note: reading state, dates, and annotation pointers | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
-| `bob ref today` | `-f json` | Today's reference rows and their reading tasks | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
+| `bob ref scan` | `-f json` | Scan report: `mode`, `write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`, `intake_only`, `queued`. `--intake-only` files queued `xlib/` PDFs and audio only (no annotation pass); `ok` is then also false when a writing drain leaves `queued` nonempty. Hard failures use the error envelope (`error.code` / `hint` / `paths`) instead of `summary`/`notes`/`failures`. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [JSON output](../highlights-ref-sync.md#json-output) |
+| `bob ref today` | `-f json` | Pulls one reference's reading task into a Pomodoro (`mode` `dry_run` or `write`; `-d` plans without writing). Success carries `changed`, `ref`, `task`, `pomodoros`, and `capture`. This is not a listing of today's references. | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [bob ref today](../ref.md#bob-ref-today) |
 | `bob ref rename` | `-f json` | Rename plan and rewritten-link report | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref migrate-tasks` | `-f json` | Migration plan for open ref tasks | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref migrate-zorg` | `-f json` | Zorg-record migration plan | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
@@ -121,7 +138,7 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob gkeep pull` | `-f json` | Inbox import report | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob plugins` and `bob plugins list` | `-f json` (default is `table`) | Repo plugins with version, sync, and vault state | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
 | `bob plugins sync` | `-f json` | Copied, skipped, and unchanged files with backups | Unversioned (`ok`, no `schema_version`) | [Bob Plugins](../plugins.md) |
-| `bob vault-sync status` | `--json` / `-j` | Last reconcile cycle: SHAs, counts, conflicts, and halted state | Unversioned status record (no `schema_version`) | [Vault Git sync](../vault-git-sync.md) |
+| `bob vault-sync status` | `--json` / `-j` | Direct `StatusRecord`: `last_attempt_at`, `last_success_at`, `local_sha`, `remote_sha`, `files_committed`, `push_retries`, `duration_ms`, `conflicts`, `interrupted_merge_recovered`, `aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, `last_error` | Unversioned (no `ok`, no `schema_version`) | [Vault Git sync](../vault-git-sync.md) |
 | `bob completion status` | `--json` / `-j` | Protocol, executable, and per-shell install state | `schema_version: 1`, `protocol: 1` | [Completion](../completion.md) |
 
 ## Other structured formats
@@ -133,8 +150,8 @@ commands.
 | --- | --- | --- |
 | CSV | `bob stats overview -f csv`, `bob stats show -f csv` | Same report rows as JSON, comma-separated |
 | TSV | `bob ref migrate-tasks -f tsv` | Migration plan rows for spreadsheets |
-| Table | `bob plugins -f json` off, `bob gkeep -f json` off | Human tables; the default for those two families |
-| Markdown | `bob query -f markdown`, `bob ref find -f markdown`, `bob ref list -f markdown` | Rendered notes output |
+| Table | `bob plugins -f table`, `bob gkeep -f table` | Human tables; the default for those two families |
+| Markdown | `bob query -f markdown`, `bob ref find -f markdown`, `bob ref list -f markdown`, `bob ref show -f markdown` | Rendered notes output |
 | Paths | `bob query` default (`-f paths`) | Newline-separated vault paths |
 
 Hidden adapters (Keep, web-clip, Dataview internals) and on-disk state files
@@ -143,6 +160,7 @@ are not public command outputs even when they contain JSON.
 
 ## Related
 
+- [Your first Bob day](../start/first-bob-day.md)
 - [Capture syntax](capture-syntax.md) for the tokens these envelopes describe.
 - [CLI reference](cli/index.md) for the exact flags of every command.
 - [Configuration and environment](configuration.md) for the `BOB_*` names that

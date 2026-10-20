@@ -258,9 +258,20 @@ See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.
 See [`bob completion`](cli/completion.md), [plugin deployment](../plugins.md),
 and the [bob-plugins README](https://github.com/bobs-org/bob-plugins#readme).
 
-To install plugins, run `bob plugins sync` from a checkout of the
-[bob-plugins](https://github.com/bobs-org/bob-plugins#readme) repo and enable
-them in Obsidian; `bob plugins list` reports the sync state first.
+To install plugins, name the checkout you mean. Bare `bob plugins sync`
+resolves `--repo`, then `BOB_PLUGINS_DIR`, then
+`~/projects/github/bobs-org/bob-plugins`; a bare sync from inside a different
+bob-plugins checkout refuses before any pull or copy. From the checkout you
+want to deploy, preview then copy with that same `--repo`:
+
+```bash
+bob plugins list --repo "$PWD" --no-pull
+bob plugins sync --repo "$PWD" --dry-run --no-pull
+```
+
+`--repo "$PWD"` requires the current directory to be that bob-plugins
+checkout. Enable the copied plugins in Obsidian afterward. Do not run a live
+deploy from this documentation.
 
 ## Other runtime environment
 
@@ -304,6 +315,7 @@ conflict recovery, and Keyboard for the capture editor keys.
 
 ## Related
 
+- [Your first Bob day](../start/first-bob-day.md)
 - [Environment overview in the README](https://github.com/bobs-org/bob-cli#environment)
 - [Configuration contracts for plan, freshness, and stats](../plan.md#config), [freshness](../freshness.md#2-fields-overrides-and-config), and [stats](../stats.md#stats-config)
 - [Capture](../capture.md) and [reference library](../ref.md)

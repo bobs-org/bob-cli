@@ -56,6 +56,73 @@ struct WithTestField {
     assert names["BOB_LATER_NAME"][0].path == "src/native/demo.rs"
 
 
+def test_string_and_char_delimiters_do_not_hide_production_or_leak_tests(
+    tmp_path: Path,
+) -> None:
+    opening, docs = _repo(
+        tmp_path,
+        """
+#[cfg(test)]
+fn test_only() {
+    let _ = "{";
+    let _ = r#"{"#;
+    let _ = '{';
+    let _ = "(";
+    let _ = "[";
+    let _ = "#";
+    let _ = ";";
+    let _ = ",";
+    let _ = "BOB_TEST_ONLY";
+}
+fn production() {
+    let _ = "BOB_PRODUCTION";
+}
+""",
+    )
+    names = scan_environment_names(opening)
+    assert set(names) == {"BOB_PRODUCTION"}
+    location = names["BOB_PRODUCTION"][0]
+    findings = check_environment_coverage(opening, docs)
+    assert findings == [
+        (
+            location.path,
+            location.line,
+            "environment",
+            "undocumented production environment name BOB_PRODUCTION; document it in docs/reference/configuration.md or add a reasoned exact exception",
+        )
+    ]
+
+    closing, docs = _repo(
+        tmp_path,
+        """
+#[cfg(test)]
+fn test_only() {
+    let _ = "}";
+    let _ = r#"}"#;
+    let _ = '}';
+    let _ = ")";
+    let _ = "]";
+    let _ = "BOB_TEST_ONLY";
+}
+fn production() {
+    let _ = "BOB_PRODUCTION";
+}
+""",
+    )
+    names = scan_environment_names(closing)
+    assert set(names) == {"BOB_PRODUCTION"}
+    location = names["BOB_PRODUCTION"][0]
+    findings = check_environment_coverage(closing, docs)
+    assert findings == [
+        (
+            location.path,
+            location.line,
+            "environment",
+            "undocumented production environment name BOB_PRODUCTION; document it in docs/reference/configuration.md or add a reasoned exact exception",
+        )
+    ]
+
+
 def test_test_source_files_are_excluded(tmp_path: Path) -> None:
     root, _docs = _repo(tmp_path, 'const NAME: &str = "BOB_PRODUCTION";')
     tests = root / "src/native/tests/helper.rs"

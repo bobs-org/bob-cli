@@ -160,5 +160,9 @@ continuation with Bob's Obsidian plugins.
 ## Continue
 
 - [Getting started contract](../getting-started.md)
+- [Capture syntax](../reference/capture-syntax.md)
+- [Vault format](../reference/vault-format.md)
+- [JSON outputs](../reference/json-outputs.md)
+- [Configuration](../reference/configuration.md)
 - [Plan budget, Today, and lanes](../plan.md)
 - [Task freshness](../freshness.md)

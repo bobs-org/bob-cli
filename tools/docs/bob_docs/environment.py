@@ -160,15 +160,24 @@ def rust_tokens(source: str) -> list[RustToken]:
     return tokens
 
 
+def _is_punct(token: RustToken, value: str) -> bool:
+    """True when `token` is punctuation whose text is exactly `value`.
+
+    String and character contents can equal `{`, `}`, or other delimiters;
+    those tokens must not change lexical scope.
+    """
+
+    return token.kind == "punct" and token.value == value
+
+
 def _matching(tokens: list[RustToken], start: int, opening: str, closing: str) -> int | None:
-    if start >= len(tokens) or tokens[start].value != opening:
+    if start >= len(tokens) or not _is_punct(tokens[start], opening):
         return None
     depth = 1
     for index in range(start + 1, len(tokens)):
-        value = tokens[index].value
-        if value == opening:
+        if _is_punct(tokens[index], opening):
             depth += 1
-        elif value == closing:
+        elif _is_punct(tokens[index], closing):
             depth -= 1
             if depth == 0:
                 return index
@@ -178,13 +187,13 @@ def _matching(tokens: list[RustToken], start: int, opening: str, closing: str) -
 def _cfg_test_attribute(tokens: list[RustToken], index: int) -> int | None:
     """Return the closing bracket for an attribute that enables test-only code."""
 
-    if index + 1 >= len(tokens) or tokens[index].value != "#":
+    if index + 1 >= len(tokens) or not _is_punct(tokens[index], "#"):
         return None
     close = _matching(tokens, index + 1, "[", "]")
     if close is None:
         return None
     body = tokens[index + 2 : close]
-    if len(body) >= 3 and body[0].kind == "ident" and body[0].value == "cfg" and body[1].value == "(":
+    if len(body) >= 3 and body[0].kind == "ident" and body[0].value == "cfg" and _is_punct(body[1], "("):
         end = _matching(body, 1, "(", ")")
         if end is not None and _cfg_requires_test(body[2:end]):
             return close
@@ -196,7 +205,7 @@ def _cfg_requires_test(expression: list[RustToken]) -> bool:
 
     if len(expression) == 1:
         return expression[0].kind == "ident" and expression[0].value == "test"
-    if len(expression) < 3 or expression[0].kind != "ident" or expression[1].value != "(":
+    if len(expression) < 3 or expression[0].kind != "ident" or not _is_punct(expression[1], "("):
         return False
     close = _matching(expression, 1, "(", ")")
     if close != len(expression) - 1:
@@ -208,12 +217,11 @@ def _cfg_requires_test(expression: list[RustToken]) -> bool:
     start = 2
     depth = 0
     for index in range(2, close):
-        value = expression[index].value
-        if value == "(":
+        if _is_punct(expression[index], "("):
             depth += 1
-        elif value == ")":
+        elif _is_punct(expression[index], ")"):
             depth -= 1
-        elif value == "," and depth == 0:
+        elif _is_punct(expression[index], ",") and depth == 0:
             arguments.append(expression[start:index])
             start = index + 1
     if start < close:
@@ -231,7 +239,7 @@ def _skip_item(tokens: list[RustToken], index: int) -> int:
     length = len(tokens)
     cursor = index
     while cursor < length:
-        if cursor + 1 < length and tokens[cursor].value == "#":
+        if cursor + 1 < length and _is_punct(tokens[cursor], "#"):
             close = _matching(tokens, cursor + 1, "[", "]")
             if close is not None:
                 cursor = close + 1
@@ -243,37 +251,41 @@ def _skip_item(tokens: list[RustToken], index: int) -> int:
     # make a closure or attribute look like the item's body.
     parens = brackets = angles = 0
     brace_depth = sum(
-        1 if token.value == "{" else -1 if token.value == "}" else 0
+        1 if _is_punct(token, "{") else -1 if _is_punct(token, "}") else 0
         for token in tokens[:index]
     )
     cursor_body: int | None = None
     cursor = cursor
     while cursor < length:
-        value = tokens[cursor].value
-        if value == "(" and parens >= 0:
+        token = tokens[cursor]
+        if _is_punct(token, "(") and parens >= 0:
             parens += 1
-        elif value == ")" and parens:
+        elif _is_punct(token, ")") and parens:
             parens -= 1
-        elif value == "[" and parens == 0:
+        elif _is_punct(token, "[") and parens == 0:
             brackets += 1
-        elif value == "]" and brackets:
+        elif _is_punct(token, "]") and brackets:
             brackets -= 1
-        elif value == "<":
+        elif _is_punct(token, "<"):
             angles += 1
-        elif value == ">" and angles:
+        elif _is_punct(token, ">") and angles:
             angles -= 1
         elif parens == 0 and brackets == 0 and angles == 0:
-            if value == ";":
+            if _is_punct(token, ";"):
                 return cursor + 1
-            if value == "," and brace_depth > 0:
+            if _is_punct(token, ",") and brace_depth > 0:
                 return cursor + 1
-            if value == "{":
+            if _is_punct(token, "{"):
                 cursor_body = _matching(tokens, cursor, "{", "}")
                 if cursor_body is None:
                     return length
                 # Const/static block expressions and tuple structs end with a
                 # semicolon; consume it when immediately present.
-                return cursor_body + 2 if cursor_body + 1 < length and tokens[cursor_body + 1].value == ";" else cursor_body + 1
+                return (
+                    cursor_body + 2
+                    if cursor_body + 1 < length and _is_punct(tokens[cursor_body + 1], ";")
+                    else cursor_body + 1
+                )
         cursor += 1
     return length
 

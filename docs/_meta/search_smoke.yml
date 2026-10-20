@@ -6,9 +6,15 @@
   location: /reference/capture-syntax/#bare-public-url
 - query: "URL @route"
   location: /reference/capture-syntax/#url-at-route
+- query: "@route URL"
+  location: /reference/capture-syntax/#url-at-route
 - query: "URL %"
   location: /reference/capture-syntax/#url-listen
+- query: "URL % @route"
+  location: /reference/capture-syntax/#url-listen
 - query: "-r"
+  location: /reference/capture-syntax/#cli-route
+- query: "-r route"
   location: /reference/capture-syntax/#cli-route
 - query: "@@route"
   location: /reference/capture-syntax/#global-route
@@ -42,9 +48,13 @@
   location: /reference/capture-syntax/#plus-parent-picker
 - query: "+"
   location: /reference/capture-syntax/#lone-plus
+- query: "lone +"
+  location: /reference/capture-syntax/#lone-plus
 - query: "&note:block-id"
   location: /reference/capture-syntax/#ampersand-prereq
 - query: "&"
+  location: /reference/capture-syntax/#ampersand-picker
+- query: "&query"
   location: /reference/capture-syntax/#ampersand-picker
 - query: "^route:block-id &note:id"
   location: /reference/capture-syntax/#add-prereq-existing
@@ -55,6 +65,8 @@
 - query: "^route:block-id *note:id"
   location: /reference/capture-syntax/#star-existing
 - query: "!"
+  location: /reference/capture-syntax/#bang-picker
+- query: "!query"
   location: /reference/capture-syntax/#bang-picker
 - query: "!note:block-id"
   location: /reference/capture-syntax/#bang-complete
@@ -67,6 +79,8 @@
 - query: "--[N]"
   location: /reference/capture-syntax/#minus-minus-shift
 - query: "="
+  location: /reference/capture-syntax/#equals-start
+- query: "=<X>"
   location: /reference/capture-syntax/#equals-start
 - query: "=<X>#pomodoro"
   location: /reference/capture-syntax/#equals-named
@@ -83,6 +97,8 @@
 - query: Work Log
   location: /reference/capture-syntax/#x-work-log
 - query: "+2 x"
+  location: /reference/capture-syntax/#operator-chain
+- query: "x ="
   location: /reference/capture-syntax/#operator-chain
 - query: "@route:block-id=x"
   location: /reference/capture-syntax/#link-then-close
@@ -106,7 +122,13 @@
   location: /reference/capture-syntax/#s-schedule
 - query: "$"
   location: /reference/capture-syntax/#dollar-priority
+- query: "$<N>"
+  location: /reference/capture-syntax/#dollar-priority
 - query: "%"
+  location: /reference/capture-syntax/#percent-clipboard
+- query: "%N"
+  location: /reference/capture-syntax/#percent-clipboard
+- query: "%header"
   location: /reference/capture-syntax/#percent-clipboard
 - query: Pending
   location: /reference/vault-format/#pending
