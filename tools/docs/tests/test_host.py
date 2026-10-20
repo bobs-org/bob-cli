@@ -28,6 +28,7 @@ from bob_docs.host import (
     collect_status,
     default_host_run,
     format_status,
+    inspect_repo,
     list_open_weekly_issues,
     load_host_templates,
     run_host_bootstrap,
@@ -250,6 +251,22 @@ class FakeHost:
             self.actions_status = 200
             return CommandResult(0, json.dumps(self.actions), "")
         raise AssertionError(f"unexpected API {method} {path}")
+
+
+def test_inspect_repo_accepts_ansi_colored_json() -> None:
+    colored = (
+        "\x1b[1;37m{\x1b[m\n"
+        '  \x1b[1;34m"default_branch"\x1b[m: \x1b[32m"main"\x1b[m\n'
+        "}\n"
+    )
+
+    def run(argv: list[str], stdin_text: str | None) -> CommandResult:
+        assert argv[:4] == ["gh", "api", "--method", "GET"]
+        return CommandResult(0, colored, "")
+
+    status, repo = inspect_repo(run)
+    assert status == 200
+    assert repo == {"default_branch": "main"}
 
 
 def test_cli_help_and_short_aliases() -> None:

@@ -28,6 +28,16 @@ def test_caller_and_callee_files_exist() -> None:
     assert (ROOT / "tools/docs/host/README.md").is_file()
 
 
+def test_host_readme_passes_just_args_after_double_dash() -> None:
+    text = (ROOT / "tools/docs/host/README.md").read_text(encoding="utf-8")
+    assert "just docs-host-bootstrap -- --yes" in text
+    assert "just docs-publish -- --force" in text
+    assert "just docs-publish -- --drill" in text
+    assert "just docs-publish -- --pinned" in text
+    assert "just docs-host-bootstrap --yes\n" not in text
+    assert "just docs-publish --force\n" not in text
+
+
 def test_caller_schedule_and_dispatch_only() -> None:
     triggers = _triggers(_load(CALLER))
     assert set(triggers) == {"schedule", "workflow_dispatch"}
@@ -52,6 +62,7 @@ def test_caller_grants_required_permissions_without_concurrency() -> None:
     caller = _load(CALLER)
     assert "concurrency" not in caller
     job = caller["jobs"]["publish"]
+    assert "runs-on" not in job
     assert job["permissions"] == {
         "contents": "write",
         "id-token": "write",

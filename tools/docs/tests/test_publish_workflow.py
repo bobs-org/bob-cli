@@ -105,6 +105,13 @@ def test_single_non_cancelling_pages_concurrency(document: dict) -> None:
     assert document["concurrency"] == {"group": "pages", "cancel-in-progress": False}
 
 
+def test_every_job_declares_ubuntu_latest(document: dict) -> None:
+    jobs = document["jobs"]
+    assert jobs, "reusable publication workflow has no jobs"
+    for job_name, job in jobs.items():
+        assert job.get("runs-on") == "ubuntu-latest", f"{job_name} missing runs-on"
+
+
 def test_all_actions_are_pinned_release_tags(document: dict) -> None:
     for job_name, job in document["jobs"].items():
         for step in _steps(job):

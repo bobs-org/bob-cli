@@ -112,6 +112,13 @@ def test_weekly_concurrency_is_separate_group(weekly: dict) -> None:
     assert weekly["concurrency"] == {"group": "docs-weekly", "cancel-in-progress": False}
 
 
+def test_every_weekly_job_declares_ubuntu_latest(weekly: dict) -> None:
+    jobs = weekly["jobs"]
+    assert jobs, "reusable weekly workflow has no jobs"
+    for job_name, job in jobs.items():
+        assert job.get("runs-on") == "ubuntu-latest", f"{job_name} missing runs-on"
+
+
 def test_weekly_actions_are_pinned_release_tags(weekly: dict) -> None:
     for job_name, job in weekly["jobs"].items():
         for step in _steps(job):
@@ -216,6 +223,7 @@ def test_caller_uses_reusable_without_inputs(caller: dict) -> None:
     job = caller["jobs"]["weekly"]
     assert job["uses"] == "bobs-org/bob-cli/.github/workflows/docs-weekly.yml@master"
     assert job.get("with", None) in (None, {})
+    assert "runs-on" not in job
     assert job["permissions"] == {"contents": "read", "issues": "write"}
     assert "concurrency" not in caller
     assert set(caller["jobs"]) == {"weekly"}

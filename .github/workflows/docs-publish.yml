@@ -39,6 +39,7 @@ concurrency:
 jobs:
   publish:
     name: Plan, gate, and stage the site
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pages: write
@@ -166,6 +167,7 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
     needs: publish
     if: needs.publish.outputs.should_deploy == 'true'
     permissions:
@@ -181,6 +183,7 @@ jobs:
 
   record:
     name: Record the publication manifest
+    runs-on: ubuntu-latest
     needs: [publish, deploy]
     if: needs.deploy.result == 'success'
     permissions:
@@ -213,6 +216,7 @@ jobs:
 
   verify:
     name: Verify the live site
+    runs-on: ubuntu-latest
     needs: [publish, deploy, record]
     if: needs.record.result == 'success'
     permissions:
@@ -256,6 +260,7 @@ jobs:
 
   report:
     name: Report a blocked publication
+    runs-on: ubuntu-latest
     needs: [publish, deploy, record, verify]
     if: failure()
     permissions:

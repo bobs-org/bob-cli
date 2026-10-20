@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -64,6 +65,25 @@ MAINTAINED_FILES: tuple[tuple[str, str], ...] = (
 
 _HTTP_RE = re.compile(r"\(HTTP (\d+)\)")
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _plain_host_env() -> dict[str, str]:
+    """Return a subprocess environment that keeps ``gh`` JSON uncolored."""
+
+    env = os.environ.copy()
+    env["NO_COLOR"] = "1"
+    env["CLICOLOR"] = "0"
+    env["CLICOLOR_FORCE"] = "0"
+    env.pop("FORCE_COLOR", None)
+    env.pop("GH_FORCE_TTY", None)
+    return env
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI color sequences so GitHub JSON can be parsed."""
+
+    return _ANSI_RE.sub("", text)
 
 
 def default_host_run(argv: list[str], stdin_text: str | None = None) -> CommandResult:
@@ -81,6 +101,7 @@ def default_host_run(argv: list[str], stdin_text: str | None = None) -> CommandR
             stderr=subprocess.PIPE,
             check=False,
             timeout=timeout,
+            env=_plain_host_env(),
         )
     except OSError as error:
         raise DocsError(f"could not start {' '.join(argv[:2])}: {error}") from error
@@ -142,10 +163,10 @@ def gh_api(
     result = run(argv, stdin)
     status = http_status(result)
     if result.returncode == 0:
-        return status or 200, result.stdout
+        return status or 200, strip_ansi(result.stdout)
     if status is None:
         raise DocsError(f"GitHub request failed: {_failure_text(result)}")
-    return status, result.stdout or result.stderr
+    return status, strip_ansi(result.stdout or result.stderr)
 
 
 def require_api_ok(status: int, body: str, *, action: str) -> str:

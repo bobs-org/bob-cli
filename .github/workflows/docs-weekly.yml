@@ -30,6 +30,7 @@ concurrency:
 jobs:
   weekly:
     name: Build Material and check external links
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       issues: write
@@ -98,6 +99,7 @@ jobs:
 
   report:
     name: Report blocked weekly checks
+    runs-on: ubuntu-latest
     needs: weekly
     if: failure()
     permissions:
