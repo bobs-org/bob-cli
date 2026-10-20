@@ -68,10 +68,51 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Reference:
+      - Overview: reference/index.md
+      - CLI:
+          - Command index: reference/cli/index.md
+          # BEGIN GENERATED: cli nav
+          - "Daily workflow":
+              - "bob capture": reference/cli/capture.md
+              - "bob freshness": reference/cli/freshness.md
+              - "bob plan": reference/cli/plan.md
+              - "bob pomodoro": reference/cli/pomodoro.md
+              - "bob ready": reference/cli/ready.md
+              - "bob stats": reference/cli/stats.md
+          - "Tasks and projects":
+              - "bob projects": reference/cli/projects.md
+              - "bob task": reference/cli/task.md
+          - "Vault":
+              - "bob articles": reference/cli/articles.md
+              - "bob nightly": reference/cli/nightly.md
+              - "bob query": reference/cli/query.md
+              - "bob ref": reference/cli/ref.md
+              - "bob vault-sync": reference/cli/vault-sync.md
+          - "Integrations":
+              - "bob gkeep": reference/cli/gkeep.md
+          - "Setup":
+              - "bob completion": reference/cli/completion.md
+              - "bob plugins": reference/cli/plugins.md
+          - "Capture protocol":
+              - "bob capture-complete": reference/cli/capture-complete.md
+              - "bob capture-parse": reference/cli/capture-parse.md
+              - "bob capture-pomodoro-name": reference/cli/capture-pomodoro-name.md
+              - "bob capture-pomodoros": reference/cli/capture-pomodoros.md
+              - "bob capture-rewrite": reference/cli/capture-rewrite.md
+              - "bob capture-sections": reference/cli/capture-sections.md
+              - "bob capture-targets": reference/cli/capture-targets.md
+              - "bob capture-task-id": reference/cli/capture-task-id.md
+              - "bob capture-task-sections": reference/cli/capture-task-sections.md
+              - "bob capture-tasks": reference/cli/capture-tasks.md
+              - "bob capture-templates": reference/cli/capture-templates.md
+          # END GENERATED: cli nav
+      - Glossary: reference/glossary.md
   - Develop:
       - Overview: develop/index.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
+      - Design decisions: develop/decisions.md
       - Contracts:
           - Overview: develop/contracts.md
           # BEGIN GENERATED: contracts nav

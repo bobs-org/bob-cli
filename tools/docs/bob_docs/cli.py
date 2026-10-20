@@ -56,7 +56,9 @@ def _parser() -> argparse.ArgumentParser:
         "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
     )
 
-    gen_parser = subparsers.add_parser("gen", help="generate tracked contract indexes")
+    gen_parser = subparsers.add_parser(
+        "gen", help="generate tracked contract indexes and memory-web reference pages"
+    )
     gen_parser.add_argument("-c", "--check", action="store_true", help="check generated files without writing")
 
     subparsers.add_parser(

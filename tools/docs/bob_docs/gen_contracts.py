@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .contracts import Contract, ContractGroup, ContractRegistry, load_contract_registry
 from .errors import DocsError
+from .gen_reference import generate_reference
 from .generated import first_heading, replace_generated_region
 
 
@@ -96,6 +97,7 @@ def generate_contracts(root: Path, *, check: bool = False) -> list[Path]:
 
 def check_or_generate(root: Path, *, check: bool) -> int:
     drift = generate_contracts(root, check=check)
+    drift.extend(generate_reference(root, check=check))
     if check and drift:
         for path in drift:
             print(f"out of date: {path.relative_to(root)} (run just docs-gen)")

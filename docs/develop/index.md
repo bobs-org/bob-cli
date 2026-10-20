@@ -11,3 +11,5 @@ pages remain beside the code they specify.
 - [Build the documentation](build.md) with the local `bob-docs` tools.
 - Follow [Writing docs](writing-docs.md) when adding or changing a page.
 - Browse the [behavior contracts](contracts.md) and their conformance specifications.
+- Read the [design decisions](decisions.md) behind Bob's behavior.
+- Look up the generated [CLI reference](../reference/cli/index.md).

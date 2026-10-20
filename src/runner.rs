@@ -301,6 +301,66 @@ pub(crate) fn subcommands() -> &'static [Subcommand] {
     SUBCOMMANDS
 }
 
+/// One group member of a group command, as shown in the group's `--help`.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct DocsCatalogMember {
+    pub name: &'static str,
+    pub about: &'static str,
+}
+
+/// One visible top-level command, as shown in the root `bob --help`.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct DocsCatalogCommand {
+    pub name: &'static str,
+    pub about: &'static str,
+    pub members: Vec<DocsCatalogMember>,
+}
+
+/// One `bob --help` section with its visible top-level commands.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct DocsCatalogSection {
+    pub title: &'static str,
+    pub commands: Vec<DocsCatalogCommand>,
+}
+
+/// Help sections in `bob --help` order, each with its visible top-level
+/// commands and group members (path and about line). Derived from the same
+/// `SUBCOMMANDS` table as root help and completion, so hidden root aliases
+/// (the separate `ALIASES` table) never appear here. This is a library
+/// function for the docs golden test, not a CLI subcommand.
+#[doc(hidden)]
+pub fn docs_catalog() -> Vec<DocsCatalogSection> {
+    SECTIONS
+        .iter()
+        .map(|section| DocsCatalogSection {
+            title: section.title(),
+            commands: SUBCOMMANDS
+                .iter()
+                .filter(|entry| entry.section == *section)
+                .map(|entry| DocsCatalogCommand {
+                    name: entry.name,
+                    about: entry.about,
+                    members: match entry.target {
+                        Target::Leaf(_) => Vec::new(),
+                        Target::Group(group) => group
+                            .members
+                            .iter()
+                            .map(|member| DocsCatalogMember {
+                                name: member.name,
+                                about: member.about,
+                            })
+                            .collect(),
+                    },
+                })
+                .collect(),
+        })
+        .filter(|section| !section.commands.is_empty())
+        .collect()
+}
+
 // Keep this table sorted by section and then command name. Root help and
 // completion both render in declaration order.
 const SUBCOMMANDS: &[Subcommand] = &[

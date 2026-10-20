@@ -55,6 +55,7 @@ def test_generated_outputs_have_no_drift() -> None:
 def test_check_mode_reports_generated_page_drift_without_writing(tmp_path: Path, capsys) -> None:
     shutil.copytree(ROOT / "docs", tmp_path / "docs")
     shutil.copy2(ROOT / "mkdocs.yml", tmp_path / "mkdocs.yml")
+    shutil.copytree(ROOT / "sase" / "memory", tmp_path / "sase" / "memory")
     page = tmp_path / "docs/develop/contracts.md"
     original = page.read_text(encoding="utf-8")
     changed = original.replace("These pages specify behavior", "Drifted pages specify behavior")

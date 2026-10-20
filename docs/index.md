@@ -11,5 +11,6 @@ instructions for building the documentation locally.
 
 ## Browse
 
+- [Look up](reference/index.md) for the CLI reference, glossary, and design decisions.
 - [Develop Bob](develop/index.md) for the docs build and contributor material.
 - [Contracts](develop/contracts.md) for the behavior specifications.

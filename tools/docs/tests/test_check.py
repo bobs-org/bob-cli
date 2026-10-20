@@ -65,7 +65,7 @@ def test_unimplemented_gate_skips_are_explicit_and_report_missing_cargo(monkeypa
     check._report_unimplemented_gates()
     output = capsys.readouterr().out
 
-    assert "skipped: CLI reference golden not implemented in this slice" in output
+    assert "skipped: CLI reference golden is a cargo test, not a docs-check gate" in output
     assert "skipped: tutorial not implemented in this slice" in output
     assert "skipped: media checks not implemented in this slice" in output
     assert "skipped: optional Rust runtime unavailable (cargo not found)" in output

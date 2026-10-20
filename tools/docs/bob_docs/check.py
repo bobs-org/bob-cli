@@ -40,7 +40,7 @@ def _report_unimplemented_gates() -> None:
     """Name planned gates that later docs phases have not installed yet."""
 
     print("\ndocs-check: follow-on gates")
-    print("skipped: CLI reference golden not implemented in this slice")
+    print("skipped: CLI reference golden is a cargo test, not a docs-check gate")
     print("skipped: tutorial not implemented in this slice")
     print("skipped: media checks not implemented in this slice")
     if shutil.which("cargo") is None:

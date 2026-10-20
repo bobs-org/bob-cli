@@ -177,8 +177,10 @@ docs-build: (_banner "34" "📖" "DOCS BUILD")
 docs-build-material: (_banner "34" "📖" "DOCS BUILD · MATERIAL")
     uv run --project tools/docs --group material bob-docs build --material
 
-# Regenerate committed contract indexes and navigation.
+# Regenerate the golden CLI reference, then committed contract indexes,
+# generated memory pages, and navigation.
 docs-gen: (_banner "35" "⚙️" "DOCS GENERATE")
+    BOB_UPDATE_GOLDENS=1 cargo test --test cli docs_reference
     uv run --project tools/docs bob-docs gen
 
 # Run every local documentation gate against one assembled source context.
