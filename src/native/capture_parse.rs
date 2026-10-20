@@ -363,8 +363,10 @@ and ownership rules as `&` (mid-line `~` stays body text; `~/path`, `~5m`, \
 `~~old~~`, and `~~~x:y` stay literal with the documented guards; bare or \
 partial `~` needs `relation_target`, and `~note:id|` needs `relation_label`); \
 an ownerless `~note:block-id` reuses `dependency_target`, and `bob capture` \
-currently refuses any item with relations with a temporary unsupported error. \
-The retired \
+executes recognized `~` / `~~` modifiers through the staged batch writer: it \
+appends or relabels the source task's managed 🪢 LINKS line, mints any block \
+IDs the edge needs, and stages the target's generated 🪢 LINKED FROM mirror; \
+relations never block, consume, promote, or schedule anything. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \

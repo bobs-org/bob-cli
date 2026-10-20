@@ -21,7 +21,7 @@ Pomodoro work links.
 For example, capture a follow-up to a task in another note:
 
 ```bash
-bob capture 'Investigate retry handling ~service:retry-loop|follow-up of'
+bob capture 'Investigate retry handling ~service:retry-loop|"follow-up of"'
 ```
 
 Or create a task that an existing task should link to:
@@ -34,7 +34,7 @@ Use `@route+block-id` to add a relation to an existing owner task without
 creating a new task:
 
 ```bash
-bob capture '@bob+retry-investigation ~service:retry-loop|related to'
+bob capture '@bob+retry-investigation ~service:retry-loop|"related to"'
 ```
 
 Quote the draft in a shell so it passes `~` and `~~` to Bob literally. The
