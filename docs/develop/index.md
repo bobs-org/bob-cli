@@ -11,6 +11,8 @@ pages remain beside the code they specify.
 - [Build the documentation](build.md) with the local `bob-docs` tools.
 - [Plugin development](plugins/index.md) for architecture, validation, APIs,
   and deployment of the Obsidian plugins.
+- [Mac Capture development](mac-capture/index.md) for the capture panel's
+  architecture and contributor pages.
 - Follow [Writing docs](writing-docs.md) when adding or changing a page.
 - [Migration notes](migration-notes.md) for old command spellings and retired
   capture tokens.

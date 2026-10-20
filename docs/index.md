@@ -48,7 +48,7 @@ reference.
 
 ![Bob mark](assets/bob-mark.svg)
 
-The panel is illustrative; the Mac phase owns the real screenshot.
+Read the [Mac Capture reference](reference/mac-capture/index.md). The panel is illustrative; the media phase owns the real screenshot.
 
 </div>
 

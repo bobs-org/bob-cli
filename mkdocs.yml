@@ -138,6 +138,7 @@ nav:
       - Overview: reference/index.md
       - By component: reference/by-component.md
       - Obsidian plugins: reference/plugins/index.md
+      - Mac Capture: reference/mac-capture/index.md
       - Capture syntax: reference/capture-syntax.md
       - Vault format: reference/vault-format.md
       - CLI:
@@ -184,6 +185,7 @@ nav:
   - Develop:
       - Overview: develop/index.md
       - Plugin development: develop/plugins/index.md
+      - Mac Capture development: develop/mac-capture/index.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
       - Migration notes: develop/migration-notes.md

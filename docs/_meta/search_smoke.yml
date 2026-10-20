@@ -187,3 +187,5 @@
   location: /guides/add-prerequisites/
 - query: recover a stuck reference job
   location: /guides/recover-reference-job/
+- query: Pomodoro agenda
+  location: /reference/mac-capture/idle-agenda/

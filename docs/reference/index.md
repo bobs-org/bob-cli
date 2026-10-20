@@ -13,6 +13,8 @@ that stay in lockstep with the tools.
   Obsidian, or macOS.
 - [Obsidian plugins](plugins/index.md) for each plugin's commands, settings,
   and topics.
+- [Mac Capture](mac-capture/index.md) for the menu-bar panel: capture flow,
+  pickers, previews, keyboard, agenda, and protocol.
 - [Capture syntax](capture-syntax.md) for every `bob capture` token.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
 - [Configuration](configuration.md) for config keys, environment, and runtimes.

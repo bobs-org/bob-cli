@@ -10,4 +10,16 @@
   source: docs/develop
   target: develop/plugins
   nav_title: Plugin development
+- repo: bob-mac-capture
+  remote: https://github.com/bobs-org/bob-mac-capture
+  branch: master
+  source: docs
+  target: reference/mac-capture
+  nav_title: Mac Capture
+- repo: bob-mac-capture
+  remote: https://github.com/bobs-org/bob-mac-capture
+  branch: master
+  source: docs/develop
+  target: develop/mac-capture
+  nav_title: Mac Capture development
 
