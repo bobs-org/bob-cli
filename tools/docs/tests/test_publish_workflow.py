@@ -187,6 +187,94 @@ def test_record_commits_only_the_manifest_without_force(document: dict) -> None:
                 assert stripped == "git add published.json", stripped
 
 
+@pytest.mark.parametrize("concurrent_hold", [False, True])
+def test_record_script_pushes_only_manifest_and_preserves_remote_changes(
+    document: dict, tmp_path: Path, concurrent_hold: bool
+) -> None:
+    """Exercise the real record script against an isolated Git remote."""
+    env = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_AUTHOR_NAME": "Fixture",
+        "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+        "GIT_COMMITTER_NAME": "Fixture",
+        "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    }
+
+    def git(cwd: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=cwd, env=env, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
+
+    remote = tmp_path / "remote.git"
+    git(tmp_path, "init", "--bare", "--initial-branch=main", str(remote))
+    operator = tmp_path / "operator"
+    git(tmp_path, "clone", str(remote), str(operator))
+    (operator / "README.md").write_text("host\n")
+    git(operator, "add", "README.md")
+    git(operator, "commit", "-m", "Seed synthetic host")
+    git(operator, "push", "origin", "main")
+    checkout = tmp_path / "record"
+    git(tmp_path, "clone", str(remote), str(checkout))
+    (checkout / "handoff").mkdir()
+    manifest = '{"hold":false,"fingerprint":"fixture"}\n'
+    (checkout / "handoff/published.json").write_text(manifest)
+    (checkout / "README.md").write_text("unrelated local change\n")
+    (checkout / "unrelated.txt").write_text("do not publish\n")
+
+    hold = '{"hold":true,"fingerprint":"operator"}\n'
+    if concurrent_hold:
+        (operator / "published.json").write_text(hold)
+        git(operator, "add", "published.json")
+        git(operator, "commit", "-m", "Hold publication")
+        git(operator, "push", "origin", "main")
+
+    script = _step_by_name(
+        document["jobs"]["record"], "Commit only the publication manifest"
+    )["run"]
+    script = script.replace("${{ github.repository }}", EXPECTED_CALLER)
+    script = script.replace("${{ github.run_id }}", "42")
+
+    def record() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-e", "-c", script], cwd=checkout,
+            env={
+                key: value for key, value in env.items()
+                if not key.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))
+            },
+            capture_output=True, text=True,
+        )
+
+    result = record()
+    if concurrent_hold:
+        assert result.returncode != 0
+        assert "[rejected]" in result.stderr, result.stderr
+        assert git(remote, "show", "main:published.json") == hold.strip()
+        return
+
+    assert result.returncode == 0, result.stderr
+    assert git(remote, "show", "main:published.json") == manifest.strip()
+    assert git(remote, "show", "main:README.md") == "host"
+    assert git(remote, "log", "-1", "--format=%an <%ae>") == (
+        "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+    )
+    assert git(remote, "diff-tree", "--no-commit-id", "--name-only", "-r", "main") == (
+        "published.json"
+    )
+    assert git(remote, "log", "-1", "--format=%B").splitlines() == [
+        "Record documentation publication",
+        "",
+        f"Run: https://github.com/{EXPECTED_CALLER}/actions/runs/42",
+    ]
+    previous = git(remote, "rev-parse", "main")
+    result = record()
+    assert result.returncode == 0, result.stderr
+    assert "no manifest change" in result.stdout
+    assert git(remote, "rev-parse", "main") == previous
+
+
 def test_guard_names_caller_repo_and_default_branch(document: dict) -> None:
     guard = _step_by_name(document["jobs"]["publish"], "Guard caller repository and branch")
     run = guard.get("run", "")

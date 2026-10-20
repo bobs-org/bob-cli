@@ -209,8 +209,8 @@ jobs:
             echo "no manifest change; nothing to record"
             exit 0
           fi
-          git -c user.name "github-actions[bot]" \
-            -c user.email "41898282+github-actions[bot]@users.noreply.github.com" \
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -m "Record documentation publication" \
             -m "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           git push
