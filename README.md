@@ -39,7 +39,7 @@ just install-all
 From Git without a checkout:
 
 ```bash
-cargo install --git https://github.com/bobs-org/bob-cli.git --locked bob-cli && bob completion install
+cargo install --git https://github.com/bobs-org/bob-cli.git --locked bob-obsidian && bob completion install
 ```
 
 Point `bob` at a vault and confirm it answers:

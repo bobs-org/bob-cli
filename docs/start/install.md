@@ -45,9 +45,11 @@ just install
 
 `just install` builds with Cargo and installs `bob` plus shell completion
 into `${CARGO_INSTALL_ROOT:-${CARGO_HOME:-~/.cargo}}`, overriding cargo's
-`install.root` so the recipe refreshes the binary it installed. Do not pass
-`--force`: cargo already replaces the same package from any checkout. Ensure
-that `bin` directory is on `PATH`:
+`install.root` so the recipe refreshes the binary it installed.
+Before it installs, `just install` removes a path or Git install registered as
+`bob-cli`. If `bob-cli` came from a registry, the recipe stops because that is
+another project. The recipe does not use `--force`. Ensure that `bin` directory
+is on `PATH`:
 
 <!-- tutorial-test: skip PATH export edits the reader shell profile -->
 ```bash
@@ -61,7 +63,7 @@ bob --version
 ```
 
 ```text { .no-copy title="Output" }
-bob 0.1.0
+bob 0.2.0
 ```
 
 The exact version changes over time; the check passes when the command
@@ -73,11 +75,11 @@ full contract.
 
 ## Install from Git
 
-Without a local checkout, install the published crate from Git:
+Without a local checkout, install Bob from its Git repository:
 
 <!-- tutorial-test: skip network install needs a remote and writes outside the sandbox -->
 ```bash
-cargo install --git https://github.com/bobs-org/bob-cli.git --locked bob-cli && bob completion install
+cargo install --git https://github.com/bobs-org/bob-cli.git --locked bob-obsidian && bob completion install
 ```
 
 To install the CLI, plugins, and (on macOS) Mac Capture from sibling

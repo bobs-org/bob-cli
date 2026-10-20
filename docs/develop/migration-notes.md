@@ -26,6 +26,14 @@ Reroll and archive commits are labeled `bob task reroll` and
 `bob task archive`. Older history says `bob randomize` and
 `bob move-done-tasks`.
 
+## Package name
+
+The Cargo package is `bob-obsidian`; its installed binaries keep their names,
+including `bob`. `just install` removes a path or Git install registered as
+`bob-cli` before installing this checkout. Direct Git installs need
+`cargo uninstall bob-cli` once. `cargo install bob-cli` installs an unrelated
+project from crates.io.
+
 These top-level names also moved: `bob collect-done` is `bob task archive`,
 `bob dataview` is `bob query`, and `bob highlights-ref` is `bob ref`
 (`bob highlights` stays as a permanent alias). `bob sync`,

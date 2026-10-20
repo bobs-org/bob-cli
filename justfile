@@ -37,7 +37,8 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all scripts/test_install_migration scripts/dev/note_snapshot_corpus_gate scripts/dev/note_snapshot_corpus_gate_test
+    bash scripts/test_install_migration
     bash scripts/dev/note_snapshot_corpus_gate_test
 
 # Type-check the pinned Keep adapter and run its offline self-test.
@@ -55,13 +56,21 @@ check-web-clip-adapter:
 package-list:
     cargo package --list
 
+package-check *args:
+    python3 tools/release/package_check.py {{args}}
+
+check-release-tools:
+    python3 -m unittest discover -s tools/release -p 'test_*.py'
+
 # Install bob and its shims from this checkout, then install or refresh shell
 # completion. Pass shells to choose explicitly: `just install zsh bash`.
 [positional-arguments]
 install *shells: (_banner "35" "📦" "INSTALL")
     #!/usr/bin/env bash
     set -euo pipefail
+    source scripts/lib/bob_shell.sh
     root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
+    bob_prepare_install_root "$root"
     cargo install --path . --locked --root "$root"
     if ! "$root/bin/bob" completion install "$@"; then
         printf '\nbob is installed at %s; shell completion needs attention (see above).\n' \

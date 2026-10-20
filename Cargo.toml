@@ -1,23 +1,46 @@
 [package]
-name = "bob-cli"
-version = "0.1.0"
+name = "bob-obsidian"
+version = "0.2.0"
 edition = "2024"
-description = "Bob command-line tools"
+rust-version = "1.95"
+description = "Command-line tools for Bob, a GTD workflow that lives in one Obsidian vault"
 repository = "https://github.com/bobs-org/bob-cli"
+homepage = "https://bobs-org.github.io/"
+documentation = "https://bobs-org.github.io/"
+readme = "README.md"
 license = "MIT"
 default-run = "bob"
+keywords = ["obsidian", "gtd", "pomodoro", "cli", "tasks"]
+categories = ["command-line-utilities"]
 include = [
     "/Cargo.toml",
     "/Cargo.lock",
-    "/LICENSE*",
     "/README.md",
-    "/docs/**",
+    "/CHANGELOG.md",
+    "/LICENSE*",
     "/assets/**",
-    "/justfile",
     "/src/**",
-    "/scripts/**",
-    "/tests/**",
+    "/scripts/bob_notify",
+    "/scripts/bob_pomodoro",
+    "/scripts/tmux_bob_pomodoro",
+    "/scripts/lib/bob_shell.sh",
+    "/scripts/gkeep_adapter.py",
+    "/scripts/web_clip/web_clip_adapter.py",
+    "/scripts/web_clip/snapshot.js",
+    "/scripts/web_clip/web_clip_render.py",
+    "/scripts/web_clip/diagram_render.py",
+    "/scripts/web_clip/vendor/defuddle.full.js",
+    "/scripts/web_clip/vendor/DEFUDDLE_LICENSE",
+    "/scripts/web_clip/vendor/mermaid.min.js",
+    "/scripts/web_clip/vendor/MERMAID_LICENSE",
+    "/scripts/web_clip/vendor/README.md",
+    "/scripts/web_clip/template/reader.css",
+    "/scripts/web_clip/fonts/**",
 ]
+
+[lib]
+name = "bob_cli"
+path = "src/lib.rs"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

@@ -72,7 +72,7 @@ bob --version
 ```
 
 ```text { .no-copy title="Output" }
-bob 0.1.0
+bob 0.2.0
 ```
 
 The printed version changes over time. The check passes when the command prints

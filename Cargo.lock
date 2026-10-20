@@ -145,8 +145,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "bob-cli"
-version = "0.1.0"
+name = "bob-obsidian"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "clap",

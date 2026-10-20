@@ -24,9 +24,9 @@ was built from. The floors below are the minimum versions readers need.
   Tasks 8.4.0 filter behavior for `status.symbol`; the parity fixture and
   goldens run headless without Obsidian. Desktop rendering inside Obsidian
   still awaits a human pass.
-- **Rust:** a current stable compiler that supports edition 2024 from the
-  [Rust toolchain](https://rust-lang.org/tools/install). No minimum version
-  is pinned here.
+- **Rust:** version 1.95.0 or later from the
+  [Rust toolchain](https://rust-lang.org/tools/install). The repository pins
+  1.95.0 in `rust-toolchain.toml`, and the package declares `rust-version = "1.95"`.
 - **Mac Capture (optional):** macOS 26 with Command Line Tools for Xcode
   26+ or Xcode 26+, plus a signed or ad-hoc signed `bob` on `PATH`. See
   [Install](https://bobs-org.github.io/reference/mac-capture/install/),

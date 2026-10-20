@@ -69,6 +69,41 @@ function log::warn() {
   _bob_log "warning" "$@"
 }
 
+# Remove the old package entry that would otherwise conflict with Bob's
+# executable names after the package is installed as bob-obsidian. Never
+# uninstall a registry package, because the bob-cli name belongs to another
+# project there.
+function bob_prepare_install_root() {
+  local root="${1:?install root is required}"
+  local listing line source
+
+  if ! listing="$(cargo install --list --root "$root")"; then
+    printf 'Could not inspect Cargo installs under %s; refusing to install.\n' "$root" >&2
+    return 1
+  fi
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^bob-cli[[:space:]]+v[^[:space:]]+[[:space:]]+\((.*)\):$ ]]; then
+      source="${BASH_REMATCH[1]}"
+      case "$source" in
+        registry+* | sparse+*)
+          printf 'A registry-installed bob-cli is a different project; refusing to uninstall it or install Bob.\n' >&2
+          return 1
+          ;;
+        path+* | git+* | /* | file://* | https://* | ssh://* | git@*)
+          printf 'Removing the existing bob-cli install from %s before installing bob-obsidian.\n' "$source" >&2
+          cargo uninstall --root "$root" bob-cli
+          return
+          ;;
+        *)
+          printf 'Cannot identify the source of bob-cli under %s; refusing to uninstall it or install Bob.\n' "$root" >&2
+          return 1
+          ;;
+      esac
+    fi
+  done <<< "$listing"
+}
+
 function die() {
   local exit_code=1
 

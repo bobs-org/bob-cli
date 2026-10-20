@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+fake_bin="$tmp/bin"
+mkdir -p "$fake_bin" "$tmp/root"
+
+cat > "$fake_bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  install)
+    [[ "${2:-}" == --list && "${3:-}" == --root && "${4:-}" == "$BOB_TEST_ROOT" ]]
+    cat "$BOB_TEST_FIXTURE"
+    ;;
+  uninstall)
+    printf '%s\n' "$*" >> "$BOB_TEST_LOG"
+    ;;
+  *)
+    printf 'unexpected fake cargo command: %s\n' "$*" >&2
+    exit 99
+    ;;
+esac
+EOF
+chmod +x "$fake_bin/cargo"
+
+source "$script_dir/lib/bob_shell.sh"
+export PATH="$fake_bin:$PATH"
+export BOB_TEST_ROOT="$tmp/root"
+export BOB_TEST_FIXTURE="$tmp/list"
+export BOB_TEST_LOG="$tmp/uninstall.log"
+
+fail() {
+  printf 'install migration test failed: %s\n' "$1" >&2
+  exit 1
+}
+
+run_success() {
+  local source_text="$1"
+  local expected="$2"
+  : > "$BOB_TEST_LOG"
+  printf '%s\n    bob\n' "$source_text" > "$BOB_TEST_FIXTURE"
+  if ! bob_prepare_install_root "$BOB_TEST_ROOT" > "$tmp/stdout" 2> "$tmp/stderr"; then
+    fail "expected install preparation to succeed for: $source_text"
+  fi
+  [[ "$(cat "$BOB_TEST_LOG")" == "$expected" ]] || fail "unexpected uninstall call for: $source_text"
+  grep -q 'Removing the existing bob-cli install' "$tmp/stderr" || fail "missing removal notice for: $source_text"
+}
+
+run_success \
+  'bob-cli v0.1.0 (/old/bob-cli):' \
+  "uninstall --root $BOB_TEST_ROOT bob-cli"
+run_success \
+  'bob-cli v0.1.0 (git+https://github.com/bobs-org/bob-cli#abc123):' \
+  "uninstall --root $BOB_TEST_ROOT bob-cli"
+
+: > "$BOB_TEST_LOG"
+printf '%s\n    bob\n' \
+  'bob-cli v0.3.2 (registry+https://github.com/rust-lang/crates.io-index):' \
+  > "$BOB_TEST_FIXTURE"
+if bob_prepare_install_root "$BOB_TEST_ROOT" > "$tmp/stdout" 2> "$tmp/stderr"; then
+  fail 'registry-installed bob-cli should block installation'
+fi
+[[ ! -s "$BOB_TEST_LOG" ]] || fail 'registry-installed bob-cli must not be uninstalled'
+grep -q 'different project' "$tmp/stderr" || fail 'registry refusal did not explain the conflict'
+
+: > "$BOB_TEST_LOG"
+printf '%s\n    other\n' 'some-tool v1.0.0 (/tmp/source):' > "$BOB_TEST_FIXTURE"
+bob_prepare_install_root "$BOB_TEST_ROOT" > "$tmp/stdout" 2> "$tmp/stderr" || fail 'no matching package should succeed'
+[[ ! -s "$BOB_TEST_LOG" ]] || fail 'an unrelated package must not be uninstalled'
+
+: > "$BOB_TEST_LOG"
+printf '%s\n    bob\n' 'bob-cli v0.1.0 (unrecognized-source):' > "$BOB_TEST_FIXTURE"
+if bob_prepare_install_root "$BOB_TEST_ROOT" > "$tmp/stdout" 2> "$tmp/stderr"; then
+  fail 'an unknown bob-cli source should block installation'
+fi
+[[ ! -s "$BOB_TEST_LOG" ]] || fail 'an unknown source must not be uninstalled'
+
+printf 'install migration checks passed\n'

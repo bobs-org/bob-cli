@@ -11,6 +11,7 @@ Run the package checks from a clean worktree:
 just check
 just check-scripts
 just package-list
+just package-check
 ```
 
 `just check` is the canonical verification gate: `cargo fmt --check`,

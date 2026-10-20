@@ -226,7 +226,7 @@ task bead.
 completion in one step. From the Git remote instead:
 
 ```bash
-cargo install --git git@github.com:bobs-org/bob-cli.git --locked bob-cli && bob completion install
+cargo install --git git@github.com:bobs-org/bob-cli.git --locked bob-obsidian && bob completion install
 ```
 
 `bob completion install` targets your shells directly:
