@@ -18,6 +18,7 @@ class DocsContext:
     output_dir: Path
     config: dict[str, Any]
     source_dirs: dict[str, Path] = field(default_factory=dict)
+    assembled: bool = False
 
     @property
     def assembled_config(self) -> Path:

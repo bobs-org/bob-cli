@@ -621,6 +621,7 @@ def sync_mount_copies(
     tracked = _tracked_files(root)
     owned = _owned_files(root)
     expected: set[str] = set()
+    source_stamps: dict[str, str] = {}
     writes: list[tuple[Path, Path, str]] = []
     for plan in plans:
         for source_path, target_relative in plan.files:
@@ -628,6 +629,7 @@ def sync_mount_copies(
             destination = docs_root / Path(*target_relative.parts)
             repo_relative = source_path.relative_to(plan.repo_dir).as_posix()
             if source_path.suffix == ".md":
+                source_stamps[str(target_relative)] = f"{plan.mount.repo}:{repo_relative}"
                 text = _read_source_text(source_path)
                 try:
                     stamped = stamp_markdown(
@@ -672,7 +674,13 @@ def sync_mount_copies(
             parent = parent.parent
     manifest_path(root).parent.mkdir(parents=True, exist_ok=True)
     manifest_path(root).write_text(
-        json.dumps({"files": sorted(expected)}, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        json.dumps(
+            {"files": sorted(expected), "sources": dict(sorted(source_stamps.items()))},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     return expected
 

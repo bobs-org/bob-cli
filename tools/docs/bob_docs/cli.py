@@ -66,9 +66,9 @@ def _parser() -> argparse.ArgumentParser:
 
     lint_parser = subparsers.add_parser(
         "lint",
-        help="enforce the documentation contract",
+        help="assemble and enforce the documentation contract",
         description=(
-            "Check typing, the contract registry, front matter, budgets, hygiene, "
+            "Assemble the current source context, then check typing, the contract registry, front matter, budgets, hygiene, "
             "test pins, portability, navigation, privacy, and media provenance. "
             "Normal runs never write tracked files. --fix only ratchets page "
             "ceilings down and removes obsolete privacy baseline hits."
@@ -113,7 +113,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "links":
             return run_links(root)
         if args.command == "lint":
-            return run_lint(root, fix=args.fix)
+            context, _manifest = assemble(root)
+            return run_lint(root, fix=args.fix, docs_context=context)
         if args.command == "serve":
             return serve(root)
         if args.command == "urls":

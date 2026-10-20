@@ -8,6 +8,7 @@ portability markup, media provenance, and privacy baseline.
 from __future__ import annotations
 
 import fnmatch
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -30,7 +31,7 @@ from .markdown import (
     parse_front_matter,
     split_front_matter,
 )
-from .mounts import Mount, discover_repo, load_mounts
+from .mounts import Mount, load_mounts
 from .yaml_tools import dump_yaml, load_yaml
 
 TYPED_DIRS = ("start", "guides", "concepts", "reference", "develop")
@@ -81,7 +82,6 @@ ADMONITION_RE = re.compile(r"(?m)^[ \t]*!!![ \t]+\S")
 TAB_RE = re.compile(r"(?m)^[ \t]*===[ \t]+\S")
 KEY_RE = re.compile(r"\+\+[A-Za-z][A-Za-z0-9_+-]*\+\+")
 PROMPT_RE = re.compile(r"(?m)^[ \t]*\$[ \t]+\S")
-SOURCE_RE = re.compile(r"^[^:]+:.+$")
 
 GUIDE_HYGIENE = (
     ("bead-id", BEAD_ID_RE, "reader pages must not name bead IDs ({hit})"),
@@ -140,6 +140,9 @@ class LintContext:
     baseline: dict[tuple[str, str, str], int]
     media: dict[str, MediaEntry]
     media_paths: tuple[Path, ...]
+    source_dirs: dict[str, Path]
+    source_stamps: dict[str, str]
+    assembled: bool
 
 
 def _finding(path: str, line: int, rule: str, explanation: str, *, severity: str = "error") -> Finding:
@@ -188,10 +191,6 @@ def _is_contract(rel: str, stems: set[str]) -> bool:
     return "/" not in rel and rel.endswith(".md") and rel[:-3] in stems
 
 
-def _mount_targets(mounts: list[Mount]) -> tuple[PurePosixPath, ...]:
-    return tuple(mount.target for mount in mounts)
-
-
 def _under_mount(rel: str, mounts: list[Mount]) -> Mount | None:
     posix = PurePosixPath(rel)
     for mount in mounts:
@@ -212,16 +211,21 @@ def _is_mount_landing(rel: str, mounts: list[Mount]) -> bool:
     return any(posix == mount.target / "index.md" for mount in mounts)
 
 
-def _is_verified_copy(rel: str, source: object, mounts: list[Mount]) -> bool:
-    if not isinstance(source, str) or not SOURCE_RE.fullmatch(source.strip()):
+def _is_verified_copy(
+    rel: str,
+    source: object,
+    mounts: list[Mount],
+    source_stamps: dict[str, str],
+) -> bool:
+    if not isinstance(source, str):
         return False
     if _is_mount_landing(rel, mounts):
         return False
     mount = _under_mount(rel, mounts)
     if mount is None:
         return False
-    repo, _sep, rest = source.partition(":")
-    return repo == mount.repo and bool(rest)
+    expected = source_stamps.get(rel)
+    return expected is not None and source == expected and source.partition(":")[0] == mount.repo
 
 
 def publishable_markdown(docs: Path, exclude_globs: tuple[str, ...]) -> list[str]:
@@ -467,6 +471,33 @@ def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -
     docs_context = docs_context or context_from_root(root)
     registry = load_contract_registry(docs_context.repo_root)
     mounts = load_mounts(docs_context.repo_root)
+    docs = docs_context.docs_root
+    config = docs_context.config
+    source_stamps: dict[str, str] = {}
+    if docs_context.assembled:
+        docs = docs_context.output_dir / "docs"
+        assembled_config = load_yaml(docs_context.assembled_config)
+        if not isinstance(assembled_config, dict):
+            raise DocsError(f"{docs_context.assembled_config}: assembled config must be a mapping")
+        config = assembled_config
+        if not docs.is_dir():
+            raise DocsError(f"assembled docs tree is missing: {docs}")
+    if docs_context.assembled:
+        manifest_path = docs_context.output_dir / "mount-manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except OSError as error:
+            raise DocsError(f"cannot read assembled mount manifest {manifest_path}: {error}") from error
+        except ValueError as error:
+            raise DocsError(f"assembled mount manifest {manifest_path} is invalid JSON: {error}") from error
+        raw_stamps = manifest.get("sources") if isinstance(manifest, dict) else None
+        if not isinstance(raw_stamps, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in raw_stamps.items()
+        ):
+            raise DocsError(
+                f"assembled mount manifest {manifest_path} must map copied paths to source stamps"
+            )
+        source_stamps = raw_stamps
     meta = docs_context.docs_root / "_meta"
     budgets_path = meta / "budgets.yml"
     privacy_path = meta / "privacy.yml"
@@ -475,15 +506,9 @@ def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -
     media = load_media(media_path)
     media_paths = [media_path]
     for mount in mounts:
-        if docs_context.source_dirs:
-            repo_dir = docs_context.source_dirs.get(mount.repo)
-            if repo_dir is None:
-                continue
-        else:
-            try:
-                repo_dir, _ = discover_repo(mount, root=docs_context.repo_root)
-            except DocsError:
-                continue
+        repo_dir = docs_context.source_dirs.get(mount.repo)
+        if repo_dir is None:
+            continue
         mounted_media = repo_dir / Path(*mount.source.parts) / "media.yml"
         if mounted_media.is_file():
             for key, entry in load_media(mounted_media).items():
@@ -491,19 +516,22 @@ def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -
             media_paths.append(mounted_media)
     return LintContext(
         root=docs_context.repo_root,
-        docs=docs_context.docs_root,
+        docs=docs,
         config_path=docs_context.authored_config,
-        config=docs_context.config,
+        config=config,
         registry=registry,
         mounts=mounts,
         ceilings=load_budgets(budgets_path),
         budgets_path=budgets_path,
-        exclude_globs=load_exclude_globs(docs_context.config),
+        exclude_globs=load_exclude_globs(config),
         privacy_patterns=load_privacy_patterns(privacy_path),
         baseline_path=baseline_path,
         baseline=load_privacy_baseline(baseline_path),
         media=media,
         media_paths=tuple(media_paths),
+        source_dirs=docs_context.source_dirs,
+        source_stamps=source_stamps,
+        assembled=docs_context.assembled,
     )
 
 
@@ -597,7 +625,7 @@ def check_front_matter(
         return findings
     source = head.get("source")
     if "source" in head:
-        if not _is_verified_copy(rel, source, ctx.mounts):
+        if not _is_verified_copy(rel, source, ctx.mounts, ctx.source_stamps):
             findings.append(
                 _finding(
                     label,
@@ -838,9 +866,18 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
     for rel in pages:
         if rel in redirects:
             continue
-        if _under_mount(rel, ctx.mounts) is not None and not _is_mount_landing(rel, ctx.mounts):
-            continue
         if rel not in nav_set:
+            mount = _under_mount(rel, ctx.mounts)
+            if mount is not None and not _is_mount_landing(rel, ctx.mounts):
+                findings.append(
+                    _finding(
+                        _docs_path(rel),
+                        1,
+                        "nav",
+                        f"copied page is missing from expanded nav; add it to {mount.repo}'s nav.yml",
+                    )
+                )
+                continue
             findings.append(
                 _finding(_docs_path(rel), 1, "nav", "page is missing from nav (Zensical does not report this)")
             )
@@ -890,14 +927,22 @@ def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> l
     findings: list[Finding] = []
     label = _docs_path(rel)
     hits = collect_privacy_hits(rel, text, ctx.privacy_patterns)
+    first_lines: dict[tuple[str, str], int] = {}
+    for pattern in ctx.privacy_patterns:
+        for match in pattern.regex.finditer(text):
+            matched = match.group(0).replace("\t", " ")
+            if any(allow.search(matched) for allow in pattern.allow):
+                continue
+            first_lines.setdefault((pattern.ident, matched), line_at(text, match.start()))
     for (rule, matched), count in sorted(hits.items()):
+        line = first_lines[(rule, matched)]
         if not contract:
             placeholder = next((p.placeholder for p in ctx.privacy_patterns if p.ident == rule), None)
             hint = f"; use placeholder {placeholder}" if placeholder else ""
             findings.append(
                 _finding(
                     label,
-                    1,
+                    line,
                     "privacy",
                     f"{rule} hit {matched!r} occurs {count} time(s) on a reader page or mount{hint}",
                 )
@@ -908,7 +953,7 @@ def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> l
             findings.append(
                 _finding(
                     label,
-                    1,
+                    line,
                     "privacy",
                     f"new {rule} hit {matched!r} is not in privacy_baseline.txt",
                 )
@@ -917,7 +962,7 @@ def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> l
             findings.append(
                 _finding(
                     label,
-                    1,
+                    line,
                     "privacy",
                     f"duplicate {rule} hit {matched!r}: {count} occurrences exceed baseline {allowed}",
                 )
@@ -928,21 +973,30 @@ def check_privacy(rel: str, text: str, ctx: LintContext, *, contract: bool) -> l
 def check_test_pins(ctx: LintContext) -> list[Finding]:
     findings: list[Finding] = []
     roots = [ctx.root / "src", ctx.root / "tests"]
-    files: list[Path] = []
+    files: list[tuple[Path, str | None]] = []
     for base in roots:
         if base.is_dir():
-            files.extend(path for path in base.rglob("*.rs") if path.is_file())
+            files.extend((path, None) for path in base.rglob("*.rs") if path.is_file())
     for mount in ctx.mounts:
-        try:
-            repo_dir, _ = discover_repo(mount, root=ctx.root)
-        except DocsError:
+        repo_dir = ctx.source_dirs.get(mount.repo)
+        if repo_dir is None:
+            if ctx.assembled:
+                raise DocsError(
+                    f"assembled source context is missing the resolved repo {mount.repo!r}"
+                )
             continue
-        files.extend(_js_test_files(repo_dir))
-    for path in sorted(files):
-        try:
-            rel = path.relative_to(ctx.root).as_posix()
-        except ValueError:
-            rel = path.as_posix()
+        files.extend(
+            (path, f"{mount.repo}/{path.relative_to(repo_dir).as_posix()}")
+            for path in _js_test_files(repo_dir)
+        )
+    for path, mounted_rel in sorted(files, key=lambda item: item[0].as_posix()):
+        if mounted_rel is not None:
+            rel = mounted_rel
+        else:
+            try:
+                rel = path.relative_to(ctx.root).as_posix()
+            except ValueError:
+                rel = path.as_posix()
         if rel in TEST_PIN_EXEMPTIONS:
             continue
         text = _read(path)
@@ -1015,29 +1069,27 @@ def check_media(ctx: LintContext) -> list[Finding]:
     return findings
 
 
-def check_stale_ceilings(ctx: LintContext, pages: set[str]) -> list[Finding]:
-    findings: list[Finding] = []
+def _stale_ceilings(ctx: LintContext, pages: set[str]) -> dict[str, str]:
+    stale: dict[str, str] = {}
     stems = _contract_stems(ctx.registry)
     for rel in sorted(ctx.ceilings):
         path = ctx.docs / rel
         if rel not in pages or not path.is_file():
-            findings.append(
-                _finding("docs/_meta/budgets.yml", 1, "budget", f"stale ceiling for missing page {rel}")
-            )
+            stale[rel] = f"stale ceiling for missing or excluded page {rel}"
             continue
         text = _read(path)
         if text is None:
             continue
         if _is_contract(rel, stems) or is_whole_file_generated(text):
-            findings.append(
-                _finding(
-                    "docs/_meta/budgets.yml",
-                    1,
-                    "budget",
-                    f"stale ceiling for budget-exempt page {rel}",
-                )
-            )
-    return findings
+            stale[rel] = f"stale ceiling for budget-exempt page {rel}"
+    return stale
+
+
+def check_stale_ceilings(ctx: LintContext, pages: set[str]) -> list[Finding]:
+    return [
+        _finding("docs/_meta/budgets.yml", 1, "budget", explanation)
+        for _rel, explanation in sorted(_stale_ceilings(ctx, pages).items())
+    ]
 
 
 def check_tree(ctx: LintContext) -> list[Finding]:
@@ -1101,13 +1153,16 @@ def check_tree(ctx: LintContext) -> list[Finding]:
 def ratchet_ceilings(ctx: LintContext) -> list[str]:
     ceilings = dict(ctx.ceilings)
     changed: list[str] = []
-    stems = _contract_stems(ctx.registry)
+    pages = set(publishable_markdown(ctx.docs, ctx.exclude_globs))
+    stale = _stale_ceilings(ctx, pages)
     for rel in sorted(list(ceilings)):
-        path = ctx.docs / rel
-        text = _read(path) if path.is_file() else None
-        if text is None or _is_contract(rel, stems) or is_whole_file_generated(text):
+        if rel in stale:
             del ceilings[rel]
             changed.append(f"removed stale ceiling: {rel}")
+            continue
+        path = ctx.docs / rel
+        text = _read(path)
+        if text is None:
             continue
         shrunk_to = max(1, math.ceil(count_words(text) * 1.01))
         if shrunk_to < ceilings[rel]:
@@ -1152,10 +1207,6 @@ def ratchet_privacy_baseline(ctx: LintContext) -> list[str]:
         ctx.baseline_path.write_text(dump_privacy_baseline(updated), encoding="utf-8")
         ctx.baseline = updated
     return changed
-
-
-def lint_tree(root: Path, *, docs_context: DocsContext | None = None) -> list[Finding]:
-    return check_tree(build_lint_context(root, docs_context=docs_context))
 
 
 def run_lint(root: Path, *, fix: bool = False, docs_context: DocsContext | None = None) -> int:

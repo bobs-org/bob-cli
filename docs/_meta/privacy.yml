@@ -1,6 +1,7 @@
 # Patterns that fail on reader pages and mounts. Existing contract hits are
 # ratcheted by privacy_baseline.txt; a second copy of the same text is a new
-# hit. Use the placeholders in examples instead of real machine details.
+# hit. Use the placeholders in examples instead of real machine details. A link to a
+# public third-party repository still needs its own narrow allow entry with a comment.
 placeholders:
   home-path: /home/alex
   vault-repo: git@github.com:example/vault.git
@@ -14,6 +15,8 @@ patterns:
   - id: vault-repo
     description: private vault repository URLs
     regex: "(?:git@|https://)github\\.com[:/](?!bobs-org/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    allow:
+      - "^(?:git@|https://)github\\.com[:/]example/"
     placeholder: git@github.com:example/vault.git
   - id: launch-agent
     description: personal LaunchAgent labels

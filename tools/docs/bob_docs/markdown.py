@@ -9,7 +9,7 @@ from typing import Iterator
 from .errors import DocsError
 from .yaml_tools import load_yaml_text
 
-FENCE_OPEN_RE = re.compile(r"(?m)^([ \t]{0,3})(`{3,}|~{3,})([^\n]*)\n")
+FENCE_OPEN_RE = re.compile(r"(?m)^([ \t]*)(`{3,}|~{3,})([^\n]*)\n")
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 GENERATED_BLOCK_RE = re.compile(
     r"(?:<!--\s*)?BEGIN GENERATED.*?END GENERATED(?:\s*-->)?",
@@ -163,14 +163,6 @@ def _comment_and_generated_spans(text: str) -> list[tuple[int, int]]:
 
 def mask_comments_and_generated(text: str) -> str:
     return mask_spans(text, _comment_and_generated_spans(text))
-
-
-def mask_code(text: str) -> str:
-    """Mask fenced and inline code while preserving line positions."""
-
-    spans = [(fence.start, fence.end) for fence in iter_fences(text)]
-    spans.extend((match.start(), match.end()) for match in INLINE_CODE_RE.finditer(text))
-    return mask_spans(text, spans)
 
 
 def mask_for_hygiene(text: str) -> str:
