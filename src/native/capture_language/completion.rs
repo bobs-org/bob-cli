@@ -1,11 +1,13 @@
 //! Cursor completion for capture markers.
 
+use super::bare_name::NameSpelling;
 use super::dependencies::*;
 use super::draft::*;
 use super::editor_classify::*;
 use super::editor_model::*;
 use super::editor_parse::*;
 use super::editor_pomodoro::*;
+use super::item::{named_start_name_offset, session_equals_token, EqualsToken};
 use super::line::*;
 use super::markers::*;
 use super::model::*;
@@ -566,6 +568,7 @@ pub(super) fn caret_completion_field_at(
             block_id,
             link_end,
             Some((link_end, link_end)),
+            false,
             cursor,
         )
         .filter(|_| cursor <= first.start + suffix_offset),
@@ -583,21 +586,37 @@ pub(super) fn caret_completion_field_at(
                 bare_name: false,
             })
         }
-        CaretTokenShape::NamePartial { route, block_id } => {
+        CaretTokenShape::NamePartial {
+            route,
+            block_id,
+            link_end,
+            name_range,
+            start_offset,
+            ..
+        } => {
             if item.lines.len() != 1 {
                 return None;
             }
-            // The token ends with a bare `#`: the link part ends before it
-            // and the name is an empty insertion point just after it.
-            let hash = first.text.find('#').unwrap_or(first.text.len());
             caret_link_field(
                 first,
                 route,
                 block_id,
-                hash,
-                Some((hash + 1, hash + 1)),
+                link_end,
+                Some(name_range),
+                false,
                 cursor,
             )
+            .filter(|_| {
+                start_offset.is_none_or(|offset| {
+                    let name_start = first.start + name_range.0;
+                    let name_end = first.start + name_range.1;
+                    if name_start >= first.start + offset {
+                        cursor <= name_end
+                    } else {
+                        cursor <= first.start + offset
+                    }
+                })
+            })
         }
         CaretTokenShape::Complete {
             route,
@@ -605,6 +624,7 @@ pub(super) fn caret_completion_field_at(
             link_end,
             name_range,
             start_offset,
+            bare_name,
             ..
         } => caret_link_field(
             first,
@@ -612,10 +632,20 @@ pub(super) fn caret_completion_field_at(
             block_id,
             link_end,
             name_range.or(Some((link_end, link_end))),
+            bare_name,
             cursor,
         )
         .filter(|_| {
-            start_offset.is_none_or(|offset| cursor <= first.start + offset)
+            start_offset.is_none_or(|offset| {
+                if let Some((name_start, name_end)) = name_range
+                    && first.start + name_start >= first.start + offset
+                {
+                    cursor >= first.start + name_start
+                        && cursor <= first.start + name_end
+                } else {
+                    cursor <= first.start + offset
+                }
+            })
         }),
     }
 }
@@ -632,6 +662,7 @@ pub(super) fn caret_link_field(
     block_id: String,
     link_end: usize,
     name_range: Option<(usize, usize)>,
+    bare_name: bool,
     cursor: usize,
 ) -> Option<CompletionField> {
     let link_end_abs = token.start + link_end;
@@ -662,7 +693,7 @@ pub(super) fn caret_link_field(
         block_id: Some(block_id),
         query,
         replacement: (name_start_abs, name_end_abs),
-        bare_name: false,
+        bare_name,
     })
 }
 
@@ -1477,6 +1508,11 @@ pub(super) fn marker_field_at_cursor(
             Some((route, rest)) => (route, rest, true),
             None => (marker, "", false),
         };
+        if let Some(field) =
+            pomodoro_link_suffix_name_field(token, route_part, rest, cursor)
+        {
+            return Some(field);
+        }
         // The additive `=<X>` start or `=x` close suffix is never a
         // completable component: strip it before splitting `#` so the
         // block and name parts — and their replacement ranges — end
@@ -1555,6 +1591,61 @@ pub(super) fn marker_field_at_cursor(
         },
         cursor,
     )
+}
+
+/// Completion for a name that follows a Pomodoro link's `=` suffix. The
+/// start lexer supplies the name offset and spelling, while the route and
+/// block ID still come from the link prefix. The replacement owns only the
+/// name so a typed timing or hash delimiter survives accepting a candidate.
+fn pomodoro_link_suffix_name_field(
+    token: &Token<'_>,
+    route_part: &str,
+    rest: &str,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let (prefix, suffix) = rest.split_once('=')?;
+    let (block_id, prefix_name) = match prefix.split_once('#') {
+        Some((block, name)) => (block, Some(name)),
+        None => (prefix, None),
+    };
+    if !is_block_id(block_id)
+        || prefix_name.is_some_and(|name| !name.is_empty())
+    {
+        return None;
+    }
+    let start_token = format!("={suffix}");
+    let EqualsToken::Start {
+        suffix: timing_suffix,
+        name: Some(name),
+        name_spelling: Some(spelling),
+        drop,
+        doubled: false,
+        ..
+    } = session_equals_token(&start_token)?
+    else {
+        return None;
+    };
+    if drop.is_some() {
+        return None;
+    }
+    let equals = token.text.find('=')?;
+    let name_start =
+        equals + named_start_name_offset(timing_suffix.len(), spelling);
+    let name_end = name_start + name.len();
+    if cursor < token.start + name_start || cursor > token.start + name_end {
+        return None;
+    }
+    Some(CompletionField {
+        context: CompletionContext::PomodoroName,
+        route: Some(route_part.to_ascii_lowercase()),
+        block_id: Some(block_id.to_string()),
+        query: token
+            .text
+            .get(name_start..cursor - token.start)?
+            .to_string(),
+        replacement: (token.start + name_start, token.start + name_end),
+        bare_name: spelling == NameSpelling::Bare,
+    })
 }
 
 pub(super) fn global_completion_field_at(

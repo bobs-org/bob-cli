@@ -1128,7 +1128,7 @@ fn capture_parse_reports_start_suffix_spans_and_batch_offsets() {
         })
     );
 
-    let invalid = parse("Do work @sase:outline=abc");
+    let invalid = parse("Do work @sase:outline=3abc");
     assert!(invalid.get("pomodoro_start").is_none(), "{invalid}");
     assert_eq!(invalid["diagnostics"][0]["code"], "invalid_pomodoro_start");
 

@@ -1556,6 +1556,46 @@ fn execution_parses_project_note_markers() {
 }
 
 #[test]
+fn pomodoro_link_suffix_names_match_the_existing_hash_spelling() {
+    for (short, established) in [
+        ("@work:outline=bugs", "@work:outline#bugs="),
+        ("^work:outline=bugs", "^work:outline#bugs="),
+        (
+            "Write outline @work:outline=bugs",
+            "Write outline @work:outline#bugs=",
+        ),
+        ("@work:outline=bugs@3", "@work:outline#bugs=3"),
+        ("@work:outline=3#bugs", "@work:outline#bugs=3"),
+        ("@work:outline=#bugs", "@work:outline#bugs="),
+        ("^work:outline=bugs@3", "^work:outline#bugs=3"),
+        ("^work:outline=3#bugs", "^work:outline#bugs=3"),
+        ("^work:outline=#bugs", "^work:outline#bugs="),
+    ] {
+        assert_eq!(
+            execute(short).expect(short),
+            execute(established).expect(established),
+            "{short} should preserve the established link meaning"
+        );
+    }
+}
+
+#[test]
+fn pomodoro_link_suffixes_teach_about_drops_duplicate_names_and_glued_timing() {
+    for raw in ["@work:outline=bugs~2", "^work:outline=~2"] {
+        let error = execute(raw).expect_err(raw);
+        assert!(error.contains("not a `~` drop list"), "{raw}: {error}");
+    }
+
+    let duplicate = execute("@work:outline#bugs=3#focus")
+        .expect_err("a link names the Pomodoro only once");
+    assert!(duplicate.contains("names the Pomodoro both before and after `=`"));
+
+    let glued = execute("@work:outline=3bugs")
+        .expect_err("a counted timing cannot run into a bare name");
+    assert!(glued.contains("runs the duration into the name"), "{glued}");
+}
+
+#[test]
 fn execution_rejects_project_note_shape_errors() {
     // A `#pomodoro` name with no ` :` task is unused.
     let error = execute("Finish it @cash^goog-exit+#bugs")

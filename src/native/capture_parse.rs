@@ -2476,7 +2476,7 @@ mod tests {
 
     #[test]
     fn json_reports_invalid_start_suffixes_as_diagnostics() {
-        let value = json("Do work @sase:outline=abc");
+        let value = json("Do work @sase:outline=3abc");
         assert!(value.get("pomodoro_start").is_none(), "{value}");
         assert_eq!(value["diagnostics"][0]["code"], "invalid_pomodoro_start");
 

@@ -593,6 +593,19 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             POMODORO_NAME_ERROR,
         ));
     }
+    if let Some(raw) = start_part
+        && !raw.eq_ignore_ascii_case("x")
+        && link_close_after_x(raw).is_none()
+        // Preserve the editor's incomplete block-ID state for the legacy
+        // unnamed timing form (`@route:=3`). The shared link-start parser
+        // requires a block ID for execution and would otherwise turn this
+        // useful partial input into an invalid marker.
+        && !(block_part.is_empty() && parse_pomodoro_start_suffix(raw).is_ok())
+    {
+        return classify_pomodoro_link_start_suffix(
+            token, sigil_len, route_part, rest,
+        );
+    }
     let mut close_spec = None;
     let mut close_suffix: Option<EditorCloseSuffix> = None;
     let start_spec = match start_part {
@@ -850,6 +863,123 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         }
     }
     TokenParse::Marker(marker_parse)
+}
+
+/// Classify a Pomodoro link's non-close `=` suffix with the shared start
+/// lexer. Names may sit after `=` (`=bugs`, `=3#bugs`) or before it
+/// (`#bugs=3`); the returned token-relative offsets keep their spans and
+/// completion fields aligned with execution.
+fn classify_pomodoro_link_start_suffix(
+    token: &Token<'_>,
+    sigil_len: usize,
+    route_part: &str,
+    rest: &str,
+) -> TokenParse {
+    match parse_colon_link_tail(token.text, route_part, rest, false) {
+        Ok(parts) => {
+            let mut parsed = marker_parse(
+                token,
+                MarkerShape {
+                    sigil_len,
+                    route_part,
+                    separator_len: 1,
+                    right_part: &parts.block_id,
+                    route_kind: SpanKind::PomodoroRoute,
+                    right_kind: SpanKind::PomodoroBlockId,
+                    complete_mode: EditorMode::PomodoroTask,
+                    right_need: Need::PomodoroId,
+                    third: None,
+                    suffix: None,
+                },
+            );
+            parsed.section = parts.pomodoro_name;
+            parsed.pomodoro_start = parts.start;
+            for (start, end) in parts.start_ranges {
+                if end > start {
+                    parsed.spans.push(Span {
+                        start: token.start + start,
+                        end: token.start + end,
+                        kind: SpanKind::PomodoroStart,
+                    });
+                }
+            }
+            if let Some((start, end)) = parts.name_range
+                && end > start
+            {
+                parsed.spans.push(Span {
+                    start: token.start + start,
+                    end: token.start + end,
+                    kind: SpanKind::PomodoroName,
+                });
+            }
+            parsed.spans.sort_by_key(|span| (span.start, span.end));
+            TokenParse::Marker(parsed)
+        }
+        Err(message) if message == POMODORO_NAME_REQUIRED_ERROR => {
+            let prefix = rest
+                .split_once('=')
+                .map(|(before, _)| before)
+                .unwrap_or(rest);
+            let block_id = prefix
+                .split_once('#')
+                .map(|(block, _)| block)
+                .unwrap_or(prefix);
+            if block_id.is_empty() || !is_block_id(block_id) {
+                return TokenParse::Invalid(token_diagnostic(
+                    token,
+                    "invalid_pomodoro_block_id",
+                    POMODORO_BLOCK_ID_ERROR,
+                ));
+            }
+            let mut parsed = marker_parse(
+                token,
+                MarkerShape {
+                    sigil_len,
+                    route_part,
+                    separator_len: 1,
+                    right_part: block_id,
+                    route_kind: SpanKind::PomodoroRoute,
+                    right_kind: SpanKind::PomodoroBlockId,
+                    complete_mode: EditorMode::PomodoroTask,
+                    right_need: Need::PomodoroId,
+                    third: None,
+                    suffix: None,
+                },
+            );
+            let equals = token.text.find('=').unwrap_or(token.text.len());
+            let hash = token.text.rfind('#').unwrap_or(token.text.len());
+            if equals < hash {
+                parsed.spans.push(Span {
+                    start: token.start + equals,
+                    end: token.start + hash,
+                    kind: SpanKind::PomodoroStart,
+                });
+            }
+            // An empty suffix name is a one-byte placeholder on its `#`.
+            // The start token may precede it (`=3#`) or use a bare `#` form
+            // (`=#`), but the typed timing remains visible as a start span.
+            parsed.spans.push(Span {
+                start: token.start + hash,
+                end: token.start + hash + 1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            parsed.mode = EditorMode::Incomplete;
+            parsed.section = None;
+            parsed.block_id = Some(block_id.to_string());
+            parsed.needs = vec![Need::PomodoroName];
+            TokenParse::Marker(parsed)
+        }
+        Err(message) => {
+            let code = if message == POMODORO_BLOCK_ID_ERROR {
+                "invalid_pomodoro_block_id"
+            } else if message == POMODORO_NAME_ERROR {
+                "invalid_pomodoro_name"
+            } else {
+                "invalid_pomodoro_start"
+            };
+            TokenParse::Invalid(token_diagnostic(token, code, &message))
+        }
+    }
 }
 
 /// Classify the remaining `@` forms: a bare `@`, the `@#`/`@#prefix` target

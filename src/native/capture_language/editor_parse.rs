@@ -1889,6 +1889,8 @@ pub(super) fn parse_editor_item_with<'a>(
                 link_end,
                 name_range,
                 start_offset,
+                bare_name: _,
+                start_ranges,
                 close_in_progress,
                 close_park,
                 close_complete,
@@ -1963,11 +1965,15 @@ pub(super) fn parse_editor_item_with<'a>(
                             });
                         }
                     } else {
-                        spans.push(Span {
-                            start: token_start + offset,
-                            end: token_end,
-                            kind: SpanKind::PomodoroStart,
-                        });
+                        for (start, end) in start_ranges {
+                            if end > start {
+                                spans.push(Span {
+                                    start: token_start + start,
+                                    end: token_start + end,
+                                    kind: SpanKind::PomodoroStart,
+                                });
+                            }
+                        }
                     }
                 }
                 local_destination_markers.push(LocalDestinationMarker {
@@ -2158,6 +2164,10 @@ pub(super) fn parse_editor_item_with<'a>(
             CaretItemKind::NamePartial {
                 route: partial_route,
                 block_id: partial_block,
+                link_end,
+                name_range,
+                start_offset: _,
+                start_ranges,
             } => {
                 mode = EditorMode::Incomplete;
                 body = String::new();
@@ -2176,12 +2186,21 @@ pub(super) fn parse_editor_item_with<'a>(
                 });
                 spans.push(Span {
                     start: route_end + 1,
-                    end: token_end - 1,
+                    end: token_start + link_end,
                     kind: SpanKind::ActiveTaskBlockId,
                 });
+                for (start, end) in start_ranges {
+                    if end > start {
+                        spans.push(Span {
+                            start: token_start + start,
+                            end: token_start + end,
+                            kind: SpanKind::PomodoroStart,
+                        });
+                    }
+                }
                 spans.push(Span {
-                    start: token_end - 1,
-                    end: token_end,
+                    start: token_start + name_range.0 - 1,
+                    end: token_start + name_range.0,
                     kind: SpanKind::InteractivePlaceholder,
                 });
             }

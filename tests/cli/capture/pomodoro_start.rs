@@ -359,8 +359,12 @@ fn capture_pomodoro_start_rejects_invalid_and_conflicting_syntax() {
     let temp = TempDir::new("bob-cli-capture-start-invalid");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    for marker in ["@sase:b1==3", "@sase:b1=a", "@sase:b1=3--", "@sase:b1=3-2-"]
-    {
+    for marker in [
+        "@sase:b1==3",
+        "@sase:b1=3a",
+        "@sase:b1=3--",
+        "@sase:b1=3-2-",
+    ] {
         let output = bob_command()
             .arg("capture")
             .arg("-b")

@@ -110,6 +110,71 @@ fn capture_colon_query_json_failure_reports_ok_false() {
 }
 
 #[test]
+fn bare_caret_link_suffix_writes_the_same_result_as_hash_before_equals() {
+    let mut results = Vec::new();
+    let mut snapshots = Vec::new();
+    for (index, token) in ["^cash:work=focus@5", "^cash:work#focus=5"]
+        .into_iter()
+        .enumerate()
+    {
+        let temp =
+            TempDir::new(&format!("bob-cli-capture-caret-link-suffix-{index}"));
+        let vault = temp.path().join("vault");
+        let target = vault.join("cash.md");
+        let day_file = vault.join("day.md");
+        write_file(
+            &target,
+            "# Cash\n## Tasks\n- [ ] #task Work [id:: cash__work] ^work\n",
+        );
+        write_file(
+            &day_file,
+            "## Pomodoros\n- [ ] () — CURRENT\n  - context\n",
+        );
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg(token)
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:00:00")
+            .output()
+            .expect("run caret Pomodoro link");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["kind"], "pomodoro_link", "{json}");
+        assert_eq!(json["pomodoro_name"], "FOCUS", "{json}");
+        results.push(json);
+        snapshots.push((
+            fs::read_to_string(target).expect("read linked task"),
+            fs::read_to_string(day_file).expect("read Pomodoro ledger"),
+        ));
+    }
+
+    assert_eq!(snapshots[0], snapshots[1]);
+    for json in &mut results {
+        if let Some(object) = json.as_object_mut() {
+            object.remove("input");
+            object.remove("day_file");
+            object.remove("target");
+            if let Some(open_notes) =
+                object.get_mut("open_notes").and_then(|v| v.as_array_mut())
+            {
+                for note in open_notes {
+                    if let Some(note) = note.as_object_mut() {
+                        note.remove("path");
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(results[0], results[1]);
+}
+
+#[test]
 fn capture_batch_with_a_colon_query_writes_nothing() {
     let temp = TempDir::new("bob-cli-capture-task-link-batch");
     let vault = temp.path().join("vault");

@@ -161,6 +161,46 @@ fn pomodoro_completion_ranges_end_before_the_start_suffix() {
 }
 
 #[test]
+fn pomodoro_link_suffix_names_complete_without_replacing_the_link_start() {
+    for raw in ["@work:outline=bu", "^work:outline=bu"] {
+        let completion = field(raw, raw.len()).expect("suffix Pomodoro name");
+        assert_eq!(
+            completion.context,
+            CompletionContext::PomodoroName,
+            "{raw}"
+        );
+        assert_eq!(completion.route.as_deref(), Some("work"), "{raw}");
+        assert_eq!(completion.block_id.as_deref(), Some("outline"), "{raw}");
+        assert_eq!(completion.query, "bu", "{raw}");
+        assert_eq!(completion.replacement, (raw.len() - 2, raw.len()), "{raw}");
+        assert!(completion.bare_name, "{raw}");
+    }
+
+    let timed = "@work:outline=bu@3";
+    let name_end = timed.find("@3").expect("timing suffix");
+    let completion = field(timed, name_end).expect("name before timing");
+    assert_eq!(completion.context, CompletionContext::PomodoroName);
+    assert_eq!(completion.query, "bu");
+    assert_eq!(
+        completion.replacement,
+        (timed.find("bu").expect("name query"), name_end)
+    );
+
+    let hash = "^work:outline=3#bu";
+    let completion = field(hash, hash.len()).expect("hash suffix name");
+    assert_eq!(completion.context, CompletionContext::PomodoroName);
+    assert_eq!(completion.query, "bu");
+    assert_eq!(completion.replacement, (hash.len() - 2, hash.len()));
+    assert!(!completion.bare_name);
+
+    let empty = "^work:outline=3#";
+    let completion = field(empty, empty.len()).expect("empty suffix name");
+    assert_eq!(completion.context, CompletionContext::PomodoroName);
+    assert_eq!(completion.query, "");
+    assert_eq!(completion.replacement, (empty.len(), empty.len()));
+}
+
+#[test]
 fn task_block_id_route_and_authored_id_both_complete() {
     let route = field("Do work @Dev^new-id", 12).expect("route field");
     assert_eq!(route.context, CompletionContext::Route);

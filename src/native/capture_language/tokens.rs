@@ -1,5 +1,6 @@
 //! Route, caret, and selector parsers.
 
+use super::bare_name::NameSpelling;
 use super::close_selection::*;
 use super::dependencies::*;
 use super::draft::*;
@@ -641,6 +642,111 @@ pub(super) struct ColonLinkParts {
     pub(super) pomodoro_name: Option<String>,
     pub(super) start: Option<PomodoroStartSpec>,
     pub(super) close: Option<PomodoroCloseSpec>,
+    /// Token-relative end of the route:block-id portion.
+    pub(super) link_end: usize,
+    /// Token-relative name span, regardless of whether it appeared before
+    /// or after the `=` suffix.
+    pub(super) name_range: Option<(usize, usize)>,
+    /// Token-relative start of the `=` suffix.
+    pub(super) start_offset: Option<usize>,
+    /// True when the suffix name is written as bare `=name` rather than
+    /// `=#name` / `=3#name`.
+    pub(super) bare_name: bool,
+    /// The start operator's disjoint editor spans. A name in the suffix can
+    /// split the start into a prefix (`=3`) and trailing timing (`@3`).
+    pub(super) start_ranges: Vec<(usize, usize)>,
+}
+
+struct ParsedLinkStart {
+    spec: PomodoroStartSpec,
+    name: Option<String>,
+    name_range: Option<(usize, usize)>,
+    bare_name: bool,
+    start_ranges: Vec<(usize, usize)>,
+}
+
+/// Parse the text following a link's `=` through the same whole-item start
+/// lexer used by standalone `=name` starts. Link starts share its timing and
+/// name spellings, while dropping from a link remains disallowed.
+fn parse_link_start_suffix(
+    typed_token: &str,
+    raw: &str,
+    equals_offset: usize,
+) -> Result<ParsedLinkStart, String> {
+    let start_token = format!("={raw}");
+    let Some(EqualsToken::Start {
+        suffix,
+        len,
+        name,
+        name_spelling,
+        drop,
+        timing,
+        doubled,
+        ..
+    }) = session_equals_token(&start_token)
+    else {
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    };
+    if doubled {
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    }
+    if len != start_token.len() {
+        if let Some((message, _)) =
+            glued_timing_diagnostic(&start_token, len, &suffix)
+        {
+            return Err(message);
+        }
+        return Err(POMODORO_START_SHAPE_ERROR.to_string());
+    }
+    if let Some((_, list)) = drop {
+        return Err(format!(
+            "Pomodoro link start `{typed_token}` takes a name and timing, not a `~` drop list; remove `~{list}`"
+        ));
+    }
+    if name.as_deref() == Some("") {
+        return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
+    }
+    if name
+        .as_deref()
+        .is_some_and(|name| !is_pomodoro_selector_component(name))
+    {
+        return Err(POMODORO_NAME_ERROR.to_string());
+    }
+
+    let effective = effective_start_timing(&suffix, &timing);
+    let spec = parse_pomodoro_start_suffix(&effective)?;
+    let name_range =
+        name.as_ref().zip(name_spelling).map(|(name, spelling)| {
+            let start =
+                equals_offset + named_start_name_offset(suffix.len(), spelling);
+            (start, start + name.len())
+        });
+    let mut start_ranges = Vec::new();
+    if let Some((name_start, name_end)) = name_range {
+        // A hash delimiter remains unpainted, as it does in the existing
+        // `#name=3` spelling. The `=` and timing before it belong to the
+        // start span; timing after the name gets its own start span.
+        let name_spelling = name_spelling.expect("named start spelling");
+        let prefix_end = match name_spelling {
+            NameSpelling::Hash => name_start - 1,
+            NameSpelling::Bare => name_start,
+        };
+        if equals_offset < prefix_end {
+            start_ranges.push((equals_offset, prefix_end));
+        }
+        if name_end < equals_offset + start_token.len() {
+            start_ranges.push((name_end, equals_offset + start_token.len()));
+        }
+    } else if equals_offset < equals_offset + start_token.len() {
+        start_ranges.push((equals_offset, equals_offset + start_token.len()));
+    }
+    Ok(ParsedLinkStart {
+        spec,
+        name,
+        name_range,
+        bare_name: name_spelling == Some(NameSpelling::Bare),
+        start_ranges,
+    })
 }
 
 /// Shared post-sigil `@route:…` / `^route:…` component parser: block ID,
@@ -697,6 +803,10 @@ pub(super) fn parse_colon_link_tail(
         Some((before, suffix)) => (before, Some(suffix)),
         None => (rest, None),
     };
+    let sigil_len = if typed_token.starts_with("@!") { 2 } else { 1 };
+    let link_base = sigil_len + route.len() + 1;
+    let equals_offset = suffix.map(|_| link_base + rest_before_start.len());
+    let mut parsed_suffix = None;
     let session: Option<SessionSuffix> = match suffix {
         None => None,
         Some(raw)
@@ -732,7 +842,14 @@ pub(super) fn parse_colon_link_tail(
             Some(SessionSuffix::Close(spec))
         }
         Some(raw) => {
-            Some(SessionSuffix::Start(parse_pomodoro_start_suffix(raw)?))
+            let parsed = parse_link_start_suffix(
+                typed_token,
+                raw,
+                equals_offset.expect("suffix has an equals offset"),
+            )?;
+            let spec = parsed.spec.clone();
+            parsed_suffix = Some(parsed);
+            Some(SessionSuffix::Start(spec))
         }
     };
     let (start, close) = match session {
@@ -757,7 +874,7 @@ pub(super) fn parse_colon_link_tail(
     if !is_block_id(block_id) {
         return Err(POMODORO_BLOCK_ID_ERROR.to_string());
     }
-    let pomodoro_name = match pomodoro_name {
+    let prefix_name = match pomodoro_name {
         None => None,
         Some("") => {
             return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
@@ -768,17 +885,65 @@ pub(super) fn parse_colon_link_tail(
         Some(name) => Some(name.to_string()),
     };
 
+    if prefix_name.is_some()
+        && parsed_suffix
+            .as_ref()
+            .and_then(|parsed| parsed.name.as_ref())
+            .is_some()
+    {
+        return Err(format!(
+            "`{typed_token}` names the Pomodoro both before and after `=`; name it once, for example `@{route}:{block_id}={}` or `@{route}:{block_id}#{}=`",
+            parsed_suffix.as_ref().and_then(|parsed| parsed.name.as_deref()).unwrap_or_default(),
+            prefix_name.as_deref().unwrap_or_default(),
+        ));
+    }
+    let suffix_name = parsed_suffix
+        .as_ref()
+        .and_then(|parsed| parsed.name.clone());
+    let pomodoro_name = prefix_name.or(suffix_name);
+
     if close.is_some() && pomodoro_name.is_some() {
         let name = pomodoro_name.as_deref().unwrap_or_default();
         return Err(format!(
             "`=x` always closes the running Pomodoro; remove `#{name}` (drop `=x` to link under a named Pomodoro instead)"
         ));
     }
+    let prefix_name_range = pomodoro_name
+        .as_ref()
+        .filter(|_| {
+            parsed_suffix
+                .as_ref()
+                .and_then(|parsed| parsed.name.as_ref())
+                .is_none()
+        })
+        .map(|name| {
+            let name_start = link_base + block_id.len() + 1;
+            (name_start, name_start + name.len())
+        });
+    let name_range = parsed_suffix
+        .as_ref()
+        .and_then(|parsed| parsed.name_range)
+        .or(prefix_name_range);
+    let start_ranges = parsed_suffix
+        .as_ref()
+        .map(|parsed| parsed.start_ranges.clone())
+        .unwrap_or_else(|| {
+            equals_offset
+                .map(|offset| vec![(offset, typed_token.len())])
+                .unwrap_or_default()
+        });
     Ok(ColonLinkParts {
         block_id: block_id.to_string(),
         pomodoro_name,
         start,
         close,
+        link_end: link_base + block_id.len(),
+        name_range,
+        start_offset: equals_offset,
+        bare_name: parsed_suffix
+            .as_ref()
+            .is_some_and(|parsed| parsed.bare_name),
+        start_ranges,
     })
 }
 
@@ -947,7 +1112,14 @@ pub(super) enum CaretTokenShape {
     /// part. The route is set once a valid `route:` prefix is typed.
     Partial { route: Option<String> },
     /// `^route:block-id#`: still typing the Pomodoro name.
-    NamePartial { route: String, block_id: String },
+    NamePartial {
+        route: String,
+        block_id: String,
+        link_end: usize,
+        name_range: (usize, usize),
+        start_offset: Option<usize>,
+        start_ranges: Vec<(usize, usize)>,
+    },
     /// A complete `^route:block-id[#name][=<X>]` token. `link_end` ends the
     /// `route:block-id` part (before any `#`/`=`); `name_range` covers the
     /// name text after `#`; `start_offset` starts the `=<X>`/`=x` suffix.
@@ -960,6 +1132,8 @@ pub(super) enum CaretTokenShape {
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
+        bare_name: bool,
+        start_ranges: Vec<(usize, usize)>,
         /// Token-relative ranges of the `<N>`, `*<P>`, `!<M>`, and `~<K>`
         /// lists inside a selection-bearing close suffix, for the
         /// `pomodoro_close_in_progress`/`pomodoro_close_park`/
@@ -1034,6 +1208,7 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             POMODORO_LINK_TOGGLE_ERROR.to_string(),
         );
     }
+    let link_base = 1 + route_part.len() + 1;
     // A close-shaped `=` suffix (`x`, `x` plus lists, or a retired `*`/`!`
     // alias) lexes through the shared selection lexer with token-relative
     // offsets, so the editor can span the lists, report precise
@@ -1048,29 +1223,17 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
     match parse_colon_link_tail(text, route_part, tail, true) {
         Ok(parts) => {
             let route = route_part.to_ascii_lowercase();
-            let link_base = 1 + route_part.len() + 1;
-            let (before_start, start_offset) = match tail.split_once('=') {
-                Some((before, _)) => (before, Some(link_base + before.len())),
-                None => (tail, None),
-            };
-            let (block_raw, name_raw) = match before_start.split_once('#') {
-                Some((block, name)) => (block, Some(name)),
-                None => (before_start, None),
-            };
-            let link_end = link_base + block_raw.len();
-            let name_range = name_raw.map(|name| {
-                let name_start = link_end + 1;
-                (name_start, name_start + name.len())
-            });
             CaretTokenShape::Complete {
                 route,
                 block_id: parts.block_id,
                 pomodoro_name: parts.pomodoro_name,
                 start: parts.start,
                 close: parts.close,
-                link_end,
-                name_range,
-                start_offset,
+                link_end: parts.link_end,
+                name_range: parts.name_range,
+                start_offset: parts.start_offset,
+                bare_name: parts.bare_name,
+                start_ranges: parts.start_ranges,
                 close_in_progress: None,
                 close_park: None,
                 close_complete: None,
@@ -1079,13 +1242,53 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
         }
         Err(message) => {
             if message == POMODORO_NAME_REQUIRED_ERROR {
-                let block = tail
+                let before_start = tail
+                    .split_once('=')
+                    .map(|(before, _)| before)
+                    .unwrap_or(tail);
+                let block = before_start
                     .split_once('#')
                     .map(|(block, _)| block)
-                    .unwrap_or(tail);
+                    .unwrap_or(before_start);
+                let link_end = link_base + block.len();
+                let (hash_offset, start_offset) = match tail.split_once('=') {
+                    Some((before, after)) => {
+                        let name_position = before
+                            .split_once('#')
+                            .map(|(block, _)| block.len())
+                            .unwrap_or(before.len());
+                        let hash_offset = if before.contains('#') {
+                            link_base + name_position
+                        } else {
+                            link_base
+                                + before.len()
+                                + 1
+                                + after
+                                    .find('#')
+                                    .unwrap_or(after.len().saturating_sub(1))
+                        };
+                        (hash_offset, Some(link_base + before.len()))
+                    }
+                    None => (link_base + block.len(), None),
+                };
+                let start_ranges = start_offset
+                    .map(|offset| {
+                        let end = tail
+                            .find('#')
+                            .map(|hash| link_base + hash)
+                            .unwrap_or(offset + 1);
+                        (offset < end).then_some((offset, end))
+                    })
+                    .flatten()
+                    .into_iter()
+                    .collect();
                 return CaretTokenShape::NamePartial {
                     route: route_part.to_ascii_lowercase(),
                     block_id: block.to_string(),
+                    link_end,
+                    name_range: (hash_offset + 1, hash_offset + 1),
+                    start_offset,
+                    start_ranges,
                 };
             }
             CaretTokenShape::Invalid(message)
@@ -1138,6 +1341,13 @@ fn classify_caret_close_suffix(
             return CaretTokenShape::NamePartial {
                 route,
                 block_id: block_id.to_string(),
+                link_end: link_base + block_id.len(),
+                name_range: (
+                    link_base + block_id.len() + 1,
+                    link_base + block_id.len() + 1,
+                ),
+                start_offset: None,
+                start_ranges: Vec::new(),
             };
         }
         Some(name) if !is_pomodoro_selector_component(name) => {
@@ -1172,6 +1382,8 @@ fn classify_caret_close_suffix(
             link_end,
             name_range: None,
             start_offset: Some(suffix_offset),
+            bare_name: false,
+            start_ranges: Vec::new(),
             close_in_progress: lex.in_progress_range,
             close_park: lex.park_range,
             close_complete: lex.complete_range,
@@ -1270,6 +1482,8 @@ pub(super) enum CaretItemKind {
         link_end: usize,
         name_range: Option<(usize, usize)>,
         start_offset: Option<usize>,
+        bare_name: bool,
+        start_ranges: Vec<(usize, usize)>,
         close_in_progress: Option<(usize, usize)>,
         close_park: Option<(usize, usize)>,
         close_complete: Option<(usize, usize)>,
@@ -1307,6 +1521,10 @@ pub(super) enum CaretItemKind {
     NamePartial {
         route: String,
         block_id: String,
+        link_end: usize,
+        name_range: (usize, usize),
+        start_offset: Option<usize>,
+        start_ranges: Vec<(usize, usize)>,
     },
     Invalid {
         message: String,
@@ -1357,12 +1575,26 @@ pub(super) fn classify_caret_item<'a>(
                 None
             }
         }
-        CaretTokenShape::NamePartial { route, block_id } => {
+        CaretTokenShape::NamePartial {
+            route,
+            block_id,
+            link_end,
+            name_range,
+            start_offset,
+            start_ranges,
+        } => {
             if solo_parent && single_line {
                 Some(CaretItem {
                     token: *first,
                     solo_parent,
-                    kind: CaretItemKind::NamePartial { route, block_id },
+                    kind: CaretItemKind::NamePartial {
+                        route,
+                        block_id,
+                        link_end,
+                        name_range,
+                        start_offset,
+                        start_ranges,
+                    },
                 })
             } else {
                 None
@@ -1377,6 +1609,8 @@ pub(super) fn classify_caret_item<'a>(
             link_end,
             name_range,
             start_offset,
+            bare_name,
+            start_ranges,
             close_in_progress,
             close_park,
             close_complete,
@@ -1396,6 +1630,8 @@ pub(super) fn classify_caret_item<'a>(
                     link_end,
                     name_range,
                     start_offset,
+                    bare_name,
+                    start_ranges,
                     close_in_progress,
                     close_park,
                     close_complete,

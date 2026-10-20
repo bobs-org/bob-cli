@@ -508,6 +508,59 @@ fn editor_reports_caret_pomodoro_links() {
 }
 
 #[test]
+fn editor_spans_pomodoro_link_names_after_the_equal_suffix() {
+    let at = editor("@work:outline=bugs");
+    assert_eq!(at.mode, EditorMode::PomodoroLink);
+    assert_eq!(at.route.as_deref(), Some("work"));
+    assert_eq!(at.block_id.as_deref(), Some("outline"));
+    assert_eq!(at.section.as_deref(), Some("bugs"));
+    assert!(at.diagnostics.is_empty());
+    assert_eq!(
+        ranges(&at),
+        vec![
+            (0, 5, SpanKind::PomodoroRoute),
+            (6, 13, SpanKind::PomodoroBlockId),
+            (13, 14, SpanKind::PomodoroStart),
+            (14, 18, SpanKind::PomodoroName),
+        ]
+    );
+
+    let caret = editor("^work:outline=bugs@3");
+    assert_eq!(caret.mode, EditorMode::PomodoroLink);
+    assert_eq!(caret.section.as_deref(), Some("bugs"));
+    assert_eq!(
+        caret
+            .pomodoro_start
+            .as_ref()
+            .map(|start| start.raw.as_str()),
+        Some("3")
+    );
+    assert_eq!(
+        ranges(&caret),
+        vec![
+            (0, 5, SpanKind::ActiveTaskRoute),
+            (6, 13, SpanKind::ActiveTaskBlockId),
+            (13, 14, SpanKind::PomodoroStart),
+            (14, 18, SpanKind::PomodoroName),
+            (18, 20, SpanKind::PomodoroStart),
+        ]
+    );
+
+    let timed = editor("@work:outline=3#bugs");
+    assert_eq!(timed.mode, EditorMode::PomodoroLink);
+    assert_eq!(timed.section.as_deref(), Some("bugs"));
+    assert_eq!(
+        ranges(&timed),
+        vec![
+            (0, 5, SpanKind::PomodoroRoute),
+            (6, 13, SpanKind::PomodoroBlockId),
+            (13, 15, SpanKind::PomodoroStart),
+            (16, 20, SpanKind::PomodoroName),
+        ]
+    );
+}
+
+#[test]
 fn editor_reports_caret_partials_as_incomplete() {
     for raw in ["^", "^frag", "^sase:"] {
         let parse = editor(raw);

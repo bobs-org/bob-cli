@@ -1749,7 +1749,7 @@ fn pomodoro_start_suffix_reports_spec_and_non_overlapping_spans() {
     assert_eq!(incomplete_start.raw, "3");
     assert!(incomplete.diagnostics.is_empty());
 
-    let invalid = editor("Do work @sase:outline=abc");
+    let invalid = editor("Do work @sase:outline=3abc");
     assert!(invalid.pomodoro_start.is_none());
     assert_eq!(codes(&invalid), vec!["invalid_pomodoro_start"]);
 
