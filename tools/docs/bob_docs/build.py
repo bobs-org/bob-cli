@@ -17,25 +17,43 @@ _MIRROR_INTERVAL_SECONDS = 0.5
 
 
 def build(
-    root: Path, *, material: bool = False, production: bool = False, sources: Path | str | None = None
+    root: Path,
+    *,
+    material: bool = False,
+    production: bool = False,
+    sources: Path | str | None = None,
 ) -> int:
     context, manifest = assemble(
-        root, production=production, sources=sources,
+        root,
+        production=production,
+        sources=sources,
         builder="material" if material else "zensical",
     )
     return build_assembled(context, manifest, material=material)
 
 
-def build_assembled(context: DocsContext, manifest: Path, *, material: bool = False) -> int:
+def build_assembled(
+    context: DocsContext, manifest: Path, *, material: bool = False
+) -> int:
     """Build from a source context already validated by :func:`assemble`."""
 
     executable = "mkdocs" if material else "zensical"
-    command = [executable, "build", "--strict", "--config-file", str(context.assembled_config)]
+    command = [
+        executable,
+        "build",
+        "--strict",
+        "--config-file",
+        str(context.assembled_config),
+    ]
     print("running: " + " ".join(command))
     try:
         result = subprocess.run(command, cwd=context.repo_root, check=False)
     except OSError as error:
-        hint = " (install with `uv run --project tools/docs --group material ...`)" if material else ""
+        hint = (
+            " (install with `uv run --project tools/docs --group material ...`)"
+            if material
+            else ""
+        )
         raise DocsError(f"could not start {executable}{hint}: {error}") from error
     if result.returncode != 0:
         return result.returncode
@@ -61,9 +79,13 @@ def _collect_authored_files(authored_docs: Path) -> dict[str, Path]:
                 try:
                     target = child.resolve(strict=True)
                 except OSError as error:
-                    raise DocsError(f"docs source has a broken symlink: {child}: {error}") from error
+                    raise DocsError(
+                        f"docs source has a broken symlink: {child}: {error}"
+                    ) from error
                 if not target.is_relative_to(resolved_root):
-                    raise DocsError(f"docs source symlink escapes docs/: {child} -> {target}")
+                    raise DocsError(
+                        f"docs source symlink escapes docs/: {child} -> {target}"
+                    )
                 if target.is_dir():
                     if target in ancestors:
                         raise DocsError(f"docs source has a symlink cycle: {child}")
@@ -104,21 +126,42 @@ def _needs_copy(real: Path, dest: Path) -> bool:
         return True
 
 
+def _clear_conflicting_path(dest: Path, staged_docs: Path) -> None:
+    """Remove a staged file or directory that blocks dest, including type flips."""
+
+    resolved_stage = staged_docs.resolve()
+    parent = dest.parent
+    while parent != dest.anchor:
+        try:
+            parent_resolved = parent.resolve()
+        except OSError:
+            break
+        if parent_resolved == resolved_stage or not parent_resolved.is_relative_to(
+            resolved_stage
+        ):
+            break
+        if parent.is_symlink() or parent.is_file():
+            parent.unlink()
+        parent = parent.parent
+    if dest.is_symlink() or dest.is_file():
+        dest.unlink()
+    elif dest.is_dir():
+        shutil.rmtree(dest)
+
+
+def _prune_empty_dirs(staged_docs: Path) -> None:
+    for path in sorted(staged_docs.rglob("*"), reverse=True):
+        if path.is_dir() and not path.is_symlink() and path != staged_docs:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+
+
 def mirror_docs_once(authored_docs: Path, staged_docs: Path) -> dict[str, int]:
     """Mirror one authored-to-staged pass; the staged manifest is preserved."""
 
     authored = _collect_authored_files(authored_docs)
-    copied = 0
-    for rel, real in authored.items():
-        if rel == STAGED_MANIFEST:
-            continue
-        dest = staged_docs / Path(*rel.split("/"))
-        if _needs_copy(real, dest):
-            if dest.is_symlink() or dest.is_file():
-                dest.unlink()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(real, dest)
-            copied += 1
     staged = dict(_iter_staged_files(staged_docs))
     deleted = 0
     for rel, path in staged.items():
@@ -126,16 +169,30 @@ def mirror_docs_once(authored_docs: Path, staged_docs: Path) -> dict[str, int]:
             continue
         path.unlink()
         deleted += 1
-    for path in sorted(staged_docs.rglob("*"), reverse=True):
-        if path.is_dir() and not path.is_symlink() and path != staged_docs:
-            try:
-                path.rmdir()
-            except OSError:
-                pass
+    copied = 0
+    for rel, real in authored.items():
+        if rel == STAGED_MANIFEST:
+            continue
+        dest = staged_docs / Path(*rel.split("/"))
+        if dest.is_dir() and not dest.is_symlink():
+            _clear_conflicting_path(dest, staged_docs)
+        else:
+            parent = dest.parent
+            if parent.is_symlink() or parent.is_file():
+                _clear_conflicting_path(dest, staged_docs)
+        if _needs_copy(real, dest):
+            if dest.is_symlink() or dest.is_file():
+                dest.unlink()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(real, dest)
+            copied += 1
+    _prune_empty_dirs(staged_docs)
     return {"copied": copied, "deleted": deleted}
 
 
-def _mirror_until_stopped(authored_docs: Path, staged_docs: Path, stop: threading.Event) -> None:
+def _mirror_until_stopped(
+    authored_docs: Path, staged_docs: Path, stop: threading.Event
+) -> None:
     while not stop.wait(_MIRROR_INTERVAL_SECONDS):
         try:
             mirror_docs_once(authored_docs, staged_docs)
@@ -156,7 +213,9 @@ def serve(root: Path) -> int:
         command = ["zensical", "serve", "--config-file", str(context.assembled_config)]
         print("running: " + " ".join(command))
         try:
-            return subprocess.run(command, cwd=context.repo_root, check=False).returncode
+            return subprocess.run(
+                command, cwd=context.repo_root, check=False
+            ).returncode
         except OSError as error:
             raise DocsError(f"could not start zensical serve: {error}") from error
     finally:

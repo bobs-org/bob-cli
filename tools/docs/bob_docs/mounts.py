@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from .errors import DocsError
 from .ignore import path_ignored
@@ -29,6 +30,30 @@ MANIFEST_FILENAME = "mount-manifest.json"
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
+_GITHUB_HOSTS = {"github.com", "www.github.com"}
+
+# Genuine transport failures. Unknown diagnostics fail closed.
+_CONNECTIVITY_RE = re.compile(
+    r"could not resolve host|"
+    r"could not resolve hostname|"
+    r"name or service not known|"
+    r"temporary failure in name resolution|"
+    r"nodename nor servname provided|"
+    r"failed to resolve address|"
+    r"failed to connect to|"
+    r"could not connect to|"
+    r"couldn't connect to server|"
+    r"connection timed out|"
+    r"operation timed out|"
+    r"network is unreachable|"
+    r"no route to host|"
+    r"connection reset by peer|"
+    r"connection refused|"
+    r"server unexpectedly closed the connection|"
+    r"ssh: connect to host",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Mount:
@@ -43,11 +68,15 @@ class Mount:
 def env_var_for(repo: str) -> str:
     name = re.sub(r"[^0-9A-Za-z]+", "_", repo).strip("_").upper()
     if not name:
-        raise DocsError(f"mount repo {repo!r} has no usable name for discovery env vars")
+        raise DocsError(
+            f"mount repo {repo!r} has no usable name for discovery env vars"
+        )
     return f"BOB_DOCS_{name}_DIR"
 
 
-def _mapping(value: Any, where: str, allowed: set[str], required: set[str]) -> dict[str, Any]:
+def _mapping(
+    value: Any, where: str, allowed: set[str], required: set[str]
+) -> dict[str, Any]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise DocsError(f"{where}: expected a mapping")
     unknown = set(value) - allowed
@@ -60,11 +89,18 @@ def _mapping(value: Any, where: str, allowed: set[str], required: set[str]) -> d
 
 
 def _relative_posix(value: Any, where: str) -> PurePosixPath:
-    if not isinstance(value, str) or not value or value.startswith("/") or value.startswith("~"):
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or value.startswith("~")
+    ):
         raise DocsError(f"{where}: must be a relative path beneath its parent")
     path = PurePosixPath(value)
     if not path.parts or any(part in ("", ".", "..") for part in path.parts):
-        raise DocsError(f"{where}: must be a relative path without empty, '.', or '..' parts")
+        raise DocsError(
+            f"{where}: must be a relative path without empty, '.', or '..' parts"
+        )
     return path
 
 
@@ -87,8 +123,14 @@ def load_mounts(root: Path) -> list[Mount]:
         source = _relative_posix(mount["source"], f"{where}: source")
         target = _relative_posix(mount["target"], f"{where}: target")
         for other in seen_targets:
-            if target == other or target.is_relative_to(other) or other.is_relative_to(target):
-                raise DocsError(f"{where}: target {str(target)!r} overlaps another mount target")
+            if (
+                target == other
+                or target.is_relative_to(other)
+                or other.is_relative_to(target)
+            ):
+                raise DocsError(
+                    f"{where}: target {str(target)!r} overlaps another mount target"
+                )
         seen_targets.append(target)
         mounts.append(
             Mount(
@@ -103,21 +145,163 @@ def load_mounts(root: Path) -> list[Mount]:
     return mounts
 
 
-def _git(cwd: Path, *args: str) -> str | None:
+def _git_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def _run_git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["git", *args],
             cwd=cwd,
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             check=False,
+            env=_git_env(),
         )
-    except OSError:
-        return None
+    except OSError as error:
+        return subprocess.CompletedProcess(
+            ["git", *args],
+            returncode=127,
+            stdout="",
+            stderr=str(error),
+        )
+
+
+def _git(cwd: Path, *args: str) -> str | None:
+    result = _run_git(cwd, *args)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
+
+
+def _strip_dot_git(value: str) -> str:
+    value = value.rstrip("/")
+    if value.endswith(".git"):
+        return value[:-4]
+    return value
+
+
+def _owner_repo(path: str) -> tuple[str, str] | None:
+    cleaned = _strip_dot_git(unquote(path).strip("/"))
+    parts = [part for part in cleaned.split("/") if part]
+    if len(parts) != 2:
+        return None
+    return parts[0].lower(), parts[1].lower()
+
+
+def _github_identity(url: str) -> tuple[str, str] | None:
+    raw = url.strip()
+    scp = re.match(r"^git@([^:]+):(.+)$", raw)
+    if scp and scp.group(1).lower() in _GITHUB_HOSTS:
+        return _owner_repo(scp.group(2))
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if host in _GITHUB_HOSTS:
+        return _owner_repo(parsed.path)
+    return None
+
+
+def _local_identity(url: str) -> Path | None:
+    raw = url.strip()
+    if raw.startswith("file:"):
+        parsed = urlparse(raw)
+        if parsed.scheme != "file":
+            return None
+        host = (parsed.netloc or "").lower()
+        if host not in {"", "localhost"}:
+            return None
+        path = unquote(parsed.path)
+        if not path:
+            return None
+        return Path(path).resolve()
+    if raw.startswith("/") or raw.startswith("./") or raw.startswith("../"):
+        return Path(raw).resolve()
+    if raw.startswith("~"):
+        return Path(raw).expanduser().resolve()
+    return None
+
+
+def origin_identity(url: str) -> tuple[str, ...]:
+    """Comparable repository identity for a Git remote URL."""
+
+    github = _github_identity(url)
+    if github is not None:
+        return ("github", *github)
+    local = _local_identity(url)
+    if local is not None:
+        return ("local", str(local))
+    return ("other", _strip_dot_git(url.strip()))
+
+
+def origins_match(left: str, right: str) -> bool:
+    """Whether two remotes name the same repository under known equivalent forms."""
+
+    if left == right:
+        return True
+    return origin_identity(left) == origin_identity(right)
+
+
+def _is_connectivity_failure(stderr: str) -> bool:
+    return bool(_CONNECTIVITY_RE.search(stderr))
+
+
+def _worktree_failure(candidate: Path) -> str | None:
+    """Return a reason if ``candidate`` is not a Git working tree rooted at itself."""
+
+    resolved = candidate.resolve()
+    inside = _run_git(candidate, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        detail = inside.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        return f"not a Git working tree rooted at this path{hint}"
+    toplevel = _run_git(candidate, "rev-parse", "--show-toplevel")
+    if toplevel.returncode != 0:
+        detail = toplevel.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        return f"could not resolve the working-tree root{hint}"
+    root = Path(toplevel.stdout.strip()).resolve()
+    if root != resolved:
+        return f"Git toplevel is {root}, not this directory (enclosing repository is not this source)"
+    head = _run_git(candidate, "rev-parse", "--verify", "HEAD")
+    if head.returncode != 0:
+        detail = head.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        return f"HEAD is not resolvable{hint}"
+    return None
+
+
+def _require_discovered_source(
+    candidate: Path,
+    mount: Mount,
+    *,
+    source: str,
+    fallthrough: bool = True,
+) -> None:
+    """Reject an existing override, sibling, linked, or cache path that is not this repo."""
+
+    suffix = "; it never falls through to other locations" if fallthrough else ""
+    reason = _worktree_failure(candidate)
+    if reason is not None:
+        raise DocsError(
+            f"mount repo {mount.repo!r}: {source} {candidate} is not a usable Git "
+            f"working tree ({reason}){suffix}"
+        )
+    origin = _git(candidate, "config", "--get", "remote.origin.url")
+    if origin is None:
+        raise DocsError(
+            f"mount repo {mount.repo!r}: {source} {candidate} has no origin; "
+            f"expected {mount.remote}{suffix}"
+        )
+    if not origins_match(origin, mount.remote):
+        raise DocsError(
+            f"mount repo {mount.repo!r}: {source} {candidate} has origin {origin!r}, "
+            f"not the mount remote {mount.remote!r}{suffix}"
+        )
 
 
 def repo_git_info(repo_dir: Path) -> dict[str, Any]:
@@ -137,44 +321,39 @@ def cache_root() -> Path:
 
 
 def _refresh_cached_clone(mount: Mount, cached: Path) -> tuple[Path, str]:
-    """Verify a cached clone's origin and refresh it to the remote branch head."""
+    """Verify a cached clone's identity and refresh it to the remote branch head."""
 
-    origin = _git(cached, "config", "--get", "remote.origin.url")
-    if origin is None:
-        raise DocsError(
-            f"mount repo {mount.repo!r}: cached clone at {cached} has no origin; "
-            f"remove it so a fresh shallow clone of {mount.remote} can replace it"
-        )
-    if origin != mount.remote:
-        raise DocsError(
-            f"mount repo {mount.repo!r}: cached clone at {cached} points at origin "
-            f"{origin!r}, not the mount remote {mount.remote!r}; remove it so a "
-            "fresh shallow clone can replace it"
-        )
-    fetch = subprocess.run(
-        ["git", "fetch", "--depth", "1", "origin", mount.branch],
-        cwd=cached,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    _require_discovered_source(cached, mount, source="cached clone", fallthrough=False)
+    fetch = _run_git(
+        cached,
+        "fetch",
+        "--depth",
+        "1",
+        "origin",
+        f"+refs/heads/{mount.branch}:refs/remotes/origin/{mount.branch}",
     )
     if fetch.returncode != 0:
-        detail = fetch.stderr.strip().splitlines()
-        hint = f": {detail[-1]}" if detail else ""
-        print(
-            f"bob-docs: warning: offline, keeping cached {mount.repo!r} "
-            f"without refreshing{hint}",
+        diagnostic = fetch.stderr.strip() or fetch.stdout.strip()
+        hint = f": {diagnostic.splitlines()[-1]}" if diagnostic else ""
+        if _is_connectivity_failure(diagnostic):
+            print(
+                f"bob-docs: warning: offline, keeping cached {mount.repo!r} "
+                f"without refreshing{hint}",
+            )
+            return cached.resolve(), str(cached)
+        raise DocsError(
+            f"mount repo {mount.repo!r}: could not refresh cached clone of "
+            f"{mount.remote} branch {mount.branch}{hint}"
         )
-        return cached.resolve(), str(cached)
-    reset = subprocess.run(
-        ["git", "reset", "--hard", f"origin/{mount.branch}"],
-        cwd=cached,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    fetched = _run_git(cached, "rev-parse", "--verify", "FETCH_HEAD")
+    if fetched.returncode != 0:
+        detail = fetched.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        raise DocsError(
+            f"mount repo {mount.repo!r}: fetched {mount.remote} "
+            f"branch {mount.branch} but FETCH_HEAD is missing{hint}"
+        )
+    reset = _run_git(cached, "reset", "--hard", fetched.stdout.strip())
     if reset.returncode != 0:
         detail = reset.stderr.strip().splitlines()
         hint = f": {detail[-1]}" if detail else ""
@@ -202,6 +381,7 @@ def discover_repo(
         if not candidate.is_absolute():
             candidate = (root / candidate).resolve()
         if candidate.is_dir():
+            _require_discovered_source(candidate, mount, source=f"${var}")
             return candidate, f"${var}"
         raise DocsError(
             f"mount repo {mount.repo!r}: ${var}={override} is not a usable directory; "
@@ -212,26 +392,39 @@ def discover_repo(
     sibling = (root.parent / mount.repo).resolve()
     attempted.append(str(sibling))
     if sibling.is_dir():
+        _require_discovered_source(sibling, mount, source="sibling")
         return sibling, str(sibling)
 
     linked = (root / "sase/repos/linked" / mount.repo).resolve()
     attempted.append(str(linked))
     if linked.is_dir():
+        _require_discovered_source(linked, mount, source="linked checkout")
         return linked, str(linked)
 
     cached = cache_root() / mount.repo
-    attempted.append(f"{cached} (shallow clone of {mount.remote} branch {mount.branch})")
+    attempted.append(
+        f"{cached} (shallow clone of {mount.remote} branch {mount.branch})"
+    )
     if cached.is_dir():
         return _refresh_cached_clone(mount, cached)
     try:
         cached.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", mount.branch, mount.remote,
-             str(cached)],
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                mount.branch,
+                mount.remote,
+                str(cached),
+            ],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            env=_git_env(),
         )
     except OSError as error:
         raise DocsError(
@@ -272,7 +465,9 @@ def _is_skipped(relative: PurePosixPath) -> bool:
     )
 
 
-def _collect_candidates(mount: Mount, repo_dir: Path) -> tuple[Path, list[tuple[Path, PurePosixPath]]]:
+def _collect_candidates(
+    mount: Mount, repo_dir: Path
+) -> tuple[Path, list[tuple[Path, PurePosixPath]]]:
     lexical_source = repo_dir / Path(*mount.source.parts)
     if lexical_source.is_symlink():
         raise DocsError(
@@ -286,7 +481,9 @@ def _collect_candidates(mount: Mount, repo_dir: Path) -> tuple[Path, list[tuple[
             f"mount {mount.repo!r} -> {str(mount.target)!r}: "
             f"source directory {str(mount.source)!r} does not exist in {repo_dir}"
         )
-    if source_dir != repo_dir.resolve() and not source_dir.is_relative_to(repo_dir.resolve()):
+    if source_dir != repo_dir.resolve() and not source_dir.is_relative_to(
+        repo_dir.resolve()
+    ):
         raise DocsError(
             f"mount {mount.repo!r} -> {str(mount.target)!r}: "
             f"source {str(mount.source)!r} escapes its repo {repo_dir}"
@@ -300,7 +497,9 @@ def _collect_candidates(mount: Mount, repo_dir: Path) -> tuple[Path, list[tuple[
             try:
                 resolved = path.resolve(strict=True)
             except OSError as error:
-                raise DocsError(f"mount source has a broken symlink: {path}: {error}") from error
+                raise DocsError(
+                    f"mount source has a broken symlink: {path}: {error}"
+                ) from error
             if not resolved.is_relative_to(repo_dir.resolve()):
                 raise DocsError(
                     f"mount source symlink escapes its repo: {path} -> {resolved}"
@@ -321,7 +520,9 @@ def _partition_nested(
     by_repo: dict[str, list[int]] = {}
     for index, mount in enumerate(mounts):
         by_repo.setdefault(mount.repo, []).append(index)
-    assigned: dict[int, list[tuple[Path, PurePosixPath]]] = {index: [] for index in range(len(mounts))}
+    assigned: dict[int, list[tuple[Path, PurePosixPath]]] = {
+        index: [] for index in range(len(mounts))
+    }
     for indexes in by_repo.values():
         if len(indexes) == 1:
             assigned[indexes[0]] = candidates[indexes[0]]
@@ -376,11 +577,16 @@ def load_source_nav(mount: Mount, source_dir: Path) -> list[dict[str, str]]:
             raise DocsError(f"{where}: title must be a nonempty string")
         relative = _relative_posix(rel, f"{where}: path")
         if relative.suffix != ".md":
-            raise DocsError(f"{where}: nav path {str(relative)!r} must be a Markdown page")
+            raise DocsError(
+                f"{where}: nav path {str(relative)!r} must be a Markdown page"
+            )
         if str(relative) in seen:
             raise DocsError(f"{where}: duplicate nav path {str(relative)!r}")
         seen.add(str(relative))
-        if relative == PurePosixPath(INDEX_FILENAME) or relative.parts[0] == INDEX_FILENAME:
+        if (
+            relative == PurePosixPath(INDEX_FILENAME)
+            or relative.parts[0] == INDEX_FILENAME
+        ):
             raise DocsError(
                 f"{where}: {INDEX_FILENAME} is the committed landing page and must not "
                 "be listed in nav.yml; it is included exactly once by the assembler"
@@ -415,11 +621,13 @@ def plan_mounts(
                 )
         ordered = sorted(assigned[index], key=lambda item: str(item[1]))
         files = tuple(
-            (relative, PurePosixPath((mount.target / relative).as_posix())) for _, relative in ordered
+            (relative, PurePosixPath((mount.target / relative).as_posix()))
+            for _, relative in ordered
         )
         by_relative = {str(relative): path for path, relative in assigned[index]}
         ordered_paths = tuple(
-            (by_relative[str(relative)], target_relative) for relative, target_relative in files
+            (by_relative[str(relative)], target_relative)
+            for relative, target_relative in files
         )
         plans.append(
             MountPlan(
@@ -432,7 +640,9 @@ def plan_mounts(
         )
     for plan in plans:
         for _, target_relative in plan.files:
-            if target_relative == PurePosixPath(f"{plan.mount.target.as_posix()}/{INDEX_FILENAME}"):
+            if target_relative == PurePosixPath(
+                f"{plan.mount.target.as_posix()}/{INDEX_FILENAME}"
+            ):
                 raise DocsError(
                     f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: source ships "
                     f"{INDEX_FILENAME}, which collides with the committed landing page; "
@@ -515,7 +725,9 @@ def _check_no_symlink_escape(
         if component.is_symlink():
             raise DocsError(f"{blame}: {component} is a symlink; refusing to follow it")
     parent_resolved = destination.parent.resolve()
-    if parent_resolved != docs_resolved and not parent_resolved.is_relative_to(docs_resolved):
+    if parent_resolved != docs_resolved and not parent_resolved.is_relative_to(
+        docs_resolved
+    ):
         raise DocsError(
             f"{blame}: {destination} resolves outside the docs root {docs_resolved}; "
             "mount copies stay beneath docs/"
@@ -538,7 +750,10 @@ def _check_stale_deletable(
             "refusing to delete it"
         )
     victim = _check_no_symlink_escape(
-        relative, docs_root=docs_root, docs_resolved=docs_resolved, blame=f"stale mount output {stale!r}"
+        relative,
+        docs_root=docs_root,
+        docs_resolved=docs_resolved,
+        blame=f"stale mount output {stale!r}",
     )
     tracked_rel = f"docs/{relative.as_posix()}"
     if tracked is not None and tracked_rel in tracked:
@@ -596,6 +811,13 @@ def validate_mount_targets(
                     "mount targets are gitignored apart from index.md"
                 )
         for _, target_relative in plan.files:
+            tracked_rel = f"docs/{target_relative.as_posix()}"
+            if not path_ignored(root, tracked_rel):
+                raise DocsError(
+                    f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: "
+                    f"{tracked_rel} is not gitignored; copied pages must be ignored "
+                    "apart from index.md"
+                )
             _check_no_symlink_escape(
                 target_relative,
                 docs_root=docs_root,
@@ -629,7 +851,9 @@ def sync_mount_copies(
             destination = docs_root / Path(*target_relative.parts)
             repo_relative = source_path.relative_to(plan.repo_dir).as_posix()
             if source_path.suffix == ".md":
-                source_stamps[str(target_relative)] = f"{plan.mount.repo}:{repo_relative}"
+                source_stamps[str(target_relative)] = (
+                    f"{plan.mount.repo}:{repo_relative}"
+                )
                 text = _read_source_text(source_path)
                 try:
                     stamped = stamp_markdown(
@@ -701,7 +925,9 @@ def _walk_nav(nav: Any, visit: Any) -> Any:
 def index_title(docs_root: Path, target: PurePosixPath, fallback: str) -> str:
     from .yaml_tools import load_yaml_text
 
-    text = (docs_root / Path(*target.parts) / INDEX_FILENAME).read_text(encoding="utf-8")
+    text = (docs_root / Path(*target.parts) / INDEX_FILENAME).read_text(
+        encoding="utf-8"
+    )
     front_matter, _ = _split_front_matter(text)
     if front_matter is None:
         return fallback
@@ -709,7 +935,11 @@ def index_title(docs_root: Path, target: PurePosixPath, fallback: str) -> str:
         parsed = load_yaml_text(front_matter, source=str(target / INDEX_FILENAME))
     except DocsError:
         return fallback
-    if isinstance(parsed, dict) and isinstance(parsed.get("title"), str) and parsed["title"].strip():
+    if (
+        isinstance(parsed, dict)
+        and isinstance(parsed.get("title"), str)
+        and parsed["title"].strip()
+    ):
         return parsed["title"].strip()
     return fallback
 
@@ -756,7 +986,9 @@ def expand_mount_nav(
             + ", ".join(sorted(missing))
             + "; add '- <title>: <target>/index.md' entries"
         )
-    _reject_unresolved_placeholders(config["nav"], docs_root=docs_root, known=set(by_target))
+    _reject_unresolved_placeholders(
+        config["nav"], docs_root=docs_root, known=set(by_target)
+    )
     return config
 
 
@@ -776,7 +1008,9 @@ def _nav_leaves(nav: Any) -> list[str]:
     return leaves
 
 
-def _reject_unresolved_placeholders(nav: Any, *, docs_root: Path, known: set[str]) -> None:
+def _reject_unresolved_placeholders(
+    nav: Any, *, docs_root: Path, known: set[str]
+) -> None:
     for leaf in _nav_leaves(nav):
         if not leaf.endswith(f"/{INDEX_FILENAME}"):
             continue
@@ -798,7 +1032,9 @@ class ProductionSource:
     sha: str
 
 
-def load_production_sources(sources_path: Path, *, root: Path, repos: list[str]) -> list[ProductionSource]:
+def load_production_sources(
+    sources_path: Path, *, root: Path, repos: list[str]
+) -> list[ProductionSource]:
     try:
         raw = json.loads(sources_path.read_text(encoding="utf-8"))
     except OSError as error:
@@ -857,7 +1093,9 @@ def verify_production_clean(sources: list[ProductionSource]) -> None:
             )
         status = _git(source.path, "status", "--porcelain", "--untracked-files=all")
         if status is None:
-            raise DocsError(f"production source {source.name!r}: could not inspect git state")
+            raise DocsError(
+                f"production source {source.name!r}: could not inspect git state"
+            )
         if status:
             preview = "\n".join(status.splitlines()[:10])
             raise DocsError(
@@ -868,7 +1106,9 @@ def verify_production_clean(sources: list[ProductionSource]) -> None:
 
 def reject_production_env_overrides() -> None:
     offenders = sorted(
-        key for key in os.environ if key.startswith("BOB_DOCS_") and key.endswith("_DIR")
+        key
+        for key in os.environ
+        if key.startswith("BOB_DOCS_") and key.endswith("_DIR")
     )
     if offenders:
         raise DocsError(

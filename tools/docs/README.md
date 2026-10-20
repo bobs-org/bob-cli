@@ -42,12 +42,21 @@ copied only to `develop/plugins/` and never duplicated under `reference/plugins/
 Sibling discovery resolves each unique repo once, in this order:
 
 1. `$BOB_DOCS_<REPO>_DIR` (uppercased, non-alphanumerics become `_`; for example
-   `$BOB_DOCS_BOB_PLUGINS_DIR`). An explicitly set override that is not a usable
-   directory fails immediately; it never falls through to the next location.
-2. `../<repo>` (the `install-all` checkout layout).
-3. `sase/repos/linked/<repo>` (agent workspaces).
+   `$BOB_DOCS_BOB_PLUGINS_DIR`). An explicitly set override must be a Git working
+   tree rooted at that path, with a resolvable HEAD and an origin matching the
+   mount remote. SSH and HTTPS spellings of the same GitHub repository match;
+   `file://` and local paths to the same directory match. An override that exists
+   but is not that source fails immediately and never falls through.
+2. `../<repo>` (the `install-all` checkout layout), with the same working-tree
+   and origin checks.
+3. `sase/repos/linked/<repo>` (agent workspaces), with the same checks.
 4. A shallow branch clone of `remote` into `~/.cache/bob-docs/<repo>`
-   (`$XDG_CACHE_HOME/bob-docs/<repo>` when set).
+   (`$XDG_CACHE_HOME/bob-docs/<repo>` when set). An existing cache is identity-
+   checked, then shallow-fetched to the requested branch and hard-reset to the
+   fetched commit. Only a genuine connectivity failure keeps a previously
+   validated cache, with an explicit warning; a missing branch, authentication
+   failure, missing repository, or other Git error fails closed. Discovery never
+   fetches or resets user-owned override, sibling, or linked worktrees.
 
 A repo that resolves nowhere fails with the full list of attempted locations.
 
@@ -60,8 +69,9 @@ Validation runs before any write, so a failure leaves the tree unchanged:
 - Symlinks pointing outside their repo are rejected; nothing is created as a
   symlink at the destination.
 - The target directory is gitignored apart from its committed `index.md`
-  landing page. Repeat assembly overwrites only previously copied outputs,
-  removes stale copied pages, and refuses to overwrite any other file.
+  landing page, and every copied destination path must itself be gitignored.
+  Repeat assembly overwrites only previously copied outputs, removes stale
+  copied pages, and refuses to overwrite any other file.
 - `nav.yml` and `media.yml` are support metadata, never public pages, and are
   not copied. Dotfiles are not copied.
 - Every copied Markdown page gets `source: <repo>:<path>` (repo-relative path)
@@ -130,9 +140,10 @@ time may change between runs; generated tracked content stays deterministic.
 `bob-docs serve` assembles once, then serves the staged tree with Zensical.
 While the server runs, a background thread mirrors authored `docs/` edits into
 the staged tree about twice a second: additions and edits appear, deletions
-disappear, escaping symlinks are rejected, and the staged `build.json` plus
-anything else assembly wrote is preserved. Restart the server to pick up
-`mkdocs.yml` or mount-table changes; those never mirror.
+disappear, file-to-directory and directory-to-file replacements succeed,
+escaping symlinks are rejected before any staged mutation, and the staged
+`build.json` plus anything else assembly wrote is preserved. Restart the server
+to pick up `mkdocs.yml` or mount-table changes; those never mirror.
 
 ## Published URLs (`bob-docs urls`)
 
