@@ -405,8 +405,10 @@ fn completion_is_read_only() {
     let fixture = fixture();
     let snapshot = tree_hashes(&fixture.vault);
 
-    // Write-lock the vault (best effort outside unix).
-    lock_tree(&fixture.vault);
+    // Write-lock the vault (best effort outside unix). Keep the
+    // guard alive for the whole probe so Drop restores owner write
+    // even if an assertion panics.
+    let _lock = lock_tree(&fixture.vault);
 
     let probe = TempDir::new("bob-cli-complete-readonly");
     let git_log = probe.path().join("git-calls.log");
@@ -527,6 +529,21 @@ fn completion_is_read_only() {
     }
 }
 
+/// The lock guard restores owner write, and `TempDir` drop then
+/// removes the fixture even after it was 0555/0444.
+#[cfg(unix)]
+#[test]
+fn locked_vault_fixture_is_removed_after_guard_and_tempdir_drop() {
+    let fixture = fixture();
+    let root = fixture._temp.path().to_path_buf();
+    let vault = fixture.vault.clone();
+    let lock = lock_tree(&vault);
+    assert!(vault.exists());
+    drop(lock);
+    drop(fixture);
+    assert!(!root.exists(), "locked fixture leaked: {}", root.display());
+}
+
 fn tree_hashes(root: &Path) -> HashMap<PathBuf, String> {
     let mut hashes = HashMap::new();
     let mut stack = vec![root.to_path_buf()];
@@ -549,26 +566,90 @@ fn tree_hashes(root: &Path) -> HashMap<PathBuf, String> {
     hashes
 }
 
-#[cfg(unix)]
-fn lock_tree(root: &Path) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(path) = stack.pop() {
-        let entries = fs::read_dir(&path).expect("read lock directory");
-        for entry in entries {
-            let entry = entry.expect("lock entry");
-            let entry_path = entry.path();
-            if entry_path.is_dir() {
-                stack.push(entry_path);
-            } else {
-                set_mode(&entry_path, 0o444);
-            }
-        }
+/// Restores owner write (`0755` directories, `0644` files) on drop.
+#[must_use = "keep the lock alive so Drop restores owner write"]
+struct TreeLock {
+    root: PathBuf,
+}
+
+impl Drop for TreeLock {
+    fn drop(&mut self) {
+        restore_tree(&self.root);
     }
-    set_mode(root, 0o555);
+}
+
+/// Write-lock every real directory (`0555`) and file (`0444`) under
+/// `root`. The returned guard restores owner write when it drops.
+#[cfg(unix)]
+#[must_use = "keep the lock alive so Drop restores owner write"]
+fn lock_tree(root: &Path) -> TreeLock {
+    let lock = TreeLock {
+        root: root.to_path_buf(),
+    };
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    collect_real_nodes(root, &mut dirs, &mut files);
+    for file in &files {
+        set_mode_nofollow(file, 0o444)
+            .unwrap_or_else(|error| panic!("lock {}: {error}", file.display()));
+    }
+    for dir in &dirs {
+        set_mode_nofollow(dir, 0o555)
+            .unwrap_or_else(|error| panic!("lock {}: {error}", dir.display()));
+    }
+    lock
 }
 
 #[cfg(not(unix))]
-fn lock_tree(_root: &Path) {}
+#[must_use = "keep the lock alive so Drop restores owner write"]
+fn lock_tree(root: &Path) -> TreeLock {
+    TreeLock {
+        root: root.to_path_buf(),
+    }
+}
+
+#[cfg(unix)]
+fn restore_tree(root: &Path) {
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    collect_real_nodes(root, &mut dirs, &mut files);
+    for dir in &dirs {
+        let _ = set_mode_nofollow(dir, 0o755);
+    }
+    for file in &files {
+        let _ = set_mode_nofollow(file, 0o644);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_tree(_root: &Path) {}
+
+/// Collect real files and directories under `root`, skipping
+/// symlinks instead of following them.
+#[cfg(unix)]
+fn collect_real_nodes(
+    root: &Path,
+    dirs: &mut Vec<PathBuf>,
+    files: &mut Vec<PathBuf>,
+) {
+    let meta = match fs::symlink_metadata(root) {
+        Ok(meta) => meta,
+        Err(_) => return,
+    };
+    if meta.file_type().is_symlink() {
+        return;
+    }
+    if meta.is_dir() {
+        dirs.push(root.to_path_buf());
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                collect_real_nodes(&entry.path(), dirs, files);
+            }
+        }
+    } else {
+        files.push(root.to_path_buf());
+    }
+}
 
 fn is_empty_dir(directory: &Path) -> bool {
     let mut stack = vec![directory.to_path_buf()];

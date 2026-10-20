@@ -580,6 +580,47 @@ pub(crate) fn set_mode(path: &Path, mode: u32) {
 #[cfg(not(unix))]
 pub(crate) fn set_mode(_path: &Path, _mode: u32) {}
 
+/// Change the mode of `path` without following a final symlink.
+///
+/// `fs::set_permissions` follows the last component, so a tree that
+/// contains a symlink would otherwise chmod the target. Directories
+/// are opened with `O_NOFOLLOW` and `fchmod`'d through that fd.
+#[cfg(unix)]
+pub(crate) fn set_mode_nofollow(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path =
+        std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "path contains interior NUL",
+            )
+        })?;
+    // SAFETY: `c_path` is a valid C string. `O_NOFOLLOW` refuses a
+    // final symlink, so the fd refers to `path` itself. The fd is
+    // closed before this function returns.
+    let fd = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_RDONLY
+                | libc::O_NOFOLLOW
+                | libc::O_CLOEXEC
+                | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let rc = unsafe { libc::fchmod(fd, mode as libc::mode_t) };
+    let chmod_error = io::Error::last_os_error();
+    unsafe { libc::close(fd) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(chmod_error)
+    }
+}
+
 pub(crate) fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -731,9 +772,54 @@ pub(crate) fn remove_dir_all_if_exists(path: &Path) -> io::Result<()> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            repair_owner_write_in_tree(path);
+            match fs::remove_dir_all(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
+        }
         Err(error) => Err(error),
     }
 }
+
+/// Add owner write and execute on real directories inside `root`.
+///
+/// Walks with `symlink_metadata` and never follows a symlink, so a
+/// fixture that points at a foreign tree cannot chmod that target.
+/// Directories owned by another uid are left alone.
+#[cfg(unix)]
+fn repair_owner_write_in_tree(root: &Path) {
+    // SAFETY: `geteuid` is always safe to call.
+    let euid = unsafe { libc::geteuid() };
+    repair_owner_write_walk(root, euid);
+}
+
+#[cfg(unix)]
+fn repair_owner_write_walk(path: &Path, euid: u32) {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return,
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return;
+    }
+    if meta.uid() == euid {
+        let mode = meta.mode() & 0o777;
+        if mode & 0o300 != 0o300 {
+            let _ = set_mode_nofollow(path, mode | 0o300);
+        }
+    }
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            repair_owner_write_walk(&entry.path(), euid);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn repair_owner_write_in_tree(_root: &Path) {}
 
 /// Coverage invariant for batch-level `pomodoro_blocks`.
 ///
@@ -939,4 +1025,39 @@ fn pomodoro_section_range(lines: &[&str]) -> std::ops::Range<usize> {
         Some(heading) => heading..lines.len(),
         None => 0..0,
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn tempdir_drop_removes_write_locked_tree() {
+    let temp = TempDir::new("bob-cli-tempdir-locked");
+    let path = temp.path().to_path_buf();
+    let nested = path.join("vault").join("nested");
+    fs::create_dir_all(&nested).expect("nested vault dir");
+    write_file(&nested.join("file.md"), "x\n");
+    set_mode(&nested.join("file.md"), 0o444);
+    set_mode(&nested, 0o555);
+    set_mode(&path.join("vault"), 0o555);
+    set_mode(&path, 0o555);
+    drop(temp);
+    assert!(!path.exists(), "locked temp dir leaked: {}", path.display());
+}
+
+#[cfg(unix)]
+#[test]
+fn tempdir_drop_does_not_chmod_symlink_target() {
+    let temp = TempDir::new("bob-cli-tempdir-symlink");
+    let outside = TempDir::new("bob-cli-tempdir-outside");
+    let path = temp.path().to_path_buf();
+    let outside_dir = outside.path().join("foreign");
+    fs::create_dir_all(&outside_dir).expect("foreign dir");
+    write_file(&outside_dir.join("secret.md"), "keep\n");
+    std::os::unix::fs::symlink(&outside_dir, path.join("link"))
+        .expect("symlink into foreign dir");
+    set_mode(&outside_dir, 0o555);
+    set_mode(&path, 0o555);
+    drop(temp);
+    assert!(!path.exists(), "temp dir leaked: {}", path.display());
+    assert_unix_mode(&outside_dir, 0o555);
+    set_mode(&outside_dir, 0o755);
 }
