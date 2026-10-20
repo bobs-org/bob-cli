@@ -1,0 +1,36 @@
+{# Contract banner above registry-listed contracts only. #}
+{% if not page.is_homepage and config.extra and config.extra.contracts %}
+{% set page_url = page.url | d('', true) %}
+{% set ns = namespace(matched=false) %}
+{% if config.extra.contracts.groups %}
+{% for group in config.extra.contracts.groups %}
+{% for contract in group.contracts %}
+{% if page_url == contract.stem ~ "/" %}
+{% set ns.matched = contract %}
+{% endif %}
+{% if page_url == contract.stem %}
+{% set ns.matched = contract %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% endif %}
+{% if ns.matched %}
+<aside class="bob-contract-banner" role="note" aria-label="Contract notice">
+  <span class="bob-contract-icon" aria-hidden="true">📄</span>
+  <strong>Contract · written for implementers and tests</strong>
+  <span>{{ ns.matched.summary | e }}</span>
+  {% if ns.matched.reader %}
+  {% set reader = ns.matched.reader %}
+  {% if '.md' in reader %}
+  {% set reader_url = reader | replace('.md', '/') %}
+  {% else %}
+  {% set reader_url = reader %}
+  {% endif %}
+  <span>Reader guide: <a href="{{ reader_url | url }}">{{ reader_url | e }}</a></span>
+  {% endif %}
+  {% if ns.matched.historical %}
+  <span>This contract page is historical and kept for reference.</span>
+  {% endif %}
+</aside>
+{% endif %}
+{% endif %}

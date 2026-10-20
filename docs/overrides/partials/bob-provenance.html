@@ -1,0 +1,42 @@
+{# Build provenance footer: rolling snapshot, SHAs, date, build.json. #}
+{% if config.extra and config.extra.build %}
+{% set build = config.extra.build %}
+{% set sources = build.sources | d({}, true) %}
+<div class="bob-provenance" role="contentinfo" aria-label="Build provenance">
+  <span>Tested rolling snapshot</span>
+  {% for repo in sources %}
+  {% set info = sources[repo] %}
+  {% set sha = info.sha | d('', true) %}
+  {% if sha %}
+  {% set short = sha[:7] %}
+  {% if repo == "bob-cli" %}
+  {% set commit_base = config.repo_url %}
+  {% else %}
+  {% set commit_base = '' %}
+  {% if config.extra and config.extra.bob_mounts %}
+  {% for mount in config.extra.bob_mounts %}
+  {% if mount.repo == repo %}
+  {% set commit_base = mount.remote | replace('.git', '') %}
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+  {% endif %}
+  {% if commit_base %}
+  <span><a href="{{ (commit_base ~ '/commit/' ~ sha) | e }}">{{ repo }} {{ short | e }}</a>{% if info.dirty %} (dirty){% endif %}{% if info.branch %} · {{ info.branch | e }}{% endif %}</span>
+  {% else %}
+  <span>{{ repo }} {{ short | e }}{% if info.dirty %} (dirty){% endif %}{% if info.branch %} · {{ info.branch | e }}{% endif %}</span>
+  {% endif %}
+  {% else %}
+  {% if info.dirty %}
+  <span>{{ repo }} dirty working tree</span>
+  {% else %}
+  <span>{{ repo }} unknown revision</span>
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+  {% if build.built_at %}
+  <span>Built {{ build.built_at | e }} ({{ build.builder | d('zensical', true) | e }})</span>
+  {% endif %}
+  <span><a href="{{ 'build.json' | url }}">build.json</a></span>
+</div>
+{% endif %}

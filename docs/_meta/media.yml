@@ -1,4 +1,15 @@
 # Published image assets keyed by path relative to docs/.
 # Each entry needs provenance (`source`) and an ISO date (`YYYY-MM-DD`).
 # Markdown image syntax inside code examples is not an asset.
-{}
+assets/bob-mark.svg:
+  source: "bob-docs social-card (deterministic SVG mark, 18x18 bullet-b geometry)"
+  date: 2026-10-20
+assets/favicon.svg:
+  source: "bob-docs social-card (deterministic SVG favicon from bullet-b mark)"
+  date: 2026-10-20
+assets/favicon.png:
+  source: "bob-docs social-card (deterministic Pillow 32x32 PNG favicon)"
+  date: 2026-10-20
+assets/social-card.png:
+  source: "bob-docs social-card (deterministic Pillow 1200x630 social card)"
+  date: 2026-10-20

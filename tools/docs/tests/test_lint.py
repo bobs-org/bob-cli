@@ -905,13 +905,16 @@ def test_cli_help_lists_lint_and_fix() -> None:
     names = list(parser._subparsers._group_actions[0].choices)
     assert names == sorted(names)
     assert names == [
+        "a11y",
         "assemble",
         "build",
         "check",
+        "fonts",
         "gen",
         "links",
         "lint",
         "serve",
+        "social-card",
         "urls",
     ]
     lint = parser._subparsers._group_actions[0].choices["lint"]

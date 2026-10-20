@@ -199,6 +199,41 @@ def assemble(
     manifest = build_manifest(context.repo_root, repo_dirs, builder=builder)
     extra["build"] = manifest
     extra["contracts"] = registry_extra(registry)
+    # Small additive mapping for portable templates: mount edit bases, a
+    # per-URL edit map (no template string parsing), and a compatibility-door
+    # flag. Existing build/contracts shapes are unchanged.
+    extra["bob_mounts"] = [
+        {
+            "repo": mount.repo,
+            "remote": mount.remote,
+            "branch": mount.branch,
+            "target": mount.target.as_posix(),
+        }
+        for mount in mounts
+    ]
+    bob_edits: dict[str, str] = {}
+    for plan in plans:
+        remote = plan.mount.remote
+        if remote.endswith(".git"):
+            remote = remote[:-4]
+        for source_path, target_relative in plan.files:
+            if source_path.suffix != ".md":
+                continue
+            rel = target_relative.as_posix()
+            if rel.endswith("/index.md"):
+                url = rel[: -len("index.md")]
+            elif rel.endswith(".md"):
+                url = rel[: -len(".md")] + "/"
+            else:
+                continue
+            repo_relative = source_path.relative_to(plan.repo_dir).as_posix()
+            bob_edits[url] = f"{remote}/edit/{plan.mount.branch}/{repo_relative}"
+    extra["bob_edits"] = bob_edits
+    docs_root = context.repo_root / "docs"
+    extra["has_compatibility"] = bool(
+        (docs_root / "reference/compatibility.md").is_file()
+        or (docs_root / "compatibility.md").is_file()
+    )
 
     manifest_path = context.output_dir / "build.json"
     payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"

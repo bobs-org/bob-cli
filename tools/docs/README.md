@@ -4,21 +4,53 @@ Build and validate Bob's documentation site. Run from the bob-cli repository roo
 
 ```bash
 just docs-gen             # regenerate tracked contract indexes
-just docs-serve            # assemble and serve locally with live reload
-just docs-build            # strict Zensical build of the assembled site
-just docs-build-material   # strict Material 9.7 fallback build
-just docs-check            # lint, drift, build, links, search smoke, and tests
+just docs-serve           # assemble and serve locally with live reload
+just docs-build           # strict Zensical build of the assembled site
+just docs-build-material  # strict Material 9.7 fallback build
+just docs-check           # lint, drift, build, links, search smoke, and tests
+just docs-fonts           # subset bundled OFL fonts to WOFF2 (needs --group fonts)
+just docs-assets          # generate identity assets: mark, favicons, social card
+just docs-a11y            # Playwright + axe audit of the built site (dev only)
 uv run --project tools/docs bob-docs lint
 uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
 ```
+
+Install audit browsers once with
+`uv run --project tools/docs --group a11y playwright install chromium`.
+The audit injects the vendored `tools/docs/vendor/axe.min.js` (axe-core 4.14.0,
+MPL-2.0) locally; it never downloads an unpinned CDN script at runtime.
 
 `bob-docs check --production --sources FILE` runs the same gates using one explicit,
 clean, SHA-pinned source set for bob-cli and every mounted repository.
 
 Assembly never edits tracked sources. Generated output lives under `target/docs/`:
 the assembled `mkdocs.yml`, `build.json` provenance manifest, and the built site.
-Only `just docs-gen` and explicit `bob-docs lint --fix` ratchet updates modify
-tracked files. Normal lint never writes.
+Tracked files are written only by `just docs-gen`, the explicit asset generators
+(`just docs-fonts` for WOFF2, `just docs-assets` for the mark, favicons, and
+social card), and explicit `bob-docs lint --fix` ceiling/baseline ratchets.
+Normal lint never writes. Browser audits (`just docs-a11y`) are dev-only and are
+not part of `just docs-check`.
+
+## Task fences (`bob-task`)
+
+Static, accessible task examples use `bob-task` fences. `today` is an explicit
+illustration flag for open rows, never inferred from dates:
+
+````markdown
+```bob-task
+- [ ] #task Review the queue input [created:: 2026-10-20]
+```
+
+```bob-task today
+- [*] #task Fix the parser crash ^fix
+```
+````
+
+Statuses render with accessible names (Ready, Next, In Progress, Blocked, Done,
+Cancelled). An exact `#task` token becomes the teal identity mark; `#prj`
+renders violet and other tags render as pills. Canonical date fields render as
+absolute monochrome marks with the year; malformed or duplicate fields stay
+literal. Unknown lines appear as escaped text and never fail the build.
 
 ## Mount table (`docs/_meta/mounts.yml`)
 

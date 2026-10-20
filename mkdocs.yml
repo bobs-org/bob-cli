@@ -1,5 +1,8 @@
 site_name: Bob
 site_url: https://bobs-org.github.io/
+site_description: Bob combines a Rust CLI, Obsidian plugins, and Mac Capture into one honest GTD workflow.
+site_author: Bryan Bugyi
+copyright: MIT License — see the project LICENSE.
 repo_url: https://github.com/bobs-org/bob-cli
 repo_name: bobs-org/bob-cli
 edit_uri: edit/master/docs/
@@ -30,6 +33,23 @@ theme:
   custom_dir: docs/overrides
   variant: classic
   font: false
+  logo: assets/bob-mark.svg
+  favicon: assets/favicon.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
   features:
     - content.action.edit
     - content.code.copy
@@ -40,6 +60,9 @@ theme:
     - search.highlight
     - search.suggest
     - toc.follow
+
+extra_css:
+  - stylesheets/bob.css
 
 plugins:
   - search
@@ -64,6 +87,10 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format ''
+        - name: bob-task
+          class: bob-task
+          format: !!python/name:bob_docs.fences.fence_format ''
+          validator: !!python/name:bob_docs.fences.fence_validator ''
   - github-callouts
 
 nav:

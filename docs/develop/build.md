@@ -116,5 +116,27 @@ the documentation package tests. For a pinned production build, use
 `uv run --project tools/docs bob-docs check --production --sources FILE`; production
 requires an explicit clean SHA for bob-cli and every mounted source.
 
+Generate the local fonts and identity assets after changing the bundled sources or the
+mark geometry:
+
+```bash
+just docs-fonts    # subset OFL fonts to WOFF2 with --group fonts
+just docs-assets   # mark, favicons, and social card
+```
+
+Both commands accept `-c/--check` to compare without writing. The WOFF2 total stays
+under 450,000 bytes; record the sizes when regenerating.
+
+Audit the built site for accessibility after theme or homepage changes:
+
+```bash
+just docs-a11y
+```
+
+Install browsers once with
+`uv run --project tools/docs --group a11y playwright install chromium`.
+Audits are dev-only and are not part of `just docs-check`.
+
 The generated site is written to `target/docs/site/`. Building does not regenerate
-tracked pages; run `just docs-gen` explicitly and review its changes.
+tracked pages; run `just docs-gen`, `just docs-fonts`, or `just docs-assets`
+explicitly and review their changes.

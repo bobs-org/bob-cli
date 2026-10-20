@@ -24,6 +24,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    a11y_parser = subparsers.add_parser("a11y", help="audit the built site with Playwright and axe")
+    a11y_parser.add_argument(
+        "-b", "--builder", metavar="BUILDER", help="builder report to audit (default: existing site)"
+    )
+    a11y_parser.add_argument(
+        "-s", "--site", metavar="DIR", help="built site directory to audit (default: target/docs/site)"
+    )
+
     assemble_parser = subparsers.add_parser(
         "assemble", help="assemble config and source provenance"
     )
@@ -56,6 +64,11 @@ def _parser() -> argparse.ArgumentParser:
         "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
     )
 
+    fonts_parser = subparsers.add_parser("fonts", help="subset bundled fonts to WOFF2")
+    fonts_parser.add_argument(
+        "-c", "--check", action="store_true", help="check generated fonts without writing"
+    )
+
     gen_parser = subparsers.add_parser(
         "gen", help="generate tracked contract indexes and memory-web reference pages"
     )
@@ -85,6 +98,11 @@ def _parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("serve", help="assemble and serve the site with Zensical")
 
+    social_parser = subparsers.add_parser("social-card", help="generate deterministic identity assets")
+    social_parser.add_argument(
+        "-c", "--check", action="store_true", help="check generated assets without writing"
+    )
+
     urls_parser = subparsers.add_parser("urls", help="verify published URLs and page mentions")
     urls_parser.add_argument(
         "-p", "--production", action="store_true", help="verify pinned production sources"
@@ -102,6 +120,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root = Path.cwd()
     try:
+        if args.command == "a11y":
+            from .a11y import run_a11y
+
+            return run_a11y(root, builder=args.builder, site=args.site)
         if args.command == "assemble":
             context, _manifest = assemble(root, production=args.production, sources=args.sources)
             print(f"assembled config: {context.assembled_config}")
@@ -110,6 +132,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return build(root, material=args.material, production=args.production, sources=args.sources)
         if args.command == "check":
             return run_check(root, production=args.production, sources=args.sources)
+        if args.command == "fonts":
+            from .fonts import generate_fonts
+
+            return generate_fonts(root, check=args.check)
         if args.command == "gen":
             return check_or_generate(root, check=args.check)
         if args.command == "links":
@@ -119,6 +145,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_lint(root, fix=args.fix, docs_context=context)
         if args.command == "serve":
             return serve(root)
+        if args.command == "social-card":
+            from .assets import generate_assets
+
+            return generate_assets(root, check=args.check)
         if args.command == "urls":
             return run_urls(
                 root, refresh=args.refresh, production=args.production, sources=args.sources

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://bobs-org.github.io/sitemap.xml

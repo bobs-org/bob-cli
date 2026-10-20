@@ -127,6 +127,17 @@ Lint rejects markup that only one builder renders. Follow these rules on every p
 
 - Do not use rendered `!!!` admonitions, `===` content tabs, or `++key++` key markup.
   Use GitHub callouts such as `> [!NOTE]` and `<kbd>` for keys.
+- Use `bob-task` fences for static task examples. The `today` flag is an explicit
+  illustration annotation for open rows and is never inferred:
+
+  ````markdown
+  ```bob-task
+  - [ ] #task Review the queue input [created:: 2026-10-20]
+  ```
+  ````
+
+  An exact `#task` token renders as the teal identity mark; other tags render as
+  pills. Canonical dates render as absolute marks with the year.
 - Do not add MkDocs `hooks:` or plugins outside the allowlist (`search`, `redirects`,
   `tags`, `llmstxt`). Generate extra files in `tools/` before the build.
 

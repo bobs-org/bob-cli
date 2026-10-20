@@ -1,0 +1,375 @@
+/* Bob notebook theme: warm paper, ink text, teal interaction.
+ * Tomato is reserved for Today/Pomodoro. Caution uses a non-tomato
+ * crimson pair chosen for AA on both schemes:
+ * light #81182B (9.4:1 on paper), dark #E79AAB (8.2:1 on slate).
+ */
+
+@font-face {
+  font-family: "Inter";
+  src: url("../assets/fonts/Inter-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("../assets/fonts/Inter-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter Display";
+  src: url("../assets/fonts/InterDisplay-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Bob Mono";
+  src: url("../assets/fonts/BobMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --bob-paper: #fbf8f2;
+  --bob-ink: #171c1a;
+  --bob-muted: #5c5f5a;
+  --bob-link: #0f6b63;
+  --bob-identity: #0a9391;
+  --bob-today-text: #9b3d2d;
+  --bob-today-glyph: #d9472b;
+  --bob-caution: #81182b;
+  --bob-tag-prj: #6d28d9;
+}
+
+[data-md-color-scheme="slate"] {
+  --bob-paper: #121816;
+  --bob-ink: #eef3ed;
+  --bob-muted: #a3a9a2;
+  --bob-link: #79dedc;
+  --bob-identity: #79dedc;
+  --bob-today-text: #f58b72;
+  --bob-today-glyph: #f58b72;
+  --bob-caution: #e79aab;
+  --bob-tag-prj: #b7a6f5;
+}
+
+/* Map tokens onto Material surfaces. The scheme attribute on <body>
+   beats :root for inherited custom properties, so map on every scheme. */
+:root,
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--bob-paper);
+  --md-default-fg-color: var(--bob-ink);
+  --md-typeset-color: var(--bob-ink);
+  --md-typeset-a-color: var(--bob-link);
+  --md-accent-fg-color: var(--bob-link);
+  --md-primary-fg-color: var(--bob-paper);
+  --md-primary-bg-color: var(--bob-ink);
+}
+
+.md-header {
+  background-color: var(--bob-paper);
+  color: var(--bob-ink);
+  border-bottom: 1px solid color-mix(in srgb, var(--bob-ink) 12%, transparent);
+}
+
+.md-header .md-header__title,
+.md-header .md-logo {
+  color: var(--bob-ink);
+}
+
+.md-tabs {
+  background-color: var(--bob-paper);
+  color: var(--bob-ink);
+}
+
+.md-tabs__link--active {
+  border-bottom: 2px solid var(--bob-identity);
+  color: var(--bob-link);
+}
+
+.md-search__input {
+  background-color: color-mix(in srgb, var(--bob-ink) 6%, var(--bob-paper));
+  color: var(--bob-ink);
+}
+
+.md-nav,
+.md-sidebar {
+  background-color: var(--bob-paper);
+  color: var(--bob-ink);
+}
+
+.md-footer {
+  background-color: var(--bob-paper);
+  color: var(--bob-muted);
+  border-top: 1px solid color-mix(in srgb, var(--bob-ink) 12%, transparent);
+}
+
+.md-footer-meta {
+  background-color: var(--bob-paper);
+  color: var(--bob-muted);
+}
+
+.md-copyright,
+.md-copyright__highlight {
+  color: var(--bob-muted);
+}
+
+html .md-footer-meta.md-typeset .md-copyright a,
+html .md-footer .md-copyright a {
+  color: var(--bob-link);
+  opacity: 1;
+}
+
+/* Article measure: readable columns, full width for homepage and nav. */
+.md-content__inner.md-typeset {
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  max-width: 75ch;
+}
+
+.md-content__inner.md-typeset h1,
+.md-content__inner.md-typeset h2,
+.md-content__inner.md-typeset h3 {
+  font-family: "Inter Display", "Inter", system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* Homepage and wide navigation use the available width. */
+body:has(.bob-home) .md-content__inner.md-typeset {
+  max-width: none;
+}
+
+/* Prose links are underlined; focus stays visible and teal. */
+.md-typeset a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.md-typeset :focus-visible,
+.md-header :focus-visible,
+.md-nav :focus-visible {
+  outline: 2px solid var(--bob-identity);
+  outline-offset: 2px;
+}
+
+.md-skip {
+  background-color: var(--bob-identity);
+  color: var(--bob-paper);
+}
+
+/* Long tables and code scroll inside their own containers. */
+.md-typeset .md-typeset__table,
+.md-typeset table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.md-typeset pre {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.md-typeset code,
+.md-typeset kbd {
+  font-family: "Bob Mono", ui-monospace, monospace;
+}
+
+/* Keycaps look like small physical keys. */
+.md-typeset kbd {
+  border: 1px solid var(--bob-muted);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  font-family: "Bob Mono", ui-monospace, monospace;
+  padding: 0 0.35em;
+  white-space: nowrap;
+}
+
+/* Output blocks are quieter than commands and have no copy action. */
+.md-typeset pre.bob-output,
+.md-typeset .bob-output pre {
+  background-color: color-mix(in srgb, var(--bob-ink) 4%, var(--bob-paper));
+  border: 1px solid color-mix(in srgb, var(--bob-ink) 12%, transparent);
+}
+
+.md-typeset pre.bob-output .md-clipboard,
+.md-typeset .bob-output .md-clipboard {
+  display: none;
+}
+
+/* GitHub callouts: five types, tomato never used except Today. */
+.md-typeset .admonition.note {
+  border-color: var(--bob-link);
+}
+
+.md-typeset .admonition.tip {
+  border-color: var(--bob-identity);
+}
+
+.md-typeset .admonition.important {
+  border-color: var(--bob-link);
+}
+
+.md-typeset .admonition.warning {
+  border-color: var(--bob-caution);
+}
+
+.md-typeset .admonition.caution {
+  border-color: var(--bob-caution);
+  background-color: color-mix(in srgb, var(--bob-caution) 8%, var(--bob-paper));
+}
+
+/* Tag and component chips carry text, never color alone. */
+.bob-tag {
+  display: inline-block;
+  font-size: 0.85em;
+  border: 1px solid color-mix(in srgb, var(--bob-ink) 24%, transparent);
+  border-radius: 999px;
+  padding: 0 0.55em;
+  margin: 0 0.15em;
+  white-space: nowrap;
+}
+
+.bob-tag-task {
+  color: var(--bob-link);
+  border-color: color-mix(in srgb, var(--bob-identity) 55%, transparent);
+}
+
+.bob-tag-prj {
+  color: var(--bob-tag-prj);
+  border-color: color-mix(in srgb, var(--bob-tag-prj) 45%, transparent);
+}
+
+/* Task lines: status, identity, dates, Today. */
+.bob-task {
+  border: 1px solid color-mix(in srgb, var(--bob-ink) 14%, transparent);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+  margin: 1em 0;
+  background-color: color-mix(in srgb, var(--bob-ink) 2%, var(--bob-paper));
+}
+
+.bob-task-line {
+  display: flex;
+  gap: 0.5em;
+  align-items: baseline;
+  padding: 0.15em 0;
+}
+
+.bob-task-closed {
+  opacity: 1;
+}
+
+.bob-status {
+  display: inline-block;
+  min-width: 1.4em;
+  text-align: center;
+  font-weight: 600;
+}
+
+.bob-today {
+  color: var(--bob-today-glyph);
+}
+
+.bob-date {
+  display: inline-flex;
+  gap: 0.22em;
+  align-items: baseline;
+  font-size: 0.85em;
+  opacity: 0.9;
+  border: 1px solid color-mix(in srgb, var(--bob-ink) 18%, transparent);
+  border-radius: 999px;
+  padding: 0 0.5em;
+  margin: 0 0.2em;
+  white-space: nowrap;
+}
+
+.bob-date-label {
+  font-variant-numeric: tabular-nums;
+}
+
+.bob-id {
+  opacity: 0.75;
+  font-size: 0.85em;
+  font-family: "Bob Mono", ui-monospace, monospace;
+}
+
+.bob-task-raw {
+  font-family: "Bob Mono", ui-monospace, monospace;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Contract banner above registry-listed contracts. */
+.bob-contract-banner {
+  border-left: 3px solid var(--bob-identity);
+  padding: 0.6em 1em;
+  margin: 0 0 1.2em;
+  background-color: color-mix(in srgb, var(--bob-identity) 8%, var(--bob-paper));
+}
+
+/* Provenance footer. */
+.bob-provenance {
+  margin-top: 2.5em;
+  padding-top: 1em;
+  border-top: 1px solid color-mix(in srgb, var(--bob-ink) 14%, transparent);
+  color: var(--bob-muted);
+  font-size: 0.9em;
+}
+
+/* Mermaid diagrams inherit the same tokens. */
+.mermaid {
+  background-color: transparent;
+  color: var(--bob-ink);
+}
+
+/* Honor reduced motion everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none;
+    transition: none;
+    scroll-behavior: auto;
+  }
+
+  .mermaid * {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Navigation and right rail collapse on mobile. */
+@media screen and (max-width: 76.1875em) {
+  .md-nav--secondary {
+    display: none;
+  }
+}
+
+@media screen and (max-width: 59.9375em) {
+  .md-sidebar--primary {
+    transform: translateX(-100%);
+  }
+}
+
+/* Visually hidden but accessible text. */
+.bob-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

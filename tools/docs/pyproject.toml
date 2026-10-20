@@ -15,7 +15,7 @@ bob-docs = "bob_docs.cli:main"
 [dependency-groups]
 a11y = ["playwright>=1.50"]
 dev = ["pytest>=8.3"]
-fonts = ["brotli>=1.1", "fonttools>=4.55"]
+fonts = ["brotli>=1.1", "fonttools>=4.55", "pillow>=10.0"]
 material = [
     "mkdocs-material==9.7.*",
     "mkdocs-redirects",

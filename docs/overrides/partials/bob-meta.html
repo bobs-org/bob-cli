@@ -1,0 +1,28 @@
+{# Open Graph and Twitter metadata from page title/description. #}
+{% if config.site_url %}
+{% set base = config.site_url %}
+<link rel="icon" type="image/svg+xml" href="{{ 'assets/bob-mark.svg' | url }}">
+<link rel="alternate icon" type="image/png" href="{{ 'assets/favicon.png' | url }}">
+{% if page.meta and page.meta.description %}
+{% set desc = page.meta.description %}
+{% elif page.title and not page.is_homepage %}
+{% set desc = page.title %}
+{% else %}
+{% set desc = config.site_description | d(config.site_name, true) %}
+{% endif %}
+{% if page.title and not page.is_homepage %}
+{% set title = page.title ~ " - " ~ config.site_name %}
+{% else %}
+{% set title = config.site_name %}
+{% endif %}
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ config.site_name | e }}">
+<meta property="og:title" content="{{ title | e }}">
+<meta property="og:description" content="{{ desc | e }}">
+<meta property="og:url" content="{{ (base ~ (page.url | d('', true))) | e }}">
+<meta property="og:image" content="{{ (base ~ 'assets/social-card.png') | e }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ title | e }}">
+<meta name="twitter:description" content="{{ desc | e }}">
+<meta name="twitter:image" content="{{ (base ~ 'assets/social-card.png') | e }}">
+{% endif %}

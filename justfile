@@ -186,3 +186,15 @@ docs-gen: (_banner "35" "⚙️" "DOCS GENERATE")
 # Run every local documentation gate against one assembled source context.
 docs-check: (_banner "32" "✅" "DOCS CHECK")
     uv run --project tools/docs bob-docs check
+
+# Subset bundled OFL fonts to deterministic WOFF2.
+docs-fonts: (_banner "35" "🔤" "DOCS FONTS")
+    uv run --project tools/docs --group fonts bob-docs fonts
+
+# Generate deterministic Bob identity assets (mark, favicons, social card).
+docs-assets: (_banner "35" "🎨" "DOCS ASSETS")
+    uv run --project tools/docs --group fonts bob-docs social-card
+
+# Audit the built site for accessibility with Playwright and axe (dev only).
+docs-a11y: (_banner "33" "♿" "DOCS A11Y")
+    uv run --project tools/docs --group a11y bob-docs a11y

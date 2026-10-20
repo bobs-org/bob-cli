@@ -1,0 +1,85 @@
+"""Cheap committed-asset validation (normal suite) plus optional generation checks."""
+
+from __future__ import annotations
+
+import struct
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO = Path(__file__).resolve().parents[3]
+FONTS_DIR = REPO / "docs/assets/fonts"
+ASSETS_DIR = REPO / "docs/assets"
+
+
+def _png_size(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{path.name} is not a PNG"
+    width, height = struct.unpack(">II", data[16:24])
+    return width, height
+
+
+def test_identity_svg_geometry() -> None:
+    for name in ("bob-mark.svg", "favicon.svg"):
+        text = (ASSETS_DIR / name).read_text(encoding="utf-8")
+        assert 'viewBox="0 0 18 18"' in text
+        assert 'x1="4.25"' in text and 'y1="3.25"' in text
+        assert 'cx="9"' in text and 'cy="10"' in text and 'r="4.75"' in text
+        assert 'r="1.6"' in text
+
+
+def test_raster_dimensions() -> None:
+    assert _png_size(ASSETS_DIR / "favicon.png") == (32, 32)
+    assert _png_size(ASSETS_DIR / "social-card.png") == (1200, 630)
+
+
+def test_woff2_budget() -> None:
+    total = 0
+    faces = sorted(FONTS_DIR.glob("*.woff2"))
+    assert len(faces) == 4, f"expected 4 WOFF2 faces, got {[p.name for p in faces]}"
+    for path in faces:
+        size = path.stat().st_size
+        total += size
+        assert size > 1000, f"{path.name} is suspiciously small"
+    assert total < 450_000, f"WOFF2 total {total} exceeds 450000"
+    assert (FONTS_DIR / "OFL.txt").is_file()
+
+
+def test_media_manifest() -> None:
+    manifest = yaml.safe_load((REPO / "docs/_meta/media.yml").read_text(encoding="utf-8"))
+    for asset in ("assets/bob-mark.svg", "assets/favicon.svg",
+                  "assets/favicon.png", "assets/social-card.png"):
+        assert asset in manifest, f"{asset} missing from media.yml"
+        assert manifest[asset]["source"], f"{asset} needs provenance source"
+        assert manifest[asset]["date"], f"{asset} needs ISO date"
+
+
+def test_fonts_check_with_group() -> None:
+    try:
+        import fontTools  # noqa: F401
+        import brotli  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        pytest.skip("generation dependencies are absent (run with --group fonts)")
+    from bob_docs.assets import generate_assets
+    from bob_docs.fonts import generate_fonts
+
+    assert generate_fonts(REPO, check=True) == 0
+    assert generate_assets(REPO, check=True) == 0
+
+
+def test_fonts_cmap_and_outlines() -> None:
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        pytest.skip("fonttools is absent (run with --group fonts)")
+    font = TTFont(str(FONTS_DIR / "BobMono-Regular.woff2"))
+    cmap = font.getBestCmap()
+    assert 0x2022 in cmap and 0x2317 in cmap
+    glyph_set = font.getGlyphSet()
+    from fontTools.pens.boundsPen import BoundsPen
+
+    pen = BoundsPen(glyph_set)
+    glyph_set[cmap[0x2317]].draw(pen)
+    assert pen.bounds is not None
