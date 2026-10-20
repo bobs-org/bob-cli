@@ -1,0 +1,4 @@
+# Published image assets keyed by path relative to docs/.
+# Each entry needs provenance (`source`) and an ISO date (`YYYY-MM-DD`).
+# Markdown image syntax inside code examples is not an asset.
+{}

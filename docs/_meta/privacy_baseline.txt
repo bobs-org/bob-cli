@@ -1,0 +1,16 @@
+# Contract privacy baseline. Columns: path, rule, count, matched.
+# Counts ignore line movement. A second copy of the same text is a new hit.
+# Normal lint never adds rows. bob-docs lint --fix only removes obsolete hits
+# or lowers a count that shrank.
+capture.md	home-path	3	/Users/bryan
+gkeep.md	email	1	bryanbugyi34@gmail.com
+highlights-create.md	home-path	5	/home/bryan
+obsidian-sync-exclusions.md	home-path	1	/home/bryan
+obsidian-sync-exclusions.md	launch-agent	1	com.bbugyi.bob-vault-sync
+plugins.md	home-path	6	/home/bryan
+ref-jobs.md	home-path	1	/home/bryan
+vault-git-sync.md	home-path	2	/Users/bbugyi
+vault-git-sync.md	home-path	2	/home/bryan
+vault-git-sync.md	launch-agent	2	com.bbugyi.bob-vault-sync
+vault-git-sync.md	launch-agent	1	com.bbugyi.bob-vault-sync.err
+vault-git-sync.md	launch-agent	2	com.bbugyi.bob-vault-sync.plist

@@ -1,0 +1,4 @@
+# Optional per-page word ceilings. bob-docs lint fails a page that grows
+# past its ceiling. bob-docs lint --fix lowers a ceiling when a page shrinks
+# and never raises one. Missing, generated, and contract pages are removed.
+ceilings: {}

@@ -1,0 +1,27 @@
+# Patterns that fail on reader pages and mounts. Existing contract hits are
+# ratcheted by privacy_baseline.txt; a second copy of the same text is a new
+# hit. Use the placeholders in examples instead of real machine details.
+placeholders:
+  home-path: /home/alex
+  vault-repo: git@github.com:example/vault.git
+  launch-agent: com.example.bob-vault-sync
+  email: user@example.com
+patterns:
+  - id: home-path
+    description: real home directories
+    regex: "/home/bryan(?![A-Za-z0-9])|/Users/(?:bryan|bbugyi)(?![A-Za-z0-9])"
+    placeholder: /home/alex
+  - id: vault-repo
+    description: private vault repository URLs
+    regex: "(?:git@|https://)github\\.com[:/](?!bobs-org/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    placeholder: git@github.com:example/vault.git
+  - id: launch-agent
+    description: personal LaunchAgent labels
+    regex: "com\\.bbugyi\\.[A-Za-z0-9._-]+"
+    placeholder: com.example.bob-vault-sync
+  - id: email
+    description: personal email addresses
+    regex: "(?i)\\b(?!git@)[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b"
+    allow:
+      - "(?i)^[^@]+@example\\.(com|org)$"
+    placeholder: user@example.com

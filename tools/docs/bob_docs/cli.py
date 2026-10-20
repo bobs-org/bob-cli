@@ -12,13 +12,14 @@ from .build import build, serve
 from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
+from .lint import run_lint
 from .urls import run_urls
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bob-docs",
-        description="Assemble, generate, and build Bob's documentation site.",
+        description="Assemble, generate, lint, and build Bob's documentation site.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -44,6 +45,23 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "links",
         help="check built-site links offline with the pinned lychee release",
+    )
+
+    lint_parser = subparsers.add_parser(
+        "lint",
+        help="enforce the documentation contract",
+        description=(
+            "Check typing, the contract registry, front matter, budgets, hygiene, "
+            "test pins, portability, navigation, privacy, and media provenance. "
+            "Normal runs never write tracked files. --fix only ratchets page "
+            "ceilings down and removes obsolete privacy baseline hits."
+        ),
+    )
+    lint_parser.add_argument(
+        "-f",
+        "--fix",
+        action="store_true",
+        help="lower page ceilings and drop obsolete privacy baseline hits; never raise limits",
     )
 
     subparsers.add_parser("serve", help="assemble and serve the site with Zensical")
@@ -75,6 +93,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return check_or_generate(root, check=args.check)
         if args.command == "links":
             return run_links(root)
+        if args.command == "lint":
+            return run_lint(root, fix=args.fix)
         if args.command == "serve":
             return serve(root)
         if args.command == "urls":

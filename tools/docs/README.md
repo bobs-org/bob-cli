@@ -7,11 +7,14 @@ just docs-gen             # regenerate tracked contract indexes
 just docs-serve            # assemble and serve locally with live reload
 just docs-build            # strict Zensical build of the assembled site
 just docs-build-material   # strict Material 9.7 fallback build
+uv run --project tools/docs bob-docs lint
+uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
 ```
 
 Assembly never edits tracked sources. Generated output lives under `target/docs/`:
 the assembled `mkdocs.yml`, `build.json` provenance manifest, and the built site.
-Only `just docs-gen` (and explicit lint ratchet updates) modify tracked files.
+Only `just docs-gen` and explicit `bob-docs lint --fix` ratchet updates modify
+tracked files. Normal lint never writes.
 
 ## Mount table (`docs/_meta/mounts.yml`)
 
