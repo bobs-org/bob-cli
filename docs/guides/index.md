@@ -29,6 +29,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 ## Projects and dependencies
 
 - [Add prerequisites while capturing](add-prerequisites.md)
+- [Link related tasks](link-related-tasks.md)
 
 ## Reading
 

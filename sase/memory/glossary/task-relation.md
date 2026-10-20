@@ -8,7 +8,8 @@ aliases:
 
 *Requested · project*
 
-A directed, optional labelled edge between two tasks, authored as a task block link on
-the source task's 🪢 **LINKS:** line. Its generated 🪢 **LINKED FROM:** entry appears on
-the target task. A relation is distinct from a Pomodoro [[task-link]] and never blocks a
-task or changes its status, schedule, priority, or freshness.
+A directed, optionally labelled, inert link from one task to another. It is authored on
+the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
+**LINKED FROM:** line. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
+gestures. A relation is distinct from a Pomodoro [[task-link]]: it never blocks a task,
+counts as a Pomodoro Task Link, or changes its status, schedule, priority, or freshness.

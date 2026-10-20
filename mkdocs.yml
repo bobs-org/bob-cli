@@ -120,6 +120,7 @@ nav:
           - Keep Ready lanes under their cap: guides/keep-ready-under-cap.md
       - Projects and dependencies:
           - Add prerequisites while capturing: guides/add-prerequisites.md
+          - Link related tasks: guides/link-related-tasks.md
       - Reading:
           - Save a link to your reading queue: guides/save-link-to-reading-queue.md
       - Fix problems:
