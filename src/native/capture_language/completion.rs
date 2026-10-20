@@ -10,6 +10,7 @@ use super::line::*;
 use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
+use super::relations::{scan_line_relations, ScannedRelation};
 use super::tokens::*;
 use crate::native::url_routing::{
     classify_token, is_standalone_listen_marker, RoutingEntry, UrlRoutingPolicy,
@@ -47,6 +48,12 @@ pub(crate) enum CompletionContext {
     /// A `*` blocked-task modifier: vault-wide open-task search whose accept
     /// inserts a Bob-authored `*note:block-id` replacement.
     BlockedTask,
+    /// A `~` relation target picker: the current task links to the candidate.
+    RelationTo,
+    /// A `~~` relation target picker: the candidate links to the current task.
+    RelationFrom,
+    /// A relation label suggestion field after `|`.
+    RelationLabel,
     /// A whole-item `!` token: vault-wide open-task search whose accept
     /// inserts a Bob-authored `!note:block-id` replacement. The query is
     /// decoded like `&`; the replacement covers the whole token, sigil
@@ -200,6 +207,176 @@ pub(super) fn blocked_task_completion_field_at(
         b'*',
         CompletionContext::BlockedTask,
     )
+}
+
+/// Complete a `~` / `~~` relation target. The replacement ends before an
+/// optional label, so choosing another task preserves a label already typed.
+fn relation_target_completion_field_at(
+    line: &RawLine<'_>,
+    cursor: usize,
+    parent: bool,
+) -> Option<CompletionField> {
+    let (_, found) = extract_line_dependencies(
+        tokenize_line_with_spans(line),
+        line.text,
+        line.start,
+        parent,
+        true,
+    );
+    for scanned in scan_line_relations(line.text, line.start) {
+        let (start, end, direction, sigil_len, directive_end) = match &scanned {
+            ScannedRelation::Complete(entry) => {
+                let target_end = entry
+                    .separator
+                    .map(|separator| separator.0)
+                    .unwrap_or(entry.end);
+                if cursor < entry.start || cursor > target_end {
+                    continue;
+                }
+                (
+                    entry.start,
+                    target_end,
+                    entry.direction,
+                    entry.sigil_len(),
+                    entry.end,
+                )
+            }
+            ScannedRelation::PartialTarget { start, end, .. } => {
+                if cursor < *start || cursor > *end {
+                    continue;
+                }
+                let relative = *start - line.start;
+                let sigil_len =
+                    if line.text.as_bytes().get(relative + 1) == Some(&b'~') {
+                        2
+                    } else {
+                        1
+                    };
+                (
+                    *start,
+                    *end,
+                    if sigil_len == 2 {
+                        RelationDirection::From
+                    } else {
+                        RelationDirection::To
+                    },
+                    sigil_len,
+                    *end,
+                )
+            }
+            ScannedRelation::PartialLabel { .. }
+            | ScannedRelation::Invalid(_)
+            | ScannedRelation::Escaped { .. } => continue,
+        };
+        let is_directive =
+            found.relation_entries.iter().any(|entry| {
+                entry.start == start && entry.end == directive_end
+            }) || found.relation_target_partials.iter().any(
+                |(partial_start, partial_end)| {
+                    *partial_start == start
+                        && *partial_end == end
+                        && start <= cursor
+                        && cursor <= end
+                },
+            );
+        if !is_directive {
+            continue;
+        }
+        let query_end = cursor.min(end);
+        let query =
+            if cursor <= start + sigil_len {
+                String::new()
+            } else {
+                decode_dependency_query(line.text.get(
+                    start + sigil_len - line.start..query_end - line.start,
+                )?)
+            };
+        return Some(CompletionField {
+            context: match direction {
+                RelationDirection::To => CompletionContext::RelationTo,
+                RelationDirection::From => CompletionContext::RelationFrom,
+            },
+            route: None,
+            block_id: None,
+            query,
+            replacement: (start, end),
+        });
+    }
+    None
+}
+
+/// Complete the label part of a relation. The replacement owns the pipe and
+/// the complete label token, so suggestions can use Bob's canonical
+/// `|label` or `|"multi word"` spelling.
+fn relation_label_completion_field_at(
+    line: &RawLine<'_>,
+    cursor: usize,
+    parent: bool,
+) -> Option<CompletionField> {
+    let (_, found) = extract_line_dependencies(
+        tokenize_line_with_spans(line),
+        line.text,
+        line.start,
+        parent,
+        true,
+    );
+    for scanned in scan_line_relations(line.text, line.start) {
+        let (start, end, separator) = match &scanned {
+            ScannedRelation::Complete(entry) => {
+                let Some((separator, _)) = entry.separator else {
+                    continue;
+                };
+                if cursor <= separator || cursor > entry.end {
+                    continue;
+                }
+                (entry.start, entry.end, separator)
+            }
+            ScannedRelation::PartialLabel { raw, start, end } => {
+                if cursor < *start || cursor > *end {
+                    continue;
+                }
+                let Some(pipe) = raw.rfind('|') else {
+                    continue;
+                };
+                let separator = *start + pipe;
+                if cursor <= separator {
+                    continue;
+                }
+                (*start, *end, separator)
+            }
+            _ => continue,
+        };
+        let is_directive = found
+            .relation_entries
+            .iter()
+            .any(|entry| entry.start == start && entry.end == end)
+            || found.relation_label_partials.iter().any(
+                |(partial_start, partial_end)| {
+                    *partial_start == start
+                        && *partial_end == end
+                        && start <= cursor
+                        && cursor <= end
+                },
+            );
+        if !is_directive {
+            continue;
+        }
+        let query_end = cursor.min(end);
+        let raw_query = line
+            .text
+            .get(separator + 1 - line.start..query_end - line.start)?;
+        let raw_query = raw_query.strip_prefix('"').unwrap_or(raw_query);
+        let query =
+            raw_query.strip_suffix('"').unwrap_or(raw_query).to_string();
+        return Some(CompletionField {
+            context: CompletionContext::RelationLabel,
+            route: None,
+            block_id: None,
+            query,
+            replacement: (separator, end),
+        });
+    }
+    None
 }
 
 fn relation_completion_field_at(
@@ -736,6 +913,18 @@ pub(crate) fn completion_field_at(
     // using the same owner context as `&` prerequisites.
     if let Some(field) =
         blocked_task_completion_field_at(&scan_line, cursor, leading)
+    {
+        return Some(field);
+    }
+    // Relation labels win over relation targets when the cursor is past `|`;
+    // otherwise the target picker owns the sigil and task locator.
+    if let Some(field) =
+        relation_label_completion_field_at(&scan_line, cursor, leading)
+    {
+        return Some(field);
+    }
+    if let Some(field) =
+        relation_target_completion_field_at(&scan_line, cursor, leading)
     {
         return Some(field);
     }

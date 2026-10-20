@@ -3,16 +3,17 @@ use std::path::Path;
 use super::{
     candidates::{
         active_task_candidates, blocked_task_candidates, link_candidates,
-        route_candidates, section_candidates, task_candidates,
-        task_complete_candidates, task_link_candidates, task_parent_candidates,
-        task_section_candidates, TaskSearch,
+        relation_candidates, relation_label_suggestions, route_candidates,
+        section_candidates, task_candidates, task_complete_candidates,
+        task_link_candidates, task_parent_candidates, task_section_candidates,
+        TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
 };
 use crate::native::{
     capture, capture_block_ids, capture_completable_tasks,
-    capture_language::{self, CompletionContext},
+    capture_language::{self, CompletionContext, RelationDirection},
     capture_links,
 };
 
@@ -403,6 +404,95 @@ pub(crate) fn shell_completion(
                     group: "blocked tasks".to_string(),
                 });
             }
+        }
+        CompletionContext::RelationTo | CompletionContext::RelationFrom => {
+            let item = capture_language::editor_item_at(raw_text, cursor);
+            let owner_note = item
+                .as_ref()
+                .and_then(|found| found.route.as_deref())
+                .or_else(|| {
+                    item.as_ref()
+                        .and_then(|found| found.dependency_target.as_ref())
+                        .and_then(|target| target.route.as_deref())
+                })
+                .unwrap_or_else(|| capture::inbox_route());
+            let (candidates, _) = relation_candidates(
+                bob_dir,
+                "",
+                if field.context == CompletionContext::RelationTo {
+                    RelationDirection::To
+                } else {
+                    RelationDirection::From
+                },
+                item.as_ref()
+                    .and_then(|found| found.dependency_target.as_ref()),
+                &capture::route_label(owner_note),
+                item.as_ref()
+                    .map(|found| found.relations.as_slice())
+                    .unwrap_or(&[]),
+                item.as_ref()
+                    .map(|found| found.dependencies.as_slice())
+                    .unwrap_or(&[]),
+            );
+            let Candidates::Relation(items) = candidates else {
+                return Ok(None);
+            };
+            let group = if field.context == CompletionContext::RelationTo {
+                "links to"
+            } else {
+                "linked from"
+            };
+            for item in items {
+                if item.replacement.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&item.replacement),
+                    full: format!("{marker_prefix}{}", item.replacement),
+                    description: item.text,
+                    group: group.to_string(),
+                });
+            }
+        }
+        CompletionContext::RelationLabel => {
+            let (candidates, _) =
+                relation_label_suggestions(bob_dir, &field.query);
+            let Candidates::RelationLabel(items) = candidates else {
+                return Ok(None);
+            };
+            let last_sigil = raw_text
+                .get(..field.replacement.0)
+                .and_then(|prefix| prefix.rfind('~'))
+                .unwrap_or(field.replacement.0);
+            let relation_start = if last_sigil > 0
+                && raw_text.as_bytes().get(last_sigil - 1) == Some(&b'~')
+            {
+                last_sigil - 1
+            } else {
+                last_sigil
+            };
+            for item in items {
+                if item.disabled_reason.is_some() || item.replacement.is_empty()
+                {
+                    continue;
+                }
+                let Some(target_prefix) =
+                    raw_text.get(relation_start..field.replacement.0)
+                else {
+                    continue;
+                };
+                let full = format!("{target_prefix}{}", item.replacement);
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.label,
+                    group: "relation labels".to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion {
+                marker_start: relation_start,
+                rows,
+            }));
         }
         CompletionContext::TaskLink => {
             let (candidates, _) = task_link_candidates(bob_dir, "");

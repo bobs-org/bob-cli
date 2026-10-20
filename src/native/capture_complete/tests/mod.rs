@@ -12,6 +12,7 @@ mod blocked_tasks;
 mod output;
 mod parent_tasks;
 mod pomodoros;
+mod relations;
 mod routes_tasks;
 mod task_links;
 

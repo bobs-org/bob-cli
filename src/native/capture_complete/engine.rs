@@ -4,9 +4,10 @@ use super::{
     candidates::{
         active_task_candidates, apply_relationship_picker,
         blocked_task_candidates, dependency_candidates, link_candidates,
-        route_candidates, section_candidates, task_candidates,
-        task_complete_candidates, task_goto_candidates, task_link_candidates,
-        task_parent_candidates, task_section_candidates, TaskSearch,
+        relation_candidates, relation_label_suggestions, route_candidates,
+        section_candidates, task_candidates, task_complete_candidates,
+        task_goto_candidates, task_link_candidates, task_parent_candidates,
+        task_section_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
@@ -22,6 +23,7 @@ use crate::native::{
     capture, capture_active_tasks, capture_block_ids, capture_dependency_tasks,
     capture_language::{
         self, CompletionContext, DependencyTarget, DependencyTargetKind,
+        RelationDirection,
     },
     capture_links, pomodoro,
 };
@@ -98,6 +100,9 @@ fn build_result_inner(
             | CompletionContext::TaskParent
             | CompletionContext::TaskDependency
             | CompletionContext::BlockedTask
+            | CompletionContext::RelationTo
+            | CompletionContext::RelationFrom
+            | CompletionContext::RelationLabel
             | CompletionContext::TaskComplete => {
                 unreachable!("link field context")
             }
@@ -327,6 +332,33 @@ fn build_result_inner(
                 &typed_blocked,
             )
         }
+        CompletionContext::RelationTo | CompletionContext::RelationFrom => {
+            let item = editor_item.as_ref();
+            let owner_note = item
+                .and_then(|found| found.route.as_deref())
+                .or_else(|| {
+                    item.and_then(|found| found.dependency_target.as_ref())
+                        .and_then(|target| target.route.as_deref())
+                })
+                .unwrap_or_else(|| capture::inbox_route());
+            relation_candidates(
+                bob_dir,
+                &field.query,
+                if field.context == CompletionContext::RelationTo {
+                    RelationDirection::To
+                } else {
+                    RelationDirection::From
+                },
+                item.and_then(|found| found.dependency_target.as_ref()),
+                &capture::route_label(owner_note),
+                item.map(|found| found.relations.as_slice()).unwrap_or(&[]),
+                item.map(|found| found.dependencies.as_slice())
+                    .unwrap_or(&[]),
+            )
+        }
+        CompletionContext::RelationLabel => {
+            relation_label_suggestions(bob_dir, &field.query)
+        }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock => {
@@ -334,11 +366,9 @@ fn build_result_inner(
         }
     };
 
-    // Bob owns the search query for dependency, blocked-task, scoped task,
-    // parent-task, and task-complete pickers. Dependency and
-    // task-complete queries are decoded here so clients never parse a
-    // quoted note component; only the dependency context also carries
-    // its owner.
+    // Bob owns the search query for task pickers and relation completion.
+    // Relation target queries are decoded here so clients never parse a
+    // quoted note component; only target contexts carry their lexical owner.
     let (query, owner) = if matches!(
         field.context,
         CompletionContext::TaskDependency
@@ -346,6 +376,9 @@ fn build_result_inner(
             | CompletionContext::Task
             | CompletionContext::TaskParent
             | CompletionContext::TaskComplete
+            | CompletionContext::RelationTo
+            | CompletionContext::RelationFrom
+            | CompletionContext::RelationLabel
     ) {
         (
             Some(field.query.clone()),
@@ -353,6 +386,8 @@ fn build_result_inner(
                 field.context,
                 CompletionContext::TaskDependency
                     | CompletionContext::BlockedTask
+                    | CompletionContext::RelationTo
+                    | CompletionContext::RelationFrom
             ) {
                 editor_item
                     .as_ref()

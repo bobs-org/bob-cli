@@ -451,7 +451,8 @@ another thin client of that service (see `docs/capture.md`
   kind, `new block ID`, or Pomodoro time and name. Groups are human
   words: `inbox` / `areas` / `projects`, `sections in dev`,
   `tasks in dev`, `parent tasks`, `new task ID`, `task sections`,
-  `open Pomodoros`, `active tasks`, `prerequisite tasks`, `blocked tasks`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
+  `open Pomodoros`, `active tasks`, `prerequisite tasks`, `blocked tasks`,
+  `links to`, `linked from`, and `relation labels`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
   a complete marker gets a space. A quoted word carrying its own prefix
   (for example `fix it @dev:`) is served with `!prefix 7`, counted in
   Unicode scalar values.

@@ -7,8 +7,9 @@ use std::{
 use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-        Candidates, CompleteError, DependencyCandidate, PickerRelationship,
-        PickerRelationshipEntry, RouteCandidate, SectionCandidate,
+        Candidates, CompleteError, DependencyCandidate, PickerRelationEntry,
+        PickerRelationship, PickerRelationshipEntry, RelationCandidate,
+        RelationLabelSuggestion, RouteCandidate, SectionCandidate,
         TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
         TaskLinkCandidate, TaskParentCandidate, TaskSectionCandidate,
     },
@@ -19,11 +20,12 @@ use crate::native::{
     capture_completable_tasks, capture_dependency_tasks,
     capture_language::{
         DependencyEntry, DependencyTarget, DependencyTargetKind,
-        EditorItemParse,
+        EditorItemParse, RelationDirection, RelationEntry,
     },
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
-    pomodoro, project_dependencies, task_complete, task_status_hooks,
+    pomodoro, project_dependencies, task_complete, task_relations,
+    task_status_hooks,
 };
 
 pub(super) fn route_candidates(
@@ -591,7 +593,10 @@ pub(super) fn apply_relationship_picker(
     candidates: &mut Candidates,
     item: &EditorItemParse,
 ) -> Option<PickerRelationship> {
-    if item.dependencies.is_empty() && item.blocked_tasks.is_empty() {
+    if item.dependencies.is_empty()
+        && item.blocked_tasks.is_empty()
+        && item.relations.is_empty()
+    {
         return None;
     }
 
@@ -607,6 +612,28 @@ pub(super) fn apply_relationship_picker(
         .blocked_tasks
         .iter()
         .map(|entry| resolve_relationship_entry(bob_dir, &discovered, entry))
+        .collect();
+    let relations = item
+        .relations
+        .iter()
+        .map(|entry| {
+            let text = capture_dependency_tasks::resolve_dependency_note(
+                bob_dir,
+                &discovered,
+                &entry.note,
+            )
+            .ok()
+            .map(|path| capture_dependency_tasks::display_path(&path))
+            .and_then(|note_path| {
+                unique_task(&discovered, &note_path, &entry.block_id)
+                    .map(|task| task.text.clone())
+            })
+            .unwrap_or_else(|| entry.raw.clone());
+            PickerRelationEntry {
+                direction: entry.direction,
+                text,
+            }
+        })
         .collect();
     let recognized_projects = recognized_project_paths(bob_dir, &discovered);
     let settings = note_tasks::read_settings(bob_dir);
@@ -675,6 +702,7 @@ pub(super) fn apply_relationship_picker(
             .into_iter()
             .map(|entry| entry.wire)
             .collect(),
+        relations,
     })
 }
 
@@ -1184,6 +1212,461 @@ pub(super) fn blocked_task_candidates(
         })
         .collect();
     (Candidates::BlockedTask(candidates), warnings)
+}
+
+/// Relation targets use the same complete task catalog as dependencies.
+/// `to` reads the owner's LINKS line, while `from` reads each offered
+/// source's LINKS line because that is the task the capture would edit.
+pub(super) fn relation_candidates(
+    bob_dir: &Path,
+    query: &str,
+    direction: RelationDirection,
+    owner: Option<&DependencyTarget>,
+    owner_note: &str,
+    typed_relations: &[RelationEntry],
+    typed_dependencies: &[DependencyEntry],
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let (links, mut warnings, _) = task_links_catalog(bob_dir, &discovered);
+    let graph =
+        capture_dependency_tasks::dependency_graph(bob_dir, &discovered);
+    let mut ledger_warnings = Vec::new();
+    let ledger = capture_active_tasks::read_ledger(
+        &pomodoro::day_file_for(bob_dir),
+        &mut ledger_warnings,
+    );
+    warnings.extend(ledger_warnings);
+    let owner_identity = owner.and_then(|target| {
+        if target.kind != DependencyTargetKind::ExistingTask {
+            return None;
+        }
+        let route = target.route.as_deref()?;
+        let block_id = target.block_id.as_deref()?;
+        task_identity_for_route(bob_dir, &discovered, route, block_id)
+    });
+
+    let mut prerequisites = HashSet::new();
+    if let Some(identity) = &owner_identity {
+        if let Some(targets) = graph.get(identity) {
+            prerequisites.extend(targets.iter().cloned());
+        }
+    }
+    for entry in typed_dependencies {
+        if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+            bob_dir,
+            &discovered,
+            &entry.note,
+        ) {
+            prerequisites.insert((
+                capture_dependency_tasks::display_path(&path),
+                entry.block_id.clone(),
+            ));
+        }
+    }
+
+    let mut typed = HashMap::new();
+    for entry in typed_relations
+        .iter()
+        .filter(|entry| entry.direction == direction)
+    {
+        if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+            bob_dir,
+            &discovered,
+            &entry.note,
+        ) {
+            typed
+                .entry((
+                    capture_dependency_tasks::display_path(&path),
+                    entry.block_id.clone(),
+                ))
+                .or_insert_with(|| entry.label.clone());
+        }
+    }
+
+    let owner_links = owner_identity
+        .as_ref()
+        .and_then(|identity| links.get(identity));
+    let ordered = relation_picker_order(
+        bob_dir,
+        &discovered.tasks,
+        query,
+        Some(owner_note),
+        direction,
+        &ledger,
+    );
+    let candidates = ordered
+        .into_iter()
+        .map(|task| {
+            let key = task
+                .block_id
+                .as_ref()
+                .map(|id| (task.note_path.clone(), id.clone()));
+            let is_self = key.as_ref().is_some_and(|identity| {
+                owner_identity.as_ref() == Some(identity)
+            });
+            let candidate_links =
+                key.as_ref().and_then(|identity| links.get(identity));
+            let stored_link = match direction {
+                RelationDirection::To => key.as_ref().and_then(|identity| {
+                    owner_links.and_then(|source| source.outgoing.get(identity))
+                }),
+                RelationDirection::From => {
+                    owner_identity.as_ref().and_then(|owner| {
+                        candidate_links
+                            .and_then(|source| source.outgoing.get(owner))
+                    })
+                }
+            };
+            let stored_label = stored_link.cloned().flatten();
+            let typed_label = key
+                .as_ref()
+                .and_then(|identity| typed.get(identity).cloned())
+                .flatten();
+            let already_linked = stored_link.is_some()
+                || key
+                    .as_ref()
+                    .is_some_and(|identity| typed.contains_key(identity));
+            let archived = is_done_path(Path::new(&task.note_path));
+            let read_only = direction == RelationDirection::From
+                && is_relation_source_read_only(bob_dir, task);
+            let malformed = direction == RelationDirection::From
+                && candidate_links.is_some_and(|source| source.malformed);
+            let disabled_reason = if is_self {
+                Some("the owner task itself".to_string())
+            } else if task.duplicate_id {
+                Some(format!(
+                    "duplicate block ID ^{} in {}",
+                    task.block_id.as_deref().unwrap_or_default(),
+                    task.note_path
+                ))
+            } else if read_only {
+                Some("read-only note".to_string())
+            } else if malformed {
+                Some("its LINKS line is malformed".to_string())
+            } else if archived && task.block_id.is_none() {
+                Some("archived tasks can't get an id".to_string())
+            } else {
+                None
+            };
+            let requires_block_id = task.block_id.is_none();
+            let replacement = if requires_block_id || disabled_reason.is_some()
+            {
+                String::new()
+            } else {
+                capture_dependency_tasks::replacement_for_prefix(
+                    &discovered.index,
+                    Path::new(&task.note_path),
+                    task.block_id.as_deref().expect("identified relation task"),
+                    match direction {
+                        RelationDirection::To => "~",
+                        RelationDirection::From => "~~",
+                    },
+                )
+            };
+            RelationCandidate {
+                replacement,
+                task_ref: task.task_ref.clone(),
+                note_path: task.note_path.clone(),
+                locator: task.locator.clone(),
+                group: capture_dependency_tasks::group_for(
+                    task,
+                    Some(owner_note),
+                )
+                .to_string(),
+                hidden: task.hidden,
+                block_id: task.block_id.clone(),
+                requires_block_id,
+                block_id_suggestions: task.block_id_suggestions.clone(),
+                already_linked,
+                existing_label: typed_label.or(stored_label),
+                also_prerequisite: key
+                    .as_ref()
+                    .is_some_and(|identity| prerequisites.contains(identity)),
+                disabled_reason,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+                task_kind: task.task_kind,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    (Candidates::Relation(candidates), warnings)
+}
+
+/// Build one source LINKS view per identified task and count normalized
+/// labels across every accepted LINKS line, including `done/` history.
+fn task_links_catalog(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+) -> (
+    HashMap<capture_dependency_tasks::TaskIdentity, TaskLinks>,
+    Vec<String>,
+    Vec<(String, usize)>,
+) {
+    let mut tasks_by_note: HashMap<
+        &str,
+        Vec<&capture_dependency_tasks::DependencyTask>,
+    > = HashMap::new();
+    for task in &discovered.tasks {
+        tasks_by_note
+            .entry(task.note_path.as_str())
+            .or_default()
+            .push(task);
+    }
+    let mut links = HashMap::new();
+    let mut warnings = Vec::new();
+    let mut labels: HashMap<String, (String, usize)> = HashMap::new();
+    for (note_path, tasks) in tasks_by_note {
+        let Ok(contents) = fs::read_to_string(bob_dir.join(note_path)) else {
+            continue;
+        };
+        let lines = contents.lines().collect::<Vec<_>>();
+        let fenced =
+            crate::native::markdown::fenced_lines(&lines, 0..lines.len());
+        for task in tasks {
+            let block_id = task.block_id.as_deref();
+            let task_line = task.line.saturating_sub(1);
+            let children = task_relations::parse::links_children_of(
+                &lines, &fenced, task_line,
+            );
+            let mut source = TaskLinks::default();
+            for child in children {
+                match child.parsed {
+                    task_relations::LinksLine::Accepted { entries, .. } => {
+                        for entry in entries {
+                            if let Some(label) = entry.label.as_deref() {
+                                let folded = label.to_lowercase();
+                                let value = labels
+                                    .entry(folded)
+                                    .or_insert_with(|| (label.to_string(), 0));
+                                value.1 += 1;
+                            }
+                            let target_path = if entry.target.is_empty() {
+                                Some(PathBuf::from(&task.note_path))
+                            } else {
+                                discovered.index.resolve(
+                                    Some(Path::new(&task.note_path)),
+                                    &entry.target,
+                                )
+                            };
+                            if let Some(target_path) = target_path {
+                                let identity = (
+                                    capture_dependency_tasks::display_path(
+                                        &target_path,
+                                    ),
+                                    entry.block_id,
+                                );
+                                source
+                                    .outgoing
+                                    .entry(identity)
+                                    .or_insert(entry.label);
+                            }
+                        }
+                    }
+                    task_relations::LinksLine::Malformed => {
+                        source.malformed = true;
+                    }
+                    task_relations::LinksLine::Empty
+                    | task_relations::LinksLine::NotALine => {}
+                }
+            }
+            if let Some(block_id) = block_id {
+                links.insert(
+                    (task.note_path.clone(), block_id.to_string()),
+                    source,
+                );
+            }
+        }
+    }
+    let mut labels = labels.into_values().collect::<Vec<_>>();
+    labels.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    warnings.extend(discovered.warnings.iter().cloned());
+    (links, warnings, labels)
+}
+
+fn relation_picker_order<'a>(
+    bob_dir: &Path,
+    tasks: &'a [capture_dependency_tasks::DependencyTask],
+    query: &str,
+    owner_note: Option<&str>,
+    direction: RelationDirection,
+    ledger: &capture_active_tasks::Ledger,
+) -> Vec<&'a capture_dependency_tasks::DependencyTask> {
+    let mut scored = tasks
+        .iter()
+        .filter(|task| {
+            direction == RelationDirection::To
+                || is_editable_open_task(task)
+                || is_relation_source_read_only(bob_dir, task)
+        })
+        .filter_map(|task| {
+            capture_link_tasks::match_score(
+                &capture_dependency_tasks::dependency_search_fields(task),
+                query,
+            )
+            .map(|score| (task, score))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|(left, left_score), (right, right_score)| {
+        right_score.cmp(left_score).then_with(|| {
+            relation_order_key(left, owner_note, direction, ledger)
+                .cmp(&relation_order_key(right, owner_note, direction, ledger))
+        })
+    });
+    scored.into_iter().map(|(task, _)| task).collect()
+}
+
+fn relation_order_key(
+    task: &capture_dependency_tasks::DependencyTask,
+    owner_note: Option<&str>,
+    direction: RelationDirection,
+    ledger: &capture_active_tasks::Ledger,
+) -> (u8, u8, usize, usize, u8, String, usize) {
+    let hidden = u8::from(task.hidden);
+    if direction == RelationDirection::To {
+        let group = if owner_note == Some(task.note_path.as_str()) {
+            0
+        } else if is_done_path(Path::new(&task.note_path)) {
+            5
+        } else if task.open && task.status_symbol == '/' {
+            1
+        } else if task.open && task.status_symbol == '*' {
+            2
+        } else if task.open {
+            3
+        } else {
+            4
+        };
+        return (group, hidden, 0, 0, 0, task.note_path.clone(), task.line);
+    }
+
+    if let Some((entry, link)) = task_ledger_position(task, ledger) {
+        let running = task
+            .block_id
+            .as_ref()
+            .and_then(|id| {
+                ledger
+                    .owners
+                    .get(&(task_route(&task.note_path), id.clone()))
+            })
+            .is_some_and(|pomodoro| pomodoro.is_current);
+        return (
+            0,
+            u8::from(!running),
+            entry,
+            link,
+            hidden,
+            task.note_path.clone(),
+            task.line,
+        );
+    }
+    let group = if task.status_symbol == '/' {
+        1
+    } else if task.status_symbol == '*' {
+        2
+    } else if owner_note == Some(task.note_path.as_str()) {
+        3
+    } else {
+        4
+    };
+    (group, 0, 0, 0, hidden, task.note_path.clone(), task.line)
+}
+
+#[derive(Default)]
+struct TaskLinks {
+    outgoing: HashMap<capture_dependency_tasks::TaskIdentity, Option<String>>,
+    malformed: bool,
+}
+
+pub(super) fn relation_label_suggestions(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let (_, warnings, labels) = task_links_catalog(bob_dir, &discovered);
+    let validation =
+        crate::native::task_relations::label::normalize_relation_label(query);
+    let normalized_query = validation.as_ref().cloned().unwrap_or_else(|_| {
+        crate::native::task_relations::label::collapse_label_text(query)
+    });
+    let ranked = rank(labels, &normalized_query, |(label, _)| label);
+    let mut suggestions = ranked
+        .into_iter()
+        .map(|(label, count)| RelationLabelSuggestion {
+            replacement: crate::native::task_relations::label::relation_label_quoted_form(&label),
+            label,
+            count: Some(count),
+            typed: false,
+            disabled_reason: None,
+        })
+        .collect::<Vec<_>>();
+    if !normalized_query.is_empty() {
+        let (label, replacement, disabled_reason) = match validation {
+            Ok(label) => (
+                label.clone(),
+                crate::native::task_relations::label::relation_label_quoted_form(&label),
+                None,
+            ),
+            Err(error) => (
+                normalized_query.clone(),
+                String::new(),
+                Some(match error {
+                    crate::native::task_relations::label::LabelError::Empty => {
+                        "label can't be empty"
+                    }
+                    crate::native::task_relations::label::LabelError::TooLong => {
+                        "label can't exceed 40 characters"
+                    }
+                    crate::native::task_relations::label::LabelError::ForbiddenCharacter => {
+                        "label contains a forbidden character"
+                    }
+                    crate::native::task_relations::label::LabelError::InvalidStart => {
+                        "label can't start with a middle dot or comma"
+                    }
+                }
+                .to_string()),
+            ),
+        };
+        suggestions.retain(|item| !item.label.eq_ignore_ascii_case(&label));
+        suggestions.insert(
+            0,
+            RelationLabelSuggestion {
+                replacement,
+                label,
+                count: None,
+                typed: true,
+                disabled_reason,
+            },
+        );
+    }
+    (Candidates::RelationLabel(suggestions), warnings)
+}
+
+fn is_done_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "done")
+}
+
+fn is_relation_source_read_only(
+    bob_dir: &Path,
+    task: &capture_dependency_tasks::DependencyTask,
+) -> bool {
+    let path = Path::new(&task.note_path);
+    is_done_path(path)
+        || task_status_hooks::canonical_daily_date(path).is_some()
+        || fs::metadata(bob_dir.join(path))
+            .is_ok_and(|metadata| metadata.permissions().readonly())
 }
 
 fn is_editable_open_task(

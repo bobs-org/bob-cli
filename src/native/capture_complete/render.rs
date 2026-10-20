@@ -3,8 +3,8 @@ use serde_json::json;
 use super::model::{
     BlockedTaskCandidate, Candidates, CaptureCompleteResult, CompleteError,
     DependencyCandidate, OutputFormat, PomodoroNameCandidate,
-    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
-    TaskParentCandidate,
+    RelationCandidate, RelationLabelSuggestion, TaskCompleteCandidate,
+    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::{
@@ -314,6 +314,59 @@ pub(super) fn blocked_task_line(
     (label, detail)
 }
 
+pub(super) fn relation_line(item: &RelationCandidate) -> (String, String) {
+    let mut detail = format!(
+        "[{}] {}  · {}  · {}",
+        item.status_symbol, item.text, item.locator, item.group
+    );
+    if item.requires_block_id {
+        if let Some(suggestion) = item.block_id_suggestions.first() {
+            detail.push_str(&format!(" · needs ID (^{suggestion})"));
+        } else {
+            detail.push_str(" · needs ID");
+        }
+    }
+    if item.already_linked {
+        detail.push_str(" · already linked");
+    }
+    if let Some(label) = &item.existing_label {
+        detail.push_str(&format!(" · ‹{label}›"));
+    }
+    if item.also_prerequisite {
+        detail.push_str(" · also prerequisite");
+    }
+    if let Some(reason) = &item.disabled_reason {
+        detail.push_str(&format!(" · {reason}"));
+    }
+    let label = if item.replacement.is_empty() {
+        if item.requires_block_id {
+            format!("{}:…", item.locator)
+        } else {
+            "…".to_string()
+        }
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
+}
+
+pub(super) fn relation_label_line(
+    item: &RelationLabelSuggestion,
+) -> (String, String) {
+    let detail = if let Some(reason) = &item.disabled_reason {
+        format!("typed label · {reason}")
+    } else if item.typed {
+        "typed label · canonical spelling".to_string()
+    } else {
+        format!(
+            "{} use{}",
+            item.count.unwrap_or_default(),
+            if item.count == Some(1) { "" } else { "s" }
+        )
+    };
+    (item.replacement.clone(), detail)
+}
+
 pub(super) fn candidate_lines(
     candidates: &Candidates,
     context: Option<CompletionContext>,
@@ -392,6 +445,12 @@ pub(super) fn candidate_lines(
         }
         Candidates::BlockedTask(items) => {
             items.iter().map(blocked_task_line).collect()
+        }
+        Candidates::Relation(items) => {
+            items.iter().map(relation_line).collect()
+        }
+        Candidates::RelationLabel(items) => {
+            items.iter().map(relation_label_line).collect()
         }
         Candidates::TaskComplete(items) => {
             items.iter().map(task_complete_line).collect()
@@ -522,6 +581,9 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskParent => "task_parent",
         CompletionContext::TaskDependency => "task_dependency",
         CompletionContext::BlockedTask => "blocked_task",
+        CompletionContext::RelationTo => "relation_to",
+        CompletionContext::RelationFrom => "relation_from",
+        CompletionContext::RelationLabel => "relation_label",
         CompletionContext::TaskComplete => "task_complete",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",

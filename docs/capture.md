@@ -5990,19 +5990,27 @@ are omitted when absent, and responses for drafts without relationship
 modifiers remain byte-identical.
 
 `~` / `~~` add the `relation_to` and `relation_from` contexts and the
-`relation_label` context. Both task contexts reuse the whole `discover`
-catalog with direction-specific eligibility, ranking, and badges, and
-rows carry `already_linked`, `existing_label`, and the information
+`relation_label` context. `relation_to` uses the whole `discover`
+catalog; `relation_from` offers open editable tasks, with read-only
+sources kept visible and disabled. Empty-query order for `relation_to`
+is the owner's note, In Progress, Next, other open tasks, closed tasks
+in active notes, then `done/`. For `relation_from`, today's linked tasks
+(the running entry first) precede In Progress, Next, the owner's note,
+and other editable tasks. A query ranks by match score first, then these
+tiers. Rows carry `already_linked`, `existing_label`, and the information
 badge `also_prerequisite` plus `disabled_reason` (`the owner task
 itself`, the duplicate-block-ID reason, `archived tasks can't get an
 id`, and — for `relation_from` only — `read-only note` and `its LINKS
-line is malformed`). Label suggestions scan every LINKS line,
-`done/` included, and return `suggestions[] {label, count,
-replacement}`; a non-empty typed label adds a first `{label, typed:
-true, replacement}` row with bob's canonical `|label` /
-`|"multi word"` spelling. `picker.relationship` gains `relations[]`
-(direction, text) for the owner picker, and shell completion gains
-`links to` / `linked from` groups. See
+line is malformed`). Label suggestions scan every LINKS line, including
+`done/` and lines beneath ID-less tasks, and return
+`suggestions[] {label, count, replacement}`. A non-empty typed label adds
+a first `{label, typed: true, replacement}` row with bob's canonical
+`|label` / `|"multi word"` spelling; invalid labels carry a
+`disabled_reason` naming the broken label rule. `picker.relationship`
+gains `relations[]` (direction, text) for the owner picker, and shell
+completion gains `links to` / `linked from` groups. `capture-task-id`
+returns `relation_to_replacement` and `relation_from_replacement` for
+the Add block ID flow. See
 [Linking tasks with '~' and '~~'](#linking-tasks).
 
 The analogous parent-task picker accepts a terminal `+query` on an item's

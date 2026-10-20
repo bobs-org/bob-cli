@@ -347,8 +347,18 @@ pub(crate) fn replacement_for_sigil(
     block_id: &str,
     sigil: u8,
 ) -> String {
+    replacement_for_prefix(index, path, block_id, &(sigil as char).to_string())
+}
+
+/// Sigil-prefix formatter for relation arrows, whose incoming form uses two
+/// bytes (`~~`). Quoting rules are shared with dependency markers.
+pub(crate) fn replacement_for_prefix(
+    index: &NoteIndex,
+    path: &Path,
+    block_id: &str,
+    sigil: &str,
+) -> String {
     let locator = locator_for(index, path);
-    let sigil = sigil as char;
     if needs_quoting(&locator) {
         format!("{sigil}\"{}\":{block_id}", escape_quoted_note(&locator))
     } else {

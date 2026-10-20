@@ -1,0 +1,238 @@
+use super::{
+    super::{
+        model::Candidates, render::candidate_lines, shell::shell_completion,
+    },
+    result, write_file, write_settings, TempDir,
+};
+use crate::native::capture_language::CompletionContext;
+
+fn relation_fixture() -> TempDir {
+    let temp = TempDir::new("bob-cli-capture-complete-relations");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("mac_inbox.md"),
+        "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[tasks#^target|follow-up of]]\n  - ⛓️ **DEPENDS ON:** [[tasks#^target]]\n- [ ] #task Owner neighbor ^owner-neighbor\n",
+    );
+    write_file(
+        &temp.path().join("tasks.md"),
+        "- [ ] #task Target ^target\n- [ ] #task Source ^source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [ ] #task Malformed source ^malformed\n  - 🪢 **LINKS:** see (old) [[mac_inbox#^owner]]\n- [ ] #task Idless source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [/] #task In progress ^progress\n- [*] #task Next ^next\n- [x] #task Closed ^closed\n",
+    );
+    write_file(
+        &temp.path().join("done/archive.md"),
+        "- [ ] #task Archived without ID\n- [ ] #task Archived source ^archived-source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n",
+    );
+    temp
+}
+
+#[test]
+fn relation_target_contexts_use_directional_markers_and_owner_links() {
+    let temp = relation_fixture();
+
+    let bare_to = result(temp.path(), "New task ~", "New task ~".len());
+    assert_eq!(bare_to.context, Some(CompletionContext::RelationTo));
+    let note_prefix = "New task ~tasks:";
+    let prefixed = result(temp.path(), note_prefix, note_prefix.len());
+    assert_eq!(prefixed.context, Some(CompletionContext::RelationTo));
+    assert_eq!(prefixed.query.as_deref(), Some("tasks:"));
+    let to_marker = "New task ~tasks:tar";
+    let from_marker = "New task ~~tasks:tar";
+    let to_flip = result(temp.path(), to_marker, to_marker.len());
+    let from_flip = result(temp.path(), from_marker, from_marker.len());
+    assert_eq!(to_flip.context, Some(CompletionContext::RelationTo));
+    assert_eq!(from_flip.context, Some(CompletionContext::RelationFrom));
+    assert_eq!(to_flip.replacement.start, from_flip.replacement.start);
+
+    let raw = "Use this @mac_inbox+owner ~tar";
+    let to = result(temp.path(), raw, raw.len());
+    assert_eq!(to.context, Some(CompletionContext::RelationTo));
+    assert_eq!(to.replacement.start, raw.find('~').expect("sigil"));
+    let json = serde_json::to_value(&to).expect("serialize to picker");
+    let target = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["block_id"] == "target")
+        .expect("target candidate");
+    assert_eq!(target["replacement"], "~tasks:target");
+    assert_eq!(target["already_linked"], true);
+    assert_eq!(target["existing_label"], "follow-up of");
+    assert_eq!(target["also_prerequisite"], true);
+
+    let raw = "Use this @mac_inbox+owner ~~sou";
+    let from = result(temp.path(), raw, raw.len());
+    assert_eq!(from.context, Some(CompletionContext::RelationFrom));
+    let json = serde_json::to_value(&from).expect("serialize from picker");
+    let source = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["block_id"] == "source")
+        .expect("source candidate");
+    assert_eq!(source["replacement"], "~~tasks:source");
+    assert_eq!(source["already_linked"], true);
+    assert_eq!(source["existing_label"], "follow-up of");
+    let json = serde_json::to_value(&from).expect("serialize guarded rows");
+    let malformed = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["block_id"] == "malformed")
+        .expect("malformed source candidate");
+    assert_eq!(malformed["disabled_reason"], "its LINKS line is malformed");
+    let archived = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["block_id"] == "archived-source")
+        .expect("archived source candidate");
+    assert_eq!(archived["disabled_reason"], "read-only note");
+}
+
+#[test]
+fn relation_target_replacement_stops_before_an_existing_label() {
+    let temp = relation_fixture();
+    let raw = "New task ~tasks:tar|\"follow-up of\"";
+    let cursor = raw.find('|').expect("label separator");
+    let value = result(temp.path(), raw, cursor);
+    assert_eq!(value.context, Some(CompletionContext::RelationTo));
+    assert_eq!(
+        &raw[value.replacement.start..value.replacement.end],
+        "~tasks:tar"
+    );
+    assert_eq!(value.query.as_deref(), Some("tasks:tar"));
+}
+
+#[test]
+fn relation_pools_follow_directional_tiers_and_editability() {
+    let temp = relation_fixture();
+    let raw = "Use this @mac_inbox+owner ~";
+    let to = result(temp.path(), raw, raw.len());
+    let json = serde_json::to_value(to).expect("serialize relation-to rows");
+    let texts = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["text"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        [
+            "Owner",
+            "Owner neighbor",
+            "In progress",
+            "Next",
+            "Target",
+            "Source",
+            "Malformed source",
+            "Idless source",
+            "Closed",
+            "Archived without ID",
+            "Archived source",
+        ]
+    );
+
+    let raw = "Use this @mac_inbox+owner ~~";
+    let from = result(temp.path(), raw, raw.len());
+    let json =
+        serde_json::to_value(from).expect("serialize relation-from rows");
+    let rows = json["candidates"].as_array().unwrap();
+    let texts = rows
+        .iter()
+        .map(|row| row["text"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(!texts.contains(&"Closed"));
+    let archived = rows
+        .iter()
+        .find(|row| row["text"] == "Archived source")
+        .expect("read-only archived source remains visible");
+    assert_eq!(archived["disabled_reason"], "read-only note");
+}
+
+#[test]
+fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
+    let temp = relation_fixture();
+    let raw = "Use this @mac_inbox+owner ~tasks:target|follow";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    assert_eq!(
+        &raw[value.replacement.start..value.replacement.end],
+        "|follow"
+    );
+    let Candidates::RelationLabel(rows) = &value.candidates else {
+        panic!("expected relation label suggestions");
+    };
+    assert_eq!(rows[0].label, "follow");
+    assert!(rows[0].typed);
+    assert_eq!(rows[0].replacement, "|follow");
+    assert!(rows.iter().any(|row| {
+        row.label == "follow-up of"
+            && row.count == Some(4)
+            && row.replacement == "|\"follow-up of\""
+    }));
+    let raw = "Use this @mac_inbox+owner ~";
+    let to = result(temp.path(), raw, raw.len());
+    let json = serde_json::to_value(to).expect("serialize archived rows");
+    let archived = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|candidate| candidate["text"] == "Archived without ID")
+        .expect("archived task candidate");
+    assert_eq!(
+        archived["disabled_reason"],
+        "archived tasks can't get an id"
+    );
+    assert_eq!(
+        candidate_lines(&value.candidates, value.context)[0].0,
+        "|follow"
+    );
+    let raw = "New task ~tasks:target|\"see (old";
+    let invalid = result(temp.path(), raw, raw.len());
+    assert_eq!(invalid.context, Some(CompletionContext::RelationLabel));
+    let Candidates::RelationLabel(rows) = invalid.candidates else {
+        panic!("expected invalid typed relation label");
+    };
+    assert_eq!(rows[0].label, "see (old");
+    assert!(rows[0].typed);
+    assert_eq!(rows[0].replacement, "");
+    assert_eq!(
+        rows[0].disabled_reason.as_deref(),
+        Some("label contains a forbidden character")
+    );
+}
+
+#[test]
+fn parent_picker_reports_typed_relation_direction_and_target_text() {
+    let temp = relation_fixture();
+    let raw = "~tasks:target New task +";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::TaskParent));
+    let json = serde_json::to_value(value).expect("serialize parent picker");
+    assert_eq!(
+        json["picker"]["relationship"]["relations"],
+        serde_json::json!([
+            { "direction": "to", "text": "Target" }
+        ])
+    );
+}
+
+#[test]
+fn relation_shell_groups_are_directional_and_skip_guarded_rows() {
+    let temp = relation_fixture();
+    for (raw, group, expected) in [
+        ("New task ~", "links to", "~tasks:target"),
+        ("New task ~~", "linked from", "~~tasks:source"),
+    ] {
+        let completion = shell_completion(temp.path(), raw, raw.len())
+            .expect("shell completion")
+            .expect("relation shell rows");
+        assert!(completion
+            .rows
+            .iter()
+            .any(|row| { row.full == expected && row.group == group }));
+        assert!(completion
+            .rows
+            .iter()
+            .all(|row| { !row.full.contains("Archived without ID") }));
+    }
+}

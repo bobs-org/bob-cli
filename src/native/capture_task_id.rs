@@ -94,6 +94,9 @@ quoting or case, plus `blocked_task_replacement` (`*note:id`, quoted when the \
 locator needs it, in both modes) so the blocked-task picker can splice the new ID, \
 plus `complete_replacement` (`!note:id`, quoted when the \
 locator needs it, in both modes) so the Complete picker can splice the new ID, \
+plus `relation_to_replacement` (`~note:block-id`) and \
+`relation_from_replacement` (`~~note:block-id`), quoted when the locator \
+needs it, so either relation picker can splice the new ID, \
 plus `parent_replacement` (`@route+block-id`) in routable \
 `--route` mode. Dry-run plans the same \
 mutation and returns the same success shape without writing. Stale, \
@@ -336,6 +339,10 @@ struct CaptureTaskIdResult {
     /// losing quoting or case. Present in both `--route` and
     /// `--note-path` modes.
     complete_replacement: String,
+    /// Backend-formatted `~` and `~~` relation replacements, quoted when
+    /// the locator needs it. Present in both target modes.
+    relation_to_replacement: String,
+    relation_from_replacement: String,
     /// Backend-formatted parent-task marker, present only when `--route`
     /// identifies a routable note.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -534,6 +541,20 @@ fn plan_assignment(
         &request.block_id,
         b'!',
     );
+    let relation_to_replacement =
+        capture_dependency_tasks::replacement_for_prefix(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            "~",
+        );
+    let relation_from_replacement =
+        capture_dependency_tasks::replacement_for_prefix(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            "~~",
+        );
     let parent_replacement = route
         .as_deref()
         .map(|route| format!("@{route}+{}", request.block_id));
@@ -555,6 +576,8 @@ fn plan_assignment(
             dependency_replacement,
             blocked_task_replacement,
             complete_replacement,
+            relation_to_replacement,
+            relation_from_replacement,
             parent_replacement,
             line: assigned.line,
             task_ref: assigned.task_ref.clone(),
@@ -1038,6 +1061,8 @@ mod tests {
             dependency_replacement: "&file:report-id".to_string(),
             blocked_task_replacement: "*file:report-id".to_string(),
             complete_replacement: "!file:report-id".to_string(),
+            relation_to_replacement: "~file:report-id".to_string(),
+            relation_from_replacement: "~~file:report-id".to_string(),
             parent_replacement: Some("@file+report-id".to_string()),
             line: 2,
             task_ref: "2:abcd1234".to_string(),
@@ -1066,6 +1091,8 @@ mod tests {
         assert_eq!(value["dependency_replacement"], "&file:report-id");
         assert_eq!(value["blocked_task_replacement"], "*file:report-id");
         assert_eq!(value["complete_replacement"], "!file:report-id");
+        assert_eq!(value["relation_to_replacement"], "~file:report-id");
+        assert_eq!(value["relation_from_replacement"], "~~file:report-id");
         assert_eq!(value["block_id"], "report-id");
         assert_eq!(value["line"], 2);
         assert_eq!(value["ref"], "2:abcd1234");

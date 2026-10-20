@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::native::{
     capture_block_ids,
     capture_completable_tasks::{CompletableGroup, TodayInfo},
-    capture_language::CompletionContext,
+    capture_language::{CompletionContext, RelationDirection},
     capture_link_tasks,
     capture_links::{
         WikilinkBlockCandidate, WikilinkHeadingCandidate, WikilinkNoteCandidate,
@@ -186,6 +186,54 @@ pub(super) struct BlockedTaskCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
+/// One `relation_to` / `relation_from` task candidate. Its identity and
+/// display fields mirror `DependencyCandidate`; relation metadata stays
+/// additive and omitted when it does not apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) note_path: String,
+    pub(super) locator: String,
+    pub(super) group: String,
+    pub(super) hidden: bool,
+    pub(super) block_id: Option<String>,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) already_linked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) existing_label: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) also_prerequisite: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
+}
+
+/// One canonical relation label suggestion. Corpus rows carry an occurrence
+/// count; a typed row is first and has `typed: true` instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationLabelSuggestion {
+    pub(super) label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) count: Option<usize>,
+    pub(super) replacement: String,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) typed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+}
+
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
 /// routable inbox, area, or non-terminal project note. The JSON keys match
 /// the picker contract: `replacement` is the `@route:id` an accept inserts
@@ -364,6 +412,13 @@ pub(super) struct PickerDescriptor {
 pub(super) struct PickerRelationship {
     pub(super) dependencies: Vec<PickerRelationshipEntry>,
     pub(super) blocked_tasks: Vec<PickerRelationshipEntry>,
+    pub(super) relations: Vec<PickerRelationEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PickerRelationEntry {
+    pub(super) direction: RelationDirection,
+    pub(super) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -456,6 +511,8 @@ pub(super) enum Candidates {
     TaskParent(Vec<TaskParentCandidate>),
     Dependency(Vec<DependencyCandidate>),
     BlockedTask(Vec<BlockedTaskCandidate>),
+    Relation(Vec<RelationCandidate>),
+    RelationLabel(Vec<RelationLabelSuggestion>),
     TaskComplete(Vec<TaskCompleteCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
@@ -480,6 +537,8 @@ impl Candidates {
             Self::TaskParent(items) => items.len(),
             Self::Dependency(items) => items.len(),
             Self::BlockedTask(items) => items.len(),
+            Self::Relation(items) => items.len(),
+            Self::RelationLabel(items) => items.len(),
             Self::TaskComplete(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
@@ -534,7 +593,8 @@ pub(super) struct CaptureCompleteResult {
     /// note component. Omitted from other contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) query: Option<String>,
-    /// Lexical owner of the `task_dependency` or `blocked_task` modifier
+    /// Lexical owner of the `task_dependency`, `blocked_task`, `relation_to`,
+    /// or `relation_from` modifier
     /// under the cursor (the capture-parse `dependency_target` for the
     /// cursor's item), so clients never derive the owner themselves.
     /// Set only for those contexts.
