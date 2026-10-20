@@ -1,0 +1,6 @@
+---
+type: "[[area]]"
+---
+# Garden
+
+## Tasks

@@ -1085,6 +1085,7 @@ def test_cli_help_lists_lint_and_fix() -> None:
         "publish-plan",
         "serve",
         "social-card",
+        "tutorial",
         "urls",
     ]
     lint = parser._subparsers._group_actions[0].choices["lint"]

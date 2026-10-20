@@ -19,11 +19,13 @@ just docs-serve           # assemble and serve locally with live reload
 just docs-build           # strict Zensical build of the assembled site
 just docs-build-material  # strict Material 9.7 fallback build
 just docs-check           # lint, drift, build, links, search smoke, and tests
+just docs-tutorial        # execute the published first-day Bash tutorial in isolation
 just docs-fonts           # subset bundled OFL fonts to WOFF2 (needs --group fonts)
 just docs-assets          # generate identity assets: mark, favicons, social card
 just docs-a11y            # Playwright + axe audit of the built site (dev only)
 uv run --project tools/docs bob-docs lint
 uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
+uv run --project tools/docs bob-docs tutorial     # direct tutorial replay
 ```
 
 Install audit browsers once with
@@ -111,6 +113,25 @@ Tracked files are written only by `just docs-gen`, the explicit asset generators
 social card), and explicit `bob-docs lint --fix` ceiling/baseline ratchets.
 Normal lint never writes. Browser audits (`just docs-a11y`) are dev-only and are
 not part of `just docs-check`.
+
+## Executable tutorial (`bob-docs tutorial`)
+
+The tutorial runner follows the Get started navigation order and executes each
+published Bash fence in a persistent shell. It copies `examples/demo-vault` into
+a temporary workspace, isolates `HOME`, XDG directories, and the Bob environment,
+and verifies state at each `tutorial-test: checkpoint` marker. Use
+`just docs-tutorial` to run it directly. It needs Cargo to build this checkout or
+an explicit executable path in `BOB_BIN`; without either, the docs-check gate
+reports a capability skip. A direct tutorial run fails with an actionable error.
+
+In Get started pages, every unmarked Bash fence executes. A
+`<!-- tutorial-test: skip reason -->` immediately before one Bash fence skips
+that fence and reports its source and reason. A
+`<!-- tutorial-test: checkpoint id -->` immediately after a Bash fence checks
+the effects before the next fence runs. Keep network, install, and GUI steps
+complete for readers, and mark them skipped only when replay cannot safely
+exercise the step. The runner rejects malformed, unknown, unused, and missing
+required checkpoint markers, and rejects start pages omitted from navigation.
 
 ## Task fences (`bob-task`)
 

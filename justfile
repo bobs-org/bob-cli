@@ -187,6 +187,10 @@ docs-gen: (_banner "35" "⚙️" "DOCS GENERATE")
 docs-check: (_banner "32" "✅" "DOCS CHECK")
     uv run --project tools/docs bob-docs check
 
+# Replay the published first-day Bash tutorial in an isolated demo vault.
+docs-tutorial:
+    uv run --project tools/docs bob-docs tutorial
+
 # Subset bundled OFL fonts to deterministic WOFF2.
 docs-fonts: (_banner "35" "🔤" "DOCS FONTS")
     uv run --project tools/docs --group fonts bob-docs fonts

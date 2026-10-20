@@ -95,6 +95,9 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Get started:
+      - Overview: start/index.md
+      - Your first Bob day: start/first-bob-day.md
   - Reference:
       - Overview: reference/index.md
       - Capture syntax: reference/capture-syntax.md

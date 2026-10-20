@@ -28,6 +28,7 @@ default-groups = ["dev"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["integration: runs the published tutorial against the current Bob binary"]
 
 [build-system]
 requires = ["hatchling>=1.26"]

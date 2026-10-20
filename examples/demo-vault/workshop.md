@@ -1,0 +1,6 @@
+---
+type: "[[area]]"
+---
+# Workshop
+
+## Tasks

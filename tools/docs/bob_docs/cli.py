@@ -139,6 +139,15 @@ def _parser() -> argparse.ArgumentParser:
         "-c", "--check", action="store_true", help="check generated assets without writing"
     )
 
+    subparsers.add_parser(
+        "tutorial",
+        help="execute the published Get started Bash fences in a synthetic vault",
+        description=(
+            "Run every executable Bash fence in the Get started pages, in navigation order, "
+            "against a fresh synthetic vault. Requires Cargo or BOB_BIN."
+        ),
+    )
+
     urls_parser = subparsers.add_parser("urls", help="verify published URLs and page mentions")
     urls_parser.add_argument(
         "-p", "--production", action="store_true", help="verify pinned production sources"
@@ -199,6 +208,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .assets import generate_assets
 
             return generate_assets(root, check=args.check)
+        if args.command == "tutorial":
+            from .tutorial import run_tutorial
+
+            return run_tutorial(root)
         if args.command == "urls":
             return run_urls(
                 root, refresh=args.refresh, production=args.production, sources=args.sources
