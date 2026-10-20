@@ -85,9 +85,14 @@ or timeout paths above rather than a silent empty list.
 ## If it goes wrong
 
 If Recheck Bob still shows `Not resolved`, the override is not an
-absolute executable or that file is not a signed or ad-hoc signed
-`bob`. Paste the path from `which bob` with no wrapping quotes in the
-field. Capability mismatches belong in
+absolute path, that file is not executable, or none of the four default
+paths holds an executable `bob`. The resolver checks only that an
+override is absolute and executable, or finds an executable in those
+paths; it does not inspect code signatures. Paste the path from
+`which bob` with no wrapping quotes in the field. App signing
+requirements are separate from this diagnosis; see
+[Install](../reference/mac-capture/install.md#signing). Capability
+mismatches belong in
 [Protocol](../reference/mac-capture/protocol.md); a `swift test` failure
 with `no such module 'XCTest'` belongs in
 [Build](../develop/mac-capture/build.md).

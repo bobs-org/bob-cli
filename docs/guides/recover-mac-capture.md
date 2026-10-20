@@ -26,12 +26,16 @@ panel open. Use **Copy Diagnostic** next to the error for the exact
 vanished after Return means the capture landed; the success
 notification names the route.
 
-Closing the panel never destroys a draft. **Discard** permanently
-clears it. Control-C stashes a semantically nonempty draft before
-clearing and closing. Restore from the footer **Stash** action
-(Control-S) onto an empty editor. **Shift-D Delete All** in the stash
-picker permanently clears every retained draft, including the on-disk
-file; lowercase `d` does nothing.
+Closing the panel with Escape retains a nonempty draft and reopens
+it as left. **Discard** permanently clears it without stashing.
+Control-C always clears the draft: it stashes a semantically nonempty
+draft first, except a Task Go-To (`/`) draft is deliberately discarded
+and nothing is retained when stashing is off (capacity 0). Only a
+stashed draft can be recovered; restore it from the footer **Stash**
+action (Control-S) onto an empty editor. See
+[Settings › Canceled Draft Stash](../reference/mac-capture/settings.md#canceled-draft-stash).
+**Shift-D Delete All** in the stash picker permanently clears every
+retained draft, including the on-disk file; lowercase `d` does nothing.
 
 ## 2. Add block ID errors and focus
 

@@ -12,4 +12,4 @@ Build and type-check from [Build](build.md). Sign, install, update, and uninstal
 - [Reference hub](../../reference/mac-capture/index.md) for the user-facing install, settings, panel, picker, preview, keyboard, Refs, diagnostics, and protocol pages.
 - [Develop Bob](../index.md) for the shared docs toolchain (`just docs-check`) and behavior contracts.
 
-Doc changes here publish to the Mac Capture development mount and require `just docs-check` in bob-cli; the Mac repo gets docs, scripts, and recipes only, never Swift changes in this epic.
+Doc changes here publish to the Mac Capture development mount and require `just docs-check` in bob-cli. Bob-cli owns these hub landings; the Mac repository owns the mounted reference and developer content.
