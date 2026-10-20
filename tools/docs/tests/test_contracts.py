@@ -1,11 +1,12 @@
 import hashlib
+import shutil
 from pathlib import Path
 
 import pytest
 
 from bob_docs.contracts import load_contract_registry
 from bob_docs.errors import DocsError
-from bob_docs.gen_contracts import generate_contracts
+from bob_docs.gen_contracts import check_or_generate, generate_contracts
 from bob_docs.yaml_tools import dump_yaml, load_yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -49,6 +50,19 @@ def test_readme_table_matches_original_contract_index_snapshot() -> None:
 
 def test_generated_outputs_have_no_drift() -> None:
     assert generate_contracts(ROOT, check=True) == []
+
+
+def test_check_mode_reports_generated_page_drift_without_writing(tmp_path: Path, capsys) -> None:
+    shutil.copytree(ROOT / "docs", tmp_path / "docs")
+    shutil.copy2(ROOT / "mkdocs.yml", tmp_path / "mkdocs.yml")
+    page = tmp_path / "docs/develop/contracts.md"
+    original = page.read_text(encoding="utf-8")
+    changed = original.replace("These pages specify behavior", "Drifted pages specify behavior")
+    page.write_text(changed, encoding="utf-8")
+
+    assert check_or_generate(tmp_path, check=True) == 1
+    assert page.read_text(encoding="utf-8") == changed
+    assert "out of date: docs/develop/contracts.md" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

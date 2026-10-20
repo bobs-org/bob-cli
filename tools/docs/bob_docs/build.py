@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from .assemble import assemble
+from .context import DocsContext
 from .errors import DocsError
 
 
@@ -14,6 +15,12 @@ def build(
     root: Path, *, material: bool = False, production: bool = False, sources: Path | str | None = None
 ) -> int:
     context, manifest = assemble(root, production=production, sources=sources)
+    return build_assembled(context, manifest, material=material)
+
+
+def build_assembled(context: DocsContext, manifest: Path, *, material: bool = False) -> int:
+    """Build from a source context already validated by :func:`assemble`."""
+
     executable = "mkdocs" if material else "zensical"
     command = [executable, "build", "--strict", "--config-file", str(context.assembled_config)]
     print("running: " + " ".join(command))

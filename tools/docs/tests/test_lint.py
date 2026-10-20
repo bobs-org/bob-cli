@@ -494,7 +494,7 @@ def test_cli_help_lists_lint_and_fix() -> None:
     parser = _parser()
     names = list(parser._subparsers._group_actions[0].choices)
     assert names == sorted(names)
-    assert names == ["assemble", "build", "gen", "links", "lint", "serve", "urls"]
+    assert names == ["assemble", "build", "check", "gen", "links", "lint", "serve", "urls"]
     lint = parser._subparsers._group_actions[0].choices["lint"]
     flags = [flag for action in lint._actions for flag in action.option_strings]
     assert "-f" in flags and "--fix" in flags

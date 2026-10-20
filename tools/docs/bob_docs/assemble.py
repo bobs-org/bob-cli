@@ -158,6 +158,14 @@ def assemble(
             if mount.repo not in repo_dirs:
                 repo_dir, _ = discover_repo(mount, root=context.repo_root)
                 repo_dirs[mount.repo] = repo_dir
+    context = DocsContext(
+        context.repo_root,
+        context.docs_root,
+        context.authored_config,
+        context.output_dir,
+        context.config,
+        {"bob-cli": context.repo_root, **repo_dirs},
+    )
     plans = plan_mounts(mounts, repo_dirs)
     validate_mount_targets(plans, root=context.repo_root, docs_root=context.docs_root)
     sync_mount_copies(plans, root=context.repo_root, docs_root=context.docs_root)

@@ -9,6 +9,7 @@ from typing import Sequence
 
 from .assemble import assemble
 from .build import build, serve
+from .check import run_check
 from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
@@ -23,7 +24,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    assemble_parser = subparsers.add_parser("assemble", help="assemble config and source provenance")
+    assemble_parser = subparsers.add_parser(
+        "assemble", help="assemble config and source provenance"
+    )
     assemble_parser.add_argument(
         "-p", "--production", action="store_true", help="verify pinned production sources"
     )
@@ -36,6 +39,20 @@ def _parser() -> argparse.ArgumentParser:
         "-p", "--production", action="store_true", help="verify pinned production sources"
     )
     build_parser.add_argument(
+        "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
+    )
+    check_parser = subparsers.add_parser(
+        "check",
+        help="run the complete local documentation gate",
+        description=(
+            "Assemble once, then run lint, generated drift, strict Zensical build, "
+            "URL and link checks, search smoke, and the bob-docs unit tests."
+        ),
+    )
+    check_parser.add_argument(
+        "-p", "--production", action="store_true", help="verify pinned production sources"
+    )
+    check_parser.add_argument(
         "-s", "--sources", metavar="FILE", help="production sources JSON (needs --production)"
     )
 
@@ -89,6 +106,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "build":
             return build(root, material=args.material, production=args.production, sources=args.sources)
+        if args.command == "check":
+            return run_check(root, production=args.production, sources=args.sources)
         if args.command == "gen":
             return check_or_generate(root, check=args.check)
         if args.command == "links":

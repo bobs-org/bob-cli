@@ -180,3 +180,7 @@ docs-build-material: (_banner "34" "📖" "DOCS BUILD · MATERIAL")
 # Regenerate committed contract indexes and navigation.
 docs-gen: (_banner "35" "⚙️" "DOCS GENERATE")
     uv run --project tools/docs bob-docs gen
+
+# Run every local documentation gate against one assembled source context.
+docs-check: (_banner "32" "✅" "DOCS CHECK")
+    uv run --project tools/docs bob-docs check

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ class DocsContext:
     authored_config: Path
     output_dir: Path
     config: dict[str, Any]
+    source_dirs: dict[str, Path] = field(default_factory=dict)
 
     @property
     def assembled_config(self) -> Path:

@@ -28,6 +28,7 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
+from .context import DocsContext
 from .errors import DocsError
 
 MAX_REDIRECT_HOPS = 16
@@ -577,11 +578,19 @@ def _staged_markdown_files(staged_docs: Path) -> list[Path]:
     )
 
 
-def _source_readmes(root: Path, *, production: bool, sources: Path | str | None) -> list[Path]:
+def _source_readmes(
+    root: Path,
+    *,
+    production: bool,
+    sources: Path | str | None,
+    source_dirs: dict[str, Path] | None = None,
+) -> list[Path]:
     from .mounts import discover_repo, load_mounts, load_production_sources
 
     repo_dirs: dict[str, Path] = {}
-    if production:
+    if source_dirs is not None:
+        repo_dirs = {name: path for name, path in source_dirs.items() if name != "bob-cli"}
+    elif production:
         assert sources is not None
         for source in load_production_sources(
             Path(sources), root=root, repos=sorted({mount.repo for mount in load_mounts(root)})
@@ -602,14 +611,20 @@ def _source_readmes(root: Path, *, production: bool, sources: Path | str | None)
 
 
 def run_urls(
-    root: Path, *, refresh: bool = False, production: bool = False, sources: Path | str | None = None
+    root: Path,
+    *,
+    refresh: bool = False,
+    production: bool = False,
+    sources: Path | str | None = None,
+    context: DocsContext | None = None,
 ) -> int:
     """Check every published-URL obligation against the built site."""
 
     from .assemble import assemble
 
     repo_root = Path(root).resolve()
-    context, _ = assemble(repo_root, production=production, sources=sources)
+    if context is None:
+        context, _ = assemble(repo_root, production=production, sources=sources)
     site_url = context.config.get("site_url", "")
     if not isinstance(site_url, str):
         raise DocsError("mkdocs.yml: site_url must be a string")
@@ -640,7 +655,12 @@ def run_urls(
     mentions = scan_source_mentions(repo_root)
     site_url_mentions = scan_site_urls(
         _staged_markdown_files(context.output_dir / "docs")
-        + _source_readmes(repo_root, production=production, sources=sources),
+        + _source_readmes(
+            repo_root,
+            production=production,
+            sources=sources,
+            source_dirs=context.source_dirs if context.source_dirs else None,
+        ),
         origin,
     )
     ignored = load_mentions_ignore(repo_root)

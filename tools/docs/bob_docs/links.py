@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .context import DocsContext, context_from_root
 from .errors import DocsError
 from .urls import DOWNLOAD_TIMEOUT_SECONDS, site_origin
 
@@ -316,13 +317,13 @@ def lychee_argv(lychee: Path, *, site_dir: Path, origin: str) -> list[str]:
     ]
 
 
-def run_links(root: Path, *, lychee: Path | str | None = None) -> int:
+def run_links(
+    root: Path, *, lychee: Path | str | None = None, context: DocsContext | None = None
+) -> int:
     """Run the offline lychee check over the built site; propagate its status."""
 
-    from .context import context_from_root
-
     repo_root = Path(root).resolve()
-    context = context_from_root(repo_root)
+    context = context or context_from_root(repo_root)
     site_url = context.config.get("site_url", "")
     if not isinstance(site_url, str):
         raise DocsError("mkdocs.yml: site_url must be a string")

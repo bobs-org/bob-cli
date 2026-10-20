@@ -16,7 +16,7 @@ from datetime import date as date_type
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
-from .context import context_from_root
+from .context import DocsContext, context_from_root
 from .contracts import ContractRegistry, load_contract_registry
 from .errors import DocsError
 from .markdown import (
@@ -512,8 +512,8 @@ def _path_ignored(root: Path, rel: str) -> bool:
     return _gitignore_file_ignored(root, rel)
 
 
-def build_lint_context(root: Path) -> LintContext:
-    docs_context = context_from_root(root)
+def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -> LintContext:
+    docs_context = docs_context or context_from_root(root)
     registry = load_contract_registry(docs_context.repo_root)
     mounts = load_mounts(docs_context.repo_root)
     meta = docs_context.docs_root / "_meta"
@@ -524,10 +524,15 @@ def build_lint_context(root: Path) -> LintContext:
     media = load_media(media_path)
     media_paths = [media_path]
     for mount in mounts:
-        try:
-            repo_dir, _ = discover_repo(mount, root=docs_context.repo_root)
-        except DocsError:
-            continue
+        if docs_context.source_dirs:
+            repo_dir = docs_context.source_dirs.get(mount.repo)
+            if repo_dir is None:
+                continue
+        else:
+            try:
+                repo_dir, _ = discover_repo(mount, root=docs_context.repo_root)
+            except DocsError:
+                continue
         mounted_media = repo_dir / Path(*mount.source.parts) / "media.yml"
         if mounted_media.is_file():
             for key, entry in load_media(mounted_media).items():
@@ -1198,12 +1203,12 @@ def ratchet_privacy_baseline(ctx: LintContext) -> list[str]:
     return changed
 
 
-def lint_tree(root: Path) -> list[Finding]:
-    return check_tree(build_lint_context(root))
+def lint_tree(root: Path, *, docs_context: DocsContext | None = None) -> list[Finding]:
+    return check_tree(build_lint_context(root, docs_context=docs_context))
 
 
-def run_lint(root: Path, *, fix: bool = False) -> int:
-    ctx = build_lint_context(root)
+def run_lint(root: Path, *, fix: bool = False, docs_context: DocsContext | None = None) -> int:
+    ctx = build_lint_context(root, docs_context=docs_context)
     if fix:
         for line in ratchet_ceilings(ctx):
             print(f"lowered ceiling: {line}")

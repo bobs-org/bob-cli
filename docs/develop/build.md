@@ -99,5 +99,18 @@ Build the same configuration with the Material 9.7 fallback:
 just docs-build-material
 ```
 
+Run the full documentation gate after editing docs, the registry, generators, or the
+build toolchain:
+
+```bash
+just docs-check
+```
+
+The gate assembles source context once, then checks the docs contract, generated-file
+drift, a strict Zensical build, published URLs, offline links, search smoke cases, and
+the documentation package tests. For a pinned production build, use
+`uv run --project tools/docs bob-docs check --production --sources FILE`; production
+requires an explicit clean SHA for bob-cli and every mounted source.
+
 The generated site is written to `target/docs/site/`. Building does not regenerate
 tracked pages; run `just docs-gen` explicitly and review its changes.

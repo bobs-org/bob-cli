@@ -1,0 +1,4 @@
+- query: halted sync
+  location: /vault-git-sync/#halted-sync
+- query: conflict copy
+  location: /vault-git-sync/

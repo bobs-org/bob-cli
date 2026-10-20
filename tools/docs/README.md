@@ -7,9 +7,13 @@ just docs-gen             # regenerate tracked contract indexes
 just docs-serve            # assemble and serve locally with live reload
 just docs-build            # strict Zensical build of the assembled site
 just docs-build-material   # strict Material 9.7 fallback build
+just docs-check            # lint, drift, build, links, search smoke, and tests
 uv run --project tools/docs bob-docs lint
 uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
 ```
+
+`bob-docs check --production --sources FILE` runs the same gates using one explicit,
+clean, SHA-pinned source set for bob-cli and every mounted repository.
 
 Assembly never edits tracked sources. Generated output lives under `target/docs/`:
 the assembled `mkdocs.yml`, `build.json` provenance manifest, and the built site.
