@@ -9,6 +9,71 @@ Run these recipes from the bob-cli repository root. `uv` creates and uses the lo
 environment under `tools/docs/.venv`; generated files and the built site stay in the
 repository's ignored `target/docs/` directory.
 
+## Build and test each repository
+
+The documentation source is split across three repositories. Use the commands from the
+repository that owns the source you changed.
+
+### bob-cli
+
+Run the canonical Rust gate from the repository root:
+
+```bash
+just check
+```
+
+This checks Rust formatting, Clippy, and all Rust tests. For Rust API documentation and
+doctests, also run:
+
+```bash
+cargo doc --locked --no-deps
+cargo test --locked --doc
+```
+
+The documentation package has its own checks below; it does not replace `just check`.
+
+### bob-plugins
+
+The plugin source of truth is the `bob-plugins` repository. For plugins that use
+`src/fragments.json`, rebuild generated `main.js` files after changing a fragment:
+
+```bash
+npm run build
+```
+
+Then verify the bundles and plugin code:
+
+```bash
+npm run build:check
+npm test
+npm run validate
+```
+
+`npm test` and `npm run validate` check generated bundles before their other checks.
+Generated entrypoints are committed outputs; do not edit them by hand. Plugin changes
+are deployed to the vault with `bob plugins sync` as described in the plugin
+repository's README.
+
+### bob-mac-capture
+
+The native menu-bar app lives in the `bob-mac-capture` repository. On macOS with Xcode,
+run:
+
+```bash
+just format-lint
+just build
+just test
+```
+
+`just bundle` additionally assembles a local app bundle. On a host without Xcode, use
+`just portable-check` for the portable Swift packages; it cannot type-check the macOS
+app targets. See that repository's README for signing and installation steps.
+
+### Documentation package
+
+The tools and authored pages live in bob-cli. The documentation-specific commands below
+build this site and check its contracts. They do not install Bob or change a vault.
+
 Regenerate the contract index, navigation, and README table after changing the contract
 registry:
 

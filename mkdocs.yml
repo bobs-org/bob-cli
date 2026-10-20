@@ -71,6 +71,7 @@ nav:
   - Develop:
       - Overview: develop/index.md
       - Build: develop/build.md
+      - Writing docs: develop/writing-docs.md
       - Contracts:
           - Overview: develop/contracts.md
           # BEGIN GENERATED: contracts nav

@@ -97,9 +97,11 @@ memory files directly.
 
 1. **`sase/memory/cli_rules.md`** - Read anytime new CLI subcommands or options are
    added.
-2. **`sase/memory/sase_artifacts.md`** - Read before creating, consuming, resolving,
+2. **`sase/memory/docs.md`** - Read before changing docs/, mkdocs.yml, tools/docs,
+   README front doors, or user-visible CLI help.
+3. **`sase/memory/sase_artifacts.md`** - Read before creating, consuming, resolving,
    linking, or managing retention for SASE artifact references and indexed files.
-3. **`sase/memory/sase_beads.md`** - Read before creating, updating, closing, or
+4. **`sase/memory/sase_beads.md`** - Read before creating, updating, closing, or
    querying sase beads — bead types and tiers, the status lifecycle agents must never
    hand-edit, task-bead triage, phase-bead description prefixes, and non-cascading
    close, resolution, and note semantics.
