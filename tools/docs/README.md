@@ -145,10 +145,11 @@ site (run `just docs-build` first so `target/docs/site/` exists):
    published page URL must still resolve. An unreachable site or a 404 warns
    explicitly (offline machine, first publish); a reachable but malformed list
    or a missing previously published page fails.
-2. It scans every literal `docs/<path>.md(#fragment)` mention in `src/`,
-   `tests/`, the root `README.md`, and `docs/`, plus every absolute site URL in
-   the assembled docs and each discovered source repo's README, and resolves
-   each against an index built from the actual output HTML paths and
+2. It scans every literal `docs/<path>.md(#fragment)` mention in UTF-8 text
+   under `src/` and `tests/` (skipping undecodable files and build/vendor
+   directories), the root `README.md`, and `docs/`, plus every absolute site
+   URL in the assembled docs and each discovered source repo's README, and
+   resolves each against an index built from the actual output HTML paths and
    `id`/`name` anchors. Directory URLs, index pages, percent-encoded
    paths/fragments, and redirects (with bounded loop detection) resolve; path
    escapes and broken targets fail with `path:line:` provenance.
@@ -157,24 +158,29 @@ site (run `just docs-build` first so `target/docs/site/` exists):
 
 `docs/_meta/url_mentions_ignore.txt` holds narrowly scoped
 `MATCH | SCOPE | REASON` exclusions for demonstrated non-public references
-(the excluded repository hub, fixture-vault paths). Never exclude a real path
-printed by bob, a broken anchor, or an entire subtree; stale entries fail.
-`bob-docs urls --refresh` (`-r`) validates the contract and appends newly
-observed resolving site URLs deterministically; it never deletes obligations.
+(the excluded repository hub, fixture-vault paths). MATCH must name a page
+(a `docs/<page>.md` path, or an absolute site URL with a page path). SCOPE
+must name files: no `*`, no `**`, no wildcard-only globs, and no trailing
+`/`. Never exclude a real path printed by bob, a broken anchor, or an entire
+subtree; stale entries fail. `bob-docs urls --refresh` (`-r`) applies those
+ignores first, then validates the contract and appends newly observed
+resolving site URLs deterministically; it never deletes obligations.
 
 ## Offline link check (`bob-docs links`)
 
 `bob-docs links` checks the built site with a pinned lychee release:
 
 ```bash
-lychee --offline --no-progress --root-dir <site> \
-  --remap "https://bobs-org.github.io/ file://<site>/" <site>
+lychee --offline --no-progress --include-fragments --index-files index.html \
+  --root-dir <site> --remap "https://bobs-org.github.io/ file://<site>/" <site>
 ```
 
 Lychee resolves from `$LYCHEE`, then `PATH`, then `docs/_meta/lychee.yml`'s
 pinned release (Linux x86_64/aarch64, macOS arm64), downloaded into
 `~/.cache/bob-docs/bin/` and SHA-256 verified before extraction or execution.
-A missing or corrupt checker fails; it is never a green skip. Fragment
-checking stays with `bob-docs urls`: lychee cannot check fragments on
-`file://` directory URLs, while the `urls` resolver indexes them precisely.
-Online external checks belong to the weekly publish phase, not this gate.
+A missing or corrupt checker fails; it is never a green skip. Offline
+fragment checking uses `--include-fragments --index-files index.html` so
+directory URLs such as `/page/#anchor` resolve against each directory's
+`index.html`. `bob-docs urls` still owns mention, curated, and live-URL
+resolution. Online external checks belong to the weekly publish phase, not
+this gate.

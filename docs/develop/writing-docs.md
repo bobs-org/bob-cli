@@ -105,7 +105,37 @@ Keep command examples short and verify flags against the current `--help` output
 must not pin ordinary guide prose; put testable behavior in contracts and executable
 conformance cases. Use temporary directories or a temporary `HOME` for commands that
 write files or inspect user state. Run `just docs-check` for the complete documentation
-gate when it is available, and run the repository checks for code changes.
+gate, and run the repository checks for code changes.
+
+### Portable Markdown
+
+Lint rejects markup that only one builder renders. Follow these rules on every page:
+
+- In `bash`, `sh`, `shell`, `zsh`, and `console` fences, do not start a command with a
+  `$` prompt. Write the command alone.
+- Show command output in a separate `text` fence titled `Output` and marked `.no-copy`:
+
+  ````markdown
+  ```bash
+  bob plan -b /path/to/vault
+  ```
+
+  ```text { .no-copy title="Output" }
+  bob plan - Tue 2026-10-20 - no daily note yet
+  ```
+  ````
+
+- Do not use rendered `!!!` admonitions, `===` content tabs, or `++key++` key markup.
+  Use GitHub callouts such as `> [!NOTE]` and `<kbd>` for keys.
+- Do not add MkDocs `hooks:` or plugins outside the allowlist (`search`, `redirects`,
+  `tags`, `llmstxt`). Generate extra files in `tools/` before the build.
+
+### Hygiene
+
+Start, guides, and concepts pages must not name bead IDs, cite `src/` paths, carry epic
+or phase labels, or use history wording (`formerly`, `no longer`, `legacy`, `renamed`).
+Reference pages must not name bead IDs. Put implementation paths and tracker IDs in
+develop pages or in code, not in reader docs.
 
 Record images in `docs/_meta/media.yml` with their source and creation date. Do not add
 unlicensed assets, screenshots with private data, credentials, or personal vault content.
@@ -120,5 +150,5 @@ preserve its old URL with a redirect or a useful compatibility page.
 
 ## Related
 
-- [Build and test Bob](build.md) — commands for the documentation site and each source repository.
+- [Build the docs](build.md) — commands for the documentation site and each source repository.
 - [Behavior contracts](contracts.md) — specifications for Bob's user-visible behavior.

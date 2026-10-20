@@ -59,7 +59,7 @@ def run_check(root: Path, *, production: bool = False, sources: Path | str | Non
         ("generated drift", lambda: check_or_generate(repo_root, check=True)),
         ("strict Zensical build", lambda: build_assembled(context, manifest)),
         ("published URLs", lambda: run_urls(repo_root, context=context)),
-        ("offline lychee", lambda: run_links(repo_root, context=context)),
+        ("offline lychee with fragments", lambda: run_links(repo_root, context=context)),
         ("search smoke", lambda: run_search_smoke(repo_root, context=context)),
         ("documentation unit tests", lambda: _run_unit_tests(repo_root)),
     ]

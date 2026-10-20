@@ -7,13 +7,10 @@ unsupported platforms fail with the supported list. A missing checker is an
 error, never a green skip.
 
 The offline run checks the built site with the site directory as root and the
-absolute org-root URLs remapped onto local output. Fragment checking is
-deliberately left to :mod:`bob_docs.urls`: lychee 0.24.2 cannot check
-fragments on ``file://`` directory URLs (every ``/page/#anchor`` link reports
-``Cannot find fragment`` even when the anchor exists; verified against the
-real strict build), while the ``urls`` resolver indexes directory URLs, index
-pages, and redirect destinations precisely. The online weekly publish phase
-can use ``--include-fragments`` over HTTP, where the same links resolve.
+absolute org-root URLs remapped onto local output. Fragment checking uses
+``--include-fragments --index-files index.html`` so directory URLs such as
+``/page/#anchor`` resolve against each directory's ``index.html``. The
+``urls`` resolver remains the mention, curated, and live-URL gate.
 """
 
 from __future__ import annotations
@@ -309,6 +306,9 @@ def lychee_argv(lychee: Path, *, site_dir: Path, origin: str) -> list[str]:
         str(lychee),
         "--offline",
         "--no-progress",
+        "--include-fragments",
+        "--index-files",
+        "index.html",
         "--root-dir",
         str(site_dir.resolve()),
         "--remap",
@@ -341,5 +341,5 @@ def run_links(
     if result.returncode != 0:
         print(f"links: lychee reported broken links (exit {result.returncode})")
         return result.returncode
-    print("links: OK (offline lychee; fragments are checked by `bob-docs urls`)")
+    print("links: OK (offline lychee with fragment checking)")
     return 0

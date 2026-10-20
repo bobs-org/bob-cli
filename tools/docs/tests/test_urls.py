@@ -213,12 +213,16 @@ def test_write_urls_txt_is_sorted_and_includes_redirects(tmp_path) -> None:
 
 
 class _FakeResponse:
-    def __init__(self, *, status=200, body=b"") -> None:
+    def __init__(self, *, status=200, body=b"", url=None) -> None:
         self.status = status
         self._body = body
+        self._url = url if url is not None else f"{ORIGIN}/{urls.URLS_TXT_NAME}"
 
     def read(self) -> bytes:
         return self._body
+
+    def geturl(self) -> str:
+        return self._url
 
     def __enter__(self):
         return self
@@ -262,6 +266,37 @@ def test_fetch_published_urls_validates_body(monkeypatch) -> None:
     with pytest.raises(DocsError, match="unexpected HTTP status 500"):
         fetch_published_urls(ORIGIN)
 
+    def empty(request, timeout=None):
+        return _FakeResponse(body=b"\n\n")
+
+    monkeypatch.setattr(urls.urllib.request, "urlopen", empty)
+    with pytest.raises(DocsError, match="published URL list is empty"):
+        fetch_published_urls(ORIGIN)
+
+    def redirected(request, timeout=None):
+        return _FakeResponse(
+            body=f"{ORIGIN}/\n".encode(), url="https://evil.example/urls.txt"
+        )
+
+    monkeypatch.setattr(urls.urllib.request, "urlopen", redirected)
+    with pytest.raises(DocsError, match="redirected to origin https://evil.example"):
+        fetch_published_urls(ORIGIN)
+
+
+def test_resolve_fragment_on_non_indexed_file_raises_docs_error(tmp_path) -> None:
+    resolver = _resolver(
+        tmp_path,
+        {
+            "index.html": "<html></html>",
+            "404.html": '<html><body id="x"></body></html>',
+            "assets/app.js": "console.log(1);",
+        },
+    )
+    with pytest.raises(DocsError, match="/404.html#x"):
+        resolver.resolve("/404.html#x")
+    with pytest.raises(DocsError, match="not a published page"):
+        resolver.resolve("/assets/app.js#x")
+
 
 def test_scan_source_mentions_without_swallowing_punctuation(tmp_path) -> None:
     from pathlib import Path
@@ -273,12 +308,26 @@ def test_scan_source_mentions_without_swallowing_punctuation(tmp_path) -> None:
         "mydocs/fake.md stays out but sub/docs/real.md is a fixture path.\n",
         encoding="utf-8",
     )
+    (tmp_path / "src" / "note.lua").write_text(
+        "-- see docs/guide.md in lua\n", encoding="utf-8"
+    )
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "vectors.json").write_text(
+        '{"doc": "docs/other.md"}\n', encoding="utf-8"
+    )
+    (tmp_path / "src" / "vendor" / "skip.rs").parent.mkdir()
+    (tmp_path / "src" / "vendor" / "skip.rs").write_text(
+        "// docs/secret.md\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "blob.bin").write_bytes(b"\xff\xfe docs/binary.md \x00")
     mentions = scan_source_mentions(tmp_path)
-    assert [(m.line, m.text) for m in mentions] == [
-        (1, "docs/guide.md#part"),
-        (1, "docs/other.md"),
-        (1, "docs/tick.md"),
-        (2, "docs/real.md"),
+    assert [(m.source.name, m.line, m.text) for m in mentions] == [
+        ("code.rs", 1, "docs/guide.md#part"),
+        ("code.rs", 1, "docs/other.md"),
+        ("code.rs", 1, "docs/tick.md"),
+        ("code.rs", 2, "docs/real.md"),
+        ("note.lua", 1, "docs/guide.md"),
+        ("vectors.json", 1, "docs/other.md"),
     ]
 
 
@@ -316,7 +365,7 @@ def test_ignore_entries_are_narrow_and_fresh(tmp_path) -> None:
     assert len(entries) == 1
     mention = urls.UrlMention(source=tmp_path / "README.md", line=3, text="docs/hub.md", kind="x")
     other = urls.UrlMention(source=tmp_path / "docs/other.md", line=1, text="docs/hub.md", kind="x")
-    kept, _ = apply_ignores([mention, other], entries, root=tmp_path)
+    kept = apply_ignores([mention, other], entries, root=tmp_path)
     assert kept == [other]
 
 
@@ -336,6 +385,21 @@ def test_ignore_rejects_broad_malformed_and_stale(tmp_path) -> None:
     ignore.write_text("docs/a.md | README.md | Reason.\n", encoding="utf-8")
     with pytest.raises(DocsError, match="stale entries"):
         apply_ignores([], load_mentions_ignore(tmp_path), root=tmp_path)
+    ignore.write_text("docs/a.md | src/**/*.rs | Nested glob.\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="contains '\\*\\*'"):
+        load_mentions_ignore(tmp_path)
+    ignore.write_text("docs/a.md | ??? | Only wildcards.\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="only wildcards"):
+        load_mentions_ignore(tmp_path)
+    ignore.write_text("docs/a.md | src/ | Directory scope.\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="ends in '/'"):
+        load_mentions_ignore(tmp_path)
+    ignore.write_text("docs/ | README.md | Directory match.\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="names no page"):
+        load_mentions_ignore(tmp_path)
+    ignore.write_text("docs/guide | README.md | Missing suffix.\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="names no page"):
+        load_mentions_ignore(tmp_path)
 
 
 def test_url_contract_parsing_and_refresh(tmp_path) -> None:
@@ -454,6 +518,26 @@ def test_run_urls_refresh_adds_observed_site_url(tmp_path, monkeypatch, capsys) 
     out = capsys.readouterr().out
     assert "url_contract.txt: 1 -> 2 (+1)" in out
     assert load_url_contract(root, ORIGIN) == [f"{ORIGIN}/guide/#part", f"{ORIGIN}/guide/"]
+
+
+def test_run_urls_refresh_skips_ignored_site_urls(tmp_path, monkeypatch, capsys) -> None:
+    from pathlib import Path
+
+    assert isinstance(tmp_path, Path)
+    root = _fixture_root(tmp_path)
+    (root / "README.md").write_text(
+        f"See docs/guide.md#part.\nSee {ORIGIN}/guide/.\nSee {ORIGIN}/.\n",
+        encoding="utf-8",
+    )
+    (root / "docs/_meta/url_mentions_ignore.txt").write_text(
+        f"{ORIGIN}/guide/ | README.md | Template example, not a live obligation.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(urls, "fetch_published_urls", lambda origin, **_: ("offline", "down"))
+    assert run_urls(root, refresh=True) == 0
+    out = capsys.readouterr().out
+    assert "url_contract.txt: 1 -> 2 (+1)" in out
+    assert load_url_contract(root, ORIGIN) == [f"{ORIGIN}/guide/#part", f"{ORIGIN}/"]
 
 
 def test_run_urls_broken_contract_link_fails(tmp_path, monkeypatch, capsys) -> None:

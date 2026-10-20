@@ -1,23 +1,29 @@
 ---
-title: "<the thing: command, key, concept surface, or file format>"
-description: "<what the thing is, in one line>"
+title: "bob plan"
+description: "Read-only flags and defaults for bob plan, which prints today's ledger budget."
 ---
 
-# <the thing>
+# bob plan
 
-This reference records <thing>'s exact flags, defaults, and behavior. Guides link here
-for facts; this page links back to the tasks that use them.
+This reference records `bob plan`'s exact flags, defaults, and behavior. Guides link
+here for facts; this page links back to the tasks that use them. The contract is
+docs/plan.md.
 
-## <first facet>
+## Flags
 
-<facts in tables or short lists. Put generated values inside a marked block produced by
-`just docs-gen`; never hand-edit generated content.>
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-b`, `--bob-dir <DIR>` | `BOB_DIR` or `~/bob` | Vault root |
+| `-f`, `--format <FORMAT>` | `human` | `human` or `json` |
+| `-h`, `--help` | | Show help |
 
-## <second facet>
+The command is read-only. A missing daily note or missing Pomodoros section still
+reports TODAY 0 and the lanes, and exits 0.
 
-<more facts. Split the page when it approaches its word limit.>
+Put generated values inside a marked block produced by `just docs-gen`; never
+hand-edit generated content.
 
 ## Related
 
-- [<guide that uses this reference>](<guide-path>)
-- [<concept that explains it>](<concept-path>)
+- [Getting started](../getting-started.md)
+- [Plan budget, Today, and lanes](../plan.md)

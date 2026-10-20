@@ -210,13 +210,17 @@ def test_lychee_argv_uses_offline_root_and_remap(tmp_path) -> None:
         str(tmp_path / "lychee"),
         "--offline",
         "--no-progress",
+        "--include-fragments",
+        "--index-files",
+        "index.html",
         "--root-dir",
         str(site.resolve()),
         "--remap",
         f"https://docs.example.test/ {site.resolve().as_uri()}/",
         str(site.resolve()),
     ]
-    assert "--include-fragments" not in argv
+    assert argv[argv.index("--include-fragments") + 1] == "--index-files"
+    assert argv[argv.index("--index-files") + 1] == "index.html"
 
 
 def _links_root(root, origin="https://docs.example.test"):
@@ -244,6 +248,7 @@ def test_run_links_propagates_checker_status(tmp_path, capsys) -> None:
     assert "exit 3" in capsys.readouterr().out
     passing = _executable(tmp_path / "lychee-ok", "#!/bin/sh\nexit 0\n")
     assert run_links(root, lychee=passing) == 0
+    assert "offline lychee with fragment checking" in capsys.readouterr().out
 
 
 def test_run_links_requires_built_site(tmp_path) -> None:

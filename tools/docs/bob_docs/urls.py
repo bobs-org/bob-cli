@@ -8,12 +8,12 @@ independent URL sources against that index:
 
 * ``target/docs/site/urls.txt`` written from the build, compared with the live
   org-root ``/urls.txt`` so previously published pages keep resolving;
-* every literal ``docs/<path>.md(#fragment)`` mention in ``src/``, ``tests/``,
-  the root ``README.md``, and ``docs/``;
+* every literal ``docs/<path>.md(#fragment)`` mention in UTF-8 text under
+  ``src/`` and ``tests/``, the root ``README.md``, and ``docs/``;
 * the curated absolute site URLs in ``docs/_meta/url_contract.txt``.
 
-Lychee (see :mod:`bob_docs.links`) never checks fragments on ``file://``
-directory URLs, so this resolver is the authoritative fragment gate.
+Lychee (see :mod:`bob_docs.links`) also checks fragments offline on the built
+site. This resolver remains the mention, curated, and live-URL fragment gate.
 """
 
 from __future__ import annotations
@@ -40,6 +40,11 @@ ERROR_PAGE = "404.html"
 
 MENTIONS_IGNORE_FILE = "url_mentions_ignore.txt"
 URL_CONTRACT_FILE = "url_contract.txt"
+
+SKIP_SCAN_DIR_NAMES = frozenset(
+    {".git", "node_modules", "dist", "coverage", ".venv", "target", "__pycache__", "vendor"}
+)
+_WILDCARD_ONLY_RE = re.compile(r"^[*?]+$")
 
 _MENTION_RE = re.compile(
     r"(?<![A-Za-z0-9_-])docs/"
@@ -69,12 +74,11 @@ def strip_trailing_punctuation(value: str) -> str:
 
 
 class _PageParser(HTMLParser):
-    """Collect anchors, the canonical link, and the meta-refresh target."""
+    """Collect anchors and the meta-refresh target."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.anchors: set[str] = set()
-        self.canonical: str | None = None
         self.refresh_target: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -83,9 +87,6 @@ class _PageParser(HTMLParser):
             self.anchors.add(unescape(values["id"]))
         if tag == "a" and values.get("name"):
             self.anchors.add(unescape(values["name"]))
-        if tag == "link" and values.get("rel", "").lower() == "canonical" and values.get("href"):
-            if self.canonical is None:
-                self.canonical = values["href"].strip()
         if tag == "meta" and values.get("http-equiv", "").lower() == "refresh":
             target = _refresh_target(values.get("content", ""))
             if target and self.refresh_target is None:
@@ -165,9 +166,6 @@ class SiteResolver:
     def origin(self) -> str:
         return self._index.origin
 
-    def page_paths(self) -> list[str]:
-        return sorted(self._index.pages)
-
     def resolve(self, url: str) -> ResolvedURL:
         """Resolve one site-relative, absolute-path, or absolute-origin URL."""
 
@@ -176,7 +174,12 @@ class SiteResolver:
         page = self._follow(normalised, url, [normalised])
         target_fragment = page[1] if page[1] else fragment
         if target_fragment:
-            anchors = self._index.pages[page[0]].anchors
+            page_info = self._index.pages.get(page[0])
+            if page_info is None:
+                raise DocsError(
+                    f"{url}: {page[0]} is not a published page in the URL index"
+                )
+            anchors = page_info.anchors
             if target_fragment not in anchors:
                 raise DocsError(
                     f"{url}: anchor #{target_fragment} not found on {page[0]} "
@@ -333,10 +336,12 @@ def write_urls_txt(site_dir: Path, index: SiteIndex) -> Path:
     return path
 
 
-def fetch_published_urls(origin: str, *, timeout: int = LIVE_TIMEOUT_SECONDS) -> tuple[str, list[str] | None]:
+def fetch_published_urls(
+    origin: str, *, timeout: int = LIVE_TIMEOUT_SECONDS
+) -> tuple[str, list[str] | str | None]:
     """Fetch the live ``/urls.txt``.
 
-    Returns ``("ok", urls)``, ``("offline", None)`` for a genuinely
+    Returns ``("ok", urls)``, ``("offline", reason)`` for a genuinely
     unreachable site, or ``("first-publish", None)`` for an HTTP 404.
     A reachable but unparsable response raises :class:`DocsError`.
     """
@@ -353,6 +358,7 @@ def fetch_published_urls(origin: str, *, timeout: int = LIVE_TIMEOUT_SECONDS) ->
                 raise DocsError(
                     f"{origin}/{URLS_TXT_NAME}: unexpected HTTP status {status}"
                 )
+            _require_live_origin(response, origin)
             try:
                 body = response.read().decode("utf-8")
             except (UnicodeDecodeError, ValueError) as error:
@@ -386,7 +392,36 @@ def fetch_published_urls(origin: str, *, timeout: int = LIVE_TIMEOUT_SECONDS) ->
                 "expected an absolute site URL without a query string"
             )
         urls.append(line)
+    if not urls:
+        raise DocsError(
+            f"{origin}/{URLS_TXT_NAME}: published URL list is empty; "
+            "a successful live manifest must list at least one page URL"
+        )
     return "ok", urls
+
+
+def _require_live_origin(response: object, origin: str) -> None:
+    """Fail when a successful fetch redirected off the configured origin."""
+
+    final_url = ""
+    geturl = getattr(response, "geturl", None)
+    if callable(geturl):
+        final_url = geturl() or ""
+    if not final_url:
+        final_url = getattr(response, "url", "") or ""
+    if not final_url:
+        return
+    try:
+        final_origin = site_origin(final_url)
+    except DocsError as error:
+        raise DocsError(
+            f"{origin}/{URLS_TXT_NAME}: redirected to {final_url!r}, "
+            "which is not an http(s) site origin"
+        ) from error
+    if final_origin != origin:
+        raise DocsError(
+            f"{origin}/{URLS_TXT_NAME}: redirected to origin {final_origin}, expected {origin}"
+        )
 
 
 @dataclass(frozen=True)
@@ -397,20 +432,53 @@ class UrlMention:
     kind: str
 
 
+def _scan_source_files(root: Path) -> list[Path]:
+    """UTF-8 text under ``src/`` and ``tests/``, plus README and docs Markdown."""
+
+    files: list[Path] = []
+    for relative in ("src", "tests"):
+        base = root / relative
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if not path.is_file() or path.is_symlink():
+                continue
+            if any(part in SKIP_SCAN_DIR_NAMES for part in path.relative_to(root).parts):
+                continue
+            files.append(path)
+    readme = root / "README.md"
+    if readme.is_file() and not readme.is_symlink():
+        files.append(readme)
+    docs = root / "docs"
+    if docs.is_dir():
+        for path in sorted(docs.rglob("*.md")):
+            if path.is_file() and not path.is_symlink():
+                files.append(path)
+    return files
+
+
+def _read_utf8_text(path: Path) -> str | None:
+    """Return UTF-8 text, or ``None`` for undecodable or binary files."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    except OSError as error:
+        raise DocsError(f"cannot read {path}: {error}") from error
+    if "\0" in text:
+        return None
+    return text
+
+
 def scan_source_mentions(root: Path) -> list[UrlMention]:
     """Collect literal ``docs/<path>.md(#fragment)`` mentions with provenance."""
 
     mentions: list[UrlMention] = []
-    files: list[Path] = []
-    for pattern in ("src/**/*.rs", "tests/**/*.rs", "README.md", "docs/**/*.md"):
-        files.extend(sorted(root.glob(pattern)))
-    for path in files:
-        if not path.is_file() or path.is_symlink():
+    for path in _scan_source_files(root):
+        text = _read_utf8_text(path)
+        if text is None:
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as error:
-            raise DocsError(f"cannot read {path}: {error}") from error
         for line_number, line in enumerate(text.splitlines(), start=1):
             for match in _MENTION_RE.finditer(line):
                 mention = strip_trailing_punctuation(match.group(0))
@@ -483,19 +551,57 @@ def load_mentions_ignore(root: Path) -> list[IgnoreEntry]:
                 f"{path}:{line_number}: expected MATCH | SCOPE | REASON, got {line.strip()!r}"
             )
         match, scope, reason = parts
-        if scope == "*":
-            raise DocsError(
-                f"{path}:{line_number}: scope '*' is too broad; name the file(s) the "
-                "non-public reference lives in"
-            )
+        _validate_ignore_match(match, path, line_number)
+        _validate_ignore_scope(scope, path, line_number)
         entries.append(IgnoreEntry(match=match, scope=scope, reason=reason, line=line_number))
     return entries
 
 
+def _validate_ignore_match(match: str, path: Path, line_number: int) -> None:
+    if match.rstrip("/") == "docs":
+        raise DocsError(
+            f"{path}:{line_number}: MATCH {match!r} names no page; name a docs/<page>.md path"
+        )
+    if ".md" in match:
+        return
+    parsed = urllib.parse.urlsplit(match)
+    if (
+        parsed.scheme in ("http", "https")
+        and parsed.netloc
+        and parsed.path not in ("", "/")
+    ):
+        return
+    raise DocsError(
+        f"{path}:{line_number}: MATCH {match!r} names no page "
+        "(it has no .md and is not an absolute site URL path)"
+    )
+
+
+def _validate_ignore_scope(scope: str, path: Path, line_number: int) -> None:
+    if scope == "*":
+        raise DocsError(
+            f"{path}:{line_number}: scope '*' is too broad; name the file(s) the "
+            "non-public reference lives in"
+        )
+    if "**" in scope:
+        raise DocsError(
+            f"{path}:{line_number}: scope {scope!r} contains '**'; name specific files"
+        )
+    if _WILDCARD_ONLY_RE.fullmatch(scope):
+        raise DocsError(
+            f"{path}:{line_number}: scope {scope!r} is only wildcards; name the file(s) "
+            "the non-public reference lives in"
+        )
+    if scope.endswith("/"):
+        raise DocsError(
+            f"{path}:{line_number}: scope {scope!r} ends in '/'; name files, not directories"
+        )
+
+
 def apply_ignores(
     mentions: list[UrlMention], entries: list[IgnoreEntry], *, root: Path
-) -> tuple[list[UrlMention], dict[int, int]]:
-    """Split mentions into kept ones; every entry must match at least one mention."""
+) -> list[UrlMention]:
+    """Return mentions that no ignore entry covers; every entry must match at least one."""
 
     uses: dict[int, int] = {entry.line: 0 for entry in entries}
     kept: list[UrlMention] = []
@@ -517,7 +623,7 @@ def apply_ignores(
             f"docs/_meta/{MENTIONS_IGNORE_FILE}: stale entries match no scanned mention "
             f"(lines {', '.join(map(str, stale))}); remove them"
         )
-    return kept, uses
+    return kept
 
 
 def load_url_contract(root: Path, origin: str) -> list[str]:
@@ -664,7 +770,7 @@ def run_urls(
         origin,
     )
     ignored = load_mentions_ignore(repo_root)
-    kept, _ = apply_ignores([*mentions, *site_url_mentions], ignored, root=repo_root)
+    kept = apply_ignores([*mentions, *site_url_mentions], ignored, root=repo_root)
     for mention in kept:
         try:
             if mention.kind == "docs-mention":
@@ -678,7 +784,7 @@ def run_urls(
             )
 
     if refresh:
-        observed = sorted({mention.text for mention in site_url_mentions})
+        observed = sorted({mention.text for mention in kept if mention.kind == "site-url"})
         before, after, added = refresh_url_contract(
             repo_root, origin, [url for url in observed if _check_url(resolver, url)]
         )

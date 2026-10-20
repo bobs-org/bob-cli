@@ -1,18 +1,19 @@
 ---
-title: "<section name>"
-description: "<who this section is for and what it collects, in one line>"
+title: "Develop"
+description: "Contributor pages for building, writing, and contracting Bob documentation."
 ---
 
-# <section name>
+# Develop
 
-<one orientation sentence: who this section is for and how its pages split the topic>
+These pages are for people who change Bob's documentation site: how to build it, how
+to write a page, and where the behavior contracts live.
 
-## <first group>
+## Build and write
 
-- [<page>](<path>) — <what it is for, in a few words>
-- [<page>](<path>) — <what it is for, in a few words>
+- [Build the docs](build.md) — generate, serve, and check the site
+- [Writing docs](writing-docs.md) — page types, templates, and lint rules
 
-## <second group>
+## Contracts
 
-- [<page>](<path>) — <what it is for, in a few words>
-- [<page>](<path>) — <what it is for, in a few words>
+- [Behavior contracts](contracts.md) — index of user-visible specifications
+- [Plan budget, Today, and lanes](../plan.md) — the `bob plan` contract, docs/plan.md
