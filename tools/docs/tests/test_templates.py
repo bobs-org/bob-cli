@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -139,12 +139,20 @@ def _plugin_repo(repo: Path) -> Path:
 def _build(root: Path, *, material: bool, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(root.parent / "bob-plugins"))
     context, _ = assemble(root, builder="material" if material else "zensical")
-    executable = "mkdocs" if material else "zensical"
-    args = ["build", "--strict", "--config-file", str(context.assembled_config)]
+    # Run the project interpreter's mkdocs so a global PATH mkdocs without the
+    # locked material dependencies can never shadow the tested build.
     if material:
-        args.append("--config-file")
-    # mkdocs uses `mkdocs build --strict --config-file ...`; zensical too.
-    cmd = [executable, "build", "--strict", "--config-file", str(context.assembled_config)]
+        cmd = [
+            sys.executable,
+            "-m",
+            "mkdocs",
+            "build",
+            "--strict",
+            "--config-file",
+            str(context.assembled_config),
+        ]
+    else:
+        cmd = ["zensical", "build", "--strict", "--config-file", str(context.assembled_config)]
     result = subprocess.run(cmd, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     return context.site_dir
@@ -183,8 +191,9 @@ def test_templates_in_zensical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert "edit" in guide and "guide.md" in guide and "/main/" in guide.replace("&#x2f;", "/")
 
 
-@pytest.mark.skipif(shutil.which("mkdocs") is None, reason="material builder not installed")
 def test_templates_in_material(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("mkdocs")
+    pytest.importorskip("material")
     plugin = _plugin_repo(tmp_path / "bob-plugins")
     root = _fixture_root(tmp_path / "root", plugin_repo=plugin)
     site = _build(root, material=True, monkeypatch=monkeypatch)
@@ -231,8 +240,9 @@ def test_component_chips_in_zensical(tmp_path: Path, monkeypatch: pytest.MonkeyP
     _assert_component_chips(site)
 
 
-@pytest.mark.skipif(shutil.which("mkdocs") is None, reason="material builder not installed")
 def test_component_chips_in_material(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("mkdocs")
+    pytest.importorskip("material")
     plugin = _plugin_repo(tmp_path / "bob-plugins")
     root = _fixture_root(tmp_path / "root", plugin_repo=plugin)
     site = _build(root, material=True, monkeypatch=monkeypatch)

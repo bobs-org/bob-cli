@@ -171,6 +171,9 @@ Lint rejects markup that only one builder renders. Follow these rules on every p
 
   An exact `#task` token renders as the teal identity mark; other tags render as
   pills. Canonical dates render as absolute marks with the year.
+- Close every fenced code block on its own line with the same fence marker.
+  If a fence is left unclosed, the strict Zensical build scans the rest of the
+  page as prose, and bare `[[#^block]]` links there fail the build.
 - Do not add MkDocs `hooks:` or plugins outside the allowlist (`search`, `redirects`,
   `tags`, `llmstxt`). Generate extra files in `tools/` before the build.
 

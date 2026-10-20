@@ -330,6 +330,10 @@ Call Sam @work
 A successful real `@@template:` capture saves the template block (not the
 rows) on the shelf. Manage it with `bob capture-templates`.
 
+Editors that run [`bob capture-rewrite`](../capture.md#bob-capture-rewrite),
+including the Mac capture panel, turn a typed `@@@` at the very start of a
+draft into the `@@template:` header and put the caret on the next line.
+
 Contract: [Bulk templates](../capture.md#bulk-templates).
 
 ## Block IDs and linked tasks

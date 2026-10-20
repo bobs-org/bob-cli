@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -206,7 +207,7 @@ def test_compatibility_builds_in_material(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.chdir(root)
     context, _ = assemble(root)
     result = subprocess.run(
-        ["mkdocs", "build", "--strict", "--config-file", str(context.assembled_config)],
+        [sys.executable, "-m", "mkdocs", "build", "--strict", "--config-file", str(context.assembled_config)],
         cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr

@@ -10,24 +10,30 @@ The offline run checks the built site with the site directory as root and the
 absolute org-root URLs remapped onto local output. Fragment checking uses
 ``--include-fragments --index-files index.html`` so directory URLs such as
 ``/page/#anchor`` resolve against each directory's ``index.html``. The
-``urls`` resolver remains the mention, curated, and live-URL gate.
+``urls`` resolver remains the mention, curated, and live-URL gate. A separate
+offline edit-link gate (``run_edit_links``) proves every rendered
+``rel="edit"`` href targets a real source file.
 
 The online run keeps the same root, remap, and fragment checking and additionally
 fetches external HTTP(S) destinations with bounded retries and timeouts. It adds
-one narrowly scoped ``--exclude`` for the vendored OFL boilerplate Adobe URL;
+two narrowly scoped ``--exclude`` entries: the vendored OFL boilerplate Adobe
+URL and the rendered GitHub edit links (verified offline instead);
 any other broken external link fails rather than turning green.
 """
 
 from __future__ import annotations
 
 import hashlib
+import html as html_module
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
 import tarfile
 import tempfile
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +60,13 @@ LLMS_PAGE_MARKDOWN_EXCLUDE = "(^|/)index[.]md$"
 # automated clients, so the weekly online check excludes exactly that URL.
 # Other OFL.txt links, such as scripts.sil.org/OFL, stay checked.
 ADOBE_OFL_URL_EXCLUDE = "^http://www[.]adobe[.]com/?$"
+# Anonymous GitHub edit URLs always answer 302 -> /login, even for a branch
+# or path that does not exist, so fetching them online proves only that the
+# repository exists. Weekly runs 39475174066 and 39499697687 each failed on
+# four different 429s for these edit URLs with zero other errors. The online
+# check therefore excludes rendered edit links; run_edit_links below verifies
+# each one offline against its source checkout instead.
+EDIT_LINK_EXCLUDE = "^https://github[.]com/bobs-org/(bob-cli|bob-plugins|bob-mac-capture)/edit/"
 
 
 @dataclass(frozen=True)
@@ -350,9 +363,10 @@ def online_argv(
 
     Local file links keep resolving against ``site_dir`` through ``--root-dir``
     and ``--remap``, so authored ``docs/`` paths, source README links, and
-    command snippets are not treated as external requests. One narrowly scoped
-    ``--exclude`` covers the vendored OFL boilerplate Adobe URL; other broken
-    externals fail.
+    command snippets are not treated as external requests. Two narrowly scoped
+    ``--exclude`` entries cover the vendored OFL boilerplate Adobe URL and the
+    rendered GitHub edit links (verified offline by ``run_edit_links``);
+    other broken externals fail.
     """
 
     if timeout <= 0:
@@ -382,6 +396,8 @@ def online_argv(
         str(retry_wait),
         "--exclude",
         ADOBE_OFL_URL_EXCLUDE,
+        "--exclude",
+        EDIT_LINK_EXCLUDE,
         str(site_dir.resolve()),
     ]
 
@@ -437,4 +453,146 @@ def run_links(
         print("links: OK (online lychee with fragment checking)")
     else:
         print("links: OK (offline lychee with fragment checking)")
+    return 0
+
+
+_EDIT_TAG_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
+_REL_EDIT_RE = re.compile(r"""\brel\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+_HREF_RE = re.compile(r"""\bhref\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
+_EDIT_URL_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/edit/(?P<branch>[^/]+)/(?P<path>.+)$"
+)
+
+
+def _parse_github_repo_url(url: str) -> tuple[str, str]:
+    """Split an ``https://github.com/<owner>/<repo>`` URL into its parts."""
+
+    parsed = urllib.parse.urlsplit(url.strip())
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        raise DocsError(f"mkdocs.yml: repo_url must be https://github.com/<owner>/<repo>, got {url!r}")
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2 or not all(parts):
+        raise DocsError(f"mkdocs.yml: repo_url must be https://github.com/<owner>/<repo>, got {url!r}")
+    repo = parts[1]
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    return parts[0], repo
+
+
+def _parse_edit_branch(edit_uri: object) -> str:
+    """Return the branch embedded in MkDocs ``edit_uri`` (``edit/<branch>/...``)."""
+
+    if not isinstance(edit_uri, str) or not edit_uri:
+        raise DocsError("mkdocs.yml: edit_uri must be a nonempty string like 'edit/master/docs/'")
+    parts = [part for part in edit_uri.strip().split("/") if part]
+    if len(parts) < 2 or parts[0] != "edit" or not parts[1]:
+        raise DocsError(f"mkdocs.yml: edit_uri must look like 'edit/<branch>/...', got {edit_uri!r}")
+    return parts[1]
+
+
+def _known_edit_sources(
+    repo_root: Path, context: DocsContext
+) -> dict[tuple[str, str, str], Path]:
+    """Map ``(owner, repo, branch)`` to the source checkout holding its files."""
+
+    from .mounts import load_mounts
+
+    repo_url = context.config.get("repo_url", "")
+    edit_uri = context.config.get("edit_uri", "")
+    if not isinstance(repo_url, str) or not repo_url.strip():
+        raise DocsError("mkdocs.yml: repo_url must be a nonempty string")
+    owner, repo = _parse_github_repo_url(repo_url)
+    branch = _parse_edit_branch(edit_uri)
+    source_dirs = dict(context.source_dirs) if context.source_dirs else {}
+    bob_cli_dir = source_dirs.get("bob-cli", repo_root)
+    allowed: dict[tuple[str, str, str], Path] = {(owner, repo, branch): Path(bob_cli_dir)}
+    for mount in load_mounts(repo_root):
+        remote = mount.remote
+        if remote.endswith(".git"):
+            remote = remote[: -len(".git")]
+        mount_owner, mount_repo = _parse_github_repo_url(remote)
+        repo_dir = source_dirs.get(mount.repo)
+        if repo_dir is None:
+            raise DocsError(
+                f"edit-link gate needs source checkout for mount repo {mount.repo!r}; "
+                "run through `bob-docs check` with an assembled context"
+            )
+        allowed.setdefault((mount_owner, mount_repo, mount.branch), Path(repo_dir))
+    return allowed
+
+
+def _collect_edit_links(site_dir: Path) -> list[tuple[str, str]]:
+    """Collect ``(page, href)`` for every ``rel="edit"`` anchor in the built site."""
+
+    found: list[tuple[str, str]] = []
+    for page in sorted(site_dir.rglob("*.html")):
+        try:
+            text = page.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for tag in _EDIT_TAG_RE.findall(text):
+            rel = _REL_EDIT_RE.search(tag)
+            if rel is None:
+                continue
+            value = rel.group(2) or rel.group(3) or rel.group(4) or ""
+            if "edit" not in value.split():
+                continue
+            href = _HREF_RE.search(tag)
+            if href is None:
+                continue
+            raw = href.group(2) or href.group(3) or href.group(4) or ""
+            found.append((page.relative_to(site_dir).as_posix(), html_module.unescape(raw.strip())))
+    return found
+
+
+def run_edit_links(
+    root: Path,
+    *,
+    context: DocsContext | None = None,
+) -> int:
+    """Verify every rendered ``rel="edit"`` href targets a real source file.
+
+    Each href must parse as
+    ``https://github.com/<owner>/<repo>/edit/<branch>/<path>`` where
+    owner/repo and branch match a known source (bob-cli from ``repo_url`` and
+    ``edit_uri`` in ``mkdocs.yml``; mounts from ``docs/_meta/mounts.yml``),
+    and ``<path>`` must exist as a file in that source checkout. Every
+    failure is reported with its page; any failure fails the gate.
+    """
+
+    repo_root = Path(root).resolve()
+    context = context or context_from_root(repo_root)
+    site_dir = context.site_dir
+    if not (site_dir / "index.html").is_file():
+        raise DocsError(f"no built site at {site_dir}; run `just docs-build` first")
+    allowed = _known_edit_sources(repo_root, context)
+    links = _collect_edit_links(site_dir)
+    failures: list[str] = []
+    for page, href in links:
+        match = _EDIT_URL_RE.match(href)
+        if match is None:
+            failures.append(f"{page}: edit href does not parse as a GitHub edit URL: {href!r}")
+            continue
+        key = (match.group("owner"), match.group("repo"), match.group("branch"))
+        repo_dir = allowed.get(key)
+        if repo_dir is None:
+            known = ", ".join(f"{o}/{r}@{b}" for o, r, b in sorted(allowed))
+            failures.append(
+                f"{page}: unknown edit source {key[0]}/{key[1]}@{key[2]} in {href!r} "
+                f"(known: {known})"
+            )
+            continue
+        relative = match.group("path").split("?", 1)[0].split("#", 1)[0]
+        relative = urllib.parse.unquote(relative).strip()
+        if not relative or ".." in Path(relative).parts:
+            failures.append(f"{page}: edit href has an unsafe path: {href!r}")
+            continue
+        if not (repo_dir / relative).is_file():
+            failures.append(f"{page}: edit target is missing: {href!r} (no {repo_dir / relative})")
+    if failures:
+        for failure in failures:
+            print(f"edit-links: FAILED {failure}")
+        print(f"edit-links: FAILED ({len(failures)} bad edit link(s) on {len(links)} edit link(s))")
+        return 1
+    print(f"edit-links: OK ({len(links)} edit link(s) point at real source files)")
     return 0

@@ -264,10 +264,15 @@ The `weekly.yml` caller runs on `41 6 * * 1` and manual dispatch. It always
 builds the strict Material site with the locked material group and runs
 `bob-docs links --online` with bounded retries and timeouts, even when the
 publication fingerprint is unchanged or a publish hold remains. The online
-check excludes exactly one URL, `http://www.adobe.com/`, which is Adobe's
+check excludes exactly two URLs: `http://www.adobe.com/`, which is Adobe's
 copyright line in the vendored Source Serif OFL text
-(`docs/assets/fonts/OFL.txt`) and returns 403 to automated clients; every
-other OFL link, such as `scripts.sil.org/OFL`, stays checked. Weekly cannot
-release the hold or deploy, and it never writes `published.json`. A failure
-opens or updates one `Docs weekly checks blocked` issue (`docs-weekly`); a
-passing run closes only that issue.
+(`docs/assets/fonts/OFL.txt`) and returns 403 to automated clients, and the
+rendered GitHub edit links
+(`^https://github[.]com/bobs-org/(bob-cli|bob-plugins|bob-mac-capture)/edit/`),
+which always answer `302 -> /login` for anonymous clients and are verified
+offline by the `edit-links` docs-check gate instead; every other OFL link,
+such as `scripts.sil.org/OFL`, and every other github.com URL (blob, tree,
+repo, issues) stays checked. Weekly cannot release the hold or deploy, and
+it never writes `published.json`. A failure opens or updates one
+`Docs weekly checks blocked` issue (`docs-weekly`); a passing run closes only
+that issue.

@@ -45,6 +45,7 @@ def test_check_runs_ordered_gates_with_one_source_context(
     )
     monkeypatch.setattr(check, "run_urls", gate("urls", context, context=context))
     monkeypatch.setattr(check, "run_links", gate("links", context, context=context))
+    monkeypatch.setattr(check, "run_edit_links", gate("edits", context, context=context))
     monkeypatch.setattr(
         check, "run_search_smoke", gate("search", context, context=context)
     )
@@ -75,6 +76,7 @@ def test_check_runs_ordered_gates_with_one_source_context(
         "build",
         "urls",
         "links",
+        "edits",
         "search",
         "tutorial",
         "media",
@@ -83,9 +85,9 @@ def test_check_runs_ordered_gates_with_one_source_context(
     assert order[0] == ("assemble", True, "sources.json")
     assert order[2] == ("gen", True, context.source_dirs, True)
     assert order[3] == ("build", context, manifest)
-    assert order[7] == ("tutorial", fake_bob)
-    assert order[8] == ("media", True, fake_bob)
-    assert order[9] == ("pytest", fake_bob)
+    assert order[8] == ("tutorial", fake_bob)
+    assert order[9] == ("media", True, fake_bob)
+    assert order[10] == ("pytest", fake_bob)
 
 
 def test_check_stops_after_first_failing_gate(tmp_path, monkeypatch) -> None:
@@ -122,6 +124,7 @@ def test_check_reports_tutorial_capability_skip_without_cargo_or_bob(
     monkeypatch.setattr(check, "build_assembled", lambda *args, **kwargs: 0)
     monkeypatch.setattr(check, "run_urls", lambda *args, **kwargs: 0)
     monkeypatch.setattr(check, "run_links", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(check, "run_edit_links", lambda *args, **kwargs: 0)
     monkeypatch.setattr(check, "run_search_smoke", lambda *args, **kwargs: 0)
     monkeypatch.setattr(check, "_run_unit_tests", lambda *args, **kwargs: 0)
     monkeypatch.setattr(

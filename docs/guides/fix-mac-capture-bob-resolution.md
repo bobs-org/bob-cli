@@ -46,7 +46,8 @@ empty. Relative paths are refused. Set **Vault path** to the vault
 `BOB_DIR` names.
 
 Choose **Recheck Bob** from the menu-bar item. Confirm **Resolved path**
-matches `which bob` and the `!` glyph returns to the bullet-b.
+matches `which bob` and the menu-bar icon's `!` turns back into the Bob
+mark's bullet ([Menu-bar icon](../reference/mac-capture/diagnostics.md#menu-bar-icon)).
 
 ## 3. Timeouts
 

@@ -1,7 +1,7 @@
 """Focused online-mode tests for the pinned-lychee link checker.
 
 The online run keeps the offline root/remap/fragment contract and adds bounded
-retries and timeouts plus one narrowly scoped Adobe-URL exclusion.
+retries and timeouts plus two narrowly scoped exclusions (Adobe URL, edit links).
 """
 
 import pytest
@@ -42,7 +42,7 @@ def _site(tmp_path, origin="https://docs.example.test"):
 def test_online_argv_keeps_root_remap_fragments_without_offline(tmp_path) -> None:
     from pathlib import Path
 
-    from bob_docs.links import ADOBE_OFL_URL_EXCLUDE
+    from bob_docs.links import ADOBE_OFL_URL_EXCLUDE, EDIT_LINK_EXCLUDE
 
     assert isinstance(tmp_path, Path)
     site = tmp_path / "site"
@@ -63,12 +63,15 @@ def test_online_argv_keeps_root_remap_fragments_without_offline(tmp_path) -> Non
     assert str(ONLINE_MAX_RETRIES) in argv
     assert str(ONLINE_RETRY_WAIT_SECONDS) in argv
     # The only path exclusion is llmstxt's duplicate Markdown output, and the
-    # only URL exclusion is the vendored OFL boilerplate Adobe URL; any other
-    # broken link in the generated HTML remains a failure.
+    # only URL exclusions are the vendored OFL boilerplate Adobe URL and the
+    # rendered GitHub edit links (verified offline); any other broken link
+    # in the generated HTML remains a failure.
     assert argv.count("--exclude-path") == 1
-    assert argv.count("--exclude") == 1
-    assert argv[argv.index("--exclude") + 1] == ADOBE_OFL_URL_EXCLUDE
-    assert argv[argv.index("--exclude") + 1] == "^http://www[.]adobe[.]com/?$"
+    assert argv.count("--exclude") == 2
+    excludes = [argv[i + 1] for i, item in enumerate(argv) if item == "--exclude"]
+    assert excludes == [ADOBE_OFL_URL_EXCLUDE, EDIT_LINK_EXCLUDE]
+    assert ADOBE_OFL_URL_EXCLUDE == "^http://www[.]adobe[.]com/?$"
+    assert EDIT_LINK_EXCLUDE == "^https://github[.]com/bobs-org/(bob-cli|bob-plugins|bob-mac-capture)/edit/"
     assert not any(item.startswith("--scheme") for item in argv)
 
 

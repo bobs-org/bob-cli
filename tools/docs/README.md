@@ -488,8 +488,13 @@ resolution.
 `bob-docs links --online` keeps the same root, remap, and fragment checking
 and additionally fetches external HTTP(S) destinations with bounded retries
 and timeouts (`--timeout-seconds`, `--retries`, `--wait-seconds`, defaulting
-to 20 seconds, 3 retries, and 1 second). It adds one narrowly scoped
-`--exclude` for the vendored OFL boilerplate Adobe URL
-(`^http://www[.]adobe[.]com/?$`, which returns 403 to automated clients);
-every other broken external fails. The weekly workflow runs this online
-check after a strict Material build, not the offline gate.
+to 20 seconds, 3 retries, and 1 second). It adds two narrowly scoped
+`--exclude` entries: the vendored OFL boilerplate Adobe URL
+(`^http://www[.]adobe[.]com/?$`, which returns 403 to automated clients) and
+the rendered GitHub edit links
+(`^https://github[.]com/bobs-org/(bob-cli|bob-plugins|bob-mac-capture)/edit/`,
+which always answer `302 -> /login` for anonymous clients and are verified
+offline by the `edit-links` docs-check gate instead); every other broken
+external fails, and every other github.com URL (blob, tree, repo, issues)
+stays checked. The weekly workflow runs this online check after a strict
+Material build, not the offline gate.

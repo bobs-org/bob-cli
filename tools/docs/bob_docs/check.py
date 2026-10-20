@@ -12,7 +12,7 @@ from .assemble import assemble
 from .build import build_assembled
 from .errors import DocsError
 from .gen_contracts import check_or_generate
-from .links import run_links
+from .links import run_edit_links, run_links
 from .lint import run_lint
 from .media import run_media
 from .publish_drill import (
@@ -27,7 +27,7 @@ from .urls import run_urls
 
 
 def _run_unit_tests(root: Path, *, bob_bin: Path | None = None) -> int:
-    command = ["uv", "run", "--project", "tools/docs", "pytest", "tools/docs/tests"]
+    command = ["uv", "run", "--project", "tools/docs", "--group", "material", "pytest", "tools/docs/tests"]
     print("running: " + " ".join(command))
     env = None
     if bob_bin is not None:
@@ -116,6 +116,7 @@ def run_check(
             "offline lychee with fragments",
             lambda: run_links(repo_root, context=context),
         ),
+        ("edit links point at real sources", lambda: run_edit_links(repo_root, context=context)),
         ("search smoke", lambda: run_search_smoke(repo_root, context=context)),
         ("executable first-day tutorial", tutorial_gate),
         ("CLI media determinism", media_gate),
