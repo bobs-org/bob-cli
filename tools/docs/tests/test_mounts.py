@@ -36,11 +36,22 @@ def _mounts_yaml(entries: list[dict[str, str]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _gitignore_for_mounts(*, ignore_indexes: bool = False) -> str:
+    lines = ["target/", "docs/reference/plugins/*"]
+    if not ignore_indexes:
+        lines.append("!docs/reference/plugins/index.md")
+    lines.append("docs/develop/plugins/*")
+    if not ignore_indexes:
+        lines.append("!docs/develop/plugins/index.md")
+    return "\n".join(lines) + "\n"
+
+
 def _minimal_root(
     root: Path,
     *,
     mounts: str = "[]\n",
     nav_extra: str = "",
+    ignore_indexes: bool = False,
 ) -> Path:
     (root / "docs/_meta").mkdir(parents=True)
     (root / "docs/develop").mkdir(parents=True)
@@ -53,14 +64,7 @@ def _minimal_root(
         "      - stem: only\n        summary: One contract\n        order: 1\n",
     )
     _write(root / "docs/_meta/mounts.yml", mounts)
-    _write(
-        root / ".gitignore",
-        "target/\n"
-        "docs/reference/plugins/*\n"
-        "!docs/reference/plugins/index.md\n"
-        "docs/develop/plugins/*\n"
-        "!docs/develop/plugins/index.md\n",
-    )
+    _write(root / ".gitignore", _gitignore_for_mounts(ignore_indexes=ignore_indexes))
     _write(
         root / "mkdocs.yml",
         "site_name: Test\ndocs_dir: docs\nsite_dir: target/docs/site\n"
@@ -87,7 +91,10 @@ def _plugin_repo(
     _write(repo / "docs/media.yml", "assets: []\n")
     _write(repo / "docs/.hidden.md", "# Hidden\n")
     if with_index:
-        _write(repo / "docs/index.md", "# Source index\n")
+        _write(
+            repo / "docs/index.md",
+            "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n---\n\n# Plugins\n",
+        )
     return _ensure_git_origin(repo, origin or repo.as_uri())
 
 
@@ -386,6 +393,277 @@ def test_source_index_collision_rejected(
     )
     _write(root / "docs/reference/plugins/index.md", "# Hub\n")
     with pytest.raises(DocsError, match="collides with the committed landing page"):
+        assemble(root)
+
+
+def _nested_source_hub_repo(repo: Path) -> Path:
+    _write(
+        repo / "docs/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n---\n\n# Plugins\n",
+    )
+    _write(repo / "docs/overview.md", "# Overview\n")
+    _write(repo / "docs/nav.yml", "- title: Overview\n  path: overview.md\n")
+    _write(
+        repo / "docs/develop/index.md",
+        "---\ntitle: Plugin development\ndescription: Develop hub.\n---\n\n# Develop\n",
+    )
+    _write(repo / "docs/develop/setup.md", "# Setup\n")
+    _write(repo / "docs/develop/nav.yml", "- title: Setup\n  path: setup.md\n")
+    return _ensure_git_origin(repo, repo.as_uri())
+
+
+def _nested_source_hub_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path
+) -> Path:
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    return _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml(
+            [
+                {
+                    **_mount_entry(repo, target="reference/plugins"),
+                    "nav_title": "Reference",
+                },
+                {
+                    "repo": "bob-plugins",
+                    "remote": repo.as_uri(),
+                    "branch": "main",
+                    "source": "docs/develop",
+                    "target": "develop/plugins",
+                    "nav_title": "Develop",
+                },
+            ]
+        ),
+        nav_extra="  - Reference: reference/plugins/index.md\n  - Develop: develop/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+
+
+def test_source_hub_and_nested_developer_hub_copy_with_provenance_and_nav(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _nested_source_hub_repo(tmp_path / "bob-plugins")
+    root = _nested_source_hub_root(tmp_path, monkeypatch, repo)
+    context, _ = assemble(root)
+    staged = context.output_dir / "docs"
+    ref_hub = staged / "reference/plugins/index.md"
+    dev_hub = staged / "develop/plugins/index.md"
+    assert ref_hub.is_file()
+    assert dev_hub.is_file()
+    assert ref_hub.read_text(encoding="utf-8").startswith(
+        "---\nsource: bob-plugins:docs/index.md\n"
+    )
+    assert "title: Plugins inventory" in ref_hub.read_text(encoding="utf-8")
+    assert dev_hub.read_text(encoding="utf-8").startswith(
+        "---\nsource: bob-plugins:docs/develop/index.md\n"
+    )
+    assert "title: Plugin development" in dev_hub.read_text(encoding="utf-8")
+    assert (staged / "reference/plugins/overview.md").is_file()
+    assert not (staged / "reference/plugins/develop/setup.md").exists()
+    assert not (staged / "reference/plugins/develop/index.md").exists()
+    assert (staged / "develop/plugins/setup.md").is_file()
+    from bob_docs.yaml_tools import load_yaml
+
+    config = load_yaml(context.assembled_config)
+    reference = next(
+        item for item in config["nav"] if isinstance(item, dict) and "Reference" in item
+    )
+    develop = next(
+        item for item in config["nav"] if isinstance(item, dict) and "Develop" in item
+    )
+    assert reference["Reference"][0] == {
+        "Plugins inventory": "reference/plugins/index.md"
+    }
+    assert reference["Reference"][1] == {"Overview": "reference/plugins/overview.md"}
+    assert len(reference["Reference"]) == 2
+    assert develop["Develop"][0] == {"Plugin development": "develop/plugins/index.md"}
+    assert develop["Develop"][1] == {"Setup": "develop/plugins/setup.md"}
+    assert len(develop["Develop"]) == 2
+    edits = config["extra"]["bob_edits"]
+    assert edits["reference/plugins/"].endswith("/docs/index.md")
+    assert "/main/" in edits["reference/plugins/"] or edits[
+        "reference/plugins/"
+    ].endswith("/docs/index.md")
+    assert edits["develop/plugins/"].endswith("/docs/develop/index.md")
+    manifest = json.loads(
+        (context.output_dir / "mount-manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        manifest["sources"]["reference/plugins/index.md"] == "bob-plugins:docs/index.md"
+    )
+    assert (
+        manifest["sources"]["develop/plugins/index.md"]
+        == "bob-plugins:docs/develop/index.md"
+    )
+
+
+def test_source_hub_repeat_assembly_and_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    assemble(root)
+    hub = root / "docs/reference/plugins/index.md"
+    first_hub = hub.read_bytes()
+    first_guide = (root / "docs/reference/plugins/guide.md").read_bytes()
+    assemble(root)
+    assert hub.read_bytes() == first_hub
+    assert (root / "docs/reference/plugins/guide.md").read_bytes() == first_guide
+    _write(
+        repo / "docs/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n---\n\n# Plugins v2\n",
+    )
+    assemble(root)
+    assert "Plugins v2" in hub.read_text(encoding="utf-8")
+    assert hub.read_text(encoding="utf-8").startswith(
+        "---\nsource: bob-plugins:docs/index.md\n"
+    )
+    (repo / "docs/guide.md").unlink()
+    _write(repo / "docs/nav.yml", "- title: FM\n  path: fm.md\n")
+    assemble(root)
+    assert not (root / "docs/reference/plugins/guide.md").exists()
+    assert (root / "docs/reference/plugins/fm.md").is_file()
+    assert hub.is_file()
+    (repo / "docs/index.md").unlink()
+    with pytest.raises(DocsError, match="previously copied hub"):
+        assemble(root)
+    assert hub.is_file()
+    assert (root / "docs/reference/plugins/fm.md").is_file()
+
+
+def test_source_hub_collision_leaves_existing_copies_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    assemble(root)
+    guide = root / "docs/reference/plugins/guide.md"
+    first = guide.read_bytes()
+    authored = (root / "docs/reference/plugins/index.md").read_bytes()
+    _write(
+        repo / "docs/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n---\n\n# Plugins\n",
+    )
+    with pytest.raises(DocsError, match="collides with the committed landing page"):
+        assemble(root)
+    assert guide.read_bytes() == first
+    assert (root / "docs/reference/plugins/index.md").read_bytes() == authored
+
+
+def test_source_hub_nonignored_index_leaves_outputs_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    assemble(root)
+    hub = root / "docs/reference/plugins/index.md"
+    guide = root / "docs/reference/plugins/guide.md"
+    first_hub, first_guide = hub.read_bytes(), guide.read_bytes()
+    _write(root / ".gitignore", _gitignore_for_mounts(ignore_indexes=False))
+    with pytest.raises(DocsError, match="not gitignored"):
+        assemble(root)
+    assert hub.read_bytes() == first_hub
+    assert guide.read_bytes() == first_guide
+
+
+def test_source_hub_symlink_leaves_outputs_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    assemble(root)
+    hub = root / "docs/reference/plugins/index.md"
+    guide = root / "docs/reference/plugins/guide.md"
+    first_guide = guide.read_bytes()
+    outside = tmp_path / "elsewhere.md"
+    _write(outside, "# Elsewhere\n")
+    hub.unlink()
+    hub.symlink_to(outside)
+    with pytest.raises(DocsError, match="is a symlink"):
+        assemble(root)
+    assert outside.read_text(encoding="utf-8") == "# Elsewhere\n"
+    assert guide.read_bytes() == first_guide
+
+
+def test_tracked_source_hub_destination_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    assemble(root)
+    hub = root / "docs/reference/plugins/index.md"
+    first = hub.read_bytes()
+    _commit_all(root)
+    subprocess.run(
+        ["git", "add", "-f", "docs/reference/plugins/index.md"],
+        cwd=root,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "track hub",
+        ],
+        cwd=root,
+        check=True,
+    )
+    with pytest.raises(DocsError, match="tracked files"):
+        assemble(root)
+    assert hub.read_bytes() == first
+
+
+def test_nav_listing_index_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins", with_index=True)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+        ignore_indexes=True,
+    )
+    _write(
+        repo / "docs/nav.yml",
+        "- title: Hub\n  path: index.md\n- title: Guide\n  path: guide.md\n",
+    )
+    with pytest.raises(DocsError, match="must not"):
         assemble(root)
 
 

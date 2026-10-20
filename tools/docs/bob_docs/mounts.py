@@ -446,8 +446,30 @@ class MountPlan:
     mount: Mount
     repo_dir: Path
     source_dir: Path
-    files: tuple[tuple[PurePosixPath, PurePosixPath], ...]
+    files: tuple[tuple[Path, PurePosixPath], ...]
     nav: tuple[dict[str, str], ...]
+    source_hub: bool = False
+
+
+def _hub_target(mount: Mount) -> PurePosixPath:
+    return PurePosixPath(f"{mount.target.as_posix()}/{INDEX_FILENAME}")
+
+
+def source_owns_index(
+    mount: Mount,
+    *,
+    repo_dir: Path | None = None,
+    source_stamps: dict[str, str] | None = None,
+) -> bool:
+    """Whether this mount's hub is the source repository's ``index.md``."""
+
+    landing = f"{mount.target.as_posix()}/{INDEX_FILENAME}"
+    if source_stamps and landing in source_stamps:
+        return True
+    if repo_dir is None:
+        return False
+    candidate = repo_dir / Path(*mount.source.parts) / INDEX_FILENAME
+    return candidate.is_file() and not candidate.is_symlink()
 
 
 def _read_source_text(path: Path) -> str:
@@ -588,7 +610,7 @@ def load_source_nav(mount: Mount, source_dir: Path) -> list[dict[str, str]]:
             or relative.parts[0] == INDEX_FILENAME
         ):
             raise DocsError(
-                f"{where}: {INDEX_FILENAME} is the committed landing page and must not "
+                f"{where}: {INDEX_FILENAME} is the mount hub and must not "
                 "be listed in nav.yml; it is included exactly once by the assembler"
             )
         entries.append({"title": title, "path": str(relative)})
@@ -636,18 +658,12 @@ def plan_mounts(
                 source_dir=source_dir,
                 files=ordered_paths,
                 nav=tuple(nav),
+                source_hub=any(
+                    target_relative == _hub_target(mount)
+                    for _, target_relative in ordered_paths
+                ),
             )
         )
-    for plan in plans:
-        for _, target_relative in plan.files:
-            if target_relative == PurePosixPath(
-                f"{plan.mount.target.as_posix()}/{INDEX_FILENAME}"
-            ):
-                raise DocsError(
-                    f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: source ships "
-                    f"{INDEX_FILENAME}, which collides with the committed landing page; "
-                    "keep the landing page in bob-cli or remove it from the source"
-                )
     return plans
 
 
@@ -786,25 +802,50 @@ def validate_mount_targets(
     for plan in plans:
         target_dir = docs_root / Path(*plan.mount.target.parts)
         index = target_dir / INDEX_FILENAME
-        if not index.is_file() or index.is_symlink():
-            raise DocsError(
-                f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: missing committed "
-                f"landing page {index}; commit it before mounting"
-            )
+        index_rel = f"docs/{plan.mount.target.as_posix()}/{INDEX_FILENAME}"
+        hub = _hub_target(plan.mount)
+        if plan.source_hub:
+            if index.exists() and str(hub) not in owned:
+                raise DocsError(
+                    f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: source ships "
+                    f"{INDEX_FILENAME}, which collides with the committed landing page "
+                    f"{index}; never silently replace an authored landing page"
+                )
+        else:
+            leftover_copy = str(hub) in owned
+            if leftover_copy and path_ignored(root, index_rel):
+                raise DocsError(
+                    f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: source no longer "
+                    f"ships {INDEX_FILENAME} and {index} is a previously copied hub, not a "
+                    "committed landing page; restore the source hub or replace it with a "
+                    "tracked authored landing page"
+                )
+            if not index.is_file() or index.is_symlink():
+                raise DocsError(
+                    f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: missing committed "
+                    f"landing page {index}; commit it before mounting"
+                )
         probe = f"docs/{plan.mount.target.as_posix()}/.__bob_docs_mount_probe.md"
         if not path_ignored(root, probe):
             raise DocsError(
                 f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: target is not "
-                "gitignored; copied pages must be ignored apart from index.md"
+                "gitignored; copied pages must be ignored apart from an authored index.md"
             )
         if tracked is not None:
+            landing_exempt = set() if plan.source_hub else {index_rel}
             offenders = sorted(
                 path
                 for path in tracked
                 if path.startswith(f"docs/{plan.mount.target.as_posix()}/")
-                and path != f"docs/{plan.mount.target.as_posix()}/{INDEX_FILENAME}"
+                and path not in landing_exempt
             )
             if offenders:
+                if plan.source_hub:
+                    raise DocsError(
+                        f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: target holds "
+                        f"tracked files: {', '.join(offenders)}; a source-owned hub and its "
+                        "copies must be gitignored and untracked"
+                    )
                 raise DocsError(
                     f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: target holds "
                     f"tracked files outside the landing page: {', '.join(offenders)}; "
@@ -866,8 +907,13 @@ def sync_mount_copies(
                 writes.append((source_path, destination, stamped))
             else:
                 writes.append((source_path, destination, ""))
+    authored_hubs = {
+        str(_hub_target(plan.mount)) for plan in plans if not plan.source_hub
+    }
     stale_victims: list[Path] = []
     for stale in sorted(owned - expected):
+        if stale in authored_hubs:
+            continue
         stale_victims.append(
             _check_stale_deletable(
                 stale,

@@ -32,7 +32,7 @@ from .markdown import (
     parse_front_matter,
     split_front_matter,
 )
-from .mounts import Mount, load_mounts
+from .mounts import Mount, load_mounts, source_owns_index
 from .yaml_tools import dump_yaml, load_yaml
 
 TYPED_DIRS = ("start", "guides", "concepts", "reference", "develop")
@@ -219,8 +219,6 @@ def _is_verified_copy(
     source_stamps: dict[str, str],
 ) -> bool:
     if not isinstance(source, str):
-        return False
-    if _is_mount_landing(rel, mounts):
         return False
     mount = _under_mount(rel, mounts)
     if mount is None:
@@ -571,10 +569,25 @@ def check_mount_gitignores(ctx: LintContext) -> list[Finding]:
                     1,
                     "gitignore",
                     f"mount target {mount.target.as_posix()!r} is not gitignored; "
-                    "copied pages must be ignored apart from index.md",
+                    "copied pages must be ignored apart from an authored index.md",
                 )
             )
-        if _path_ignored(ctx.root, landing):
+        owned_by_source = source_owns_index(
+            mount,
+            repo_dir=ctx.source_dirs.get(mount.repo),
+            source_stamps=ctx.source_stamps,
+        )
+        if owned_by_source:
+            if not _path_ignored(ctx.root, landing):
+                findings.append(
+                    _finding(
+                        "docs/_meta/mounts.yml",
+                        1,
+                        "gitignore",
+                        f"source-owned hub {landing} must be gitignored",
+                    )
+                )
+        elif _path_ignored(ctx.root, landing):
             findings.append(
                 _finding(
                     "docs/_meta/mounts.yml",
@@ -844,9 +857,25 @@ def check_nav(ctx: LintContext, pages: list[str]) -> list[Finding]:
         page = ctx.docs / Path(*PurePosixPath(leaf).parts)
         if leaf in mount_placeholders:
             if not page.is_file():
-                findings.append(
-                    _finding(label, 1, "nav", f"mount placeholder {leaf!r} has no committed landing page")
+                mount = next(
+                    item
+                    for item in ctx.mounts
+                    if f"{item.target.as_posix()}/index.md" == leaf
                 )
+                source_hub = source_owns_index(
+                    mount,
+                    repo_dir=ctx.source_dirs.get(mount.repo),
+                    source_stamps=ctx.source_stamps,
+                )
+                if ctx.assembled or not source_hub:
+                    findings.append(
+                        _finding(
+                            label,
+                            1,
+                            "nav",
+                            f"mount placeholder {leaf!r} has no committed landing page",
+                        )
+                    )
             continue
         if not page.is_file():
             if leaf.endswith("/index.md"):

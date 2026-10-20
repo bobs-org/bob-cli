@@ -263,6 +263,74 @@ def test_verified_mount_source_passes(tmp_path: Path) -> None:
     assert _errors(root) == []
 
 
+def test_copied_hub_source_stamp_is_verified(tmp_path: Path) -> None:
+    root = _mounted_fixture(_site(tmp_path))
+    _write(
+        root / ".gitignore",
+        "/docs/reference/plugins/*\n",
+    )
+    (root / "docs/reference/plugins/index.md").unlink()
+    _write(
+        root / "docs/reference/plugins/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n"
+        "source: bob-plugins:docs/index.md\n---\n\n# Plugins\n",
+    )
+    manifest = json.loads(
+        (root / "target/docs/mount-manifest.json").read_text(encoding="utf-8")
+    )
+    manifest["files"].append("reference/plugins/index.md")
+    manifest["sources"]["reference/plugins/index.md"] = "bob-plugins:docs/index.md"
+    (root / "target/docs/mount-manifest.json").write_text(
+        json.dumps(manifest) + "\n", encoding="utf-8"
+    )
+    assert _errors(root) == []
+
+
+def test_copied_hub_forged_source_fails(tmp_path: Path) -> None:
+    root = _mounted_fixture(_site(tmp_path))
+    _write(
+        root / ".gitignore",
+        "/docs/reference/plugins/*\n",
+    )
+    (root / "docs/reference/plugins/index.md").unlink()
+    _write(
+        root / "docs/reference/plugins/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n"
+        "source: bob-plugins:docs/forged.md\n---\n\n# Plugins\n",
+    )
+    manifest = json.loads(
+        (root / "target/docs/mount-manifest.json").read_text(encoding="utf-8")
+    )
+    manifest["files"].append("reference/plugins/index.md")
+    manifest["sources"]["reference/plugins/index.md"] = "bob-plugins:docs/index.md"
+    (root / "target/docs/mount-manifest.json").write_text(
+        json.dumps(manifest) + "\n", encoding="utf-8"
+    )
+    joined = "\n".join(_errors(root))
+    assert "docs/reference/plugins/index.md:1: source:" in joined
+    assert "forged" in joined
+
+
+def test_source_owned_hub_must_be_gitignored(tmp_path: Path) -> None:
+    root = _mounted_fixture(_site(tmp_path))
+    _write(
+        root / "docs/reference/plugins/index.md",
+        "---\ntitle: Plugins inventory\ndescription: Plugin hub.\n"
+        "source: bob-plugins:docs/index.md\n---\n\n# Plugins\n",
+    )
+    manifest = json.loads(
+        (root / "target/docs/mount-manifest.json").read_text(encoding="utf-8")
+    )
+    manifest["files"].append("reference/plugins/index.md")
+    manifest["sources"]["reference/plugins/index.md"] = "bob-plugins:docs/index.md"
+    (root / "target/docs/mount-manifest.json").write_text(
+        json.dumps(manifest) + "\n", encoding="utf-8"
+    )
+    joined = "\n".join(_errors(root))
+    assert "source-owned hub" in joined
+    assert "must be gitignored" in joined
+
+
 def test_mount_source_must_match_the_assembled_stamp(tmp_path: Path) -> None:
     root = _mounted_fixture(_site(tmp_path), source="bob-plugins:docs/elsewhere.md")
     joined = "\n".join(_errors(root))
@@ -668,6 +736,73 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
         and "bob-plugins's nav.yml" in item.explanation
         for item in findings
     )
+
+
+def test_assembled_lint_accepts_copied_source_hubs(tmp_path: Path, monkeypatch) -> None:
+    root = _site(tmp_path / "bob-cli")
+    _write(
+        root / "docs/_meta/mounts.yml",
+        "- repo: bob-plugins\n"
+        "  remote: https://example.com/bob-plugins.git\n"
+        "  branch: main\n"
+        "  source: docs\n"
+        "  target: reference/plugins\n"
+        "  nav_title: Plugins\n",
+    )
+    _write(root / ".gitignore", "/docs/reference/plugins/*\n")
+    nav = (root / "mkdocs.yml").read_text(encoding="utf-8")
+    _write(root / "mkdocs.yml", nav + "\n  - Plugins: reference/plugins/index.md\n")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+
+    source = tmp_path / "bob-plugins"
+    _write(
+        source / "docs/index.md",
+        GOOD_FM + "# Plugins inventory\n\nHub sentence.\n",
+    )
+    _write(source / "docs/nav.yml", "- title: Listed\n  path: listed.md\n")
+    _write(source / "docs/listed.md", GOOD_FM + "# Listed\n\nMounted content.\n")
+    subprocess.run(
+        ["git", "init", "-b", "main", "-q"], cwd=source, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://example.com/bob-plugins.git"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=source, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "fixture",
+        ],
+        cwd=source,
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(source))
+
+    context, _manifest = assemble(root)
+    staged_hub = context.output_dir / "docs/reference/plugins/index.md"
+    assert staged_hub.is_file()
+    assert "source: bob-plugins:docs/index.md" in staged_hub.read_text(encoding="utf-8")
+    manifest = json.loads(
+        (context.output_dir / "mount-manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        manifest["sources"]["reference/plugins/index.md"] == "bob-plugins:docs/index.md"
+    )
+    assert not [
+        item
+        for item in check_tree(build_lint_context(root, docs_context=context))
+        if item.severity == "error"
+    ]
 
 
 def test_duplicate_nav_entry_fails(tmp_path: Path) -> None:

@@ -111,10 +111,16 @@ Validation runs before any write, so a failure leaves the tree unchanged:
   targets must not overlap.
 - Symlinks pointing outside their repo are rejected; nothing is created as a
   symlink at the destination.
-- The target directory is gitignored apart from its committed `index.md`
-  landing page, and every copied destination path must itself be gitignored.
-  Repeat assembly overwrites only previously copied outputs, removes stale
-  copied pages, and refuses to overwrite any other file.
+- Hub ownership has two compatible forms. When the selected source has no
+  `index.md`, bob-cli keeps a committed `<target>/index.md` landing page and
+  gitignores every other copied path. When the source supplies `index.md`,
+  that file is the hub: it is copied and stamped like any other page, and the
+  destination including `index.md` must be gitignored and untracked. A
+  previously copied hub may be refreshed or removed through the ownership
+  manifest. An authored landing page is never replaced.
+- Every copied destination path must itself be gitignored. Repeat assembly
+  overwrites only previously copied outputs, removes stale copied pages, and
+  refuses to overwrite any other file.
 - `nav.yml` and `media.yml` are support metadata, never public pages, and are
   not copied. Dotfiles are not copied.
 - Every copied Markdown page gets `source: <repo>:<path>` (repo-relative path)
@@ -135,11 +141,13 @@ order; paths are relative to the source root:
 
 Titles and order are preserved, paths are qualified with the target, and
 escaping, missing, duplicate, or non-Markdown entries fail. `index.md` must not
-be listed: the committed `<target>/index.md` landing page is always included
-exactly once, first, under the mount's `nav_title`. The authored `mkdocs.yml`
-holds one placeholder line per mount (`- Plugins: reference/plugins/index.md`);
-assembly replaces it with the expanded section. A mount with no placeholder,
-or a placeholder with no mount and no page, fails the build.
+be listed. The hub, either the source `index.md` or the committed bob-cli
+landing page, is included exactly once, first, under the mount's `nav_title`.
+Source hubs are copied and stamped before their titles are read. The authored
+`mkdocs.yml` holds one placeholder line per mount
+(`- Plugins: reference/plugins/index.md`); assembly replaces it with the
+expanded section. A mount with no placeholder, or a placeholder with no mount
+and no page, fails the build.
 
 ## Production assembly (`--production --sources FILE`)
 
