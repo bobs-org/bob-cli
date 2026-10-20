@@ -17,8 +17,8 @@ that stay in lockstep with the tools.
 - [Vault format](vault-format.md) for task lines, lanes, fields, and notes.
 - [Configuration](configuration.md) for config keys, environment, and runtimes.
 - [JSON outputs](json-outputs.md) for every machine-readable command envelope.
-- [Requirements and compatibility](compatibility.md) for the tested snapshot
-  and minimum versions.
+- [Requirements and compatibility](compatibility.md) for the tested snapshot,
+  minimum versions, shims, and runtime tools.
 - [CLI reference](cli/index.md) for every `bob` command and subcommand.
 - [Glossary](glossary.md) for Bob's shared vocabulary.
 - [Design decisions](../develop/decisions.md) for the reasoning behind

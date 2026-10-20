@@ -1,9 +1,17 @@
 # Command guides
 
+The public site at <https://bobs-org.github.io/> is the reader front door:
+
+- [Get started](https://bobs-org.github.io/start/)
+- [Guides](https://bobs-org.github.io/guides/)
+- [Understand](https://bobs-org.github.io/concepts/)
+- [Reference](https://bobs-org.github.io/reference/)
+- [Develop](https://bobs-org.github.io/develop/)
+
 Start with [Getting started](getting-started.md) for vault settings, a first
-capture and session, and command effects. The [root README](../README.md)
-covers installation, the command index, dependencies, and environment variables.
-The guides below explain current behavior and provide detailed contracts.
+capture and session, and command effects. The [root README](../README.md) is
+a short GitHub front door. The table below lists the in-repo behavior
+contracts.
 
 For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md),
 [Freshness review](freshness.md), and [Daily Stats](stats.md). For the

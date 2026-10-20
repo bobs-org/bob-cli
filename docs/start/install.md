@@ -44,7 +44,10 @@ just install
 ```
 
 `just install` builds with Cargo and installs `bob` plus shell completion
-into your Cargo bin directory. Ensure that directory is on `PATH`:
+into `${CARGO_INSTALL_ROOT:-${CARGO_HOME:-~/.cargo}}`, overriding cargo's
+`install.root` so the recipe refreshes the binary it installed. Do not pass
+`--force`: cargo already replaces the same package from any checkout. Ensure
+that `bin` directory is on `PATH`:
 
 <!-- tutorial-test: skip PATH export edits the reader shell profile -->
 ```bash
@@ -63,8 +66,25 @@ bob 0.1.0
 
 The exact version changes over time; the check passes when the command
 prints a version and exits 0. For command help, run `bob --help`.
+`just install` also runs `bob completion install`, which never edits your
+rc files. Inspect the state with `bob completion` (same as
+`bob completion status`). See [shell completion](../completion.md) for the
+full contract.
+
+## Install from Git
+
+Without a local checkout, install the published crate from Git:
+
+<!-- tutorial-test: skip network install needs a remote and writes outside the sandbox -->
+```bash
+cargo install --git https://github.com/bobs-org/bob-cli.git --locked bob-cli && bob completion install
+```
+
+To install the CLI, plugins, and (on macOS) Mac Capture from sibling
+checkouts, use [Install everything with one command](../guides/install-everything.md).
 
 ## Next
 
 - [Your first Bob day](first-bob-day.md) — capture and plan in a demo vault
+- [Install everything with one command](../guides/install-everything.md) — plugins and Mac Capture
 - [Requirements and compatibility](../reference/compatibility.md) — supported platforms and floors

@@ -78,6 +78,21 @@ bob 0.1.0
 The printed version changes over time. The check passes when the command prints
 a version and exits 0.
 
+## Restart Obsidian
+
+After a clean run, `just install-all` restarts a running Obsidian only when
+`bob plugins sync` copied at least one file. It previews the sync with
+`bob plugins sync --dry-run --format json`. On macOS it quits and relaunches
+Obsidian; the first run may ask for Automation permission. Before the quit,
+it posts a Notification Center banner titled `Restarting Obsidian` with
+subtitle `bob install-all`. The banner titled `Obsidian needs a restart`
+posts instead when a failed step or a failed quit/relaunch leaves the new
+plugins unloaded. macOS files the banner under Script Editor. A denied
+banner does not change the restart. On Linux it uses the Obsidian CLI
+`restart` when that CLI is registered at `~/.local/bin/obsidian`. A stopped
+Obsidian is never launched. The pending marker lives under
+`~/.local/state/bob-cli/install-all/`.
+
 ## If it goes wrong
 
 A failed clone, a failed `just install`, or a failed plugin sync exits 1 and

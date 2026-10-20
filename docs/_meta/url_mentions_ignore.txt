@@ -5,9 +5,6 @@
 # Seed only demonstrated non-public references: never a real path printed by
 # bob, a broken anchor, or an entire subtree. Entries that match nothing fail
 # the urls gate as stale; remove them instead of widening the scope.
-# Root README links the repository hub, which is intentionally excluded from
-# the site (mkdocs exclude_docs).
-docs/README.md | README.md | Repository hub excluded from the site; the root README links it as the guide index.
 # Fixture-vault path inside a doc-comment test, not a published page.
 docs/mirrored.md | tests/cli/ref_library/migrate_zorg.rs | Fixture-vault path in a test, not a published page.
 # Fixture vault-note path in a unit test, not a published page.

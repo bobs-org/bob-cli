@@ -186,6 +186,8 @@ nav:
       - Plugin development: develop/plugins/index.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
+      - Migration notes: develop/migration-notes.md
+      - Release checklist: develop/release-checklist.md
       - Design decisions: develop/decisions.md
       - Contracts:
           - Overview: develop/contracts.md

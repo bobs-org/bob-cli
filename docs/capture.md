@@ -6367,5 +6367,6 @@ unreadable-note errors.
 A `$<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
 captures remain `[ ]`, and unscheduled Pomodoro-linked tasks remain `[*]`.
 Project notes and their `^prj` lifecycle tasks are covered in
-[projects.md](projects.md). The command index and environment variables live in
-the [root README](https://github.com/bobs-org/bob-cli/blob/master/README.md).
+[projects.md](projects.md). The command index lives in the
+[CLI reference](reference/cli/index.md) and environment variables in
+[configuration](reference/configuration.md).

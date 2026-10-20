@@ -8,8 +8,8 @@ the terminal and Obsidian views consume the same JSON model.
 (`dash_stats.md`, STATS chip on the dashboard) is the same report drawn
 by the `bob-stats` block; see [dashboard.md](dashboard.md#child-pages).
 Journal files under `.bob/stats/review/` travel with the vault; see
-[vault-git-sync.md](vault-git-sync.md#stats-review-journal). The root
-[README](https://github.com/bobs-org/bob-cli/blob/master/README.md#stats) indexes the command.
+[vault-git-sync.md](vault-git-sync.md#stats-review-journal). The
+[`bob stats` CLI reference](reference/cli/stats.md) indexes the command.
 
 This document defines the v1 review journal written by `bob-ledger-tools` and
 `bob-navigation-hotkeys`. The journal is append-only and per host. It contains no

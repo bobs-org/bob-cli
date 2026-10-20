@@ -98,6 +98,11 @@ that repository and update its local nav metadata; do not edit its copied site o
 The bob-cli docs repository owns `docs/develop/`, authored contract landing pages, site
 navigation, and documentation metadata.
 
+The repository root `README.md` is a short GitHub front door: one sentence, one
+CLI image, requirements, install, components, Docs links, and the license. Do
+not grow it. Put new material in a typed `docs/` page. README links to the
+site use absolute `https://bobs-org.github.io/` URLs.
+
 ## Writing and verification
 
 Use plain Markdown that works in the strict Zensical build and the Material fallback.

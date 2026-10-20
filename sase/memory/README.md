@@ -132,8 +132,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Parent: `AGENTS.md`
 - Description: Read before changing docs/, mkdocs.yml, tools/docs, README front doors,
   or user-visible CLI help.
-- Lines: 26
-- Approx. tokens: 245
+- Lines: 32
+- Approx. tokens: 330
 
 ### `sase/memory/sase_artifacts.md`
 
@@ -170,8 +170,8 @@ strand inherits no `type:` of its own and never inlines into `AGENTS.md`.
 - Core notes: 1
 - Reference notes: 5
 - Web descriptor notes: 3
-- Total lines: 636
-- Total approx. tokens: 8439
+- Total lines: 642
+- Total approx. tokens: 8524
 
 ## Commands
 

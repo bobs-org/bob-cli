@@ -19,7 +19,7 @@ cargo install --path . --locked
 bob completion install
 ```
 
-See the [installation guide](https://github.com/bobs-org/bob-cli/blob/master/README.md#installation) for remote installation
+See the [installation guide](start/install.md) for remote installation
 and [completion](completion.md) for Bash/Zsh setup. Completion installation
 does not edit shell rc files.
 

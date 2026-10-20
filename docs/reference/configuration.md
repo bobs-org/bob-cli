@@ -203,7 +203,7 @@ interpret shell quotes unless their contract says otherwise.
 | `BOB_CAPTURE_TEMPLATES_FILE` | `$XDG_STATE_HOME/bob-cli/capture/templates.json`, else `$HOME/.local/state/bob-cli/capture/templates.json` | Exact saved-template shelf file. |
 | `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, and task reroll. |
 | `BOB_VAULT_SYNC_STATE_FILE` | `$XDG_STATE_HOME/bob-cli/vault-sync.json`, else `$HOME/.local/state/bob-cli/vault-sync.json` | Vault-sync status JSON path. |
-| `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. |
+| `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. See [compatibility shims](compatibility.md#compatibility-shims). |
 
 ### Capture and query adapters
 
@@ -300,7 +300,7 @@ articles; `pandoc` and `xelatex` for Markdown-to-PDF rendering; `pass` for
 the default Keep token store; and `uv` plus the pinned adapter packages for
 Google Keep. Clipboard tools are platform-specific. Native execution does
 not require Bash or Perl; the compatibility fallback may. See the
-[runtime dependency list](https://github.com/bobs-org/bob-cli#runtime-dependencies) and the
+[runtime dependency list](compatibility.md#runtime-dependencies) and the
 individual command references for command-specific requirements.
 
 ## Mac Capture hotkeys
@@ -316,6 +316,6 @@ conflict recovery, and Keyboard for the capture editor keys.
 ## Related
 
 - [Your first Bob day](../start/first-bob-day.md)
-- [Environment overview in the README](https://github.com/bobs-org/bob-cli#environment)
+- [Requirements and compatibility](compatibility.md)
 - [Configuration contracts for plan, freshness, and stats](../plan.md#config), [freshness](../freshness.md#2-fields-overrides-and-config), and [stats](../stats.md#stats-config)
 - [Capture](../capture.md) and [reference library](../ref.md)

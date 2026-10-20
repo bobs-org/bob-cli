@@ -5,3 +5,11 @@
 # deletes an obligation.
 # Code-emitted deep link printed by src/native/vault_sync.rs on a halted sync.
 https://bobs-org.github.io/vault-git-sync/#halted-sync
+# Root README front-door links.
+https://bobs-org.github.io/
+https://bobs-org.github.io/start/
+https://bobs-org.github.io/guides/
+https://bobs-org.github.io/concepts/
+https://bobs-org.github.io/reference/
+https://bobs-org.github.io/develop/
+https://bobs-org.github.io/reference/compatibility/
