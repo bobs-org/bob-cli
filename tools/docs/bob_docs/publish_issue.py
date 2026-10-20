@@ -30,8 +30,7 @@ WEEKLY_BLOCKED_TITLE = "Docs weekly checks blocked"
 WEEKLY_BLOCKED_LABEL = "docs-weekly"
 WEEKLY_LABEL_COLOR = "FBCA04"
 WEEKLY_LABEL_DESCRIPTION = (
-    "Weekly documentation checks (Material build and external links) are blocked; "
-    "see the issue body for the failing step and recovery."
+    "Weekly docs checks are blocked; see the issue for the failing step and recovery."
 )
 
 
@@ -156,6 +155,7 @@ def build_blocked_body(
     reason: str,
     fingerprint: str = "",
     details: tuple[str, ...] = (),
+    weekly: bool = False,
 ) -> str:
     """Render the managed-issue body from structured fields."""
 
@@ -163,8 +163,9 @@ def build_blocked_body(
         raise DocsError("blocked-issue step must be a nonempty string")
     if not run_url.strip():
         raise DocsError("blocked-issue run URL must be a nonempty string")
+    subject = "Weekly documentation checks are" if weekly else "Documentation publication is"
     lines = [
-        f"Documentation publication is blocked at step `{step}`.",
+        f"{subject} blocked at step `{step}`.",
         "",
         f"Run: {run_url}",
         f"Reason: {reason or 'gate failure'}",
@@ -173,6 +174,18 @@ def build_blocked_body(
         lines.append(f"Fingerprint: `{fingerprint}`")
     for detail in details:
         lines.append(detail)
+    if weekly:
+        lines.extend(
+            [
+                "",
+                "Recovery:",
+                "- Inspect the failing step in the run log above.",
+                "- Repair or triage the Material build or external-link failure.",
+                "- Dispatch the weekly workflow again; it does not deploy or change publication state.",
+                "- This issue closes automatically after both weekly checks succeed.",
+            ]
+        )
+        return "\n".join(lines) + "\n"
     lines.extend(
         [
             "",
@@ -299,7 +312,8 @@ def run_publish_report(
             ensure_label(run, label=label)
     if mode == "open":
         body = build_blocked_body(
-            step=step, run_url=run_url, reason=reason, fingerprint=fingerprint, details=details
+            step=step, run_url=run_url, reason=reason, fingerprint=fingerprint,
+            details=details, weekly=label == WEEKLY_BLOCKED_LABEL,
         )
         return open_or_update_blocked(run, title=title, label=label, body=body)
     if mode == "close":

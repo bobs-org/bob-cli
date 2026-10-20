@@ -5,6 +5,7 @@ which parses as boolean True), never by matching raw file text. Shell blocks
 are additionally validated with `bash -n` where a shell is available.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -182,6 +183,37 @@ def test_weekly_runs_online_links_bounded(weekly: dict) -> None:
     # bounded retries/timeouts are the CLI defaults; the workflow must not add broad excludes
     assert "--exclude " not in runs
     assert "--exclude=" not in runs
+
+
+@pytest.mark.parametrize("stage", ["build", "links", "close"])
+def test_failed_weekly_step_records_its_own_stage(
+    weekly: dict, tmp_path: Path, stage: str
+) -> None:
+    """A failed command must report the attempted stage, not the last success."""
+    step = next(item for item in _steps(weekly["jobs"]["weekly"]) if item.get("id") == stage)
+    script = re.sub(r"\$\{\{.*?\}\}", "test", step["run"])
+    (tmp_path / "tooling").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text("#!/bin/sh\nexit 23\n")
+    uv.chmod(0o755)
+    outputs = tmp_path / "outputs"
+    result = subprocess.run(
+        ["bash", "-e", "-c", script],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_OUTPUT": str(outputs),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 23, result.stderr
+    assert outputs.is_file(), "failed stage was never written"
+    assert outputs.read_text().splitlines() == [f"stage={stage}"]
 
 
 def test_weekly_issue_is_isolated_from_publish(weekly: dict) -> None:

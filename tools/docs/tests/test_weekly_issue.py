@@ -34,6 +34,10 @@ class FakeGh:
             label = argv[argv.index("create") + 1]
             color = argv[argv.index("--color") + 1]
             description = argv[argv.index("--description") + 1]
+            if len(description) > 100:
+                return CommandResult(
+                    1, "", "HTTP 422: description is too long (maximum is 100 characters)"
+                )
             self.created_labels.append((label, color, description))
             return CommandResult(0, "", "")
         if argv[:2] == ["gh", "issue"] and argv[2] == "list":
@@ -67,6 +71,14 @@ def test_weekly_open_provisions_weekly_label() -> None:
     )
     assert number == 21
     assert (WEEKLY_BLOCKED_LABEL, WEEKLY_LABEL_COLOR, WEEKLY_LABEL_DESCRIPTION) in gh.created_labels
+    body = next(
+        text for argv, text in gh.calls if argv[:3] == ["gh", "issue", "create"]
+    )
+    assert "Weekly documentation checks are blocked at step `links`." in body
+    assert "Dispatch the weekly workflow again" in body
+    assert "publication is blocked" not in body
+    assert "pinned=true" not in body
+    assert "hold" not in body
 
 
 def test_weekly_close_only_closes_weekly_issue() -> None:

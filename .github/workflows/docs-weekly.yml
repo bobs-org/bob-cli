@@ -42,6 +42,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "stage=guard" >> "$GITHUB_OUTPUT"
           if [ "${{ github.repository }}" != "bobs-org/bobs-org.github.io" ]; then
             echo "::error::docs-weekly runs only for bobs-org/bobs-org.github.io (got ${{ github.repository }})"
             exit 1
@@ -51,7 +52,6 @@ jobs:
             echo "::error::docs-weekly runs only on the default branch (got ${{ github.ref_name }}, default $default_branch)"
             exit 1
           fi
-          echo "stage=guard" >> "$GITHUB_OUTPUT"
 
       - name: Check out bob-cli tooling
         uses: actions/checkout@v6
@@ -71,18 +71,18 @@ jobs:
       - name: Build the strict Material site
         id: build
         run: |
+          echo "stage=build" >> "$GITHUB_OUTPUT"
           cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" --group material \
             bob-docs build --material
-          echo "stage=build" >> "$GITHUB_OUTPUT"
 
       - name: Check external links with bounded retries
         id: links
         run: |
+          echo "stage=links" >> "$GITHUB_OUTPUT"
           cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs links --online
-          echo "stage=links" >> "$GITHUB_OUTPUT"
 
       - name: Close the managed weekly issue
         id: close
@@ -90,13 +90,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "stage=close" >> "$GITHUB_OUTPUT"
           cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs publish-report --close \
             --title "Docs weekly checks blocked" \
             --label "docs-weekly" \
             --comment "Weekly checks passed for run https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}."
-          echo "stage=close" >> "$GITHUB_OUTPUT"
 
   report:
     name: Report blocked weekly checks
@@ -127,7 +127,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          failed="weekly (${{ needs.weekly.outputs.stage || 'build' }})"
+          failed="weekly (${{ needs.weekly.outputs.stage || 'start' }})"
           cd "$GITHUB_WORKSPACE/tooling"
           uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
             bob-docs publish-report --open \
