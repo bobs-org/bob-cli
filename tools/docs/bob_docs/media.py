@@ -314,9 +314,17 @@ def capture_pty(
                         break
                     chunks.append(data)
                 break
-        status = proc.wait()
         if timed_out:
             raise DocsError(f"{command[0]} timed out after {timeout:g}s under a PTY")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _kill_group(proc)
+            raise DocsError(f"{command[0]} timed out after {timeout:g}s under a PTY")
+        try:
+            status = proc.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            _kill_group(proc)
+            raise DocsError(f"{command[0]} timed out after {timeout:g}s under a PTY") from error
         return status, b"".join(chunks)
     finally:
         if slave_open:

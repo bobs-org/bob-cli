@@ -22,16 +22,15 @@ ls "$BOB_DIR/mac_inbox.md" "$BOB_DIR/garden.md"
 Open the `$BOB_DIR` copy from the tutorial as an Obsidian vault with
 **Open folder as vault**. Keep using the temporary copy, not your real vault.
 
-## 2. Install and enable the review plugins
+## 2. Install Tasks and confirm the demo settings
 
-<!-- tutorial-test: skip plugin install needs the Obsidian app and network -->
+<!-- tutorial-test: skip Tasks install needs the Obsidian app and network -->
 ```bash
 ls "$BOB_DIR/.obsidian/plugins/obsidian-tasks-plugin/data.json"
 ```
 
-In Obsidian, install and enable **Tasks**, **Bob Ledger Tools**, and
-**Bob Navigation Hotkeys** from Community plugins. Confirm the Tasks
-settings the demo ships with:
+In Obsidian, install and enable **Tasks** from Community plugins. Confirm
+the Tasks settings the demo ships with:
 
 - Task format is **Dataview**.
 - Global filter is `#task`.
@@ -43,16 +42,25 @@ for freshness and ready reports.
 
 ## 3. Deploy the custom plugins from source
 
-<!-- tutorial-test: skip plugin sync needs a plugin source checkout and Obsidian -->
+The custom Bob plugins do not live in Community plugins. Clone their public
+source, then deploy that checkout into the demo vault:
+
+<!-- tutorial-test: skip plugin clone needs network and a plugin source checkout -->
 ```bash
-bob plugins sync --bob-dir "$BOB_DIR"
+git clone https://github.com/bobs-org/bob-plugins.git ~/projects/github/bobs-org/bob-plugins
 ```
 
-Clone the public
-[bob-plugins](https://github.com/bobs-org/bob-plugins#readme) source, then
-run sync explicitly against the demo vault as shown. Sync copies plugin
-assets into the vault. It does not enable plugins in Obsidian and does not
-create dashboard notes; enable each plugin and open notes by hand.
+<!-- tutorial-test: skip plugin sync needs a plugin source checkout and Obsidian -->
+```bash
+bob plugins sync --repo ~/projects/github/bobs-org/bob-plugins --bob-dir "$BOB_DIR"
+```
+
+Pass `--repo` with the checkout path every time: a bare sync run from inside
+a different checkout refuses rather than deploying the wrong source. Sync
+copies plugin assets into the vault. It does not enable plugins in Obsidian
+and does not create dashboard notes; enable **Bob Ledger Tools** and
+**Bob Navigation Hotkeys** by hand and open notes by hand. See the mounted
+[Obsidian plugins](../reference/plugins/index.md) reference for versions.
 
 ## 4. Read a rendered task and run one review gesture
 
@@ -62,9 +70,18 @@ A garden task renders as a card with its lane and date marks:
 - [ ] #task Water the seedlings [created:: 2026-10-20]
 ```
 
-With Bob Ledger Tools and Bob Navigation Hotkeys enabled, open the review
-queue with `]s`, land on the inbox task, and press `Alt+F` to confirm it.
-The stamp is the desktop continuation the CLI tutorial leaves for Obsidian.
+With both custom plugins enabled, press `Ctrl+Alt+J` to land on the next
+task due for freshness review, as documented in
+[Bob Navigation Hotkeys](../reference/plugins/bob-navigation-hotkeys.md).
+The walk and its freshness marks are rendered by
+[Bob Ledger Tools](../reference/plugins/bob-ledger-tools.md). Then press
+`Alt+F` to confirm the landed task.
+
+When the landed task still lives in the inbox, the review first asks where
+the task goes and moves it there before stamping; only a non-inbox task gets
+a plain freshness stamp. A Pending task may also ask for an optional Work Log
+summary. This routing confirmation is the desktop continuation the CLI
+tutorial leaves for Obsidian.
 
 ## Next
 

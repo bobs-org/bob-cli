@@ -9,7 +9,7 @@ search:
 
 In about 15 minutes, you will capture two tasks in a synthetic gardening vault,
 choose one for today's work, finish it, and inspect the review queue. Use one
-terminal so the variables below remain available. This path exercises the Bob
+Bash terminal so the variables below remain available. This path exercises the Bob
 CLI; reviewing a task is a separate desktop continuation.
 
 ## Before you start
@@ -84,7 +84,9 @@ create daily files for you.
 
 ## 5. Create today's daily-note skeleton
 
-Create the ledger before starting a session. This command honors Bob's fixed
+Create the ledger before starting a session. This step requires Bash: it uses
+Bash-specific `[[ ... =~ ... ]]` and `BASH_REMATCH`, and the tutorial runner
+executes fences in a persistent Bash session. The command honors Bob's fixed
 `BOB_NOW` clock when one is set and otherwise uses your local date.
 
 ```bash
@@ -141,10 +143,11 @@ bob capture 'x!'
 ```
 <!-- tutorial-test: checkpoint task-completed -->
 
-`x!` closes the open Pomodoro and completes its one linked task. Because this
-walkthrough uses a fixed instant, the recorded session can have zero elapsed
-minutes; no time is invented. The completed task leaves Today while the inbox
-task remains open for review.
+`x!` closes the open Pomodoro and completes its one linked task. The zero-minute
+outcome belongs to the automated fixed-clock replay (`BOB_NOW`); a human
+following these instructions normally uses their local clock and records real
+elapsed minutes. No time is invented. The completed task leaves Today while
+the inbox task remains open for review.
 
 ## 9. Inspect the review queue
 
@@ -158,6 +161,13 @@ confirmed. The freshness command inspects the queue; answering it is a desktop
 continuation with Bob's Obsidian plugins.
 
 ## Continue
+
+The terminal path ends here. Continue on the desktop with the same demo copy:
+
+- [Continue in Obsidian](obsidian.md) — open the demo in Obsidian and confirm one review gesture
+- [Continue with Mac Capture](mac-capture.md) — submit one capture from the menu-bar panel on macOS
+
+Then read the contracts this tutorial exercised:
 
 - [Getting started contract](../getting-started.md)
 - [Capture syntax](../reference/capture-syntax.md)

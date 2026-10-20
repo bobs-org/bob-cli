@@ -13,7 +13,7 @@ itself, it runs `bob`, renders the preview, and submits one `bob capture`
 call per draft. The automated tutorial replay runs on Linux and never
 exercises this app; follow the steps on a Mac by hand.
 
-## 1. Build from source
+## 1. Build, bundle, and launch from source
 
 <!-- tutorial-test: skip Mac build needs macOS and the Apple toolchain -->
 ```bash
@@ -22,21 +22,48 @@ cd bob-mac-capture
 just build
 ```
 
+<!-- tutorial-test: skip Mac bundle needs macOS and the Apple toolchain -->
+```bash
+just bundle
+```
+
+`just bundle` creates `.build/bundle/Bob Mac Capture.app`. Install it with:
+
+<!-- tutorial-test: skip Mac install needs macOS and the Apple toolchain -->
+```bash
+just install ~/Applications
+```
+
+Then launch the installed copy:
+
+<!-- tutorial-test: skip Mac launch needs the Mac app bundle -->
+```bash
+open ~/Applications/"Bob Mac Capture.app"
+```
+
 Building needs macOS 26 with Command Line Tools for Xcode 26+ or Xcode 26+,
-with Swift resolved through the Apple toolchain. For signing, bundling, and
-toolchain diagnosis, follow that repository's README instead of this page.
+with Swift resolved through `./Scripts/xcode-swift.sh` rather than a bare
+`swift` on `PATH`. For the full toolchain, signing, and diagnosis steps, see
+the authoritative
+[Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme),
+[Requirements](https://github.com/bobs-org/bob-mac-capture#requirements),
+[Development](https://github.com/bobs-org/bob-mac-capture#development), and
+[Signing](https://github.com/bobs-org/bob-mac-capture#signing).
 
 ## 2. Select Bob and the demo vault
 
-<!-- tutorial-test: skip panel setup needs the Mac app and Accessibility grant -->
+<!-- tutorial-test: skip panel setup needs the Mac app -->
 ```bash
 which bob
 echo "$BOB_DIR"
 ```
 
-In the panel settings, select the installed `bob` executable and the demo
-`$BOB_DIR` copy from the tutorial. The app finds `bob` at the usual install
-locations when settings are untouched.
+In Settings, under the **Bob** section, set **Executable override** to the
+installed `bob` executable and **Vault path** to the demo `$BOB_DIR` copy
+from the tutorial. **Resolved path** shows what the app actually uses. When
+no override is set, the app finds `bob` at `~/.cargo/bin/bob`, `~/bin/bob`,
+`/opt/homebrew/bin/bob`, or `/usr/local/bin/bob`; use **Recheck Bob** after
+changing either field.
 
 Grant Accessibility only for the Highlights tab feature the Mac README
 names. The panel requests it once through the system prompt; capture and
@@ -44,14 +71,25 @@ the ledger agenda work without it.
 
 ## 3. Capture once and read the result
 
-<!-- tutorial-test: skip first Mac capture needs the Mac panel -->
-```bash
-bob capture 'Water the seedlings @garden^seedlings'
+Submit this new draft in the panel (it uses a fresh ID the tutorial never
+creates):
+
+```text
+Sharpen the shears @workshop^shears
 ```
 
-Type the same text in the panel, read its preview, and submit. The panel
-hides only after `bob` reports success for the whole draft, and the task
-lands in `garden.md` exactly as the CLI writes it.
+<!-- tutorial-test: skip first Mac capture needs the Mac panel -->
+```bash
+bob capture 'Sharpen the shears @workshop^shears'
+```
+
+The fenced command shows the CLI semantics of the same draft: after the
+tutorial, `^seed-packet` and `^seedlings` already exist, so this fresh
+`^shears` ID routes a new task to `workshop.md`. Type the plain text in the
+panel, read its preview, and submit. The panel hides only after `bob`
+reports success for the whole draft, and the task lands in `workshop.md`
+exactly as the CLI writes it. This Mac panel path was validated against the
+post-tutorial demo state from source; Linux replay never runs the Mac GUI.
 
 ## Next
 

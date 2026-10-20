@@ -19,14 +19,17 @@ flowchart LR
   bob --> ui[Mac panel renders spans and preview]
   ui --> submit[One bob capture call]
   submit --> vault[(Markdown vault)]
+  vault --> resp[bob reports success]
+  resp --> ui
   vault --> obsidian[Obsidian plugins render review]
   obsidian --> vault
   vault --> bob
 ```
 
 A draft travels one round trip: the panel sends text, `bob` returns spans,
-candidates, and a preview, the panel renders them, and one submit writes the
-vault. Obsidian reads the same vault afterward.
+candidates, and a preview, the panel renders them, one submit writes the
+vault, and `bob` reports success back to the panel before it hides. Obsidian
+reads the same vault afterward and writes review gestures directly.
 
 ## Who owns what
 
@@ -39,15 +42,19 @@ nothing. It computes Today from Task Links under open Pomodoros at read
 time; lanes stay sticky except derived Blocked, and freshness never changes
 a lane. The contracts beside this page specify the exact behavior.
 
-Obsidian plugins render cards, badges, the review walk, and the Task Card.
-They do not replace capture semantics: the thin-client rule keeps `bob` as
-the only implementation, so the app and plugins delegate grammar,
-completion, preview, and vault mutation to it. See
+Obsidian plugins render cards, badges, the review walk, and the Task Card,
+and they write Markdown directly for review gestures: lane moves, dependency
+edits, and freshness stamps go through the shared stamper into the vault.
+They do not replace capture semantics, but only Mac Capture is governed by
+the thin-client rule. See
 [Bob Mac Capture Is A Thin Client Of bob](../develop/decisions.md#mac-capture-is-a-thin-client).
 
-Mac Capture owns presentation, the hotkey, settings, and packaging. It
-never reads the vault directly for the agenda; it asks
-`bob capture-pomodoros --tasks` and paints what comes back.
+Mac Capture owns presentation, the hotkey, settings, and packaging. It never
+parses capture grammar and never writes the vault directly: it runs `bob`
+for spans, candidates, and previews, submits one `bob capture` per draft,
+and only hides after `bob` reports success. For the agenda it never reads
+the vault directly either; it asks `bob capture-pomodoros --tasks` and
+paints what comes back.
 
 ## Related
 

@@ -85,6 +85,25 @@ def test_pty_timeout_reaps_the_child() -> None:
         )
 
 
+def test_pty_early_eof_still_applies_timeout() -> None:
+    import sys
+    import time
+
+    # Close stdio descriptors, then sleep well past the deadline. The PTY sees
+    # EOF immediately, but the process group must still be bounded by timeout.
+    child = "import os, time\ntry:\n os.close(0)\nexcept OSError:\n pass\ntry:\n os.close(1)\nexcept OSError:\n pass\ntry:\n os.close(2)\nexcept OSError:\n pass\ntime.sleep(10)\n"
+    start = time.monotonic()
+    with pytest.raises(DocsError, match="timed out"):
+        capture_pty(
+            [sys.executable, "-c", child],
+            env=dict(os.environ),
+            cwd=ROOT,
+            timeout=0.5,
+        )
+    elapsed = time.monotonic() - start
+    assert elapsed < 5
+
+
 def test_media_environment_enables_color(tmp_path: Path) -> None:
     from bob_docs.sandbox import BobSandbox
 

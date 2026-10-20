@@ -112,6 +112,42 @@ def resolve_bob_binary(repo_root: Path, *, source_env: Mapping[str, str] | None 
     return executable.resolve()
 
 
+def _install_sandbox_bob_shim(bin_dir: Path, bob_bin: Path) -> None:
+    """Install a sandbox-owned ``bob`` entry that runs the selected executable.
+
+    The tutorial executes literal ``bob`` commands while checkpoints use the
+    absolute executable. Pointing PATH at ``bob_bin.parent`` lets an ambient
+    ``bob`` win when the selected executable has a different basename, or when
+    the selected path was a symlink whose resolved parent holds no ``bob``.
+    A sandbox-owned shim keeps the selected executable authoritative.
+    """
+
+    target = bob_bin.resolve() if isinstance(bob_bin, Path) else Path(bob_bin).resolve()
+    shim = bin_dir / "bob"
+    try:
+        if shim.is_symlink() or shim.exists():
+            shim.unlink()
+        shim.symlink_to(target)
+    except OSError:
+        # Symlinks can fail across filesystems; fall back to a tiny exec wrapper.
+        shim.write_text(f'#!/bin/sh\nexec "{target}" "$@"\n', encoding="utf-8")
+        try:
+            shim.chmod(0o755)
+        except OSError:
+            pass
+    if os.name == "nt":
+        win_shim = bin_dir / "bob.exe"
+        try:
+            if win_shim.is_symlink() or win_shim.exists():
+                win_shim.unlink()
+            try:
+                win_shim.symlink_to(target)
+            except OSError:
+                shutil.copyfile(target, win_shim)
+        except OSError:
+            pass
+
+
 def isolated_environment(
     *,
     root: Path,
@@ -137,8 +173,10 @@ def isolated_environment(
     state = home / ".local" / "state"
     temp = root / "tmp"
     work = root / "work"
-    for directory in (home, config, data, cache, state, temp, work):
+    bin_dir = root / "bin"
+    for directory in (home, config, data, cache, state, temp, work, bin_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    _install_sandbox_bob_shim(bin_dir, bob_bin)
 
     env.update(
         {
@@ -156,7 +194,7 @@ def isolated_environment(
             "LANG": "en_US.UTF-8",
             "LC_ALL": "en_US.UTF-8",
             "NO_COLOR": "1",
-            "PATH": str(bob_bin.parent) + os.pathsep + source.get("PATH", os.defpath),
+            "PATH": str(bin_dir) + os.pathsep + source.get("PATH", os.defpath),
             "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
         }
     )

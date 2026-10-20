@@ -20,8 +20,9 @@ glossary for exact meanings.
 - **Freshness** — the local calendar date a human last confirmed a task.
 - **Project** — a note whose `^prj` task states the outcome; residents follow
   its blocking.
-- **Plugin** — desktop Obsidian or Mac surfaces that read the vault; the CLI
-  owns capture semantics and vault writes.
+- **Plugin** — Obsidian editor surfaces that read and write the vault for
+  review; Mac Capture is a separate app that never writes the vault
+  directly and submits through the CLI.
 
 ## System and vocabulary
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -146,6 +147,74 @@ def test_runner_requires_all_named_checkpoints_before_building_bob(tmp_path: Pat
         run_tutorial(root, source_env={"PATH": "/bin"})
 
 
+def _write_executable(path: Path, marker: str) -> Path:
+    path.write_text(f"#!/bin/sh\nprintf '%s\\n' '{marker}'\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_sandbox_prefers_selected_executable_over_ambient_bob(tmp_path: Path) -> None:
+    selected_dir = tmp_path / "selected"
+    ambient_dir = tmp_path / "ambient"
+    selected_dir.mkdir()
+    ambient_dir.mkdir()
+    selected = _write_executable(selected_dir / "versioned-bob", "selected-bob")
+    _write_executable(ambient_dir / "bob", "ambient-bob")
+    env = isolated_environment(
+        root=tmp_path / "sandbox",
+        bob_bin=selected,
+        now=DEFAULT_NOW,
+        source_env={"PATH": str(ambient_dir) + os.pathsep + "/usr/bin:/bin"},
+    )
+    resolved = shutil.which("bob", path=env["PATH"])
+    assert resolved is not None
+    assert Path(resolved).parent == tmp_path / "sandbox" / "bin"
+    completed = subprocess.run(
+        ["bob"],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0
+    assert "selected-bob" in completed.stdout
+    assert "ambient-bob" not in completed.stdout
+
+
+def test_sandbox_symlinked_selection_still_runs_selected_bob(tmp_path: Path) -> None:
+    real_dir = tmp_path / "real"
+    link_dir = tmp_path / "links"
+    ambient_dir = tmp_path / "ambient"
+    real_dir.mkdir()
+    link_dir.mkdir()
+    ambient_dir.mkdir()
+    real_exe = _write_executable(real_dir / "versioned-bob", "selected-bob")
+    link = link_dir / "bob"
+    link.symlink_to(real_exe)
+    resolved = resolve_bob_binary(ROOT, source_env={"BOB_BIN": str(link)})
+    assert resolved == real_exe.resolve()
+    assert resolved.name != "bob"
+    _write_executable(ambient_dir / "bob", "ambient-bob")
+    env = isolated_environment(
+        root=tmp_path / "sandbox",
+        bob_bin=resolved,
+        now=DEFAULT_NOW,
+        source_env={"PATH": str(ambient_dir) + os.pathsep + "/usr/bin:/bin"},
+    )
+    completed = subprocess.run(
+        ["bob"],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0
+    assert "selected-bob" in completed.stdout
+    assert "ambient-bob" not in completed.stdout
+
+
 def test_sandbox_environment_discards_hostile_bob_and_desktop_overrides(tmp_path: Path) -> None:
     source = {
         "PATH": "/usr/bin:/bin",
@@ -173,7 +242,9 @@ def test_sandbox_environment_discards_hostile_bob_and_desktop_overrides(tmp_path
     assert env["BOB_REF_JOBS_KICK"] == "off"
     assert "BOB_DAY_FILE" not in env
     assert not {"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "CLIPBOARD"} & env.keys()
-    assert env["PATH"].startswith("/isolated/bin" + os.pathsep)
+    sandbox_bin = tmp_path / "sandbox" / "bin"
+    assert env["PATH"].startswith(str(sandbox_bin) + os.pathsep)
+    assert (sandbox_bin / "bob").exists() or (sandbox_bin / "bob").is_symlink()
 
 
 def test_persistent_shell_keeps_variables_and_directory_between_fences(tmp_path: Path) -> None:
