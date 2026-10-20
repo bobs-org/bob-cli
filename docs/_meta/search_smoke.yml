@@ -189,3 +189,7 @@
   location: /guides/recover-reference-job/
 - query: Pomodoro agenda
   location: /reference/mac-capture/idle-agenda/
+- query: "Bob Mac Capture Local"
+  location: /reference/mac-capture/install/
+- query: refs-rank
+  location: /reference/mac-capture/diagnostics/

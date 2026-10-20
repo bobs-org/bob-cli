@@ -12,7 +12,7 @@ pages remain beside the code they specify.
 - [Plugin development](plugins/index.md) for architecture, validation, APIs,
   and deployment of the Obsidian plugins.
 - [Mac Capture development](mac-capture/index.md) for the capture panel's
-  architecture and contributor pages.
+  architecture, build recipes, and CI gates.
 - Follow [Writing docs](writing-docs.md) when adding or changing a page.
 - [Migration notes](migration-notes.md) for old command spellings and retired
   capture tokens.
