@@ -1,0 +1,134 @@
+# Weekly documentation checks (reusable, called by the deploy repo).
+#
+# This workflow never triggers inside bob-cli itself: it runs only through
+# `workflow_call` from bobs-org/bobs-org.github.io, which owns the Monday
+# schedule and manual dispatch. The `docs-weekly` concurrency group lives here,
+# so the caller must not define its own (two holders would deadlock). This
+# group is separate from the publish `pages` group: weekly checks never deploy
+# and never write the publication manifest.
+#
+# Weekly checks always run the Material build and the online external-link
+# check against current source heads, even when the publication fingerprint is
+# unchanged or a publish hold remains in place. Weekly cannot release the hold
+# or deploy; it only reports through its own managed issue.
+#
+# Action pins below were verified against current release tags (2026-10-20):
+# checkout v6, setup-python v6, setup-uv v6.
+#
+# The caller grants `contents: read` and `issues: write`; each job below
+# narrows to what it actually uses. No Pages deployment, no manifest write,
+# and no `contents: write` appear here by design.
+name: Weekly documentation checks
+
+on:
+  workflow_call:
+
+concurrency:
+  group: docs-weekly
+  cancel-in-progress: false
+
+jobs:
+  weekly:
+    name: Build Material and check external links
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      stage: ${{ steps.close.outputs.stage || steps.links.outputs.stage || steps.build.outputs.stage || steps.guard.outputs.stage || 'start' }}
+    steps:
+      - name: Guard caller repository and branch
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.repository }}" != "bobs-org/bobs-org.github.io" ]; then
+            echo "::error::docs-weekly runs only for bobs-org/bobs-org.github.io (got ${{ github.repository }})"
+            exit 1
+          fi
+          default_branch="$(gh api 'repos/${{ github.repository }}' --jq .default_branch)"
+          if [ "${{ github.ref_name }}" != "$default_branch" ]; then
+            echo "::error::docs-weekly runs only on the default branch (got ${{ github.ref_name }}, default $default_branch)"
+            exit 1
+          fi
+          echo "stage=guard" >> "$GITHUB_OUTPUT"
+
+      - name: Check out bob-cli tooling
+        uses: actions/checkout@v6
+        with:
+          repository: bobs-org/bob-cli
+          ref: master
+          path: tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build the strict Material site
+        id: build
+        run: |
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" --group material \
+            bob-docs build --material
+          echo "stage=build" >> "$GITHUB_OUTPUT"
+
+      - name: Check external links with bounded retries
+        id: links
+        run: |
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs links --online
+          echo "stage=links" >> "$GITHUB_OUTPUT"
+
+      - name: Close the managed weekly issue
+        id: close
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-report --close \
+            --title "Docs weekly checks blocked" \
+            --label "docs-weekly" \
+            --comment "Weekly checks passed for run https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+          echo "stage=close" >> "$GITHUB_OUTPUT"
+
+  report:
+    name: Report blocked weekly checks
+    needs: weekly
+    if: failure()
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out bob-cli tooling
+        uses: actions/checkout@v6
+        with:
+          repository: bobs-org/bob-cli
+          ref: master
+          path: tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Create or update the blocked issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          failed="weekly (${{ needs.weekly.outputs.stage || 'build' }})"
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-report --open \
+            --title "Docs weekly checks blocked" \
+            --label "docs-weekly" \
+            --step "$failed" \
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --reason "weekly Material build or external-link check failed"

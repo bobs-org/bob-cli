@@ -26,6 +26,13 @@ PUBLISH_LABEL_DESCRIPTION = (
     "Gated documentation publication is blocked; "
     "see the issue body for the failing step and recovery."
 )
+WEEKLY_BLOCKED_TITLE = "Docs weekly checks blocked"
+WEEKLY_BLOCKED_LABEL = "docs-weekly"
+WEEKLY_LABEL_COLOR = "FBCA04"
+WEEKLY_LABEL_DESCRIPTION = (
+    "Weekly documentation checks (Material build and external links) are blocked; "
+    "see the issue body for the failing step and recovery."
+)
 
 
 @dataclass(frozen=True)
@@ -281,7 +288,15 @@ def run_publish_report(
     """Open/update (``mode="open"``) or close (``mode="close"``) the managed issue."""
 
     if ensure_managed_label:
-        ensure_label(run, label=label)
+        if label == WEEKLY_BLOCKED_LABEL:
+            ensure_label(
+                run,
+                label=label,
+                color=WEEKLY_LABEL_COLOR,
+                description=WEEKLY_LABEL_DESCRIPTION,
+            )
+        else:
+            ensure_label(run, label=label)
     if mode == "open":
         body = build_blocked_body(
             step=step, run_url=run_url, reason=reason, fingerprint=fingerprint, details=details

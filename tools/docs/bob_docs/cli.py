@@ -14,7 +14,12 @@ from .check import run_check
 from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .host import run_host_bootstrap, run_publish, run_status
-from .links import run_links
+from .links import (
+    ONLINE_MAX_RETRIES,
+    ONLINE_RETRY_WAIT_SECONDS,
+    ONLINE_TIMEOUT_SECONDS,
+    run_links,
+)
 from .lint import run_lint
 from .publish_issue import (
     PUBLISH_BLOCKED_LABEL,
@@ -122,9 +127,45 @@ def _parser() -> argparse.ArgumentParser:
         help="apply the printed create/sync/Pages/enable operations",
     )
 
-    subparsers.add_parser(
+    links_parser = subparsers.add_parser(
         "links",
-        help="check built-site links offline with the pinned lychee release",
+        help="check built-site links with the pinned lychee release",
+        description=(
+            "Check the built site with the pinned lychee release. Offline is the "
+            "default and blocks network requests; --online fetches external "
+            "HTTP(S) destinations with bounded retries and timeouts while "
+            "keeping fragment checking on the built tree."
+        ),
+    )
+    links_parser.add_argument(
+        "-o",
+        "--online",
+        action="store_true",
+        help="fetch external HTTP(S) links with bounded retries and timeouts",
+    )
+    links_parser.add_argument(
+        "-r",
+        "--retries",
+        metavar="N",
+        type=int,
+        default=ONLINE_MAX_RETRIES,
+        help=f"maximum retries per online request (default: {ONLINE_MAX_RETRIES})",
+    )
+    links_parser.add_argument(
+        "-t",
+        "--timeout-seconds",
+        metavar="SECONDS",
+        type=int,
+        default=ONLINE_TIMEOUT_SECONDS,
+        help=f"timeout per online request (default: {ONLINE_TIMEOUT_SECONDS})",
+    )
+    links_parser.add_argument(
+        "-w",
+        "--wait-seconds",
+        metavar="SECONDS",
+        type=int,
+        default=ONLINE_RETRY_WAIT_SECONDS,
+        help=f"minimum wait between online retries (default: {ONLINE_RETRY_WAIT_SECONDS})",
     )
 
     lint_parser = subparsers.add_parser(
@@ -426,7 +467,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "host-bootstrap":
             return run_host_bootstrap(root, yes=args.yes, deploy_dir=args.deploy_dir)
         if args.command == "links":
-            return run_links(root)
+            return run_links(
+                root,
+                online=args.online,
+                timeout=args.timeout_seconds,
+                retries=args.retries,
+                retry_wait=args.wait_seconds,
+            )
         if args.command == "lint":
             context, _manifest = assemble(root)
             return run_lint(root, fix=args.fix, docs_context=context)

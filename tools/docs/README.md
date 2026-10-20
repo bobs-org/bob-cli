@@ -89,10 +89,31 @@ Job permissions narrow to what each job uses; the caller grants
 `contents: write`, `pages: write`, `id-token: write`, and `issues: write`.
 All action pins are release tags, verified during implementation.
 
+## Weekly checks workflow (`.github/workflows/docs-weekly.yml`)
+
+The reusable weekly workflow checks the docs through `workflow_call` only,
+with no inputs. It never triggers inside bob-cli itself: the deploy
+repository calls it from a Monday schedule (`41 6 * * 1`) and manual
+dispatch. Its separate `docs-weekly` concurrency group (`cancel-in-progress:
+false`) lives here, so the caller must not define its own. Weekly always
+runs the checks against current source heads, even when the publication
+fingerprint is unchanged or a publish hold remains; it cannot release the
+hold or deploy.
+
+The workflow guards the expected caller repository and its default branch,
+checks out bob-cli tooling, builds the strict Material site with the locked
+material group (`--group material`), runs `bob-docs links --online` with
+bounded retries and timeouts, and closes its own managed issue on success. Any
+failure creates or updates exactly one `Docs weekly checks blocked` issue with
+the `docs-weekly` label, reusing the publication reporting helpers with an
+isolated title and label. Weekly has no Pages deployment, no
+`published.json` write, and no `contents: write` permission. All action pins
+are release tags, verified during implementation.
+
 ## Host bootstrap, dispatch, and status
 
 The deploy repository `bobs-org/bobs-org.github.io` is a thin publisher. Its
-caller workflow and README are authored in `tools/docs/host/` and synced by
+caller workflows and README are authored in `tools/docs/host/` and synced by
 `bob-docs host-bootstrap`. Preview is the default and prints the create, sync,
 Pages, and workflow-enable operations without mutating anything. Apply with
 `-y/--yes`. Bootstrap never writes, initializes, or resets `published.json`.
@@ -441,5 +462,11 @@ A missing or corrupt checker fails; it is never a green skip. Offline
 fragment checking uses `--include-fragments --index-files index.html` so
 directory URLs such as `/page/#anchor` resolve against each directory's
 `index.html`. `bob-docs urls` still owns mention, curated, and live-URL
-resolution. Online external checks belong to the weekly publish phase, not
-this gate.
+resolution.
+
+`bob-docs links --online` keeps the same root, remap, and fragment checking
+and additionally fetches external HTTP(S) destinations with bounded retries
+and timeouts (`--timeout-seconds`, `--retries`, `--wait-seconds`, defaulting
+to 20 seconds, 3 retries, and 1 second). It adds no broad `--exclude`
+patterns; a broken external fails. The weekly workflow runs this online
+check after a strict Material build, not the offline gate.

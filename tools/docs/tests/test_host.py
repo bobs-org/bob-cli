@@ -22,10 +22,13 @@ from bob_docs.host import (
     CALLER_WORKFLOW,
     HOST_REPO,
     MANIFEST_PATH,
+    WEEKLY_CALLER_WORKFLOW,
+    WEEKLY_WORKFLOW_PATH,
     build_bootstrap_plan,
     collect_status,
     default_host_run,
     format_status,
+    list_open_weekly_issues,
     load_host_templates,
     run_host_bootstrap,
     run_publish,
@@ -329,6 +332,8 @@ def test_apply_is_idempotent_and_preserves_unrelated_files(tmp_path: Path) -> No
     assert (working / "README.md").read_text(encoding="utf-8") == templates["README.md"]
     workflow = working / ".github/workflows/publish.yml"
     assert workflow.read_text(encoding="utf-8") == templates[".github/workflows/publish.yml"]
+    weekly = working / ".github/workflows/weekly.yml"
+    assert weekly.read_text(encoding="utf-8") == templates[".github/workflows/weekly.yml"]
     assert (working / MANIFEST_PATH).read_text(encoding="utf-8") == published
     assert (working / "NOTES.md").read_text(encoding="utf-8") == notes
     log_after_first = _run_git(working, "git", "rev-parse", "HEAD")
@@ -342,6 +347,7 @@ def test_apply_is_idempotent_and_preserves_unrelated_files(tmp_path: Path) -> No
     assert host.pages is not None and host.pages["build_type"] == "workflow"
     assert host.actions["enabled"] is True
     assert CALLER_WORKFLOW in host.enabled
+    assert WEEKLY_CALLER_WORKFLOW in host.enabled
 
     host.pages_status = 200
     host.actions = {"enabled": True, "allowed_actions": "all"}
@@ -350,7 +356,12 @@ def test_apply_is_idempotent_and_preserves_unrelated_files(tmp_path: Path) -> No
             "name": "Publish documentation",
             "path": ".github/workflows/publish.yml",
             "state": "active",
-        }
+        },
+        {
+            "name": "Check weekly documentation",
+            "path": ".github/workflows/weekly.yml",
+            "state": "active",
+        },
     ]
     second_chunks: list[str] = []
     second = run_host_bootstrap(
@@ -389,6 +400,11 @@ def test_partial_bootstrap_recovers_missing_files(tmp_path: Path) -> None:
     assert status == 0
     assert (working / "README.md").read_text(encoding="utf-8") == templates["README.md"]
     assert (working / ".github/workflows/publish.yml").is_file()
+    assert (working / ".github/workflows/weekly.yml").is_file()
+    assert (
+        (working / ".github/workflows/weekly.yml").read_text(encoding="utf-8")
+        == templates[".github/workflows/weekly.yml"]
+    )
     assert (working / MANIFEST_PATH).read_text(encoding="utf-8") == MANIFEST
     assert (working / "unrelated.txt").read_text(encoding="utf-8") == "keep me\n"
     assert host.pages_status == 200
@@ -401,6 +417,7 @@ def test_preview_with_deploy_dir_reads_local_files_only(tmp_path: Path) -> None:
         {
             "README.md": templates["README.md"],
             ".github/workflows/publish.yml": templates[".github/workflows/publish.yml"],
+            ".github/workflows/weekly.yml": templates[".github/workflows/weekly.yml"],
             MANIFEST_PATH: MANIFEST,
         },
     )
@@ -412,7 +429,12 @@ def test_preview_with_deploy_dir_reads_local_files_only(tmp_path: Path) -> None:
             "name": "Publish documentation",
             "path": ".github/workflows/publish.yml",
             "state": "active",
-        }
+        },
+        {
+            "name": "Check weekly documentation",
+            "path": ".github/workflows/weekly.yml",
+            "state": "active",
+        },
     ]
     plan = build_bootstrap_plan(ROOT, deploy_dir=working, run=host)
     assert plan.create_repo is False
@@ -621,3 +643,62 @@ def test_status_missing_manifest_is_clear() -> None:
 def test_default_host_run_rejects_unknown_binaries() -> None:
     with pytest.raises(DocsError, match="could not start"):
         default_host_run(["/nonexistent-bob-docs-host-binary"], None)
+
+
+def test_host_templates_include_both_callers() -> None:
+    templates = load_host_templates(ROOT)
+    assert set(templates) == {
+        "README.md",
+        ".github/workflows/publish.yml",
+        ".github/workflows/weekly.yml",
+    }
+    assert (ROOT / "tools/docs/host/weekly.yml").is_file()
+    assert "41 6 * * 1" in templates[".github/workflows/weekly.yml"]
+
+
+def test_status_lists_publish_and_weekly_issues() -> None:
+    host = FakeHost()
+    host.files = {MANIFEST_PATH: MANIFEST}
+    host.workflows = []
+    host.issues = [
+        {"number": 12, "title": "Docs publish blocked", "url": "https://example.test/issues/12"},
+        {"number": 13, "title": "Docs weekly checks blocked", "url": "https://example.test/issues/13"},
+        {"number": 99, "title": "Unrelated", "url": "https://example.test/issues/99"},
+    ]
+
+    def fetch(url: str, *, timeout: int) -> FetchedPage:
+        return FetchedPage(404, "", url)
+
+    report = collect_status(host, fetch=fetch)
+    numbers = [item["number"] for item in report["open_issues"]]
+    assert numbers == [12, 13]
+    text = format_status(report)
+    assert "#12 Docs publish blocked" in text
+    assert "#13 Docs weekly checks blocked" in text
+    assert list_open_weekly_issues(host) == [
+        {"number": 13, "title": "Docs weekly checks blocked", "url": "https://example.test/issues/13"}
+    ]
+
+
+def test_bootstrap_enables_both_workflows(tmp_path: Path) -> None:
+    templates = load_host_templates(ROOT)
+    _bare, working = _init_deploy(
+        tmp_path / "deploy",
+        {MANIFEST_PATH: MANIFEST},
+    )
+    host = FakeHost()
+    host.files = {MANIFEST_PATH: MANIFEST}
+    host.pages_status = 404
+    host.workflows = []
+    status = run_host_bootstrap(
+        ROOT,
+        yes=True,
+        deploy_dir=working,
+        run=host,
+        sleep=lambda _seconds: None,
+        stdout_write=lambda _text: None,
+    )
+    assert status == 0
+    assert CALLER_WORKFLOW in host.enabled
+    assert WEEKLY_CALLER_WORKFLOW in host.enabled
+    assert (working / WEEKLY_WORKFLOW_PATH).read_text(encoding="utf-8") == templates[WEEKLY_WORKFLOW_PATH]

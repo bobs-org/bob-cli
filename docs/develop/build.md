@@ -223,3 +223,13 @@ After the gates pass, upload, Pages deploy, recording `published.json`, and
 live verification run in that order. A deploy or record failure keeps the
 previous live site. A live-verification failure means the new site may already
 be serving; the blocked issue opens so the next ordinary run revalidates.
+
+### Weekly checks
+
+The `weekly.yml` caller runs on `41 6 * * 1` and manual dispatch. It always
+builds the strict Material site with the locked material group and runs
+`bob-docs links --online` with bounded retries and timeouts, even when the
+publication fingerprint is unchanged or a publish hold remains. Weekly cannot
+release the hold or deploy, and it never writes `published.json`. A failure
+opens or updates one `Docs weekly checks blocked` issue (`docs-weekly`); a
+passing run closes only that issue.

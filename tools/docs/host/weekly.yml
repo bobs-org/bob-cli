@@ -1,0 +1,21 @@
+# Thin caller for weekly documentation checks.
+#
+# All check logic lives in bob-cli. This workflow only schedules, accepts a
+# manual dispatch, and calls the reusable weekly checker. Weekly checks build
+# the strict Material site and fetch external links with bounded retries;
+# they never deploy and never write the publication manifest.
+# Do not add a concurrency group here: the callee owns the `docs-weekly` group.
+name: Check weekly documentation
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  weekly:
+    name: Weekly
+    permissions:
+      contents: read
+      issues: write
+    uses: bobs-org/bob-cli/.github/workflows/docs-weekly.yml@master

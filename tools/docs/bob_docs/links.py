@@ -1,4 +1,4 @@
-"""Pinned-lychee acquisition and the offline built-site link check.
+"""Pinned-lychee acquisition and the built-site link checks.
 
 Lychee resolves from ``$LYCHEE``, then ``PATH``, then a pinned upstream
 release downloaded into ``~/.cache/bob-docs/bin/`` (``$XDG_CACHE_HOME`` aware).
@@ -11,6 +11,11 @@ absolute org-root URLs remapped onto local output. Fragment checking uses
 ``--include-fragments --index-files index.html`` so directory URLs such as
 ``/page/#anchor`` resolve against each directory's ``index.html``. The
 ``urls`` resolver remains the mention, curated, and live-URL gate.
+
+The online run keeps the same root, remap, and fragment checking and additionally
+fetches external HTTP(S) destinations with bounded retries and timeouts. It adds
+no ``--exclude`` broad exclusions; a broken external link fails rather than
+turning green.
 """
 
 from __future__ import annotations
@@ -36,6 +41,9 @@ LYCHEE_ENV_VAR = "LYCHEE"
 LYCHEE_BIN_DIRNAME = "bin"
 LYCHEE_METADATA_FILE = "lychee.yml"
 LYCHEE_CHECKSUM_SUFFIX = ".sha256"
+ONLINE_TIMEOUT_SECONDS = 20
+ONLINE_MAX_RETRIES = 3
+ONLINE_RETRY_WAIT_SECONDS = 1
 
 
 @dataclass(frozen=True)
@@ -317,10 +325,66 @@ def lychee_argv(lychee: Path, *, site_dir: Path, origin: str) -> list[str]:
     ]
 
 
+def online_argv(
+    lychee: Path,
+    *,
+    site_dir: Path,
+    origin: str,
+    timeout: int = ONLINE_TIMEOUT_SECONDS,
+    retries: int = ONLINE_MAX_RETRIES,
+    retry_wait: int = ONLINE_RETRY_WAIT_SECONDS,
+) -> list[str]:
+    """Exact online invocation: same root/remap/fragments, plus live HTTP(S).
+
+    Local file links keep resolving against ``site_dir`` through ``--root-dir``
+    and ``--remap``, so authored ``docs/`` paths, source README links, and
+    command snippets are not treated as external requests. No ``--exclude``
+    broad exclusions are added; broken externals fail.
+    """
+
+    if timeout <= 0:
+        raise DocsError("online link timeout must be a positive number of seconds")
+    if retries < 0:
+        raise DocsError("online link retries must be zero or greater")
+    if retry_wait < 0:
+        raise DocsError("online link retry wait must be zero or greater")
+    site_uri = site_dir.resolve().as_uri() + "/"
+    return [
+        str(lychee),
+        "--no-progress",
+        "--include-fragments",
+        "--index-files",
+        "index.html",
+        "--root-dir",
+        str(site_dir.resolve()),
+        "--remap",
+        f"{origin}/ {site_uri}",
+        "--timeout",
+        str(timeout),
+        "--max-retries",
+        str(retries),
+        "--retry-wait-time",
+        str(retry_wait),
+        str(site_dir.resolve()),
+    ]
+
+
 def run_links(
-    root: Path, *, lychee: Path | str | None = None, context: DocsContext | None = None
+    root: Path,
+    *,
+    lychee: Path | str | None = None,
+    context: DocsContext | None = None,
+    online: bool = False,
+    timeout: int = ONLINE_TIMEOUT_SECONDS,
+    retries: int = ONLINE_MAX_RETRIES,
+    retry_wait: int = ONLINE_RETRY_WAIT_SECONDS,
 ) -> int:
-    """Run the offline lychee check over the built site; propagate its status."""
+    """Run the lychee check over the built site; propagate its status.
+
+    With ``online=False`` (default) only local files are checked. With
+    ``online=True`` external HTTP(S) destinations are fetched with bounded
+    retries and timeouts while fragment checking stays on the built tree.
+    """
 
     repo_root = Path(root).resolve()
     context = context or context_from_root(repo_root)
@@ -332,14 +396,28 @@ def run_links(
     if not (site_dir / "index.html").is_file():
         raise DocsError(f"no built site at {site_dir}; run `just docs-build` first")
     binary = Path(lychee) if lychee is not None else resolve_lychee(repo_root)
-    command = lychee_argv(binary, site_dir=site_dir, origin=origin)
+    if online:
+        command = online_argv(
+            binary,
+            site_dir=site_dir,
+            origin=origin,
+            timeout=timeout,
+            retries=retries,
+            retry_wait=retry_wait,
+        )
+    else:
+        command = lychee_argv(binary, site_dir=site_dir, origin=origin)
     print("running: " + " ".join(command))
     try:
         result = subprocess.run(command, cwd=repo_root, check=False)
     except OSError as error:
         raise DocsError(f"could not start {binary}: {error}") from error
     if result.returncode != 0:
-        print(f"links: lychee reported broken links (exit {result.returncode})")
+        mode = "online" if online else "offline"
+        print(f"links: lychee reported broken links (exit {result.returncode}, {mode})")
         return result.returncode
-    print("links: OK (offline lychee with fragment checking)")
+    if online:
+        print("links: OK (online lychee with fragment checking)")
+    else:
+        print("links: OK (offline lychee with fragment checking)")
     return 0

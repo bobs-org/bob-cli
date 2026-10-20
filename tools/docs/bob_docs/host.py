@@ -25,6 +25,8 @@ from .errors import DocsError
 from .publish_issue import (
     PUBLISH_BLOCKED_LABEL,
     PUBLISH_BLOCKED_TITLE,
+    WEEKLY_BLOCKED_LABEL,
+    WEEKLY_BLOCKED_TITLE,
     CommandResult,
     RunFn,
 )
@@ -40,8 +42,11 @@ HOST_DESCRIPTION = (
     "Publishes the Bob documentation site. Source lives in bobs-org/bob-cli."
 )
 CALLER_WORKFLOW = "publish.yml"
+WEEKLY_CALLER_WORKFLOW = "weekly.yml"
 REUSABLE_WORKFLOW = "bobs-org/bob-cli/.github/workflows/docs-publish.yml@master"
+WEEKLY_REUSABLE_WORKFLOW = "bobs-org/bob-cli/.github/workflows/docs-weekly.yml@master"
 PUBLISH_WORKFLOW_PATH = ".github/workflows/publish.yml"
+WEEKLY_WORKFLOW_PATH = ".github/workflows/weekly.yml"
 MANIFEST_PATH = "published.json"
 DEFAULT_BRANCH_FALLBACK = "master"
 ENABLE_ATTEMPTS = 8
@@ -54,6 +59,7 @@ LIVE_TIMEOUT_SECONDS = 15
 MAINTAINED_FILES: tuple[tuple[str, str], ...] = (
     ("README.md", "README.md"),
     (PUBLISH_WORKFLOW_PATH, CALLER_WORKFLOW),
+    (WEEKLY_WORKFLOW_PATH, WEEKLY_CALLER_WORKFLOW),
 )
 
 _HTTP_RE = re.compile(r"\(HTTP (\d+)\)")
@@ -214,6 +220,8 @@ class BootstrapPlan:
     actions_note: str
     enable_workflow: bool
     workflow_state: str | None
+    enable_weekly: bool = True
+    weekly_state: str | None = None
     operations: list[str] = field(default_factory=list)
 
 
@@ -287,7 +295,7 @@ def inspect_actions(run: RunFn) -> tuple[bool | None, bool, str]:
     return False, True, "Actions are disabled on the repository"
 
 
-def inspect_workflow_state(run: RunFn) -> str | None:
+def _workflow_states(run: RunFn) -> dict[str, str | None]:
     status, body = gh_api(run, "GET", f"repos/{HOST_REPO}/actions/workflows")
     if status in {401, 403}:
         raise DocsError(
@@ -295,20 +303,32 @@ def inspect_workflow_state(run: RunFn) -> str | None:
             f"{'authentication failure' if status == 401 else 'permission denied'} (HTTP {status})"
         )
     if status == 404:
-        return None
+        return {}
     text = require_api_ok(status, body, action=f"list workflows on {HOST_REPO}")
     payload = _parse_json(text, what="workflow list")
     workflows = payload.get("workflows") if isinstance(payload, dict) else None
     if not isinstance(workflows, list):
-        return None
+        return {}
+    states: dict[str, str | None] = {}
     for item in workflows:
         if not isinstance(item, dict):
             continue
         path = str(item.get("path") or "")
+        state = item.get("state")
+        normalized = state if isinstance(state, str) else "unknown"
         if path.endswith(f"/{CALLER_WORKFLOW}") or path == CALLER_WORKFLOW:
-            state = item.get("state")
-            return state if isinstance(state, str) else "unknown"
-    return None
+            states[CALLER_WORKFLOW] = normalized
+        if path.endswith(f"/{WEEKLY_CALLER_WORKFLOW}") or path == WEEKLY_CALLER_WORKFLOW:
+            states[WEEKLY_CALLER_WORKFLOW] = normalized
+    return states
+
+
+def inspect_workflow_state(run: RunFn) -> str | None:
+    return _workflow_states(run).get(CALLER_WORKFLOW)
+
+
+def inspect_weekly_state(run: RunFn) -> str | None:
+    return _workflow_states(run).get(WEEKLY_CALLER_WORKFLOW)
 
 
 def _file_syncs(
@@ -351,6 +371,7 @@ def build_bootstrap_plan(
     enable_actions = False
     actions_note = "repository does not exist yet"
     workflow_state: str | None = None
+    weekly_state: str | None = None
 
     if repo_exists:
         if deploy_dir is not None:
@@ -368,7 +389,9 @@ def build_bootstrap_plan(
             manifest_present = _read_remote_file(run, MANIFEST_PATH) is not None
         pages_build_type, configure_pages = inspect_pages(run)
         actions_enabled, enable_actions, actions_note = inspect_actions(run)
-        workflow_state = inspect_workflow_state(run)
+        states = _workflow_states(run)
+        workflow_state = states.get(CALLER_WORKFLOW)
+        weekly_state = states.get(WEEKLY_CALLER_WORKFLOW)
     else:
         current = {path: None for path in templates}
         configure_pages = True
@@ -430,6 +453,18 @@ def build_bootstrap_plan(
         operations.append(f"enable workflow {CALLER_WORKFLOW} after it is installed")
         enable_workflow = True
 
+    if weekly_state == "active":
+        operations.append(f"ensure workflow {WEEKLY_CALLER_WORKFLOW} stays enabled (active)")
+        enable_weekly = True
+    elif weekly_state:
+        operations.append(
+            f"enable workflow {WEEKLY_CALLER_WORKFLOW} (currently {weekly_state})"
+        )
+        enable_weekly = True
+    else:
+        operations.append(f"enable workflow {WEEKLY_CALLER_WORKFLOW} after it is installed")
+        enable_weekly = True
+
     return BootstrapPlan(
         repo_exists=repo_exists,
         default_branch=default_branch,
@@ -445,6 +480,8 @@ def build_bootstrap_plan(
         actions_note=actions_note,
         enable_workflow=enable_workflow,
         workflow_state=workflow_state,
+        enable_weekly=enable_weekly,
+        weekly_state=weekly_state,
         operations=operations,
     )
 
@@ -572,11 +609,12 @@ def _enable_actions(run: RunFn) -> None:
 
 def _enable_workflow(
     run: RunFn,
+    workflow: str = CALLER_WORKFLOW,
     *,
     sleep: Callable[[float], None],
     attempts: int = ENABLE_ATTEMPTS,
 ) -> None:
-    argv = ["gh", "workflow", "enable", CALLER_WORKFLOW, "--repo", HOST_REPO]
+    argv = ["gh", "workflow", "enable", workflow, "--repo", HOST_REPO]
     last = ""
     for attempt in range(attempts):
         result = run(argv, None)
@@ -585,7 +623,7 @@ def _enable_workflow(
         last = _failure_text(result)
         if attempt + 1 < attempts:
             sleep(POLL_SECONDS)
-    raise DocsError(f"cannot enable workflow {CALLER_WORKFLOW}: {last}")
+    raise DocsError(f"cannot enable workflow {workflow}: {last}")
 
 
 def apply_bootstrap_plan(
@@ -622,7 +660,9 @@ def apply_bootstrap_plan(
     if plan.enable_actions:
         _enable_actions(run)
     if plan.enable_workflow:
-        _enable_workflow(run, sleep=sleep)
+        _enable_workflow(run, CALLER_WORKFLOW, sleep=sleep)
+    if plan.enable_weekly:
+        _enable_workflow(run, WEEKLY_CALLER_WORKFLOW, sleep=sleep)
 
 
 def run_host_bootstrap(
@@ -681,7 +721,7 @@ def enable_publish_workflow(
     *,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    _enable_workflow(run, sleep=sleep)
+    _enable_workflow(run, CALLER_WORKFLOW, sleep=sleep)
 
 
 def dispatch_publish(
@@ -923,7 +963,7 @@ def list_workflows(run: RunFn) -> list[dict[str, Any]]:
     return [item for item in workflows if isinstance(item, dict)]
 
 
-def list_open_managed_issues(run: RunFn) -> list[dict[str, Any]]:
+def _list_open_issues_for(run: RunFn, *, title: str, label: str) -> list[dict[str, Any]]:
     result = run(
         [
             "gh",
@@ -934,7 +974,7 @@ def list_open_managed_issues(run: RunFn) -> list[dict[str, Any]]:
             "--state",
             "open",
             "--label",
-            PUBLISH_BLOCKED_LABEL,
+            label,
             "--json",
             "number,title,url",
             "--limit",
@@ -948,10 +988,20 @@ def list_open_managed_issues(run: RunFn) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         raise DocsError("cannot list open managed issues: expected a list")
     return [
-        item
-        for item in payload
-        if isinstance(item, dict) and item.get("title") == PUBLISH_BLOCKED_TITLE
+        item for item in payload if isinstance(item, dict) and item.get("title") == title
     ]
+
+
+def list_open_managed_issues(run: RunFn) -> list[dict[str, Any]]:
+    return _list_open_issues_for(
+        run, title=PUBLISH_BLOCKED_TITLE, label=PUBLISH_BLOCKED_LABEL
+    )
+
+
+def list_open_weekly_issues(run: RunFn) -> list[dict[str, Any]]:
+    return _list_open_issues_for(
+        run, title=WEEKLY_BLOCKED_TITLE, label=WEEKLY_BLOCKED_LABEL
+    )
 
 
 def _summarize_sources(record: dict[str, Any] | None) -> str:
@@ -993,11 +1043,13 @@ def collect_status(
     except DocsError:
         if any(path.endswith(CALLER_WORKFLOW) for path in names):
             raise
-    if any(path.endswith("weekly.yml") for path in names):
-        weekly_runs = list_workflow_runs(run, workflow="weekly.yml", limit=5)
+    if any(path.endswith(WEEKLY_CALLER_WORKFLOW) for path in names):
+        weekly_runs = list_workflow_runs(run, workflow=WEEKLY_CALLER_WORKFLOW, limit=5)
     hold = None
     if isinstance(manifest, dict) and "hold" in manifest:
         hold = bool(manifest.get("hold"))
+    managed = list_open_managed_issues(run) + list_open_weekly_issues(run)
+    managed.sort(key=lambda item: item.get("number", 0) if isinstance(item.get("number"), int) else 0)
     return {
         "repository": HOST_REPO,
         "origin": origin,
@@ -1018,7 +1070,7 @@ def collect_status(
         ],
         "publish_runs": publish_runs,
         "weekly_runs": weekly_runs,
-        "open_issues": list_open_managed_issues(run),
+        "open_issues": managed,
     }
 
 
@@ -1084,7 +1136,7 @@ def format_status(report: dict[str, Any]) -> str:
 
     weekly_runs = report.get("weekly_runs") or []
     if weekly_runs or any(
-        str(item.get("path") or "").endswith("weekly.yml") for item in workflows
+        str(item.get("path") or "").endswith(WEEKLY_CALLER_WORKFLOW) for item in workflows
     ):
         lines.append("recent weekly runs:")
         if not weekly_runs:

@@ -8,7 +8,9 @@ workflows, and publication logic live in
 
 Do not treat this repository as documentation source. Edit pages, the theme,
 and the publisher in bob-cli, then let the hourly poll (cron `17 * * * *`) or
-an operator dispatch publish the result.
+an operator dispatch publish the result. The Monday weekly check (cron
+`41 6 * * 1`) builds the strict Material site and fetches external links with
+bounded retries; it never deploys and never writes `published.json`.
 
 `published.json` is the publication log in this repository. It is not
 necessarily served as `/published.json` on the live site. The live provenance
@@ -61,6 +63,16 @@ just docs-publish
 Do not use `--force` to recover. Force rebuilds unchanged inputs when nothing
 is held; recovery is the blocked-issue path. A successful live verification
 closes the issue.
+
+## Weekly checks
+
+The `weekly.yml` caller runs on `41 6 * * 1` and manual dispatch. It always
+builds the strict Material site with the locked material group and runs
+`bob-docs links --online`, even when the publication fingerprint is unchanged
+or a publish hold remains. Weekly cannot release the hold or deploy, and it
+never writes `published.json`. A failure opens or updates one issue titled
+`Docs weekly checks blocked` (label `docs-weekly`); a passing run closes only
+that issue.
 
 ## Inactivity
 
