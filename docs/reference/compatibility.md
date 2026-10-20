@@ -16,8 +16,9 @@ was built from. The floors below are the minimum versions readers need.
   browser helpers cover both; Mac-only paths note it where they differ.
 - **Obsidian:** 1.8.7 or later. Every bundled Bob plugin manifest sets
   `minAppVersion` 1.8.7, so the floor follows the manifests, not this
-  site's builder version. See the mounted [Obsidian plugins](plugins/index.md)
-  reference for current manifest versions.
+  site's builder version. The mounted [Obsidian plugins inventory](plugins/index.md)
+  is generated from the manifests, making it the source of truth for this floor
+  and current manifest versions.
 - **Tasks plugin:** use a current Tasks release with the Dataview task
   format and the `#task` global filter. The native query engine follows
   Tasks 8.4.0 filter behavior for `status.symbol`; the parity fixture and

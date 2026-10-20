@@ -60,7 +60,8 @@ a different checkout refuses rather than deploying the wrong source. Sync
 copies plugin assets into the vault. It does not enable plugins in Obsidian
 and does not create dashboard notes; enable **Bob Ledger Tools** and
 **Bob Navigation Hotkeys** by hand and open notes by hand. See the mounted
-[Obsidian plugins](../reference/plugins/index.md) reference for versions.
+[Obsidian plugins](../reference/plugins/index.md) reference for versions,
+commands, registered default hotkeys, settings, and keyboard behavior.
 
 ## 4. Read a rendered task and run one review gesture
 

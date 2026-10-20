@@ -145,7 +145,7 @@ def _fixture_root(root: Path) -> Path:
     )
     _write(root / "docs/_meta/mounts.yml", "[]\n")
     _write(root / "docs/reference/index.md", "# Plugins\n")
-    _write(root / "docs/reference/plugins/index.md", "# Obsidian plugins\n")
+    _write(root / "docs/reference/plugins/index.md", "# Obsidian plugins inventory\n")
     _write(root / "docs/alpha.md", "# Alpha contract\n")
     for stub in ("start/index.md", "start/install.md", "start/obsidian.md", "start/mac-capture.md"):
         _write(root / "docs" / stub, f"# {stub}\n\nStub.\n")

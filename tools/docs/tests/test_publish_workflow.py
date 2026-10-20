@@ -22,6 +22,7 @@ ALLOWED_USES = {
     "actions/upload-pages-artifact@v4",
     "actions/deploy-pages@v4",
     "actions/setup-python@v6",
+    "actions/setup-node@v7",
     "astral-sh/setup-uv@v6",
     "actions/upload-artifact@v4",
     "actions/download-artifact@v4",
@@ -127,6 +128,14 @@ def test_gates_require_a_planned_build_and_plumb_drill(document: dict) -> None:
     refs = _refs_of(gates)
     assert any(ref.endswith("should_build") for ref in refs)
     assert "inputs.drill" in refs
+
+
+def test_publish_sets_up_node_before_production_gates(document: dict) -> None:
+    steps = _steps(document["jobs"]["publish"])
+    setup = next(i for i, step in enumerate(steps) if step.get("uses") == "actions/setup-node@v7")
+    gates = next(i for i, step in enumerate(steps) if step.get("name") == "Run the gated production checks")
+    assert setup < gates
+    assert steps[setup].get("with", {}).get("node-version") == "24"
 
 
 def test_upload_and_deploy_gate_on_planner_outputs_not_inputs(document: dict) -> None:

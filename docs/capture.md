@@ -1335,8 +1335,8 @@ replacement covers the whole token, sigil included, so refetching at
 rows read `[status] text  · note_path:line`, with `· scheduled YYYY-MM-DD`
 whenever the task carries a scheduled date; the shell format yields no rows,
 because nothing is insertable. The navigation itself runs through
-bob-navigation-hotkeys' `obsidian://bob-goto-task` URI, whose contract lives
-in the bob-plugins README.
+bob-navigation-hotkeys' `obsidian://bob-goto-task` URI, whose contract is in
+the [Go to task URI reference](reference/plugins/goto-task-uri.md).
 
 ### Choosing a parent task with `+`
 

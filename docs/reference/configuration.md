@@ -6,9 +6,8 @@ description: Configuration file precedence, supported YAML settings, environment
 # Bob configuration and environment
 
 This page covers configuration read by the Rust `bob` CLI. Obsidian plugin
-settings have separate owners and are described in the [bob-plugins
-README](https://github.com/bobs-org/bob-plugins#readme); Bob CLI does not
-validate plugin settings.
+settings have separate owners and are described in the [Obsidian plugins
+reference](plugins/index.md); Bob CLI does not validate plugin settings.
 
 ## Configuration file
 
@@ -256,7 +255,8 @@ See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.
 | `BOB_COMPLETE_DEBUG` | No completion debug file | Appends hidden shell-completion request and response diagnostics to the exact path supplied. |
 
 See [`bob completion`](cli/completion.md), [plugin deployment](../plugins.md),
-and the [bob-plugins README](https://github.com/bobs-org/bob-plugins#readme).
+the [Obsidian plugins reference](plugins/index.md), and the
+[plugin deployment guide](../develop/plugins/deployment.md).
 
 To install plugins, name the checkout you mean. Bare `bob plugins sync`
 resolves `--repo`, then `BOB_PLUGINS_DIR`, then
