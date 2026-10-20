@@ -134,6 +134,7 @@ nav:
               - "bob capture-tasks": reference/cli/capture-tasks.md
               - "bob capture-templates": reference/cli/capture-templates.md
           # END GENERATED: cli nav
+      - Configuration: reference/configuration.md
       - Glossary: reference/glossary.md
   - Develop:
       - Overview: develop/index.md

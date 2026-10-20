@@ -2,6 +2,17 @@
 
 Build and validate Bob's documentation site. Run from the bob-cli repository root:
 
+The docs linter inventories complete `BOB_*` identifiers in Rust string
+literals under production `src/` code and checks them against
+`docs/reference/configuration.md`. Its lexical scan respects Rust strings,
+raw strings, nested comments, and item braces; it excludes Rust test source
+files and items gated by `#[cfg(test)]`, including inline test modules, while
+continuing through later production items. It intentionally does not resolve
+which strings reach an environment reader, so historic help text and private
+process controls need exact, specific reasons in
+`docs/_meta/environment_ignore.yml`. Public runtime controls belong on the
+configuration page instead of that exception list.
+
 ```bash
 just docs-gen             # regenerate tracked contract indexes
 just docs-serve           # assemble and serve locally with live reload

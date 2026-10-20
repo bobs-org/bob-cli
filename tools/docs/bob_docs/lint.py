@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from .context import DocsContext, context_from_root
 from .contracts import ContractRegistry, load_contract_registry
 from .errors import DocsError
+from .environment import check_environment_coverage
 from .ignore import path_ignored as _path_ignored
 from .markdown import (
     blank_link_destinations,
@@ -1097,6 +1098,10 @@ def check_tree(ctx: LintContext) -> list[Finding]:
     findings.extend(check_registry(ctx))
     findings.extend(check_mount_gitignores(ctx))
     findings.extend(check_portability_config(ctx))
+    findings.extend(
+        _finding(path, line, rule, explanation)
+        for path, line, rule, explanation in check_environment_coverage(ctx.root, ctx.docs)
+    )
     pages = publishable_markdown(ctx.docs, ctx.exclude_globs)
     findings.extend(check_nav(ctx, pages))
     findings.extend(check_stale_ceilings(ctx, set(pages)))

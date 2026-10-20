@@ -134,6 +134,15 @@ def test_clean_fixture_passes(tmp_path: Path) -> None:
     assert _errors(_site(tmp_path)) == []
 
 
+def test_environment_guard_runs_in_normal_lint(tmp_path: Path) -> None:
+    root = _site(tmp_path)
+    _write(root / "src/main.rs", 'const ENV: &str = "BOB_LINT_DISCOVERY";\n')
+    findings = [item for item in check_tree(build_lint_context(root)) if item.rule == "environment"]
+    assert len(findings) == 1
+    assert findings[0].path == "docs/reference/configuration.md"
+    assert "missing configuration reference" in findings[0].explanation
+
+
 def test_staged_build_json_is_not_linted(tmp_path: Path) -> None:
     root = _site(tmp_path)
     _write(root / "docs/build.json", '{"builder": "zensical"}\n')
@@ -566,6 +575,20 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
     _write(root / "docs/reference/plugins/index.md", GOOD_FM + "# Plugins\n")
     nav = (root / "mkdocs.yml").read_text(encoding="utf-8")
     _write(root / "mkdocs.yml", nav + "\n  - Plugins: reference/plugins/index.md\n")
+    nav = (root / "mkdocs.yml").read_text(encoding="utf-8")
+    _write(
+        root / "mkdocs.yml",
+        nav.replace(
+            "  - Develop:\n",
+            "  - Reference:\n      - Configuration: reference/configuration.md\n"
+            "  - Develop:\n",
+        ),
+    )
+    _write(root / "src/main.rs", 'const ENV: &str = "BOB_ASSEMBLED_DISCOVERY";\n')
+    _write(
+        root / "docs/reference/configuration.md",
+        GOOD_FM + "# Configuration\n\n`BOB_ASSEMBLED_DISCOVERY` is documented.\n",
+    )
     subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
 
     source = tmp_path / "bob-plugins"
@@ -612,6 +635,17 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
         for item in check_tree(build_lint_context(root, docs_context=context))
         if item.severity == "error"
     ]
+
+    staged_config = context.output_dir / "docs/reference/configuration.md"
+    staged_config.write_text(
+        staged_config.read_text(encoding="utf-8").replace("BOB_ASSEMBLED_DISCOVERY", ""),
+        encoding="utf-8",
+    )
+    findings = check_tree(build_lint_context(root, docs_context=context))
+    assert any(
+        item.rule == "environment" and "BOB_ASSEMBLED_DISCOVERY" in item.explanation
+        for item in findings
+    )
 
     staged_page = context.output_dir / "docs/reference/plugins/listed.md"
     staged_page.write_text(
