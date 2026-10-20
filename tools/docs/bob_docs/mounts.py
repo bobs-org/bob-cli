@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .errors import DocsError
+from .ignore import path_ignored
 from .yaml_tools import load_yaml
 
 MOUNT_KEYS = {"repo", "remote", "branch", "source", "target", "nav_title"}
@@ -62,7 +63,7 @@ def _relative_posix(value: Any, where: str) -> PurePosixPath:
     if not isinstance(value, str) or not value or value.startswith("/") or value.startswith("~"):
         raise DocsError(f"{where}: must be a relative path beneath its parent")
     path = PurePosixPath(value)
-    if any(part in ("", ".", "..") for part in path.parts):
+    if not path.parts or any(part in ("", ".", "..") for part in path.parts):
         raise DocsError(f"{where}: must be a relative path without empty, '.', or '..' parts")
     return path
 
@@ -135,6 +136,55 @@ def cache_root() -> Path:
     return Path.home() / ".cache" / "bob-docs"
 
 
+def _refresh_cached_clone(mount: Mount, cached: Path) -> tuple[Path, str]:
+    """Verify a cached clone's origin and refresh it to the remote branch head."""
+
+    origin = _git(cached, "config", "--get", "remote.origin.url")
+    if origin is None:
+        raise DocsError(
+            f"mount repo {mount.repo!r}: cached clone at {cached} has no origin; "
+            f"remove it so a fresh shallow clone of {mount.remote} can replace it"
+        )
+    if origin != mount.remote:
+        raise DocsError(
+            f"mount repo {mount.repo!r}: cached clone at {cached} points at origin "
+            f"{origin!r}, not the mount remote {mount.remote!r}; remove it so a "
+            "fresh shallow clone can replace it"
+        )
+    fetch = subprocess.run(
+        ["git", "fetch", "--depth", "1", "origin", mount.branch],
+        cwd=cached,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if fetch.returncode != 0:
+        detail = fetch.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        print(
+            f"bob-docs: warning: offline, keeping cached {mount.repo!r} "
+            f"without refreshing{hint}",
+        )
+        return cached.resolve(), str(cached)
+    reset = subprocess.run(
+        ["git", "reset", "--hard", f"origin/{mount.branch}"],
+        cwd=cached,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if reset.returncode != 0:
+        detail = reset.stderr.strip().splitlines()
+        hint = f": {detail[-1]}" if detail else ""
+        raise DocsError(
+            f"mount repo {mount.repo!r}: fetched {mount.remote} "
+            f"branch {mount.branch} but could not reset the cached clone{hint}"
+        )
+    return cached.resolve(), str(cached)
+
+
 def discover_repo(
     mount: Mount,
     *,
@@ -172,11 +222,12 @@ def discover_repo(
     cached = cache_root() / mount.repo
     attempted.append(f"{cached} (shallow clone of {mount.remote} branch {mount.branch})")
     if cached.is_dir():
-        return cached.resolve(), str(cached)
+        return _refresh_cached_clone(mount, cached)
     try:
         cached.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", mount.branch, mount.remote, str(cached)],
+            ["git", "clone", "--depth", "1", "--branch", mount.branch, mount.remote,
+             str(cached)],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -222,7 +273,14 @@ def _is_skipped(relative: PurePosixPath) -> bool:
 
 
 def _collect_candidates(mount: Mount, repo_dir: Path) -> tuple[Path, list[tuple[Path, PurePosixPath]]]:
-    source_dir = (repo_dir / Path(*mount.source.parts)).resolve()
+    lexical_source = repo_dir / Path(*mount.source.parts)
+    if lexical_source.is_symlink():
+        raise DocsError(
+            f"mount {mount.repo!r} -> {str(mount.target)!r}: "
+            f"source directory {str(mount.source)!r} is a symlink; "
+            "mount sources must be real directories inside their repo"
+        )
+    source_dir = lexical_source.resolve()
     if not source_dir.is_dir():
         raise DocsError(
             f"mount {mount.repo!r} -> {str(mount.target)!r}: "
@@ -403,7 +461,7 @@ def stamp_markdown(text: str, *, repo: str, repo_path: str) -> str:
             f"mount source {repo}:{repo_path} already sets {SOURCE_KEY!r}; "
             "authored source spoofing is rejected"
         )
-    return f"---\n{SOURCE_KEY}: {repo}:{repo_path}\n{front_matter}{body}"
+    return f"---\n{SOURCE_KEY}: {repo}:{repo_path}\n{front_matter}---\n{body}"
 
 
 def load_yaml_text_mapping(text: str) -> dict[str, Any]:
@@ -441,6 +499,66 @@ def _owned_files(root: Path) -> set[str]:
     return set(files)
 
 
+def _check_no_symlink_escape(
+    relative: PurePosixPath,
+    *,
+    docs_root: Path,
+    docs_resolved: Path,
+    blame: str,
+) -> Path:
+    """Reject symlink components and resolved parents outside the docs root."""
+
+    destination = docs_root / Path(*relative.parts)
+    parts = relative.parts
+    for depth in range(1, len(parts) + 1):
+        component = docs_root / Path(*parts[:depth])
+        if component.is_symlink():
+            raise DocsError(f"{blame}: {component} is a symlink; refusing to follow it")
+    parent_resolved = destination.parent.resolve()
+    if parent_resolved != docs_resolved and not parent_resolved.is_relative_to(docs_resolved):
+        raise DocsError(
+            f"{blame}: {destination} resolves outside the docs root {docs_resolved}; "
+            "mount copies stay beneath docs/"
+        )
+    return destination
+
+
+def _check_stale_deletable(
+    stale: str,
+    *,
+    root: Path,
+    docs_root: Path,
+    docs_resolved: Path,
+    tracked: set[str] | None,
+) -> Path:
+    relative = PurePosixPath(stale)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise DocsError(
+            f"mount manifest lists stale path {stale!r}, which is outside docs/; "
+            "refusing to delete it"
+        )
+    victim = _check_no_symlink_escape(
+        relative, docs_root=docs_root, docs_resolved=docs_resolved, blame=f"stale mount output {stale!r}"
+    )
+    tracked_rel = f"docs/{relative.as_posix()}"
+    if tracked is not None and tracked_rel in tracked:
+        raise DocsError(
+            f"stale mount output {stale!r} is a tracked file ({tracked_rel}); "
+            "refusing to delete it"
+        )
+    if not path_ignored(root, tracked_rel):
+        raise DocsError(
+            f"stale mount output {stale!r} is not gitignored; refusing to delete it"
+        )
+    if victim.is_symlink() or victim.is_file():
+        return victim
+    if victim.exists():
+        raise DocsError(
+            f"stale mount output {stale!r} is not a plain file; refusing to delete it"
+        )
+    return victim
+
+
 def validate_mount_targets(
     plans: list[MountPlan],
     *,
@@ -449,6 +567,7 @@ def validate_mount_targets(
 ) -> None:
     tracked = _tracked_files(root)
     owned = _owned_files(root)
+    docs_resolved = docs_root.resolve()
     for plan in plans:
         target_dir = docs_root / Path(*plan.mount.target.parts)
         index = target_dir / INDEX_FILENAME
@@ -456,6 +575,12 @@ def validate_mount_targets(
             raise DocsError(
                 f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: missing committed "
                 f"landing page {index}; commit it before mounting"
+            )
+        probe = f"docs/{plan.mount.target.as_posix()}/.__bob_docs_mount_probe.md"
+        if not path_ignored(root, probe):
+            raise DocsError(
+                f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: target is not "
+                "gitignored; copied pages must be ignored apart from index.md"
             )
         if tracked is not None:
             offenders = sorted(
@@ -471,12 +596,13 @@ def validate_mount_targets(
                     "mount targets are gitignored apart from index.md"
                 )
         for _, target_relative in plan.files:
+            _check_no_symlink_escape(
+                target_relative,
+                docs_root=docs_root,
+                docs_resolved=docs_resolved,
+                blame=f"mount {plan.mount.repo!r}",
+            )
             destination = docs_root / Path(*target_relative.parts)
-            if destination.is_symlink():
-                raise DocsError(
-                    f"mount {plan.mount.repo!r}: destination {destination} is a symlink; "
-                    "refusing to follow it"
-                )
             if destination.exists() and str(target_relative) not in owned:
                 raise DocsError(
                     f"mount {plan.mount.repo!r} -> {str(plan.mount.target)!r}: refusing to "
@@ -491,6 +617,8 @@ def sync_mount_copies(
     root: Path,
     docs_root: Path,
 ) -> set[str]:
+    docs_resolved = docs_root.resolve()
+    tracked = _tracked_files(root)
     owned = _owned_files(root)
     expected: set[str] = set()
     writes: list[tuple[Path, Path, str]] = []
@@ -512,8 +640,18 @@ def sync_mount_copies(
                 writes.append((source_path, destination, stamped))
             else:
                 writes.append((source_path, destination, ""))
+    stale_victims: list[Path] = []
     for stale in sorted(owned - expected):
-        victim = docs_root / Path(*PurePosixPath(stale).parts)
+        stale_victims.append(
+            _check_stale_deletable(
+                stale,
+                root=root,
+                docs_root=docs_root,
+                docs_resolved=docs_resolved,
+                tracked=tracked,
+            )
+        )
+    for victim in stale_victims:
         if victim.is_symlink() or victim.is_file():
             victim.unlink()
     for _, destination, text in writes:

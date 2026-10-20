@@ -102,8 +102,8 @@ The JSON file has this shape; relative paths resolve against the JSON file:
 ```json
 {
   "sources": {
-    "bob-cli": {"path": ".", "sha": "<40-hex HEAD>"},
-    "bob-plugins": {"path": "../bob-plugins", "sha": "<40-hex HEAD>"}
+    "bob-cli": {"path": "../..", "sha": "<40-hex HEAD>"},
+    "bob-plugins": {"path": "../../../bob-plugins", "sha": "<40-hex HEAD>"}
   }
 }
 ```
@@ -119,10 +119,20 @@ again after mount copies land.
 ## Provenance (`target/docs/build.json`)
 
 Each assembly writes repo-keyed SHAs, dirty flags, branches, the UTC build
-time, and installed tool versions, and injects them plus the contract registry
-into the assembled config as `extra.build` / `extra.contracts`. The site build
-copies the manifest to `/build.json`. Build time may change between runs;
-generated tracked content stays deterministic.
+time, the builder used (`zensical` or `material`), and installed tool versions,
+and injects them plus the contract registry into the assembled config as
+`extra.build` / `extra.contracts`. The same payload is also written into the
+staged docs tree, so the site build copies the manifest to `/build.json`. Build
+time may change between runs; generated tracked content stays deterministic.
+
+## Serve (`just docs-serve`)
+
+`bob-docs serve` assembles once, then serves the staged tree with Zensical.
+While the server runs, a background thread mirrors authored `docs/` edits into
+the staged tree about twice a second: additions and edits appear, deletions
+disappear, escaping symlinks are rejected, and the staged `build.json` plus
+anything else assembly wrote is preserved. Restart the server to pick up
+`mkdocs.yml` or mount-table changes; those never mirror.
 
 ## Published URLs (`bob-docs urls`)
 

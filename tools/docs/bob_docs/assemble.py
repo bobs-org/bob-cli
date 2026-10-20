@@ -54,7 +54,12 @@ def _tool_version(name: str, fallback: str) -> str:
         return fallback
 
 
-def build_manifest(root: Path, mounted: dict[str, Path] | None = None) -> dict[str, Any]:
+def build_manifest(
+    root: Path,
+    mounted: dict[str, Path] | None = None,
+    *,
+    builder: str = "zensical",
+) -> dict[str, Any]:
     sha = _git(root, "rev-parse", "HEAD")
     branch = _git(root, "branch", "--show-current")
     status = _git(root, "status", "--porcelain", "--untracked-files=all")
@@ -74,14 +79,21 @@ def build_manifest(root: Path, mounted: dict[str, Path] | None = None) -> dict[s
         except ValueError:
             shown = str(repo_dir.resolve())
         sources[repo] = {"path": shown, **info}
+    tools: dict[str, Any] = {
+        "bob-docs": _tool_version("bob-docs", "0.1.0"),
+        "python": ".".join(map(str, sys.version_info[:3])),
+        "zensical": _tool_version("zensical", "unknown"),
+    }
+    for optional in ("mkdocs", "mkdocs-material"):
+        try:
+            tools[optional] = version(optional)
+        except PackageNotFoundError:
+            continue
     return {
         "sources": sources,
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-        "tools": {
-            "bob-docs": _tool_version("bob-docs", "0.1.0"),
-            "python": ".".join(map(str, sys.version_info[:3])),
-            "zensical": _tool_version("zensical", "unknown"),
-        },
+        "builder": builder,
+        "tools": tools,
     }
 
 
@@ -132,7 +144,11 @@ def _stage_docs(context: DocsContext) -> None:
 
 
 def assemble(
-    root: Path, *, production: bool = False, sources: Path | str | None = None
+    root: Path,
+    *,
+    production: bool = False,
+    sources: Path | str | None = None,
+    builder: str = "zensical",
 ) -> tuple[DocsContext, Path]:
     """Write target/docs/mkdocs.yml and build.json without editing tracked sources."""
 
@@ -179,11 +195,15 @@ def assemble(
     extra = config.setdefault("extra", {})
     if not isinstance(extra, dict):
         raise DocsError("mkdocs.yml: extra must be a mapping")
-    manifest = build_manifest(context.repo_root, repo_dirs)
+    manifest = build_manifest(context.repo_root, repo_dirs, builder=builder)
     extra["build"] = manifest
     extra["contracts"] = registry_extra(registry)
 
     manifest_path = context.output_dir / "build.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    manifest_path.write_text(payload, encoding="utf-8")
+    # Publish the same manifest inside the staged docs tree so build and serve
+    # both expose it as the static file /build.json from one copy path.
+    (context.output_dir / "docs" / "build.json").write_text(payload, encoding="utf-8")
     context.assembled_config.write_text(dump_yaml(config), encoding="utf-8")
     return context, manifest_path

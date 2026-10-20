@@ -67,6 +67,12 @@ def test_clean_fixture_passes(tmp_path: Path) -> None:
     assert _errors(_site(tmp_path)) == []
 
 
+def test_staged_build_json_is_not_linted(tmp_path: Path) -> None:
+    root = _site(tmp_path)
+    _write(root / "docs/build.json", '{"builder": "zensical"}\n')
+    assert _errors(root) == []
+
+
 def test_real_site_passes_lint() -> None:
     assert run_lint(ROOT) == 0
 

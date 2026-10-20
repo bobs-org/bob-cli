@@ -1,13 +1,16 @@
 """Fixture-repository tests for mount discovery, copying, nav, and production."""
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from bob_docs.assemble import assemble
+from bob_docs.assemble import assemble, build_manifest
+from bob_docs.build import mirror_docs_once
 from bob_docs.errors import DocsError
+from bob_docs.markdown import parse_front_matter
 from bob_docs.mounts import (
     Mount,
     discover_repo,
@@ -49,6 +52,14 @@ def _minimal_root(
         "      - stem: only\n        summary: One contract\n        order: 1\n",
     )
     _write(root / "docs/_meta/mounts.yml", mounts)
+    _write(
+        root / ".gitignore",
+        "target/\n"
+        "docs/reference/plugins/*\n"
+        "!docs/reference/plugins/index.md\n"
+        "docs/develop/plugins/*\n"
+        "!docs/develop/plugins/index.md\n",
+    )
     _write(
         root / "mkdocs.yml",
         "site_name: Test\ndocs_dir: docs\nsite_dir: target/docs/site\n"
@@ -147,8 +158,6 @@ def test_discovery_failure_reports_attempted_locations(
 ) -> None:
     monkeypatch.delenv("BOB_DOCS_BOB_PLUGINS_DIR", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
-    import dataclasses
-
     root = _minimal_root(tmp_path / "root")
     probe = dataclasses.replace(_probe(), remote="/nonexistent/remote")
     with pytest.raises(DocsError, match="attempted"):
@@ -480,8 +489,6 @@ def test_cache_clone_from_local_remote(
     remote = _plugin_repo(tmp_path / "remote")
     _commit_all(remote)
     root = _minimal_root(tmp_path / "root")
-    import dataclasses
-
     probe = dataclasses.replace(_probe(), remote=remote.as_uri(), branch="main")
     found, _ = discover_repo(probe, root=root)
     assert (found / "docs/guide.md").is_file()
@@ -528,3 +535,449 @@ def test_nav_entry_problems_rejected(
     _write(repo / "docs/nav.yml", "- title: Up\n  path: ../evil.md\n")
     with pytest.raises(DocsError, match="without empty"):
         assemble(root)
+
+
+def _two_mount_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    repo_one: Path,
+    repo_two: Path,
+    *,
+    repo_two_name: str = "bob-other",
+) -> Path:
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo_one))
+    monkeypatch.setenv(f"BOB_DOCS_{repo_two_name.upper().replace('-', '_')}_DIR", str(repo_two))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([
+            _mount_entry(repo_one),
+            {
+                "repo": repo_two_name,
+                "remote": repo_two.as_uri(),
+                "branch": "main",
+                "source": "docs",
+                "target": "develop/plugins",
+                "nav_title": "Other",
+            },
+        ]),
+        nav_extra=(
+            "  - Plugins: reference/plugins/index.md\n"
+            "  - Other: develop/plugins/index.md\n"
+        ),
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub one\n")
+    _write(root / "docs/develop/plugins/index.md", "# Hub two\n")
+    return root
+
+
+def _other_repo(path: Path) -> Path:
+    _write(path / "docs/extra.md", "# Extra\n")
+    _write(path / "docs/nav.yml", "- title: Extra\n  path: extra.md\n")
+    return path
+
+
+def test_stamp_without_front_matter_exact() -> None:
+    assert stamp_markdown("# T\n", repo="r", repo_path="p") == "---\nsource: r:p\n---\n# T\n"
+
+
+def test_stamp_with_front_matter_keeps_closing_delimiter() -> None:
+    stamped = stamp_markdown("---\ntitle: FM\n---\n\n# FM\n", repo="r", repo_path="docs/fm.md")
+    assert stamped == "---\nsource: r:docs/fm.md\ntitle: FM\n---\n\n# FM\n"
+    head, _body, error = parse_front_matter(stamped, source="docs/copy.md")
+    assert error is None
+    assert head == {"source": "r:docs/fm.md", "title": "FM"}
+
+
+def test_spoofed_second_mount_leaves_first_outputs_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_one = _plugin_repo(tmp_path / "bob-plugins")
+    repo_two = _other_repo(tmp_path / "bob-other")
+    root = _two_mount_root(tmp_path, monkeypatch, repo_one, repo_two)
+    assemble(root)
+    guide = root / "docs/reference/plugins/guide.md"
+    extra = root / "docs/develop/plugins/extra.md"
+    first_guide, first_extra = guide.read_bytes(), extra.read_bytes()
+    _write(repo_two / "docs/extra.md", "---\nsource: forged:x\n---\n\n# Extra\n")
+    with pytest.raises(DocsError, match="spoofing"):
+        assemble(root)
+    assert guide.read_bytes() == first_guide
+    assert extra.read_bytes() == first_extra
+
+
+def test_destination_file_symlink_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    assemble(root)
+    guide = root / "docs/reference/plugins/guide.md"
+    first = guide.read_bytes()
+    outside = tmp_path / "elsewhere.md"
+    _write(outside, "# Elsewhere\n")
+    guide.unlink()
+    guide.symlink_to(outside)
+    with pytest.raises(DocsError, match="is a symlink"):
+        assemble(root)
+    assert outside.read_text(encoding="utf-8") == "# Elsewhere\n"
+    (repo / "docs/guide.md").write_text("# Guide\n\nBody text.\n", encoding="utf-8")
+    guide.unlink()
+    assemble(root)
+    assert guide.read_bytes() == first
+
+
+def test_parent_directory_symlink_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_one = _plugin_repo(tmp_path / "bob-plugins")
+    repo_two = _other_repo(tmp_path / "bob-other")
+    root = _two_mount_root(tmp_path, monkeypatch, repo_one, repo_two)
+    assemble(root)
+    first = (root / "docs/reference/plugins/guide.md").read_bytes()
+    outside = tmp_path / "outside"
+    (outside / "plugins").mkdir(parents=True)
+    _write(outside / "plugins" / "index.md", "# Hub two\n")
+    import shutil
+
+    shutil.rmtree(root / "docs/develop")
+    (root / "docs/develop").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(DocsError, match="is a symlink"):
+        assemble(root)
+    assert sorted(path.name for path in (outside / "plugins").iterdir()) == ["index.md"]
+    assert (root / "docs/reference/plugins/guide.md").read_bytes() == first
+
+
+def test_nonignored_target_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo, target="reference/other")]),
+        nav_extra="  - Other: reference/other/index.md\n",
+    )
+    _write(root / "docs/reference/other/index.md", "# Hub\n")
+    with pytest.raises(DocsError, match="not gitignored"):
+        assemble(root)
+
+
+@pytest.mark.parametrize("target", ["../evil", "/absolute"])
+def test_dotdot_and_absolute_targets_rejected(tmp_path: Path, target: str) -> None:
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=(
+            "- repo: r\n  remote: x\n  branch: main\n  source: docs\n"
+            f"  target: {target}\n  nav_title: T\n"
+        ),
+    )
+    with pytest.raises(DocsError, match="relative path"):
+        load_mounts(root)
+
+
+@pytest.mark.parametrize("source", ["..", ".", "/absolute"])
+def test_dotdot_and_absolute_sources_rejected(tmp_path: Path, source: str) -> None:
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=(
+            "- repo: r\n  remote: x\n  branch: main\n  source: "
+            f"{source}\n  target: reference/plugins\n  nav_title: T\n"
+        ),
+    )
+    with pytest.raises(DocsError, match="relative path"):
+        load_mounts(root)
+
+
+def test_symlinked_source_directory_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "bob-plugins"
+    real = repo / "real"
+    _write(real / "guide.md", "# Guide\n")
+    _write(real / "nav.yml", "- title: Guide\n  path: guide.md\n")
+    (repo / "docs").symlink_to(real)
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    with pytest.raises(DocsError, match="is a symlink"):
+        assemble(root)
+
+
+def test_stale_tracked_file_survives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    _commit_all(root)
+    assemble(root)
+    guide = root / "docs/reference/plugins/guide.md"
+    first = guide.read_bytes()
+    subprocess.run(
+        ["git", "add", "-f", "docs/reference/plugins/guide.md"], cwd=root, check=True,
+    )
+    subprocess.run(
+        ["git", "-c", "user.email=test@example.com", "-c", "user.name=Test",
+         "commit", "-m", "track copy"],
+        cwd=root, check=True,
+    )
+    (repo / "docs/guide.md").unlink()
+    _write(repo / "docs/nav.yml", "- title: FM\n  path: fm.md\n")
+    with pytest.raises(DocsError, match="tracked file"):
+        assemble(root)
+    assert guide.read_bytes() == first
+
+
+def test_tracked_file_inside_target_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    _write(root / "docs/reference/plugins/guide.md", "# Mine\n")
+    _commit_all(root)
+    subprocess.run(
+        ["git", "add", "-f", "docs/reference/plugins/guide.md"], cwd=root, check=True,
+    )
+    with pytest.raises(DocsError, match="tracked files outside the landing page"):
+        assemble(root)
+
+
+def test_stale_nonignored_path_refuses_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _plugin_repo(tmp_path / "bob-plugins")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([_mount_entry(repo)]),
+        nav_extra="  - Plugins: reference/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Hub\n")
+    assemble(root)
+    first = (root / "docs/reference/plugins/fm.md").read_bytes()
+    manifest = json.loads((root / "target/docs/mount-manifest.json").read_text(encoding="utf-8"))
+    manifest["files"].append("reference/other/old.md")
+    (root / "target/docs/mount-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    _write(root / "docs/reference/other/old.md", "# Old\n")
+    with pytest.raises(DocsError, match="not gitignored"):
+        assemble(root)
+    assert (root / "docs/reference/plugins/fm.md").read_bytes() == first
+    assert (root / "docs/reference/other/old.md").is_file()
+
+
+def test_repo_shared_by_two_mounts_resolved_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bob_docs.assemble as assemble_module
+
+    calls: list[str] = []
+    real_discover = assemble_module.discover_repo
+
+    def counting(
+        mount: Mount, **kwargs: object
+    ) -> tuple[Path, str]:
+        calls.append(mount.repo)
+        return real_discover(mount, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(assemble_module, "discover_repo", counting)
+    repo = tmp_path / "bob-plugins"
+    _write(repo / "docs/overview.md", "# Overview\n")
+    _write(repo / "docs/develop/setup.md", "# Setup\n")
+    _write(repo / "docs/nav.yml", "- title: Overview\n  path: overview.md\n")
+    _write(repo / "docs/develop/nav.yml", "- title: Setup\n  path: setup.md\n")
+    monkeypatch.setenv("BOB_DOCS_BOB_PLUGINS_DIR", str(repo))
+    root = _minimal_root(
+        tmp_path / "root",
+        mounts=_mounts_yaml([
+            {**_mount_entry(repo, target="reference/plugins"), "nav_title": "Reference"},
+            {
+                "repo": "bob-plugins",
+                "remote": repo.as_uri(),
+                "branch": "main",
+                "source": "docs/develop",
+                "target": "develop/plugins",
+                "nav_title": "Develop",
+            },
+        ]),
+        nav_extra="  - Reference: reference/plugins/index.md\n  - Develop: develop/plugins/index.md\n",
+    )
+    _write(root / "docs/reference/plugins/index.md", "# Ref hub\n")
+    _write(root / "docs/develop/plugins/index.md", "# Dev hub\n")
+    assemble(root)
+    assert calls == ["bob-plugins"]
+    assert (root / "docs/reference/plugins/overview.md").is_file()
+    assert (root / "docs/develop/plugins/setup.md").is_file()
+
+
+def test_cached_clone_refreshes_to_remote_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOB_DOCS_BOB_PLUGINS_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = _plugin_repo(tmp_path / "remote")
+    _commit_all(remote)
+    root = _minimal_root(tmp_path / "root")
+    probe = dataclasses.replace(_probe(), remote=remote.as_uri(), branch="main")
+    found, _ = discover_repo(probe, root=root)
+    assert (found / "docs/guide.md").is_file()
+    _write(remote / "docs/guide.md", "# Guide v2\n")
+    _commit_all(remote)
+    again, _ = discover_repo(probe, root=root)
+    assert again == found
+    assert (found / "docs/guide.md").read_text(encoding="utf-8") == "# Guide v2\n"
+    from bob_docs.mounts import repo_git_info
+
+    assert repo_git_info(found)["sha"] == _git(remote, "rev-parse", "HEAD")
+
+
+def test_cached_clone_with_wrong_origin_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOB_DOCS_BOB_PLUGINS_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = _plugin_repo(tmp_path / "remote")
+    _commit_all(remote)
+    root = _minimal_root(tmp_path / "root")
+    probe = dataclasses.replace(_probe(), remote=remote.as_uri(), branch="main")
+    found, _ = discover_repo(probe, root=root)
+    other = dataclasses.replace(probe, remote="https://example.com/other.git")
+    with pytest.raises(DocsError, match="not the mount remote"):
+        discover_repo(other, root=root)
+    assert (found / "docs/guide.md").is_file()
+
+
+def test_cached_clone_without_git_origin_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOB_DOCS_BOB_PLUGINS_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    cached = tmp_path / "cache" / "bob-docs" / "bob-plugins"
+    cached.mkdir(parents=True)
+    root = _minimal_root(tmp_path / "root")
+    with pytest.raises(DocsError, match="has no origin"):
+        discover_repo(_probe(), root=root)
+
+
+def test_cached_clone_offline_keeps_cache_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("BOB_DOCS_BOB_PLUGINS_DIR", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    remote = _plugin_repo(tmp_path / "remote")
+    _commit_all(remote)
+    root = _minimal_root(tmp_path / "root")
+    probe = dataclasses.replace(_probe(), remote=remote.as_uri(), branch="main")
+    found, _ = discover_repo(probe, root=root)
+    first = (found / "docs/guide.md").read_text(encoding="utf-8")
+    import shutil
+
+    shutil.rmtree(remote)
+    capsys.readouterr()
+    again, _ = discover_repo(probe, root=root)
+    assert again == found
+    assert (found / "docs/guide.md").read_text(encoding="utf-8") == first
+    assert "offline" in capsys.readouterr().out
+
+
+def test_production_rejects_missing_sha_and_path(tmp_path: Path) -> None:
+    root, repo, cli_sha, plugin_sha = _production_fixture(tmp_path)
+    sources = _sources_json(tmp_path, cli_sha, plugin_sha, str(repo))
+    raw = json.loads(sources.read_text(encoding="utf-8"))
+    del raw["sources"]["bob-plugins"]["sha"]
+    sources.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="missing keys"):
+        assemble(root, production=True, sources=sources)
+    raw = json.loads(sources.read_text(encoding="utf-8"))
+    raw["sources"]["bob-plugins"]["sha"] = plugin_sha
+    del raw["sources"]["bob-plugins"]["path"]
+    sources.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    with pytest.raises(DocsError, match="missing keys"):
+        assemble(root, production=True, sources=sources)
+
+
+def test_production_rejects_untracked_only_dirt(tmp_path: Path) -> None:
+    root, repo, cli_sha, plugin_sha = _production_fixture(tmp_path)
+    (repo / "docs/draft.md").write_text("# Draft\n", encoding="utf-8")
+    sources = _sources_json(tmp_path, cli_sha, plugin_sha, str(repo))
+    with pytest.raises(DocsError, match="not clean"):
+        assemble(root, production=True, sources=sources)
+
+
+def test_production_rechecks_clean_after_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import bob_docs.assemble as assemble_module
+
+    root, repo, cli_sha, plugin_sha = _production_fixture(tmp_path)
+    sources = _sources_json(tmp_path, cli_sha, plugin_sha, str(repo))
+    real_sync = assemble_module.sync_mount_copies
+
+    def dirty_sync(*args: object, **kwargs: object) -> set[str]:
+        out = real_sync(*args, **kwargs)  # type: ignore[arg-type]
+        (root / "sneaky.md").write_text("# Sneaky\n", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(assemble_module, "sync_mount_copies", dirty_sync)
+    with pytest.raises(DocsError, match="not clean"):
+        assemble(root, production=True, sources=sources)
+
+
+def test_build_manifest_records_builder_and_installed_builders(tmp_path: Path) -> None:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as dist_version
+
+    manifest = build_manifest(tmp_path)
+    assert manifest["builder"] == "zensical"
+    assert "zensical" in manifest["tools"]
+    assert build_manifest(tmp_path, builder="material")["builder"] == "material"
+    for dist in ("mkdocs", "mkdocs-material"):
+        try:
+            dist_version(dist)
+            installed = True
+        except PackageNotFoundError:
+            installed = False
+        assert (dist in manifest["tools"]) == installed
+
+
+def test_mirror_once_adds_updates_deletes_and_preserves_manifest(tmp_path: Path) -> None:
+    authored = tmp_path / "authored"
+    staged = tmp_path / "staged"
+    _write(authored / "keep.md", "# Keep v1\n")
+    _write(authored / "gone.md", "# Gone\n")
+    _write(staged / "keep.md", "# Keep v1\n")
+    _write(staged / "stale.md", "# Stale\n")
+    _write(staged / "build.json", '{"builder": "zensical"}\n')
+    assert mirror_docs_once(authored, staged) == {"copied": 1, "deleted": 1}
+    assert (staged / "gone.md").read_text(encoding="utf-8") == "# Gone\n"
+    assert not (staged / "stale.md").exists()
+    _write(authored / "keep.md", "# Keep v2 with more words here\n")
+    _write(authored / "new.md", "# New\n")
+    (authored / "gone.md").unlink()
+    assert mirror_docs_once(authored, staged) == {"copied": 2, "deleted": 1}
+    assert (staged / "keep.md").read_text(encoding="utf-8") == "# Keep v2 with more words here\n"
+    assert (staged / "new.md").is_file()
+    assert not (staged / "gone.md").exists()
+    assert (staged / "build.json").read_text(encoding="utf-8") == '{"builder": "zensical"}\n'

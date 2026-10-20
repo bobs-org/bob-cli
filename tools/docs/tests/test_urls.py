@@ -154,6 +154,21 @@ def test_redirect_keeps_original_fragment_when_target_has_none(tmp_path) -> None
     assert (resolved.page, resolved.fragment) == ("/final/", "kept")
 
 
+def test_build_manifest_and_urls_txt_excluded_from_contract(tmp_path) -> None:
+    site = _write_site(
+        tmp_path,
+        {
+            "index.html": "<html><body></body></html>",
+            "build.json": '{"builder": "zensical"}',
+            "urls.txt": f"{ORIGIN}/\n",
+        },
+    )
+    index = SiteIndex.from_dir(site, ORIGIN)
+    assert set(index.pages) == {"/"}
+    assert published_page_urls(index) == [f"{ORIGIN}/"]
+    assert "build.json" not in write_urls_txt(site, index).read_text(encoding="utf-8")
+
+
 def test_named_anchors_and_error_page_excluded(tmp_path) -> None:
     from pathlib import Path
 

@@ -63,3 +63,31 @@ def test_assemble_rejects_invalid_mount_table(tmp_path: Path) -> None:
     root = _minimal_root(tmp_path, mounts="- repo: bob-plugins\n")
     with pytest.raises(DocsError, match="missing keys"):
         assemble(root)
+
+
+def test_assemble_publishes_staged_build_json(tmp_path: Path) -> None:
+    root = _minimal_root(tmp_path)
+    context, manifest_path = assemble(root)
+    staged = (context.output_dir / "docs" / "build.json").read_text(encoding="utf-8")
+    assert staged == manifest_path.read_text(encoding="utf-8")
+    manifest = json.loads(staged)
+    assert manifest["builder"] == "zensical"
+    assert "zensical" in manifest["tools"]
+
+
+def test_build_assembled_publishes_build_json_into_site(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    from bob_docs import build as build_module
+
+    root = _minimal_root(tmp_path)
+    context, manifest_path = assemble(root)
+    context.site_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        build_module, "subprocess", SimpleNamespace(run=lambda *args, **kwargs: SimpleNamespace(returncode=0)),
+    )
+    assert build_module.build_assembled(context, manifest_path) == 0
+    site_manifest = (context.site_dir / "build.json").read_text(encoding="utf-8")
+    assert site_manifest == manifest_path.read_text(encoding="utf-8")

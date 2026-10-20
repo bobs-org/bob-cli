@@ -10,7 +10,6 @@ from __future__ import annotations
 import fnmatch
 import math
 import re
-import subprocess
 from dataclasses import dataclass
 from datetime import date as date_type
 from pathlib import Path, PurePosixPath
@@ -19,6 +18,7 @@ from typing import Any, Iterable
 from .context import DocsContext, context_from_root
 from .contracts import ContractRegistry, load_contract_registry
 from .errors import DocsError
+from .ignore import path_ignored as _path_ignored
 from .markdown import (
     blank_link_destinations,
     count_words,
@@ -461,55 +461,6 @@ def _nav_sections(nav: Any) -> list[tuple[str, list[str]]]:
             else:
                 sections.append((title_text, _nav_paths(value)))
     return sections
-
-
-def _gitignore_ignored(root: Path, rel: str) -> bool | None:
-    try:
-        result = subprocess.run(
-            ["git", "check-ignore", "-q", "--no-index", rel],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except OSError:
-        return None
-    if result.returncode == 0:
-        return True
-    if result.returncode == 1:
-        return False
-    return None
-
-
-def _gitignore_file_ignored(root: Path, rel: str) -> bool:
-    path = root / ".gitignore"
-    if not path.is_file():
-        return False
-    posix = rel.replace("\\", "/")
-    ignored = False
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        negate = line.startswith("!")
-        pattern = line[1:] if negate else line
-        if pattern.endswith("/"):
-            pattern += "*"
-        anchored = pattern.startswith("/")
-        check_pattern = pattern.lstrip("/")
-        matched = fnmatch.fnmatch(posix, check_pattern) or fnmatch.fnmatch(posix, pattern)
-        if anchored:
-            matched = fnmatch.fnmatch("/" + posix, pattern) or fnmatch.fnmatch(posix, check_pattern)
-        if matched:
-            ignored = not negate
-    return ignored
-
-
-def _path_ignored(root: Path, rel: str) -> bool:
-    checked = _gitignore_ignored(root, rel)
-    if checked is not None:
-        return checked
-    return _gitignore_file_ignored(root, rel)
 
 
 def build_lint_context(root: Path, *, docs_context: DocsContext | None = None) -> LintContext:

@@ -87,6 +87,10 @@ Serve the site locally with live reload:
 just docs-serve
 ```
 
+The server mirrors authored `docs/` edits into the staged tree while it runs,
+preserving the staged `build.json`; `mkdocs.yml` and mount-table changes need
+a restart.
+
 Build the strict Zensical site:
 
 ```bash
