@@ -1082,6 +1082,7 @@ def test_cli_help_lists_lint_and_fix() -> None:
         "gen",
         "links",
         "lint",
+        "publish-plan",
         "serve",
         "social-card",
         "urls",
@@ -1094,3 +1095,26 @@ def test_cli_help_lists_lint_and_fix() -> None:
     lint_help = lint.format_help()
     assert "contract registry" in lint_help
     assert "-f, --fix" in lint_help
+
+    publish_plan = parser._subparsers._group_actions[0].choices["publish-plan"]
+    publish_flags = [flag for action in publish_plan._actions for flag in action.option_strings]
+    assert publish_flags == [
+        "-h",
+        "--help",
+        "-d",
+        "--drill",
+        "-f",
+        "--force",
+        "-g",
+        "--github-output",
+        "-m",
+        "--manifest",
+        "-o",
+        "--output-dir",
+        "-p",
+        "--pinned",
+        "-r",
+        "--recovery",
+        "-w",
+        "--work-dir",
+    ]

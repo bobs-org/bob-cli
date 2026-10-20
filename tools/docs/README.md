@@ -34,6 +34,76 @@ MPL-2.0) locally; it never downloads an unpinned CDN script at runtime.
 `bob-docs check --production --sources FILE` runs the same gates using one explicit,
 clean, SHA-pinned source set for bob-cli and every mounted repository.
 
+## Publication planning (`bob-docs publish-plan`)
+
+`bob-docs publish-plan` reads a durable `published.json` manifest, resolves immutable
+source commits, and writes transient plan files. The command never updates the durable
+manifest. For example, a workflow can run:
+
+```bash
+bob-docs publish-plan \
+  --manifest ../deploy/published.json \
+  --output-dir target/docs/publish-plan \
+  --work-dir target/docs/publish-work \
+  --github-output "$GITHUB_OUTPUT"
+```
+
+The `--output-dir` contains:
+
+- `publish-plan.json`: `should_build`, `should_deploy`, `should_record`, a reason,
+  selected sources, the input fingerprint, and paths to the other outputs.
+- `production-sources.json`: exactly the `{"sources": {repo: {"path", "sha"}}}`
+  shape accepted by `bob-docs check --production --sources ...`. Each path resolves to
+  a dedicated clean checkout pinned to that SHA, never the tooling or developer
+  checkout.
+- `next-publication.json`: a transient candidate containing `schema_version`, `hold`,
+  source identities, input records, and the fingerprint. After a successful deploy,
+  the workflow adds `tools`, `built_at`, and `run_url` before committing it as
+  `published.json`.
+
+The durable version 1 `published.json` record has this shape:
+
+```json
+{
+  "schema_version": 1,
+  "hold": false,
+  "sources": {
+    "bob-cli": {
+      "remote": "https://github.com/bobs-org/bob-cli.git",
+      "branch": "master",
+      "sha": "<40-character commit SHA>"
+    }
+  },
+  "inputs": [
+    {
+      "repo": "bob-cli",
+      "path": "docs",
+      "kind": "tree",
+      "object_id": "<40-character Git object ID>"
+    }
+  ],
+  "fingerprint": "<64-character SHA-256>",
+  "tools": {"bob-docs": "0.1.0", "zensical": "0.0.71"},
+  "built_at": "2026-10-20T00:00:00Z",
+  "run_url": "https://github.com/bobs-org/bob-cli/actions/runs/42"
+}
+```
+
+Mounted input records also include `target`, so two mounts from one repository remain
+distinct. Fingerprints use sorted input identities and Git tree/blob IDs only; checkout
+paths, mtimes, and poll timestamps do not affect them. The inputs are bob-cli `docs`,
+`mkdocs.yml`, `tools/docs`, every `.github/workflows/docs-*.yml`, and every mounted
+source directory. Code-only commits that leave those trees unchanged do not publish.
+
+The manifest must be valid and versioned; missing state means first publication, while
+malformed or unsupported state fails closed. A hold skips every unpinned run, including
+force, recovery, and drill. `--pinned` builds the exact recorded SHAs and preserves the
+hold. `--drill` runs the gates but marks both deploy and record false. `--force` and
+`--recovery` rebuild equal inputs when no unpinned hold applies. When `GITHUB_OUTPUT` is
+set (or `--github-output` is passed), the planner writes stable `should_build`,
+`should_deploy`, `should_record`, `reason`, `fingerprint`, `sources_file`, and
+`next_publication_file` values for workflow conditions.
+
 Assembly never edits tracked sources. Generated output lives under `target/docs/`:
 the assembled `mkdocs.yml`, `build.json` provenance manifest, and the built site.
 Tracked files are written only by `just docs-gen`, the explicit asset generators

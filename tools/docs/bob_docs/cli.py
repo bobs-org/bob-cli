@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -14,6 +15,7 @@ from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
 from .lint import run_lint
+from .publish_plan import run_publish_plan
 from .urls import run_urls
 
 
@@ -96,6 +98,40 @@ def _parser() -> argparse.ArgumentParser:
         help="lower page ceilings and drop obsolete privacy baseline hits; never raise limits",
     )
 
+    publish_plan_parser = subparsers.add_parser(
+        "publish-plan",
+        help="select immutable publication sources and write a build plan",
+        description=(
+            "Resolve the selected source commits, compare their documentation inputs "
+            "with the publication manifest, and write transient planner outputs. "
+            "This command never changes the publication manifest."
+        ),
+    )
+    publish_plan_parser.add_argument(
+        "-d", "--drill", action="store_true", help="run gates without deploying or recording publication"
+    )
+    publish_plan_parser.add_argument(
+        "-f", "--force", action="store_true", help="rebuild even when source inputs are unchanged"
+    )
+    publish_plan_parser.add_argument(
+        "-g", "--github-output", metavar="FILE", help="append stable workflow outputs to FILE"
+    )
+    publish_plan_parser.add_argument(
+        "-m", "--manifest", metavar="FILE", default="published.json", help="publication state manifest"
+    )
+    publish_plan_parser.add_argument(
+        "-o", "--output-dir", metavar="DIR", default="target/docs/publish-plan", help="transient plan output directory"
+    )
+    publish_plan_parser.add_argument(
+        "-p", "--pinned", action="store_true", help="build the exact sources in the valid publication manifest"
+    )
+    publish_plan_parser.add_argument(
+        "-r", "--recovery", action="store_true", help="re-run gates for an open blocked publication"
+    )
+    publish_plan_parser.add_argument(
+        "-w", "--work-dir", metavar="DIR", default="target/docs/publish-work", help="dedicated clean source checkout directory"
+    )
+
     subparsers.add_parser("serve", help="assemble and serve the site with Zensical")
 
     social_parser = subparsers.add_parser("social-card", help="generate deterministic identity assets")
@@ -143,6 +179,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "lint":
             context, _manifest = assemble(root)
             return run_lint(root, fix=args.fix, docs_context=context)
+        if args.command == "publish-plan":
+            plan = run_publish_plan(
+                root,
+                manifest=Path(args.manifest),
+                output_dir=Path(args.output_dir),
+                work_dir=Path(args.work_dir),
+                force=args.force,
+                drill=args.drill,
+                pinned=args.pinned,
+                recovery=args.recovery,
+                github_output=Path(args.github_output) if args.github_output else None,
+            )
+            print(json.dumps(plan, sort_keys=True, separators=(",", ":")))
+            return 0
         if args.command == "serve":
             return serve(root)
         if args.command == "social-card":
