@@ -1229,8 +1229,11 @@ fn relation_stripped_parent_tokens<'a>(
 fn line_has_relations(deps: &LineDependencies) -> bool {
     !deps.entries.is_empty()
         || !deps.blocked_entries.is_empty()
+        || !deps.relation_entries.is_empty()
         || !deps.partials.is_empty()
         || !deps.blocked_partials.is_empty()
+        || !deps.relation_target_partials.is_empty()
+        || !deps.relation_label_partials.is_empty()
 }
 
 fn remainder_is_caret_owner(tokens: &[Token<'_>]) -> bool {
@@ -1606,6 +1609,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),

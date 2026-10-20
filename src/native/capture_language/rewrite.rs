@@ -533,13 +533,26 @@ pub(super) fn non_absorbable_marker_notice(
         // into `@@` would change which task the prerequisites attach to.
         EditorMode::TaskDependency => format!(
             "@@ cannot take a task relationship owner ({}): leave {} on this item, or delete it",
-            match (
-                item.dependencies.first().map(|entry| entry.start),
-                item.blocked_tasks.first().map(|entry| entry.start),
-            ) {
-                (Some(dependency), Some(blocked)) if blocked < dependency => "*",
-                (None, Some(_)) => "*",
-                _ => "&",
+            {
+                let mut candidates: Vec<(usize, &str)> = Vec::new();
+                candidates.extend(
+                    item.dependencies
+                        .first()
+                        .map(|entry| (entry.start, "&")),
+                );
+                candidates.extend(
+                    item.blocked_tasks
+                        .first()
+                        .map(|entry| (entry.start, "*")),
+                );
+                candidates.extend(
+                    item.relations.first().map(|entry| (entry.start, "~")),
+                );
+                candidates.sort_by_key(|(start, _)| *start);
+                candidates
+                    .first()
+                    .map(|(_, sigil)| *sigil)
+                    .unwrap_or("&")
             },
             marker.text,
         ),

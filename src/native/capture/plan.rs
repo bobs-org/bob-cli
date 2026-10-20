@@ -508,6 +508,15 @@ pub(super) fn plan_capture_item(
     dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
+    // Temporary execution refusal for the capture-parse phase: the lexer,
+    // needs, spans, and JSON land first, and execution (same-batch mirror)
+    // lands in the capture-execute phase. This keeps a half-landed epic
+    // from writing `~` as body text.
+    if !parsed.relations.is_empty() {
+        return Err(CaptureError::usage(
+            "`~` task links are not supported yet",
+        ));
+    }
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
     // It never flows through the toggle/link planners below. Inherited

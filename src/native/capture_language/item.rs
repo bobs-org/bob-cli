@@ -146,6 +146,7 @@ fn claim_reference_item<'a>(
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -164,6 +165,7 @@ fn claim_reference_item<'a>(
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
+                relations: Vec::new(),
                 dependency_target: None,
             },
             Vec::new(),
@@ -195,6 +197,7 @@ fn claim_reference_item<'a>(
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
                             blocked_tasks: Vec::new(),
+                            relations: Vec::new(),
                             dependency_target: None,
                         },
                         Vec::new(),
@@ -213,6 +216,7 @@ fn claim_reference_item<'a>(
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -260,6 +264,7 @@ fn claim_reference_item<'a>(
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
+                relations: Vec::new(),
                 dependency_target: None,
             },
             Vec::new(),
@@ -291,6 +296,7 @@ fn claim_reference_item<'a>(
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -322,6 +328,7 @@ fn claim_reference_item<'a>(
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -387,6 +394,7 @@ pub(super) fn parse_capture_item<'a>(
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -412,27 +420,48 @@ pub(super) fn parse_capture_item<'a>(
     // draft resolution.
     let item_dependencies =
         scan_item_dependencies(item, options.parse_clip_markers);
-    let invalid = match (
-        item_dependencies.invalid.first(),
-        item_dependencies.blocked_invalid.first(),
-    ) {
-        (Some(dependency), Some(blocked))
-            if blocked.start < dependency.start =>
-        {
-            Some(blocked)
-        }
-        (Some(dependency), _) => Some(dependency),
-        (None, blocked) => blocked,
-    };
+    let invalid = [
+        item_dependencies
+            .invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+        item_dependencies
+            .blocked_invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+        item_dependencies
+            .relation_invalid
+            .first()
+            .map(|invalid| (invalid.start, invalid.message.clone())),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(start, _)| *start)
+    .map(|(_, message)| message);
     if let Some(invalid) = invalid {
-        return Err(invalid.message.clone());
+        return Err(invalid);
     }
     if item_dependencies.has_partial_tokens() {
-        return Err(if item_dependencies.partial_sigil() == b'*' {
-            incomplete_blocked_task_error()
-        } else {
-            incomplete_dependency_error()
-        });
+        let mut partials: Vec<(usize, String)> = Vec::new();
+        if let Some(partial) = item_dependencies.partials.first() {
+            partials.push((partial.0, incomplete_dependency_error()));
+        }
+        if let Some(partial) = item_dependencies.blocked_partials.first() {
+            partials.push((partial.0, incomplete_blocked_task_error()));
+        }
+        if let Some(partial) =
+            item_dependencies.relation_target_partials.first()
+        {
+            partials.push((partial.0, incomplete_relation_target_error()));
+        }
+        if let Some(partial) = item_dependencies.relation_label_partials.first()
+        {
+            partials.push((partial.0, incomplete_relation_label_error()));
+        }
+        partials.sort_by_key(|(start, _)| *start);
+        if let Some((_, message)) = partials.first() {
+            return Err(message.clone());
+        }
     }
     let has_dependencies = item_dependencies.has_entries();
     let relationship_sigil = item_dependencies.sigil();
@@ -729,6 +758,7 @@ pub(super) fn parse_capture_item<'a>(
                 sub_bullets: Vec::new(),
                 dependencies,
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
+                relations: execution_relations(&item_dependencies),
                 dependency_target,
             },
             declarations,
@@ -765,6 +795,7 @@ pub(super) fn parse_capture_item<'a>(
                 sub_bullets,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
+                relations: Vec::new(),
                 dependency_target: None,
             },
             declarations,
@@ -807,6 +838,7 @@ pub(super) fn parse_capture_item<'a>(
                 sub_bullets,
                 dependencies,
                 blocked_tasks: execution_blocked_tasks(&item_dependencies),
+                relations: execution_relations(&item_dependencies),
                 dependency_target,
             },
             declarations,
@@ -942,6 +974,7 @@ pub(super) fn parse_capture_item<'a>(
             sub_bullets,
             dependencies,
             blocked_tasks: execution_blocked_tasks(&item_dependencies),
+            relations: execution_relations(&item_dependencies),
             dependency_target,
         },
         declarations,
@@ -958,7 +991,10 @@ pub(super) fn finish_item_dependency_target(
     parsed: &mut ParsedCaptureText,
     inherited: bool,
 ) -> Result<(), String> {
-    if parsed.dependencies.is_empty() && parsed.blocked_tasks.is_empty() {
+    if parsed.dependencies.is_empty()
+        && parsed.blocked_tasks.is_empty()
+        && parsed.relations.is_empty()
+    {
         return Ok(());
     }
     if let Some(target) = parsed.dependency_target.as_mut() {
@@ -972,6 +1008,16 @@ pub(super) fn finish_item_dependency_target(
         }
         return Ok(());
     }
+    // Ownerless sigil prefers `&`, then `*`, then `~` by earliest start.
+    // `ParsedCaptureText` has no positions, so prefer `~` when only
+    // relations name an owner.
+    let ownerless_sigil = if !parsed.dependencies.is_empty() {
+        b'&'
+    } else if !parsed.blocked_tasks.is_empty() {
+        b'*'
+    } else {
+        b'~'
+    };
     if let Some(target) = finish_inherited_dependency_target(
         parsed.route.as_deref(),
         &parsed.kind,
@@ -979,22 +1025,12 @@ pub(super) fn finish_item_dependency_target(
         false,
         true,
         inherited,
-        if parsed.dependencies.is_empty() {
-            b'*'
-        } else {
-            b'&'
-        },
+        ownerless_sigil,
     )? {
         parsed.dependency_target = Some(target);
         return Ok(());
     }
-    Err(ownerless_relation_error(
-        if parsed.dependencies.is_empty() {
-            b'*'
-        } else {
-            b'&'
-        },
-    ))
+    Err(ownerless_relation_error(ownerless_sigil))
 }
 
 /// Complete modifiers plus ownership for an execution item: empty when
@@ -1543,6 +1579,7 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
             sub_bullets: Vec::new(),
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
+            relations: Vec::new(),
             dependency_target: None,
         },
         Vec::new(),
@@ -1869,6 +1906,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -1950,6 +1988,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 sub_bullets: Vec::new(),
                                 dependencies: Vec::new(),
                                 blocked_tasks: Vec::new(),
+                                relations: Vec::new(),
                                 dependency_target: None,
                             },
                             Vec::new(),
@@ -2097,6 +2136,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
                             blocked_tasks: Vec::new(),
+                            relations: Vec::new(),
                             dependency_target: None,
                         },
                         Vec::new(),
@@ -2258,6 +2298,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -2385,6 +2426,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),

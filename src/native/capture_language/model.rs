@@ -434,12 +434,35 @@ pub(crate) struct ParsedCaptureText {
     pub(crate) dependencies: Vec<ParsedDependency>,
     /// Complete `*note:block-id` modifiers on this item, in typed order.
     pub(crate) blocked_tasks: Vec<ParsedDependency>,
+    /// Complete `~` / `~~` modifiers on this item, in typed order.
+    /// Empty for every input without relation modifiers.
+    pub(crate) relations: Vec<ParsedRelation>,
     /// Ownership of this item's modifiers: a task this capture creates
     /// (`new_task`) or an explicitly selected existing task
     /// (`existing_task`). `None` when the item carries no modifiers, or
     /// when no dependent was named yet (draft resolution finishes it
     /// after `@@` inheritance, or reports the ownerless diagnostic).
     pub(crate) dependency_target: Option<ParsedDependencyTarget>,
+}
+
+/// One complete `~` / `~~` modifier on an execution item, in typed
+/// order. Mirrors [`RelationEntry`](super::editor_model::RelationEntry)
+/// without spans: the writer resolves `note`/`block_id` against staged
+/// vault contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedRelation {
+    /// Exact typed text, sigil included.
+    pub(crate) raw: String,
+    /// `to` for `~`, `from` for `~~`.
+    pub(crate) direction: super::editor_model::RelationDirection,
+    /// Vault-relative note identity (quotes removed, escapes decoded).
+    pub(crate) note: String,
+    /// Related task block ID.
+    pub(crate) block_id: String,
+    /// Whether the note was a `"quoted component"`.
+    pub(crate) quoted: bool,
+    /// Normalised label, when `|label` was typed.
+    pub(crate) label: Option<String>,
 }
 
 /// One complete `&note:block-id` modifier on an execution item, in typed

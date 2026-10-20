@@ -14,7 +14,7 @@
 //! and `` `code` `` spans is never a modifier.
 
 use super::draft::{classify_authored_line, AuthoredLineClass};
-use super::editor_model::{DependencyEntry, Span, SpanKind};
+use super::editor_model::{DependencyEntry, RelationEntry, Span, SpanKind};
 use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
     is_escaped_priority_token, is_priority_marker_token, parse_clip_token,
@@ -22,9 +22,10 @@ use super::markers::{
 };
 use super::model::{
     CaptureItem, CaptureKind, ParsedDependency, ParsedDependencyTarget,
-    ParsedDependencyTargetKind, RawLine, SubBulletTarget, TaskToggleIntent,
-    Token,
+    ParsedDependencyTargetKind, ParsedRelation, RawLine, SubBulletTarget,
+    TaskToggleIntent, Token,
 };
+use super::relations::{scan_line_relations, RelationRef, ScannedRelation};
 
 /// One complete `&note:block-id` modifier with original-draft byte offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +102,7 @@ impl ScannedDependency {
 
 /// Byte ranges of `[[wikilink]]` and `` `code` `` spans on one line: `&`
 /// inside them is literal text, never a modifier.
-fn protected_ranges(line: &str) -> Vec<(usize, usize)> {
+pub(crate) fn protected_ranges(line: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let bytes = line.as_bytes();
     let mut index = 0;
@@ -130,7 +131,7 @@ fn protected_ranges(line: &str) -> Vec<(usize, usize)> {
 /// Whether the byte before `amp` starts a token: line start or whitespace
 /// (matching [`super::line::normalize_task_text`]'s `split_whitespace`
 /// boundaries).
-fn is_token_start(line: &str, amp: usize) -> bool {
+pub(crate) fn is_token_start(line: &str, amp: usize) -> bool {
     amp == 0
         || line[..amp]
             .chars()
@@ -140,7 +141,10 @@ fn is_token_start(line: &str, amp: usize) -> bool {
 
 /// The start byte of the `\` run directly before `amp`, with its length.
 /// Returns `None` when no backslash precedes `amp`.
-fn slash_run_before(line: &str, amp: usize) -> Option<(usize, usize)> {
+pub(crate) fn slash_run_before(
+    line: &str,
+    amp: usize,
+) -> Option<(usize, usize)> {
     let mut index = amp;
     while index > 0 && line.as_bytes()[index - 1] == b'\\' {
         index -= 1;
@@ -150,12 +154,12 @@ fn slash_run_before(line: &str, amp: usize) -> Option<(usize, usize)> {
 
 /// Whether `amp` is an escaped literal: an odd `\` run whose own first
 /// backslash opens the token (`\&...` at a token start).
-fn escape_at(line: &str, amp: usize) -> Option<usize> {
+pub(crate) fn escape_at(line: &str, amp: usize) -> Option<usize> {
     let (start, len) = slash_run_before(line, amp)?;
     (len % 2 == 1 && is_token_start(line, start)).then_some(start)
 }
 
-fn char_len(line: &str, index: usize) -> usize {
+pub(crate) fn char_len(line: &str, index: usize) -> usize {
     line[index..]
         .chars()
         .next()
@@ -163,7 +167,7 @@ fn char_len(line: &str, index: usize) -> usize {
         .unwrap_or(1)
 }
 
-fn is_space_at(line: &str, index: usize) -> bool {
+pub(crate) fn is_space_at(line: &str, index: usize) -> bool {
     line[index..]
         .chars()
         .next()
@@ -172,7 +176,7 @@ fn is_space_at(line: &str, index: usize) -> bool {
 
 /// Decode the inside of a quoted note: only `\"` and `\\` are escapes;
 /// every other backslash stays literal.
-fn decode_quoted_note(raw: &str) -> String {
+pub(crate) fn decode_quoted_note(raw: &str) -> String {
     let mut decoded = String::with_capacity(raw.len());
     let bytes = raw.as_bytes();
     let mut index = 0;
@@ -195,7 +199,7 @@ fn decode_quoted_note(raw: &str) -> String {
 /// Validate one vault-relative note identity, returning the repairable
 /// message when it cannot name a note. `sigil` renders the example in the
 /// empty-note message (`&` for dependencies, `!` for completions).
-fn validate_note(note: &str, sigil: u8) -> Option<String> {
+pub(crate) fn validate_note(note: &str, sigil: u8) -> Option<String> {
     if note.is_empty() {
         return Some(format!(
             "dependency note is empty: use '{sigil}note:block-id' \
@@ -230,7 +234,7 @@ fn validate_note(note: &str, sigil: u8) -> Option<String> {
 
 /// Validate one prerequisite block ID against Bob's existing rules.
 /// `sigil` renders the example (`&` for dependencies, `!` for completions).
-fn validate_block_id(block_id: &str, sigil: u8) -> Option<String> {
+pub(crate) fn validate_block_id(block_id: &str, sigil: u8) -> Option<String> {
     if !super::tokens::is_block_id(block_id) {
         return Some(format!(
             "dependency block ID '{block_id}' must contain only A-Z, a-z, \
@@ -492,17 +496,25 @@ pub(crate) struct LineDependencies {
     pub(crate) entries: Vec<DependencyRef>,
     /// Complete `*` modifiers in source order.
     pub(crate) blocked_entries: Vec<DependencyRef>,
+    /// Complete `~` / `~~` modifiers in source order.
+    pub(crate) relation_entries: Vec<RelationRef>,
     /// Partial-query ranges in source order.
     pub(crate) partials: Vec<(usize, usize)>,
     /// Partial `*` modifier ranges.
     pub(crate) blocked_partials: Vec<(usize, usize)>,
+    /// Partial `~` / `~~` target ranges (need `relation_target`).
+    pub(crate) relation_target_partials: Vec<(usize, usize)>,
+    /// Partial `|label` ranges (need `relation_label`).
+    pub(crate) relation_label_partials: Vec<(usize, usize)>,
     /// Malformed modifiers in source order.
     pub(crate) invalid: Vec<InvalidDependency>,
     /// Malformed `*` modifiers in source order.
     pub(crate) blocked_invalid: Vec<InvalidDependency>,
+    /// Malformed `~` / `~~` modifiers in source order.
+    pub(crate) relation_invalid: Vec<InvalidDependency>,
     /// Semantic spans for every extracted modifier.
     pub(crate) spans: Vec<Span>,
-    /// Consumed `\` bytes of `\&`/`\*` escapes (for body unescaping).
+    /// Consumed `\` bytes of `\&`/`\*`/`\~` escapes (for body unescaping).
     pub(crate) escapes: Vec<(usize, usize)>,
     /// Whitespace tokens consumed as directive modifiers.
     pub(crate) stripped_tokens: usize,
@@ -513,7 +525,7 @@ pub(crate) struct LineDependencies {
 /// Pomodoro-note marker, and schedule/priority/clipboard markers (whole
 /// or still-typed). Skipped tokens stay in the stream for terminal-marker
 /// extraction and route selection; only modifiers are directive.
-fn is_trailing_transparent(text: &str, parse_clip: bool) -> bool {
+pub(crate) fn is_trailing_transparent(text: &str, parse_clip: bool) -> bool {
     text.starts_with('@')
         || text == "#"
         || text == "s:"
@@ -604,6 +616,18 @@ pub(crate) fn extract_line_dependencies<'a>(
     result.spans.append(&mut blocked.spans);
     result.escapes.append(&mut blocked.escapes);
     result.stripped_tokens += blocked.stripped_tokens;
+    let (tokens, mut relations) = extract_line_relations(
+        tokens, line_text, line_base, parent, parse_clip,
+    );
+    result.relation_entries = std::mem::take(&mut relations.relation_entries);
+    result.relation_target_partials =
+        std::mem::take(&mut relations.relation_target_partials);
+    result.relation_label_partials =
+        std::mem::take(&mut relations.relation_label_partials);
+    result.relation_invalid = std::mem::take(&mut relations.relation_invalid);
+    result.spans.append(&mut relations.spans);
+    result.escapes.append(&mut relations.escapes);
+    result.stripped_tokens += relations.stripped_tokens;
     result.spans.sort_by_key(|span| (span.start, span.end));
     (tokens, result)
 }
@@ -625,10 +649,14 @@ fn extract_line_relation<'a>(
     let mut covering: Vec<Option<usize>> = vec![None; tokens.len()];
     let other_sigil = if sigil == b'&' { b'*' } else { b'&' };
     let other_scanned = scan_line_modifiers(line_text, line_base, other_sigil);
+    let relation_scanned = scan_line_relations(line_text, line_base);
     let covered_by_other_relation = |token: &Token<'_>| {
         other_scanned
             .iter()
             .any(|scan| scan.start() <= token.start && token.end <= scan.end())
+            || relation_scanned.iter().any(|scan| {
+                scan.start() <= token.start && token.end <= scan.end()
+            })
     };
     for (token_index, token) in tokens.iter().enumerate() {
         for (scan_index, scan) in scanned.iter().enumerate() {
@@ -672,6 +700,7 @@ fn extract_line_relation<'a>(
                 || covered_by_other_relation(&tokens[index])
                 || tokens[index].text.starts_with("\\&")
                 || tokens[index].text.starts_with("\\*")
+                || tokens[index].text.starts_with("\\~")
             {
                 index += 1;
                 continue;
@@ -733,6 +762,7 @@ fn extract_line_relation<'a>(
             }
             if tokens[candidate].text.starts_with("\\&")
                 || tokens[candidate].text.starts_with("\\*")
+                || tokens[candidate].text.starts_with("\\~")
             {
                 index -= 1;
                 continue;
@@ -852,14 +882,324 @@ fn extract_line_relation<'a>(
     (remaining, result)
 }
 
+fn escaped_tilde_is_in_modifier_run(
+    backslash: usize,
+    tokens: &[Token<'_>],
+    consumed: &[bool],
+    parent: bool,
+    parse_clip: bool,
+) -> bool {
+    let Some(token_index) =
+        tokens.iter().position(|token| token.start == backslash)
+    else {
+        return false;
+    };
+    let token = tokens[token_index].text;
+    let has_query = token
+        .strip_prefix("\\~~")
+        .is_some_and(|query| !query.is_empty())
+        || token
+            .strip_prefix("\\~")
+            .is_some_and(|query| !query.is_empty());
+
+    if parent {
+        let mut index = 0;
+        while index < tokens.len() {
+            if index == token_index {
+                return has_query;
+            }
+            if consumed[index]
+                || is_trailing_transparent(tokens[index].text, parse_clip)
+                || tokens[index].text.starts_with("\\&")
+                || tokens[index].text.starts_with("\\*")
+                || tokens[index].text.starts_with("\\~")
+            {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    let mut index = tokens.len();
+    while index > 0 {
+        let candidate = index - 1;
+        if candidate == token_index {
+            return has_query || token_index > 0;
+        }
+        if consumed[candidate]
+            || is_trailing_transparent(tokens[candidate].text, parse_clip)
+            || tokens[candidate].text.starts_with("\\&")
+            || tokens[candidate].text.starts_with("\\*")
+            || tokens[candidate].text.starts_with("\\~")
+        {
+            index -= 1;
+            continue;
+        }
+        break;
+    }
+    false
+}
+
+fn extract_line_relations<'a>(
+    tokens: Vec<Token<'a>>,
+    line_text: &str,
+    line_base: usize,
+    parent: bool,
+    parse_clip: bool,
+) -> (Vec<Token<'a>>, LineDependencies) {
+    let scanned = scan_line_relations(line_text, line_base);
+    if scanned.is_empty() {
+        return (tokens, LineDependencies::default());
+    }
+    let mut covering: Vec<Option<usize>> = vec![None; tokens.len()];
+    let amp_scanned = scan_line_modifiers(line_text, line_base, b'&');
+    let star_scanned = scan_line_modifiers(line_text, line_base, b'*');
+    let covered_by_other_relation = |token: &Token<'_>| {
+        amp_scanned
+            .iter()
+            .any(|scan| scan.start() <= token.start && token.end <= scan.end())
+            || star_scanned.iter().any(|scan| {
+                scan.start() <= token.start && token.end <= scan.end()
+            })
+    };
+    for (token_index, token) in tokens.iter().enumerate() {
+        for (scan_index, scan) in scanned.iter().enumerate() {
+            if matches!(scan, ScannedRelation::Escaped { .. }) {
+                continue;
+            }
+            if scan.start() <= token.start && token.end <= scan.end() {
+                covering[token_index] = Some(scan_index);
+                break;
+            }
+        }
+    }
+    // A bare `~` / `~~` works as the first parent token or as the last
+    // token with other text; line-initial `~~` alone on a child stays
+    // literal, and mid-line bare sigils stay literal via the runs below.
+    let bare_directive = |token_index: usize| -> bool {
+        (parent && token_index == 0)
+            || (token_index > 0 && token_index + 1 == tokens.len())
+    };
+    let is_directive = |token_index: usize, scan_index: usize| -> bool {
+        match &scanned[scan_index] {
+            ScannedRelation::Escaped { .. } => false,
+            ScannedRelation::PartialTarget { raw, .. }
+                if raw == "~" || raw == "~~" =>
+            {
+                bare_directive(token_index)
+            }
+            _ => true,
+        }
+    };
+
+    let mut consumed = vec![false; tokens.len()];
+    if parent {
+        let mut index = 0;
+        while index < tokens.len() {
+            if is_trailing_transparent(tokens[index].text, parse_clip)
+                || covered_by_other_relation(&tokens[index])
+                || tokens[index].text.starts_with("\\&")
+                || tokens[index].text.starts_with("\\*")
+                || tokens[index].text.starts_with("\\~")
+            {
+                index += 1;
+                continue;
+            }
+            match covering[index] {
+                Some(scan_index) if is_directive(index, scan_index) => {
+                    let (start, end) = {
+                        let scan = &scanned[scan_index];
+                        (scan.start(), scan.end())
+                    };
+                    for (other, token) in tokens.iter().enumerate() {
+                        if start <= token.start && token.end <= end {
+                            consumed[other] = true;
+                        }
+                    }
+                    while index < tokens.len() && consumed[index] {
+                        index += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+    {
+        let mut index = tokens.len();
+        while index > 0 {
+            let candidate = index - 1;
+            if consumed[candidate] {
+                index -= 1;
+                continue;
+            }
+            if let Some(scan_index) = covering[candidate] {
+                if is_directive(candidate, scan_index) {
+                    let (start, end) = {
+                        let scan = &scanned[scan_index];
+                        (scan.start(), scan.end())
+                    };
+                    for (other, token) in tokens.iter().enumerate() {
+                        if start <= token.start && token.end <= end {
+                            consumed[other] = true;
+                        }
+                    }
+                    index = candidate;
+                    continue;
+                }
+                break;
+            }
+            if is_trailing_transparent(tokens[candidate].text, parse_clip) {
+                index -= 1;
+                continue;
+            }
+            if covered_by_other_relation(&tokens[candidate]) {
+                index -= 1;
+                continue;
+            }
+            if tokens[candidate].text.starts_with("\\&")
+                || tokens[candidate].text.starts_with("\\*")
+                || tokens[candidate].text.starts_with("\\~")
+            {
+                index -= 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    let mut result = LineDependencies::default();
+    for scan in &scanned {
+        match scan {
+            ScannedRelation::Complete(entry) => {
+                let kept =
+                    tokens.iter().enumerate().any(|(token_index, token)| {
+                        !consumed[token_index]
+                            && entry.start <= token.start
+                            && token.end <= entry.end
+                    });
+                if kept {
+                    continue;
+                }
+                result.spans.push(Span {
+                    start: entry.start,
+                    end: entry.start + entry.sigil_len(),
+                    kind: SpanKind::RelationSigil,
+                });
+                result.spans.push(Span {
+                    start: entry.note_start,
+                    end: entry.note_end,
+                    kind: SpanKind::RelationNote,
+                });
+                result.spans.push(Span {
+                    start: entry.block_start,
+                    end: entry.block_end,
+                    kind: SpanKind::RelationBlockId,
+                });
+                if let Some(separator) = entry.separator {
+                    result.spans.push(Span {
+                        start: separator.0,
+                        end: separator.1,
+                        kind: SpanKind::RelationLabelSeparator,
+                    });
+                }
+                if let (Some(label_start), Some(label_end)) =
+                    (entry.label_start, entry.label_end)
+                {
+                    result.spans.push(Span {
+                        start: label_start,
+                        end: label_end,
+                        kind: SpanKind::RelationLabel,
+                    });
+                }
+                result.relation_entries.push(entry.clone());
+            }
+            ScannedRelation::PartialTarget { start, end, .. } => {
+                let kept =
+                    tokens.iter().enumerate().any(|(token_index, token)| {
+                        !consumed[token_index]
+                            && *start <= token.start
+                            && token.end <= *end
+                    });
+                if kept {
+                    continue;
+                }
+                result.spans.push(Span {
+                    start: *start,
+                    end: *end,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                result.relation_target_partials.push((*start, *end));
+            }
+            ScannedRelation::PartialLabel { start, end, .. } => {
+                let kept =
+                    tokens.iter().enumerate().any(|(token_index, token)| {
+                        !consumed[token_index]
+                            && *start <= token.start
+                            && token.end <= *end
+                    });
+                if kept {
+                    continue;
+                }
+                result.spans.push(Span {
+                    start: *start,
+                    end: *end,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                result.relation_label_partials.push((*start, *end));
+            }
+            ScannedRelation::Invalid(invalid) => {
+                let kept =
+                    tokens.iter().enumerate().any(|(token_index, token)| {
+                        !consumed[token_index]
+                            && invalid.start <= token.start
+                            && token.end <= invalid.end
+                    });
+                if kept {
+                    continue;
+                }
+                result.spans.push(Span {
+                    start: invalid.start,
+                    end: invalid.end,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                result.relation_invalid.push(InvalidDependency {
+                    raw: invalid.raw.clone(),
+                    message: invalid.message.clone(),
+                    start: invalid.start,
+                    end: invalid.end,
+                });
+            }
+            ScannedRelation::Escaped { backslash, .. } => {
+                if escaped_tilde_is_in_modifier_run(
+                    *backslash, &tokens, &consumed, parent, parse_clip,
+                ) {
+                    result.escapes.push((*backslash, *backslash + 1));
+                }
+            }
+        }
+    }
+    result.stripped_tokens =
+        consumed.iter().filter(|consumed| **consumed).count();
+    let remaining = tokens
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| !consumed[*index])
+        .map(|(_, token)| token)
+        .collect();
+    (remaining, result)
+}
+
 /// Unescape one body token: a consumed relationship escape drops its
-/// backslash, leaving the visible `&...` or `*...` in task text.
+/// backslash, leaving the visible `&...`, `*...`, or `~...` in task text.
 pub(crate) fn unescape_dependency_text(
     text: &str,
     token_start: usize,
     escapes: &[(usize, usize)],
 ) -> String {
-    if (text.starts_with("\\&") || text.starts_with("\\*"))
+    if (text.starts_with("\\&")
+        || text.starts_with("\\*")
+        || text.starts_with("\\~"))
         && escapes.contains(&(token_start, token_start + 1))
     {
         text[1..].to_string()
@@ -897,10 +1237,14 @@ pub(crate) fn decode_dependency_query(text: &str) -> String {
 pub(crate) struct ItemDependencySet {
     pub(crate) entries: Vec<DependencyRef>,
     pub(crate) blocked_entries: Vec<DependencyRef>,
+    pub(crate) relation_entries: Vec<RelationRef>,
     pub(crate) partials: Vec<(usize, usize)>,
     pub(crate) blocked_partials: Vec<(usize, usize)>,
+    pub(crate) relation_target_partials: Vec<(usize, usize)>,
+    pub(crate) relation_label_partials: Vec<(usize, usize)>,
     pub(crate) invalid: Vec<InvalidDependency>,
     pub(crate) blocked_invalid: Vec<InvalidDependency>,
+    pub(crate) relation_invalid: Vec<InvalidDependency>,
 }
 
 impl ItemDependencySet {
@@ -919,6 +1263,13 @@ impl ItemDependencySet {
                 self.blocked_entries.push(entry.clone());
             }
         }
+        for entry in &line.relation_entries {
+            if !self.relation_entries.iter().any(|known| {
+                known.start == entry.start && known.end == entry.end
+            }) {
+                self.relation_entries.push(entry.clone());
+            }
+        }
         for partial in &line.partials {
             if !self.partials.contains(partial) {
                 self.partials.push(*partial);
@@ -927,6 +1278,16 @@ impl ItemDependencySet {
         for partial in &line.blocked_partials {
             if !self.blocked_partials.contains(partial) {
                 self.blocked_partials.push(*partial);
+            }
+        }
+        for partial in &line.relation_target_partials {
+            if !self.relation_target_partials.contains(partial) {
+                self.relation_target_partials.push(*partial);
+            }
+        }
+        for partial in &line.relation_label_partials {
+            if !self.relation_label_partials.contains(partial) {
+                self.relation_label_partials.push(*partial);
             }
         }
         for invalid in &line.invalid {
@@ -943,61 +1304,98 @@ impl ItemDependencySet {
                 self.blocked_invalid.push(invalid.clone());
             }
         }
+        for invalid in &line.relation_invalid {
+            if !self.relation_invalid.iter().any(|known| {
+                known.start == invalid.start && known.end == invalid.end
+            }) {
+                self.relation_invalid.push(invalid.clone());
+            }
+        }
         self.entries.sort_by_key(|entry| (entry.start, entry.end));
         self.blocked_entries
             .sort_by_key(|entry| (entry.start, entry.end));
+        self.relation_entries
+            .sort_by_key(|entry| (entry.start, entry.end));
         self.partials.sort();
         self.blocked_partials.sort();
+        self.relation_target_partials.sort();
+        self.relation_label_partials.sort();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
             && self.blocked_entries.is_empty()
+            && self.relation_entries.is_empty()
             && self.partials.is_empty()
             && self.blocked_partials.is_empty()
+            && self.relation_target_partials.is_empty()
+            && self.relation_label_partials.is_empty()
             && self.invalid.is_empty()
             && self.blocked_invalid.is_empty()
+            && self.relation_invalid.is_empty()
     }
 
     pub(crate) fn has_entries(&self) -> bool {
-        !self.entries.is_empty() || !self.blocked_entries.is_empty()
+        !self.entries.is_empty()
+            || !self.blocked_entries.is_empty()
+            || !self.relation_entries.is_empty()
     }
 
     pub(crate) fn has_partial_tokens(&self) -> bool {
-        !self.partials.is_empty() || !self.blocked_partials.is_empty()
-    }
-
-    pub(crate) fn partial_sigil(&self) -> u8 {
-        match (
-            self.partials.first().map(|partial| partial.0),
-            self.blocked_partials.first().map(|partial| partial.0),
-        ) {
-            (Some(dependency), Some(blocked)) if blocked < dependency => b'*',
-            (None, Some(_)) => b'*',
-            _ => b'&',
-        }
+        !self.partials.is_empty()
+            || !self.blocked_partials.is_empty()
+            || !self.relation_target_partials.is_empty()
+            || !self.relation_label_partials.is_empty()
     }
 
     pub(crate) fn sigil(&self) -> u8 {
-        let dependency = self
-            .entries
-            .iter()
-            .map(|entry| entry.start)
-            .chain(self.partials.iter().map(|partial| partial.0))
-            .chain(self.invalid.iter().map(|invalid| invalid.start))
-            .min();
-        let blocked = self
-            .blocked_entries
-            .iter()
-            .map(|entry| entry.start)
-            .chain(self.blocked_partials.iter().map(|partial| partial.0))
-            .chain(self.blocked_invalid.iter().map(|invalid| invalid.start))
-            .min();
-        match (dependency, blocked) {
-            (Some(a), Some(b)) if b < a => b'*',
-            (None, Some(_)) => b'*',
-            _ => b'&',
-        }
+        let mut candidates: Vec<(usize, u8)> = Vec::new();
+        candidates.extend(
+            self.entries
+                .iter()
+                .map(|entry| (entry.start, b'&'))
+                .chain(self.partials.iter().map(|partial| (partial.0, b'&')))
+                .chain(
+                    self.invalid.iter().map(|invalid| (invalid.start, b'&')),
+                ),
+        );
+        candidates.extend(
+            self.blocked_entries
+                .iter()
+                .map(|entry| (entry.start, b'*'))
+                .chain(
+                    self.blocked_partials
+                        .iter()
+                        .map(|partial| (partial.0, b'*')),
+                )
+                .chain(
+                    self.blocked_invalid
+                        .iter()
+                        .map(|invalid| (invalid.start, b'*')),
+                ),
+        );
+        candidates.extend(
+            self.relation_entries
+                .iter()
+                .map(|entry| (entry.start, b'~'))
+                .chain(
+                    self.relation_target_partials
+                        .iter()
+                        .map(|partial| (partial.0, b'~')),
+                )
+                .chain(
+                    self.relation_label_partials
+                        .iter()
+                        .map(|partial| (partial.0, b'~')),
+                )
+                .chain(
+                    self.relation_invalid
+                        .iter()
+                        .map(|invalid| (invalid.start, b'~')),
+                ),
+        );
+        candidates.sort_by_key(|(start, sigil)| (*start, *sigil));
+        candidates.first().map(|(_, sigil)| *sigil).unwrap_or(b'&')
     }
 
     pub(crate) fn dependency_entries(&self) -> Vec<DependencyEntry> {
@@ -1024,6 +1422,24 @@ impl ItemDependencySet {
                 quoted: entry.quoted,
                 start: entry.start,
                 end: entry.end,
+            })
+            .collect()
+    }
+
+    pub(crate) fn relation_entries(&self) -> Vec<RelationEntry> {
+        self.relation_entries
+            .iter()
+            .map(|entry| RelationEntry {
+                raw: entry.raw.clone(),
+                direction: entry.direction,
+                note: entry.note.clone(),
+                block_id: entry.block_id.clone(),
+                quoted: entry.quoted,
+                label: entry.label.clone(),
+                start: entry.start,
+                end: entry.end,
+                label_start: entry.label_start,
+                label_end: entry.label_end,
             })
             .collect()
     }
@@ -1108,6 +1524,23 @@ pub(crate) fn execution_blocked_tasks(
         .collect()
 }
 
+pub(crate) fn execution_relations(
+    found: &ItemDependencySet,
+) -> Vec<ParsedRelation> {
+    found
+        .relation_entries
+        .iter()
+        .map(|entry| ParsedRelation {
+            raw: entry.raw.clone(),
+            direction: entry.direction,
+            note: entry.note.clone(),
+            block_id: entry.block_id.clone(),
+            quoted: entry.quoted,
+            label: entry.label.clone(),
+        })
+        .collect()
+}
+
 /// Map stripped tokens through relationship unescaping without moving their
 /// borrows: a token starting with a consumed escape drops its backslash
 /// and keeps the visible modifier in task text. `escapes` are the absolute
@@ -1120,7 +1553,9 @@ pub(crate) fn unescape_execution_tokens<'a>(
         .into_iter()
         .map(|token| {
             let text = token.text;
-            if (text.starts_with("\\&") || text.starts_with("\\*"))
+            if (text.starts_with("\\&")
+                || text.starts_with("\\*")
+                || text.starts_with("\\~"))
                 && escapes.contains(&(token.start, token.start + 1))
                 && let Some(unescaped) = text.strip_prefix('\\')
             {
@@ -1205,7 +1640,7 @@ pub(crate) fn relationship_needs_text_error(
     )
 }
 
-/// Typed `&`/`*` modifiers in source order, for teaching examples.
+/// Typed `&`/`*`/`~` modifiers in source order, for teaching examples.
 pub(crate) fn relation_modifier_raws(found: &ItemDependencySet) -> Vec<String> {
     let mut entries: Vec<(usize, String)> = found
         .entries
@@ -1217,9 +1652,26 @@ pub(crate) fn relation_modifier_raws(found: &ItemDependencySet) -> Vec<String> {
                 .iter()
                 .map(|entry| (entry.start, entry.raw.clone())),
         )
+        .chain(
+            found
+                .relation_entries
+                .iter()
+                .map(|entry| (entry.start, entry.raw.clone())),
+        )
         .collect();
     entries.sort_by_key(|(start, _)| *start);
     entries.into_iter().map(|(_, raw)| raw).collect()
+}
+
+pub(crate) fn incomplete_relation_target_error() -> String {
+    "`~` needs a task; choose one, or write `\\~` for a literal tilde"
+        .to_string()
+}
+
+pub(crate) fn incomplete_relation_label_error() -> String {
+    "relation label is incomplete: finish typing the `|label` or remove it \
+     (labels are 1-40 characters; quote multi-word labels: `|\"follow up\"`)"
+        .to_string()
 }
 
 /// First `$<N>`, retired `p:<N>`, `s:<N>`, or clipboard token on the parent

@@ -27,6 +27,7 @@ mod line;
 mod markers;
 mod model;
 mod project_tasks;
+mod relations;
 mod rewrite;
 mod start_selection;
 pub(crate) mod template;
@@ -62,6 +63,8 @@ pub(crate) use self::editor_model::EditorMode;
 #[cfg(test)]
 pub(crate) use self::editor_model::EditorParse;
 pub(crate) use self::editor_model::Need;
+pub(crate) use self::editor_model::RelationDirection;
+pub(crate) use self::editor_model::RelationEntry;
 pub(crate) use self::editor_model::Severity;
 pub(crate) use self::editor_model::Span;
 pub(crate) use self::editor_model::SpanKind;

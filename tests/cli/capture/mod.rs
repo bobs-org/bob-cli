@@ -26,6 +26,7 @@ mod parse_dependency;
 mod parse_pomodoro;
 mod parse_pomodoro_close;
 mod parse_pomodoro_start_drop;
+mod parse_relation;
 mod parse_template;
 mod plan_budget;
 mod pomodoro_adjust;

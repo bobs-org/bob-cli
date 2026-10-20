@@ -48,6 +48,11 @@ pub(crate) enum SpanKind {
     BlockedTaskSigil,
     BlockedTaskNote,
     BlockedTaskBlockId,
+    RelationSigil,
+    RelationNote,
+    RelationBlockId,
+    RelationLabelSeparator,
+    RelationLabel,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
     /// The standalone `%` listen marker (or compatible `@` alias).
@@ -111,6 +116,11 @@ impl SpanKind {
             Self::BlockedTaskSigil => "blocked_task_sigil",
             Self::BlockedTaskNote => "blocked_task_note",
             Self::BlockedTaskBlockId => "blocked_task_block_id",
+            Self::RelationSigil => "relation_sigil",
+            Self::RelationNote => "relation_note",
+            Self::RelationBlockId => "relation_block_id",
+            Self::RelationLabelSeparator => "relation_label_separator",
+            Self::RelationLabel => "relation_label",
             Self::RefUrl => "ref_url",
             Self::RefListen => "ref_listen",
             Self::TaskCompleteSigil => "task_complete_sigil",
@@ -242,6 +252,10 @@ pub(crate) enum Need {
     TaskDependency,
     /// A blocked-task picker is still open: a `*` modifier is partial.
     BlockedTask,
+    /// A relation picker is still open: a `~` / `~~` target is partial.
+    RelationTarget,
+    /// A relation label is still open: `|label` after a relation target.
+    RelationLabel,
     /// No dependent was named: add task text or `@note+task-id`.
     DependencyTarget,
     /// A completion picker is still open: a `!` token is partial.
@@ -270,6 +284,8 @@ impl Need {
             Self::PomodoroStartTiming => "pomodoro_start_timing",
             Self::TaskDependency => "task_dependency",
             Self::BlockedTask => "blocked_task",
+            Self::RelationTarget => "relation_target",
+            Self::RelationLabel => "relation_label",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
             Self::TemplateRow => "template_row",
@@ -298,6 +314,41 @@ pub(crate) struct DependencyEntry {
 /// One complete `*note:block-id` modifier. Its wire shape matches
 /// `DependencyEntry`; the distinct field and span kinds carry direction.
 pub(crate) type BlockedTaskEntry = DependencyEntry;
+
+/// Direction of a `~` / `~~` relation modifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RelationDirection {
+    To,
+    From,
+}
+
+/// One complete `~note:block-id[|label]` modifier on an item, in source
+/// order. Additive schema-version-1 data alongside `dependencies`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RelationEntry {
+    /// Exact typed text, sigil included.
+    pub(crate) raw: String,
+    pub(crate) direction: RelationDirection,
+    /// Vault-relative note identity (quotes removed, escapes decoded).
+    pub(crate) note: String,
+    /// Related task block ID.
+    pub(crate) block_id: String,
+    /// Whether the note was a `"quoted component"`.
+    pub(crate) quoted: bool,
+    /// Normalised label, when `|label` was typed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) label: Option<String>,
+    /// Whole-modifier range, sigil included.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// Label text range (inside quotes when quoted), when a label was typed.
+    #[serde(skip)]
+    pub(crate) label_start: Option<usize>,
+    /// Label text end, when a label was typed.
+    #[serde(skip)]
+    pub(crate) label_end: Option<usize>,
+}
 
 /// One whole-item `!note:block-id` completion token, in lexical form.
 /// Additive schema-version-1 data: the picker and writer phases add
@@ -382,6 +433,9 @@ pub(crate) struct EditorParse {
     /// Complete `*note:block-id` modifiers on the first item, in source
     /// order. Empty for every older input.
     pub(crate) blocked_tasks: Vec<BlockedTaskEntry>,
+    /// Complete `~` / `~~` modifiers on the first item, in source order.
+    /// Empty for every older input.
+    pub(crate) relations: Vec<RelationEntry>,
     /// Ownership of the first item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
     /// Whole-item `!note:block-id` completion token on the first item,
@@ -434,6 +488,8 @@ pub(crate) struct EditorItemParse {
     pub(crate) dependencies: Vec<DependencyEntry>,
     /// Complete `*note:block-id` modifiers on this item, in source order.
     pub(crate) blocked_tasks: Vec<BlockedTaskEntry>,
+    /// Complete `~` / `~~` modifiers on this item, in source order.
+    pub(crate) relations: Vec<RelationEntry>,
     /// Ownership of this item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
     /// Whole-item `!note:block-id` completion token, when claimed.

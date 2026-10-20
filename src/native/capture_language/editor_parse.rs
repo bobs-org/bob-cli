@@ -358,6 +358,7 @@ pub(crate) fn parse_for_editor_with(
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
+            relations: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans,
@@ -381,6 +382,7 @@ pub(crate) fn parse_for_editor_with(
     let pomodoro_close = first.pomodoro_close.clone();
     let dependencies = first.dependencies.clone();
     let blocked_tasks = first.blocked_tasks.clone();
+    let relations = first.relations.clone();
     let dependency_target = first.dependency_target.clone();
     let task_complete = first.task_complete.clone();
     let sub_bullets = first.sub_bullets.clone();
@@ -408,6 +410,7 @@ pub(crate) fn parse_for_editor_with(
         pomodoro_close,
         dependencies,
         blocked_tasks,
+        relations,
         dependency_target,
         task_complete,
         spans,
@@ -673,10 +676,19 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
     }
     outcome.item.dependencies = found.dependency_entries();
     outcome.item.blocked_tasks = found.blocked_task_entries();
+    outcome.item.relations = found.relation_entries();
     for invalid in found.invalid.iter().chain(found.blocked_invalid.iter()) {
         outcome.item.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: "invalid_dependency",
+            message: invalid.message.clone(),
+            range: Some((invalid.start, invalid.end)),
+        });
+    }
+    for invalid in found.relation_invalid.iter() {
+        outcome.item.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_relation",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
         });
@@ -698,6 +710,16 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
         && !outcome.item.needs.contains(&Need::BlockedTask)
     {
         outcome.item.needs.push(Need::BlockedTask);
+    }
+    if !found.relation_target_partials.is_empty()
+        && !outcome.item.needs.contains(&Need::RelationTarget)
+    {
+        outcome.item.needs.push(Need::RelationTarget);
+    }
+    if !found.relation_label_partials.is_empty()
+        && !outcome.item.needs.contains(&Need::RelationLabel)
+    {
+        outcome.item.needs.push(Need::RelationLabel);
     }
     outcome
 }
@@ -731,6 +753,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
+            relations: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans: vec![Span {
@@ -776,6 +799,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
+            relations: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans: vec![Span {
@@ -833,6 +857,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             pomodoro_close: None,
             dependencies: Vec::new(),
             blocked_tasks: Vec::new(),
+            relations: Vec::new(),
             dependency_target: None,
             task_complete,
             spans,
@@ -927,11 +952,29 @@ pub(super) fn parse_editor_parent_task_item<'a>(
     {
         needs.push(Need::BlockedTask);
     }
+    if !found.relation_target_partials.is_empty()
+        && !needs.contains(&Need::RelationTarget)
+    {
+        needs.push(Need::RelationTarget);
+    }
+    if !found.relation_label_partials.is_empty()
+        && !needs.contains(&Need::RelationLabel)
+    {
+        needs.push(Need::RelationLabel);
+    }
     let mut diagnostics = Vec::new();
     for invalid in found.invalid.iter().chain(found.blocked_invalid.iter()) {
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: "invalid_dependency",
+            message: invalid.message.clone(),
+            range: Some((invalid.start, invalid.end)),
+        });
+    }
+    for invalid in found.relation_invalid.iter() {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_relation",
             message: invalid.message.clone(),
             range: Some((invalid.start, invalid.end)),
         });
@@ -972,6 +1015,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             pomodoro_close: None,
             dependencies: found.dependency_entries(),
             blocked_tasks: found.blocked_task_entries(),
+            relations: found.relation_entries(),
             dependency_target: None,
             task_complete: None,
             spans,
@@ -1058,6 +1102,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_close: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
+                relations: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
                 spans: vec![Span {
@@ -1100,6 +1145,7 @@ fn parse_editor_ref_item<'a>(
                         pomodoro_close: None,
                         dependencies: Vec::new(),
                         blocked_tasks: Vec::new(),
+                        relations: Vec::new(),
                         dependency_target: None,
                         task_complete: None,
                         spans: vec![
@@ -1164,6 +1210,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_close: None,
                 dependencies: Vec::new(),
                 blocked_tasks: Vec::new(),
+                relations: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
                 spans: vec![
@@ -1224,6 +1271,7 @@ fn parse_editor_ref_item<'a>(
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
                     spans: vec![
@@ -1290,6 +1338,7 @@ fn parse_editor_ref_item<'a>(
                     pomodoro_close: None,
                     dependencies: Vec::new(),
                     blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
                     spans: vec![
@@ -2189,6 +2238,14 @@ pub(super) fn parse_editor_item_with<'a>(
                 range: Some((invalid.start, invalid.end)),
             });
         }
+        for invalid in item_dependencies.relation_invalid.iter() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_relation",
+                message: invalid.message.clone(),
+                range: Some((invalid.start, invalid.end)),
+            });
+        }
         let parent_marker = parent_parse.marker.as_ref();
         let caret_aliased = has_caret_item
             && body.is_empty()
@@ -2362,6 +2419,16 @@ pub(super) fn parse_editor_item_with<'a>(
         {
             needs.push(Need::BlockedTask);
         }
+        if !item_dependencies.relation_target_partials.is_empty()
+            && !needs.contains(&Need::RelationTarget)
+        {
+            needs.push(Need::RelationTarget);
+        }
+        if !item_dependencies.relation_label_partials.is_empty()
+            && !needs.contains(&Need::RelationLabel)
+        {
+            needs.push(Need::RelationLabel);
+        }
         if pomodoro_close.is_some()
             && !item_dependencies.blocked_entries.is_empty()
         {
@@ -2444,6 +2511,7 @@ pub(super) fn parse_editor_item_with<'a>(
             pomodoro_close,
             dependencies: item_dependencies.dependency_entries(),
             blocked_tasks: item_dependencies.blocked_task_entries(),
+            relations: item_dependencies.relation_entries(),
             dependency_target,
             task_complete: None,
             spans,
