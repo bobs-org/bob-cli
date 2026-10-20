@@ -32,6 +32,7 @@ mod capture_pomodoro_start;
 mod capture_pomodoros;
 mod capture_pomodoros_agenda;
 mod capture_project_note;
+mod capture_related;
 mod capture_rewrite;
 mod capture_schedule_log;
 mod capture_sections;
@@ -90,6 +91,7 @@ pub(crate) enum NativeCommand {
     CaptureParse,
     CapturePomodoroName,
     CapturePomodoros,
+    CaptureRelated,
     CaptureRewrite,
     CaptureSections,
     CaptureTargets,
@@ -143,6 +145,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureParse => capture_parse::run(args),
         NativeCommand::CapturePomodoroName => capture_pomodoro_name::run(args),
         NativeCommand::CapturePomodoros => capture_pomodoros::run(args),
+        NativeCommand::CaptureRelated => capture_related::run(args),
         NativeCommand::CaptureRewrite => capture_rewrite::run(args),
         NativeCommand::CaptureSections => capture_sections::run(args),
         NativeCommand::CaptureTargets => capture_targets::run(args),

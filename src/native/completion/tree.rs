@@ -35,6 +35,9 @@ impl NativeCommand {
             NativeCommand::CapturePomodoros => {
                 crate::native::capture_pomodoros::build_cli()
             }
+            NativeCommand::CaptureRelated => {
+                crate::native::capture_related::build_cli()
+            }
             NativeCommand::CaptureRewrite => {
                 crate::native::capture_rewrite::build_cli()
             }

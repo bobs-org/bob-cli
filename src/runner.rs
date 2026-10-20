@@ -562,6 +562,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "capture-related",
+        about: "List existing tasks that a new capture may duplicate",
+        section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureRelated,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "capture-rewrite",
         about: "Apply the capture grammar's automatic draft rewrites",
         section: Section::CaptureProtocol,
@@ -1555,6 +1564,7 @@ mod tests {
             NativeCommand::CaptureParse,
             NativeCommand::CapturePomodoroName,
             NativeCommand::CapturePomodoros,
+            NativeCommand::CaptureRelated,
             NativeCommand::CaptureRewrite,
             NativeCommand::CaptureSections,
             NativeCommand::CaptureTargets,

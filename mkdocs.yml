@@ -216,6 +216,7 @@ nav:
               - "bob capture-parse": reference/cli/capture-parse.md
               - "bob capture-pomodoro-name": reference/cli/capture-pomodoro-name.md
               - "bob capture-pomodoros": reference/cli/capture-pomodoros.md
+              - "bob capture-related": reference/cli/capture-related.md
               - "bob capture-rewrite": reference/cli/capture-rewrite.md
               - "bob capture-sections": reference/cli/capture-sections.md
               - "bob capture-targets": reference/cli/capture-targets.md

@@ -97,6 +97,7 @@ install-smoke:
     "${root}/bin/bob" capture-parse --help >/dev/null
     "${root}/bin/bob" capture-pomodoro-name --help >/dev/null
     "${root}/bin/bob" capture-pomodoros --help >/dev/null
+    "${root}/bin/bob" capture-related --help >/dev/null
     "${root}/bin/bob" capture-rewrite --help >/dev/null
     "${root}/bin/bob" capture-sections --help >/dev/null
     "${root}/bin/bob" capture-targets --help >/dev/null

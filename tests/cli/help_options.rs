@@ -481,6 +481,38 @@ fn capture_pomodoros_help_lists_options_alphabetically() {
 }
 
 #[test]
+fn capture_related_help_lists_options_alphabetically() {
+    let output = bob_command()
+        .arg("capture-related")
+        .arg("--help")
+        .output()
+        .expect("run bob capture-related --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("List existing tasks that each new task in a capture")
+            && help.contains("--query evaluation harness")
+            && help.contains("schema_version 1")
+            && help.contains("BOB_NOW")
+            && !help.contains("DRAFT"),
+        "expected capture-related long help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --days",
+            "-f, --format",
+            "-h, --help",
+            "-l, --limit",
+            "-q, --query",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_rewrite_help_lists_options_alphabetically() {
     let output = bob_command()
         .arg("capture-rewrite")

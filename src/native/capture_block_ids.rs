@@ -574,12 +574,33 @@ fn phrase_spans(body: &str) -> Vec<String> {
     phrases
 }
 
-fn wikilink_phrase(inner: &str) -> String {
+pub(crate) fn wikilink_phrase(inner: &str) -> String {
     if let Some((_, alias)) = inner.split_once('|') {
         return alias.to_string();
     }
     let target = inner.split_once('#').map_or(inner, |(target, _)| target);
     target.rsplit('/').next().unwrap_or(target).to_string()
+}
+
+/// Replace each `[[target|alias]]` (or alias-less `[[path/Note]]`) with
+/// the display text a reader sees: the alias, or the basename.
+pub(crate) fn reduce_wikilinks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        if text[index..].starts_with("[[")
+            && let Some(close) = text[index + 2..].find("]]")
+        {
+            let inner = &text[index + 2..index + 2 + close];
+            out.push_str(&wikilink_phrase(inner));
+            index = index + 2 + close + 2;
+            continue;
+        }
+        let ch = text[index..].chars().next().expect("index in range");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
 }
 
 fn join_truncated(words: &[String], marker: char) -> Option<String> {
