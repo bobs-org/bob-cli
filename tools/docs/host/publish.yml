@@ -1,0 +1,45 @@
+# Thin caller for gated documentation publication.
+#
+# All publication logic lives in bob-cli. This workflow only schedules,
+# accepts operator dispatch flags, and calls the reusable publisher.
+# Do not add a concurrency group here: the callee owns the `pages` group.
+name: Publish documentation
+
+run-name: ${{ github.event.inputs.correlation && format('Docs publish [{0}]', github.event.inputs.correlation) || 'Docs publish' }}
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      correlation:
+        description: Operator correlation id for matching the dispatched run
+        type: string
+        required: false
+        default: ""
+      drill:
+        description: Run the real gates with a staged broken link; never deploy or record
+        type: boolean
+        default: false
+      force:
+        description: Rebuild even when source inputs are unchanged
+        type: boolean
+        default: false
+      pinned:
+        description: Build the exact SHAs in the publication manifest, preserving hold
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    name: Publish
+    permissions:
+      contents: write
+      id-token: write
+      issues: write
+      pages: write
+    uses: bobs-org/bob-cli/.github/workflows/docs-publish.yml@master
+    with:
+      drill: ${{ github.event.inputs.drill == 'true' }}
+      force: ${{ github.event.inputs.force == 'true' }}
+      pinned: ${{ github.event.inputs.pinned == 'true' }}

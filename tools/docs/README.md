@@ -23,6 +23,9 @@ just docs-tutorial        # execute the published first-day Bash tutorial in iso
 just docs-fonts           # subset bundled OFL fonts to WOFF2 (needs --group fonts)
 just docs-assets          # generate identity assets: mark, favicons, social card
 just docs-a11y            # Playwright + axe audit of the built site (dev only)
+just docs-host-bootstrap  # preview the public host; pass -- --yes to apply
+just docs-publish         # enable, dispatch, and watch the host publish workflow
+just docs-status          # host manifest, live build, runs, workflows, hold, issues
 uv run --project tools/docs bob-docs lint
 uv run --project tools/docs bob-docs lint --fix   # ratchet ceilings / privacy baseline
 uv run --project tools/docs bob-docs tutorial     # direct tutorial replay
@@ -85,6 +88,38 @@ normal recovery run closes it again.
 Job permissions narrow to what each job uses; the caller grants
 `contents: write`, `pages: write`, `id-token: write`, and `issues: write`.
 All action pins are release tags, verified during implementation.
+
+## Host bootstrap, dispatch, and status
+
+The deploy repository `bobs-org/bobs-org.github.io` is a thin publisher. Its
+caller workflow and README are authored in `tools/docs/host/` and synced by
+`bob-docs host-bootstrap`. Preview is the default and prints the create, sync,
+Pages, and workflow-enable operations without mutating anything. Apply with
+`-y/--yes`. Bootstrap never writes, initializes, or resets `published.json`.
+Standalone apply clones the host over SSH into a temporary directory; pass
+`-d/--deploy-dir` to use a checkout opened through `/sase_repo`.
+
+```bash
+just docs-host-bootstrap
+just docs-host-bootstrap -- --yes
+just docs-host-bootstrap -- --yes --deploy-dir /path/to/bobs-org.github.io
+```
+
+`bob-docs publish` (`just docs-publish`) enables the caller workflow, dispatches
+it, and watches the run matching this dispatch's correlation id. Pass
+`--force`, `--drill`, or `--pinned` as needed. A failed run keeps a nonzero
+exit status.
+
+`bob-docs status` (`just docs-status`) reports the deploy-repo `published.json`
+log, live `/build.json`, recent publish and weekly runs, workflow state
+including `disabled_inactivity`, the hold flag, and open managed issues. A
+missing first site is a clear status. GitHub authentication failure is an
+error. The publication log is read from the deploy repository; it is not
+assumed to be served as `/published.json`.
+
+The host README and `docs/develop/build.md` cover rollback with held pinned
+SHAs, recovery from a blocked issue, 60-day workflow inactivity, and
+pre/post-deployment failure boundaries.
 
 ## Publication record (`bob-docs publish-record`)
 

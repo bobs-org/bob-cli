@@ -13,6 +13,7 @@ from .build import build, serve
 from .check import run_check
 from .errors import DocsError
 from .gen_contracts import check_or_generate
+from .host import run_host_bootstrap, run_publish, run_status
 from .links import run_links
 from .lint import run_lint
 from .publish_issue import (
@@ -95,6 +96,31 @@ def _parser() -> argparse.ArgumentParser:
     )
     gen_parser.add_argument("-c", "--check", action="store_true", help="check generated files without writing")
 
+    host_parser = subparsers.add_parser(
+        "host-bootstrap",
+        help="preview or apply the public documentation host repository",
+        description=(
+            "Create bobs-org/bobs-org.github.io if it is missing, sync the caller "
+            "workflow and README, configure GitHub Pages (build_type=workflow), "
+            "and enable Actions plus the publish workflow. Preview is the default "
+            "and makes no mutations. Pass -y/--yes to apply. Never writes "
+            "published.json. Standalone apply clones over SSH into a temporary "
+            "directory; pass -d/--deploy-dir to use an explicit checkout instead."
+        ),
+    )
+    host_parser.add_argument(
+        "-d",
+        "--deploy-dir",
+        metavar="DIR",
+        help="existing deploy-repo checkout to sync (skips the temporary SSH clone)",
+    )
+    host_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="apply the printed create/sync/Pages/enable operations",
+    )
+
     subparsers.add_parser(
         "links",
         help="check built-site links offline with the pinned lychee release",
@@ -115,6 +141,35 @@ def _parser() -> argparse.ArgumentParser:
         "--fix",
         action="store_true",
         help="lower page ceilings and drop obsolete privacy baseline hits; never raise limits",
+    )
+
+    publish_parser = subparsers.add_parser(
+        "publish",
+        help="enable, dispatch, and watch the host documentation publish workflow",
+        description=(
+            "Enable the deploy-repo publish workflow, dispatch it with optional "
+            "force/drill/pinned flags, and watch the run that this dispatch "
+            "started. A correlation id matches that run so a concurrent scheduled "
+            "publish is not watched. A failed run keeps a nonzero exit status."
+        ),
+    )
+    publish_parser.add_argument(
+        "-d",
+        "--drill",
+        action="store_true",
+        help="run the real gates with a staged broken link; never deploy or record",
+    )
+    publish_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="rebuild even when source inputs are unchanged",
+    )
+    publish_parser.add_argument(
+        "-p",
+        "--pinned",
+        action="store_true",
+        help="build the exact SHAs in the publication manifest, preserving hold",
     )
 
     publish_plan_parser = subparsers.add_parser(
@@ -269,6 +324,19 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser(
+        "status",
+        help="show host publication, live provenance, workflows, runs, hold, and issues",
+        description=(
+            "Report the deploy-repo published.json log, the live /build.json "
+            "provenance, recent publish and weekly runs, workflow enabled state "
+            "including disabled_inactivity, the hold flag, and open managed "
+            "blocked issues. A missing first site is a clear status; GitHub "
+            "authentication failure is an error. published.json is read from the "
+            "deploy repository, not assumed at /published.json."
+        ),
+    )
+
+    subparsers.add_parser(
         "tutorial",
         help="execute the published Get started Bash fences in a synthetic vault",
         description=(
@@ -354,11 +422,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return generate_fonts(root, check=args.check)
         if args.command == "gen":
             return check_or_generate(root, check=args.check)
+        if args.command == "host-bootstrap":
+            return run_host_bootstrap(root, yes=args.yes, deploy_dir=args.deploy_dir)
         if args.command == "links":
             return run_links(root)
         if args.command == "lint":
             context, _manifest = assemble(root)
             return run_lint(root, fix=args.fix, docs_context=context)
+        if args.command == "publish":
+            return run_publish(force=args.force, drill=args.drill, pinned=args.pinned)
         if args.command == "publish-plan":
             plan = run_publish_plan(
                 root,
@@ -379,6 +451,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .assets import generate_assets
 
             return generate_assets(root, check=args.check)
+        if args.command == "status":
+            return run_status()
         if args.command == "tutorial":
             from .tutorial import run_tutorial
 

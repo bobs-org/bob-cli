@@ -140,3 +140,85 @@ Audits are dev-only and are not part of `just docs-check`.
 The generated site is written to `target/docs/site/`. Building does not regenerate
 tracked pages; run `just docs-gen`, `just docs-fonts`, or `just docs-assets`
 explicitly and review their changes.
+
+## Publish the public site
+
+The live site is `https://bobs-org.github.io/`. Publication logic lives in this
+repository; `bobs-org/bobs-org.github.io` holds only the caller workflow, a
+README, and the durable `published.json` log. That log is not assumed to be
+served as `/published.json`. Live provenance is `/build.json`.
+
+Preview host bootstrap, then apply it only when you intend to create or resync
+the deploy repository. Bootstrap never writes `published.json`.
+
+```bash
+just docs-host-bootstrap
+just docs-host-bootstrap -- --yes
+```
+
+Pass `--deploy-dir` when an agent already opened the deploy checkout:
+
+```bash
+just docs-host-bootstrap -- --yes --deploy-dir /path/to/bobs-org.github.io
+```
+
+Dispatch a publish and watch the run that dispatch started. The command enables
+the workflow first so a 60-day inactivity disable does not block it.
+
+```bash
+just docs-publish
+just docs-publish -- --force
+just docs-publish -- --drill
+just docs-publish -- --pinned
+just docs-status
+```
+
+`just docs-status` reports the host manifest, live `/build.json`, recent
+publish and weekly runs, workflow state including `disabled_inactivity`, the
+hold flag, and open managed blocked issues. A missing first site is a clear
+status. GitHub authentication failure is an error.
+
+### Rollback with held pinned SHAs
+
+Edit `published.json` in the deploy repository: set `"hold": true` and the
+source SHAs to serve. Dispatch a pinned publish:
+
+```bash
+just docs-publish -- --pinned
+```
+
+Scheduled and ordinary unpinned runs skip while hold is true, including force.
+Pinned builds those exact SHAs and leaves the hold in place. Set `"hold": false`
+when the rollback is finished.
+
+### Recovery
+
+A gate or deploy failure opens one `Docs publish blocked` issue
+(`docs-publish`) and leaves the last good site live. The next ordinary
+dispatch sees that issue and re-runs the gates even when the fingerprint is
+unchanged:
+
+```bash
+just docs-publish
+```
+
+Do not use `--force` to recover. Force rebuilds unchanged inputs when nothing
+is held. A successful live verification closes the issue.
+
+### Inactivity
+
+GitHub disables scheduled workflows on a public repository after 60 days
+without a run (`disabled_inactivity`). `just docs-publish` enables the workflow
+before dispatch. `just docs-status` reports that state.
+
+### Failure boundaries
+
+Before deploy, a planner skip, a held unpinned run, or a gate failure uploads
+nothing and does not rewrite `published.json`. The last good site stays live.
+`--drill` runs the real gates against a staged-only broken link, must fail
+before upload, and opens the blocked issue.
+
+After the gates pass, upload, Pages deploy, recording `published.json`, and
+live verification run in that order. A deploy or record failure keeps the
+previous live site. A live-verification failure means the new site may already
+be serving; the blocked issue opens so the next ordinary run revalidates.

@@ -202,3 +202,15 @@ docs-assets: (_banner "35" "🎨" "DOCS ASSETS")
 # Audit the built site for accessibility with Playwright and axe (dev only).
 docs-a11y: (_banner "33" "♿" "DOCS A11Y")
     uv run --project tools/docs --group a11y bob-docs a11y
+
+# Preview or apply the public documentation host (caller templates, Pages, workflows).
+docs-host-bootstrap *args: (_banner "36" "🏠" "DOCS HOST BOOTSTRAP")
+    uv run --project tools/docs bob-docs host-bootstrap {{args}}
+
+# Enable the host publish workflow, dispatch it, and watch the dispatched run.
+docs-publish *args: (_banner "35" "🚀" "DOCS PUBLISH")
+    uv run --project tools/docs bob-docs publish {{args}}
+
+# Show host publication status: manifest, live build, runs, workflows, hold, and issues.
+docs-status *args: (_banner "36" "📡" "DOCS STATUS")
+    uv run --project tools/docs bob-docs status {{args}}
