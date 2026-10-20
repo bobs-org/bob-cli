@@ -372,7 +372,7 @@ fn capture_pomodoro_whole_item_start_guards_fail_write_free() {
         let error = stdout(&output);
         assert!(
             error.contains(
-                "no future Pomodoro to start: today's ledger (`day.md`) has no open `- [ ] ()` placeholder (start a new named session with `=#<name>`, or a task's session with `^route:block-id=`)"
+                "no future Pomodoro to start: today's ledger (`day.md`) has no open `- [ ] ()` placeholder (start a new named session with `=<name>`, or a task's session with `^route:block-id=`)"
             ),
             "{day}: {error}"
         );
@@ -459,7 +459,6 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
     // task-session start instead. Never tasks, never writes.
     for (text, token, suffix) in [
         ("=3 more", "=3", "3"),
-        ("=3x", "=3", "3"),
         ("=3s:1", "=3", "3"),
         ("=2-1-", "=2-1", "2-1"),
         ("=-2 @work", "=-2", "-2"),
@@ -475,6 +474,16 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
         );
         assert_eq!(before, after, "{text} must not write");
     }
+    let (output, before, after) = run("=3x");
+    assert_ne!(output.status.code(), Some(0), "=3x should fail");
+    let error = stdout(&output);
+    assert!(
+        error.contains("runs the duration into the name")
+            && error.contains("`=#x@3`")
+            && error.contains("`=3#x`"),
+        "=3x: {error}"
+    );
+    assert_eq!(before, after, "=3x must not write");
 
     // Exact tokens with child lines fail bare or counted.
     for (stdin_text, token) in [("=\n- child\n", "="), ("=2\n- child\n", "=2")]

@@ -30,7 +30,7 @@ fn retired_whole_item_closes_name_the_bare_rewrite_and_write_nothing() {
         ("=!2", "=!2", "x!2"),
         ("=*!2", "=*!2", "x*!2"),
         ("=x wired the lexer", "=x", "x wired the lexer"),
-        ("=x#bugs", "=x#bugs", "x =#bugs"),
+        ("=x#bugs", "=x#bugs", "x =bugs"),
     ]
     .into_iter()
     .enumerate()

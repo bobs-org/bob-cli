@@ -302,3 +302,32 @@ fn named_start_created_reports_added_block() {
         ])
     );
 }
+
+#[test]
+fn named_start_bare_spelling_writes_the_same_as_hash() {
+    let (_temp_a, vault_a, day_a) =
+        named_vault("bob-cli-named-bare-equiv-a", WORKED);
+    let (_temp_b, vault_b, day_b) =
+        named_vault("bob-cli-named-bare-equiv-b", WORKED);
+    let now = "2026-07-10 09:02:00";
+    let bare = run_capture(&vault_a, &day_a, &["=bugs"], now);
+    let hashed = run_capture(&vault_b, &day_b, &["=#bugs"], now);
+    assert_success(&bare);
+    assert_success(&hashed);
+    let bare_json: serde_json::Value =
+        serde_json::from_str(stdout(&bare).trim()).expect("bare JSON");
+    let hashed_json: serde_json::Value =
+        serde_json::from_str(stdout(&hashed).trim()).expect("hash JSON");
+    assert_eq!(bare_json["text"], "=bugs", "{bare_json}");
+    assert_eq!(hashed_json["text"], "=#bugs", "{hashed_json}");
+    assert_eq!(bare_json["kind"], hashed_json["kind"]);
+    assert_eq!(bare_json["pomodoro_name"], hashed_json["pomodoro_name"]);
+    assert_eq!(
+        bare_json["pomodoro_start"], hashed_json["pomodoro_start"],
+        "{bare_json} vs {hashed_json}"
+    );
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("bare day"),
+        fs::read_to_string(&day_b).expect("hash day")
+    );
+}

@@ -6,6 +6,7 @@
 //! byte range everywhere. Diagnostic text lives in [`markers`]; this module
 //! only decides which diagnostic applies and where it points.
 
+use super::bare_name::start_name_spelling;
 use super::markers::*;
 use super::model::*;
 
@@ -71,7 +72,7 @@ pub(crate) enum CloseSelectionOutcome {
 /// length 1; a selection-shaped long close reports the text after `x`; any
 /// suffix starting with `*` or `!` is a short alias (claimed even when its
 /// list is malformed, so `=*abc` reports a close diagnostic, never a task).
-fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
+pub(crate) fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
     if after_eq.eq_ignore_ascii_case("x") {
         return Some(("", 1));
     }
@@ -127,17 +128,17 @@ pub(crate) fn classify_whole_item_close(token: &str) -> Option<&str> {
 /// with a teaching error instead of becoming a task: `=x`/`=X` (rewrite
 /// `x`), selection-shaped `=x…`/`=X…` (`=X2` is `x2`), the `=*…`/`=!…`
 /// shorthands (`=*1` is `x*1`, `=!` is `x!`; claimed even when malformed),
-/// and the `=x#…` hash near miss (`=x#bugs` is `x =#bugs`, closing then
-/// starting).
-/// `==`-prefixed tokens and every other `=` shape (`=xx`, `=xa`, `=3`) are
-/// not retired closes.
+/// and the `=x#…` hash near miss (`=x#bugs` is `x =bugs`, closing then
+/// starting; names that cannot be bare keep `#`).
+/// `==`-prefixed tokens and every other `=` shape (`=3`) are not retired
+/// closes. `=xx` / `=xa` are named starts, not retired closes.
 pub(crate) fn retired_whole_item_close_rewrite(token: &str) -> Option<String> {
     let after_eq = token.strip_prefix('=')?;
     if let Some(name) = after_eq
         .strip_prefix("x#")
         .or_else(|| after_eq.strip_prefix("X#"))
     {
-        return Some(format!("x =#{name}"));
+        return Some(format!("x ={}", start_name_spelling(name)));
     }
     let (selection, _) = close_after_eq_parts(after_eq)?;
     Some(format!("x{selection}"))
@@ -1553,8 +1554,8 @@ mod tests {
             ("=!2", "x!2"),
             ("=*!2", "x*!2"),
             ("=*abc", "x*abc"),
-            ("=x#bugs", "x =#bugs"),
-            ("=X#bugs", "x =#bugs"),
+            ("=x#bugs", "x =bugs"),
+            ("=X#bugs", "x =bugs"),
             ("=x#", "x =#"),
         ] {
             assert_eq!(

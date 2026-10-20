@@ -617,7 +617,6 @@ fn capture_pomodoro_close_diagnostics() {
     // lowercase `x` closes. `=3` is a start, not a task, and is covered by
     // the start tests below.
     for (input, kind) in [
-        ("=xx", "task"),
         ("Plan x", "task"),
         ("xx", "task"),
         ("xa", "task"),

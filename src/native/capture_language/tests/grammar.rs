@@ -992,7 +992,6 @@ fn execution_parses_equals_family_starts_alongside_close() {
         ("=-2 @work", "=-2", "-2"),
         ("=3s:1", "=3", "3"),
         ("=2-1-", "=2-1", "2-1"),
-        ("=3x", "=3", "3"),
         ("=\n- child", "=", ""),
         ("=2\n- child", "=2", "2"),
     ] {
@@ -1004,6 +1003,28 @@ fn execution_parses_equals_family_starts_alongside_close() {
             ),
             "{raw}"
         );
+    }
+    // Counted timing glued to a following name is a teaching error, not
+    // extra-text shape (`=3s:1` stays shape because `s:1` is not a name).
+    for (raw, message) in [
+        (
+            "=3bugs",
+            "`=3bugs` runs the duration into the name; write `=bugs@3` or `=3#bugs`; a name that starts with a digit takes `#` (`=#3bugs`)",
+        ),
+        (
+            "=-2bugs",
+            "`=-2bugs` runs the duration into the name; write `=bugs@-2` or `=-2#bugs`",
+        ),
+        (
+            "=2fa",
+            "`=2fa` runs the duration into the name; write `=fa@2` or `=2#fa`; a name that starts with a digit takes `#` (`=#2fa`)",
+        ),
+        (
+            "=3x",
+            "`=3x` runs the duration into the name; write `=#x@3` or `=3#x`; a name that starts with a digit takes `#` (`=#3x`)",
+        ),
+    ] {
+        assert_eq!(execute(raw).expect_err(raw), message, "{raw}");
     }
     // Oversized values fail the shared start overflow before any write.
     let overflow = execute("=99999999999999999999999").expect_err("overflow");
@@ -1050,7 +1071,23 @@ fn execution_parses_equals_family_starts_alongside_close() {
         other => panic!("x more: expected close, got {other:?}"),
     }
     assert_eq!(inline.body, "x", "x more");
-    for raw in ["=xx", "=xa"] {
+    for raw in ["=xx", "=xa", "=xmas", "=Xmas", "=Bugs"] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        match parsed.kind {
+            CaptureKind::PomodoroStart {
+                ref spec,
+                ref pomodoro_name,
+            } => {
+                assert_eq!(spec.raw, "", "{raw}");
+                assert_eq!(spec.duration_units, 5, "{raw}");
+                assert_eq!(pomodoro_name.as_deref(), Some(&raw[1..]), "{raw}");
+            }
+            other => panic!("{raw}: expected named start, got {other:?}"),
+        }
+    }
+    // Mid-body `=word` and doubled `=` stay prose.
+    for raw in ["Plan =bugs", "==bugs", "==important==", "=>", "= bugs"] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
@@ -1070,6 +1107,146 @@ fn execution_parses_equals_family_starts_alongside_close() {
     assert!(
         dangling.contains("`x~` is incomplete: type a task number after `~`"),
         "{dangling}"
+    );
+}
+
+#[test]
+fn execution_treats_bare_named_starts_as_hash_equivalents() {
+    fn assert_equivalent(bare: &str, hashed: &str) {
+        match (execute_draft(bare), execute_draft(hashed)) {
+            (Ok(left), Ok(right)) => {
+                assert_eq!(
+                    left.items.len(),
+                    right.items.len(),
+                    "{bare} vs {hashed}"
+                );
+                for (left_item, right_item) in
+                    left.items.iter().zip(right.items.iter())
+                {
+                    assert_eq!(
+                        left_item.parsed.kind, right_item.parsed.kind,
+                        "{bare} vs {hashed} item {}",
+                        left_item.index
+                    );
+                    assert_eq!(
+                        left_item.parsed.route, right_item.parsed.route,
+                        "{bare} vs {hashed} item {}",
+                        left_item.index
+                    );
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(_), Err(error)) => panic!("{hashed} failed: {error}"),
+            (Err(error), Ok(_)) => panic!("{bare} failed: {error}"),
+        }
+        let left = editor(bare);
+        let right = editor(hashed);
+        assert_eq!(left.mode, right.mode, "{bare} vs {hashed}");
+        assert_eq!(left.route, right.route, "{bare} vs {hashed}");
+        assert_eq!(left.section, right.section, "{bare} vs {hashed}");
+        assert_eq!(left.block_id, right.block_id, "{bare} vs {hashed}");
+        assert_eq!(left.needs, right.needs, "{bare} vs {hashed}");
+        assert_eq!(
+            left.pomodoro_start, right.pomodoro_start,
+            "{bare} vs {hashed}"
+        );
+        assert_eq!(
+            left.pomodoro_close, right.pomodoro_close,
+            "{bare} vs {hashed}"
+        );
+        assert_eq!(codes(&left), codes(&right), "{bare} vs {hashed}");
+        assert_eq!(left.items.len(), right.items.len(), "{bare} vs {hashed}");
+        for (left_item, right_item) in left.items.iter().zip(right.items.iter())
+        {
+            assert_eq!(
+                left_item.mode, right_item.mode,
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+            assert_eq!(
+                left_item.section, right_item.section,
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+            assert_eq!(
+                left_item.needs, right_item.needs,
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+            assert_eq!(
+                left_item.pomodoro_start, right_item.pomodoro_start,
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+            assert_eq!(
+                left_item.pomodoro_close, right_item.pomodoro_close,
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+            assert_eq!(
+                left_item
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code)
+                    .collect::<Vec<_>>(),
+                right_item
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code)
+                    .collect::<Vec<_>>(),
+                "{bare} vs {hashed} item {}",
+                left_item.index
+            );
+        }
+    }
+    for (bare, hashed) in [
+        ("=bugs", "=#bugs"),
+        ("=bugs@3", "=#bugs@3"),
+        ("=bugs@3~2", "=#bugs@3~2"),
+        ("=bugs~2", "=#bugs~2"),
+        ("=bugs~2@3", "=#bugs~2@3"),
+        ("=xx", "=#xx"),
+        ("=xa", "=#xa"),
+        ("=xmas", "=#xmas"),
+        ("=Xmas", "=#Xmas"),
+        ("=Bugs", "=#Bugs"),
+        ("=c++", "=#c++"),
+        ("x =bugs", "x =#bugs"),
+        ("=bugs +2", "=#bugs +2"),
+        ("x wired it =bugs", "x wired it =#bugs"),
+        ("=bugs more", "=#bugs more"),
+        ("=deep work", "=#deep work"),
+        ("=bugs=3", "=#bugs=3"),
+        ("=bugs@", "=#bugs@"),
+    ] {
+        assert_equivalent(bare, hashed);
+    }
+}
+
+#[test]
+fn execution_teaches_bare_named_start_shape_in_the_typed_spelling() {
+    assert_eq!(
+        execute("=deep work").expect_err("multi-word"),
+        "Pomodoro start `=deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `=deep-work`"
+    );
+    assert_eq!(
+        execute("=#deep work").expect_err("hashed multi-word"),
+        "Pomodoro start `=#deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `=#deep-work`"
+    );
+    assert_eq!(
+        execute("=bugs=3").expect_err("order"),
+        "write the duration after `@` or before the name: `=bugs@3` or `=3#bugs` instead of `=bugs=3`"
+    );
+    assert!(
+        execute("=bugs@")
+            .expect_err("incomplete timing")
+            .contains("incomplete"),
+        "{}",
+        execute("=bugs@").expect_err("incomplete timing")
+    );
+    assert_eq!(
+        execute("=x#bugs").expect_err("retired close-hash"),
+        "`=x#bugs` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `x =bugs`"
     );
 }
 

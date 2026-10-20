@@ -9,7 +9,10 @@ use super::{
         TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
-    pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
+    pomodoros::{
+        apply_bare_start_name_replacements, pomodoro_name_candidates,
+        pomodoro_start_name_candidates,
+    },
 };
 use crate::native::{
     capture, capture_block_ids, capture_completable_tasks,
@@ -245,7 +248,7 @@ pub(crate) fn shell_completion(
         }
         CompletionContext::PomodoroName
         | CompletionContext::PomodoroStartName => {
-            let (candidates, _) =
+            let (mut candidates, _) =
                 if field.context == CompletionContext::PomodoroName {
                     pomodoro_name_candidates(bob_dir, "")
                         .map_err(|error| error.message.clone())?
@@ -253,6 +256,9 @@ pub(crate) fn shell_completion(
                     pomodoro_start_name_candidates(bob_dir, "")
                         .map_err(|error| error.message.clone())?
                 };
+            if field.bare_name {
+                apply_bare_start_name_replacements(&mut candidates);
+            }
             let Candidates::PomodoroName(items) = candidates else {
                 return Ok(None);
             };

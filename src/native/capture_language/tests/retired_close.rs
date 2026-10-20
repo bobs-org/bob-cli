@@ -33,8 +33,8 @@ fn retired_whole_item_closes_fail_with_the_bare_rewrite_in_both_parsers() {
         ("=!2", "=!2", "x!2"),
         ("=*!2", "=*!2", "x*!2"),
         ("=*abc", "=*abc", "x*abc"),
-        ("=x#bugs", "=x#bugs", "x =#bugs"),
-        ("=X#bugs", "=X#bugs", "x =#bugs"),
+        ("=x#bugs", "=x#bugs", "x =bugs"),
+        ("=X#bugs", "=X#bugs", "x =bugs"),
         ("=x1,", "=x1,", "x1,"),
         ("=x wired", "=x", "x wired"),
         ("=x2,3 2 foo", "=x2,3", "x2,3 2 foo"),
@@ -73,7 +73,7 @@ fn retired_closes_with_an_inline_entry_name_the_whole_rewritten_line() {
 
 #[test]
 fn retired_closes_stay_distinct_from_prose_lookalikes() {
-    for raw in ["=xx", "=xa", "=x.", "Plan =x", "Plan =x1", "a=x"] {
+    for raw in ["Plan =x", "Plan =x1", "a=x"] {
         assert_eq!(execute(raw).expect(raw).kind, CaptureKind::Task, "{raw}");
         assert_eq!(editor(raw).mode, EditorMode::Task, "{raw}");
     }
@@ -136,7 +136,7 @@ fn double_equals_close_lookalikes_teach_the_bare_spelling() {
         ("==x2", "x2"),
         ("==*2", "x*2"),
         ("==!", "x!"),
-        ("==x#bugs", "x =#bugs"),
+        ("==x#bugs", "x =bugs"),
     ] {
         let expected = format!(
             "`{raw}` is not a close: close the running Pomodoro with `{spelling}`"

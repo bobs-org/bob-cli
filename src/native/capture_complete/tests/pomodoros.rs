@@ -4,8 +4,8 @@ use super::{
             Candidates, CaptureCompleteResult, Replacement, SCHEMA_VERSION,
         },
         pomodoros::{
-            plan_themes_after_for, pomodoro_name_candidates_at,
-            pomodoro_name_candidates_from_entries,
+            apply_bare_start_name_replacements, plan_themes_after_for,
+            pomodoro_name_candidates_at, pomodoro_name_candidates_from_entries,
             pomodoro_name_candidates_from_scan,
             pomodoro_name_candidates_from_scan_with_hint,
             pomodoro_start_name_candidates_at,
@@ -783,4 +783,27 @@ fn plan_themes_after_counts_only_fresh_non_exempt_components() {
             .expect("creation row");
         assert_eq!(created.plan_themes_after, Some(2));
     }
+}
+
+#[test]
+fn bare_start_name_replacements_prefix_hash_when_the_slug_cannot_be_bare() {
+    let scan = capture_pomodoros::scan(concat!(
+        "## Pomodoros\n",
+        "- [ ] () — 2FA\n",
+        "- [ ] () — X2\n",
+        "- [ ] () — BUGS\n",
+    ));
+    let items = pomodoro_start_name_candidates_from_scan(&scan, "");
+    let mut candidates = Candidates::PomodoroName(items);
+    apply_bare_start_name_replacements(&mut candidates);
+    let Candidates::PomodoroName(items) = candidates else {
+        panic!("expected pomodoro-name candidates");
+    };
+    let replacements: Vec<&str> =
+        items.iter().map(|row| row.replacement.as_str()).collect();
+    assert!(replacements.contains(&"#2fa"), "{replacements:?}");
+    assert!(replacements.contains(&"#x2"), "{replacements:?}");
+    assert!(replacements.contains(&"bugs"), "{replacements:?}");
+    assert!(!replacements.contains(&"2fa"), "{replacements:?}");
+    assert!(!replacements.contains(&"x2"), "{replacements:?}");
 }

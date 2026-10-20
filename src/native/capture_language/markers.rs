@@ -567,6 +567,25 @@ pub(super) fn pomodoro_start_shape_error(token: &str, suffix: &str) -> String {
     )
 }
 
+/// Counted start whose `<X>` runs into a following name (`=3bugs`, `=2fa`).
+/// `digit_name_token` is the `#` spelling of the whole `suffix+name` when
+/// that text is a digit-led Pomodoro name.
+pub(super) fn pomodoro_glued_timing_error(
+    token: &str,
+    at_form: &str,
+    hash_form: &str,
+    digit_name_token: Option<&str>,
+) -> String {
+    match digit_name_token {
+        Some(hash_name) => format!(
+            "`{token}` runs the duration into the name; write `{at_form}` or `{hash_form}`; a name that starts with a digit takes `#` (`{hash_name}`)"
+        ),
+        None => format!(
+            "`{token}` runs the duration into the name; write `{at_form}` or `{hash_form}`"
+        ),
+    }
+}
+
 /// Named-start E1: `=#` / `=3#` with an empty name part.
 pub(super) fn pomodoro_named_start_incomplete_error(token: &str) -> String {
     format!(
@@ -655,8 +674,9 @@ pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
     if name.is_empty() {
         "`x` always closes the running Pomodoro; remove `#`".to_string()
     } else {
+        let start = super::bare_name::named_start_token(name);
         format!(
-            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x =#{name}` to close it and then start that Pomodoro; `=#{name}` swaps it in without closing the running session"
+            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x {start}` to close it and then start that Pomodoro; `{start}` swaps it in without closing the running session"
         )
     }
 }

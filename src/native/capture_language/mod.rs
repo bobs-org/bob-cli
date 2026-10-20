@@ -13,6 +13,7 @@
 //! `capture/` wraps the returned message in `CaptureError::usage(...)`, so
 //! the message text is the single source of truth for both callers.
 
+mod bare_name;
 mod close_log;
 mod close_selection;
 mod completion;
@@ -36,6 +37,8 @@ mod tokens;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::bare_name::can_spell_bare;
+pub(crate) use self::bare_name::named_start_token;
 pub(crate) use self::close_log::assign_log_positions;
 pub(crate) use self::close_log::PositionalLogError;
 pub(crate) use self::completion::claimed_task_complete_tokens;

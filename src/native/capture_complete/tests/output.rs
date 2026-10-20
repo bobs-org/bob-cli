@@ -360,6 +360,58 @@ fn named_start_completion_carries_keeps_ledger_and_running() {
     assert!(!eq3.r#override.as_ref().expect("override").keeps_ledger);
     let chained = complete("x =#");
     assert!(chained.r#override.is_none());
+
+    let bare = complete("=bugs");
+    assert_eq!(bare.context, Some(CompletionContext::PomodoroStartName));
+    let bare_override = bare.r#override.as_ref().expect("bare override");
+    assert!(bare_override.keeps_ledger);
+    assert_eq!(bare_override.running, kept_override.running);
+    assert_eq!(bare.replacement, Replacement { start: 1, end: 5 });
+    let Candidates::PomodoroName(items) = &bare.candidates else {
+        panic!("expected pomodoro-name candidates");
+    };
+    assert!(
+        items.iter().any(|row| row.replacement == "bugs"),
+        "{items:?}"
+    );
+
+    let chained_bare = complete("x =bu");
+    assert_eq!(
+        chained_bare.context,
+        Some(CompletionContext::PomodoroStartName)
+    );
+    assert!(chained_bare.r#override.is_none());
+    assert_eq!(chained_bare.replacement, Replacement { start: 3, end: 5 });
+
+    let trail = complete("x wired it =bu");
+    assert_eq!(trail.context, Some(CompletionContext::PomodoroStartName));
+    assert_eq!(trail.replacement, Replacement { start: 12, end: 14 });
+}
+
+#[test]
+fn bare_start_name_completion_prefixes_hash_for_digit_led_matches() {
+    let temp = TempDir::new("bob-cli-capture-complete-bare-hash");
+    let day_file = temp.path().join("2026/20261009.md");
+    write_file(
+        &day_file,
+        concat!("## Pomodoros\n", "- [ ] () — 2FA\n", "- [ ] () — BUGS\n",),
+    );
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), "=fa", 3)
+    });
+    assert_eq!(value.context, Some(CompletionContext::PomodoroStartName));
+    assert_eq!(value.replacement, Replacement { start: 1, end: 3 });
+    let Candidates::PomodoroName(items) = &value.candidates else {
+        panic!("expected pomodoro-name candidates");
+    };
+    assert!(
+        items.iter().any(|row| row.replacement == "#2fa"),
+        "{items:?}"
+    );
+    assert!(
+        items.iter().all(|row| row.replacement != "2fa"),
+        "{items:?}"
+    );
 }
 
 #[test]

@@ -1,5 +1,6 @@
 //! Special Pomodoro item parsing for the editor view.
 
+use super::bare_name::*;
 use super::close_log::*;
 use super::close_selection::*;
 use super::draft::*;
@@ -251,17 +252,18 @@ pub(super) fn editor_start_invalid_outcome<'a>(
     }
 }
 
-/// Whole-item `=<X>#name` named start for the live editor. Mirrors the
-/// named-start branch of [`parse_pomodoro_equals_item`] but never fails:
+/// Whole-item `=<X>#name` / `=name` named start for the live editor. Mirrors
+/// the named-start branch of [`parse_pomodoro_equals_item`] but never fails:
 /// an exact token reports `pomodoro_start` with its spec, `section` set to
-/// the typed selector, a `pomodoro_start` span over `=<X>` plus a
-/// `pomodoro_name` span over the name bytes only (the `#` is in no span),
-/// while an empty name reports `incomplete` needing `pomodoro_name` with
-/// the partial spec and an `interactive_placeholder` span over `#`. A near
-/// miss reports `pomodoro_start` plus one `invalid_pomodoro_start`
-/// diagnostic reusing the execution texts: E2/E3 over the name, E4 over
-/// the extra text or child line, overflow over `=<X>`. Purely lexical: it
-/// never guesses current ledger times.
+/// the typed selector, a `pomodoro_start` span over `=<X>` (just `=` when
+/// bare) plus a `pomodoro_name` span over the name bytes only (the `#` is
+/// in no span), while an empty hash name reports `incomplete` needing
+/// `pomodoro_name` with the partial spec and an `interactive_placeholder`
+/// span over `#`. A bare token never emits that placeholder. A near miss
+/// reports `pomodoro_start` plus one `invalid_pomodoro_start` diagnostic
+/// reusing the execution texts: E2/E3 over the name, E4 over the extra
+/// text or child line, overflow over `=<X>`. Purely lexical: it never
+/// guesses current ledger times.
 ///
 /// A trailing `~<K>` drop part claims the item like a counted token. When
 /// present, the `pomodoro_start` span covers only `=<X>`, a
@@ -277,13 +279,14 @@ pub(super) fn parse_editor_named_start_item<'a>(
     len: usize,
     drop: Option<(usize, String)>,
     timing: Option<(usize, String)>,
+    spelling: NameSpelling,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
     let token_start = parent.raw.start + leading;
     let prefix_len = 1 + suffix.len();
-    let hash_start = token_start + prefix_len;
-    let name_start = hash_start + 1;
+    let name_start =
+        token_start + named_start_name_offset(suffix.len(), spelling);
     let name_end = name_start + name.len();
     let mut spans = vec![Span {
         start: token_start,
@@ -291,11 +294,16 @@ pub(super) fn parse_editor_named_start_item<'a>(
         kind: SpanKind::PomodoroStart,
     }];
     if name.is_empty() {
-        spans.push(Span {
-            start: hash_start,
-            end: hash_start + 1,
-            kind: SpanKind::InteractivePlaceholder,
-        });
+        // Bare tokens never have an empty name; only `=#` uses the
+        // placeholder over `#`.
+        if spelling == NameSpelling::Hash {
+            let hash_start = token_start + prefix_len;
+            spans.push(Span {
+                start: hash_start,
+                end: hash_start + 1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+        }
     } else {
         spans.push(Span {
             start: name_start,
@@ -363,6 +371,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         prefix_len,
                         name_start,
                         name_end,
+                        spelling,
                     },
                 )
                 .expect("empty name errors");
@@ -392,6 +401,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 prefix_len,
                 name_start,
                 name_end,
+                spelling,
             },
         ) {
             return Some(editor_named_invalid_outcome(
@@ -551,6 +561,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             prefix_len,
             name_start,
             name_end,
+            spelling,
         },
     ) {
         let range = if name.is_empty() && !has_extra {
@@ -665,6 +676,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         parent_trimmed,
         len,
         drop_text,
+        spelling,
     );
     let range = if has_extra {
         extra_text_range(token_start, parent_trimmed, len)
@@ -811,12 +823,13 @@ fn editor_start_timing_incomplete_outcome<'a>(
 
 /// Absolute byte offsets of a named start token's parts: `token_start` is
 /// the `=` byte, `prefix_len` is the `=<X>` byte length, and `name_start`
-/// / `name_end` bound the name part.
+/// / `name_end` bound the name part. `spelling` is Hash vs Bare.
 struct NamedStartOffsets {
     token_start: usize,
     prefix_len: usize,
     name_start: usize,
     name_end: usize,
+    spelling: NameSpelling,
 }
 
 /// Classify a named start token's own error the way execution's
@@ -838,6 +851,7 @@ fn named_start_token_diagnostic(
         prefix_len,
         name_start,
         name_end,
+        spelling,
     } = offsets;
     if name.is_empty() {
         return Some((
@@ -852,10 +866,14 @@ fn named_start_token_diagnostic(
     {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-        let sigil = "=";
+        let at_form = format!(
+            "{}@{after}{drop_suffix}",
+            echo_named_start(spelling, suffix, before)
+        );
+        let hash_form = format!("={after}#{before}{drop_suffix}");
         return Some((
             format!(
-                "write the duration after `@` or before the name: `{sigil}#{before}@{after}{drop_suffix}` or `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
+                "write the duration after `@` or before the name: `{at_form}` or `{hash_form}` instead of `{token}`"
             ),
             (name_start, name_end),
         ));
@@ -1033,6 +1051,17 @@ pub(super) fn parse_editor_start_item<'a>(
     let exact = parent_trimmed.len() == len && item.lines.len() == 1;
     if !exact {
         if claims || (parent_trimmed.len() == len && item.lines.len() > 1) {
+            if let Some((message, (start, end))) =
+                glued_timing_diagnostic(parent_trimmed, len, &suffix)
+            {
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    base_span,
+                    message,
+                    Some((token_start + start, token_start + end)),
+                ));
+            }
             // Both timings win over dangling-`@`, like execution.
             if !suffix.is_empty()
                 && let Some((timing_offset, timing_after)) = timing.as_ref()
@@ -1341,6 +1370,7 @@ pub(super) fn parse_editor_close_item<'a>(
             counted,
             len,
             name,
+            name_spelling,
             drop,
             timing,
             doubled,
@@ -1380,6 +1410,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     len,
                     drop,
                     timing,
+                    name_spelling.unwrap_or(NameSpelling::Hash),
                 );
             }
             return parse_editor_start_item(

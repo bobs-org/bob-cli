@@ -2703,6 +2703,25 @@ mod tests {
             chain["items"][1]["range"],
             serde_json::json!({ "start": 2, "end": 8 })
         );
+
+        let bare = json("=bugs");
+        assert_eq!(bare["mode"], "pomodoro_start");
+        assert_eq!(bare["section"], "bugs");
+        assert_eq!(
+            bare["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_start" },
+                { "start": 1, "end": 5, "kind": "pomodoro_name" },
+            ])
+        );
+        assert_eq!(bare["pomodoro_start"], value["pomodoro_start"]);
+        let bare_chain = json("x =bugs");
+        assert_eq!(bare_chain["items"][1]["section"], "bugs");
+        assert_eq!(bare_chain["items"][1]["body"], "=bugs");
+        assert_eq!(
+            bare_chain["items"][1]["pomodoro_start"],
+            chain["items"][1]["pomodoro_start"]
+        );
     }
 
     #[test]

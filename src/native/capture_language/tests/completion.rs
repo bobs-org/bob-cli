@@ -708,6 +708,44 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
 }
 
 #[test]
+fn pomodoro_start_name_completes_a_bare_name_with_the_bare_flag() {
+    let empty_hash = field("=#", 2).expect("hash empty");
+    assert!(!empty_hash.bare_name);
+
+    let mid = field("=bu", 3).expect("bare mid");
+    assert_eq!(mid.context, CompletionContext::PomodoroStartName);
+    assert_eq!(mid.query, "bu");
+    assert_eq!(mid.replacement, (1, 3));
+    assert!(mid.bare_name);
+
+    let end = field("=bugs", 5).expect("bare end");
+    assert_eq!(end.query, "bugs");
+    assert_eq!(end.replacement, (1, 5));
+    assert!(end.bare_name);
+
+    // A cursor on `=` itself offers nothing; just after `=` is the empty
+    // name query, matching just after `#` on `=#bugs`.
+    assert_eq!(field("=bugs", 0), None);
+    let after_eq = field("=bugs", 1).expect("just after =");
+    assert_eq!(after_eq.query, "");
+    assert_eq!(after_eq.replacement, (1, 5));
+    assert!(after_eq.bare_name);
+
+    let chain = "x =bu";
+    let chained = field(chain, chain.len()).expect("chain bare");
+    assert_eq!(chained.query, "bu");
+    assert_eq!(chained.replacement, (3, 5));
+    assert!(chained.bare_name);
+    assert_eq!(field(chain, 1), None);
+
+    let trail = "x wired it =bu";
+    let trailed = field(trail, trail.len()).expect("inline trail");
+    assert_eq!(trailed.query, "bu");
+    assert_eq!(trailed.replacement, (12, 14));
+    assert!(trailed.bare_name);
+}
+
+#[test]
 fn retired_doubled_start_has_no_name_completion_or_override_context() {
     for raw in ["==#", "==#bugs", "==3#bugs", "==#bugs~2"] {
         assert_eq!(field(raw, raw.len()), None, "{raw}");
@@ -719,6 +757,7 @@ fn retired_doubled_start_has_no_name_completion_or_override_context() {
 fn pomodoro_start_name_context_reports_ledger_behavior() {
     // A complete name field reports whether the swap keeps the running ledger.
     assert_eq!(pomodoro_start_override_at("=#bugs", 3), Some(true));
+    assert_eq!(pomodoro_start_override_at("=bugs", 3), Some(true));
     assert_eq!(pomodoro_start_override_at("=3#bugs", 4), Some(false));
     assert_eq!(pomodoro_start_override_at("=-2#bugs", 4), Some(false));
     // A drop list does not change the kept ledger.

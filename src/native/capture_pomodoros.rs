@@ -1132,7 +1132,11 @@ fn human_agenda_entry(
         ),
         Some(AgendaRole::Later) => {
             let trail = if entry.selectable && !entry.slug.is_empty() {
-                format!(" {}", styler.dim(&format!("=#{}", entry.slug)))
+                format!(
+                    " {}",
+                    styler
+                        .dim(&capture_language::named_start_token(&entry.slug))
+                )
             } else {
                 String::new()
             };

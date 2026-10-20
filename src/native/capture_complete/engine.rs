@@ -15,8 +15,8 @@ use super::{
         Replacement, RouteCandidate, RouteCandidateKind, SCHEMA_VERSION,
     },
     pomodoros::{
-        pomodoro_name_candidates, pomodoro_start_name_candidates,
-        running_pomodoro_session,
+        apply_bare_start_name_replacements, pomodoro_name_candidates,
+        pomodoro_start_name_candidates, running_pomodoro_session,
     },
 };
 use crate::native::{
@@ -425,6 +425,9 @@ fn build_result_inner(
                 }
             })
         });
+    if field.bare_name {
+        apply_bare_start_name_replacements(&mut candidates);
+    }
 
     Ok(CaptureCompleteResult {
         ok: true,

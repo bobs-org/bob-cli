@@ -814,3 +814,32 @@ fn editor_spans_cover_task_complete_tokens() {
         vec![(0, 4, SpanKind::InteractivePlaceholder)]
     );
 }
+
+#[test]
+fn editor_spans_a_bare_named_start_without_a_hash_gap() {
+    let parse = editor("=bugs@3~2");
+    assert_eq!(parse.mode, EditorMode::PomodoroStart);
+    assert_eq!(parse.section.as_deref(), Some("bugs"));
+    assert_eq!(
+        ranges(&parse),
+        vec![
+            (0, 1, SpanKind::PomodoroStart),
+            (1, 5, SpanKind::PomodoroName),
+            (5, 7, SpanKind::PomodoroStart),
+            (7, 9, SpanKind::PomodoroStartDrop),
+        ]
+    );
+    let hashed = editor("=#bugs@3~2");
+    assert_eq!(hashed.mode, parse.mode);
+    assert_eq!(hashed.section, parse.section);
+    assert_eq!(hashed.pomodoro_start, parse.pomodoro_start);
+    assert_eq!(
+        ranges(&hashed),
+        vec![
+            (0, 1, SpanKind::PomodoroStart),
+            (2, 6, SpanKind::PomodoroName),
+            (6, 8, SpanKind::PomodoroStart),
+            (8, 10, SpanKind::PomodoroStartDrop),
+        ]
+    );
+}

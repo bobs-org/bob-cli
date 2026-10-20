@@ -85,6 +85,10 @@ pub(crate) struct CompletionField {
     /// completion replaces in full regardless of where the cursor sits
     /// inside it.
     pub(crate) replacement: (usize, usize),
+    /// True when this `pomodoro_start_name` field is a bare `=name`
+    /// spelling, so candidates whose slug cannot be bare get a `#slug`
+    /// replacement.
+    pub(crate) bare_name: bool,
 }
 
 pub(super) struct CompletionThird<'a> {
@@ -132,6 +136,7 @@ pub(super) fn task_link_completion_field_at(
         block_id: None,
         query,
         replacement: (token.start, token.end),
+        bare_name: false,
     })
 }
 
@@ -166,6 +171,7 @@ pub(super) fn task_goto_completion_field_at(
         block_id: None,
         query,
         replacement: (token.start, token.end),
+        bare_name: false,
     })
 }
 
@@ -300,6 +306,7 @@ fn relation_target_completion_field_at(
             block_id: None,
             query,
             replacement: (start, end),
+            bare_name: false,
         });
     }
     None
@@ -374,6 +381,7 @@ fn relation_label_completion_field_at(
             block_id: None,
             query,
             replacement: (separator, end),
+            bare_name: false,
         });
     }
     None
@@ -437,6 +445,7 @@ fn relation_completion_field_at(
         block_id: None,
         query: typed,
         replacement: (start, end),
+        bare_name: false,
     })
 }
 
@@ -514,6 +523,7 @@ fn bang_completion_field(
         block_id: None,
         query,
         replacement: (start, end),
+        bare_name: false,
     })
 }
 
@@ -570,6 +580,7 @@ pub(super) fn caret_completion_field_at(
                 block_id: None,
                 query,
                 replacement: (first.start + 1, first.end),
+                bare_name: false,
             })
         }
         CaretTokenShape::NamePartial { route, block_id } => {
@@ -632,6 +643,7 @@ pub(super) fn caret_link_field(
             block_id: None,
             query,
             replacement: (token.start + 1, link_end_abs),
+            bare_name: false,
         });
     }
     let (name_start, name_end) = name_range?;
@@ -650,27 +662,30 @@ pub(super) fn caret_link_field(
         block_id: Some(block_id),
         query,
         replacement: (name_start_abs, name_end_abs),
+        bare_name: false,
     })
 }
 
-/// Lexed facts for the named-start (`=<X>#name`) token whose name part holds
-/// `cursor`: the raw `<X>` suffix, the name text, and the absolute name-part
-/// span. Retired doubled starts never offer completion. `None` when the
-/// cursor is not inside such a name part: just after `#` through the end
-/// of the name part. A cursor on `=<X>` or at the `#` byte itself yields
-/// nothing, and `#` is never inside the span. The lexer decides what
-/// counts as a named start; validity never matters here, so near misses
-/// lex the same way valid tokens do.
+/// Lexed facts for the named-start (`=<X>#name` / `=name`) token whose
+/// name part holds `cursor`: the raw `<X>` suffix, the name text, the
+/// absolute name-part span, and whether the name is bare-spelled. Retired
+/// doubled starts never offer completion. `None` when the cursor is not
+/// inside such a name part: just after `#` (hash) or just after `=`
+/// (bare) through the end of the name part. A cursor on `=<X>` or at the
+/// `#` byte itself yields nothing, and `#` is never inside the span. The
+/// lexer decides what counts as a named start; validity never matters
+/// here, so near misses lex the same way valid tokens do.
 fn named_start_name_at(
     item: &CaptureItem<'_>,
     cursor: usize,
-) -> Option<(String, String, (usize, usize))> {
+) -> Option<(String, String, (usize, usize), bool)> {
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let trimmed = text.trim();
     let super::item::EqualsToken::Start {
         suffix,
         name: Some(name),
+        name_spelling: Some(spelling),
         doubled: false,
         ..
     } = super::item::session_equals_token(trimmed)?
@@ -679,26 +694,33 @@ fn named_start_name_at(
     };
     let leading = text.len() - text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    let prefix_len = 1 + suffix.len();
-    let name_start = token_start + prefix_len + 1;
+    let name_start = token_start
+        + super::item::named_start_name_offset(suffix.len(), spelling);
     let name_end = name_start + name.len();
     if cursor < name_start || cursor > name_end {
         return None;
     }
-    Some((suffix, name, (name_start, name_end)))
+    Some((
+        suffix,
+        name,
+        (name_start, name_end),
+        spelling == super::bare_name::NameSpelling::Bare,
+    ))
 }
 
-/// Completion field for the name part of a `=<X>#name` named Pomodoro
-/// start. The cursor must lie inside `[name_start, name_end]`: just after
-/// `#` through the end of the name part. A cursor on `=<X>` or at the `#`
-/// byte itself yields nothing, and `#` is never inside the replacement.
-/// The replacement covers the whole name part regardless of where the
-/// cursor sits inside it.
+/// Completion field for the name part of a `=<X>#name` / `=name` named
+/// Pomodoro start. The cursor must lie inside `[name_start, name_end]`:
+/// just after `#` (hash) or just after `=` (bare) through the end of the
+/// name part. A cursor on `=<X>` or at the `#` byte itself yields
+/// nothing, and `#` is never inside the replacement. The replacement
+/// covers the whole name part regardless of where the cursor sits inside
+/// it.
 fn pomodoro_start_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let (_, name, (name_start, name_end)) = named_start_name_at(item, cursor)?;
+    let (_, name, (name_start, name_end), bare_name) =
+        named_start_name_at(item, cursor)?;
     let query = name.get(..cursor - name_start)?.to_string();
     Some(CompletionField {
         context: CompletionContext::PomodoroStartName,
@@ -706,6 +728,7 @@ fn pomodoro_start_name_field(
         block_id: None,
         query,
         replacement: (name_start, name_end),
+        bare_name,
     })
 }
 
@@ -736,7 +759,7 @@ pub(crate) fn pomodoro_start_override_at(
             return None;
         }
     }
-    let (suffix, _, _) = named_start_name_at(item, cursor)?;
+    let (suffix, _, _, _) = named_start_name_at(item, cursor)?;
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let leading = text.len() - text.trim_start().len();
@@ -999,6 +1022,7 @@ fn parent_task_completion_field_at(
         block_id: None,
         query,
         replacement: (selector.token.start, selector.token.end),
+        bare_name: false,
     })
 }
 
@@ -1030,6 +1054,7 @@ fn project_task_completion_field(
         block_id: None,
         query,
         replacement: (info.token.start + 1, info.token.end),
+        bare_name: false,
     })
 }
 
@@ -1610,6 +1635,7 @@ pub(super) fn completion_field_from_parts(
             block_id: None,
             query: parts.route_part[..split].to_string(),
             replacement: (route_start, route_end),
+            bare_name: false,
         });
     }
 
@@ -1651,6 +1677,7 @@ pub(super) fn completion_field_from_parts(
                 block_id: None,
                 query: right_core[..split].to_string(),
                 replacement: (right_start, core_end),
+                bare_name: false,
             });
         }
         if cursor <= right_end {
@@ -1675,6 +1702,7 @@ pub(super) fn completion_field_from_parts(
                 block_id: None,
                 query: right_core[..split].to_string(),
                 replacement: (right_start, core_end),
+                bare_name: false,
             });
         }
         let split = cursor.clamp(right_start, right_end) - right_start;
@@ -1684,6 +1712,7 @@ pub(super) fn completion_field_from_parts(
             block_id: None,
             query: parts.right_part[..split].to_string(),
             replacement: (right_start, right_end),
+            bare_name: false,
         });
     }
 
@@ -1710,6 +1739,7 @@ pub(super) fn completion_field_from_parts(
         block_id: (!third_block.is_empty()).then(|| third_block.to_string()),
         query: third.part[..split].to_string(),
         replacement: (third_start, third_end),
+        bare_name: false,
     })
 }
 

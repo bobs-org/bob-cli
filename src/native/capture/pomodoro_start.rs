@@ -1,6 +1,16 @@
 //! Pomodoro start planning and placement.
 use super::*;
 
+/// Composed start token for a suggested existing Pomodoro: `=name` when
+/// the name can be bare and no leading `<X>` was typed, otherwise `=<X>#name`.
+fn named_start_suggestion(raw: &str, slug: &str) -> String {
+    if raw.is_empty() {
+        crate::native::capture_language::named_start_token(slug)
+    } else {
+        format!("={raw}#{slug}")
+    }
+}
+
 pub(super) fn compute_pomodoro_start_range(
     now: chrono::NaiveDateTime,
     spec: &PomodoroStartSpec,
@@ -706,7 +716,7 @@ pub(super) fn plan_pomodoro_start_item(
     }
     let Some(entry) = capture_pomodoros::next_future_pomodoro(&scan) else {
         return Err(CaptureError::io(format!(
-            "no future Pomodoro to start: today's ledger (`{rel}`) has no open `- [ ] ()` placeholder (start a new named session with `=#<name>`, or a task's session with `^route:block-id=`)"
+            "no future Pomodoro to start: today's ledger (`{rel}`) has no open `- [ ] ()` placeholder (start a new named session with `=<name>`, or a task's session with `^route:block-id=`)"
         )));
     };
     let index = entry.line.checked_sub(1).ok_or_else(|| {
@@ -1374,9 +1384,9 @@ fn plan_override_swap_item(
                     .clone()
                     .unwrap_or_else(|| entry.slug.clone());
                 let slug = entry.slug.clone();
-                let raw = spec.raw.clone();
+                let token = named_start_suggestion(&spec.raw, &slug);
                 format!(
-                    "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
+                    "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `{token}`)"
                 )
             });
             let (with_placeholder, created_line, _) =
@@ -2158,9 +2168,9 @@ fn plan_named_pomodoro_start_item(
                         .clone()
                         .unwrap_or_else(|| entry.slug.clone());
                     let slug = entry.slug.clone();
-                    let raw = spec.raw.clone();
+                    let token = named_start_suggestion(&spec.raw, &slug);
                     format!(
-                        "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
+                        "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `{token}`)"
                     )
                 });
                 let (with_placeholder, created_line, _) =

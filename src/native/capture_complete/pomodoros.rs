@@ -503,6 +503,22 @@ pub(super) fn pomodoro_name_candidates_from_entries(
     candidates
 }
 
+/// Prefix `#` onto start-name replacements that cannot be spelled bare, so
+/// accepting a substring match like `2fa` on `=fa|` yields `=#2fa`.
+pub(super) fn apply_bare_start_name_replacements(candidates: &mut Candidates) {
+    let Candidates::PomodoroName(items) = candidates else {
+        return;
+    };
+    for item in items {
+        if item.replacement.is_empty() {
+            continue;
+        }
+        if !capture_language::can_spell_bare(&item.replacement) {
+            item.replacement.insert(0, '#');
+        }
+    }
+}
+
 pub(super) fn pomodoro_name_candidate(
     entry: &PomodoroEntry,
     requires_name: bool,

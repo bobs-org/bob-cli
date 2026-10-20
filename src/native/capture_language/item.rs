@@ -1,5 +1,6 @@
 //! Capture-item and session-operator parsing.
 
+use super::bare_name::*;
 use super::close_log::*;
 use super::close_selection::*;
 use super::dependencies::*;
@@ -1198,7 +1199,7 @@ pub(crate) fn session_operator_token(
 
 /// A whole-item session token: either a close (a bare `x`, or a retired
 /// `=x`/`=*`/`=!` spelling that teaches it) or a start (`=` plus an
-/// `<X>`-shaped suffix and optional `#name` part).
+/// `<X>`-shaped suffix and optional `#name` or bare `name` part).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EqualsToken {
     /// A leading bare lowercase `x`, one of its claimed selection/hash near
@@ -1207,21 +1208,25 @@ pub(crate) enum EqualsToken {
     /// becoming a task.
     Close,
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
-    /// `#name` part, plus optional `@<X>` timing and `~<K>` drop parts in
-    /// either order. `suffix` excludes the sigil (the leading `<X>`),
-    /// `counted` is true when the effective `<X>` (leading or `@`) holds at
-    /// least one digit, `name` is `Some` when a `#` immediately follows the
-    /// suffix (possibly empty, as in `=#`; it ends at the first ASCII
-    /// whitespace, `~`, or `@`), `drop` holds the `~` offset inside the
-    /// token plus the text after it, `timing` holds the `@` offset plus the
-    /// text after it, `len` is the token's byte length including the sigil,
-    /// the name, and both optional parts, and `doubled` is true when the
-    /// token used the doubled `==` sigil, which is now retired.
+    /// `#name` or bare `name` part, plus optional `@<X>` timing and `~<K>`
+    /// drop parts in either order. `suffix` excludes the sigil (the leading
+    /// `<X>`), `counted` is true when the effective `<X>` (leading or `@`)
+    /// holds at least one digit, `name` is `Some` when a `#` immediately
+    /// follows the suffix (possibly empty, as in `=#`) or a bare name
+    /// follows an empty suffix, `name_spelling` records Hash vs Bare so
+    /// callers do not recompute `1 + suffix.len() + 1`, `drop` holds the
+    /// `~` offset inside the token plus the text after it, `timing` holds
+    /// the `@` offset plus the text after it, `len` is the token's byte
+    /// length including the sigil, the name, and both optional parts, and
+    /// `doubled` is true when the token used the doubled `==` sigil, which
+    /// is now retired. A name ends at the first ASCII whitespace, `~`, or
+    /// `@`.
     Start {
         suffix: String,
         counted: bool,
         len: usize,
         name: Option<String>,
+        name_spelling: Option<NameSpelling>,
         drop: Option<(usize, String)>,
         timing: Option<(usize, String)>,
         doubled: bool,
@@ -1248,21 +1253,27 @@ fn double_close_tail_is_claimed(after_first: &str) -> bool {
 /// error. A bare start token (`=`, `=-`) has
 /// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
 /// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
-/// immediately after the suffix ends at the first ASCII whitespace, `~`, or
-/// `@`; the `#` must come immediately after the suffix. After the name, two
-/// optional parts may follow, each at most once and in either order: an
-/// `@<X>` timing part and a `~<K>` drop part. An unnamed token whose `~<K>`
-/// part is present may also take an `@<X>` part after it. A token with no
-/// `#name` and no `~<K>` never reads an `@`, so `=@3` stays prose and
-/// `=3@2` keeps its shape error. Whichever optional part comes first ends
-/// at whitespace or at the other part's sigil; the second runs to
-/// whitespace. `len` covers every part.
+/// immediately after the suffix, or a bare `name` after an empty suffix,
+/// ends at the first ASCII whitespace, `~`, or `@`; the `#` must come
+/// immediately after the suffix. After the name, two optional parts may
+/// follow, each at most once and in either order: an `@<X>` timing part
+/// and a `~<K>` drop part. An unnamed token whose `~<K>` part is present
+/// may also take an `@<X>` part after it. A token with no name and no
+/// `~<K>` never reads an `@`, so `=@3` stays prose and `=3@2` keeps its
+/// shape error. Whichever optional part comes first ends at whitespace or
+/// at the other part's sigil; the second runs to whitespace. `len` covers
+/// every part.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     // Bare `x` closes only at the start of a whole-item token. Keep this
     // strict classifier ahead of the `=`-family lexer so starts and all
     // existing `=` spellings retain their current tokenization.
     let first = text.split_whitespace().next().unwrap_or(text);
     if classify_whole_item_close(first).is_some() || first.starts_with("x#") {
+        return Some(EqualsToken::Close);
+    }
+    // Retired `=x`/`=X`/`=*`/`=!`/`=x#…` closes claim the token; other
+    // `=x…` shapes (`=xx`, `=xmas`) fall through to start lexing.
+    if retired_whole_item_close_rewrite(first).is_some() {
         return Some(EqualsToken::Close);
     }
     let rest = text.strip_prefix('=')?;
@@ -1278,19 +1289,6 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         }
         None => (rest, 1, false),
     };
-    if !doubled
-        && rest
-            .as_bytes()
-            .first()
-            .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'x'))
-    {
-        return Some(EqualsToken::Close);
-    }
-    // The retired `=*`/`=!` shorthands claim the token even when their list
-    // is malformed, so `=*abc` reports a retired-close error, never a task.
-    if !doubled && (rest.starts_with('*') || rest.starts_with('!')) {
-        return Some(EqualsToken::Close);
-    }
     let bytes = rest.as_bytes();
     let mut len = 0;
     while len < bytes.len() && bytes[len].is_ascii_digit() {
@@ -1305,17 +1303,19 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let suffix = rest[..len].to_string();
     let mut token_len = len + sigil_len;
     let mut name: Option<String> = None;
+    let mut name_spelling: Option<NameSpelling> = None;
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
-        let name_len = after_hash
-            .find(|character: char| {
-                character.is_ascii_whitespace()
-                    || character == '~'
-                    || character == '@'
-            })
-            .unwrap_or(after_hash.len());
+        let name_len = start_name_extent(after_hash);
         name = Some(after_hash[..name_len].to_string());
+        name_spelling = Some(NameSpelling::Hash);
         token_len += 1 + name_len;
+    } else if !doubled && suffix.is_empty() {
+        if let Some(name_len) = bare_start_name_len(rest) {
+            name = Some(rest[..name_len].to_string());
+            name_spelling = Some(NameSpelling::Bare);
+            token_len += name_len;
+        }
     }
     let mut drop: Option<(usize, String)> = None;
     let mut timing: Option<(usize, String)> = None;
@@ -1387,10 +1387,24 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         counted,
         len: token_len,
         name,
+        name_spelling,
         drop,
         timing,
         doubled,
     })
+}
+
+/// Absolute byte offset of a named start's name inside the token: after
+/// `=<X>#` for Hash, after `=<X>` for Bare.
+pub(crate) fn named_start_name_offset(
+    suffix_len: usize,
+    spelling: NameSpelling,
+) -> usize {
+    let prefix = 1 + suffix_len;
+    match spelling {
+        NameSpelling::Hash => prefix + 1,
+        NameSpelling::Bare => prefix,
+    }
 }
 
 /// The effective `<X>` timing text: the `@` text when a timing part was
@@ -1591,13 +1605,15 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
 /// when the token itself is well-formed (callers then report E4 for extra
 /// text or accept the exact token). `token` is the token without its
 /// `~<K>` drop and `@<X>` timing parts; `drop_text`/`timing_text` keep the
-/// typed parts in the order-error suggestion.
+/// typed parts in the order-error suggestion. Suggestions that rewrite the
+/// typed token keep `spelling`.
 fn named_token_error(
     token: &str,
     suffix: &str,
     name: &str,
     drop_text: Option<&str>,
     timing_text: Option<&str>,
+    spelling: NameSpelling,
 ) -> Option<String> {
     if name.is_empty() {
         return Some(pomodoro_named_start_incomplete_error(token));
@@ -1609,9 +1625,13 @@ fn named_token_error(
     {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-        let sigil = "=";
+        let at_form = format!(
+            "{}@{after}{drop_suffix}",
+            echo_named_start(spelling, suffix, before)
+        );
+        let hash_form = format!("={after}#{before}{drop_suffix}");
         return Some(format!(
-            "write the duration after `@` or before the name: `{sigil}#{before}@{after}{drop_suffix}` or `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
+            "write the duration after `@` or before the name: `{at_form}` or `{hash_form}` instead of `{token}`"
         ));
     }
     if !is_pomodoro_selector_component(name) {
@@ -1643,7 +1663,7 @@ fn named_timing_twice_error(
 
 /// E4 for a well-formed named token with extra text or child lines.
 /// `token` is the token without its drop part; a multi-word hint keeps the
-/// typed `~<K>`.
+/// typed `~<K>` and the typed `#` or bare spelling.
 pub(super) fn named_shape_error_with_drop(
     token: &str,
     suffix: &str,
@@ -1651,6 +1671,7 @@ pub(super) fn named_shape_error_with_drop(
     parent_trimmed: &str,
     len: usize,
     drop_text: Option<&str>,
+    spelling: NameSpelling,
 ) -> String {
     if name.is_empty()
         && let Some(nospace) = named_nospace_error(suffix, parent_trimmed, len)
@@ -1669,13 +1690,60 @@ pub(super) fn named_shape_error_with_drop(
             let joined = words.join("-");
             let drop_suffix =
                 drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-            let sigil = "=";
+            let suggestion = format!(
+                "{}{drop_suffix}",
+                echo_named_start(spelling, suffix, &format!("{name}-{joined}"))
+            );
             message.push_str(&format!(
-                "; to name a multi-word Pomodoro, join the words with `-`: `{sigil}{suffix}#{name}-{joined}{drop_suffix}`"
+                "; to name a multi-word Pomodoro, join the words with `-`: `{suggestion}`"
             ));
         }
     }
     message
+}
+
+/// Teaching error when a counted unnamed start's `<X>` runs into a following
+/// letter (`=3bugs`, `=2fa`). `None` when the byte after the suffix is not
+/// an ASCII letter. The range is token-relative over the glued name.
+pub(super) fn glued_timing_diagnostic(
+    parent_trimmed: &str,
+    len: usize,
+    suffix: &str,
+) -> Option<(String, (usize, usize))> {
+    if suffix.is_empty() || !suffix.bytes().any(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let rest = parent_trimmed.get(len..)?;
+    if !rest.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let name_len = start_name_extent(rest);
+    let name = rest.get(..name_len)?;
+    if name.is_empty() || !is_pomodoro_selector_component(name) {
+        return None;
+    }
+    let token = parent_trimmed
+        .get(..len + name_len)
+        .unwrap_or(parent_trimmed);
+    let at_form = format!("{}@{suffix}", named_start_token(name));
+    let hash_form = format!("={suffix}#{name}");
+    let combined = format!("{suffix}{name}");
+    let digit_name = if suffix.bytes().all(|byte| byte.is_ascii_digit())
+        && is_pomodoro_selector_component(&combined)
+    {
+        Some(named_start_token(&combined))
+    } else {
+        None
+    };
+    Some((
+        pomodoro_glued_timing_error(
+            token,
+            &at_form,
+            &hash_form,
+            digit_name.as_deref(),
+        ),
+        (len, len + name_len),
+    ))
 }
 
 /// Absolute byte offset of a whole-item start token's `after_tilde` text
@@ -2150,6 +2218,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             counted,
             len,
             name,
+            name_spelling,
             drop,
             timing,
             doubled,
@@ -2165,6 +2234,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 return Err(pomodoro_double_start_error(token_text));
             }
             if let Some(selector) = name {
+                let spelling = name_spelling.unwrap_or(NameSpelling::Hash);
                 let token_text =
                     parent_trimmed.get(..len).unwrap_or(parent_trimmed);
                 let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
@@ -2192,6 +2262,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     &selector,
                     drop_text,
                     timing_text,
+                    spelling,
                 ) {
                     let exact =
                         parent_trimmed.len() == len && item.lines.len() == 1;
@@ -2265,6 +2336,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             parent_trimmed,
                             len,
                             drop_text,
+                            spelling,
                         ));
                     }
                     return Ok(None);
@@ -2314,6 +2386,11 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 if claims
                     || (parent_trimmed.len() == len && item.lines.len() > 1)
                 {
+                    if let Some((message, _)) =
+                        glued_timing_diagnostic(parent_trimmed, len, &suffix)
+                    {
+                        return Err(message);
+                    }
                     let token_text =
                         parent_trimmed.get(..len).unwrap_or(parent_trimmed);
                     // Both timings win over dangling-`@`.

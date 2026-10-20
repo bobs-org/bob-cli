@@ -971,7 +971,7 @@ fn override_swap_teaching_errors() {
     assert!(!bad.status.success(), "{}", format_output(&bad));
     assert!(
         format_output(&bad).contains(
-            "`=#bugs` swaps it in without closing the running session"
+            "`=bugs` swaps it in without closing the running session"
         ),
         "{}",
         format_output(&bad)
@@ -992,7 +992,7 @@ fn override_swap_did_you_mean_spells_override() {
         warnings.iter().any(|warning| {
             warning
                 .as_str()
-                .is_some_and(|text| text.contains("use `=#bugs`"))
+                .is_some_and(|text| text.contains("use `=bugs`"))
         }),
         "{json}"
     );

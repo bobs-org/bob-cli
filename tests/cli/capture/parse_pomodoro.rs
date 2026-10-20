@@ -710,8 +710,19 @@ fn capture_parse_pomodoro_start_protocol() {
 
     // Prose lookalikes stay ordinary tasks with no diagnostics.
     for text in [
-        "= foo", "=- foo", "== foo", "==foo", "===", "==xyz", "=-)", "Plan =3",
-        "Plan ==3", "a=3", "=xx", "=xa", "Plan x", "Plan x1",
+        "= foo",
+        "=- foo",
+        "== foo",
+        "==foo",
+        "===",
+        "==xyz",
+        "=-)",
+        "Plan =3",
+        "Plan ==3",
+        "a=3",
+        "Plan x",
+        "Plan x1",
+        "Plan =bugs",
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "task", "{text}");
@@ -796,6 +807,43 @@ fn capture_parse_named_pomodoro_start_protocol() {
         );
         assert!(value.get("items").is_none(), "{text}: {value}");
     }
+
+    // Bare names skip the `#` gap: `=` then the name bytes.
+    for (text, section, name_end) in
+        [("=bugs", "bugs", 5), ("=xx", "xx", 3), ("=xmas", "xmas", 5)]
+    {
+        let value = parse(text);
+        assert_eq!(value["mode"], "pomodoro_start", "{text}");
+        assert_eq!(value["section"], section, "{text}: {value}");
+        assert_eq!(
+            value["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_start" },
+                { "start": 1, "end": name_end, "kind": "pomodoro_name" },
+            ]),
+            "{text}: {value}"
+        );
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": "",
+                "duration_units": 5,
+                "offset_units": 0,
+            }),
+            "{text}: {value}"
+        );
+    }
+    let glued = parse("=3bugs");
+    assert_eq!(glued["mode"], "pomodoro_start", "{glued}");
+    assert_eq!(
+        glued["diagnostics"][0]["code"], "invalid_pomodoro_start",
+        "{glued}"
+    );
+    assert_eq!(
+        glued["diagnostics"][0]["range"],
+        serde_json::json!([2, 6]),
+        "{glued}"
+    );
 
     // `=<X>#` with no name is incomplete, needing the Pomodoro name.
     for (text, raw) in [("=#", ""), ("=3#", "3")] {

@@ -472,3 +472,26 @@ fn chain_wildcard_close_matches_blank_line_batch() {
         fs::read_to_string(vault_b.join("bob.md")).expect("read batch bob")
     );
 }
+
+#[test]
+fn chain_bare_named_start_matches_hash_spelling() {
+    let (_temp_a, vault_a, day_a) = close_worked_vault("bob-cli-chain-bare-a");
+    let (_temp_b, vault_b, day_b) = close_worked_vault("bob-cli-chain-bare-b");
+    let now = "2026-09-28 09:37:00";
+    let bare = run_capture_json(&vault_a, &day_a, now, &["x =sase"]);
+    let hashed = run_capture_json(&vault_b, &day_b, now, &["x =#sase"]);
+    assert_eq!(bare["captures"][0]["kind"], "pomodoro_close");
+    assert_eq!(bare["captures"][1]["kind"], "pomodoro_start");
+    assert_eq!(
+        bare["captures"][0]["pomodoro_close"],
+        hashed["captures"][0]["pomodoro_close"]
+    );
+    assert_eq!(
+        bare["captures"][1]["pomodoro_start"],
+        hashed["captures"][1]["pomodoro_start"]
+    );
+    assert_eq!(
+        fs::read_to_string(&day_a).expect("bare day"),
+        fs::read_to_string(&day_b).expect("hash day")
+    );
+}

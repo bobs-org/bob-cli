@@ -51,6 +51,10 @@ fn chain_token_predicate_covers_the_documented_table() {
         "=#",
         "=#bugs=3",
         "=#b!",
+        "=bugs",
+        "=xx",
+        "=xa",
+        "=xmas",
         "x#bugs",
         "x",
         "x2",
@@ -90,8 +94,6 @@ fn chain_token_predicate_covers_the_documented_table() {
         "===",
         "==xyz",
         "==important==",
-        "=xx",
-        "=xa",
         "+++",
         "+-",
         "-foo",
@@ -136,6 +138,10 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
         "=#",
         "=#bugs=3",
         "=#b!",
+        "=bugs",
+        "=xx",
+        "=xa",
+        "=xmas",
         "x#bugs",
         "x",
         "x2",
@@ -148,8 +154,6 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
         "x!",
         "foo",
         "==",
-        "=xx",
-        "=xa",
         "+++",
         "+-",
         "-foo",
@@ -598,6 +602,23 @@ fn editor_reports_a_named_start_chain_with_absolute_spans() {
     );
     assert!(parse.items[1].diagnostics.is_empty());
     assert!(parse.items[1].pomodoro_start.is_some());
+
+    let bare = parse_for_editor("x =bugs");
+    assert_eq!(bare.items.len(), 2);
+    assert_eq!(bare.items[1].mode, EditorMode::PomodoroStart);
+    assert_eq!(bare.items[1].section.as_deref(), Some("bugs"));
+    assert_eq!(
+        bare.items[1]
+            .spans
+            .iter()
+            .map(|span| (span.start, span.end, span.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (2, 3, SpanKind::PomodoroStart),
+            (3, 7, SpanKind::PomodoroName),
+        ]
+    );
+    assert_eq!(parse.items[1].pomodoro_start, bare.items[1].pomodoro_start);
 }
 
 #[test]
