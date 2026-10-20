@@ -2,3 +2,114 @@
   location: /vault-git-sync/#halted-sync
 - query: conflict copy
   location: /vault-git-sync/
+- query: Bare public URL
+  location: /reference/capture-syntax/#bare-public-url
+- query: "URL @route"
+  location: /reference/capture-syntax/#url-at-route
+- query: "URL %"
+  location: /reference/capture-syntax/#url-listen
+- query: "-r"
+  location: /reference/capture-syntax/#cli-route
+- query: "@@route"
+  location: /reference/capture-syntax/#global-route
+- query: "@@route+block-id"
+  location: /reference/capture-syntax/#global-parent
+- query: "@@template:"
+  location: /reference/capture-syntax/#template
+- query: "@route"
+  location: /reference/capture-syntax/#at-route
+- query: "@route#Section"
+  location: /reference/capture-syntax/#at-route-section
+- query: "@route#"
+  location: /reference/capture-syntax/#at-route-any-section
+- query: "@route^block-id"
+  location: /reference/capture-syntax/#at-route-caret
+- query: "@route:block-id"
+  location: /reference/capture-syntax/#at-route-colon
+- query: "@route:block-id#pomodoro"
+  location: /reference/capture-syntax/#at-route-colon-named
+- query: "@route:block-id=<X>"
+  location: /reference/capture-syntax/#at-route-colon-start
+- query: "@route:block-id with no other text"
+  location: /reference/capture-syntax/#link-existing
+- query: "^route:block-id"
+  location: /reference/capture-syntax/#caret-active-task
+- query: ":<query>"
+  location: /reference/capture-syntax/#colon-picker
+- query: "/<query>"
+  location: /reference/capture-syntax/#slash-picker
+- query: "+query"
+  location: /reference/capture-syntax/#plus-parent-picker
+- query: "+"
+  location: /reference/capture-syntax/#lone-plus
+- query: "&note:block-id"
+  location: /reference/capture-syntax/#ampersand-prereq
+- query: "&"
+  location: /reference/capture-syntax/#ampersand-picker
+- query: "^route:block-id &note:id"
+  location: /reference/capture-syntax/#add-prereq-existing
+- query: "*note:block-id"
+  location: /reference/capture-syntax/#star-blocks
+- query: "*query"
+  location: /reference/capture-syntax/#star-picker
+- query: "^route:block-id *note:id"
+  location: /reference/capture-syntax/#star-existing
+- query: "!"
+  location: /reference/capture-syntax/#bang-picker
+- query: "!note:block-id"
+  location: /reference/capture-syntax/#bang-complete
+- query: "+[N]"
+  location: /reference/capture-syntax/#plus-adjust
+- query: "-[N]"
+  location: /reference/capture-syntax/#minus-adjust
+- query: "++[N]"
+  location: /reference/capture-syntax/#plus-plus-shift
+- query: "--[N]"
+  location: /reference/capture-syntax/#minus-minus-shift
+- query: "="
+  location: /reference/capture-syntax/#equals-start
+- query: "=<X>#pomodoro"
+  location: /reference/capture-syntax/#equals-named
+- query: "~<K>"
+  location: /reference/capture-syntax/#tilde-drop
+- query: "x"
+  location: /reference/capture-syntax/#x-close
+- query: "x!<M>"
+  location: /reference/capture-syntax/#x-complete-links
+- query: "x*<P>"
+  location: /reference/capture-syntax/#x-park-links
+- query: "x~<K>"
+  location: /reference/capture-syntax/#x-drop-links
+- query: Work Log
+  location: /reference/capture-syntax/#x-work-log
+- query: "+2 x"
+  location: /reference/capture-syntax/#operator-chain
+- query: "@route:block-id=x"
+  location: /reference/capture-syntax/#link-then-close
+- query: "@route^block-id+"
+  location: /reference/capture-syntax/#project-plus
+- query: ":id"
+  location: /reference/capture-syntax/#project-colon-child
+- query: "^id"
+  location: /reference/capture-syntax/#project-caret-child
+- query: "@route+block-id"
+  location: /reference/capture-syntax/#plus-child
+- query: "@route+block-id#section"
+  location: /reference/capture-syntax/#plus-child-section
+- query: "@route+block-id with no other text"
+  location: /reference/capture-syntax/#plus-ensure-next
+- query: "@route+block-id!"
+  location: /reference/capture-syntax/#plus-toggle
+- query: "trailing #"
+  location: /reference/capture-syntax/#trailing-hash
+- query: "s:<N>"
+  location: /reference/capture-syntax/#s-schedule
+- query: "$"
+  location: /reference/capture-syntax/#dollar-priority
+- query: "%"
+  location: /reference/capture-syntax/#percent-clipboard
+- query: Pending
+  location: /reference/vault-format/#pending
+- query: Next
+  location: /reference/vault-format/#next
+

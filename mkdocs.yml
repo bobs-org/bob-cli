@@ -97,6 +97,8 @@ nav:
   - Home: index.md
   - Reference:
       - Overview: reference/index.md
+      - Capture syntax: reference/capture-syntax.md
+      - Vault format: reference/vault-format.md
       - CLI:
           - Command index: reference/cli/index.md
           # BEGIN GENERATED: cli nav

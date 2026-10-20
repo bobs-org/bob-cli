@@ -1,0 +1,830 @@
+---
+title: Capture syntax
+description: Index of bob capture tokens with syntax, examples, and links into the capture contract.
+---
+
+# Capture syntax
+
+`bob capture` reads one draft and writes tasks, bullets, reference jobs, or
+Pomodoro session changes. This page is the token lookup. The full grammar and
+refusal messages live in the [Capture contract](../capture.md).
+
+Examples below were captured from this checkout's `bob` in an isolated
+`HOME`/`XDG_*` tree, a synthetic vault, `BOB_NOW=2026-10-20 12:00:00`,
+`TZ=UTC`, and `BOB_REF_JOBS_KICK=off`. Session examples need today's daily
+note with an open `## Pomodoros` entry. Dependency writes need Obsidian Tasks
+settings that define Blocked as `?`. Quote tokens in Zsh (`*`, `!`, `?`, and
+`#` glob). Network, clipboard, sync, and hook execution are not used here.
+
+## Token index
+
+Each row is a distinct operation. Equivalent spellings share a heading.
+Incomplete picker input is labeled **picker** and is refused if you submit it.
+
+| Token | Meaning | Heading |
+| --- | --- | --- |
+| Bare public URL | Queue a reference job under `mac_inbox` | [Bare public URL](#bare-public-url) |
+| `URL @route` / `@route URL` | Queue the reference under that route | [`URL @route`](#url-at-route) |
+| `URL %` / `URL % @route` | Queue with companion audio | [`URL %`](#url-listen) |
+| `-r route` | Force the URL (or task) route from the CLI | [`-r`](#cli-route) |
+| `@@route` | Shared task destination for unrouted items | [`@@route`](#global-route) |
+| `@@route+block-id` | Shared parent-task destination | [`@@route+block-id`](#global-parent) |
+| `@@template:` | Expand one capture per template row | [`@@template:`](#template) |
+| `@route` | Write a task to `<route>.md` | [`@route`](#at-route) |
+| `@route#Section` | Ordinary bullet under a matching heading | [`@route#Section`](#at-route-section) |
+| `@route#` | Ordinary bullet under any non-`Tasks` heading | [`@route#`](#at-route-any-section) |
+| `@route^block-id` | New open task with a user-authored block ID | [`@route^block-id`](#at-route-caret) |
+| `@route:block-id` | New Next task plus a Pomodoro Task Link | [`@route:block-id`](#at-route-colon) |
+| `@route:block-id#pomodoro` | Same, under a named Pomodoro | [`@route:block-id#pomodoro`](#at-route-colon-named) |
+| `@route:block-id=<X>` | Same, and start that session | [`@route:block-id=<X>`](#at-route-colon-start) |
+| `@route:block-id` with no other text | Link an existing task into today's ledger | [Link an existing task](#link-existing) |
+| `^route:block-id` | Active-task spelling of a link | [`^route:block-id`](#caret-active-task) |
+| `:<query>` | **Picker:** choose any open task to link | [`:<query>`](#colon-picker) |
+| `/<query>` | **Picker:** choose any open task to open | [`/<query>`](#slash-picker) |
+| `+query` | **Picker:** choose a parent task | [`+query`](#plus-parent-picker) |
+| lone `+` | Editor parent picker; Escape leaves `+5m` unchanged | [lone `+`](#lone-plus) |
+| `&note:block-id` | Captured task depends on that prerequisite | [`&note:block-id`](#ampersand-prereq) |
+| `&` / `&query` | **Picker:** choose a prerequisite | [`&`](#ampersand-picker) |
+| `^route:block-id &note:id` | Add a prerequisite to an existing owner | [Add a prerequisite](#add-prereq-existing) |
+| `*note:block-id` | Named open task depends on the captured task | [`*note:block-id`](#star-blocks) |
+| `*query` | **Picker:** choose a blocked task | [`*query`](#star-picker) |
+| `^route:block-id *note:id` | Existing owner blocks an existing task | [Block from an existing owner](#star-existing) |
+| `!` / `!query` | **Picker:** choose a task to complete | [`!`](#bang-picker) |
+| `!note:block-id` | Complete that existing open task | [`!note:block-id`](#bang-complete) |
+| `+[N]` | Extend today's current timed Pomodoro | [`+[N]`](#plus-adjust) |
+| `-[N]` | Shorten today's current timed Pomodoro | [`-[N]`](#minus-adjust) |
+| `++[N]` | Shift the running session later | [`++[N]`](#plus-plus-shift) |
+| `--[N]` | Shift the running session earlier | [`--[N]`](#minus-minus-shift) |
+| `=` / `=<X>` | Start the next future Pomodoro, or restart | [`=`](#equals-start) |
+| `=<X>#pomodoro` | Start a named Pomodoro | [`=<X>#pomodoro`](#equals-named) |
+| `~<K>` on a start | Drop those queued Task Links from the start | [`~<K>`](#tilde-drop) |
+| `x` | Close today's running timed Pomodoro | [`x`](#x-close) |
+| `x!<M>` | Close, completing those Task Links | [`x!<M>`](#x-complete-links) |
+| `x*<P>` | Close, parking those Task Links | [`x*<P>`](#x-park-links) |
+| `x~<K>` | Close, dropping those Task Links | [`x~<K>`](#x-drop-links) |
+| `x` plus Work Log text | Log work onto the close's worked tasks | [Work Log](#x-work-log) |
+| `+2 x` / `x =` | Chain session operators on one line | [Operator chain](#operator-chain) |
+| `@route:block-id=x` | Link that task, then close | [`@route:block-id=x`](#link-then-close) |
+| `@route^block-id+` | Create a project note | [`@route^block-id+`](#project-plus) |
+| `- task :id` | Project-note child: name, Next, and link | [`:id` child](#project-colon-child) |
+| `- task ^id` | Project-note child: name only | [`^id` child](#project-caret-child) |
+| `@route+block-id` | Child bullet under an existing task | [`@route+block-id`](#plus-child) |
+| `@route+block-id#section` | Child under that task's ALL-CAPS section | [`@route+block-id#section`](#plus-child-section) |
+| `@route+block-id` with no other text | Ensure Next and move its Task Link | [Ensure Next](#plus-ensure-next) |
+| `@route+block-id!` | Toggle that task's Pomodoro Task Link | [`@route+block-id!`](#plus-toggle) |
+| trailing `#` | Plain-text note on the current Pomodoro | [trailing `#`](#trailing-hash) |
+| `s:<N>` | Schedule N days from today; checkbox tasks start Blocked | [`s:<N>`](#s-schedule) |
+| `$` / `$<N>` | Write priority N and roll a scheduled date | [`$`](#dollar-priority) |
+| `%` / `%N` / `%header` | Capture clipboard content as child bullets | [`%`](#percent-clipboard) |
+
+## Overloaded markers
+
+These characters mean different things in different positions. Read them by
+what they attach to, not as one global operator.
+
+| Marker | Context | Meaning |
+| --- | --- | --- |
+| `+` | `+[N]` alone | Adjust the current Pomodoro |
+| `+` | `++[N]` alone | Shift the running session later |
+| `+` | `+query` / lone `+` | Parent-task picker |
+| `+` | `@route+block-id` | Child under an existing task, or Ensure Next when the item has no other text |
+| `+` | `@route^block-id+` | Create a project note |
+| `+` | after `#name` | Part of the Pomodoro name (`BUGS+`) |
+| `#` | trailing bare `#` | Pomodoro note |
+| `#` | `@route#Section` | Heading in that note |
+| `#` | `@route+id#section` with body text | ALL-CAPS task section |
+| `#` | `@route:id#pomodoro` / `=#name` | Named Pomodoro |
+| `@` | `@route…` | Route / destination token |
+| `@` | `@@route` | Draft-wide destination |
+| `@` | `x@<N>` / `=#name@<X>` | Timing or keep-list typed last |
+| `@` | `URL @route` | Explicit reference parent |
+| `*` | `*note:block-id` | Blocked-task (star) link |
+| `*` | `x*` | Park Task Links on close |
+| `*` | line-initial bare `*` | Never a blocked-task marker |
+| `!` | `!note:block-id` | Complete an existing task |
+| `!` | `x!` | Complete Task Links on close |
+| `%` | `URL %` | Request companion audio |
+| `%` | trailing `%` | Clipboard capture |
+
+Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
+
+## Incomplete input versus executable syntax
+
+A picker token is a draft state, not a capture. `bob capture` and
+`bob capture-parse` refuse it with a teaching error until the selection
+becomes a concrete `@route:id`, `!note:id`, `&note:id`, `*note:id`, or
+`@route+id`. Session tokens that still need a number (`x~`, `=~`, `x@`,
+`=#`) are the same kind of incomplete input.
+
+A signed count with extra prose (`+2 more`, `=3 more`) is an error, not a
+task. A sign or `=` followed by prose (`Plan +5`, `= foo`) stays ordinary
+task text. Capital `X` never closes; `X *job:cleanup` is how you capture a
+task that must start with the word `x`.
+
+## Retired and rejected forms
+
+These are not valid commands. Bob teaches the replacement.
+
+| Typed | What happens |
+| --- | --- |
+| `==`, `==<X>`, `==#name` | Retired restart/swap; write one `=` (`=`, `=3`, `=#bugs`) |
+| `==x` | Error: close with `x` |
+| `@route:id+` / `@route:id+#pomodoro` | Retired project-note forms; write `@route^id+` |
+| `@route::id` | Retired ordinary block-ID form; write `@route^id` |
+| `#now` / a free `#tag` next to `@route` | Retired; heading and Pomodoro `#` attach to the route token |
+| `x#bugs` | Error: `x` always closes the running session; write `x =#bugs` to close then start |
+
+Contract: [Retired close spellings](../capture.md#retired-close-spellings).
+
+## Routes and destinations
+
+### `@route` {#at-route}
+
+Write a `#task` into `<route>.md` at the vault root. Route names are
+`A–Z a–z 0–9 _ -`, lower-cased. The default without a route is `mac_inbox`.
+
+```bash
+bob capture 'Review the queue input'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  mac_inbox.md
+  - [ ] #task Review the queue input [created::2026-10-20]
+```
+
+```bob-task
+- [ ] #task Review the queue input [created::2026-10-20]
+```
+
+Contract: [Routing and insertion](../capture.md#routing-and-insertion).
+
+### `@@route` {#global-route}
+
+A draft-wide destination for otherwise-unrouted items. It may sit anywhere.
+A plain `@@route` also routes default (routeless) refs as source `global`.
+`@@route+block-id` keeps refs as tasks.
+
+```bash
+bob capture 'Buy milk @@work'
+```
+
+Contract: [Global destination declaration](../capture.md#global-destination-declaration).
+
+### `@@route+block-id` {#global-parent}
+
+Same declaration, but unrouted items become direct children of that existing
+task.
+
+Contract: [Global destination declaration](../capture.md#global-destination-declaration).
+
+### `@route#Section` {#at-route-section}
+
+Write an ordinary bullet (no checkbox) into a matching non-`Tasks` heading.
+
+```bash
+bob capture 'Remember the timeout @notes#Ideas'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  notes.md
+  - Remember the timeout [created::2026-10-20]
+```
+
+Contract: [Section bullets](../capture.md#section-bullets).
+
+### `@route#` {#at-route-any-section}
+
+Same, targeting any non-`Tasks` heading. Generated status-group headings
+under `Tasks` are never bullet targets.
+
+Contract: [Section bullets](../capture.md#section-bullets).
+
+### `-r` {#cli-route}
+
+`--route NAME` forces `NAME.md` and keeps typed `@tokens` literal. On a bare
+URL it queues the reference under that route with source `explicit`.
+
+```bash
+bob capture -r work -- 'https://example.com/article'
+```
+
+Contract: [Command-line options](../capture.md#command-line-options) and
+[Saving links](../capture.md#saving-links-to-your-reading-queue).
+
+## URL routing and audio
+
+### Bare public URL {#bare-public-url}
+
+When the URL routing policy admits it, a bare public URL queues a background
+reference job under `mac_inbox`. The confirmation says reading queue; the
+job files the note later. `-R, --no-ref` keeps it a task.
+
+```bash
+bob capture --dry-run 'https://example.com/article'
+```
+
+```text { .no-copy title="Output" }
+[dry-run] ok would queue  example.com/article → mac_inbox
+  new to your library · reading task lands in mac_inbox.md · file it later
+```
+
+```bash
+bob capture --dry-run --no-ref 'https://example.com/article'
+```
+
+```text { .no-copy title="Output" }
+[dry-run] ok would capture  mac_inbox.md
+  - [ ] #task https://example.com/article [created::2026-10-20]
+```
+
+Contract: [Saving links to your reading queue](../capture.md#saving-links-to-your-reading-queue).
+
+### `URL @route` {#url-at-route}
+
+Queue the reference under that route (aliases resolve; source `explicit`).
+`@route URL` is the same.
+
+Contract: [Saving links to your reading queue](../capture.md#saving-links-to-your-reading-queue).
+
+### `URL %` {#url-listen}
+
+Queue the reference with companion audio (`ref.listen` true). Parent
+selection matches a bare URL: default, `@@route` global, or `-r`. Exact
+standalone `@` remains a compatible listen alias. `URL % @route` / `@route URL %`
+sets an explicit parent.
+
+Contract: [Saving links to your reading queue](../capture.md#saving-links-to-your-reading-queue).
+
+## Templates
+
+### `@@template:` {#template}
+
+The first line is `@@template:`. The following `{N}` template captures
+exactly like its expansion: one item per later nonblank row (`{0}`-only
+templates can pack several values on one line). `-E, --expand` prints the
+expansion and exits before vault access.
+
+```bash
+printf '%s\n' '@@template:' 'Call {0} @work' '' 'Alex' 'Sam' | bob capture -E
+```
+
+```text { .no-copy title="Output" }
+Call Alex @work
+
+Call Sam @work
+```
+
+A successful real `@@template:` capture saves the template block (not the
+rows) on the shelf. Manage it with `bob capture-templates`.
+
+Contract: [Bulk templates](../capture.md#bulk-templates).
+
+## Block IDs and linked tasks
+
+### `@route^block-id` {#at-route-caret}
+
+Create an ordinary open task with that block ID.
+
+```bash
+bob capture 'Write an outline @work^outline'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work.md
+  - [ ] #task Write an outline [created::2026-10-20] ^outline
+```
+
+```bob-task
+- [ ] #task Write an outline [created::2026-10-20] ^outline
+```
+
+Contract: [Task with a requested block ID](../capture.md#task-with-a-requested-block-id).
+
+### `@route:block-id` {#at-route-colon}
+
+Create a Next (`[*]`) task and a Pomodoro Task Link. A future `s:<N>`
+(N ≥ 1) starts Blocked (`[?]`) and unlinked.
+
+```bash
+bob capture 'Write an outline @work:outline'
+```
+
+Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
+
+### `@route:block-id#pomodoro` {#at-route-colon-named}
+
+Same, linked under a matching named open Pomodoro, or a new named future
+Pomodoro.
+
+Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
+
+### `@route:block-id=<X>` {#at-route-colon-start}
+
+Same, and atomically start the selected session. `<X>` mirrors the `se<X>`
+snippet (empty is 25 minutes). Combine with `#pomodoro`.
+
+```bash
+bob capture '@work:outline=3'
+```
+
+Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
+
+### `@route:block-id` with no other text {#link-existing}
+
+Link the existing `^block-id` task in `route.md` into today's ledger. No new
+task is created. A task Blocked only by its own prerequisites drops those
+links first, then the gesture runs. `=<X>` starts the resolved session.
+
+```bash
+bob capture '@work:outline'
+```
+
+```text { .no-copy title="Output" }
+✓ link  work.md
+  [ ] → [*]  Write an outline  ^outline
+  Linked under WORK
+```
+
+```bob-task
+- [*] #task Write an outline [fresh:: 2026-10-20] [created::2026-10-20] ^outline
+```
+
+The Task Link is a dedicated child under the open Pomodoro:
+
+```markdown
+- [ ] () — WORK
+	- [[work#^outline]]
+```
+
+Contract: [Linking and starting existing tasks](../capture.md#linking-and-starting-existing-tasks).
+
+### `^route:block-id` {#caret-active-task}
+
+Identical execution to the `@` link forms. `^` is the active-task spelling
+and completes In Progress and Next tasks when that is the gesture.
+
+Contract: [Linking and starting existing tasks](../capture.md#linking-and-starting-existing-tasks).
+
+## Task pickers
+
+### `:<query>` {#colon-picker}
+
+Incomplete: pick any open task to link. `capture-parse` needs `task_link`.
+Accepting inserts `@route:block-id`. Execution never captures the query.
+
+```bash
+bob capture ':queue'
+```
+
+```text { .no-copy title="Output" }
+bob capture: capture item 1 starting on line 1: `:queue` opens the task picker; pick a task to insert its `@<route>:<block-id>` link, or write the link yourself (for example `@sase:deep-fix`)
+```
+
+Contract: [Picking any open task with ':'](../capture.md#picking-any-open-task-with).
+
+### `/<query>` {#slash-picker}
+
+Incomplete: pick any open task to open in Obsidian. `capture-parse` needs
+`task_goto`. Accepting opens the task; execution never captures it.
+
+Contract: [Going to a task with '/'](../capture.md#going-to-a-task-with).
+
+### `+query` {#plus-parent-picker}
+
+Incomplete: choose a parent task. `capture-parse` needs `task_parent`.
+Accepting inserts `@route+block-id`. Terminal prose `+` is the same picker.
+
+Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
+
+### lone `+` {#lone-plus}
+
+Opens the same parent picker in an editor. Escape leaves the valid `+5m`
+Pomodoro adjustment unchanged.
+
+Contract: [Grammar at a glance](../capture.md#grammar-at-a-glance).
+
+## Prerequisites and blocked-task links
+
+### `&note:block-id` {#ampersand-prereq}
+
+The captured (or explicitly selected) task depends on `note.md`'s
+`^block-id` task. Nested notes use `&projects/foo:bar`; notes with spaces use
+`&"Shopping List":bar`.
+
+```bash
+bob capture 'Review the intake queue @work^queue &work:prep'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work.md
+  - [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
+  ⛓ depends on "Prep the intake"  work.md ^prep  [ ] Ready
+```
+
+```bob-task
+- [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
+```
+
+The source of truth is the managed Depends-On child, not the field:
+
+```markdown
+- [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
+	- ⛓️ **DEPENDS ON:** [[#^prep]]
+```
+
+A selected `&note:block-id` with no owner is incomplete
+(`dependency_target`): type task text or `+` to choose an existing owner.
+
+Contract: [Adding prerequisites with '&'](../capture.md#adding-prerequisites-with).
+
+### `&` {#ampersand-picker}
+
+Incomplete: the prerequisite picker is still open (`task_dependency`).
+`&query` and `&note:` are the same incomplete family.
+
+Contract: [Adding prerequisites with '&'](../capture.md#adding-prerequisites-with).
+
+### `^route:block-id &note:id` {#add-prereq-existing}
+
+Add a prerequisite to an existing open owner. `^route:id` is a bare owner
+alias here and does not create a Pomodoro link. `&note:id ^route:block-id`
+is the same.
+
+Contract: [Relating existing tasks](../capture.md#relating-existing-tasks).
+
+### `*note:block-id` {#star-blocks}
+
+The named open task depends on the captured (or explicitly selected) task.
+Quote `*` on the shell. Nested notes and quoted names match `&`.
+
+```bash
+bob capture 'Ask for the dump @work^dump *work:queue'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work.md
+  - [ ] #task Ask for the dump [created::2026-10-20] [id:: work__dump] ^dump
+  🧱 blocks "Review the intake queue"  work.md ^queue  [?] Blocked
+```
+
+A line-initial bare `*` is never this marker. A selected star with no owner
+is incomplete (`dependency_target`).
+
+Contract: [Blocking existing tasks with '*'](../capture.md#blocking-existing-tasks-with).
+
+### `*query` {#star-picker}
+
+Incomplete: the blocked-task picker is still open (`blocked_task`).
+`X *` and `X *note:` are the same family after other text on the line.
+
+Contract: [Blocking existing tasks with '*'](../capture.md#blocking-existing-tasks-with).
+
+### `^route:block-id *note:id` {#star-existing}
+
+Make the named open task depend on the existing owner. `^route:id` is a bare
+owner alias and does not create a Pomodoro link.
+
+Contract: [Relating existing tasks](../capture.md#relating-existing-tasks).
+
+## Completion
+
+### `!` {#bang-picker}
+
+Incomplete: pick an open task to complete (`task_complete`). Accepting
+inserts `!<note>:<block-id>`. `!fix`, `!sase:`, and `!"Shopping List` are
+still typing the query.
+
+```bash
+bob capture '!'
+```
+
+```text { .no-copy title="Output" }
+bob capture: capture item 1 starting on line 1: `!` opens the task picker; pick a task to insert its `!<note>:<block-id>` token, or write one yourself (for example `!sase:fix-flaky`)
+```
+
+Contract: [Completing tasks with '!'](../capture.md#completing-tasks-with).
+
+### `!note:block-id` {#bang-complete}
+
+Complete that existing open task. The token must be the whole capture item.
+`bob capture` closes it exactly as `x!N` would, retires its Task Links, and
+unblocks dependents. Extra text is `invalid_task_complete`.
+
+```bash
+bob capture '!work:prep'
+```
+
+```text { .no-copy title="Output" }
+✓ completed [ ] → [x] Prep the intake  work.md ^prep
+```
+
+```bob-task
+- [x] #task Prep the intake [created::2026-10-20]  [completion:: 2026-10-20] ^prep
+```
+
+Contract: [Completing tasks with '!'](../capture.md#completing-tasks-with).
+
+## Adjustments, shifts, and session start
+
+### `+[N]` {#plus-adjust}
+
+Extend today's current timed Pomodoro by N five-minute units (default 1).
+`+5` is +25 minutes. The item must contain only the signed count.
+
+```bash
+bob capture '+2'
+```
+
+```text { .no-copy title="Output" }
+✓ adjusted  2026/20261020.md
+  WORK 1200-1215 (15m) to 1200-1225 (25m), +10m at line 8
+```
+
+Contract: [Adjusting the current Pomodoro](../capture.md#adjusting-the-current-pomodoro).
+
+### `-[N]` {#minus-adjust}
+
+Shorten by N units. Bare `-` is one unit (−5 minutes). Extra text after a
+bare sign stays prose (`- foo`).
+
+Contract: [Adjusting the current Pomodoro](../capture.md#adjusting-the-current-pomodoro).
+
+### `++[N]` {#plus-plus-shift}
+
+Shift the running timed Pomodoro N units later, keeping its duration.
+`++3` is +15 minutes. The item must contain only the operator. `+++` stays
+prose.
+
+Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pomodoro).
+
+### `--[N]` {#minus-minus-shift}
+
+Shift N units earlier. Bare `--` is one unit.
+
+Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pomodoro).
+
+### `=` {#equals-start}
+
+Start today's next future Pomodoro now with `se<X>` timing (`=` is 25
+minutes, `=3` is 15, `=-2` is 25 minutes with a 10-minute offset), or
+restart the running session with that timing. A restart prints an override
+warning. The item must contain only the start token.
+
+```bash
+bob capture '=3'
+```
+
+```text { .no-copy title="Output" }
+✓ started  2026/20261020.md
+  WORK 1200-1215 (15m) at line 8
+  - [ ] (**1200-1215** [t:: 15m]) — WORK
+  1 [*] Write an outline work.md ^outline
+```
+
+Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro).
+
+### `=<X>#pomodoro` {#equals-named}
+
+Start the named Pomodoro now. An open match (whole slug, else prefix)
+starts in place; a completed match starts a new session with that name
+("again"); otherwise a new named session is created and started. While
+another session runs, a different named target swaps in. Empty `<X>` keeps
+the running ledger.
+
+Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro).
+
+### `~<K>` {#tilde-drop}
+
+On a start token, drop the queued Task Links in `<K>` (`=~2`, `=3~2,4`,
+`=#bugs~2`). `~` always comes last. `=~` and `=~2,` are incomplete
+(`pomodoro_start_task`). A start cannot complete links; `!` belongs on `x`.
+
+Contract: [Starting the next Pomodoro](../capture.md#starting-the-next-pomodoro).
+
+## Closing, outcomes, and work logs
+
+### `x` {#x-close}
+
+Close today's running timed Pomodoro. Lowercase `x` only. Selection pieces
+`*`, `!`, `~`, and `@` may appear in any order. `<N>` keeps those numbered
+Task Links in progress; a lone `0` means none. `@<N>` is the same keep-list
+typed last (`x!1@2` means `x2!1`).
+
+```bash
+bob capture --dry-run 'x'
+```
+
+```text { .no-copy title="Output" }
+[dry-run] ok would close WORK 1200-1225 → 1200-1200 (0m, −25m) · 2026/20261020.md line 8
+  1 [*] → [/] Write an outline work.md ^outline
+  next: WORK (created) at line 10 · carries 1 link
+```
+
+A mid-body `x` stays prose (`Plan x`). `xx`, `x-ray`, and capital `X` never
+close.
+
+Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomodoro).
+
+### `x!<M>` {#x-complete-links}
+
+Complete those numbered Task Links. A present-but-empty `!` completes every
+remaining numbered link (`x!`). `x!1` narrows to task 1.
+
+Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-links-outcome).
+
+### `x*<P>` {#x-park-links}
+
+Park those links (normal work without carrying forward). Empty `*` parks
+every remaining numbered link (`x*`).
+
+Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-links-outcome).
+
+### `x~<K>` {#x-drop-links}
+
+Drop those links (removed, not carried, not started). `x~` is incomplete
+(`pomodoro_close_task`).
+
+Contract: [Choosing each Task Link's outcome](../capture.md#choosing-each-task-links-outcome).
+
+### Work Log {#x-work-log}
+
+One entry may sit on the close line; several use child bullets. With no
+number, the line logs to the first task the close works. A leading number
+names the task (`x 1 3 bugs fixed` logs `3 bugs fixed` to task 1). `x 1`
+without text is incomplete (`pomodoro_close_log_text`). Bullets are numbered
+all or none. A two-space bullet nests an undated detail.
+
+Contract: [Logging work while closing](../capture.md#logging-work-while-closing).
+
+### `+2 x` {#operator-chain}
+
+Whitespace-separated session tokens on one line run left to right exactly
+like blank-line items (`+2 x`, `x =`, `x =#bugs`, `=#bugs +2`). An inline
+Work Log entry sits right after its close, with operators trailing
+(`x wired the lexer =`). Child bullets attach to that line's `x`.
+
+Contract: [Chaining session operators on one line](../capture.md#chaining-session-operators-on-one-line).
+
+### `@route:block-id=x` {#link-then-close}
+
+Put that existing task into the running session, then close it. Own-prerequisite
+Blocked targets drop those links first. The `=` is the suffix separator;
+numbers refer to the post-link lineup. `^route:block-id=x` is the
+active-task spelling. With extra text, create the new linked task and then
+close.
+
+Contract: [Closing the running Pomodoro](../capture.md#closing-the-running-pomodoro).
+
+## Project captures
+
+### `@route^block-id+` {#project-plus}
+
+Create the project note `<route>_<block_id>.md` (hyphens in the block ID
+become underscores). The `^prj` task is never linked and the daily note is
+untouched. `#pomodoro` on this form sends ` :id` Task Links under that named
+open Pomodoro.
+
+```bash
+bob capture '@work^intake-flow+' 'Ship the intake flow'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work_intake_flow.md
+  parent  [[work]]
+  - [ ] #task #prj Ship the intake flow #hide ^prj
+  1 task · sections —
+```
+
+```bob-task
+- [ ] #task #prj Ship the intake flow #hide ^prj
+```
+
+Contract: [Project notes](../capture.md#project-notes).
+
+### `:id` child {#project-colon-child}
+
+On a project-note capture, `- <task> :<task-id>` names the task, makes it
+Next (`[*]`, or `[?]` when scheduled), and links `[[<stem>#^<task-id>]]`
+into the current/next Pomodoro, or the `#pomodoro` one.
+
+Contract: [Project notes](../capture.md#project-notes).
+
+### `^id` child {#project-caret-child}
+
+On a project-note capture, `- <task> ^<task-id>` names the task only:
+
+```bob-task
+- [ ] #task Named child [created:: 2026-10-20] ^named-child
+```
+
+Contract: [Project notes](../capture.md#project-notes).
+
+## Task children and link toggles
+
+### `@route+block-id` {#plus-child}
+
+Ordinary child bullet under an existing task.
+
+```bash
+bob capture 'Check the parser @work+prep'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work.md
+  under [ ] Prep the intake  ^prep
+  - Check the parser
+```
+
+Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
+
+### `@route+block-id#section` {#plus-child-section}
+
+Child bullet under an ALL-CAPS section of that task. With no other text, `#`
+names a Pomodoro instead (Ensure Next / move).
+
+Contract: [Sub-bullets under existing tasks](../capture.md#sub-bullets-under-existing-tasks).
+
+### `@route+block-id` with no other text {#plus-ensure-next}
+
+`@route+block-id` with no other text ensures the task is Next and relocates
+its existing open-Pomodoro Task Link to today's implicit current/next
+Pomodoro. `#pomodoro` moves the subtree to that named open Pomodoro,
+creating a named future Pomodoro when missing. Own-prerequisite Blocked
+targets drop those links first.
+
+Contract: [Task Link toggle](../capture.md#task-link-toggle).
+
+### `@route+block-id!` {#plus-toggle}
+
+Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and
+own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or
+unlink it when linked (lane unchanged). Removing a link never lowers Next
+or Pending.
+
+Contract: [Task Link toggle](../capture.md#task-link-toggle).
+
+## Pomodoro notes
+
+### trailing `#` {#trailing-hash}
+
+A trailing bare `#` is a plain-text note on a Pomodoro, not a routed task.
+
+```bash
+bob capture 'remembered the timeout #'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  2026/20261020.md
+  under (**1200-1230** [t:: 30m]) — WORK
+  - remembered the timeout
+```
+
+Contract: [Pomodoro notes](../capture.md#pomodoro-notes).
+
+## Scheduling, priority, and clipboard
+
+### `s:<N>` {#s-schedule}
+
+`[scheduled::]` N days from today, recognized in the terminal token region.
+Checkbox-bearing captures start Blocked (`[?]`), including `s:0`.
+
+```bash
+bob capture 'File taxes @work s:1'
+```
+
+```text { .no-copy title="Output" }
+✓ captured  work.md
+  - [?] #task File taxes [created::2026-10-20] [scheduled::2026-10-21]
+```
+
+```bob-task
+- [?] #task File taxes [created::2026-10-20] [scheduled::2026-10-21]
+```
+
+Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
+
+### `$` {#dollar-priority}
+
+Write priority level N (bare `$` = 1) and roll a scheduled date in that
+level's window. A missing config file is an error; there is no built-in
+default. An explicit `s:<N>` wins the date; `$<N>` still writes priority.
+Mid-line amounts stay text (`Pay $3 to Bob`).
+
+Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
+
+### `%` {#percent-clipboard}
+
+Capture clipboard content as child bullets. `%`, `%N`, and `%header` are
+the spellings. `-n, --no-clip` keeps trailing `%` literal. `-c, --clip`
+forces clipboard capture.
+
+Contract: [Clipboard](../capture.md#clipboard).
+
+## Related
+
+- [Capture contract](../capture.md)
+- [Vault format](vault-format.md)
+- [bob capture CLI](cli/capture.md)
+- [Capture](glossary.md#capture) and [Bulk Capture](glossary.md#bulk-capture)
+- [Task dependency links](../task-dependencies.md)
+- [Plan budget, Today, and lanes](../plan.md)
