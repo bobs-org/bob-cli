@@ -1083,6 +1083,9 @@ def test_cli_help_lists_lint_and_fix() -> None:
         "links",
         "lint",
         "publish-plan",
+        "publish-record",
+        "publish-report",
+        "publish-verify",
         "serve",
         "social-card",
         "tutorial",
@@ -1118,4 +1121,65 @@ def test_cli_help_lists_lint_and_fix() -> None:
         "--recovery",
         "-w",
         "--work-dir",
+    ]
+
+    record = parser._subparsers._group_actions[0].choices["publish-record"]
+    record_flags = [flag for action in record._actions for flag in action.option_strings]
+    assert record_flags == [
+        "-h",
+        "--help",
+        "-b",
+        "--built-at",
+        "-n",
+        "--next",
+        "-o",
+        "--output",
+        "-r",
+        "--run-url",
+        "-t",
+        "--tool",
+    ]
+
+    report = parser._subparsers._group_actions[0].choices["publish-report"]
+    report_flags = [flag for action in report._actions for flag in action.option_strings]
+    assert report_flags == [
+        "-h",
+        "--help",
+        "-c",
+        "--close",
+        "-m",
+        "--comment",
+        "-d",
+        "--detail",
+        "-f",
+        "--fingerprint",
+        "-l",
+        "--label",
+        "-o",
+        "--open",
+        "-r",
+        "--reason",
+        "-u",
+        "--run-url",
+        "-s",
+        "--step",
+        "-t",
+        "--title",
+    ]
+
+    verify = parser._subparsers._group_actions[0].choices["publish-verify"]
+    verify_flags = [flag for action in verify._actions for flag in action.option_strings]
+    assert verify_flags == [
+        "-h",
+        "--help",
+        "-e",
+        "--expected",
+        "-o",
+        "--origin",
+        "-r",
+        "--retries",
+        "-s",
+        "--site-urls",
+        "-t",
+        "--timeout-seconds",
     ]

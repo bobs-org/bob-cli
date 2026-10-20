@@ -1,0 +1,304 @@
+# Gated documentation publication (reusable, called by the deploy repo).
+#
+# This workflow never triggers inside bob-cli itself: it runs only through
+# `workflow_call` from bobs-org/bobs-org.github.io, which owns the hourly
+# schedule and manual dispatch. The single `pages` concurrency group lives
+# here, so the caller must not define its own (two holders would deadlock).
+#
+# Action pins below were verified against current release tags (2026-10-20):
+# checkout v6, configure-pages v5, upload-pages-artifact v4, deploy-pages v4,
+# setup-python v6, setup-uv v6, upload-artifact v4, download-artifact v4.
+#
+# The caller grants `contents: write`, `pages: write`, `id-token: write`, and
+# `issues: write`; each job below narrows to what it actually uses.
+name: Gated documentation publication
+
+on:
+  workflow_call:
+    inputs:
+      force:
+        description: Rebuild even when source inputs are unchanged
+        type: boolean
+        default: false
+        required: false
+      drill:
+        description: Run the real gates with a staged broken link; never deploy or record
+        type: boolean
+        default: false
+        required: false
+      pinned:
+        description: Build the exact SHAs in the publication manifest, preserving hold
+        type: boolean
+        default: false
+        required: false
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Plan, gate, and stage the site
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+      issues: read
+    outputs:
+      should_build: ${{ steps.plan.outputs.should_build }}
+      should_deploy: ${{ steps.plan.outputs.should_deploy }}
+      should_record: ${{ steps.plan.outputs.should_record }}
+      reason: ${{ steps.plan.outputs.reason }}
+      fingerprint: ${{ steps.plan.outputs.fingerprint }}
+      stage: ${{ steps.handoff.outputs.stage || steps.gates.outputs.stage || steps.plan.outputs.stage || steps.guard.outputs.stage || 'start' }}
+    steps:
+      - name: Guard caller repository and branch
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.repository }}" != "bobs-org/bobs-org.github.io" ]; then
+            echo "::error::docs-publish runs only for bobs-org/bobs-org.github.io (got ${{ github.repository }})"
+            exit 1
+          fi
+          default_branch="$(gh api 'repos/${{ github.repository }}' --jq .default_branch)"
+          if [ "${{ github.ref_name }}" != "$default_branch" ]; then
+            echo "::error::docs-publish runs only on the default branch (got ${{ github.ref_name }}, default $default_branch)"
+            exit 1
+          fi
+          echo "stage=guard" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the deploy repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.ref }}
+          path: deploy
+
+      - name: Check out bob-cli tooling
+        uses: actions/checkout@v6
+        with:
+          repository: bobs-org/bob-cli
+          ref: master
+          path: tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Plan immutable publication sources
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          blocked="$(gh issue list --state open --label docs-publish --repo '${{ github.repository }}' --json number --jq length)"
+          plan_args=(
+            --manifest "$GITHUB_WORKSPACE/deploy/published.json"
+            --output-dir "$GITHUB_WORKSPACE/.publish-plan"
+            --work-dir "$GITHUB_WORKSPACE/.publish-work"
+          )
+          if [ "${{ inputs.force }}" = "true" ]; then plan_args+=(--force); fi
+          if [ "${{ inputs.drill }}" = "true" ]; then plan_args+=(--drill); fi
+          if [ "${{ inputs.pinned }}" = "true" ]; then plan_args+=(--pinned); fi
+          if [ "$blocked" -gt 0 ] && [ "${{ inputs.force }}" != "true" ] \
+            && [ "${{ inputs.drill }}" != "true" ] && [ "${{ inputs.pinned }}" != "true" ]; then
+            plan_args+=(--recovery)
+          fi
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-plan "${plan_args[@]}"
+          echo "stage=plan" >> "$GITHUB_OUTPUT"
+
+      - name: Run the gated production checks
+        id: gates
+        if: steps.plan.outputs.should_build == 'true'
+        run: |
+          check_args=(
+            --production
+            --sources "$GITHUB_WORKSPACE/.publish-plan/production-sources.json"
+          )
+          if [ "${{ inputs.drill }}" = "true" ]; then check_args+=(--drill); fi
+          cd "$GITHUB_WORKSPACE/.publish-work/bob-cli"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs check "${check_args[@]}"
+          echo "stage=gates" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        if: steps.plan.outputs.should_deploy == 'true'
+
+      - name: Upload the gated site
+        uses: actions/upload-pages-artifact@v4
+        if: steps.plan.outputs.should_deploy == 'true'
+        with:
+          path: .publish-work/bob-cli/target/docs/site
+
+      - name: Prepare the publication record
+        id: handoff
+        if: steps.plan.outputs.should_record == 'true'
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.publish-handoff"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-record \
+            --next "$GITHUB_WORKSPACE/.publish-plan/next-publication.json" \
+            --output "$GITHUB_WORKSPACE/.publish-handoff/published.json" \
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          cp "$GITHUB_WORKSPACE/.publish-work/bob-cli/target/docs/site/urls.txt" \
+            "$GITHUB_WORKSPACE/.publish-handoff/urls.txt"
+          echo "stage=upload" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the publication handoff
+        uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.should_record == 'true'
+        with:
+          name: publish-handoff
+          path: .publish-handoff
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: publish
+    if: needs.publish.outputs.should_deploy == 'true'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the gated site
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  record:
+    name: Record the publication manifest
+    needs: [publish, deploy]
+    if: needs.deploy.result == 'success'
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the deploy repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download the publication handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: publish-handoff
+          path: handoff
+
+      - name: Commit only the publication manifest
+        run: |
+          cp handoff/published.json ./published.json
+          git add published.json
+          if git diff --cached --quiet; then
+            echo "no manifest change; nothing to record"
+            exit 0
+          fi
+          git -c user.name "github-actions[bot]" \
+            -c user.email "41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "Record documentation publication" \
+            -m "Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push
+
+  verify:
+    name: Verify the live site
+    needs: [publish, deploy, record]
+    if: needs.record.result == 'success'
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out bob-cli tooling
+        uses: actions/checkout@v6
+        with:
+          repository: bobs-org/bob-cli
+          ref: master
+          path: tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download the publication handoff
+        uses: actions/download-artifact@v4
+        with:
+          name: publish-handoff
+          path: handoff
+
+      - name: Verify live pages, fragments, and provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-verify \
+            --origin "https://bobs-org.github.io" \
+            --site-urls "$GITHUB_WORKSPACE/handoff/urls.txt" \
+            --expected "$GITHUB_WORKSPACE/handoff/next-publication.json"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-report --close \
+            --comment "Live verification passed for run https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}."
+
+  report:
+    name: Report a blocked publication
+    needs: [publish, deploy, record, verify]
+    if: failure()
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out bob-cli tooling
+        uses: actions/checkout@v6
+        with:
+          repository: bobs-org/bob-cli
+          ref: master
+          path: tooling
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download the publication handoff
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: publish-handoff
+          path: handoff
+
+      - name: Create or update the blocked issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          failed="publish (${{ needs.publish.outputs.stage || 'guard' }})"
+          if [ "${{ needs.deploy.result }}" = "failure" ]; then failed="deploy"; fi
+          if [ "${{ needs.record.result }}" = "failure" ]; then failed="record"; fi
+          if [ "${{ needs.verify.result }}" = "failure" ]; then failed="verify"; fi
+          reason="${{ needs.publish.outputs.reason }}"
+          if [ -z "$reason" ]; then
+            if [ "${{ inputs.drill }}" = "true" ]; then reason="drill"; else reason="gate failure"; fi
+          fi
+          fingerprint=""
+          if [ -f handoff/next-publication.json ]; then
+            fingerprint="$(python3 -c "import json; print(json.load(open('handoff/next-publication.json'))['fingerprint'])")"
+          fi
+          cd "$GITHUB_WORKSPACE/tooling"
+          uv run --locked --project "$GITHUB_WORKSPACE/tooling/tools/docs" \
+            bob-docs publish-report --open \
+            --step "$failed" \
+            --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --reason "$reason" \
+            --fingerprint "$fingerprint"

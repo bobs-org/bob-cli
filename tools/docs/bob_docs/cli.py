@@ -15,7 +15,18 @@ from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
 from .lint import run_lint
+from .publish_issue import (
+    PUBLISH_BLOCKED_LABEL,
+    PUBLISH_BLOCKED_TITLE,
+    run_publish_report,
+)
 from .publish_plan import run_publish_plan
+from .publish_record import parse_tool_assignments, run_publish_record
+from .publish_verify import (
+    DEFAULT_RETRIES,
+    DEFAULT_TIMEOUT_SECONDS,
+    run_publish_verify,
+)
 from .urls import run_urls
 
 
@@ -56,8 +67,16 @@ def _parser() -> argparse.ArgumentParser:
         help="run the complete local documentation gate",
         description=(
             "Assemble once, then run lint, generated drift, strict Zensical build, "
-            "URL and link checks, search smoke, and the bob-docs unit tests."
+            "URL and link checks, search smoke, and the bob-docs unit tests. "
+            "--drill injects a staged-only broken link after the clean gates and "
+            "requires the link gate to fail; a drill never succeeds or deploys."
         ),
+    )
+    check_parser.add_argument(
+        "-d",
+        "--drill",
+        action="store_true",
+        help="inject a staged-only broken link and require the link gate to fail",
     )
     check_parser.add_argument(
         "-p", "--production", action="store_true", help="verify pinned production sources"
@@ -132,6 +151,116 @@ def _parser() -> argparse.ArgumentParser:
         "-w", "--work-dir", metavar="DIR", default="target/docs/publish-work", help="dedicated clean source checkout directory"
     )
 
+    record_parser = subparsers.add_parser(
+        "publish-record",
+        help="write the durable published.json record from a planner candidate",
+        description=(
+            "Attach toolchain versions, build time, and the run URL to a "
+            "next-publication.json candidate and write published.json. The hold "
+            "flag is preserved; committing the manifest is a separate step."
+        ),
+    )
+    record_parser.add_argument(
+        "-b", "--built-at", metavar="ISO", help="build time (default: current UTC time)"
+    )
+    record_parser.add_argument(
+        "-n", "--next", metavar="FILE", required=True, help="planner next-publication.json"
+    )
+    record_parser.add_argument(
+        "-o", "--output", metavar="FILE", default="published.json", help="durable record to write"
+    )
+    record_parser.add_argument(
+        "-r", "--run-url", metavar="URL", required=True, help="workflow run URL for provenance"
+    )
+    record_parser.add_argument(
+        "-t",
+        "--tool",
+        metavar="KEY=VALUE",
+        action="append",
+        default=[],
+        help="toolchain version (repeatable; default: collect installed versions)",
+    )
+
+    report_parser = subparsers.add_parser(
+        "publish-report",
+        help="open, update, or close the managed publish-blocked issue",
+        description=(
+            "Maintain exactly one managed blocked-publication issue with gh. "
+            "--open creates the issue or comments on (and reopens) the existing "
+            "one; --close comments and closes it after live verification."
+        ),
+    )
+    report_parser.add_argument(
+        "-c", "--close", action="store_true", help="close the open managed issue"
+    )
+    report_parser.add_argument(
+        "-m", "--comment", metavar="TEXT", default="", help="close comment (with --close)"
+    )
+    report_parser.add_argument(
+        "-d",
+        "--detail",
+        metavar="TEXT",
+        action="append",
+        default=[],
+        help="extra body line for the blocked issue (repeatable, with --open)",
+    )
+    report_parser.add_argument(
+        "-f", "--fingerprint", metavar="HEX", default="", help="publication fingerprint (with --open)"
+    )
+    report_parser.add_argument(
+        "-l", "--label", metavar="LABEL", default=PUBLISH_BLOCKED_LABEL, help="managed issue label"
+    )
+    report_parser.add_argument(
+        "-o", "--open", action="store_true", help="open or update the managed issue"
+    )
+    report_parser.add_argument(
+        "-r", "--reason", metavar="TEXT", default="", help="failure reason (with --open)"
+    )
+    report_parser.add_argument(
+        "-u", "--run-url", metavar="URL", default="", help="workflow run URL (with --open)"
+    )
+    report_parser.add_argument(
+        "-s", "--step", metavar="STEP", default="", help="failed step name (with --open)"
+    )
+    report_parser.add_argument(
+        "-t", "--title", metavar="TITLE", default=PUBLISH_BLOCKED_TITLE, help="managed issue title"
+    )
+
+    verify_parser = subparsers.add_parser(
+        "publish-verify",
+        help="verify the live site after a publication deploy",
+        description=(
+            "Check every built page URL live, resolve curated fragments against "
+            "live pages with bounded retries, and confirm /build.json matches "
+            "the deployed publication. Any failure exits nonzero."
+        ),
+    )
+    verify_parser.add_argument(
+        "-e", "--expected", metavar="FILE", required=True, help="planner next-publication.json"
+    )
+    verify_parser.add_argument(
+        "-o", "--origin", metavar="URL", required=True, help="live site origin to verify"
+    )
+    verify_parser.add_argument(
+        "-r",
+        "--retries",
+        metavar="N",
+        type=int,
+        default=DEFAULT_RETRIES,
+        help=f"retries per live request (default: {DEFAULT_RETRIES})",
+    )
+    verify_parser.add_argument(
+        "-s", "--site-urls", metavar="FILE", required=True, help="built site urls.txt"
+    )
+    verify_parser.add_argument(
+        "-t",
+        "--timeout-seconds",
+        metavar="SECONDS",
+        type=int,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=f"timeout per live request (default: {DEFAULT_TIMEOUT_SECONDS})",
+    )
+
     subparsers.add_parser("serve", help="assemble and serve the site with Zensical")
 
     social_parser = subparsers.add_parser("social-card", help="generate deterministic identity assets")
@@ -176,7 +305,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "build":
             return build(root, material=args.material, production=args.production, sources=args.sources)
         if args.command == "check":
-            return run_check(root, production=args.production, sources=args.sources)
+            return run_check(root, production=args.production, sources=args.sources, drill=args.drill)
+        if args.command == "publish-record":
+            record = run_publish_record(
+                Path(args.next),
+                Path(args.output),
+                tools=parse_tool_assignments(args.tool) or None,
+                built_at=args.built_at,
+                run_url=args.run_url,
+            )
+            print(f"wrote {args.output} (fingerprint {record['fingerprint']})")
+            return 0
+        if args.command == "publish-report":
+            if bool(args.open) == bool(args.close):
+                print(
+                    "bob-docs publish-report: pass exactly one of --open or --close",
+                    file=sys.stderr,
+                )
+                return 2
+            number = run_publish_report(
+                mode="open" if args.open else "close",
+                title=args.title,
+                label=args.label,
+                step=args.step,
+                run_url=args.run_url,
+                reason=args.reason,
+                fingerprint=args.fingerprint,
+                details=tuple(args.detail),
+                comment=args.comment,
+            )
+            if number is None:
+                print("managed issue is already clear; nothing to close")
+            else:
+                print(f"managed issue #{number}")
+            return 0
+        if args.command == "publish-verify":
+            return run_publish_verify(
+                root,
+                origin=args.origin,
+                site_urls_file=Path(args.site_urls),
+                expected_file=Path(args.expected),
+                timeout=args.timeout_seconds,
+                retries=args.retries,
+            )
         if args.command == "fonts":
             from .fonts import generate_fonts
 

@@ -63,6 +63,71 @@ The `--output-dir` contains:
   the workflow adds `tools`, `built_at`, and `run_url` before committing it as
   `published.json`.
 
+## Gated publication workflow (`.github/workflows/docs-publish.yml`)
+
+The reusable workflow publishes the docs through `workflow_call` only, with
+boolean `force`/`drill`/`pinned` inputs. It never triggers inside bob-cli
+itself: the deploy repository (`bobs-org/bobs-org.github.io`) calls it from
+an hourly schedule and manual dispatch. The single `pages` concurrency group
+(`cancel-in-progress: false`) lives here, so the caller must not define its
+own. The workflow guards the expected caller repository and its default
+branch, checks out the deploy repo and bob-cli tooling into separate paths,
+plans immutable sources, runs `bob-docs check --production --sources ...`
+(or `--drill`), uploads only a successfully gated site, deploys it, records
+`published.json`, verifies the live site, and closes the managed issue. Any
+failure creates or updates exactly one `Docs publish blocked` issue with the
+`docs-publish` label. An open blocked issue makes the next normal run pass
+`--recovery` so the gates revalidate even with unchanged inputs; held skips
+never close that issue. A drill runs the real gates against a staged-only
+broken link (see below), so its expected link failure opens the issue and a
+normal recovery run closes it again.
+
+Job permissions narrow to what each job uses; the caller grants
+`contents: write`, `pages: write`, `id-token: write`, and `issues: write`.
+All action pins are release tags, verified during implementation.
+
+## Publication record (`bob-docs publish-record`)
+
+After a successful deploy, `bob-docs publish-record` attaches toolchain
+versions, build time, and the run URL to the planner's
+`next-publication.json` candidate and writes the durable `published.json`.
+The hold flag is preserved verbatim. The workflow commits only that file,
+skips an empty commit, and lets a push conflict fail (never force-pushes)
+so a concurrent operator hold change is reported, not overwritten.
+
+```bash
+bob-docs publish-record \
+  --next target/docs/publish-plan/next-publication.json \
+  --output published.json \
+  --run-url https://github.com/bobs-org/bobs-org.github.io/actions/runs/42
+```
+
+## Live verification and issue reporting
+
+`bob-docs publish-verify` checks every built page URL live, resolves curated
+fragments against live pages with bounded retries, and confirms the live
+`/build.json` matches the deployed source SHAs with clean working trees:
+
+```bash
+bob-docs publish-verify \
+  --origin https://bobs-org.github.io \
+  --site-urls target/docs/site/urls.txt \
+  --expected target/docs/publish-plan/next-publication.json
+```
+
+`bob-docs publish-report --open` creates (or comments on and reopens) the one
+managed blocked issue with the failing step, run URL, reason, and
+fingerprint; `--close` comments and closes it after live verification passes.
+Bodies travel to `gh` on stdin via `--body-file`, never through a shell.
+
+## Broken-link drill (`bob-docs check --drill`)
+
+A drill appends a relative link with a bogus fragment to the staged homepage
+after the clean gates pass, then requires the strict build and URL gates to
+pass and the offline link gate to fail. The probe never touches tracked
+sources (a later assemble discards it), and a drill always exits nonzero so
+no workflow can deploy or record it.
+
 The durable version 1 `published.json` record has this shape:
 
 ```json

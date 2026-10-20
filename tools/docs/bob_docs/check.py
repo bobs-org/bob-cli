@@ -14,6 +14,12 @@ from .errors import DocsError
 from .gen_contracts import check_or_generate
 from .links import run_links
 from .lint import run_lint
+from .publish_drill import (
+    DRILL_MARKER,
+    drill_link_built,
+    drill_marker_present,
+    inject_drill_link,
+)
 from .search_smoke import run_search_smoke
 from .sandbox import resolve_bob_binary
 from .tutorial import run_tutorial
@@ -51,12 +57,26 @@ def _report_unimplemented_gates() -> None:
     print("skipped: media checks not implemented in this slice")
 
 
-def run_check(root: Path, *, production: bool = False, sources: Path | str | None = None) -> int:
-    """Run all implemented documentation gates against one assembled source context."""
+def run_check(
+    root: Path,
+    *,
+    production: bool = False,
+    sources: Path | str | None = None,
+    drill: bool = False,
+) -> int:
+    """Run all implemented documentation gates against one assembled source context.
+
+    With ``drill=True``, run the clean gates, inject a staged-only broken
+    fragment link, then require the strict build and URL gates to pass and
+    the link gate to fail. A drill never returns success: the expected link
+    failure still exits nonzero so no workflow can deploy or record it.
+    """
 
     repo_root = Path(root).resolve()
     print("docs-check: assemble and validate source context", flush=True)
     context, manifest = assemble(repo_root, production=production, sources=sources)
+    if drill:
+        return _run_drill_gates(repo_root, context, manifest)
 
     tutorial_binary: Path | None = None
 
@@ -88,3 +108,59 @@ def run_check(root: Path, *, production: bool = False, sources: Path | str | Non
     _report_unimplemented_gates()
     print("\ndocs-check: all implemented gates passed")
     return 0
+
+
+def _run_drill_gates(root: Path, context, manifest: Path) -> int:
+    """Run the clean gates, inject the staged probe, and require link failure."""
+
+    for label, run in [
+        ("lint", lambda: run_lint(root, docs_context=context)),
+        ("generated drift", lambda: check_or_generate(root, check=True)),
+    ]:
+        status = _gate(label, run)
+        if status:
+            print("drill: clean gate failed before injection; drill is inconclusive")
+            return status
+    staged_docs = context.output_dir / "docs"
+    try:
+        injected = inject_drill_link(context)
+    except DocsError as error:
+        print(f"drill: FAILED to inject the staged probe: {error}")
+        return 2
+    print(f"\ndrill: injected staged-only probe into {injected}")
+    for label, run in [
+        ("strict Zensical build", lambda: build_assembled(context, manifest)),
+        ("published URLs", lambda: run_urls(root, context=context)),
+    ]:
+        status = _gate(label, run)
+        if status:
+            print(
+                "drill: gate failed before the link check; "
+                "the probe may be visible outside the link gate"
+            )
+            return status
+    print("\ndrill: offline lychee with fragments", flush=True)
+    links_status = run_links(root, context=context)
+    if links_status == 0:
+        if drill_link_built(context.site_dir):
+            print(
+                "drill: FAILED: the injected broken link unexpectedly passed "
+                "the link gate; refusing deployment"
+            )
+        else:
+            print(
+                "drill: FAILED: the link gate passed and the probe is missing "
+                "from the built site; the drill proved nothing"
+            )
+        return 1
+    if drill_marker_present(staged_docs) and drill_link_built(context.site_dir):
+        print(
+            f"\ndrill: expected broken-link diagnostic observed "
+            f"(link gate exit {links_status}); upload and deployment remain blocked"
+        )
+    else:
+        print(
+            f"\ndrill: link gate failed (exit {links_status}) but the probe is missing "
+            "from the staging tree or built site; treating it as an ordinary failure"
+        )
+    return links_status
