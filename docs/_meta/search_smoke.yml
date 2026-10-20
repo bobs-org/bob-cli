@@ -171,3 +171,11 @@
   location: /concepts/reference-library/
 - query: vault syncs through git
   location: /concepts/why-the-vault-syncs-through-git/
+- query: sync the vault across machines
+  location: /guides/sync-vault-across-machines/
+- query: resolve a vault-sync conflict copy
+  location: /guides/resolve-vault-conflict-copy/
+- query: add prerequisites
+  location: /guides/add-prerequisites/
+- query: recover a stuck reference job
+  location: /guides/recover-reference-job/

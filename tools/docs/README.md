@@ -14,7 +14,7 @@ process controls need exact, specific reasons in
 configuration page instead of that exception list.
 
 ```bash
-just docs-gen             # regenerate tracked contract indexes and plugin inventory
+just docs-gen             # regenerate tracked contract indexes, component index, and plugin inventory
 just docs-serve           # assemble and serve locally with live reload
 just docs-build           # strict Zensical build of the assembled site
 just docs-build-material  # strict Material 9.7 fallback build

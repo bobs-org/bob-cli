@@ -65,6 +65,12 @@ keeps the vault honest.
 
 <div class="bob-doors" markdown="1">
 
+**Do.** Complete a goal.
+
+- [Guides](guides/index.md) for install, capture, review, sync, and recovery.
+- [Add prerequisites while capturing](guides/add-prerequisites.md)
+- [Sync the vault across machines](guides/sync-vault-across-machines.md)
+
 **Learn.** Follow the tested path.
 
 - [Get started](start/index.md) for the first day, installs, and continuations.

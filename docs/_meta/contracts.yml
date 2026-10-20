@@ -7,6 +7,7 @@ groups:
       - stem: capture
         summary: "Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)"
         order: 2
+        reader: guides/add-prerequisites.md
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
@@ -16,6 +17,7 @@ groups:
       - stem: gkeep
         summary: "`bob gkeep` Keep inbox drain into tasks or inline reference clips"
         order: 9
+        reader: guides/drain-google-keep.md
       - stem: highlights-clip
         summary: "Web article and collection capture into Highlights intake PDFs"
         order: 10
@@ -30,6 +32,7 @@ groups:
       - stem: plugins
         summary: "`bob plugins` list and vault deploy"
         order: 15
+        reader: guides/deploy-obsidian-plugins.md
   - title: "Tasks and projects"
     entries:
       - stem: dashboard
@@ -41,11 +44,11 @@ groups:
       - stem: freshness
         summary: "Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14"
         order: 7
-        reader: concepts/freshness-and-the-review-walk.md
+        reader: guides/run-morning-review.md
       - stem: plan
         summary: "Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples"
         order: 14
-        reader: concepts/today-and-the-pomodoro-ledger.md
+        reader: guides/keep-ready-under-cap.md
       - stem: projects
         summary: "`bob projects` `^prj` lifecycle, schedules, and reporting-only rollup"
         order: 16
@@ -63,7 +66,7 @@ groups:
       - stem: task-dependencies
         summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
         order: 22
-        reader: concepts/projects-and-dependencies.md
+        reader: guides/add-prerequisites.md
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
         order: 23
@@ -86,11 +89,11 @@ groups:
       - stem: ref
         summary: "Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback"
         order: 19
-        reader: concepts/reference-library.md
+        reader: guides/save-link-to-reading-queue.md
       - stem: ref-jobs
         summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
         order: 20
-        reader: concepts/reference-library.md
+        reader: guides/recover-reference-job.md
   - title: "Vault"
     entries:
       - stem: obsidian-sync-exclusions
@@ -100,4 +103,4 @@ groups:
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
         order: 27
-        reader: concepts/why-the-vault-syncs-through-git.md
+        reader: guides/sync-vault-across-machines.md

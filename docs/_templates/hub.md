@@ -6,7 +6,8 @@ description: "Contributor pages for building, writing, and contracting Bob docum
 # Develop
 
 These pages are for people who change Bob's documentation site: how to build it, how
-to write a page, and where the behavior contracts live.
+to write a page, and where the behavior contracts live. Hub pages omit component
+tags and stay out of the By component index.
 
 ## Build and write
 

@@ -1,6 +1,8 @@
 ---
 title: "Print today's plan as JSON"
 description: "Export the read-only plan budget as JSON from a vault named with --bob-dir."
+tags:
+  - CLI
 ---
 
 # Print today's plan as JSON

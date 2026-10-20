@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .contracts import Contract, ContractGroup, ContractRegistry, load_contract_registry
 from .errors import DocsError
+from .gen_components import generate_components
 from .gen_plugins import run_plugin_inventory
 from .gen_reference import generate_reference
 from .generated import first_heading, replace_generated_region
@@ -111,6 +112,7 @@ def check_or_generate(
 ) -> int:
     drift = generate_contracts(root, check=check)
     drift.extend(generate_reference(root, check=check))
+    drift.extend(generate_components(root, check=check))
     plugin_status = run_plugin_inventory(
         root, check=check, source_dirs=source_dirs, production=production
     )

@@ -9,6 +9,8 @@ Hand-written lookups for capture tokens, vault structure, configuration, and
 machine-readable output, plus generated CLI, glossary, and decision pages
 that stay in lockstep with the tools.
 
+- [By component](by-component.md) for guides and concepts tagged CLI,
+  Obsidian, or macOS.
 - [Obsidian plugins](plugins/index.md) for each plugin's commands, settings,
   and topics.
 - [Capture syntax](capture-syntax.md) for every `bob capture` token.

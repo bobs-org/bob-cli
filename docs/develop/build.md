@@ -74,8 +74,9 @@ app targets. See that repository's README for signing and installation steps.
 The tools and authored pages live in bob-cli. The documentation-specific commands below
 build this site and check its contracts. They do not install Bob or change a vault.
 
-Regenerate the contract index, navigation, README table, and mounted plugin
-inventory after changing the contract registry or plugin facts:
+Regenerate the contract index, navigation, README table, By component index, and
+mounted plugin inventory after changing the contract registry, guide or concept
+tags, or plugin facts:
 
 ```bash
 just docs-gen

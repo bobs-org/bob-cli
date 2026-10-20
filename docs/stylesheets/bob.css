@@ -331,6 +331,33 @@ body:has(.bob-home-cards) .md-content__inner.md-typeset {
   overflow-wrap: anywhere;
 }
 
+/* Component chips under guide and concept titles. */
+.bob-component-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+}
+
+.bob-component-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--bob-identity) 45%, transparent);
+  border-radius: 999px;
+  color: var(--bob-link);
+  background-color: color-mix(in srgb, var(--bob-identity) 10%, var(--bob-paper));
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.bob-component-chip:hover,
+.bob-component-chip:focus-visible {
+  outline: 2px solid var(--bob-link);
+  outline-offset: 2px;
+  color: var(--bob-link);
+}
+
 /* Contract banner above registry-listed contracts. */
 .bob-contract-banner {
   border-left: 3px solid var(--bob-identity);

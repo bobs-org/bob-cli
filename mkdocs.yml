@@ -67,6 +67,9 @@ extra_css:
 plugins:
   - search
   - redirects: {}
+  - tags:
+      listings: false
+      export: false
 
 markdown_extensions:
   - admonition
@@ -102,6 +105,26 @@ nav:
       - Your first Bob day: start/first-bob-day.md
       - Continue in Obsidian: start/obsidian.md
       - Continue with Mac Capture: start/mac-capture.md
+  - Guides:
+      - Overview: guides/index.md
+      - Set up:
+          - Install everything with one command: guides/install-everything.md
+          - Point bob at your vault: guides/point-bob-at-your-vault.md
+          - Deploy the Obsidian plugins: guides/deploy-obsidian-plugins.md
+          - Sync the vault across machines: guides/sync-vault-across-machines.md
+      - Capture:
+          - Capture a task from anywhere on your Mac: guides/capture-from-your-mac.md
+          - Drain Google Keep into tasks: guides/drain-google-keep.md
+      - Plan the day:
+          - Run the morning review walk: guides/run-morning-review.md
+          - Keep Ready lanes under their cap: guides/keep-ready-under-cap.md
+      - Projects and dependencies:
+          - Add prerequisites while capturing: guides/add-prerequisites.md
+      - Reading:
+          - Save a link to your reading queue: guides/save-link-to-reading-queue.md
+      - Fix problems:
+          - Resolve a vault-sync conflict copy: guides/resolve-vault-conflict-copy.md
+          - Recover a stuck reference job: guides/recover-reference-job.md
   - Understand:
       - Overview: concepts/index.md
       - How Bob fits together: concepts/how-bob-fits-together.md
@@ -113,6 +136,7 @@ nav:
       - Why the vault syncs through git: concepts/why-the-vault-syncs-through-git.md
   - Reference:
       - Overview: reference/index.md
+      - By component: reference/by-component.md
       - Obsidian plugins: reference/plugins/index.md
       - Capture syntax: reference/capture-syntax.md
       - Vault format: reference/vault-format.md

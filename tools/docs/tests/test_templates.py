@@ -46,12 +46,13 @@ def _ensure_origin(path: Path, origin: str) -> None:
         _git(path, "-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "x")
 
 
-def _fixture_root(root: Path, *, plugin_repo: Path) -> Path:
+def _fixture_root(root: Path, *, plugin_repo: Path, site_url: str = "https://bobs-org.github.io/") -> Path:
     (root / "docs/_meta").mkdir(parents=True)
     (root / "docs/develop").mkdir(parents=True)
     # Copy the real overrides and stylesheet so the test tracks the shipped templates.
     for name in ("main.html", "partials/bob-meta.html", "partials/bob-contract.html",
-                 "partials/bob-provenance.html", "partials/actions.html"):
+                 "partials/bob-provenance.html", "partials/actions.html",
+                 "partials/tags.html"):
         src = REPO / "docs/overrides" / name
         _write(root / "docs/overrides" / name, src.read_text(encoding="utf-8"))
     _write(root / "docs/stylesheets/bob.css", (REPO / "docs/stylesheets/bob.css").read_text(encoding="utf-8"))
@@ -79,6 +80,18 @@ def _fixture_root(root: Path, *, plugin_repo: Path) -> Path:
     _write(root / "docs/guides/alpha.md",
            "---\ntitle: Alpha guide\ndescription: Reader guide.\n---\n\n# Alpha\n")
     _write(
+        root / "docs/guides/nested/tagged.md",
+        "---\ntitle: Nested tagged\ndescription: Tagged nested page.\n"
+        "tags:\n  - CLI\n  - Obsidian\n---\n\n# Nested tagged\n",
+    )
+    _write(
+        root / "docs/reference/by-component.md",
+        "---\ntitle: By component\ndescription: Component index.\n---\n\n"
+        "# By component\n\n## CLI {#cli}\n\n- [Nested tagged](../guides/nested/tagged.md)\n\n"
+        "## Obsidian {#obsidian}\n\n- [Nested tagged](../guides/nested/tagged.md)\n\n"
+        "## macOS {#macos}\n\nNo tagged pages yet.\n",
+    )
+    _write(
         root / "docs/_meta/mounts.yml",
         f"- repo: bob-plugins\n  remote: {plugin_repo.as_uri()}\n  branch: main\n"
         "  source: docs\n  target: reference/plugins\n  nav_title: Plugins\n",
@@ -90,7 +103,7 @@ def _fixture_root(root: Path, *, plugin_repo: Path) -> Path:
     )
     _write(
         root / "mkdocs.yml",
-        "site_name: Fixture\nsite_url: https://bobs-org.github.io/\n"
+        f"site_name: Fixture\nsite_url: {site_url}\n"
         "repo_url: https://github.com/bobs-org/bob-cli\n"
         "repo_name: bobs-org/bob-cli\nedit_uri: edit/master/docs/\n"
         "docs_dir: docs\nsite_dir: target/docs/site\nstrict: true\n"
@@ -105,9 +118,12 @@ def _fixture_root(root: Path, *, plugin_repo: Path) -> Path:
         "markdown_extensions:\n  - pymdownx.superfences\n"
         "  - github-callouts\n"
         "extra_css:\n  - stylesheets/bob.css\n"
+        "plugins:\n  - search\n  - tags:\n      listings: false\n      export: false\n"
         "nav:\n  - Home: index.md\n  - Normal: normal.md\n"
         "  - Alpha: alpha.md\n  - Beta: beta.md\n  - Gamma: gamma.md\n"
         "  - Guide: guides/alpha.md\n"
+        "  - Nested: guides/nested/tagged.md\n"
+        "  - Components: reference/by-component.md\n"
         "  - Plugins: reference/plugins/index.md\n",
     )
     return root
@@ -180,3 +196,59 @@ def test_templates_in_material(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     guide = _read(site, "reference/plugins/guide/index.html")
     assert "edit" in guide and "guide.md" in guide and "/main/" in guide.replace("&#x2f;", "/")
     assert "build.json" in home
+
+
+def _unescape(html: str) -> str:
+    return (
+        html.replace("&#x2f;", "/")
+        .replace("&#x23;", "#")
+        .replace("&amp;", "&")
+        .replace("%23", "#")
+    )
+
+
+def _assert_component_chips(site: Path) -> None:
+    tagged = _unescape(_read(site, "guides/nested/tagged/index.html"))
+    chips = tagged.count('class="bob-component-chip"')
+    assert chips == 2, tagged
+    assert tagged.count('aria-label="Components"') == 1
+    assert ">CLI<" in tagged
+    assert ">Obsidian<" in tagged
+    assert "by-component" in tagged
+    assert "#cli" in tagged
+    assert "#obsidian" in tagged
+    assert ".md#cli" not in tagged
+    assert ".md#obsidian" not in tagged
+    untagged = _read(site, "normal/index.html")
+    assert "bob-component-chip" not in untagged
+    assert 'aria-label="Components"' not in untagged
+
+
+def test_component_chips_in_zensical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _plugin_repo(tmp_path / "bob-plugins")
+    root = _fixture_root(tmp_path / "root", plugin_repo=plugin)
+    site = _build(root, material=False, monkeypatch=monkeypatch)
+    _assert_component_chips(site)
+
+
+@pytest.mark.skipif(shutil.which("mkdocs") is None, reason="material builder not installed")
+def test_component_chips_in_material(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _plugin_repo(tmp_path / "bob-plugins")
+    root = _fixture_root(tmp_path / "root", plugin_repo=plugin)
+    site = _build(root, material=True, monkeypatch=monkeypatch)
+    _assert_component_chips(site)
+
+
+def test_component_chips_honor_url_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin = _plugin_repo(tmp_path / "bob-plugins")
+    root = _fixture_root(
+        tmp_path / "root",
+        plugin_repo=plugin,
+        site_url="https://example.test/docs/",
+    )
+    site = _build(root, material=False, monkeypatch=monkeypatch)
+    tagged = _unescape(_read(site, "guides/nested/tagged/index.html"))
+    assert tagged.count('class="bob-component-chip"') == 2
+    assert "#cli" in tagged
+    assert "by-component" in tagged
+    assert "/docs/" in tagged or "../" in tagged

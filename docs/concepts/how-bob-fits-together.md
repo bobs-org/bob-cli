@@ -3,6 +3,10 @@ title: "How Bob fits together"
 description: "Where the vault, CLI, plugins, and Mac panel meet and who owns what."
 search:
   boost: 2
+tags:
+  - CLI
+  - Obsidian
+  - macOS
 ---
 
 # How Bob fits together

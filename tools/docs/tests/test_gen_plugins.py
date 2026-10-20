@@ -207,6 +207,7 @@ def test_check_or_generate_dispatches_plugin_inventory(
     seen: dict[str, object] = {}
     monkeypatch.setattr(gen_contracts, "generate_contracts", lambda root, *, check: [])
     monkeypatch.setattr(gen_contracts, "generate_reference", lambda root, *, check: [])
+    monkeypatch.setattr(gen_contracts, "generate_components", lambda root, *, check: [])
 
     def fake_plugin(root, *, check, source_dirs=None, production=False):
         seen.update(
@@ -240,6 +241,7 @@ def test_check_or_generate_returns_plugin_failure(
 ) -> None:
     monkeypatch.setattr(gen_contracts, "generate_contracts", lambda root, *, check: [])
     monkeypatch.setattr(gen_contracts, "generate_reference", lambda root, *, check: [])
+    monkeypatch.setattr(gen_contracts, "generate_components", lambda root, *, check: [])
     monkeypatch.setattr(
         gen_contracts,
         "run_plugin_inventory",

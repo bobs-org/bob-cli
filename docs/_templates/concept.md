@@ -3,6 +3,9 @@ title: "Plan budget"
 description: "How bob plan counts themes, Task Links, Today, Next, and Pending from the daily ledger."
 search:
   boost: 2
+tags:
+  - CLI
+  - Obsidian
 ---
 
 # Plan budget

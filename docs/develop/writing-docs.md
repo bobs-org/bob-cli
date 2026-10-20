@@ -59,6 +59,11 @@ Every page needs front matter with a `title` and a one-line `description` of at 
 characters. Use only supported front matter keys. Finish a reader-facing page with
 `Next` or `Related` links so the reader can continue.
 
+Guide and concept pages also declare `tags` naming the surfaces the page uses. The
+allowed values are `CLI`, `Obsidian`, and `macOS`. Hubs (`*/index.md`) omit tags and
+stay out of the generated [By component](../reference/by-component.md) index. Unknown
+or missing tags on a non-hub page fail `just docs-gen`.
+
 ## Page budgets
 
 Budgets keep each page focused. Word counts exclude front matter, fenced code, HTML
@@ -82,7 +87,8 @@ them.
 
 Generated blocks use matching `BEGIN GENERATED: name` and `END GENERATED: name`
 markers. Preserve their markers and run `just docs-gen` to regenerate contract indexes,
-navigation, the README contract table, and the mounted plugin inventory. Use the
+navigation, the README contract table, the By component index, and the mounted
+plugin inventory. Use the
 generator's check mode when reviewing drift; do not hand-edit generated output. Whole
 generated pages identify their generator at the top.
 

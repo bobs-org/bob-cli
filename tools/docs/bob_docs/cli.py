@@ -99,7 +99,7 @@ def _parser() -> argparse.ArgumentParser:
 
     gen_parser = subparsers.add_parser(
         "gen",
-        help="generate tracked contract indexes, memory-web reference pages, and mounted plugin inventory",
+        help="generate tracked contract indexes, memory-web reference pages, the component index, and mounted plugin inventory",
     )
     gen_parser.add_argument("-c", "--check", action="store_true", help="check generated files without writing")
 
