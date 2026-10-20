@@ -8,6 +8,7 @@ Build and type-check from [Build](build.md). Sign, install, update, and uninstal
 - [Architecture](architecture.md) for source layout, process and cache boundaries, and failure rules.
 - [Build](build.md) for toolchain selection, portable checks, bundle recipes, and glyph fixtures.
 - [CI](ci.md) for the macOS 26 workflow, launch signpost, and installer restart gates.
+- [Render fixtures](render-fixtures.md) for synthetic panel images, CI provenance, and documentation preview commands.
 - [Reference hub](../../reference/mac-capture/index.md) for the user-facing install, settings, panel, picker, preview, keyboard, Refs, diagnostics, and protocol pages.
 - [Develop Bob](../index.md) for the shared docs toolchain (`just docs-check`) and behavior contracts.
 

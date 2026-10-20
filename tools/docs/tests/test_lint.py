@@ -270,7 +270,21 @@ def test_verified_mount_source_passes(tmp_path: Path) -> None:
 def test_unassembled_lint_skips_gitignored_mount_residue(tmp_path: Path) -> None:
     root = _mounted_fixture(_site(tmp_path))
     (root / "target/docs/mount-manifest.json").unlink()
+    image = root / "docs/reference/plugins/images/panel.png"
+    image.parent.mkdir()
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
     assert _errors(root) == []
+
+    # An authored image in the mount must still have provenance.
+    with (root / ".gitignore").open("a", encoding="utf-8") as stream:
+        stream.write(
+            "!/docs/reference/plugins/images/\n"
+            "!/docs/reference/plugins/images/panel.png\n"
+        )
+    assert any(
+        "docs/reference/plugins/images/panel.png:1: media:" in item
+        for item in _errors(root)
+    )
 
 
 def test_copied_hub_source_stamp_is_verified(tmp_path: Path) -> None:
@@ -672,6 +686,13 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
     source = tmp_path / "bob-plugins"
     _write(source / "docs/nav.yml", "- title: Listed\n  path: listed.md\n")
     _write(source / "docs/listed.md", GOOD_FM + "# Listed\n\nMounted content.\n")
+    image = source / "docs/images/panel.png"
+    image.parent.mkdir()
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    media_path = _write(
+        source / "docs/media.yml",
+        "images/panel.png:\n  source: synthetic fixture\n  date: 2026-10-19\n",
+    )
     subprocess.run(
         ["git", "init", "-b", "main", "-q"], cwd=source, check=True, capture_output=True
     )
@@ -713,6 +734,17 @@ def test_assembled_lint_uses_expanded_nav_and_exact_mount_manifest(
         for item in check_tree(build_lint_context(root, docs_context=context))
         if item.severity == "error"
     ]
+
+    # Assembled checks must require source-owned provenance for mounted images.
+    media = media_path.read_text(encoding="utf-8")
+    media_path.write_text("{}\n", encoding="utf-8")
+    findings = check_tree(build_lint_context(root, docs_context=context))
+    assert any(
+        item.rule == "media"
+        and item.path == "docs/reference/plugins/images/panel.png"
+        for item in findings
+    )
+    media_path.write_text(media, encoding="utf-8")
 
     staged_config = context.output_dir / "docs/reference/configuration.md"
     staged_config.write_text(

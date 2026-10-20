@@ -44,11 +44,13 @@ reference.
 - [x] #task Ship the queue filter [completion:: 2026-10-19]
 ```
 
-**Menu bar.** The optional Mac panel shows the mark and today's queue.
+**Menu bar.** The optional Mac panel shows today's agenda.
 
-![Bob mark](assets/bob-mark.svg)
+[![Mac Capture agenda with a running FIX Pomodoro and upcoming sessions](reference/mac-capture/images/capture-agenda.png#only-light)](reference/mac-capture/images/capture-agenda.png)
+[![Mac Capture agenda with a running FIX Pomodoro and upcoming sessions](reference/mac-capture/images/capture-agenda-dark.png#only-dark)](reference/mac-capture/images/capture-agenda-dark.png)
 
-Read the [Mac Capture reference](reference/mac-capture/index.md). The panel is illustrative; the media phase owns the real screenshot.
+Rendered from synthetic CI fixtures; open the image for full-size text. Read the
+[Mac Capture reference](reference/mac-capture/index.md).
 
 </div>
 

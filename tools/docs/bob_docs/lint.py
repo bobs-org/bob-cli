@@ -1211,6 +1211,8 @@ def check_media(ctx: LintContext) -> list[Finding]:
         rel = path.relative_to(ctx.docs).as_posix()
         if _is_support(rel) or _is_excluded(rel, ctx.exclude_globs):
             continue
+        if _unassembled_mount_residue(ctx, rel):
+            continue
         published.add(rel)
     for rel in sorted(published):
         if rel not in ctx.media:
