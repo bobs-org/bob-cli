@@ -44,11 +44,9 @@ open ~/Applications/"Bob Mac Capture.app"
 Building needs macOS 26 with Command Line Tools for Xcode 26+ or Xcode 26+,
 with Swift resolved through `./Scripts/xcode-swift.sh` rather than a bare
 `swift` on `PATH`. For the full toolchain, signing, and diagnosis steps, see
-the authoritative
-[Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme),
-[Requirements](https://github.com/bobs-org/bob-mac-capture#requirements),
-[Development](https://github.com/bobs-org/bob-mac-capture#development), and
-[Signing](https://github.com/bobs-org/bob-mac-capture#signing).
+[Install](../reference/mac-capture/install.md),
+[Build](../develop/mac-capture/build.md), and
+[README › Signing](https://github.com/bobs-org/bob-mac-capture#signing).
 
 ## 2. Select Bob and the demo vault
 
@@ -65,9 +63,10 @@ no override is set, the app finds `bob` at `~/.cargo/bin/bob`, `~/bin/bob`,
 `/opt/homebrew/bin/bob`, or `/usr/local/bin/bob`; use **Recheck Bob** after
 changing either field.
 
-Grant Accessibility only for the Highlights tab feature the Mac README
-names. The panel requests it once through the system prompt; capture and
-the ledger agenda work without it.
+Grant Accessibility only for Highlights tabs. The panel requests it once
+through the system prompt; capture and the ledger agenda work without it.
+Recovery is in
+[Restore Mac Capture permissions](../guides/restore-mac-capture-permissions.md).
 
 ## 3. Capture once and read the result
 
@@ -95,4 +94,5 @@ post-tutorial demo state from source; Linux replay never runs the Mac GUI.
 
 - [Your first Bob day](first-bob-day.md) — the CLI path this panel submits to
 - [How Bob fits together](../concepts/how-bob-fits-together.md) — the capture round trip
-- [Requirements and compatibility](../reference/compatibility.md) — Mac requirements
+- [Mac Capture reference](../reference/mac-capture/index.md) — install, keys, and protocol
+- [Fix Mac Capture when bob is not resolved](../guides/fix-mac-capture-bob-resolution.md)

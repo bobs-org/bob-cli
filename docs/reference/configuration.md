@@ -306,12 +306,11 @@ individual command references for command-specific requirements.
 ## Mac Capture hotkeys
 
 Bob CLI owns no hotkey. When the Mac menu-bar app reports a hotkey conflict,
-free the shortcut shown in its Diagnostics and choose Recheck Bob, or switch
-between the production and rollback bindings in Settings. The exact keys and
-recovery steps live in the public
-[Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme):
-read Hotkey Registry, Conflicts, and Launch at Login for the registry and
-conflict recovery, and Keyboard for the capture editor keys.
+follow
+[Resolve a Mac Capture hotkey conflict](../guides/resolve-mac-capture-hotkey-conflict.md).
+The live chords are in
+[Mac Capture settings](mac-capture/settings.md#hotkey)
+and [Keyboard](mac-capture/keyboard.md).
 
 ## Related
 
@@ -319,3 +318,4 @@ conflict recovery, and Keyboard for the capture editor keys.
 - [Requirements and compatibility](compatibility.md)
 - [Configuration contracts for plan, freshness, and stats](../plan.md#config), [freshness](../freshness.md#2-fields-overrides-and-config), and [stats](../stats.md#stats-config)
 - [Capture](../capture.md) and [reference library](../ref.md)
+- [Resolve a Mac Capture hotkey conflict](../guides/resolve-mac-capture-hotkey-conflict.md)

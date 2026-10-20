@@ -28,13 +28,11 @@ was built from. The floors below are the minimum versions readers need.
   [Rust toolchain](https://rust-lang.org/tools/install). No minimum version
   is pinned here.
 - **Mac Capture (optional):** macOS 26 with Command Line Tools for Xcode
-  26+ or Xcode 26+, plus a signed or ad-hoc signed `bob` on `PATH`. See the
-  authoritative [Requirements](https://github.com/bobs-org/bob-mac-capture#requirements),
-  [Development](https://github.com/bobs-org/bob-mac-capture#development),
-  and [Signing](https://github.com/bobs-org/bob-mac-capture#signing) in the
-  [Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme).
-  The Mac reference mount is not published yet, so this page links the
-  source README instead of copying its protocol changelog.
+  26+ or Xcode 26+, plus a signed or ad-hoc signed `bob` on `PATH`. See
+  [Install](https://bobs-org.github.io/reference/mac-capture/install/),
+  [Build](https://bobs-org.github.io/develop/mac-capture/build/),
+  [README › Signing](https://github.com/bobs-org/bob-mac-capture#signing),
+  and the [protocol compatibility table](https://bobs-org.github.io/reference/mac-capture/protocol/).
 
 ## Tested snapshot
 

@@ -40,4 +40,11 @@ Build it from source with [Continue with Mac Capture](../../start/mac-capture.md
 - [Protocol](protocol.md) for subprocess commands, JSON boundaries, capability requirements, and older-Bob compatibility.
 - [Development](../../develop/mac-capture/index.md) for architecture, build, and CI.
 
-Recovery steps live in the [Mac README troubleshooting](https://github.com/bobs-org/bob-mac-capture#troubleshooting) until the Fix problems guides land.
+## Fix problems
+
+- [Fix Mac Capture when bob is not resolved](../../guides/fix-mac-capture-bob-resolution.md)
+- [Resolve a Mac Capture hotkey conflict](../../guides/resolve-mac-capture-hotkey-conflict.md)
+- [Restore Mac Capture permissions](../../guides/restore-mac-capture-permissions.md)
+- [Recover Bob Refs](../../guides/recover-bob-refs.md)
+- [Recover a stuck Mac Capture panel](../../guides/recover-mac-capture.md)
+- [Build](../../develop/mac-capture/build.md) for XCTest and toolchain diagnosis.

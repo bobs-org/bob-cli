@@ -139,7 +139,7 @@
 - query: install plugins
   location: /reference/plugins/#install
 - query: hotkey conflict
-  location: /reference/configuration/#mac-capture-hotkeys
+  location: /guides/resolve-mac-capture-hotkey-conflict/
 
 - query: first Bob day
   location: /start/first-bob-day/
@@ -193,3 +193,19 @@
   location: /reference/mac-capture/install/
 - query: refs-rank
   location: /reference/mac-capture/diagnostics/
+- query: "bob is not resolved"
+  location: /guides/fix-mac-capture-bob-resolution/
+- query: "Target cache stale"
+  location: /guides/fix-mac-capture-bob-resolution/
+- query: "Refs hotkey conflict"
+  location: /guides/resolve-mac-capture-hotkey-conflict/
+- query: "tccutil reset Accessibility"
+  location: /guides/restore-mac-capture-permissions/
+- query: "Bob couldn't load your references"
+  location: /guides/recover-bob-refs/
+- query: "Couldn't close"
+  location: /guides/recover-bob-refs/
+- query: "Restart failed"
+  location: /guides/recover-mac-capture/
+- query: "block-id-focus-claimed"
+  location: /guides/recover-mac-capture/

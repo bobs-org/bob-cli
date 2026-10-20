@@ -38,3 +38,8 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 
 - [Resolve a vault-sync conflict copy](resolve-vault-conflict-copy.md)
 - [Recover a stuck reference job](recover-reference-job.md)
+- [Fix Mac Capture when bob is not resolved](fix-mac-capture-bob-resolution.md)
+- [Resolve a Mac Capture hotkey conflict](resolve-mac-capture-hotkey-conflict.md)
+- [Restore Mac Capture permissions](restore-mac-capture-permissions.md)
+- [Recover Bob Refs](recover-bob-refs.md)
+- [Recover a stuck Mac Capture panel](recover-mac-capture.md)

@@ -16,8 +16,9 @@ or writes the vault itself.
 
 Install the CLI, point it at your vault, and install Bob Mac Capture. The
 [Continue with Mac Capture](../start/mac-capture.md) tutorial covers build,
-bundle, and install. Signing lives in the
-[Bob Mac Capture README › Signing](https://github.com/bobs-org/bob-mac-capture#signing).
+bundle, and install. Signing lives in
+[README › Signing](https://github.com/bobs-org/bob-mac-capture#signing)
+and [Install › Signing](../reference/mac-capture/install.md#signing).
 This page assumes the app is already on the Mac.
 
 ## 1. Confirm Bob and the vault in Settings
@@ -39,7 +40,7 @@ Accessibility grant; that grant is only for Highlights tabs.
 
 The production shortcut is Control-Shift-Command-I. A development shortcut
 Control-Shift-Command-R is selectable in Settings. See
-[Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme)
+[Keyboard](../reference/mac-capture/keyboard.md)
 for the current menu and shortcut list.
 
 Type a new task with a stable block id, for example
@@ -61,8 +62,9 @@ bob capture 'Sharpen the shears @workshop^shears'
 ## If it goes wrong
 
 If the menu-bar icon tooltip reads `Bob Mac Capture — bob is not resolved.
-Check Settings.`, use **Recheck Bob** or **bob Not Resolved — Open
-Settings…**. If the panel stays open, the submit did not succeed; fix the
+Check Settings.`, follow
+[Fix Mac Capture when bob is not resolved](fix-mac-capture-bob-resolution.md).
+If the panel stays open, the submit did not succeed; fix the
 preview error and submit again. Do not edit the vault from the panel.
 
 ## Related
@@ -70,4 +72,5 @@ preview error and submit again. Do not edit the vault from the panel.
 - [Continue with Mac Capture](../start/mac-capture.md)
 - [How Bob fits together](../concepts/how-bob-fits-together.md)
 - [Capture](../capture.md)
-- [Bob Mac Capture README](https://github.com/bobs-org/bob-mac-capture#readme)
+- [Mac Capture reference](../reference/mac-capture/index.md)
+- [Fix Mac Capture when bob is not resolved](fix-mac-capture-bob-resolution.md)

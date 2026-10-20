@@ -62,8 +62,8 @@ keep the local checkout.
 
 On macOS, `just install-all` passes no signing identity. Mac Capture then uses
 the stable local identity when the login keychain has it. Signing details live
-in the
-[Bob Mac Capture README › Signing](https://github.com/bobs-org/bob-mac-capture#signing).
+in [README › Signing](https://github.com/bobs-org/bob-mac-capture#signing)
+and [Install › Signing](../reference/mac-capture/install.md#signing).
 
 ## 3. Confirm the CLI answers
 

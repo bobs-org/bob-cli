@@ -125,6 +125,11 @@ nav:
       - Fix problems:
           - Resolve a vault-sync conflict copy: guides/resolve-vault-conflict-copy.md
           - Recover a stuck reference job: guides/recover-reference-job.md
+          - Fix Mac Capture when bob is not resolved: guides/fix-mac-capture-bob-resolution.md
+          - Resolve a Mac Capture hotkey conflict: guides/resolve-mac-capture-hotkey-conflict.md
+          - Restore Mac Capture permissions: guides/restore-mac-capture-permissions.md
+          - Recover Bob Refs: guides/recover-bob-refs.md
+          - Recover a stuck Mac Capture panel: guides/recover-mac-capture.md
   - Understand:
       - Overview: concepts/index.md
       - How Bob fits together: concepts/how-bob-fits-together.md
