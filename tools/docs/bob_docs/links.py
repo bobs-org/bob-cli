@@ -14,8 +14,8 @@ absolute org-root URLs remapped onto local output. Fragment checking uses
 
 The online run keeps the same root, remap, and fragment checking and additionally
 fetches external HTTP(S) destinations with bounded retries and timeouts. It adds
-no ``--exclude`` broad exclusions; a broken external link fails rather than
-turning green.
+one narrowly scoped ``--exclude`` for the vendored OFL boilerplate Adobe URL;
+any other broken external link fails rather than turning green.
 """
 
 from __future__ import annotations
@@ -44,6 +44,16 @@ LYCHEE_CHECKSUM_SUFFIX = ".sha256"
 ONLINE_TIMEOUT_SECONDS = 20
 ONLINE_MAX_RETRIES = 3
 ONLINE_RETRY_WAIT_SECONDS = 1
+# llmstxt emits a Markdown copy at every directory URL. Its copy format keeps
+# authored fragment syntax, which lychee parses differently from the checked
+# HTML page and reports as false missing anchors. The published HTML remains
+# fully checked, along with llms.txt and its page links.
+LLMS_PAGE_MARKDOWN_EXCLUDE = "(^|/)index[.]md$"
+# The vendored Source Serif OFL text (docs/assets/fonts/OFL.txt) carries
+# Adobe's copyright line as http://www.adobe.com/. Adobe returns 403 to
+# automated clients, so the weekly online check excludes exactly that URL.
+# Other OFL.txt links, such as scripts.sil.org/OFL, stay checked.
+ADOBE_OFL_URL_EXCLUDE = "^http://www[.]adobe[.]com/?$"
 
 
 @dataclass(frozen=True)
@@ -315,6 +325,8 @@ def lychee_argv(lychee: Path, *, site_dir: Path, origin: str) -> list[str]:
         "--offline",
         "--no-progress",
         "--include-fragments",
+        "--exclude-path",
+        LLMS_PAGE_MARKDOWN_EXCLUDE,
         "--index-files",
         "index.html",
         "--root-dir",
@@ -338,8 +350,9 @@ def online_argv(
 
     Local file links keep resolving against ``site_dir`` through ``--root-dir``
     and ``--remap``, so authored ``docs/`` paths, source README links, and
-    command snippets are not treated as external requests. No ``--exclude``
-    broad exclusions are added; broken externals fail.
+    command snippets are not treated as external requests. One narrowly scoped
+    ``--exclude`` covers the vendored OFL boilerplate Adobe URL; other broken
+    externals fail.
     """
 
     if timeout <= 0:
@@ -353,6 +366,8 @@ def online_argv(
         str(lychee),
         "--no-progress",
         "--include-fragments",
+        "--exclude-path",
+        LLMS_PAGE_MARKDOWN_EXCLUDE,
         "--index-files",
         "index.html",
         "--root-dir",
@@ -365,6 +380,8 @@ def online_argv(
         str(retries),
         "--retry-wait-time",
         str(retry_wait),
+        "--exclude",
+        ADOBE_OFL_URL_EXCLUDE,
         str(site_dir.resolve()),
     ]
 

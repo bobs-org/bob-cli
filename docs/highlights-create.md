@@ -114,7 +114,7 @@ Note snapshot and research-report Markdown PDFs use a clean text layer: ragged
 right, no hyphenation, `Ligatures=NoCommon` for serif, sans, and mono fonts,
 and no Type 3 body fonts. Snapshots render through pandoc and XeLaTeX because
 the PDFKit measurements found that Chromium/Skia with variable fonts damages
-some extracted words; see the PDFKit and text-layer research.
+some extracted words.
 
 A second snapshot of the same note on the same day refuses with `already
 queued` (use `-f` to replace it) or `already captured`. Pass `-N` for a

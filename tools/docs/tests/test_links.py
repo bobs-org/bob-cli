@@ -211,6 +211,8 @@ def test_lychee_argv_uses_offline_root_and_remap(tmp_path) -> None:
         "--offline",
         "--no-progress",
         "--include-fragments",
+        "--exclude-path",
+        "(^|/)index[.]md$",
         "--index-files",
         "index.html",
         "--root-dir",
@@ -219,7 +221,7 @@ def test_lychee_argv_uses_offline_root_and_remap(tmp_path) -> None:
         f"https://docs.example.test/ {site.resolve().as_uri()}/",
         str(site.resolve()),
     ]
-    assert argv[argv.index("--include-fragments") + 1] == "--index-files"
+    assert argv[argv.index("--exclude-path") + 2] == "--index-files"
     assert argv[argv.index("--index-files") + 1] == "index.html"
 
 

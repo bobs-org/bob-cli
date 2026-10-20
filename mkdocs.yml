@@ -70,6 +70,46 @@ plugins:
   - tags:
       listings: false
       export: false
+  - llmstxt:
+      sections:
+        Get started:
+          - start/*.md
+        Guides:
+          - guides/*.md
+        Concepts:
+          - concepts/*.md
+        Reference:
+          - reference/*.md
+          - reference/**/*.md
+        Contracts (optional):
+          - articles.md
+          - capture.md
+          - completion.md
+          - getting-started.md
+          - gkeep.md
+          - highlights-clip.md
+          - highlights-create.md
+          - highlights-ref-sync.md
+          - plugins.md
+          - dashboard.md
+          - date-marks.md
+          - freshness.md
+          - plan.md
+          - projects.md
+          - pomodoro-homes.md
+          - randomize.md
+          - stats.md
+          - task-dependencies.md
+          - task-relations.md
+          - task-move.md
+          - task-status-hooks.md
+          - task-tag-marks.md
+          - today-marks.md
+          - dataview.md
+          - ref.md
+          - ref-jobs.md
+          - obsidian-sync-exclusions.md
+          - vault-git-sync.md
 
 markdown_extensions:
   - admonition
@@ -194,6 +234,7 @@ nav:
       - Mac Capture development: develop/mac-capture/index.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
+      - Reader testing: develop/reader-testing.md
       - Migration notes: develop/migration-notes.md
       - Release checklist: develop/release-checklist.md
       - Design decisions: develop/decisions.md

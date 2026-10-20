@@ -13,3 +13,39 @@
 {% include "partials/bob-provenance.html" %}
 {% include "partials/footer.html" %}
 {% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+  (() => {
+    const labelScrollableTables = () => {
+      document.querySelectorAll(".md-typeset table:not([data-bob-accessible])").forEach((table) => {
+        const caption = table.querySelector("caption")?.textContent.trim();
+        let cursor = table.parentElement;
+        let heading;
+        while (cursor && !heading) {
+          let previous = cursor.previousElementSibling;
+          while (previous) {
+            if (/^H[1-6]$/.test(previous.tagName)) {
+              heading = previous;
+              break;
+            }
+            previous = previous.previousElementSibling;
+          }
+          cursor = cursor.parentElement;
+        }
+        const context = caption || heading?.textContent.replace(/\s+/g, " ").trim() || "Data table";
+        table.setAttribute("tabindex", "0");
+        table.setAttribute("aria-label", "Data table: " + context);
+        table.dataset.bobAccessible = "true";
+      });
+    };
+
+    labelScrollableTables();
+    new MutationObserver(labelScrollableTables).observe(
+      document.querySelector(".md-content") || document.body,
+      { childList: true, subtree: true }
+    );
+  })();
+</script>
+{% endblock %}

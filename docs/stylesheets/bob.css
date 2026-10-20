@@ -46,6 +46,11 @@
   --bob-today-glyph: #d9472b;
   --bob-caution: #81182b;
   --bob-tag-prj: #6d28d9;
+  --bob-code-variable: #0f6b63;
+  --bob-code-constant: #4d3c89;
+  --bob-code-number: #9b3d2d;
+  --bob-code-muted: #5c5f5a;
+  --bob-code-ink: #171c1a;
 }
 
 [data-md-color-scheme="slate"] {
@@ -58,6 +63,11 @@
   --bob-today-glyph: #f58b72;
   --bob-caution: #e79aab;
   --bob-tag-prj: #b7a6f5;
+  --bob-code-variable: #79dedc;
+  --bob-code-constant: #c4b5fd;
+  --bob-code-number: #f58b72;
+  --bob-code-muted: #a3a9a2;
+  --bob-code-ink: #eef3ed;
 }
 
 /* Map tokens onto Material surfaces. The scheme attribute on <body>
@@ -204,6 +214,52 @@ body:has(.bob-home-cards) .md-content__inner.md-typeset {
   font-family: "Bob Mono", ui-monospace, monospace;
 }
 
+/* Inline examples can wrap at high zoom without widening the article. */
+.md-typeset :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-inline: 0.1em;
+}
+
+.md-nav__link .md-typeset code {
+  color: var(--bob-ink);
+}
+
+/* Pygments defaults use low-contrast light syntax colors on both code surfaces. */
+.md-typeset .highlight .nv,
+.md-typeset .highlight .vc,
+.md-typeset .highlight .vg,
+.md-typeset .highlight .vi {
+  color: var(--bob-code-variable);
+}
+
+.md-typeset .highlight .nb,
+.md-typeset .highlight .no {
+  color: var(--bob-code-constant);
+}
+
+.md-typeset .highlight .mi,
+.md-typeset .highlight .mo {
+  color: var(--bob-code-number);
+}
+
+.md-typeset .highlight .c,
+.md-typeset .highlight .c1,
+.md-typeset .highlight .cm,
+.md-typeset .highlight .cp,
+.md-typeset .highlight .cpf,
+.md-typeset .highlight .cs,
+.md-typeset .highlight .ge,
+.md-typeset .highlight .gs,
+.md-typeset .highlight .gu,
+.md-typeset .highlight .p {
+  color: var(--bob-code-muted);
+}
+
+.md-typeset .highlight .gt {
+  color: var(--bob-code-ink);
+}
+
 /* Keycaps look like small physical keys. */
 .md-typeset kbd {
   border: 1px solid var(--bob-muted);
@@ -286,6 +342,11 @@ body:has(.bob-home-cards) .md-content__inner.md-typeset {
   padding: 0.15em 0;
 }
 
+.bob-task-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .bob-task-closed {
   opacity: 1;
 }
@@ -311,7 +372,8 @@ body:has(.bob-home-cards) .md-content__inner.md-typeset {
   border-radius: 999px;
   padding: 0 0.5em;
   margin: 0 0.2em;
-  white-space: nowrap;
+  white-space: normal;
+  flex-wrap: wrap;
 }
 
 .bob-date-label {

@@ -152,7 +152,11 @@ tracked pages; run `just docs-gen`, `just docs-fonts`, `just docs-assets`, or
 The live site is `https://bobs-org.github.io/`. Publication logic lives in this
 repository; `bobs-org/bobs-org.github.io` holds only the caller workflow, a
 README, and the durable `published.json` log. That log is not assumed to be
-served as `/published.json`. Live provenance is `/build.json`.
+served as `/published.json`. Live provenance is `/build.json`. GitHub runs the
+hourly schedule (cron `17 * * * *`) on a best-effort basis and may delay or
+drop runs under load; every run is idempotent behind the gates,
+`just docs-publish` publishes current master on demand, and `just docs-status`
+shows what is live.
 
 Preview host bootstrap, then apply it only when you intend to create or resync
 the deploy repository. Bootstrap never writes `published.json`.
@@ -259,7 +263,11 @@ recovery path: it rebuilds, deploys, records, verifies, and closes the issue.
 The `weekly.yml` caller runs on `41 6 * * 1` and manual dispatch. It always
 builds the strict Material site with the locked material group and runs
 `bob-docs links --online` with bounded retries and timeouts, even when the
-publication fingerprint is unchanged or a publish hold remains. Weekly cannot
+publication fingerprint is unchanged or a publish hold remains. The online
+check excludes exactly one URL, `http://www.adobe.com/`, which is Adobe's
+copyright line in the vendored Source Serif OFL text
+(`docs/assets/fonts/OFL.txt`) and returns 403 to automated clients; every
+other OFL link, such as `scripts.sil.org/OFL`, stays checked. Weekly cannot
 release the hold or deploy, and it never writes `published.json`. A failure
 opens or updates one `Docs weekly checks blocked` issue (`docs-weekly`); a
 passing run closes only that issue.

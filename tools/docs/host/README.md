@@ -8,9 +8,12 @@ workflows, and publication logic live in
 
 Do not treat this repository as documentation source. Edit pages, the theme,
 and the publisher in bob-cli, then let the hourly poll (cron `17 * * * *`) or
-an operator dispatch publish the result. The Monday weekly check (cron
-`41 6 * * 1`) builds the strict Material site and fetches external links with
-bounded retries; it never deploys and never writes `published.json`.
+an operator dispatch publish the result. GitHub runs schedules on a
+best-effort basis and may delay or drop them under load; every run is
+idempotent behind the gates, `just docs-publish` publishes current master on
+demand, and `just docs-status` shows what is live. The Monday weekly check
+(cron `41 6 * * 1`) builds the strict Material site and fetches external links
+with bounded retries; it never deploys and never writes `published.json`.
 
 `published.json` is the publication log in this repository. It is not
 necessarily served as `/published.json` on the live site. The live provenance

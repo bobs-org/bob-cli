@@ -1,7 +1,7 @@
 """Focused online-mode tests for the pinned-lychee link checker.
 
 The online run keeps the offline root/remap/fragment contract and adds bounded
-retries and timeouts without broad exclusions.
+retries and timeouts plus one narrowly scoped Adobe-URL exclusion.
 """
 
 import pytest
@@ -42,6 +42,8 @@ def _site(tmp_path, origin="https://docs.example.test"):
 def test_online_argv_keeps_root_remap_fragments_without_offline(tmp_path) -> None:
     from pathlib import Path
 
+    from bob_docs.links import ADOBE_OFL_URL_EXCLUDE
+
     assert isinstance(tmp_path, Path)
     site = tmp_path / "site"
     site.mkdir()
@@ -49,7 +51,8 @@ def test_online_argv_keeps_root_remap_fragments_without_offline(tmp_path) -> Non
     assert "--offline" not in argv
     assert "--no-progress" in argv
     assert "--include-fragments" in argv
-    assert argv[argv.index("--include-fragments") + 1] == "--index-files"
+    assert argv[argv.index("--exclude-path") + 1] == "(^|/)index[.]md$"
+    assert argv[argv.index("--exclude-path") + 2] == "--index-files"
     assert "--root-dir" in argv
     assert "--remap" in argv
     assert "--timeout" in argv
@@ -59,8 +62,13 @@ def test_online_argv_keeps_root_remap_fragments_without_offline(tmp_path) -> Non
     assert str(ONLINE_TIMEOUT_SECONDS) in argv
     assert str(ONLINE_MAX_RETRIES) in argv
     assert str(ONLINE_RETRY_WAIT_SECONDS) in argv
-    # no broad exclusions: a broken external must fail, not turn green
-    assert not any(item.startswith("--exclude") for item in argv)
+    # The only path exclusion is llmstxt's duplicate Markdown output, and the
+    # only URL exclusion is the vendored OFL boilerplate Adobe URL; any other
+    # broken link in the generated HTML remains a failure.
+    assert argv.count("--exclude-path") == 1
+    assert argv.count("--exclude") == 1
+    assert argv[argv.index("--exclude") + 1] == ADOBE_OFL_URL_EXCLUDE
+    assert argv[argv.index("--exclude") + 1] == "^http://www[.]adobe[.]com/?$"
     assert not any(item.startswith("--scheme") for item in argv)
 
 

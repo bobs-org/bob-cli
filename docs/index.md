@@ -46,8 +46,12 @@ reference.
 
 **Menu bar.** The optional Mac panel shows today's agenda.
 
-[![Mac Capture agenda with a running FIX Pomodoro and upcoming sessions](reference/mac-capture/images/capture-agenda.png#only-light)](reference/mac-capture/images/capture-agenda.png)
-[![Mac Capture agenda with a running FIX Pomodoro and upcoming sessions](reference/mac-capture/images/capture-agenda-dark.png#only-dark)](reference/mac-capture/images/capture-agenda-dark.png)
+<a class="only-light" href="reference/mac-capture/images/capture-agenda.png" aria-label="Open the light theme Mac Capture agenda image">
+  <img alt="Mac Capture agenda with a running FIX Pomodoro and upcoming sessions" src="reference/mac-capture/images/capture-agenda.png">
+</a>
+<a class="only-dark" href="reference/mac-capture/images/capture-agenda-dark.png" aria-label="Open the dark theme Mac Capture agenda image">
+  <img alt="Mac Capture agenda with a running FIX Pomodoro and upcoming sessions" src="reference/mac-capture/images/capture-agenda-dark.png">
+</a>
 
 Rendered from synthetic CI fixtures; open the image for full-size text. Read the
 [Mac Capture reference](reference/mac-capture/index.md).

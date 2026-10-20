@@ -488,6 +488,8 @@ resolution.
 `bob-docs links --online` keeps the same root, remap, and fragment checking
 and additionally fetches external HTTP(S) destinations with bounded retries
 and timeouts (`--timeout-seconds`, `--retries`, `--wait-seconds`, defaulting
-to 20 seconds, 3 retries, and 1 second). It adds no broad `--exclude`
-patterns; a broken external fails. The weekly workflow runs this online
+to 20 seconds, 3 retries, and 1 second). It adds one narrowly scoped
+`--exclude` for the vendored OFL boilerplate Adobe URL
+(`^http://www[.]adobe[.]com/?$`, which returns 403 to automated clients);
+every other broken external fails. The weekly workflow runs this online
 check after a strict Material build, not the offline gate.

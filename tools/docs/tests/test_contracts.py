@@ -45,6 +45,17 @@ def test_current_registry_and_generated_nav_are_complete_and_unique() -> None:
         assert nav_pages.count(f"{entry.stem}.md") == 1
 
 
+def test_llmstxt_contracts_section_lists_exactly_registry_stems() -> None:
+    registry = load_contract_registry(ROOT)
+    expected = sorted(f"{entry.stem}.md" for entry in registry.entries)
+    config = load_yaml(ROOT / "mkdocs.yml")
+    llmstxt = next(
+        plugin["llmstxt"] for plugin in config["plugins"] if isinstance(plugin, dict) and "llmstxt" in plugin
+    )
+    actual = sorted(llmstxt["sections"]["Contracts (optional)"])
+    assert actual == expected
+
+
 def test_readme_table_matches_original_contract_index_snapshot() -> None:
     table = _generated_region(
         (ROOT / "docs/README.md").read_text(encoding="utf-8"), "contract table"

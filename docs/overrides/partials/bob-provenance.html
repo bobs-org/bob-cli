@@ -2,7 +2,7 @@
 {% if config.extra and config.extra.build %}
 {% set build = config.extra.build %}
 {% set sources = build.sources | d({}, true) %}
-<div class="bob-provenance" role="contentinfo" aria-label="Build provenance">
+<div class="bob-provenance">
   <span>Tested rolling snapshot</span>
   {% for repo in sources %}
   {% set info = sources[repo] %}

@@ -14,16 +14,18 @@ from .errors import DocsError
 WIDTHS = (360, 768, 1280)
 SCHEMES = ("light", "dark")
 
-# Default audit matrix: homepage, short contract, long contract, Learn pages,
-# plus the generated CLI reference when a later phase lands it.
+# Default audit matrix: homepage, Contracts, and at least one page from each tab.
+# Include the generated CLI reference when a later phase lands it.
 PAGES: tuple[tuple[str, str], ...] = (
     ("homepage", "/"),
     ("today-marks", "/today-marks/"),
     ("capture", "/capture/"),
     ("cli-reference", "/reference/cli/"),
     ("first-bob-day", "/start/first-bob-day/"),
+    ("guide", "/guides/sync-vault-across-machines/"),
     ("compatibility", "/reference/compatibility/"),
     ("how-bob-fits-together", "/concepts/how-bob-fits-together/"),
+    ("develop", "/develop/reader-testing/"),
 )
 
 CAPTURE_DEEP_ANCHOR = "/capture/"
