@@ -217,6 +217,20 @@ fn load_blocks_lines_enabled() -> bool {
     }
 }
 
+/// Load `relations.linked_from_lines`, falling back to `true` and warning
+/// on stderr when the value is invalid (LR17).
+fn load_relations_linked_from_enabled() -> bool {
+    match bob_config::load_relations_config(&bob_config::config_path()) {
+        Ok(config) => config.linked_from_lines,
+        Err(error) => {
+            eprintln!(
+                "{COMMAND_NAME}: warning: invalid relations config: {error}; using relations.linked_from_lines=true"
+            );
+            true
+        }
+    }
+}
+
 /// Files whose mtime is in the future or unreadable: the guarded write
 /// would refuse them without waiting, so a mint on that note must not
 /// be listed this run (BR5).
@@ -512,6 +526,33 @@ pub(super) fn sync_task_statuses(
             files[file_index].tasks.len(),
             task_counts[file_index],
             "BLOCKS projection never adds or removes task lines"
+        );
+    }
+    let relations_enabled = load_relations_linked_from_enabled();
+    let relation_archives = load_relation_archives(
+        &request.bob_dir,
+        &settings,
+        &files,
+        &mut inputs,
+    )?;
+    let relations = reconcile_relation_lines(
+        &mut files,
+        &note_index,
+        &relation_archives,
+        &settings,
+        previous_daily_file,
+        &quiet_deferred,
+        relations_enabled,
+    );
+    for (file_index, original) in relations.original_contents {
+        pre_reconcile.entry(file_index).or_insert(original);
+    }
+    reconcile_touched.extend(relations.touched_files);
+    for file_index in files.iter().enumerate().map(|(index, _)| index) {
+        debug_assert_eq!(
+            files[file_index].tasks.len(),
+            task_counts[file_index],
+            "LINKED FROM projection never adds or removes task lines"
         );
     }
     let mut dependency_warnings = reconcile.warnings;
@@ -948,6 +989,9 @@ pub(super) fn sync_task_statuses(
         dependency_warnings,
         blocks_line_updates: blocks.updates,
         minted_dependent_block_ids: blocks.mints,
+        linked_from_line_updates: relations.updates,
+        minted_relation_source_block_ids: relations.mints,
+        relation_warnings: relations.warnings,
         prj_is_blocked_tags_added,
         prj_is_blocked_tags_stripped,
         unblocked_fields_written,

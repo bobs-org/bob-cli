@@ -85,6 +85,22 @@ pub(super) fn assert_reconciled_clean(json: &Value) {
         "unexpected minted block ids: {}",
         json["minted_dependent_block_ids"]
     );
+    assert!(
+        json["linked_from_line_updates"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "unexpected LINKED FROM updates: {}",
+        json["linked_from_line_updates"]
+    );
+    assert!(
+        json["minted_relation_source_block_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "unexpected minted relation source ids: {}",
+        json["minted_relation_source_block_ids"]
+    );
 }
 
 #[test]

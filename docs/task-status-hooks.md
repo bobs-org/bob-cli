@@ -1223,6 +1223,24 @@ JSON mode prints one object on stdout with these stable fields:
       "block_id": "call-back"
     }
   ],
+  "linked_from_line_updates": [
+    {
+      "path": "dev.md",
+      "line": 36,
+      "task": "Design a retry policy",
+      "kind": "inserted",
+      "added": ["[[#^fix-retries]]"],
+      "removed": []
+    }
+  ],
+  "minted_relation_source_block_ids": [
+    {
+      "path": "inbox.md",
+      "line": 4,
+      "block_id": "fix-retries"
+    }
+  ],
+  "relation_warnings": [],
   "applied_files": [],
   "deferred_files": [],
   "recovery_directory": null,
@@ -1259,7 +1277,8 @@ JSON mode prints one object on stdout with these stable fields:
 
 `scanned_files` counts only Markdown notes included in the active vault scan;
 it does not include read-only archive notes loaded only for exact `done/...`
-Pomodoro references. `references` retains its input-count contract and counts
+Pomodoro references or for relation `LINKS` sources and explicit `done/`
+targets. `references` retains its input-count contract and counts
 unique raw direct Pomodoro block links before structural cleanup; consumers do
 not need to reinterpret that older field. A canceled reference removed during
 this run therefore remains part of `references`, while the post-rewrite graph
@@ -1333,9 +1352,17 @@ for the legacy-window retirement decision, and `dependency_warnings` lists
 canonicalization, removal, or deduplication with `path`, one-based `line`,
 owner `task` description, `kind`, and `added`/`removed` canonical links;
 `minted_dependent_block_ids` lists each dependent `^block-id` minted so a
-BLOCKS entry can name it. The human report mirrors these with
-projected-field, adopted, healed, canonicalized, and `🧱 BLOCKS` sections
-plus a `Dependencies:` line, and the `Summary:` line appends the same counts.
+BLOCKS entry can name it. `linked_from_line_updates` lists each LINKED FROM
+insert, rewrite, canonicalization, removal, or deduplication in the same
+shape; `minted_relation_source_block_ids` lists each source `^block-id`
+minted so a LINKED FROM entry can name it; `relation_warnings` lists
+`{kind, path, line, message}` rows (`malformed_links_line`,
+`malformed_linked_from_line`, `unresolved_relation_link`,
+`relation_target_not_task`, `self_relation`, `duplicate_block_id`). The
+human report mirrors these with projected-field, adopted, healed,
+canonicalized, `🧱 BLOCKS`, and `🪢 LINKED FROM` sections plus
+`Dependencies:` and `Relations:` lines, and the `Summary:` line appends the
+same counts.
 `applied_files`, `deferred_files`, and `recovery_directory` describe live
 application. On dry-run and live no-op, `applied_files` and `deferred_files`
 are empty and `recovery_directory` is `null`; on a successful live write,

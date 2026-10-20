@@ -116,6 +116,15 @@ pub(super) struct MintedDependentBlockId {
     pub(super) block_id: String,
 }
 
+/// One LINKED FROM projection warning (`docs/task-relations.md` §12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationWarning {
+    pub(super) kind: String,
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct StruckCompletedReference {
     pub(crate) target: String,
@@ -289,6 +298,9 @@ pub(super) struct SyncResult {
     pub(super) dependency_warnings: Vec<DependencyWarning>,
     pub(super) blocks_line_updates: Vec<BlocksLineUpdate>,
     pub(super) minted_dependent_block_ids: Vec<MintedDependentBlockId>,
+    pub(super) linked_from_line_updates: Vec<BlocksLineUpdate>,
+    pub(super) minted_relation_source_block_ids: Vec<MintedDependentBlockId>,
+    pub(super) relation_warnings: Vec<RelationWarning>,
     pub(super) prj_is_blocked_tags_added: Vec<ProjectBlockedTagChange>,
     pub(super) prj_is_blocked_tags_stripped: Vec<ProjectBlockedTagChange>,
     pub(super) unblocked_fields_written: Vec<UnblockedFieldChange>,

@@ -18,7 +18,6 @@ pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
-#[allow(unused_imports)]
 pub(crate) use relations::load_relations_config;
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};

@@ -5,6 +5,7 @@ mod blocks;
 mod consume;
 mod dependency_line_writes;
 mod dependency_lines;
+mod relations;
 mod retry;
 mod structure;
 mod subprojects;

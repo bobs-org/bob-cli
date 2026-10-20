@@ -40,7 +40,9 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.unblocked_fields_written.len()
         + result.unblocked_fields_pruned.len()
         + result.blocks_line_updates.len()
-        + result.minted_dependent_block_ids.len();
+        + result.minted_dependent_block_ids.len()
+        + result.linked_from_line_updates.len()
+        + result.minted_relation_source_block_ids.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -149,6 +151,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_empty_pomodoro_section(result);
     print_dependency_projection_sections(&styler, result);
     print_blocks_line_sections(&styler, result);
+    print_relation_line_sections(&styler, result);
     print_project_blocked_tag_sections(&styler, result);
     print_unblocked_field_sections(&styler, result);
     print_grouped_task_sections(&styler, result);
@@ -177,7 +180,13 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.minted_dependent_block_ids.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
+        "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings",
+        result.linked_from_line_updates.len(),
+        result.minted_relation_source_block_ids.len(),
+        result.relation_warnings.len()
+    );
+    println!(
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -200,6 +209,9 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.dependency_warnings.len(),
         result.blocks_line_updates.len(),
         result.minted_dependent_block_ids.len(),
+        result.linked_from_line_updates.len(),
+        result.minted_relation_source_block_ids.len(),
+        result.relation_warnings.len(),
         result.prj_is_blocked_tags_added.len(),
         result.prj_is_blocked_tags_stripped.len(),
         result.unblocked_fields_written.len(),
@@ -249,6 +261,60 @@ pub(super) fn print_blocks_line_sections(styler: &Styler, result: &SyncResult) {
             }
         );
         for entry in &result.minted_dependent_block_ids {
+            println!(
+                "    {}  line {}  ^{}",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.block_id
+            );
+        }
+    }
+}
+
+pub(super) fn print_relation_line_sections(
+    styler: &Styler,
+    result: &SyncResult,
+) {
+    if !result.linked_from_line_updates.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            if result.dry_run {
+                "would update \u{1FAA2} LINKED FROM lines"
+            } else {
+                "updated \u{1FAA2} LINKED FROM lines"
+            }
+        );
+        for entry in &result.linked_from_line_updates {
+            let mut detail = entry.kind.clone();
+            if !entry.added.is_empty() {
+                detail.push_str("  +");
+                detail.push_str(&entry.added.join(" "));
+            }
+            if !entry.removed.is_empty() {
+                detail.push_str("  -");
+                detail.push_str(&entry.removed.join(" "));
+            }
+            println!(
+                "    {}  line {}  {}  {}",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.task,
+                detail
+            );
+        }
+    }
+    if !result.minted_relation_source_block_ids.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            if result.dry_run {
+                "would mint relation source block ids"
+            } else {
+                "minted relation source block ids"
+            }
+        );
+        for entry in &result.minted_relation_source_block_ids {
             println!(
                 "    {}  line {}  ^{}",
                 styler.cyan(&entry.path),
@@ -806,6 +872,16 @@ pub(super) fn print_warnings(result: &SyncResult) {
             warning.path,
             warning.line,
             warning.detail
+        );
+    }
+    for warning in &result.relation_warnings {
+        eprintln!(
+            "{}: {} {}:{} \u{2014} {}",
+            styler.warning_prefix(),
+            warning.kind,
+            warning.path,
+            warning.line,
+            warning.message
         );
     }
     for warning in &result.grouping_warnings {

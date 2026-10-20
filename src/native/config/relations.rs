@@ -17,7 +17,6 @@ impl Default for RelationsConfig {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn load_relations_config(
     path: &Path,
 ) -> Result<RelationsConfig, ConfigError> {

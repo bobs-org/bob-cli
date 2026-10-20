@@ -3,8 +3,8 @@
 //! A task's outgoing relations live on one authored
 //! `- 🪢 **LINKS:**` child; incoming relations are projected onto a
 //! generated `- 🪢 **LINKED FROM:**` child. This module owns the
-//! parsers, label rules, formatters, slot, and edit planners. No
-//! writer emits a relation line yet — capture and reconcile land in
+//! parsers, label rules, formatters, slot, and edit planners.
+//! Reconcile owns the LINKED FROM projection; capture writers land in
 //! later phases.
 
 #![allow(dead_code)]
