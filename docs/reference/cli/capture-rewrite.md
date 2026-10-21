@@ -11,11 +11,13 @@ Apply the capture grammar's automatic draft rewrites
 ```text title="bob capture-rewrite --help"
 Apply the capture grammar's editor typing assists to TEXT and report the resulting edits, cursor, and a human summary.
 
-The command is purely lexical and completely read-only: it never opens the vault, never reads the clipboard, never touches the filesystem, and takes no --bob-dir. It implements three rules.
+The command is purely lexical and completely read-only: it never opens the vault, never reads the clipboard, never touches the filesystem, and takes no --bob-dir. It implements four rules.
 
 Template start (requires --cursor): typing a third '@' at byte 3 when the first physical line is exactly '@@@' replaces it with '@@template:' and a line ending, then places the caret on a fresh blank line. Existing LF or CRLF is reused, and the result is idempotent (`start_template`). Without --cursor this typing gesture is skipped.
 
 Block-ID separator toggle (requires --cursor): typing '^' immediately after a complete plain '@route:id', or ':' immediately after '@route^id', consumes that character and switches the separator so '@file:id^' becomes '@file^id' and '@file^id:' becomes '@file:id' (`switch_block_id_separator`). The caret stays just past the unchanged ID. Only the token ending at --cursor is examined; the key must sit against the ID with no space, and it must end the token. Suffix families ('@route:id#name', '+', '=...'), '@@', '@!', standalone '^route:id', '&note:id', '!note:id', project-task ':id'/'^id', incomplete markers, same-separator repeats, and tokens the contextual parser does not select are left unchanged. Without --cursor this rule is skipped rather than searching the draft.
+
+Relation-label pipe attach (requires --cursor): typing '|' after whitespace that follows a relation token deletes that whitespace, so '~note:id |' becomes '~note:id|'. Only the '|' token ending at --cursor is examined; it fires only where bob's completion grammar would open a 'relation_label' field, so prose pipes, mid-line relations, already-labelled tokens, partial targets, escapes, and newlines are left unchanged. The caret lands just past the glued '|'. This is an editor assist: 'bob capture' and 'bob capture-parse' keep the literal ' |' text. Without --cursor this rule is skipped rather than searching the draft.
 
 Bare '@@' absorption: typing a bare '@@' inside an item that already carries a local destination marker (or, absent that, when the draft already carries exactly one other '@@' declaration) rewrites the bare token to '@@<payload>', deletes the token it absorbed, and deletes every other declaration token in the draft, so the result always carries at most one declaration. Only the bare '@@' at --cursor (or, when --cursor is omitted, the last bare '@@' in source order) is a candidate. An item whose single local marker cannot be expressed as a declaration -- '@route#Section', '@route+block-id#section', '@route+block-id' (a task toggle), '@route^block-id', '@route:block-id', or a trailing bare '#' -- is left untouched with a notice explaining why; an item with more than one local marker is left untouched with no notice, since 'bob capture-parse' already reports that duplicate. Feeding a rewrite's own output back in is a no-op, because the claiming token is no longer bare and no longer ends in a toggle trigger. A whole-item `x[<N>][!<M>]` close item is never rewritten or absorbed, and a `@@` declaration never applies to it.
 
@@ -43,6 +45,7 @@ Options:
 Examples:
   bob capture-rewrite -c 3 -f json -- '@@@'
   bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'
+  bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'
   bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'
   bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'
   printf 'Buy milk @dev @@' | bob capture-rewrite -f json

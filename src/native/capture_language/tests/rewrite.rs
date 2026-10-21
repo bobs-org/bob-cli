@@ -437,6 +437,109 @@ fn rewrite_draft_separator_toggle_exclusions() {
 }
 
 #[test]
+fn rewrite_draft_attaches_a_pipe_after_a_relation_token() {
+    let cases = [
+        (
+            "Fix trip ~tasks:target |",
+            "Fix trip ~tasks:target|",
+            "~tasks:target",
+        ),
+        (
+            "Fix trip ~~tasks:source |",
+            "Fix trip ~~tasks:source|",
+            "~~tasks:source",
+        ),
+        (
+            "Fix ~tasks:target \t |",
+            "Fix ~tasks:target|",
+            "~tasks:target",
+        ),
+        (
+            "Fix ~\"My Note\":target |",
+            "Fix ~\"My Note\":target|",
+            "~\"My Note\":target",
+        ),
+        (
+            "~tasks:target | Fix it",
+            "~tasks:target| Fix it",
+            "~tasks:target",
+        ),
+        (
+            "Fix ~tasks:target | @work",
+            "Fix ~tasks:target| @work",
+            "~tasks:target",
+        ),
+    ];
+    for (raw, expected, token) in cases {
+        // The cursor sits right after the typed `|`.
+        let pipe = raw.rfind('|').expect("pipe");
+        let cursor = pipe + 1;
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(
+            rewrite.rule,
+            Some(RewriteRule::AttachRelationLabel),
+            "{raw}"
+        );
+        assert_eq!(rewrite.text, expected, "{raw}");
+        let run_start = expected.find('|').expect("glued pipe");
+        assert_eq!(rewrite.cursor, Some(run_start + 1), "{raw}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some(format!("Attached | to {token}").as_str()),
+            "{raw}"
+        );
+        assert_eq!(
+            rewrite.edits,
+            vec![TextEdit {
+                start: run_start,
+                end: pipe,
+                replacement: String::new(),
+            }],
+            "{raw}"
+        );
+        assert!(rewrite.notices.is_empty(), "{raw}");
+        assert!(raw.is_char_boundary(run_start), "{raw}");
+
+        // Idempotent: the glued output has no whitespace left to delete.
+        let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+        assert_eq!(again.rule, None, "idempotent {raw}");
+        assert_eq!(again.text, rewrite.text, "idempotent {raw}");
+    }
+}
+
+#[test]
+fn rewrite_draft_attach_relation_label_exclusions() {
+    let mid_prose = "Fix ~tasks:target | then more";
+    let cases = [
+        ("Fix ~tasks:target|", "Fix ~tasks:target|".len()),
+        ("a |", "a |".len()),
+        ("Fix @work |", "Fix @work |".len()),
+        ("Fix &a:b |", "Fix &a:b |".len()),
+        (mid_prose, "Fix ~tasks:target |".len()),
+        ("Fix ~tasks:target|x |", "Fix ~tasks:target|x |".len()),
+        ("Fix ~tasks:target\n|", "Fix ~tasks:target\n|".len()),
+        ("Fix ~tasks: |", "Fix ~tasks: |".len()),
+        ("Fix \\~tasks:target |", "Fix \\~tasks:target |".len()),
+        ("Fix ~tasks:target ||", "Fix ~tasks:target ||".len()),
+        ("Fix ~tasks:target |x", "Fix ~tasks:target |x".len()),
+    ];
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw}");
+        assert_eq!(rewrite.text, raw, "{raw}");
+    }
+}
+
+#[test]
+fn rewrite_draft_attach_relation_label_requires_a_cursor() {
+    let raw = "Fix trip ~tasks:target |";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+    assert_eq!(rewrite.cursor, None);
+}
+
+#[test]
 fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
     let caret = switch_at("Do work @file:id^");
     let parsed = parse_for_editor(&caret.text);

@@ -42,6 +42,7 @@ pub(crate) enum RewriteRule {
     AbsorbDeclaration,
     StartTemplate,
     SwitchBlockIdSeparator,
+    AttachRelationLabel,
 }
 
 impl RewriteRule {
@@ -51,6 +52,7 @@ impl RewriteRule {
             Self::AbsorbDeclaration => "absorb_declaration",
             Self::StartTemplate => "start_template",
             Self::SwitchBlockIdSeparator => "switch_block_id_separator",
+            Self::AttachRelationLabel => "attach_relation_label",
         }
     }
 }
@@ -86,6 +88,11 @@ pub(crate) fn rewrite_draft(
     }
     if let Some(position) = cursor
         && let Some(rewrite) = switch_block_id_separator(raw_text, position)
+    {
+        return rewrite;
+    }
+    if let Some(position) = cursor
+        && let Some(rewrite) = attach_relation_label(raw_text, position)
     {
         return rewrite;
     }
@@ -278,6 +285,73 @@ fn switch_block_id_separator(
         text,
         cursor: Some(token_start + replacement.len()),
         summary: Some(summary),
+        notices: Vec::new(),
+    })
+}
+
+/// Typing `|` after whitespace that follows a relation token glues the
+/// pipe to the token, so `~note:id |` becomes `~note:id|`. Only the
+/// whitespace-delimited `|` token ending at `cursor` is examined. The run
+/// before it must be non-empty horizontal whitespace (spaces or tabs, never
+/// a newline) with a non-whitespace byte on the same physical line before
+/// it. Eligibility is delegated to the completion grammar: the run is
+/// deleted only when the glued draft offers a `relation_label` field whose
+/// replacement starts where the run did. Without a cursor the rule is
+/// skipped, matching `switch_block_id_separator`.
+fn attach_relation_label(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    if token.text != "|" {
+        return None;
+    }
+    let pipe = token.start;
+    let mut run_start = pipe;
+    while run_start > 0
+        && matches!(raw_text.as_bytes()[run_start - 1], b' ' | b'\t')
+    {
+        run_start -= 1;
+    }
+    if run_start == pipe || !raw_text.is_char_boundary(run_start) {
+        return None;
+    }
+    if !raw_text[..run_start]
+        .chars()
+        .next_back()
+        .is_some_and(|before| !before.is_whitespace())
+    {
+        return None;
+    }
+    let mut candidate = String::with_capacity(raw_text.len());
+    candidate.push_str(&raw_text[..run_start]);
+    candidate.push_str(&raw_text[pipe..]);
+    let candidate_cursor = cursor - (pipe - run_start);
+    let field =
+        super::completion::completion_field_at(&candidate, candidate_cursor)?;
+    if field.context != super::completion::CompletionContext::RelationLabel
+        || field.replacement.0 != run_start
+    {
+        return None;
+    }
+    let (token_start, _) =
+        super::completion::relation_label_token_at(&candidate, run_start)?;
+    let token_text = candidate.get(token_start..run_start)?;
+    let edits = vec![TextEdit {
+        start: run_start,
+        end: pipe,
+        replacement: String::new(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    debug_assert_eq!(text, candidate);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::AttachRelationLabel),
+        edits,
+        text,
+        cursor: Some(candidate_cursor),
+        summary: Some(format!("Attached | to {token_text}")),
         notices: Vec::new(),
     })
 }

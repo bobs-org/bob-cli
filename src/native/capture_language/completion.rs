@@ -389,6 +389,42 @@ fn relation_label_completion_field_at(
     None
 }
 
+/// Locate the relation token whose label separator sits at `separator`:
+/// the token's start plus its direction, so editors never re-lex the
+/// draft. The separator is the `|` byte the `relation_label` replacement
+/// starts at. Quoted note components are covered because the scan that
+/// produced the field already classified them.
+pub(crate) fn relation_label_token_at(
+    raw_text: &str,
+    separator: usize,
+) -> Option<(usize, RelationDirection)> {
+    let line = split_physical_lines(raw_text)
+        .into_iter()
+        .find(|line| separator >= line.start && separator <= line.end)?;
+    for scanned in scan_line_relations(line.text, line.start) {
+        match &scanned {
+            ScannedRelation::Complete(entry) => {
+                if entry.separator.map(|(start, _)| start) == Some(separator) {
+                    return Some((entry.start, entry.direction));
+                }
+            }
+            ScannedRelation::PartialLabel { raw, start, .. } => {
+                let pipe = raw.rfind('|')?;
+                if *start + pipe == separator {
+                    let direction = if raw.starts_with("~~") {
+                        RelationDirection::From
+                    } else {
+                        RelationDirection::To
+                    };
+                    return Some((*start, direction));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn relation_completion_field_at(
     line: &RawLine<'_>,
     cursor: usize,

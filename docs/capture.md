@@ -2358,7 +2358,9 @@ additive. `capture-parse` adds `relations[]` (top-level and per
 item), the `relation_target` / `relation_label` needs, the five
 `relation_*` span kinds, and top-level `relation_grammar: 1` whenever
 the draft contains a `~` byte. `capture-complete` adds the
-`relation_to` / `relation_from` / `relation_label` contexts.
+`relation_to` / `relation_from` / `relation_label` contexts, with an additive
+`relation` object (direction plus the sigil-to-`|` range) and `owner` on
+`relation_label` responses.
 `capture-task-id` adds `relation_to_replacement` and
 `relation_from_replacement`. `capture` adds, per item,
 `relation_updates[]`, `linked_from_line_updates[]`,
@@ -5709,7 +5711,8 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
 Applies the capture grammar's automatic draft rewrites -- template start, the
-block-ID separator toggle, and the bare `@@` absorption rule -- and reports the
+block-ID separator toggle, the relation-label pipe attach, and the bare `@@`
+absorption rule -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
@@ -5763,6 +5766,27 @@ incomplete or malformed markers, same-separator repeats, and
 marker-looking prose the contextual parser does not select are left
 unchanged. This is an editor assist: `bob capture` and `bob capture-parse`
 keep the literal `@file:id^` text.
+
+**Relation-label pipe attach.** Typing `|` after whitespace that follows a
+relation token deletes that whitespace so the pipe glues to the token.
+`--cursor` is required: only the `|` token ending at that caret is examined,
+so the command never searches the draft for a pipe. The run before the pipe
+must be spaces or tabs (never a newline) with a non-whitespace byte on the
+same physical line before it, and the glued draft must be a place where
+bob's completion grammar would open a `relation_label` field, so prose
+pipes, mid-line relations, already-labelled tokens, partial targets,
+escapes, and newlines are left unchanged.
+
+```text
+Fix trip ~work:foo |
+```
+
+becomes `Fix trip ~work:foo|`, with the cursor placed just past the glued
+`|`. The same gesture works for `~~` targets, quoted notes such as
+`~"My Note":target`, leading runs, and tokens before later body text. This
+is an editor assist: `bob capture` and `bob capture-parse` keep the literal
+` |` text. Feeding the result back through the command is a no-op,
+because no whitespace is left before the `|`.
 
 Typing a bare `@@` inside an item that already carries a local destination
 marker moves that marker onto the `@@` and deletes it, so the item ends up
@@ -5850,12 +5874,13 @@ JSON output is a single versioned object:
 }
 ```
 
-`rule` is `start_template`, `switch_block_id_separator`, `absorb_local_marker`,
-or `absorb_declaration`, omitted when nothing changed. `cursor` is present
-only when `--cursor` was supplied and is mapped through every edit. For
-`start_template`, it lands at the start of the fresh line; separator toggles
-land just past the unchanged ID, and absorption lands just past the rewritten
-`@@<payload>` token.
+`rule` is `start_template`, `switch_block_id_separator`,
+`attach_relation_label`, `absorb_local_marker`, or `absorb_declaration`,
+omitted when nothing changed. `cursor` is present only when `--cursor` was
+supplied and is mapped through every edit. For `start_template`, it lands at
+the start of the fresh line; separator toggles land just past the unchanged
+ID, pipe attaches land just past the glued `|`, and absorption lands just
+past the rewritten `@@<payload>` token.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`
@@ -6086,7 +6111,8 @@ ranks by match score first, then that order. Replacements use `*`
 `capture-task-id`'s `blocked_task_replacement`. Shell completion adds a
 `blocked tasks` group. See
 [Blocking existing tasks with '*'](#blocking-existing-tasks-with).
-For `task_dependency` and `blocked_task`, `owner` remains the lexical
+For `task_dependency`, `blocked_task`, `relation_to`, `relation_from`,
+and `relation_label`, `owner` remains the lexical
 `dependency_target`; when it resolves to an existing task, it also carries
 the additive `text`, `note_path`, `status_symbol`, and `status_name` display
 fields. A `new_task` owner carries its non-empty draft `text`. These additions
@@ -6110,7 +6136,14 @@ line is malformed`). Label suggestions scan every LINKS line, including
 `suggestions[] {label, count, replacement}`. A non-empty typed label adds
 a first `{label, typed: true, replacement}` row with bob's canonical
 `|label` / `|"multi word"` spelling; invalid labels carry a
-`disabled_reason` naming the broken label rule. `picker.relationship`
+`disabled_reason` naming the broken label rule. `relation_label` responses
+also carry an additive `relation` object: `direction` is `to` for `~` and
+`from` for `~~` (spelled like `capture-parse` `relations[].direction`), and
+`range` runs from the sigil's first byte to the `|` separator, so
+`range.end` always equals `replacement.start` -- the quoted-note form is
+covered too. The lexical `owner` covers `relation_label` as well, with the
+same resolved display fields as the relation target contexts. No other
+context carries `relation`. `picker.relationship`
 gains `relations[]` (direction, text) for the owner picker, and shell
 completion gains `links to` / `linked from` groups. `capture-task-id`
 returns `relation_to_replacement` and `relation_from_replacement` for
@@ -6187,9 +6220,9 @@ in an empty result, where it collapses to a zero-length range at the cursor.
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, and `task_complete`; it
+`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `relation_to`, `relation_from`, and `relation_label`; it
 contains the selector text after its sigil (and a decoded locator for a
-dependency or blocked-task query). `blocked_task` is the `*` twin of
+dependency, blocked-task, or relation query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,
 and the open-editable pool documented under
 [Blocking existing tasks with '*'](#blocking-existing-tasks-with). Both parent-task contexts include an

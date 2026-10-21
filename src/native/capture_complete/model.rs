@@ -430,6 +430,18 @@ pub(super) struct PickerRelationshipEntry {
     pub(super) text: Option<String>,
 }
 
+/// The relation token behind a `relation_label` completion: its
+/// direction (`to` for `~`, `from` for `~~`, spelled like `capture-parse`
+/// `relations[].direction`) plus the draft range from the sigil's first
+/// byte to the `|` separator, so `range.end` always equals
+/// `replacement.start` and clients never re-lex the draft to find the
+/// token. Omitted from every other context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) struct CompletionRelation {
+    pub(super) direction: RelationDirection,
+    pub(super) range: Replacement,
+}
+
 /// Enriched completion owner. Flattening preserves the existing lexical
 /// owner fields while adding optional resolved display metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -588,18 +600,23 @@ pub(super) struct CaptureCompleteResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Search text for `task_dependency`, `blocked_task`, scoped `task`,
-    /// and bare-plus `task_parent` completion. Relation queries have their sigil,
+    /// bare-plus `task_parent`, `task_complete`, and relation target and
+    /// label completion. Relation queries have their sigil,
     /// opening quote, and escapes decoded so clients never parse a quoted
     /// note component. Omitted from other contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) query: Option<String>,
     /// Lexical owner of the `task_dependency`, `blocked_task`, `relation_to`,
-    /// or `relation_from` modifier
+    /// `relation_from`, or `relation_label` modifier
     /// under the cursor (the capture-parse `dependency_target` for the
     /// cursor's item), so clients never derive the owner themselves.
     /// Set only for those contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<CompletionOwner>,
+    /// The relation token behind a `relation_label` completion; omitted
+    /// from every other context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation: Option<CompletionRelation>,
     /// Parent-task picker scope and editing ranges; omitted from every
     /// other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -623,6 +640,7 @@ impl CaptureCompleteResult {
             warnings: Vec::new(),
             query: None,
             owner: None,
+            relation: None,
             picker: None,
         }
     }

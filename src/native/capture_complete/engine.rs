@@ -11,8 +11,9 @@ use super::{
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
-        OverrideCompletion, PickerDescriptor, PickerKind, PickerScope,
-        Replacement, RouteCandidate, RouteCandidateKind, SCHEMA_VERSION,
+        CompletionRelation, OverrideCompletion, PickerDescriptor, PickerKind,
+        PickerScope, Replacement, RouteCandidate, RouteCandidateKind,
+        SCHEMA_VERSION,
     },
     pomodoros::{
         apply_bare_start_name_replacements, pomodoro_name_candidates,
@@ -123,6 +124,7 @@ fn build_result_inner(
             warnings: index.warnings(),
             query: None,
             owner: None,
+            relation: None,
             picker: None,
         });
     }
@@ -193,6 +195,7 @@ fn build_result_inner(
             warnings,
             query: None,
             owner: None,
+            relation: None,
             picker: None,
         });
     }
@@ -368,7 +371,8 @@ fn build_result_inner(
 
     // Bob owns the search query for task pickers and relation completion.
     // Relation target queries are decoded here so clients never parse a
-    // quoted note component; only target contexts carry their lexical owner.
+    // quoted note component; relation target and label contexts carry
+    // their lexical owner.
     let (query, owner) = if matches!(
         field.context,
         CompletionContext::TaskDependency
@@ -388,6 +392,7 @@ fn build_result_inner(
                     | CompletionContext::BlockedTask
                     | CompletionContext::RelationTo
                     | CompletionContext::RelationFrom
+                    | CompletionContext::RelationLabel
             ) {
                 editor_item
                     .as_ref()
@@ -401,6 +406,21 @@ fn build_result_inner(
         )
     } else {
         (None, None)
+    };
+    // The relation token behind a label field: its direction plus the
+    // sigil-to-`|` range, derived from the same scan that produced the
+    // field, never by re-lexing bytes here.
+    let relation = if field.context == CompletionContext::RelationLabel {
+        capture_language::relation_label_token_at(raw_text, field.replacement.0)
+            .map(|(start, direction)| CompletionRelation {
+                direction,
+                range: Replacement {
+                    start,
+                    end: field.replacement.0,
+                },
+            })
+    } else {
+        None
     };
     let mut picker = picker_descriptor(raw_text, &field);
     if matches!(
@@ -444,6 +464,7 @@ fn build_result_inner(
         warnings,
         query,
         owner,
+        relation,
         picker,
     })
 }

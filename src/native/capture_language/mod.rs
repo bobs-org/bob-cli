@@ -45,6 +45,7 @@ pub(crate) use self::completion::claimed_task_complete_tokens;
 pub(crate) use self::completion::completion_field_at;
 pub(crate) use self::completion::pomodoro_start_override_at;
 pub(crate) use self::completion::project_task_block_id_detail;
+pub(crate) use self::completion::relation_label_token_at;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;
 pub(crate) use self::dependencies::close_blocked_task_error;

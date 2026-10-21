@@ -202,6 +202,79 @@ fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
 }
 
 #[test]
+fn relation_label_completions_carry_relation_and_owner() {
+    let temp = relation_fixture();
+    for (raw, direction, token, separator) in [
+        ("New task ~tasks:target|", "to", "~tasks:target", 22),
+        ("New task ~~tasks:source|", "from", "~~tasks:source", 23),
+        (
+            "New task ~\"My Note\":target|",
+            "to",
+            "~\"My Note\":target",
+            26,
+        ),
+    ] {
+        let value = result(temp.path(), raw, raw.len());
+        assert_eq!(
+            value.context,
+            Some(CompletionContext::RelationLabel),
+            "{raw}"
+        );
+        assert_eq!(
+            (value.replacement.start, value.replacement.end),
+            (separator, raw.len()),
+            "{raw}"
+        );
+        let json =
+            serde_json::to_value(&value).expect("serialize relation label");
+        assert_eq!(json["relation"]["direction"], direction, "{raw}");
+        assert_eq!(
+            json["relation"]["range"],
+            serde_json::json!({
+                "start": raw.find(token).expect("token"),
+                "end": separator,
+            }),
+            "{raw}"
+        );
+        assert_eq!(
+            json["replacement"],
+            serde_json::json!({ "start": separator, "end": raw.len() }),
+            "{raw}"
+        );
+        assert_eq!(json["owner"]["text"], "New task", "{raw}");
+    }
+
+    // Inside a typed label the replacement owns the pipe plus the partial
+    // label, while the relation range still ends at the separator.
+    let raw = "Use this @mac_inbox+owner ~tasks:target|follow";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    let json = serde_json::to_value(&value).expect("serialize label");
+    assert_eq!(
+        &raw[value.replacement.start..value.replacement.end],
+        "|follow"
+    );
+    assert_eq!(json["relation"]["direction"], "to");
+    assert_eq!(
+        json["relation"]["range"]["end"],
+        json["replacement"]["start"]
+    );
+    assert_eq!(json["owner"]["text"], "Owner");
+
+    // Target contexts carry no relation object.
+    let raw = "New task ~tasks:tar";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationTo));
+    let json = serde_json::to_value(&value).expect("serialize target");
+    assert!(json.get("relation").is_none(), "{json}");
+    let raw = "New task ~~tasks:sou";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationFrom));
+    let json = serde_json::to_value(&value).expect("serialize target");
+    assert!(json.get("relation").is_none(), "{json}");
+}
+
+#[test]
 fn parent_picker_reports_typed_relation_direction_and_target_text() {
     let temp = relation_fixture();
     let raw = "~tasks:target New task +";
