@@ -89,10 +89,19 @@ The adapter starts headless and retries headed automatically when it meets
 a bot challenge. That retry needs a display nobody sees: a private Xvfb
 display on Linux (as on athena) or an off-screen window on macOS. Hosts
 with no usable browser fail closed with an install hint; Playwright's
-bundled Chromium counts when one is present (apollo captured headed over
-an SSH-forwarded display). `bob ref doctor` reports the `web clip
-uv`, `web clip adapter`, `web clip browser`, and `web clip headed
-fallback` rows.
+bundled Chromium counts when one is present. Discovery chooses the newest
+installed revision numerically and launches that exact executable, even
+when the pinned Playwright's default revision is missing. Both current
+macOS Chrome-for-Testing and legacy Chromium app layouts are supported,
+along with Linux's `chrome-linux*` layouts. `PLAYWRIGHT_BROWSERS_PATH`
+continues to select a custom browser cache.
+
+`bob ref doctor` reports the `web clip uv`, `web clip adapter`, `web clip
+browser`, and `web clip headed fallback` rows. Its `mermaid` row also
+renders a tiny flowchart in a temporary directory, with a 60-second adapter
+timeout. A working browser reports `test render ok`; a failed render warns
+that diagrams print as source. `BOB_HIGHLIGHTS_DIAGRAMS=off` skips this
+probe. Doctor writes nothing to the vault.
 
 ## The `--html` escape hatch
 
@@ -112,7 +121,7 @@ is skipped.
 | Variable                    | Meaning                                                              |
 | --------------------------- | -------------------------------------------------------------------- |
 | `BOB_WEB_CLIP_ADAPTER`      | Replaces the adapter invocation (test seam)                          |
-| `BOB_CHROME`                | Browser executable the adapter launches instead of discovery. Discovery itself tries Google Chrome at the usual Linux and macOS paths, then Playwright's bundled Chromium |
+| `BOB_CHROME`                | Browser executable the adapter launches instead of discovery. Discovery itself tries Google Chrome at the usual Linux and macOS paths, then Playwright's bundled Chromium, newest installed revision first, launched by its discovered path even if Playwright's default revision is missing |
 | `BOB_WEB_CLIP_TIMEOUT_SECS` | Overall adapter timeout in seconds (default 300)                     |
 | `BOB_WEB_CLIP_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging and prints its path    |
 
@@ -211,9 +220,18 @@ built from this tree (`cargo build --release`) and copied to athena's
 - Static-site check (`https://lilianweng.github.io/posts/2023-06-23-agent/`,
   scratch vault): headless, no headed fallback, 28 pages, images 13/13,
   fidelity ok; figures and code blocks render correctly.
-- apollo note: this host has Playwright's bundled Chromium 151, so with the
-  session's SSH-forwarded `DISPLAY` it captured the OpenAI URL headed
-  instead of failing closed (38 pages, 2/2 images). The stray real-vault
-  PDF this produced was deleted; `~/bob/xlib/` is empty. Truly
-  browser-less hosts still fail closed via the `browser`/`blocked` errors
-  covered by the CLI and adapter fixture tests.
+- apollo originally captured the OpenAI URL headed with bundled Chromium
+  151 and an SSH-forwarded `DISPLAY` (38 pages, 2/2 images).
+- On 2026-10-20, a newer Playwright installation replaced revision 1234
+  with Chromium revision 1248 (156.0.8078.4). Discovery found 1248, but
+  the adapter's pinned Playwright 1.62.0 still tried to launch its missing
+  default headless revision 1234. Two library PDFs consequently printed
+  Mermaid source instead of figures. Launching the discovered executable
+  fixes this version skew without reinstalling a particular revision.
+  Verification on 2026-10-21 used a temporary copy of the adapter on apollo:
+  its browser-backed self-test passed, and a one-item diagrams request
+  produced a valid PDF through `chromium-1248/chrome-linux64/chrome`, with
+  no browser installation. The headed check was skipped because Xvfb was
+  unavailable; the existing sandbox retry remained necessary.
+  Truly browser-less hosts still fail closed via the `browser`/`blocked`
+  errors covered by the CLI and adapter fixture tests.

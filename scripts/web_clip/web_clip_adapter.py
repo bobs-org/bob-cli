@@ -564,7 +564,7 @@ def discover_browser() -> dict | None:
             "kind": "chromium",
             "path": bundled,
             "version": _chrome_version(bundled),
-            "launch": {},
+            "launch": {"executable_path": bundled},
         }
     return None
 
@@ -586,17 +586,29 @@ def _bundled_chromium_candidates() -> list[str]:
                                   "ms-playwright"))
     found = []
     for root in roots:
-        if sys.platform == "darwin":
-            pattern = os.path.join(root, "chromium-*",
-                                   "chrome-mac", "Chromium.app", "Contents",
-                                   "MacOS", "Chromium")
-        else:
-            pattern = os.path.join(root, "chromium-*", "chrome-linux*",
-                                   "chrome")
-        for path in sorted(glob.glob(pattern), reverse=True):
-            if os.path.isfile(path) and os.access(path, os.X_OK):
-                found.append(path)
-    return found
+        for pattern in _bundled_chromium_patterns(root, sys.platform):
+            for path in glob.glob(pattern):
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    found.append(path)
+
+    def revision(path: str) -> int:
+        match = re.search(r"(?:^|[/\\])chromium-(\d+)(?:[/\\]|$)", path)
+        return int(match.group(1)) if match else -1
+
+    return sorted(found, key=revision, reverse=True)
+
+
+def _bundled_chromium_patterns(root: str, platform: str) -> list[str]:
+    """Browser layouts, parameterized so every host can test macOS paths."""
+    if platform == "darwin":
+        return [
+            os.path.join(root, "chromium-*", "chrome-mac-*",
+                         "Google Chrome for Testing.app", "Contents", "MacOS",
+                         "Google Chrome for Testing"),
+            os.path.join(root, "chromium-*", "chrome-mac", "Chromium.app",
+                         "Contents", "MacOS", "Chromium"),
+        ]
+    return [os.path.join(root, "chromium-*", "chrome-linux*", "chrome")]
 
 
 def headed_capability() -> str | None:
@@ -2350,6 +2362,60 @@ def self_test() -> int:
     def check(label: str, condition: bool) -> None:
         if not condition:
             failures.append(label)
+
+    # -- Bundled browser discovery without a browser or driver --------------
+    import glob
+    global BROWSER_CANDIDATE_PATHS
+    original_candidates = BROWSER_CANDIDATE_PATHS
+    original_env = {name: os.environ.get(name) for name in
+                    ("BOB_CHROME", "PLAYWRIGHT_BROWSERS_PATH")}
+    try:
+        with tempfile.TemporaryDirectory(prefix="bob-browser-discovery-") as root:
+            BROWSER_CANDIDATE_PATHS = ()
+            os.environ.pop("BOB_CHROME", None)
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = root
+            for revision in ("999", "1248", "unknown"):
+                # Use the host's layout for the end-to-end discovery check.
+                layout = ("chrome-mac-arm64/Google Chrome for Testing.app/"
+                          "Contents/MacOS/Google Chrome for Testing"
+                          if sys.platform == "darwin" else "chrome-linux64/chrome")
+                stub = os.path.join(root, f"chromium-{revision}", layout)
+                os.makedirs(os.path.dirname(stub), exist_ok=True)
+                with open(stub, "w", encoding="utf-8") as handle:
+                    handle.write("#!/bin/sh\necho 'Chromium 156.0.8078.4'\n")
+                os.chmod(stub, 0o755)
+            expected = os.path.join(root, "chromium-1248", layout)
+            browser = discover_browser()
+            check("bundled discovery chooses newest numeric revision",
+                  browser is not None and browser["path"] == expected)
+            check("bundled discovery launches the discovered executable",
+                  browser is not None and browser["kind"] == "chromium"
+                  and browser["launch"] == {"executable_path": expected})
+            check("unnumbered bundled revisions sort last",
+                  "chromium-unknown" in _bundled_chromium_candidates()[-1])
+            for layout in (
+                "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/"
+                "Google Chrome for Testing",
+                "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/"
+                "Google Chrome for Testing",
+                "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+            ):
+                binary = os.path.join(root, "chromium-1248", layout)
+                os.makedirs(os.path.dirname(binary), exist_ok=True)
+                with open(binary, "w", encoding="utf-8") as handle:
+                    handle.write("#!/bin/sh\necho 'Chromium 156.0.8078.4'\n")
+                os.chmod(binary, 0o755)
+                matches = [path for pattern in
+                           _bundled_chromium_patterns(root, "darwin")
+                           for path in glob.glob(pattern)]
+                check(f"bundled macOS layout {layout}", binary in matches)
+    finally:
+        BROWSER_CANDIDATE_PATHS = original_candidates
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
     # -- Date parsing -----------------------------------------------------
     check("date april-long",

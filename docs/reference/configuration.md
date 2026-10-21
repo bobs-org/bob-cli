@@ -246,7 +246,7 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_WEB_CLIP_ADAPTER` | Bob's pinned adapter launched through `uv` | Replaces the whole web-article adapter invocation. |
 | `BOB_WEB_CLIP_TIMEOUT_SECS` | `300` seconds | Overall web-clip adapter timeout; diagram requests use their calculated budget, capped at this default. |
 | `BOB_WEB_CLIP_KEEP_WORKDIR` | Temporary work files are removed | Set to `1` to retain the web-clip scratch directory for debugging. |
-| `BOB_CHROME` | Discovered Google Chrome, then Playwright's bundled Chromium | Browser executable for web article capture and Mermaid rendering. |
+| `BOB_CHROME` | Discovered Google Chrome, then Playwright's bundled Chromium (newest installed revision first) | Browser executable for web article capture and Mermaid rendering. Bundled Chromium launches by its discovered path even when pinned Playwright's default revision is missing. |
 | `BOB_REF_JOBS_KICK` | Eligible capture attempts to start the background worker | Exact values `off`, `0`, or `false` suppress the detached worker kick; queued jobs remain available to `bob ref jobs run`. |
 | `BOB_REF_INTAKE_LOCK_WAIT_SECONDS` | `60` seconds for maintenance lock and `30` seconds for scan lock | Bounds how long inline intake waits for vault maintenance locks. |
 | `BOB_GKEEP_ADAPTER` | `uv` runs Bob's pinned Keep adapter | Replaces the whole Keep adapter invocation. |

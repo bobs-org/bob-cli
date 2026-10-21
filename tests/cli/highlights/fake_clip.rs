@@ -18,6 +18,7 @@ impl FakeClip {
     pub(crate) fn new(temp: &TempDir, name: &str) -> Self {
         let root = temp.path().join(name);
         fs::create_dir_all(&root).expect("create fake clip dir");
+        let diagrams = FakeDiagrams::new(temp, &format!("{name}-diagrams"));
         let path = root.join("fake-clip-adapter.sh");
         let script = format!(
             r#"#!/bin/sh
@@ -37,6 +38,9 @@ printf '%s' "$request" > "$ROOT/request-$n.json"
 case "$request" in
   *'"op":"ping"'*)
     if [ -f "$ROOT/ping.json" ]; then cat "$ROOT/ping.json"; else printf '%s' '{PING}'; fi
+    ;;
+  *'"op":"diagrams"'*)
+    printf '%s' "$request" | {diagrams}
     ;;
   *'"op":"compose"'*)
     out_pdf=$(printf '%s' "$request" | sed -n 's/.*"out_pdf":"\([^"]*\)".*/\1/p')
@@ -64,6 +68,7 @@ case "$request" in
 esac
 "#,
             root = shell_single_quote(path_str(&root)),
+            diagrams = shell_single_quote(path_str(&diagrams.path)),
             PING = default_ping(),
             COMPOSE = default_compose(),
         );
@@ -120,7 +125,7 @@ esac
 /// Writes one-page PDFs for requested ids (XeLaTeX-includable, unlike
 /// the capture fixture), records stdin to `request.json`, and honors
 /// `BOB_FAKE_DIAGRAMS_MODE` (`success`, `partial`, `fail-all`, `crash`,
-/// `invalid`, `sleep`).
+/// `invalid`, `sleep`, `unavailable`).
 pub(crate) struct FakeDiagrams {
     pub(crate) root: std::path::PathBuf,
     pub(crate) path: std::path::PathBuf,
@@ -140,12 +145,17 @@ impl FakeDiagrams {
         let path = root.join("fake-diagrams-adapter.py");
         let script = format!(
             r#"#!/usr/bin/env python3
-import json, os, shutil, sys, time
+import hashlib, json, os, shutil, sys, time
 from pathlib import Path
 ROOT = Path({root})
 request = json.load(sys.stdin)
 (ROOT / "request.json").write_text(json.dumps(request))
 mode = os.environ.get("BOB_FAKE_DIAGRAMS_MODE", "success")
+if mode == "unavailable":
+    json.dump({{"protocol": 1, "ok": False, "op": "diagrams", "error": {{
+        "kind": "browser", "message": "browser launch failed: missing executable\n╔══ playwright install ══╗"
+    }}}}, sys.stdout)
+    raise SystemExit(0)
 if mode == "crash":
     sys.stderr.write("boom\n")
     raise SystemExit(3)
@@ -162,6 +172,7 @@ height = float(os.environ.get("BOB_FAKE_DIAGRAMS_HEIGHT_PT", "100"))
 results = []
 for item in request.get("items") or []:
     source = item.get("source") or ""
+    assert item["id"] == hashlib.sha1(source.encode()).hexdigest()
     fail = mode in ("fail-all",) or mode == "partial" and "not valid" in source
     if fail:
         results.append({{

@@ -5484,11 +5484,64 @@ fn highlights_create_folded_doctor_reports_web_clip_rows() {
             "web clip adapter: ok (playwright 1.62.0, defuddle 0.19.4)"
         ) && report.contains(
             "web clip browser: chrome 154.0.0 (/usr/bin/google-chrome)"
-        ) && report.contains("mermaid: ok (bundled 12.2.0 · chrome 154.0.0)")
-            && report.contains("web clip headed fallback: display")
+        ) && report.contains(
+            "mermaid: ok (bundled 12.2.0 · chrome 154.0.0 · test render ok)"
+        ) && report.contains("web clip headed fallback: display")
             && report.contains("result: ok"),
         "{report}"
     );
+    assert_eq!(fake.request_count(), 2);
+    let request: serde_json::Value =
+        serde_json::from_str(&fake.request_n(2)).expect("probe request");
+    assert_eq!(request["op"], "diagrams");
+    assert_eq!(request["items"].as_array().unwrap().len(), 1);
+    assert!(
+        !std::path::Path::new(request["workdir"].as_str().unwrap()).exists(),
+        "doctor removes scratch render"
+    );
+    assert!(report.contains("writes: none"), "{report}");
+}
+
+#[test]
+fn highlights_create_diagram_doctor_warns_when_test_render_fails() {
+    let temp = TempDir::new("bob-cli-doctor-diagram-probe-fail");
+    let vault = temp.path().join("vault");
+    for name in ["lib", "ref", "xlib"] {
+        std::fs::create_dir_all(vault.join(name))
+            .expect("create vault directory");
+    }
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    let fake = FakeClip::new(&temp, "fake");
+    for (mode, reason) in [
+        ("unavailable", "browser launch failed: missing executable"),
+        ("fail-all", "Parse error on line 1: bad"),
+    ] {
+        let output = bob_command()
+            .args(["ref", "doctor", "--no-hooks"])
+            .env("BOB_DIR", &vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_FAKE_DIAGRAMS_MODE", mode)
+            .output()
+            .expect("run doctor with failed render");
+        assert_success(&output);
+        let report = stdout(&output);
+        assert!(report.contains(&format!("mermaid: warn (test render failed: {reason}; diagrams print as source)")), "{report}");
+        assert!(
+            report.contains(&format!("Mermaid test render failed: {reason}")),
+            "{report}"
+        );
+        assert!(!report.contains("playwright install"), "{report}");
+        assert!(!report.contains("mermaid: ok"), "{report}");
+        assert!(
+            report.contains("writes: none") && report.contains("result: ok"),
+            "{report}"
+        );
+        let request: serde_json::Value =
+            serde_json::from_str(&fake.request()).expect("probe request");
+        assert!(!std::path::Path::new(request["workdir"].as_str().unwrap())
+            .exists());
+    }
 }
 
 #[test]
@@ -5524,6 +5577,7 @@ fn highlights_create_diagram_doctor_warns_without_browser_and_reports_off() {
         "{report}"
     );
 
+    assert_eq!(fake.request_count(), 1, "no browser skips the probe");
     std::fs::write(
         fake.root.join("ping.json"),
         r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","mermaid":"12.2.0","browser":{"kind":"chrome","path":"/fake/chrome","version":"155.0"},"headed":"display"}"#,
@@ -5546,6 +5600,7 @@ fn highlights_create_diagram_doctor_warns_without_browser_and_reports_off() {
             && report.contains("result: ok"),
         "{report}"
     );
+    assert_eq!(fake.request_count(), 2, "disabled diagrams skip the probe");
 }
 
 #[test]

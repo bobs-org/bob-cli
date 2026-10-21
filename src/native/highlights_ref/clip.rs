@@ -839,6 +839,45 @@ fn print_warnings(styler: &Styler, warnings: &[String]) {
     }
 }
 
+/// Exercise the render path that discovery alone cannot verify.
+fn doctor_diagram_probe() -> std::result::Result<(), String> {
+    const SOURCE: &str = "flowchart LR\n  A --> B\n";
+    // Lowercase SHA-1 of SOURCE, matching the diagrams protocol's item identity.
+    const ID: &str = "50169b25a165cafa17870d208004ec9fc6eacba8";
+    const TIMEOUT_SECS: u64 = 60;
+    let scratch =
+        ScratchDir::create("doctor-diagram").map_err(|error| error.message)?;
+    let request = DiagramsRequest::new(
+        scratch.path().to_string_lossy().into_owned(),
+        vec![DiagramItem {
+            id: ID.into(),
+            source: SOURCE.into(),
+        }],
+    );
+    let rendered = ClipAdapterClient::resolve_with_timeout(TIMEOUT_SECS)
+        .and_then(|client| client.diagrams(&request))
+        .map_err(|error| error.message)?;
+    let result = rendered
+        .results
+        .iter()
+        .find(|result| result.id == ID)
+        .ok_or_else(|| "adapter returned no test diagram".to_string())?;
+    if !result.ok {
+        return Err(result
+            .error
+            .clone()
+            .unwrap_or_else(|| "render failed".into()));
+    }
+    if !result
+        .pdf
+        .as_deref()
+        .is_some_and(|pdf| Path::new(pdf).is_file())
+    {
+        return Err("rendered PDF missing".into());
+    }
+    Ok(())
+}
+
 /// Non-fatal `doctor` rows for the web-clip chain, printed after the pandoc
 /// row. Missing pieces warn; they never fail the vault doctor.
 pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
@@ -880,10 +919,17 @@ pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
                         );
                     }
                     Some(browser) => match ping.mermaid.as_deref() {
-                        Some(version) => println!(
-                            "mermaid: ok (bundled {version} · chrome {})",
-                            browser.version.as_deref().unwrap_or("unknown"),
-                        ),
+                        Some(version) => match doctor_diagram_probe() {
+                            Ok(()) => println!(
+                                "mermaid: ok (bundled {version} · chrome {} · test render ok)",
+                                browser.version.as_deref().unwrap_or("unknown"),
+                            ),
+                            Err(reason) => {
+                                let reason = super::diagrams::compact_error(&reason);
+                                println!("mermaid: warn (test render failed: {reason}; diagrams print as source)");
+                                warnings.push(format!("Mermaid test render failed: {reason}; diagrams print as source"));
+                            }
+                        },
                         None => {
                             println!(
                                 "mermaid: warn (adapter ping failed; diagrams print as source)"

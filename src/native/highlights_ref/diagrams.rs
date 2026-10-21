@@ -522,6 +522,18 @@ fn collect_source_path(
     }
 }
 
+/// Keep PDF fallback notes and doctor rows short without losing UTF-8 boundaries.
+pub(super) fn compact_error(reason: &str) -> String {
+    reason
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("render failed")
+        .chars()
+        .take(200)
+        .collect()
+}
+
 fn fallback_pass(
     filter: &Path,
     results: &Path,
@@ -533,7 +545,7 @@ fn fallback_pass(
         results,
         &DiagramResults {
             diagrams: BTreeMap::new(),
-            fallback_error: Some(reason.clone()),
+            fallback_error: Some(compact_error(&reason)),
         },
     );
     DiagramPass {
@@ -1114,6 +1126,36 @@ plain flowchart LR in a paragraph\n\
                 .expect("results");
         assert!(results.contains("fallback_error"), "{results}");
         assert!(results.contains("web clip adapter crashed"), "{results}");
+    }
+
+    #[test]
+    fn fallback_note_is_compact_but_warning_keeps_full_adapter_error() {
+        let temp = TempDir::new("compact-fallback");
+        let results = temp.path.join("results.json");
+        let reason = format!(
+            "\n  Browser launch failed: {}  \n╔══ Install browsers ══╗\n",
+            "é".repeat(220)
+        );
+        let pass = fallback_from_adapter(
+            &temp.path.join("filter.lua"),
+            &results,
+            AdapterFailure {
+                message: reason.clone(),
+                hint: Some("playwright install".into()),
+            },
+            1,
+        );
+        let parsed: DiagramResults = serde_json::from_str(
+            &fs::read_to_string(results).expect("read fallback results"),
+        )
+        .expect("parse fallback results");
+        let note = parsed.fallback_error.expect("fallback note");
+        assert_eq!(note.chars().count(), 200);
+        assert_eq!(note.lines().count(), 1);
+        assert!(note.starts_with("Browser launch failed:"));
+        assert!(pass.warnings[0].contains(&reason));
+        assert!(pass.warnings[0].contains("playwright install"));
+        assert_eq!(compact_error("\n  short reason  \nmore"), "short reason");
     }
 
     #[test]

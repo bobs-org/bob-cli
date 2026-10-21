@@ -105,8 +105,12 @@ The documented workflows use these external-tool integrations:
   run (override the whole spawn with `BOB_WEB_CLIP_ADAPTER`). Discovery
   uses Google Chrome at `/opt/google/chrome/chrome`,
   `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS
-  Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME`
-  to another executable, including a system Chromium package. On Linux,
+  Google Chrome app, then Playwright's bundled Chromium, newest installed
+  revision first. Bundled Chromium launches by its discovered path, so the
+  pinned Playwright's default revision need not be installed (as on apollo
+  after revision 1248 replaced 1234). Current macOS Chrome-for-Testing and
+  legacy Chromium app layouts are supported. Set `BOB_CHROME` to another
+  executable, including a system Chromium package. On Linux,
   `Xvfb` lets it retry bot-protected sites headed; on macOS the retry uses
   an off-screen window
 - `bash` for the embedded shell fallback and for sourcing
