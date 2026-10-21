@@ -244,4 +244,8 @@ jobs:
           bin: bob,bob_pomodoro,bob_notify,tmux_bob_pomodoro
           tar: unix
           zip: windows
-          tag: ${{ needs.release.outputs.tag }}
+          # `ref`, not `tag`: `tag` is not an input of
+          # upload-rust-binary-action (the run ignores it and the step
+          # fails on the workflow_dispatch ref). Point at the tag the
+          # release job published so assets attach to that Release.
+          ref: refs/tags/${{ needs.release.outputs.tag }}
