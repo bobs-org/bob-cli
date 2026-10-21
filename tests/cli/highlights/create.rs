@@ -3,6 +3,7 @@
 use super::fake_clip::*;
 use crate::support::*;
 use std::ffi::OsString;
+use std::fs;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
@@ -1542,7 +1543,13 @@ fn highlights_create_rejects_non_utf8_include_id_before_writes() {
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let pandoc = temp.path().join("pandoc");
     let sentinel = temp.path().join("pandoc-invoked");
-    write_file(&source, "# Invalid ID\n");
+    if let Some(parent) = source.parent() {
+        fs::create_dir_all(parent).expect("create research dir");
+    }
+    if let Err(error) = fs::write(&source, "# Invalid ID\n") {
+        println!("skipped: OS rejected a non-UTF-8 filename ({error})");
+        return;
+    }
     write_executable(
         &pandoc,
         &format!(
@@ -6007,10 +6014,13 @@ fn highlights_create_lists_earlier_snapshots_and_hints_unread_ready() {
 fn highlights_create_vault_note_marker_survives_scan_and_sync() {
     let temp = TempDir::new("bob-cli-create-vault-note-roundtrip");
     let vault = temp.path().join("vault");
-    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    // Capture routes and APFS both require a lowercase stem; `Area.md`
+    // collides with `[[area]]` on case-insensitive filesystems and makes a
+    // no-op sync rewrite the parent/embed spelling.
+    write_file(&vault.join("area.md"), "---\ntype: [[area]]\n---\n# Area\n");
     write_file(
         &vault.join("zk/harbor_cranes.md"),
-        "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA source note.\n",
+        "---\nparent: [[area]]\n---\n# Harbor Cranes\n\nA source note.\n",
     );
     let fixture = temp.path().join("rendered.pdf");
     write_highlights_pdf_pages(&fixture, &[&[]]);
@@ -6068,7 +6078,7 @@ fn highlights_create_vault_note_marker_survives_scan_and_sync() {
         .expect("read snapshot marker");
     assert_success(&marker_output);
     let marker = stdout(&marker_output);
-    assert!(marker.contains("- parent: Area\n"), "{marker}");
+    assert!(marker.contains("- parent: area\n"), "{marker}");
     assert!(
         marker.contains("- source_note: zk/harbor_cranes\n"),
         "source-note marker must use the bare vault route:\n{marker}"

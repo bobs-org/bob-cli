@@ -409,6 +409,9 @@ fn walk_snapshot(root: &Path, path: &Path, files: &mut Vec<(String, Vec<u8>)>) {
     for entry in entries {
         let entry = entry.expect("dir entry");
         let child = entry.path();
+        if entry.file_name() == ".git" {
+            continue;
+        }
         if child.is_dir() {
             walk_snapshot(root, &child, files);
             continue;
@@ -418,7 +421,9 @@ fn walk_snapshot(root: &Path, path: &Path, files: &mut Vec<(String, Vec<u8>)>) {
             .expect("under root")
             .to_string_lossy()
             .replace('\\', "/");
-        let bytes = fs::read(&child).expect("read file");
+        let Ok(bytes) = fs::read(&child) else {
+            continue;
+        };
         files.push((name, bytes));
     }
 }

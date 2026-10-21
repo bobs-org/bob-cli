@@ -62,10 +62,12 @@ fn highlights_ref_scan_runs_configured_pre_scan_before_xlib_intake() {
         "pre-scan stderr should be inherited:\n{}",
         format_output(&output)
     );
-    assert_eq!(
-        fs::read_to_string(&pre_scan_log).expect("read pre-scan pwd log"),
-        format!("{}\n", path_str(&vault)),
-        "pre-scan hook must run from BOB_DIR"
+    let logged =
+        fs::read_to_string(&pre_scan_log).expect("read pre-scan pwd log");
+    assert!(
+        paths_match(logged.trim(), &vault),
+        "pre-scan hook must run from BOB_DIR\n  left: {logged:?}\n  right: {}\n",
+        path_str(&vault)
     );
     assert!(destination_pdf.is_file(), "pre-scan PDF was not intaked");
     assert!(

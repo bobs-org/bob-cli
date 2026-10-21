@@ -436,10 +436,16 @@ mod tests {
             LinkResolution::Missing
         );
         assert_eq!(resolver.resolve(day, "Alpha"), LinkResolution::Ambiguous);
-        assert_eq!(
-            resolver.resolve(day, "solo"),
-            LinkResolution::Found(PathBuf::from("Solo.md"))
-        );
+        match resolver.resolve(day, "solo") {
+            LinkResolution::Found(path) => {
+                assert!(
+                    path.as_os_str().eq_ignore_ascii_case("Solo.md"),
+                    "solo should resolve to Solo.md (any case): {}",
+                    path.display()
+                );
+            }
+            other => panic!("expected Found(Solo.md), got {other:?}"),
+        }
     }
 
     #[test]

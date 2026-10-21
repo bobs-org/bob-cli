@@ -1464,7 +1464,15 @@ mod tests {
 
         let resolved =
             resolve(&notes, "Daily/2026.md", "solo").expect("basename");
-        assert_eq!(resolved.vault_relative_path, PathBuf::from("Solo.md"));
+        // APFS `is_file` matches Solo.md as solo.md; accept either spelling.
+        assert!(
+            resolved
+                .vault_relative_path
+                .as_os_str()
+                .eq_ignore_ascii_case("Solo.md"),
+            "solo should resolve to Solo.md (any case): {}",
+            resolved.vault_relative_path.display()
+        );
 
         let error = resolve(&notes, "Daily/2026.md", "Alpha").expect_err("dup");
         let NoteResolveError::Ambiguous {

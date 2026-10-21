@@ -927,6 +927,12 @@ fn highlights_ref_scan_detects_same_target_collision_before_writing() {
     let note = vault.join("ref/books/example.md");
     write_highlights_pdf(&first_pdf, "- status: wip\n- parent: obsidian\n");
     write_highlights_pdf(&second_pdf, "- status: ready\n- parent: obsidian\n");
+    if fs::canonicalize(&first_pdf).ok() == fs::canonicalize(&second_pdf).ok() {
+        println!(
+            "skipped: filesystem treats example.pdf and example.PDF as one file"
+        );
+        return;
+    }
 
     let output = bob_command()
         .arg("highlights")

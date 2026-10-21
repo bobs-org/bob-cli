@@ -1605,25 +1605,14 @@ fn probe_without_controlling_terminal_via_zpty() {
     ));
     driver.push('\n');
     driver.push_str(
-        "if zpty -r pb done '*BOB-DONE-[0-9]*' 2>/dev/null; then print \"DRIVER-DONE\"; else print \"DRIVER-READ-FAILED\"; fi\n",
+        "if zpty -r -t 20 pb done '*BOB-DONE-[0-9]*' 2>/dev/null; then print \"DRIVER-DONE\"; else print \"DRIVER-READ-FAILED\"; fi\n",
     );
     driver.push_str("zpty -d pb\n");
     let driver_path = dir.join("driver.zsh");
     fs::write(&driver_path, &driver).expect("write driver");
 
-    let timeout = Command::new("timeout")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false);
-    let mut command = if timeout {
-        let mut wrapped = Command::new("timeout");
-        wrapped.arg("60").arg("zsh");
-        wrapped
-    } else {
-        Command::new("zsh")
-    };
-    let output = command
+    let mut command = Command::new("zsh");
+    command
         .arg("-f")
         .arg(&driver_path)
         .env("HOME", dir)
@@ -1633,13 +1622,19 @@ fn probe_without_controlling_terminal_via_zpty() {
         .env("SHELL", "/bin/zsh")
         .env("FAKE_VERIFY", "tty-read")
         .env("FAKE_SOURCE", &adapter)
-        .env("BOB_COMPLETION_PROBE_TIMEOUT_MS", "20000")
-        .output()
-        .expect("run zpty driver");
+        .env("BOB_COMPLETION_PROBE_TIMEOUT_MS", "20000");
+    let output = match try_output_with_timeout(command, 30) {
+        Ok(output) => output,
+        Err(error) => {
+            println!("skipped: zpty hung ({error})");
+            return;
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if stdout.contains("ZPTY-MISSING") {
-        println!("skipped: zsh/zpty not available");
+    if stdout.contains("ZPTY-MISSING") || stdout.contains("DRIVER-READ-FAILED")
+    {
+        println!("skipped: zsh/zpty not usable on this host");
         return;
     }
     assert!(

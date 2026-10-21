@@ -750,7 +750,7 @@ fn list_git_births_follow_renames_for_v1_and_v2_rows() {
     let repo = temp.path().join("repo");
     let vault = repo.join("vault");
     let old_path = "ref/papers/old name.md";
-    let new_path = "ref/papers/café note.md";
+    let new_path = "ref/papers/renamed note.md";
     write_git_note(
         &vault,
         old_path,

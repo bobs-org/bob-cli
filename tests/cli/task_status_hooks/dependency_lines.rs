@@ -1198,16 +1198,7 @@ fn reconcile_projection_only_write_defers_in_quiet_interval() {
     );
     write_file(&tasks, before);
     write_blocked_tasks_settings(&vault);
-    let touch = |spec: &str| {
-        let status = std::process::Command::new("touch")
-            .arg("-d")
-            .arg(spec)
-            .arg(&tasks)
-            .status()
-            .expect("touch tasks.md");
-        assert!(status.success());
-    };
-    touch("+1 hour");
+    touch_mtime_offset(&tasks, 3600);
 
     let output = bob_command()
         .args(["task", "reconcile"])
@@ -1237,7 +1228,7 @@ fn reconcile_projection_only_write_defers_in_quiet_interval() {
     );
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
 
-    touch("-1 hour");
+    touch_mtime_offset(&tasks, -3600);
     let applied = bob_command()
         .args(["task", "reconcile"])
         .arg("--bob-dir")

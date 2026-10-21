@@ -1,0 +1,161 @@
+# Per-push CI for bob-cli. The release train calls this workflow on the exact
+# SHA it will ship (`workflow_call` inputs `sha` and `full`).
+#
+# Concurrency: cancel superseded `push` runs only. The group is prefixed `ci-`
+# so it never equals the train's `release` group. Reusable workflows evaluate
+# `github.workflow` as the caller's name; colliding groups deadlock (see
+# docs-publish.yml).
+#
+# `full` also turns on for pushes to `ci/full*` branches, so a scratch branch
+# can exercise the extra Linux tools before this workflow exists on master
+# (GitHub only dispatches workflows that already live on the default branch).
+#
+# Action pins below were resolved with
+# `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` on 2026-10-20:
+# checkout v6.1.0, rust-cache v2.9.3, install-action v2.87.29, setup-uv v10.3.0.
+#
+# Do not add docs-check here: the deploy repo's publish pipeline already gates
+# the docs. Do not add branch protection here.
+name: CI
+
+on:
+  push:
+    branches: [master, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Install extra Linux tools so self-skipping tests actually run
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      sha:
+        description: Commit SHA to check out; empty uses github.sha
+        type: string
+        default: ""
+      full:
+        description: Install extra Linux tools so self-skipping tests actually run
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install just
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
+
+      - name: Format, clippy, scripts, and release-tool tests
+        run: |
+          just fmt
+          just lint
+          just check-scripts
+          just check-release-tools
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install just
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Install macOS bash 5
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          # Only bash 5, not the rest of Homebrew: putting prefix/bin first
+          # shadows BSD getopt/sed and breaks scripts that expect them.
+          echo "$(brew --prefix)/opt/bash/bin" >> "$GITHUB_PATH"
+
+      - name: Install full-test tools
+        if: runner.os == 'Linux' && (inputs.full == true || startsWith(github.ref_name, 'ci/full'))
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            zsh \
+            pandoc \
+            poppler-utils \
+            texlive-xetex \
+            texlive-latex-extra \
+            texlive-fonts-recommended \
+            texlive-pictures \
+            fonts-dejavu \
+            lmodern
+
+      - name: Lint macOS-only targets
+        if: runner.os == 'macOS'
+        run: just lint
+
+      - name: Run tests
+        run: cargo test --locked --no-fail-fast
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install just
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: just
+
+      - name: Check package contents and size
+        run: just package-check

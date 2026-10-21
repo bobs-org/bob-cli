@@ -3,20 +3,11 @@
 use crate::support::*;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 #[test]
 fn reconcile_status_only_flips_skip_quiet_period_but_structural_edits_wait() {
     let temp = TempDir::new("bob-cli-task-status-hooks-structural-quiet");
-    let touch_future = |path: &Path| {
-        let status = Command::new("touch")
-            .arg("-d")
-            .arg("+1 hour")
-            .arg(path)
-            .status()
-            .expect("set future mtime");
-        assert!(status.success());
-    };
+    let touch_future = |path: &Path| touch_mtime_offset(path, 3600);
     let run = |vault: &Path, daily: &Path, state: &Path| {
         bob_command()
             .args(["task", "reconcile", "--format", "json", "-r", "0"])

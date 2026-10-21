@@ -368,7 +368,8 @@ for rel in "${render_notes[@]}"; do
         residue_details+=("$rel: retained render workdir was not reported")
     else
         tmp_root=$(cd -P -- "${TMPDIR:-/tmp}" 2>/dev/null && pwd || true)
-        case "$workdir/" in
+        workdir_canon=$(cd -P -- "$workdir" 2>/dev/null && pwd || printf '%s' "$workdir")
+        case "$workdir_canon/" in
             "$tmp_root/"*|"/tmp/bob-create-"*)
                 projected="$workdir/projected.md"
                 tex="$workdir/note.tex"

@@ -20,7 +20,47 @@ function run_date() {
   # DATE='date --utc'.
   # shellcheck disable=SC2206
   local date_command=(${date_command_string})
-  "${date_command[@]}" "$@"
+
+  local spec=""
+  local -a rest=()
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    --date=*)
+      spec="${1#--date=}"
+      shift
+      ;;
+    --date)
+      spec="${2:?--date requires an argument}"
+      shift 2
+      ;;
+    *)
+      rest+=("$1")
+      shift
+      ;;
+    esac
+  done
+
+  if [[ -z "${spec}" ]]; then
+    "${date_command[@]}" "${rest[@]}"
+    return
+  fi
+
+  if "${date_command[@]}" --version >/dev/null 2>&1; then
+    "${date_command[@]}" --date="${spec}" "${rest[@]}"
+    return
+  fi
+
+  # BSD date: -j does not set the clock; -f is the input format.
+  spec="${spec/T/ }"
+  case "${spec}" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+    spec="${spec} 00:00:00"
+    ;;
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9])
+    spec="${spec}:00"
+    ;;
+  esac
+  date -j -f "%Y-%m-%d %H:%M:%S" "${spec}" "${rest[@]}"
 }
 
 function current_date() {

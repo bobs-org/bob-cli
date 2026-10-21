@@ -8,6 +8,8 @@
 //! format and `-A/--all` lifts it. `-g/--git-dates` fills modern added
 //! dates from file births and v1 finished dates from `^ref` tracker lines.
 
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use super::{LibraryConfig, RefRow};
@@ -410,11 +412,7 @@ fn load_git_birth_dates(
     if !output.status.success() {
         return Err("git log over the ref dir failed".to_string());
     }
-    let prefix = config
-        .bob_dir
-        .strip_prefix(&root)
-        .map(forward)
-        .unwrap_or_default();
+    let prefix = vault_git_prefix(&config.bob_dir, &root);
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_git_birth_dates(&text)
         .into_iter()
@@ -423,6 +421,22 @@ fn load_git_birth_dates(
             Some((unprefixed, birth))
         })
         .collect())
+}
+
+/// Vault path relative to the git root, resolving `/var` vs `/private/var`.
+fn vault_git_prefix(bob_dir: &Path, root: &Path) -> String {
+    let forward = |path: &Path| path.to_string_lossy().replace('\\', "/");
+    if let Ok(relative) = bob_dir.strip_prefix(root) {
+        return forward(relative);
+    }
+    let canon_dir =
+        fs::canonicalize(bob_dir).unwrap_or_else(|_| bob_dir.to_path_buf());
+    let canon_root =
+        fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    canon_dir
+        .strip_prefix(&canon_root)
+        .map(forward)
+        .unwrap_or_default()
 }
 
 fn strip_vault_prefix(path: &str, prefix: &str) -> Option<String> {
@@ -509,11 +523,7 @@ fn load_ref_history(config: &LibraryConfig) -> Result<RefHistory, String> {
     if !output.status.success() {
         return Err("git log over the ref dir failed".to_string());
     }
-    let prefix = config
-        .bob_dir
-        .strip_prefix(&root)
-        .map(forward)
-        .unwrap_or_default();
+    let prefix = vault_git_prefix(&config.bob_dir, &root);
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_ref_history(&text)
         .into_iter()

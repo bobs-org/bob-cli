@@ -86,11 +86,12 @@ function notify_me() {
 function parse_cli_args() {
   log::debug "Command-Line Arguments: ($*)"
 
-  eval set -- "$(getopt -o "h,v" -l "help,verbose" -- "$@")"
-
+  # Parse flags in-process: macOS /usr/bin/getopt is BSD getopt and
+  # rejects GNU -l long options, so `bob_notify --help` would miss -h
+  # and die with the usage grammar.
   VERBOSE=0
-  while [[ -n "$1" ]]; do
-    case $1 in
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
     -h | --help)
       echo "${DOC}"
       exit 0
@@ -100,6 +101,16 @@ function parse_cli_args() {
       ;;
     --)
       shift
+      break
+      ;;
+    -*)
+      if [[ "$1" =~ ^-v+$ ]]; then
+        VERBOSE=$((VERBOSE + ${#1} - 1))
+      else
+        die -x 2 "$(usage)"
+      fi
+      ;;
+    *)
       break
       ;;
     esac

@@ -69,16 +69,6 @@ fn apply_with_config(vault: &Path, daily: &Path, config: &Path) -> Output {
     output
 }
 
-fn touch_mtime(path: &Path, spec: &str) {
-    let status = std::process::Command::new("touch")
-        .arg("-d")
-        .arg(spec)
-        .arg(path)
-        .status()
-        .expect("touch mtime");
-    assert!(status.success(), "touch {spec} {}", path.display());
-}
-
 fn linked_from_updates(json: &Value) -> &[Value] {
     json["linked_from_line_updates"].as_array().unwrap()
 }
@@ -297,14 +287,14 @@ fn lr5_quiet_interval_skips_mint_until_next_run() {
     );
     write_file(&vault.join("tasks.md"), "- [ ] #task Target ^t\n");
     write_blocked_tasks_settings(&vault);
-    touch_mtime(&source, "+1 hour");
+    touch_mtime_offset(&source, 3600);
 
     let json = dry_run_json(&vault, &daily);
     assert!(minted_ids(&json).is_empty(), "{}", json);
     assert!(linked_from_updates(&json).is_empty(), "{}", json);
     assert!(!fs::read_to_string(&source).unwrap().contains(" ^"));
 
-    touch_mtime(&source, "-1 hour");
+    touch_mtime_offset(&source, -3600);
     apply_reconcile(&vault, &daily);
     let after = fs::read_to_string(&source).unwrap();
     assert!(after.contains(" ^call-back\n"), "{after}");
@@ -821,7 +811,7 @@ fn lr21_owner_future_mtime_defers_structurally() {
     );
     write_file(&tasks, before);
     write_blocked_tasks_settings(&vault);
-    touch_mtime(&tasks, "+1 hour");
+    touch_mtime_offset(&tasks, 3600);
 
     let output = bob_command()
         .args(["task", "reconcile", "--format", "json", "-r", "0"])

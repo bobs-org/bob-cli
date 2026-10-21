@@ -7,18 +7,23 @@ mod gkeep_support;
 
 use std::{
     fs,
-    io::Write as _,
     path::{Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Command, Output},
 };
 
 use gkeep_support::{
     archive_ok, error_response, note, snapshot_ok, stderr, stdout, FakeAdapter,
-    GkeepEnv, TempDir, BOB_BIN,
+    GkeepEnv, TempDir,
 };
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+
+#[cfg(target_os = "linux")]
+use std::{io::Write as _, process::Stdio};
+
+#[cfg(target_os = "linux")]
+use gkeep_support::BOB_BIN;
 
 fn default_target() -> String {
     // Mirrors the real `gkeep_inbox.md` shape: frontmatter, two intro

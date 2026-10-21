@@ -16,6 +16,7 @@ use std::process::Output;
 use std::process::Stdio;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -435,6 +436,84 @@ pub(crate) fn write_file(path: &Path, contents: &str) {
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
+/// Set `path`'s mtime to now plus `offset_secs` (negative = past).
+///
+/// Uses `File::set_modified` so tests do not depend on GNU `touch -d`.
+pub(crate) fn touch_mtime_offset(path: &Path, offset_secs: i64) {
+    let now = SystemTime::now();
+    let target = if offset_secs >= 0 {
+        now + Duration::from_secs(offset_secs as u64)
+    } else {
+        now - Duration::from_secs(offset_secs.unsigned_abs())
+    };
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(target))
+        .unwrap_or_else(|error| {
+            panic!("set mtime of {}: {error}", path.display())
+        });
+}
+
+/// Run `command` and return `Err` if it exceeds `timeout_secs`.
+///
+/// GNU `timeout(1)` is not on default macOS PATH; zsh zpty drivers hang
+/// the job without a deadline. Callers skip rather than fail when the
+/// host cannot drive zpty.
+pub(crate) fn try_output_with_timeout(
+    mut command: Command,
+    timeout_secs: u64,
+) -> Result<Output, String> {
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::piped());
+    command.stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("spawn timed command: {error}"))?;
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
+        Ok(result) => {
+            result.map_err(|error| format!("wait timed command: {error}"))
+        }
+        Err(_) => {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            let _ = rx.recv_timeout(Duration::from_secs(5));
+            Err(format!(
+                "command timed out after {timeout_secs}s (pid {pid})"
+            ))
+        }
+    }
+}
+
+/// True when `left` and `right` are the same path, including `/var` vs
+/// `/private/var` on macOS.
+pub(crate) fn paths_match(
+    left: impl AsRef<Path>,
+    right: impl AsRef<Path>,
+) -> bool {
+    let left = left.as_ref();
+    let right = right.as_ref();
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => false,
+    }
+}
+
 /// Seed a minimal legacy (v1) reference note so the first sync updates it
 /// instead of taking the v2 birth path: new births file a reading task in
 /// the parent note and render a managed embed, while an in-note `^ref`
@@ -496,6 +575,7 @@ pub(crate) fn configure_test_git_identity(repo: &Path) {
     git_in(repo, ["config", "user.name", "Test User"]);
     git_in(repo, ["config", "user.email", "test@example.com"]);
     git_in(repo, ["config", "commit.gpgsign", "false"]);
+    git_in(repo, ["config", "core.precomposeunicode", "true"]);
 }
 
 /// Materialize an executable stub without ever holding a writable descriptor
