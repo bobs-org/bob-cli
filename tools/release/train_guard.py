@@ -350,26 +350,62 @@ def _run_gh(args: list[str], timeout: float = 30.0) -> subprocess.CompletedProce
     return subprocess.run(args, check=False, text=True, capture_output=True, timeout=timeout)
 
 
+def _github_token() -> str | None:
+    """Return GH_TOKEN or GITHUB_TOKEN, whichever is set."""
+    for key in ("GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return None
+
+
 def fetch_rehearsal_last_release(repo: str | None = None) -> tuple[_dt.datetime | None, str | None]:
     """Fetch the newest GitHub Release `createdAt` (drafts included).
 
-    Returns `(timestamp_or_None, error_or_None)`. An empty release list is
-    not an error (it means "no previous release"). Anything else that goes
-    wrong returns an error string; the `--explain` path degrades gracefully
-    while the real `plan` job surfaces the message.
+    Prefers the REST API (stdlib, works in Actions with `GITHUB_TOKEN`) and
+    falls back to `gh release list`. Returns `(timestamp_or_None,
+    error_or_None)`. An empty release list is not an error (it means "no
+    previous release"). Anything else that goes wrong returns an error
+    string; the `--explain` path degrades gracefully while the real `plan`
+    job surfaces the message.
     """
+    repo = repo or os.environ.get("GITHUB_REPOSITORY") or ""
+    rest_error: str | None = None
+    if repo:
+        url = f"https://api.github.com/repos/{repo}/releases?per_page=100"
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        token = _github_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=30.0) as response:
+                body = response.read().decode("utf-8", errors="replace")
+            return parse_gh_releases_json(body or "[]"), None
+        except Exception as error:  # noqa: BLE001 -- any lookup failure falls back
+            rest_error = f"GitHub Releases API failed: {error}"
+    else:
+        rest_error = "repository is unknown (pass --repo or set GITHUB_REPOSITORY)"
+
     command = ["gh", "release", "list", "--limit", "100", "--json", "createdAt,isDraft,isPrerelease"]
     if repo:
         command.extend(["--repo", repo])
     try:
         result = _run_gh(command)
     except FileNotFoundError:
-        return None, "gh CLI is not installed"
+        detail = "gh CLI is not installed"
+        return None, f"{rest_error}; {detail}" if rest_error else detail
     except Exception as error:  # noqa: BLE001
-        return None, f"gh release list failed: {error}"
+        detail = f"gh release list failed: {error}"
+        return None, f"{rest_error}; {detail}" if rest_error else detail
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "unknown error").strip()
-        return None, f"gh release list failed: {detail}"
+        message = f"gh release list failed: {detail}"
+        return None, f"{rest_error}; {message}" if rest_error else message
     return parse_gh_releases_json(result.stdout or "[]"), None
 
 
@@ -540,6 +576,9 @@ def main(argv: list[str] | None = None) -> int:
     markdown = verdict_markdown(go=verdict["go"], dry_run=verdict["dry_run"],
                                 reason=verdict["reason"], sha=sha, mode=verdict["mode"])
     append_summary(markdown)
+    # Always echo the verdict: GITHUB_OUTPUT/SUMMARY are invisible in job logs,
+    # and a silent hard-fail is how an unauthenticated `gh` lookup hid itself.
+    sys.stdout.write(verdict["reason"] + "\n")
     if verdict["go"] and verdict["dry_run"] is False and (args.override_reason or "").strip():
         warning = f"hotfix override: {(args.override_reason or '').strip()}"
         gh_warning = f"::warning::{warning}\n"
