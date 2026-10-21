@@ -252,12 +252,13 @@ tokens than one read per term, because terms shared between definitions are prin
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
 **GLOSSARY TERMS:** Area Note; Bulk Capture (multi-item capture, batch capture);
-Capture; Inbox File (inbox note); Keep Streak (keeps); Mac Menu Bar Pomodoro Indicator
-(mac pom); Morning GTD Review Footer (review footer); Pomodoro; Project Note (prj note);
-Project Task (prj task); Reference Note (ref note); Reference Task (ref task); Schedule
-Log; Successor Offer; Task Dependency Link (task dep link, dep link); Task Freshness
-(freshness); Task Link (task block link); Task Relation (relation, LINKS line, LINKED
-FROM line); Work Log
+Capture; Directed Relation (labelled relation, directed task relation); Inbox File
+(inbox note); Keep Streak (keeps); Mac Menu Bar Pomodoro Indicator (mac pom); Morning
+GTD Review Footer (review footer); Pomodoro; Project Note (prj note); Project Task (prj
+task); Reference Note (ref note); Reference Task (ref task); Schedule Log; Successor
+Offer; Task Dependency Link (task dep link, dep link); Task Freshness (freshness); Task
+Link (task block link); Task Relation (relation, LINKS line, LINKED FROM line);
+Undirected Relation (plain link, undirected task relation); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

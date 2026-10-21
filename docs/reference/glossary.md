@@ -66,6 +66,19 @@ never captured as prose. The editor-facing `capture-*` companion commands are no
 captures, nor are `bob gkeep pull`, `bob ref create`, or Obsidian keymaps. A draft with
 two or more items is a [Bulk Capture](#bulk-capture); the grammar lives in `docs/capture.md`.
 
+### Directed Relation {#directed-relation}
+
+*Aliases: labelled relation, directed task relation.*
+
+*Requested · project*
+
+A [Task Relation](#task-relation) with a label, read from its source: "S ‹label› T", such as
+`follow-up of`. It is stored on S's LINKS line. T shows Bob's inverse phrase when one
+exists, otherwise "S · ‹label› → this". Capture `~T|label` makes the captured or owner
+task the source, and `~~T|label` makes T the source. Clearing the label turns it back
+into an [Undirected Relation](#undirected-relation). Two tasks carry at most one directed relation in each
+direction.
+
 ### Inbox File {#inbox-file}
 
 *Aliases: inbox note.*
@@ -263,11 +276,24 @@ A block link to an Obsidian task. These can be located anywhere but, when they a
 
 *Requested · project*
 
-A directed, optionally labelled, inert link from one task to another. It is authored on
-the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
-**LINKED FROM:** line. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
-gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
-counts as a Pomodoro Task Link, or changes its status, schedule, priority, or freshness.
+An inert link between two tasks: an [Undirected Relation](#undirected-relation) when it has no label, and a
+[Directed Relation](#directed-relation) when it has one. It is authored once on one task's 🪢 **LINKS:**
+line and mirrored on the other's generated 🪢 **LINKED FROM:** line. Which task stores
+a plain link carries no meaning. Add one with Capture `~` (or `~~` with a label) or the
+Task Card `l` gesture. A relation is distinct from a Pomodoro [Task Link](#task-link) and a
+[Task Dependency Link](#task-dependency-link): it never blocks a task, counts as a Pomodoro Task Link, or
+changes its status, schedule, priority, or freshness.
+
+### Undirected Relation {#undirected-relation}
+
+*Aliases: plain link, undirected task relation.*
+
+*Requested · project*
+
+A [Task Relation](#task-relation) with no label. It says only that two tasks belong together, so it has
+no direction. Both tasks show each other under `🪢 links`, and linking them again from
+either end changes nothing. Adding a label turns it into a [Directed Relation](#directed-relation). Two
+tasks that already share a directed relation need no plain link.
 
 ### Work Log {#work-log}
 
