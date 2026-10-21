@@ -736,9 +736,44 @@ fn lr18_inert_statuses_and_fields() {
 }
 
 #[test]
-fn lr19_symmetric_edges() {
-    // LR19: A → B and B → A → each lists the other.
+fn lr19_reciprocal_plains_omit_both_mirrors() {
+    // LR19 (changed): plain A → B and plain B → A → neither gets a
+    // LINKED FROM entry; one `redundant_relation`.
     let temp = TempDir::new("bob-cli-relations-lr19");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let before = concat!(
+        "- [ ] #task Alpha ^a\n",
+        "  - 🪢 **LINKS:** [[#^b]]\n",
+        "- [ ] #task Beta ^b\n",
+        "  - 🪢 **LINKS:** [[#^a]]\n",
+    );
+    write_file(&vault.join("tasks.md"), before);
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(linked_from_updates(&json).is_empty(), "{}", json);
+    let kinds = relation_warning_kinds(&json);
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "redundant_relation")
+            .count(),
+        1,
+        "{json}"
+    );
+
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert_eq!(after, before, "{after}");
+    assert!(!after.contains("LINKED FROM"), "{after}");
+}
+
+#[test]
+fn lr25_plain_subsumed_by_reverse_statement() {
+    // LR25: plain A → B and labelled B —y→ A → B's mirror omits A;
+    // A's mirror lists `[[B]] (y)`; `redundant_relation` on A's line.
+    let temp = TempDir::new("bob-cli-relations-lr25");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
     write_file(
@@ -747,21 +782,143 @@ fn lr19_symmetric_edges() {
             "- [ ] #task Alpha ^a\n",
             "  - 🪢 **LINKS:** [[#^b]]\n",
             "- [ ] #task Beta ^b\n",
-            "  - 🪢 **LINKS:** [[#^a]]\n",
+            "  - 🪢 **LINKS:** y [[#^a]]\n",
         ),
     );
     write_blocked_tasks_settings(&vault);
 
+    let json = dry_run_json(&vault, &daily);
+    let kinds = relation_warning_kinds(&json);
+    assert!(
+        kinds.contains(&"redundant_relation".to_string()),
+        "{}",
+        json["relation_warnings"]
+    );
+    let warnings = json["relation_warnings"].as_array().unwrap();
+    let redundant = warnings
+        .iter()
+        .find(|warning| warning["kind"] == "redundant_relation")
+        .expect("redundant_relation warning");
+    assert_eq!(redundant["path"], "tasks.md");
+    assert_eq!(redundant["line"], 2);
+    assert!(
+        redundant["message"]
+            .as_str()
+            .unwrap()
+            .contains("subsumed by"),
+        "{}",
+        redundant["message"]
+    );
+
     apply_reconcile(&vault, &daily);
     let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
-    assert!(
-        after.contains("- [ ] #task Alpha ^a\n  - 🪢 **LINKS:** [[#^b]]\n  - 🪢 **LINKED FROM:** [[#^b]]\n"),
-        "{after}"
+    assert!(has_linked_from(&after, "[[#^b]] (y)"), "{after}");
+    assert!(!after.contains("LINKED FROM:** [[#^a]]"), "{after}");
+}
+
+#[test]
+fn lr26_two_statements_mirror_both() {
+    // LR26: labelled A —x→ B and labelled B —y→ A → each mirror lists
+    // the other with its label (old LR19).
+    let temp = TempDir::new("bob-cli-relations-lr26");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Alpha ^a\n",
+            "  - 🪢 **LINKS:** x [[#^b]]\n",
+            "- [ ] #task Beta ^b\n",
+            "  - 🪢 **LINKS:** y [[#^a]]\n",
+        ),
     );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
     assert!(
-        after.contains("- [ ] #task Beta ^b\n  - 🪢 **LINKS:** [[#^a]]\n  - 🪢 **LINKED FROM:** [[#^a]]\n"),
-        "{after}"
+        !relation_warning_kinds(&json)
+            .contains(&"redundant_relation".to_string()),
+        "{}",
+        json["relation_warnings"]
     );
+
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(has_linked_from(&after, "[[#^b]] (y)"), "{after}");
+    assert!(has_linked_from(&after, "[[#^a]] (x)"), "{after}");
+}
+
+#[test]
+fn lr27_archived_plain_stays_subsumed_unwarned() {
+    // LR27: plain A → B with A in `done/`, and B —y→ A → B's mirror
+    // omits A; no warning; `done/` untouched.
+    let temp = TempDir::new("bob-cli-relations-lr27");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    write_file(
+        &vault.join("done/old_done.md"),
+        concat!(
+            "- [x] #task Archived source ^as\n",
+            "  - 🪢 **LINKS:** [[tasks#^t]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Target ^t\n",
+            "  - 🪢 **LINKS:** y [[done/old_done#^as]]\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let before_archived =
+        fs::read_to_string(vault.join("done/old_done.md")).unwrap();
+    let json = dry_run_json(&vault, &daily);
+    assert!(
+        !relation_warning_kinds(&json)
+            .contains(&"redundant_relation".to_string()),
+        "{}",
+        json["relation_warnings"]
+    );
+
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(!after.contains("LINKED FROM"), "{after}");
+    assert_eq!(
+        fs::read_to_string(vault.join("done/old_done.md")).unwrap(),
+        before_archived
+    );
+}
+
+#[test]
+fn lr28_malformed_target_names_nobody() {
+    // LR28: B's LINKS line is malformed; plain A → B; B's malformed
+    // line mentions A → B's mirror keeps listing A.
+    let temp = TempDir::new("bob-cli-relations-lr28");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Alpha ^a\n",
+            "  - 🪢 **LINKS:** [[#^b]]\n",
+            "- [ ] #task Beta ^b\n",
+            "  - 🪢 **LINKS:** [[#^a]] extra\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let json = dry_run_json(&vault, &daily);
+    assert!(
+        relation_warning_kinds(&json)
+            .contains(&"malformed_links_line".to_string()),
+        "{}",
+        json["relation_warnings"]
+    );
+
+    apply_reconcile(&vault, &daily);
+    let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(has_linked_from(&after, "[[#^a]]"), "{after}");
 }
 
 #[test]

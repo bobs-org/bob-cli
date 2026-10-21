@@ -113,6 +113,10 @@ pub(crate) fn plan_links_edit(
         {
             if entry.1 == label {
                 unchanged.push(link);
+            } else if label.is_none() && entry.1.is_some() {
+                // LW16: a bare add never strips a label; an explicit
+                // `relabel` map entry is the only way to clear one.
+                unchanged.push(link);
             } else {
                 entry.1 = label;
                 relabeled.push(link);
