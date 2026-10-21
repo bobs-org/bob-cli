@@ -275,6 +275,42 @@ fn relation_label_completions_carry_relation_and_owner() {
 }
 
 #[test]
+fn relation_label_leading_and_dependency_tail_keep_narrow_ranges() {
+    let temp = relation_fixture();
+    for (raw, token_start, separator, owner) in [
+        ("~tasks:target| Fix it", 0, 13, "Fix it"),
+        ("Fix it ~tasks:target| &tasks:source", 7, 20, "Fix it"),
+    ] {
+        let cursor = separator + 1;
+        let value = result(temp.path(), raw, cursor);
+        assert_eq!(
+            value.context,
+            Some(CompletionContext::RelationLabel),
+            "{raw}"
+        );
+        assert_eq!(
+            (value.replacement.start, value.replacement.end),
+            (separator, cursor),
+            "{raw}"
+        );
+        let json =
+            serde_json::to_value(&value).expect("serialize leading/tail");
+        assert_eq!(json["relation"]["direction"], "to", "{raw}");
+        assert_eq!(
+            json["relation"]["range"],
+            serde_json::json!({ "start": token_start, "end": separator }),
+            "{raw}"
+        );
+        assert_eq!(
+            json["replacement"],
+            serde_json::json!({ "start": separator, "end": cursor }),
+            "{raw}"
+        );
+        assert_eq!(json["owner"]["text"], owner, "{raw}");
+    }
+}
+
+#[test]
 fn parent_picker_reports_typed_relation_direction_and_target_text() {
     let temp = relation_fixture();
     let raw = "~tasks:target New task +";
