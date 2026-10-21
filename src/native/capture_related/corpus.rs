@@ -72,6 +72,7 @@ pub(super) struct Candidate {
     pub(super) line: usize,
     pub(super) task_ref: String,
     pub(super) block_id: Option<String>,
+    pub(super) block_id_suggestions: Vec<String>,
     pub(super) created: Option<NaiveDate>,
     pub(super) open: bool,
 }
@@ -86,6 +87,8 @@ pub(super) struct Discovery {
     pub(super) candidates: Vec<Candidate>,
     pub(super) warnings: Vec<String>,
     pub(super) global_filter: String,
+    /// `(alias, exact routable path)` pairs from the capture route catalog.
+    pub(super) route_aliases: Vec<(String, String)>,
 }
 
 pub(super) fn discover(bob_dir: &Path, days: u32) -> Discovery {
@@ -139,10 +142,21 @@ pub(super) fn discover(bob_dir: &Path, days: u32) -> Discovery {
         &mut warnings,
     );
 
+    let route_aliases = report
+        .targets
+        .iter()
+        .flat_map(|target| {
+            target.project_name_aliases.iter().map(|alias| {
+                (alias.to_ascii_lowercase(), target.relative_path.clone())
+            })
+        })
+        .collect();
+
     Discovery {
         candidates,
         warnings,
         global_filter: settings.global_filter.clone(),
+        route_aliases,
     }
 }
 
@@ -165,6 +179,11 @@ fn collect_from_note(
         return;
     }
     let scan = note_tasks::scan(contents, settings);
+    let used_ids = scan
+        .tasks()
+        .iter()
+        .filter_map(|task| task.block_id.clone())
+        .collect::<Vec<_>>();
     let lines: Vec<&str> = contents.lines().collect();
     for task in scan.tasks() {
         let raw = lines.get(task.line_index).copied().unwrap_or("");
@@ -201,6 +220,11 @@ fn collect_from_note(
             &settings.global_filter,
             task.block_id.as_deref(),
         );
+        let block_id_suggestions = if task.block_id.is_none() {
+            super::super::capture_block_ids::suggest_ids(&title, '^', &used_ids)
+        } else {
+            Vec::new()
+        };
         let key =
             candidate_key(relative, task.block_id.as_deref(), &task.digest);
         if !seen.insert(key.clone()) {
@@ -222,6 +246,7 @@ fn collect_from_note(
             line: task.line_index + 1,
             task_ref: task.task_ref(),
             block_id: task.block_id.clone(),
+            block_id_suggestions,
             created: created_date(raw),
             open,
         });

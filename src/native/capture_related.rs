@@ -1,7 +1,8 @@
-//! Read-only similar-task matcher and `--query` evaluation harness.
+//! Read-only draft matcher and `--query` evaluation harness.
 
 mod bands;
 mod corpus;
+mod draft;
 mod score;
 #[cfg(test)]
 mod tests;
@@ -46,6 +47,11 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             print_success(&result, output_format);
             0
         }
+        RelatedRequest::Draft(draft) => {
+            let result = draft::draft_related(&draft);
+            print_success(&result, output_format);
+            0
+        }
     }
 }
 
@@ -65,11 +71,10 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "List existing tasks that each new task in a capture draft may \
 duplicate or relate to.\n\n\
-The command is read-only and never writes the vault. This release ships \
-the --query evaluation harness: TEXT is ranked as one new task title \
-against every open task in routable notes, plus tasks closed in the last \
---days days. Pass --format json to emit schema_version 1 with a score on \
-each match.",
+The command is read-only and never writes the vault. Draft mode accepts \
+capture text after --, checks task-creating items, and emits the additive \
+schema_version 1 contract without scores. The --query evaluation harness \
+ranks TEXT as one task title and includes scores in JSON.",
         )
         .after_help(
             "Examples:\n  \
@@ -88,6 +93,7 @@ BOB_NOW                   Local datetime override for the closed-task window",
         .arg(help_arg())
         .arg(limit_arg())
         .arg(query_arg())
+        .arg(draft_arg())
 }
 
 fn bob_dir_arg() -> Arg {
@@ -143,8 +149,21 @@ fn query_arg() -> Arg {
         .short('q')
         .value_name("TEXT")
         .allow_hyphen_values(true)
-        .required(true)
+        .required_unless_present("draft")
+        .conflicts_with("draft")
         .help("Rank TEXT as one new task title (evaluation harness)")
+}
+
+fn draft_arg() -> Arg {
+    Arg::new("draft")
+        .value_name("DRAFT")
+        .num_args(1..)
+        .trailing_var_arg(true)
+        .allow_hyphen_values(true)
+        .value_parser(OsStringValueParser::new())
+        .required_unless_present("query")
+        .conflicts_with("query")
+        .help("Capture draft to check after --; multiple args are joined with spaces")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +188,7 @@ impl OutputFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RelatedRequest {
     Query(QueryRequest),
+    Draft(DraftRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,17 +199,39 @@ struct QueryRequest {
     query: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DraftRequest {
+    bob_dir: PathBuf,
+    days: u32,
+    limit: usize,
+    draft: String,
+}
+
 impl RelatedRequest {
     fn from_matches(matches: &ArgMatches) -> Result<Self, String> {
-        let Some(query) = matches.get_one::<String>("query") else {
-            return Err("pass --query TEXT to rank a task title".to_string());
-        };
-        Ok(Self::Query(QueryRequest {
-            bob_dir: bob_dir_from_matches(matches),
-            days: *matches.get_one::<u32>("days").unwrap_or(&30),
-            limit: *matches.get_one::<usize>("limit").unwrap_or(&5),
-            query: query.clone(),
-        }))
+        let bob_dir = bob_dir_from_matches(matches);
+        let days = *matches.get_one::<u32>("days").unwrap_or(&30);
+        let limit = *matches.get_one::<usize>("limit").unwrap_or(&5);
+        if let Some(query) = matches.get_one::<String>("query") {
+            return Ok(Self::Query(QueryRequest {
+                bob_dir,
+                days,
+                limit,
+                query: query.clone(),
+            }));
+        }
+        if let Some(values) = matches.get_many::<OsString>("draft") {
+            return Ok(Self::Draft(DraftRequest {
+                bob_dir,
+                days,
+                limit,
+                draft: values
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            }));
+        }
+        Err("pass --query TEXT or a capture draft after --".to_string())
     }
 }
 
@@ -213,7 +255,17 @@ pub(super) struct CaptureRelatedResult {
 pub(super) struct RelatedItem {
     pub(super) index: usize,
     pub(super) mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) range: Option<SourceRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) marker_at: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) route_range: Option<SourceRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) discard_range: Option<SourceRange>,
     pub(super) matches: Vec<RelatedMatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) linked: Option<Vec<LinkedMatch>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -235,7 +287,38 @@ pub(super) struct RelatedMatch {
     #[serde(rename = "ref")]
     pub(super) task_ref: String,
     pub(super) block_id: Option<String>,
-    pub(super) score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) requires_block_id: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id_suggestions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) replacements: Option<Replacements>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) actions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) default_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(super) struct SourceRange {
+    pub(super) start: usize,
+    pub(super) end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct LinkedMatch {
+    pub(super) key: String,
+    pub(super) link: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct Replacements {
+    pub(super) relation_to: String,
+    pub(super) parent: String,
+    pub(super) dependency: String,
+    pub(super) blocked_task: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -295,7 +378,12 @@ pub(super) fn query_related_in(
             line: ranked.candidate.line,
             task_ref: ranked.candidate.task_ref.clone(),
             block_id: ranked.candidate.block_id.clone(),
-            score: ranked.score,
+            requires_block_id: None,
+            block_id_suggestions: None,
+            replacements: None,
+            actions: None,
+            default_action: None,
+            score: Some(ranked.score),
         })
         .collect();
     CaptureRelatedResult {
@@ -305,7 +393,12 @@ pub(super) fn query_related_in(
         items: vec![RelatedItem {
             index: 0,
             mode: "task".to_string(),
+            range: None,
+            marker_at: None,
+            route_range: None,
+            discard_range: None,
             matches,
+            linked: None,
         }],
     }
 }
@@ -334,10 +427,10 @@ fn print_human(result: &CaptureRelatedResult, styler: &Styler) {
         return;
     }
     let item_count = result.items.len();
-    for item in &result.items {
+    for (position, item) in result.items.iter().enumerate() {
         println!(
             "{}  {}",
-            styler.cyan(&format!("{}/{}", item.index + 1, item_count)),
+            styler.cyan(&format!("{}/{}", position + 1, item_count)),
             styler.dim(&item.mode)
         );
         if item.matches.is_empty() {
@@ -353,13 +446,17 @@ fn print_human(result: &CaptureRelatedResult, styler: &Styler) {
             } else {
                 format!("{} · {}", related.locator, related.status_name)
             };
+            let score = related
+                .score
+                .map(|score| format!("   {}", styler.dim(&score_bar(score))))
+                .unwrap_or_default();
             println!(
-                "  {}  {}   ( {} )   {}   {}",
+                "  {}  {}   ( {} )   {}{}",
                 styler.cyan(&related.status_symbol),
                 title,
                 styler.yellow(&tag),
                 styler.dim(&locator),
-                styler.dim(&score_bar(related.score)),
+                score,
             );
         }
         println!();

@@ -1,0 +1,79 @@
+{
+  "items": [
+    {
+      "discard_range": {
+        "end": 35,
+        "start": 0
+      },
+      "index": 0,
+      "linked": [],
+      "marker_at": 35,
+      "matches": [
+        {
+          "actions": [
+            "open",
+            "discard"
+          ],
+          "band": "closed_duplicate",
+          "block_id": "closed-printer",
+          "block_id_suggestions": [],
+          "closed": {
+            "date": "2026-10-19",
+            "days_ago": 1,
+            "status": "done"
+          },
+          "default_action": "discard",
+          "key": "dev.md#closed-printer",
+          "kind": "task",
+          "line": 10,
+          "locator": "dev",
+          "matched_ranges": [
+            [
+              0,
+              6
+            ],
+            [
+              7,
+              10
+            ],
+            [
+              11,
+              18
+            ],
+            [
+              24,
+              30
+            ]
+          ],
+          "note_path": "dev.md",
+          "ref": "10:7c178550",
+          "replacements": {
+            "blocked_task": "*dev:closed-printer",
+            "dependency": "&dev:closed-printer",
+            "parent": "@dev+closed-printer",
+            "relation_to": "~dev:closed-printer"
+          },
+          "requires_block_id": false,
+          "route": "dev",
+          "status_name": "Done",
+          "status_symbol": "x",
+          "status_type": "DONE",
+          "target": "/Users/test/bob/dev.md",
+          "title": "Retire old printer from office"
+        }
+      ],
+      "mode": "task",
+      "range": {
+        "end": 35,
+        "start": 0
+      },
+      "route_range": {
+        "end": 35,
+        "start": 31
+      }
+    }
+  ],
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

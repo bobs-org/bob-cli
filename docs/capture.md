@@ -57,6 +57,7 @@ workflow guide.
   - [Input, stdin, and JSON output](#input-stdin-and-json-output)
   - [Interactive editor markers](#interactive-editor-markers)
 - [`bob capture-parse`](#bob-capture-parse)
+- [`bob capture-related`](#bob-capture-related)
 - [`bob capture-rewrite`](#bob-capture-rewrite)
 - [`bob capture-complete`](#bob-capture-complete)
 - [Discovery commands](#discovery-commands)
@@ -5614,6 +5615,92 @@ prints the same information without color escapes when piped — including a
 `sub_bullet_depths` when it is nonempty. On a missing `TEXT`, JSON mode prints
 a single `{"ok": false, "error": "..."}` object on stdout and keeps stderr
 clean.
+
+## `bob capture-related`
+
+```bash
+bob capture-related [-b|--bob-dir DIR] [-d|--days N] [-f|--format human|json] [-l|--limit N] [-q|--query TEXT] [-- DRAFT...]
+```
+
+This read-only command shows existing tasks that a capture draft may duplicate
+or relate to. Draft mode follows the capture editor grammar and examines only
+items that create tasks: `task`, `pomodoro_task`, `project_note`, and
+`pomodoro_project_note`. For a project-note item it matches the title. A
+`@@template:` draft and a draft with no task-creating items return an empty
+`items` array before Bob scans the vault.
+
+Open candidates are tasks in routable inbox, area, and active project notes.
+Closed candidates are tasks completed or canceled in the last `--days` days,
+including recent `done/` archives. Checklist rows, recurring tasks in closed
+state, and daily notes are excluded. A task already named by a draft
+dependency, blocked-task marker, relation, task destination, or parent-task
+destination is listed under `linked` and omitted from the matches.
+
+Each item is tokenized with Bob's task-title rules and ranked against the
+candidate set. The bands are `same_title`, `possible_duplicate`, `similar`,
+`closed_duplicate`, and `hold`; same-title matching is case-insensitive and
+ignores punctuation, tags, fields, and emoji. The exact score bars and
+default action mapping can change without a schema-version bump. Draft JSON
+never includes scores. The separate `--query TEXT` harness ranks one title
+and includes numeric scores for calibration.
+
+**Draft JSON contract.** Success uses `schema_version: 1` and returns
+`ok`, `warnings`, and `items`. Each item contains:
+
+- `index`: its 0-based position in the full capture draft;
+- `mode`: its task-creating capture mode;
+- `range`: the item's half-open UTF-8 byte range in the original draft;
+- `marker_at`: the UTF-8 byte offset where an action marker can be inserted
+  on the parent line before a trailing Pomodoro suffix;
+- `route_range`: the item's own destination-token range, or `null`;
+- `discard_range`: the item and one adjacent blank-line separator, or `null`
+  when it has authored children;
+- `matches`: ranked candidate rows;
+- `linked`: resolved candidate keys already referenced by this item, with
+  `link` set to `relation`, `dependency`, `blocked_task`, or `parent`.
+
+Every range is half-open and indexes UTF-8 bytes in the exact draft passed to
+Bob. `marker_at` and ranges are splice anchors for that draft only; clients
+must discard them after an edit.
+
+A match row contains `key`, `band`, clean `title`, `matched_ranges`, `kind`,
+`status_symbol`, `status_name`, `status_type`, nullable `closed`, `route`,
+`locator`, `note_path`, `target`, `line`, `ref`, nullable `block_id`,
+`requires_block_id`, `block_id_suggestions`, `actions`, and `default_action`.
+`matched_ranges` are UTF-8 byte ranges in `title`. `closed` is `null` for an
+open task or `{ "status": "done" | "canceled", "date": "YYYY-MM-DD",
+"days_ago": N }`. `kind` is `task`, `project`, or `reading`. `key` is the
+stable note-path-and-block-ID identity, or a digest for an ID-less task.
+`target` and `line` can be passed to Obsidian's task Go To URL; `ref` is the
+stale-safe task reference.
+
+Rows with block IDs include Bob-authored `replacements` for `relation_to`,
+`parent`, `dependency`, and `blocked_task`. ID-less rows omit `replacements`,
+set `requires_block_id: true`, and include `route`, `note_path`, `ref`, and
+suggested IDs; the existing `capture-task-id` flow supplies replacements
+after the user chooses or enters an ID.
+
+`actions` contains only edits that Bob verified by applying the replacement
+to a copy of the draft and parsing it again. Open rows may offer `relate`,
+`note`, `needs`, and `blocks`, plus `open` and `discard` when their anchors
+allow those actions. Closed rows offer only `open` and `discard`. The default
+is `discard` for an exact title, `note` for a possible duplicate, `relate`
+for a similar or held row, and `open` for a non-exact closed duplicate.
+Return remains the capture submit action; these are explicit draft edits and
+never create a link by themselves.
+
+```bash
+bob capture-related -b ~/bob -f json -- 'Install new UPS battery @dev'
+bob capture-related --query 'Install UPS battery' --format json
+```
+
+The first command emits draft item anchors and actions but no score. The
+second uses the evaluation harness and adds a score to each match. Human
+draft output groups matches by item and shows their status, highlighted title,
+band, and locator. It omits empty bands entirely; there is no “no duplicates”
+row. Unreadable candidate notes appear as bounded `warnings` while other
+matches remain available. Usage errors exit nonzero and JSON errors use the
+usual `{"ok": false, "error": "…"}` envelope.
 
 ## `bob capture-rewrite`
 

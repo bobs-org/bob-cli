@@ -1,0 +1,235 @@
+{
+  "items": [
+    {
+      "discard_range": {
+        "end": 28,
+        "start": 0
+      },
+      "index": 0,
+      "linked": [],
+      "marker_at": 28,
+      "matches": [
+        {
+          "actions": [
+            "relate",
+            "note",
+            "needs",
+            "blocks",
+            "open",
+            "discard"
+          ],
+          "band": "same_title",
+          "block_id": "ups",
+          "block_id_suggestions": [],
+          "closed": null,
+          "default_action": "discard",
+          "key": "dev.md#ups",
+          "kind": "task",
+          "line": 4,
+          "locator": "dev",
+          "matched_ranges": [
+            [
+              0,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ],
+            [
+              16,
+              23
+            ]
+          ],
+          "note_path": "dev.md",
+          "ref": "4:6a289743",
+          "replacements": {
+            "blocked_task": "*dev:ups",
+            "dependency": "&dev:ups",
+            "parent": "@dev+ups",
+            "relation_to": "~dev:ups"
+          },
+          "requires_block_id": false,
+          "route": "dev",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "target": "/Users/test/bob/dev.md",
+          "title": "Install new UPS battery"
+        },
+        {
+          "actions": [
+            "relate",
+            "note",
+            "needs",
+            "blocks",
+            "open",
+            "discard"
+          ],
+          "band": "same_title",
+          "block_id": "ups-health",
+          "block_id_suggestions": [],
+          "closed": null,
+          "default_action": "discard",
+          "key": "health.md#ups-health",
+          "kind": "task",
+          "line": 4,
+          "locator": "health",
+          "matched_ranges": [
+            [
+              0,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ],
+            [
+              16,
+              23
+            ]
+          ],
+          "note_path": "health.md",
+          "ref": "4:7b5150bd",
+          "replacements": {
+            "blocked_task": "*health:ups-health",
+            "dependency": "&health:ups-health",
+            "parent": "@health+ups-health",
+            "relation_to": "~health:ups-health"
+          },
+          "requires_block_id": false,
+          "route": "health",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "target": "/Users/test/bob/health.md",
+          "title": "Install new UPS battery"
+        },
+        {
+          "actions": [
+            "relate",
+            "note",
+            "needs",
+            "blocks",
+            "open",
+            "discard"
+          ],
+          "band": "same_title",
+          "block_id": "prj",
+          "block_id_suggestions": [],
+          "closed": null,
+          "default_action": "discard",
+          "key": "ship.md#prj",
+          "kind": "project",
+          "line": 5,
+          "locator": "ship",
+          "matched_ranges": [
+            [
+              0,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ],
+            [
+              16,
+              23
+            ]
+          ],
+          "note_path": "ship.md",
+          "ref": "5:b373bbed",
+          "replacements": {
+            "blocked_task": "*ship:prj",
+            "dependency": "&ship:prj",
+            "parent": "@ship+prj",
+            "relation_to": "~ship:prj"
+          },
+          "requires_block_id": false,
+          "route": "ship",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "target": "/Users/test/bob/ship.md",
+          "title": "Install new UPS battery"
+        },
+        {
+          "actions": [
+            "relate",
+            "note",
+            "needs",
+            "blocks",
+            "open",
+            "discard"
+          ],
+          "band": "possible_duplicate",
+          "block_id": "ups-lab",
+          "block_id_suggestions": [],
+          "closed": null,
+          "default_action": "note",
+          "key": "health.md#ups-lab",
+          "kind": "task",
+          "line": 5,
+          "locator": "health",
+          "matched_ranges": [
+            [
+              0,
+              7
+            ],
+            [
+              8,
+              11
+            ],
+            [
+              12,
+              15
+            ],
+            [
+              16,
+              23
+            ]
+          ],
+          "note_path": "health.md",
+          "ref": "5:341041f2",
+          "replacements": {
+            "blocked_task": "*health:ups-lab",
+            "dependency": "&health:ups-lab",
+            "parent": "@health+ups-lab",
+            "relation_to": "~health:ups-lab"
+          },
+          "requires_block_id": false,
+          "route": "health",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "target": "/Users/test/bob/health.md",
+          "title": "Install new UPS battery the"
+        }
+      ],
+      "mode": "task",
+      "range": {
+        "end": 28,
+        "start": 0
+      },
+      "route_range": {
+        "end": 28,
+        "start": 24
+      }
+    }
+  ],
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

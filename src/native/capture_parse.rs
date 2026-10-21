@@ -99,7 +99,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
 
 /// Load the URL routing policy for `capture-parse`. `-R` disables
 /// routing; a config error or a `capture: false` toggle does too.
-fn load_parse_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
+pub(crate) fn load_parse_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
     if no_ref {
         return None;
     }

@@ -1,0 +1,388 @@
+//! Draft-mode `bob capture-related` contract goldens and gates.
+
+use crate::support::*;
+use serde_json::Value;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+const GOLDEN_ROOT: &str = "/Users/test/bob";
+const PINNED_NOW: &str = "2026-10-20 12:00:00";
+
+fn write_related_vault(vault: &Path) {
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "statusSettings": {
+            "coreStatuses": [
+              {"symbol":" ","name":"Todo","type":"TODO"},
+              {"symbol":"x","name":"Done","type":"DONE"},
+              {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+              {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+            ],
+            "customStatuses": [
+              {"symbol":"*","name":"Next","type":"ON_HOLD"},
+              {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+            ]
+          }
+        }"##,
+    );
+    write_file(
+        &vault.join("dev.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "---\n",
+            "- [ ] #task Install new UPS battery ^ups\n",
+            "- [ ] #task Order a replacement UPS battery ^ups-order\n",
+            "- [?] #task Replace server UPS battery this weekend\n",
+            "- [/] #task Validate JSON output for capture related command ^json-output\n",
+            "- [ ] #task Use `openssl` command safely ^openssl\n",
+            "- [ ] #task Read `%d` reference notes ^percent-reference\n",
+            "- [x] #task Retire old printer from office [completion:: 2026-10-19] ^closed-printer\n",
+        ),
+    );
+    write_file(
+        &vault.join("health.md"),
+        concat!(
+            "---\n",
+            "type: [[area]]\n",
+            "---\n",
+            "- [ ] #task Install new UPS battery ^ups-health\n",
+            "- [ ] #task Install new UPS battery the ^ups-lab\n",
+            "- [ ] #task Replace old UPS battery before winter ^ups-winter\n",
+        ),
+    );
+    write_file(
+        &vault.join("ship.md"),
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task Install new UPS battery ^prj\n",
+        ),
+    );
+}
+
+fn related_json(vault: &Path, draft: &str, extra: &[&str]) -> Value {
+    let mut command = bob_command();
+    command
+        .arg("capture-related")
+        .arg("--bob-dir")
+        .arg(vault)
+        .arg("--format")
+        .arg("json");
+    for arg in extra {
+        command.arg(arg);
+    }
+    let output = command
+        .env("BOB_NOW", PINNED_NOW)
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-related draft mode");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("related draft JSON")
+}
+
+fn capture_parse_json(draft: &str) -> Value {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("--format")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture-parse for an action splice");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("capture-parse JSON")
+}
+
+fn splice_at(draft: &str, at: usize, insertion: &str) -> String {
+    format!("{}{}{}", &draft[..at], insertion, &draft[at..])
+}
+
+fn replace_span(
+    draft: &str,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> String {
+    format!("{}{}{}", &draft[..start], replacement, &draft[end..])
+}
+
+fn normalize(value: Value, vault: &Path) -> Value {
+    let vault = vault.to_string_lossy().to_string();
+    fn walk(value: Value, vault: &str) -> Value {
+        match value {
+            Value::String(text) => {
+                Value::String(text.replace(vault, GOLDEN_ROOT))
+            }
+            Value::Array(items) => Value::Array(
+                items.into_iter().map(|item| walk(item, vault)).collect(),
+            ),
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .map(|(key, item)| (key, walk(item, vault)))
+                    .collect(),
+            ),
+            scalar => scalar,
+        }
+    }
+    walk(value, &vault)
+}
+
+fn check_golden(name: &str, value: Value, vault: &Path) {
+    let value = normalize(value, vault);
+    let pretty = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&value).expect("pretty JSON")
+    );
+    let golden = fixture(&format!("capture_related/{name}.json"));
+    if std::env::var("BOB_UPDATE_GOLDENS").is_ok() {
+        fs::create_dir_all(golden.parent().expect("golden parent"))
+            .expect("create golden dir");
+        fs::write(&golden, &pretty).expect("write related golden");
+        return;
+    }
+    let expected = fs::read_to_string(&golden).expect("read related golden");
+    assert_eq!(pretty, expected, "capture-related golden {name} changed");
+}
+
+fn fixture_vault(temp: &TempDir) -> PathBuf {
+    let vault = temp.path().join("bob");
+    write_related_vault(&vault);
+    vault
+}
+
+#[test]
+fn recapture_contract_golden_includes_actions_defaults_and_cross_note_matches()
+{
+    let temp = TempDir::new("bob-cli-capture-related-recapture");
+    let vault = fixture_vault(&temp);
+    let result = related_json(&vault, "Install new UPS battery @dev", &[]);
+    let item = &result["items"][0];
+    assert_eq!(item["index"], 0);
+    assert_eq!(item["mode"], "task");
+    assert_eq!(item["matches"][0]["band"], "same_title");
+    assert_eq!(item["matches"][0]["default_action"], "discard");
+    assert_eq!(item["matches"][0]["actions"][0], "relate", "{result}");
+    assert!(item["matches"][0].get("score").is_none());
+    assert!(item["matches"].as_array().unwrap().iter().any(|row| {
+        row["note_path"] == "health.md" && row["band"] == "same_title"
+    }));
+    let draft = "Install new UPS battery @dev";
+    let first = &item["matches"][0];
+    let marker_at = item["marker_at"].as_u64().unwrap() as usize;
+    let replacements = &first["replacements"];
+    for (action, field) in [
+        ("relate", "relation_to"),
+        ("needs", "dependency"),
+        ("blocks", "blocked_task"),
+    ] {
+        assert!(first["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == action));
+        let edited = splice_at(
+            draft,
+            marker_at,
+            &format!(" {}", replacements[field].as_str().unwrap()),
+        );
+        let parsed = capture_parse_json(&edited);
+        assert_eq!(parsed["mode"], "task", "{action}: {parsed}");
+        assert_eq!(
+            parsed["diagnostics"],
+            serde_json::json!([]),
+            "{action}: {parsed}"
+        );
+    }
+    assert!(first["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == "note"));
+    let route_range = item["route_range"].as_object().unwrap();
+    let edited = replace_span(
+        draft,
+        route_range["start"].as_u64().unwrap() as usize,
+        route_range["end"].as_u64().unwrap() as usize,
+        replacements["parent"].as_str().unwrap(),
+    );
+    let parsed = capture_parse_json(&edited);
+    assert_eq!(parsed["mode"], "sub_bullet", "note: {parsed}");
+    assert_eq!(
+        parsed["diagnostics"],
+        serde_json::json!([]),
+        "note: {parsed}"
+    );
+    check_golden("recapture", result, &vault);
+}
+
+#[test]
+fn draft_gates_short_titles_templates_and_noncreating_items_before_vault_io() {
+    let temp = TempDir::new("bob-cli-capture-related-gates");
+    let vault = fixture_vault(&temp);
+    let short = related_json(&vault, "Milk @dev", &[]);
+    assert_eq!(short["items"][0]["matches"], serde_json::json!([]));
+    check_golden("short", short, &vault);
+
+    let missing = temp.path().join("does-not-exist");
+    let noncreating =
+        related_json(&missing, "Remember a thought @dev#Ideas", &[]);
+    assert_eq!(noncreating["items"], serde_json::json!([]));
+    assert_eq!(noncreating["warnings"], serde_json::json!([]));
+    check_golden("noncreating", noncreating, &missing);
+
+    let template =
+        related_json(&missing, "@@template:\n- [ ] #task {title}", &[]);
+    assert_eq!(template["items"], serde_json::json!([]));
+    assert_eq!(template["warnings"], serde_json::json!([]));
+    check_golden("template", template, &missing);
+}
+
+#[test]
+fn bulk_draft_anchors_dedupe_linked_tasks_and_project_modes() {
+    let temp = TempDir::new("bob-cli-capture-related-bulk");
+    let vault = fixture_vault(&temp);
+    let draft = concat!(
+        "Install new UPS battery @dev\n\n",
+        "Order a replacement UPS battery @dev\n\n",
+        "Read `unique-inline-code` safely @dev\n\n",
+        "Project heading to check @ship^generated-plan+\n\n",
+        "Start Pomodoro task title @dev:new-pomodoro-task",
+    );
+    let result = related_json(&vault, draft, &[]);
+    let items = result["items"].as_array().unwrap();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[3]["mode"], "project_note");
+    assert_eq!(items[4]["mode"], "pomodoro_task");
+    assert_eq!(items[0]["range"]["start"], 0);
+    assert_eq!(items[0]["discard_range"]["start"], 0);
+    assert_eq!(
+        items[1]["discard_range"]["start"],
+        items[1]["range"]["start"]
+    );
+    assert_eq!(items[4]["discard_range"]["end"], draft.len());
+    for item in items {
+        let start = item["range"]["start"].as_u64().unwrap() as usize;
+        let end = item["range"]["end"].as_u64().unwrap() as usize;
+        let marker_at = item["marker_at"].as_u64().unwrap() as usize;
+        assert!(draft.is_char_boundary(start) && draft.is_char_boundary(end));
+        assert!(draft.is_char_boundary(marker_at));
+        assert!(start <= marker_at && marker_at <= end);
+    }
+    assert!(items
+        .iter()
+        .flat_map(|item| item["matches"].as_array().unwrap())
+        .any(|row| {
+            row["band"] == "same_title" && row["kind"] == "project"
+        }));
+    assert!(
+        items
+            .iter()
+            .flat_map(|item| item["matches"].as_array().unwrap())
+            .any(|row| {
+                row["band"] == "possible_duplicate"
+                    && row["default_action"] == "note"
+                    && row["replacements"]["parent"].is_string()
+            }),
+        "{result}"
+    );
+    assert!(result["items"].as_array().unwrap().iter().all(|item| {
+        item["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("score").is_none())
+    }));
+    check_golden("bulk", result, &vault);
+}
+
+#[test]
+fn linked_candidates_are_reported_and_excluded_and_closed_rows_use_split_defaults(
+) {
+    let temp = TempDir::new("bob-cli-capture-related-linked-closed");
+    let vault = fixture_vault(&temp);
+    let linked_draft = "Install new UPS battery ~dev:ups @dev";
+    let linked = related_json(&vault, linked_draft, &[]);
+    let linked_item = &linked["items"][0];
+    assert!(linked_item["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| { row["key"] != "dev.md#ups" }));
+    assert_eq!(linked_item["linked"][0]["key"], "dev.md#ups");
+    assert_eq!(linked_item["linked"][0]["link"], "relation");
+    check_golden("linked", linked, &vault);
+
+    let closed =
+        related_json(&vault, "Retire old printer from office @dev", &[]);
+    let closed_row = &closed["items"][0]["matches"][0];
+    assert_eq!(closed_row["band"], "closed_duplicate");
+    assert_eq!(closed_row["closed"]["status"], "done");
+    assert_eq!(closed_row["default_action"], "discard");
+    assert_eq!(
+        closed_row["actions"],
+        serde_json::json!(["open", "discard"])
+    );
+    check_golden("closed", closed, &vault);
+}
+
+#[test]
+fn idless_rows_offer_suggestions_and_atomic_code_spans_stay_distinct() {
+    let temp = TempDir::new("bob-cli-capture-related-idless-code");
+    let vault = fixture_vault(&temp);
+    let idless = related_json(
+        &vault,
+        "Replace server UPS battery this weekend @dev",
+        &[],
+    );
+    let row = idless["items"][0]["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["requires_block_id"] == true)
+        .expect("ID-less blocked row");
+    assert_eq!(row["block_id"], Value::Null);
+    assert!(!row["block_id_suggestions"].as_array().unwrap().is_empty());
+    assert!(row.get("replacements").is_none());
+    check_golden("idless", idless, &vault);
+
+    let code = related_json(&vault, "`%dispatch` `%proc` @dev", &[]);
+    assert_eq!(code["items"][0]["matches"], serde_json::json!([]));
+    check_golden("code-spans", code, &vault);
+}
+
+#[test]
+fn draft_related_stays_under_the_debug_perf_gate() {
+    let temp = TempDir::new("bob-cli-capture-related-perf");
+    let vault = temp.path().join("bob");
+    write_capture_task_settings(&vault);
+    for note in 0..40 {
+        let tasks = (0..38)
+            .map(|task| {
+                format!(
+                    "- [ ] #task Analyze pipeline event system note {note} task {task} ^event-{note}-{task}\n"
+                )
+            })
+            .collect::<String>();
+        write_file(
+            &vault.join(format!("area-{note:02}.md")),
+            &format!("---\ntype: [[area]]\n---\n{tasks}"),
+        );
+    }
+    let start = std::time::Instant::now();
+    let result = related_json(
+        &vault,
+        "Analyze pipeline event system note 5 task 12 @area-05",
+        &[],
+    );
+    let elapsed = start.elapsed();
+    assert!(result["ok"] == true);
+    assert!(elapsed.as_millis() < 500, "draft query took {elapsed:?}");
+}

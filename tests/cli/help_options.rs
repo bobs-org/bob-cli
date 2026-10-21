@@ -495,7 +495,7 @@ fn capture_related_help_lists_options_alphabetically() {
             && help.contains("--query evaluation harness")
             && help.contains("schema_version 1")
             && help.contains("BOB_NOW")
-            && !help.contains("DRAFT"),
+            && help.contains("DRAFT"),
         "expected capture-related long help:\n{help}"
     );
     assert_text_order(

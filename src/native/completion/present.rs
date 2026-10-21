@@ -185,7 +185,12 @@ impl<'a> Walk<'a> {
     fn is_capture_text_command(&self) -> bool {
         matches!(
             self.path.first().map(String::as_str),
-            Some("capture" | "capture-parse" | "capture-rewrite")
+            Some(
+                "capture"
+                    | "capture-parse"
+                    | "capture-related"
+                    | "capture-rewrite"
+            )
         )
     }
 

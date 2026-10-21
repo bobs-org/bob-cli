@@ -11,9 +11,13 @@ List existing tasks that a new capture may duplicate
 ```text title="bob capture-related --help"
 List existing tasks that each new task in a capture draft may duplicate or relate to.
 
-The command is read-only and never writes the vault. This release ships the --query evaluation harness: TEXT is ranked as one new task title against every open task in routable notes, plus tasks closed in the last --days days. Pass --format json to emit schema_version 1 with a score on each match.
+The command is read-only and never writes the vault. Draft mode accepts capture text after --, checks task-creating items, and emits the additive schema_version 1 contract without scores. The --query evaluation harness ranks TEXT as one task title and includes scores in JSON.
 
-Usage: bob capture-related [OPTIONS] --query <TEXT>
+Usage: bob capture-related [OPTIONS] [DRAFT]...
+
+Arguments:
+  [DRAFT]...
+          Capture draft to check after --; multiple args are joined with spaces
 
 Options:
   -b, --bob-dir <DIR>

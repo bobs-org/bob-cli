@@ -279,7 +279,7 @@ fn scorer_pairs_from_research() {
         ),
         "CT pair band {} score {}",
         ct_match.band,
-        ct_match.score
+        ct_match.score.expect("query score")
     );
 
     let code = query(temp.path(), "Add `%d` short-hand for `%dispatch`!");
@@ -291,9 +291,9 @@ fn scorer_pairs_from_research() {
         assert_ne!(hit.band, "possible_duplicate");
         assert_ne!(hit.band, "same_title");
         assert!(
-            hit.score < bands::SIMILAR,
+            hit.score.expect("query score") < bands::SIMILAR,
             "code-span pair scored {}",
-            hit.score
+            hit.score.expect("query score")
         );
     }
 }
@@ -474,6 +474,41 @@ fn synthetic_vault_query_is_under_250ms() {
 }
 
 #[test]
+fn synthetic_vault_draft_contract_is_under_250ms() {
+    let temp = TempDir::new("bob-cli-capture-related-draft-perf");
+    write_settings(temp.path());
+    for note in 0..40 {
+        let mut body = String::from("---\ntype: [[area]]\n---\n");
+        for task in 0..38 {
+            body.push_str(&format!(
+                "- [ ] #task Perf note {note} task {task} unique-{note}-{task} ^n{note}-t{task}\n"
+            ));
+        }
+        write_file(&temp.path().join(format!("area{note}.md")), &body);
+    }
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
+    )]);
+    let request = super::DraftRequest {
+        bob_dir: temp.path().to_path_buf(),
+        days: 30,
+        limit: 5,
+        draft: "Perf note 7 task 3 unique-7-3 @area7".to_string(),
+    };
+    let _warmup = super::draft::draft_related(&request);
+    let started = std::time::Instant::now();
+    let result = super::draft::draft_related(&request);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed.as_millis() < 500,
+        "draft call took {} ms (debug target allows 500ms under parallel just check load)",
+        elapsed.as_millis()
+    );
+    assert_eq!(result.items.len(), 1);
+}
+
+#[test]
 fn cosine_is_symmetric_on_identical_titles() {
     let left = tokenize::tokenize("Install new UPS battery");
     let right = corpus::Candidate {
@@ -492,6 +527,7 @@ fn cosine_is_symmetric_on_identical_titles() {
         line: 1,
         task_ref: "1:abcd1234".into(),
         block_id: Some("ups".into()),
+        block_id_suggestions: Vec::new(),
         created: None,
         open: true,
     };

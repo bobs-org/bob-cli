@@ -1,0 +1,79 @@
+{
+  "items": [
+    {
+      "discard_range": {
+        "end": 44,
+        "start": 0
+      },
+      "index": 0,
+      "linked": [],
+      "marker_at": 44,
+      "matches": [
+        {
+          "actions": [
+            "relate",
+            "note",
+            "needs",
+            "blocks",
+            "open",
+            "discard"
+          ],
+          "band": "same_title",
+          "block_id": null,
+          "block_id_suggestions": [
+            "replace-server-ups"
+          ],
+          "closed": null,
+          "default_action": "discard",
+          "key": "dev.md#81fc6dab",
+          "kind": "task",
+          "line": 6,
+          "locator": "dev",
+          "matched_ranges": [
+            [
+              0,
+              7
+            ],
+            [
+              8,
+              14
+            ],
+            [
+              15,
+              18
+            ],
+            [
+              19,
+              26
+            ],
+            [
+              32,
+              39
+            ]
+          ],
+          "note_path": "dev.md",
+          "ref": "6:81fc6dab",
+          "requires_block_id": true,
+          "route": "dev",
+          "status_name": "Blocked",
+          "status_symbol": "?",
+          "status_type": "ON_HOLD",
+          "target": "/Users/test/bob/dev.md",
+          "title": "Replace server UPS battery this weekend"
+        }
+      ],
+      "mode": "task",
+      "range": {
+        "end": 44,
+        "start": 0
+      },
+      "route_range": {
+        "end": 44,
+        "start": 40
+      }
+    }
+  ],
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}
