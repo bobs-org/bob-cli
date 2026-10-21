@@ -2,7 +2,8 @@
 
 This guide is the authoritative display contract for task tag marks,
 in the style of `docs/date-marks.md`. The JavaScript mirror lives in
-bob-ledger-tools (`src/138-task-tag-marks.js` pure core plus
+bob-ledger-tools (`src/138-task-tag-marks.js` and
+`src/138-checklist-task-marks.js` pure core plus
 `src/264-plugin-task-tag-marks.js` Live Preview, rendered views, and
 toggle); its tests run the conformance vectors below verbatim. There
 is **no api namespace** (the top-level api stays v3; add one only
@@ -265,6 +266,66 @@ the task pickers, the Task Card header, and inbox-route subtitles. The
 stored line keeps both tags, so Tasks, Dataview, `bob query`, and grep
 keep working.
 
+## GTD checklist tasks
+
+The canonical run `#task #gtd #pre` is one teal sunrise in the task
+identity slot. `#task #gtd #post` is one teal flag. The partners may
+appear in either order after `#task`; the single glyph replaces the
+whole run, so its shape names the checklist lane while the shared teal
+ink still means "tracked task."
+
+```text
+before: - [?] #task #gtd #pre Brush teeth
+after:  - [?] ☀ Brush teeth                 (☀ sunrise: PRE opens the review)
+        - [?] ⚑ Morning review: chores done  (⚑ flag: POST closes the review)
+```
+
+The two 16×16 stroked masks use the hash/book geometry: no fill,
+`stroke-width: 1.8`, round caps and joins. They are defined beside
+`--bob-ref-task-glyph` as `--bob-pre-task-glyph` and
+`--bob-post-task-glyph`. The sunrise path is
+`M1.4 12.2h13.2M3.8 12.2a4.2 4.2 0 0 1 8.4 0M8 3.9v2.4M2.13 6.33l1.7 1.7M13.87 6.33l-1.7 1.7`;
+the flag path is
+`M3.6 14.2V2.3M3.6 2.9h8.6l-2.1 3.2 2.1 3.2H3.6`.
+
+Both variants use the same theme-aware teal identity ink, hover capsule,
+and sizing as the hash and book. The glyph does not encode status;
+closed tasks (`x`, `X`, `-`) rest at the shared 40% mix toward
+`--text-faint` with 0.75 opacity.
+
+| Kind | Variant class | Accessible label | Tooltip |
+| --- | --- | --- | --- |
+| PRE | `bob-pre-task-mark` | `PRE opening checklist task` | `#task #gtd #pre · PRE opening checklist` / `Opens the ]s walk · Ctrl+Enter when done` |
+| POST | `bob-post-task-mark` | `POST closing checklist task` | `#task #gtd #post · POST closing checklist` / `Closes the ]s walk (]S) · Ctrl+Enter when done` |
+
+Eligibility is deliberately narrow. On a real task line, the exact
+`#task` token must be followed in the identity slot by one whitespace
+run, the exact whole-token tags `#gtd` and `#pre` or `#post` in either
+order, and one whitespace run between them. Matching is
+case-insensitive for partner tags. A line containing both `#pre` and
+`#post` anywhere keeps its pills as a conflict signal. The existing
+`#task #ref` pair takes precedence. Tags elsewhere in the title, a
+missing partner, `#prep`, `#gtd/pre`, a non-task line, or code keep the
+native pills.
+
+Live Preview replaces the full run with one stable widget; touching any
+part of it reveals all three raw tags for editing. Reading view annotates
+the `#task` anchor and hides both partner anchors in place, preserving
+copy, re-scans, and the toggle. Tasks query rows use CSS only: the
+sunrise or flag appears when the description has the matching `#gtd`
+pair, and the redundant `#gtd` pill is hidden. Rows with both `#pre`
+and `#post` remain native.
+
+CSS cannot enforce that the partner tags occupy the identity slot,
+because sibling combinators ignore text nodes. The Tasks-row rule may
+therefore draw on a misplaced but otherwise matching pair; the vault's
+rows are canonical. No JavaScript touches Tasks' DOM.
+
+The Today 🍅 follows the complete checklist identity run, so it stays
+between the glyph and the title. The existing task-tag-marks toggle
+restores the three source pills everywhere. Pickers, notices, the review
+footer, CLI/TUI, `bob query`, and Bob Mac Capture are unchanged.
+
 ## Toggle and lifecycle
 
 The command "Toggle task tag marks" (id `toggle-task-tag-marks`) is
@@ -321,8 +382,9 @@ malformed canonical form).
 ## Conformance vectors
 
 Live Preview core: `taskTagMarkRanges(lineText)` returns
-`[{ from, to, kind }]` in UTF-16 line offsets, where `kind` is `"task"`
-or `"ref"` (a `ref` range spans the whole `#task #ref` pair).
+`[{ from, to, kind }]` in UTF-16 line offsets, where `kind` is `task | ref
+| pre | post`. A `ref` range spans `#task #ref`; `pre` and `post` ranges
+span the whole three-tag checklist identity run.
 
 | #    | Input                                                      | Expected                                                                             |
 | ---- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -355,6 +417,25 @@ or `"ref"` (a `ref` range spans the whole `#task #ref` pair).
 | TT27 | `- #task #ref Not a task`                                  | none (not a task line)                                                               |
 | TT28 | ``- [ ] Note `the #task #ref pair` here``                  | none in Live Preview: the core returns `[{[16,26), ref}]`, and the inline-code check drops it |
 
+PRE/POST checklist marks:
+
+| # | Input | Expected |
+| --- | --- | --- |
+| CK1 | `- [ ] #task #gtd #pre Brush teeth` | `[{[6,21), pre}]` |
+| CK2 | `- [?] #task #gtd #post Morning review` | `[{[6,22), post}]` |
+| CK3 | `- [x] #task #gtd #pre Check weather [completion:: 2026-10-21]` | `[{[6,21), pre}]` (resting tone is CSS) |
+| CK4 | `- [ ] #task #pre #gtd Swapped` | `[{[6,21), pre}]` |
+| CK5 | `- [ ] #task #GTD #Pre Loud` | `[{[6,21), pre}]` |
+| CK6 | `- [ ] #task  #gtd   #post Extra spaces` | `[{[6,25), post}]` |
+| CK7 | `- [ ] #task #gtd #pre #post Conflict` / `- [ ] #task #gtd #pre Brush #post` | `[{[6,11), task}]`; pills stay |
+| CK8 | `- [ ] #task #gtd Topic only` / `- [ ] #task #pre Missing gtd` | `[{[6,11), task}]` |
+| CK9 | `- [ ] #task #gtd #prep Typo` / `- [ ] #task #gtd/pre Nested` | `[{[6,11), task}]` |
+| CK10 | `- [ ] #task Brush teeth #gtd #pre` | `[{[6,11), task}]` (not in the slot) |
+| CK11 | `- [ ] #task #ref #gtd #pre Odd` | `[{[6,16), ref}]` (the ref pair wins) |
+| CK12 | `- #task #gtd #pre Not a task` / ``- [ ] Note `#task #gtd #pre` `` | none / none in Live Preview (code) |
+| CK13 | `- [ ] #task #gtd #pre Brush teeth ^teeth`, Today-linked | 🍅 widget at offset 22 |
+| CK14 | `checklistKindForText` on `#gtd #pre` / `#GTD #Post` / `#gtd #pre #post` / `#gtd/pre` / `#pre, #gtd` | `pre` / `post` / `pre` / `null` / `pre` |
+
 Rendered views (fake DOM in tests):
 
 | #   | DOM                                                         | Expected                                                                            |
@@ -372,6 +453,11 @@ Rendered views (fake DOM in tests):
 | TR11 | `#task` + `#references` anchors, or `#ref` before `#task`   | hash only on `#task`                                                                 |
 | TR12 | `#ref` anchor inside `.plugin-tasks-list-item .task-description` | not annotated (Tasks rows are CSS-only: the `#ref` pill renders the book)         |
 | TR13 | pair present / toggle off / toggle on                        | book plus hidden `#ref` / book stripped and `#ref` revealed document-wide / pair re-annotated |
+| CR1 | task li with adjacent `#task #gtd #pre` anchors | `#task` has sunrise class, label, and tooltip; `#gtd` and `#pre` stay hidden in place |
+| CR2 | `#task #gtd #pre #post`, or `#task` + `#gtd` + a word + `#pre` | hash only; every pill stays visible |
+| CR3 | checklist pair present / toggle off / toggle on | variants, labels, and hidden classes stripped document-wide / then re-annotated |
+| CR4 | Today reading view on a CR1 row | 🍅 inserted after the hidden `#pre` anchor and before the title |
+| CR5 | Tasks row with `#gtd` + `#post` / with `#pre` + `#post` | flag drawn and `#gtd` hidden / every pill stays native |
 
 ## Live verification (Bryan, in Obsidian)
 
@@ -396,3 +482,10 @@ Rendered views (fake DOM in tests):
   one line.
 - Mobile (iOS) renders it.
 - PDF export shows the glyph.
+- On red Blocked `[?]` rows, sunrise and flag are distinct in light and
+  dark themes and on iOS.
+- `]s` keeps the glyph on the landing row, and 🍅 follows it on
+  Today-linked PRE rows.
+- Touching the checklist glyph reveals all three tags; typing stays raw.
+- Tasks query rows show the matching CSS glyph, while a hand-typed
+  `#pre #post` conflict keeps all its pills.

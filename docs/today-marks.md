@@ -65,8 +65,10 @@ A line gets a mark only when all of these hold:
 ## Placement
 
 The mark goes at the first non-space character after the identity slot, before
-the title. The slot is the leading exact `#task` token, or the `#task #ref`
-pair (📖). On `#task #prj` lines it sits between the hash and the `#prj` pill.
+the title. The slot is the leading exact `#task` token, the `#task #ref`
+pair (📖), or the canonical `#task #gtd #pre` / `#task #gtd #post`
+checklist run (☀ / ⚑). On `#task #prj` lines it sits between the hash and the
+`#prj` pill.
 When `#task` is not the body's first token, the mark goes at the body start,
 right after the checkbox and its space.
 
@@ -190,7 +192,7 @@ stated.
 | TM13 | the task lives in a canonical daily note (`^gtd`), or T is rendered inside a daily note | no |
 | TM14 | cache not ready (startup), or the date rolled over | no |
 | TM15 | `^fix` ends two lines of T | no mark on either |
-| TM16 | `#task #ref` / `#task #prj` lines | after the 📖 pair / between the hash and `#prj` |
+| TM16 | `#task #ref` / `#task #prj` / `#task #gtd #pre` lines | after the 📖 pair / between the hash and `#prj` / after the sunrise run |
 | TM17 | cursor at the title start; cursor inside `#task` | mark shown, caret after it; hash revealed, mark stays |
 | TM18 | Ctrl+Shift+Enter link, then unlink, from T | appears with the entrance pop, then disappears |
 | TM19 | rendered view where the source line cannot be proven | no (neutral) |
