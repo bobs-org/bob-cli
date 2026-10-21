@@ -206,11 +206,12 @@ selector requires `[data-when]`.
 Validity gate (all must hold, else the native pill stays): exactly one
 `/(^|[^A-Za-z0-9_-])repeat\s*::/gi` on the line or text node;
 `[repeat:: …]` or `(repeat:: …)` with matching brackets, a lowercase
-key touching `::`, and padding spaces only; after trimming, the value
-matches Tasks' charset `^[a-zA-Z0-9, !]+$` and starts with `every`
-plus a space and more text (case-insensitive); code positions are
-excluded exactly as for dates; and the checklist guard below does not
-fire. Known limit: the charset check is necessary but not sufficient —
+key touching `::`, and ASCII space padding only; the raw value matches
+Tasks' charset `^[a-zA-Z0-9, !]+$` before repeated spaces are collapsed,
+and starts with `every` plus a space and more text (case-insensitive);
+tabs, non-breaking spaces, and other whitespace are invalid rather than
+normalized; code positions are excluded exactly as for dates; and the
+checklist guard below does not fire. Known limit: the charset check is necessary but not sufficient —
 `every blursday` gets a verbatim label, which is still truthful text.
 
 Checklist guard: no mark when the line is a checklist member
@@ -451,15 +452,15 @@ lines. `fold N` is `foldLength` in Live Preview.
 | RM5  | `every 30 days when done` / `every 28 days` | `every 30 days` / `every 28 days` |
 | RM6  | `every 1 week` / `every 3 weeks on Friday` / `every January on the 15th` | `weekly` / `every 3 weeks · Fri` / `yearly · Jan 15` |
 | RM7  | `every week on Tuesday, Friday` / `every week on Tuesday and Friday` / `every weekday` | `weekly · Tue, Fri` (both) / `weekdays` |
-| RM8  | `every April and December on the 1st and 24th` | verbatim `every April and December on the 1st and 24th` |
+| RM8  | `every April and December on the 1st and 24th`; `every constructor`; `every week on constructor`; `every constructor on the 1st` | each unknown valid-charset rule is verbatim; `when done` is omitted from the label and retained in the tooltip |
 | RM9  | `(repeat:: every week)` / `[ repeat:: every  day ]` | `weekly` / `daily` |
 | RM10 | `Every Day When Done` | `daily`; tooltip `Repeats Every Day When Done⏎Next date counts from completion` |
 | RM11 | cursor inside the field / in its folded run | reveals that field only / unfolds to fold 0 |
 | RM12 | `- [x] #task #gtd #pre Old [repeat:: every day]` (closed member) | mark shown (guard covers open rows only), resting tone |
-| RN1  | `[repeat:: weekly]`, `[Repeat:: every day]`, `[repeat :: every day]`, `[repeat:: every day; when done]`, two `repeat::` fields, `[repeat:: every day)` | no mark (pill; repair-flag selector covers `repeat`) |
+| RN1  | `[repeat:: weekly]`, `[Repeat:: every day]`, `[repeat :: every day]`, `[repeat:: every day; when done]`, `[repeat:: every\tday]`, `[repeat:: every day]`, tab padding, two `repeat::` fields, `[repeat:: every day)` | no mark (pill; repair-flag selector covers `repeat`); repeated ASCII spaces and uppercase cadence remain valid |
 | RN2  | `- [?] #task #gtd #pre Brush [repeat:: every day]` / `- [ ] #task Brush #gtd #post [repeat:: every day]` | no mark on either (the guard follows membership, not the glyph slot); the pill keeps the dashed orange flag |
 | RN3  | ``- [ ] `[repeat:: every day]` `` | untouched (code) |
-| RR1  | reading view: CR1-style PRE li whose text holds `[repeat:: every day]` / `… when done` | no mark / `daily` mark (`data-rendered="true"`) |
+| RR1  | reading view postprocessor invoked on a PRE/POST li root or containing wrapper; open li text holds `[repeat:: every day]` / `… when done`; closed li holds `[repeat:: every day]` | no mark / `daily` mark for permitted `when done` and closed rows, regardless of root shape |
 | RO2  | rollover over a rendered repeat mark | untouched; no error |
 | RA1  | `api.dateMarks.fields` / `api.dateMarks.model("repeat", "every day")` | unchanged four fields / `null` |
 
