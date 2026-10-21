@@ -386,3 +386,77 @@ fn draft_related_stays_under_the_debug_perf_gate() {
     assert!(result["ok"] == true);
     assert!(elapsed.as_millis() < 500, "draft query took {elapsed:?}");
 }
+
+#[test]
+fn calibration_excludes_self_before_closed_suppression_and_limits() {
+    let temp = TempDir::new("bob-cli-related-calibration");
+    write_related_vault(temp.path());
+    write_file(
+        &temp.path().join("calibration.md"),
+        concat!(
+            "---\ntype: [[area]]\n---\n",
+            "- [ ] #task Recycle obsolete calibration fixture ^open\n",
+            "- [x] #task Recycle obsolete calibration fixture [completion:: 2026-10-19] ^closed\n",
+        ),
+    );
+    for (extra, band, line) in [
+        (vec![], "same_title", 4),
+        (vec!["--exclude", "calibration.md:4"], "closed_duplicate", 5),
+        (vec!["-e", "dev.md:4"], "same_title", 4),
+        (vec!["-e", "calibration.md:5"], "same_title", 4),
+    ] {
+        let output = bob_command()
+            .args(["capture-related", "--bob-dir"])
+            .arg(temp.path())
+            .args([
+                "--query",
+                "Recycle obsolete calibration fixture",
+                "--limit",
+                "1",
+                "--format",
+                "json",
+            ])
+            .args(extra)
+            .env("BOB_NOW", PINNED_NOW)
+            .output()
+            .expect("query calibration fixture");
+        assert_success(&output);
+        let value: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let matches = value["items"][0]["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1, "{value}");
+        assert_eq!(matches[0]["band"], band);
+        assert_eq!(matches[0]["line"], line);
+    }
+    for excluded in [
+        "calibration.md",
+        "calibration.md:0",
+        "calibration.md:-1",
+        "calibration.md:no",
+        "/calibration.md:4",
+        "../calibration.md:4",
+        ":4",
+    ] {
+        let output = bob_command()
+            .args([
+                "capture-related",
+                "--query",
+                "Example",
+                "--exclude",
+                excluded,
+            ])
+            .output()
+            .expect("reject invalid exclusion");
+        assert_eq!(output.status.code(), Some(2), "{excluded}");
+    }
+    let output = bob_command()
+        .args([
+            "capture-related",
+            "--exclude",
+            "calibration.md:4",
+            "--",
+            "Example @dev",
+        ])
+        .output()
+        .expect("reject exclusion in draft mode");
+    assert_eq!(output.status.code(), Some(2));
+}

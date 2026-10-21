@@ -503,6 +503,7 @@ fn capture_related_help_lists_options_alphabetically() {
         &[
             "-b, --bob-dir",
             "-d, --days",
+            "-e, --exclude",
             "-f, --format",
             "-h, --help",
             "-l, --limit",

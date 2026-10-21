@@ -11,7 +11,7 @@ List existing tasks that a new capture may duplicate
 ```text title="bob capture-related --help"
 List existing tasks that each new task in a capture draft may duplicate or relate to.
 
-The command is read-only and never writes the vault. Draft mode accepts capture text after --, checks task-creating items, and emits the additive schema_version 1 contract without scores. The --query evaluation harness ranks TEXT as one task title and includes scores in JSON.
+The command is read-only and never writes the vault. Draft mode accepts capture text after --, checks task-creating items, and emits the additive schema_version 1 contract without scores. The --query evaluation harness ranks TEXT as one task title and includes scores in JSON. Use --exclude NOTE:LINE to leave one existing task out of calibration.
 
 Usage: bob capture-related [OPTIONS] [DRAFT]...
 
@@ -27,6 +27,9 @@ Options:
           Also match tasks closed in the last N days
           
           [default: 30]
+
+  -e, --exclude <NOTE:LINE>
+          Exclude one vault-relative note:line before query scoring (calibration only)
 
   -f, --format <FORMAT>
           Output format: human or json

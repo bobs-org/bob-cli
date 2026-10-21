@@ -74,7 +74,8 @@ duplicate or relate to.\n\n\
 The command is read-only and never writes the vault. Draft mode accepts \
 capture text after --, checks task-creating items, and emits the additive \
 schema_version 1 contract without scores. The --query evaluation harness \
-ranks TEXT as one task title and includes scores in JSON.",
+ranks TEXT as one task title and includes scores in JSON. Use --exclude \
+NOTE:LINE to leave one existing task out of calibration.",
         )
         .after_help(
             "Examples:\n  \
@@ -89,6 +90,7 @@ BOB_NOW                   Local datetime override for the closed-task window",
         .disable_help_flag(true)
         .arg(bob_dir_arg())
         .arg(days_arg())
+        .arg(exclude_arg())
         .arg(format_arg())
         .arg(help_arg())
         .arg(limit_arg())
@@ -113,6 +115,47 @@ fn days_arg() -> Arg {
         .value_parser(clap::value_parser!(u32))
         .default_value("30")
         .help("Also match tasks closed in the last N days")
+}
+
+fn exclude_arg() -> Arg {
+    Arg::new("exclude")
+        .long("exclude")
+        .short('e')
+        .value_name("NOTE:LINE")
+        .value_parser(parse_excluded_task)
+        .requires("query")
+        .conflicts_with("draft")
+        .help("Exclude one vault-relative note:line before query scoring (calibration only)")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExcludedTask {
+    note_path: String,
+    line: usize,
+}
+
+fn parse_excluded_task(value: &str) -> Result<ExcludedTask, String> {
+    let (note, line) = value.rsplit_once(':').ok_or_else(|| {
+        "expected NOTE:LINE, for example dev.md:42".to_string()
+    })?;
+    let path = Path::new(note);
+    if note.is_empty()
+        || note.split('/').any(|part| part == "." || part == "..")
+        || path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("NOTE must be a vault-relative path without . or ..".into());
+    }
+    let line = line
+        .parse::<usize>()
+        .ok()
+        .filter(|line| *line > 0)
+        .ok_or_else(|| "LINE must be a positive integer".to_string())?;
+    Ok(ExcludedTask {
+        note_path: path.to_string_lossy().into_owned(),
+        line,
+    })
 }
 
 fn format_arg() -> Arg {
@@ -197,6 +240,7 @@ struct QueryRequest {
     days: u32,
     limit: usize,
     query: String,
+    exclude: Option<ExcludedTask>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +262,7 @@ impl RelatedRequest {
                 days,
                 limit,
                 query: query.clone(),
+                exclude: matches.get_one::<ExcludedTask>("exclude").cloned(),
             }));
         }
         if let Some(values) = matches.get_many::<OsString>("draft") {
@@ -334,6 +379,7 @@ fn query_related(request: &QueryRequest) -> CaptureRelatedResult {
         &request.query,
         request.days,
         request.limit,
+        request.exclude.as_ref(),
     )
 }
 
@@ -342,8 +388,15 @@ pub(super) fn query_related_in(
     query: &str,
     days: u32,
     limit: usize,
+    exclude: Option<&ExcludedTask>,
 ) -> CaptureRelatedResult {
-    let discovery = corpus::discover(bob_dir, days);
+    let mut discovery = corpus::discover(bob_dir, days);
+    if let Some(exclude) = exclude {
+        discovery.candidates.retain(|candidate| {
+            candidate.note_path != exclude.note_path
+                || candidate.line != exclude.line
+        });
+    }
     let title = tokenize::display_title(query, &discovery.global_filter, None);
     let query_tokens = tokenize::tokenize(&title);
     let scores = score::cosine_scores(&query_tokens, &discovery.candidates);

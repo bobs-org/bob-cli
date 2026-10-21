@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# Synthetic coverage for scripts/dev/capture_related_calibrate: run the sampler
+# with a fake bob, fake git vault, and a scratch output dir. Assert the exit
+# status, the worksheet shape, and the vault-unchanged guard. Does not copy
+# the sampler's ranking logic; it only checks the harness contract.
+set -euo pipefail
+
+fail() {
+    printf 'capture-related-calibrate-test: FAIL: %s\n' "$*" >&2
+    exit 1
+}
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || fail "cannot resolve script directory"
+sampler=$script_dir/capture_related_calibrate
+[[ -f $sampler ]] || fail "missing sampler script: $sampler"
+
+root=$(mktemp -d "${TMPDIR:-/tmp}/bob-capture-related-calibrate-test.XXXXXX") || fail "cannot create test root"
+trap 'rm -rf -- "$root"' EXIT
+export TMPDIR=$root/tmp
+mkdir -p "$TMPDIR" "$root/bin" "$root/vault"
+
+write_exe() {
+    local path=$1
+    cat >"$path"
+    chmod +x "$path"
+}
+
+write_exe "$root/bin/bob" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+mode=""
+while (( $# )); do
+    case $1 in
+        capture-targets) mode=targets; shift ;;
+        capture-tasks) mode=tasks; shift ;;
+        capture-related) mode=related; shift ;;
+        --version) echo "bob 0.0.0-test"; exit 0 ;;
+        --query) query=$2; shift 2 ;;
+        --query=*) query=${1#--query=}; shift ;;
+        --exclude=*) exclude=${1#--exclude=}; shift ;;
+        --) shift; draft=$1; shift ;;
+        --bob-dir|--days|--limit|--format|--route) shift 2 ;;
+        *) shift ;;
+    esac
+done
+case ${mode-} in
+    targets)
+        printf '%s' '{"ok":true,"count":2,"targets":[{"route":"dev","relative_path":"dev.md"},{"route":"cash","relative_path":"cash.md"}]}'
+        ;;
+    tasks)
+        # Route is consumed above; serve two tasks per route from $FAKE_ROUTE.
+        if [[ ${FAKE_ROUTE-} == dev ]]; then
+            printf '%s' '{"ok":true,"tasks":[{"ref":"10:aaaa","line":10,"text":"Install new UPS battery"},{"ref":"20:bbbb","line":20,"text":"Water the plants"}]}'
+        else
+            printf '%s' '{"ok":true,"tasks":[{"ref":"30:cccc","line":30,"text":"Install new UPS battery!"},{"ref":"40:dddd","line":40,"text":"File the taxes"}]}'
+        fi
+        ;;
+    related)
+        if [[ -n ${query-} ]]; then
+            [[ -n ${exclude-} ]] || { echo "missing pre-ranking exclusion" >&2; exit 9; }
+            case ${FAKE_BOB_FAILURE-} in
+                exit) exit 1 ;;
+                json) echo 'not json'; exit 0 ;;
+                ok) echo '{"ok":false,"items":[]}'; exit 0 ;;
+            esac
+        fi
+        if [[ ${query-} == "File the taxes" && ${FAKE_BOB_LARGE-} == 1 ]]; then
+            python3 - <<'PYTHON'
+import json
+matches = [dict(band="similar", title=f"Common candidate {i}",
+                note_path="many.md", line=i + 1, score=0.61)
+           for i in range(130)]
+matches.append(dict(band="possible_duplicate", title="Rare duplicate",
+                    note_path="many.md", line=200, score=0.81))
+print(json.dumps(dict(ok=True, items=[dict(matches=matches)])))
+PYTHON
+            exit 0
+        fi
+        if [[ ${query-} == "Install new UPS battery" ]]; then
+            printf '%s' '{"ok":true,"items":[{"matches":[{"band":"same_title","title":"Install new UPS battery!","note_path":"cash.md","line":30,"score":1.0},{"band":"hold","title":"UPS buying guide","note_path":"cash.md","line":99,"score":0.5}]}]}'
+        elif [[ ${query-} == "Install new UPS battery!" ]]; then
+            printf '%s' '{"ok":true,"items":[{"matches":[{"band":"same_title","title":"Install new UPS battery","note_path":"dev.md","line":10,"score":1.0}]}]}'
+        elif [[ ${query-} == "Water the plants" ]]; then
+            printf '%s' '{"ok":true,"items":[{"matches":[{"band":"closed_duplicate","title":"Water the plants yesterday","note_path":"done/dev.md","line":7,"score":0.72,"closed":{"status":"done","days_ago":1}}, {"band":"hold","title":"Water the garden beds","note_path":"dev.md","line":21,"score":0.5}]}]}'
+        else
+            printf '%s' '{"ok":true,"items":[{"matches":[]}]}'
+        fi
+        ;;
+    *)
+        # Draft timing calls and anything else succeed silently.
+        exit 0
+        ;;
+esac
+EOF
+
+# Route-aware fake: capture-tasks needs the route the sampler asked for.
+# Re-exec wrapper records --route into FAKE_ROUTE for the tasks branch.
+write_exe "$root/bin/bob-route" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+fake_route=""
+prev=""
+for arg in "$@"; do
+    if [[ $prev == "--route" ]]; then
+        fake_route=$arg
+    fi
+    prev=$arg
+    args+=("$arg")
+done
+FAKE_ROUTE=$fake_route exec "$0-bin" "${args[@]}"
+EOF
+mv "$root/bin/bob" "$root/bin/bob-bin"
+mv "$root/bin/bob-route" "$root/bin/bob"
+
+# Fake git: vault is a git checkout; status output is stable.
+write_exe "$root/bin/git" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1-} == "-C" && ${3-} == rev-parse ]]; then
+    exit 0
+elif [[ ${1-} == "-C" && ${3-} == status ]]; then
+    if [[ -n ${FAKE_GIT_CHANGED-} && -f $FAKE_GIT_CHANGED ]]; then
+        echo ' M changed.md'
+    else
+        echo ""
+        [[ -z ${FAKE_GIT_CHANGED-} ]] || touch "$FAKE_GIT_CHANGED"
+    fi
+    exit 0
+fi
+exit 0
+EOF
+
+export PATH="$root/bin:$PATH"
+export BOB_BIN=bob
+export CALIBRATE_TIMING_RUNS=2
+
+out=$root/out
+BOB_BIN=bob CALIBRATE_TIMING_RUNS=2 bash "$sampler" "$root/vault" "$out" >/dev/null \
+    || fail "sampler exited non-zero"
+
+[[ -f $out/summary.md ]] || fail "missing summary.md"
+[[ -f $out/calibration_worksheet.csv ]] || fail "missing calibration_worksheet.csv"
+[[ -f $out/vault-status.before && -f $out/vault-status.after ]] || fail "missing vault status files"
+cmp -s "$out/vault-status.before" "$out/vault-status.after" || fail "vault status mismatch"
+
+python3 - "$out/calibration_worksheet.csv" "$out/summary.md" <<'EOF' || exit 1
+import csv, sys
+worksheet_path, summary_path = sys.argv[1], sys.argv[2]
+with open(worksheet_path, encoding="utf-8", newline="") as handle:
+    rows = list(csv.DictReader(handle))
+assert len(rows) == 5, f"expected 5 matching rows, got {len(rows)}"
+bands = [row["match_band"] for row in rows]
+assert "same_title" in bands, f"missing fired row: {bands}"
+assert "hold" in bands, f"missing hold row: {bands}"
+assert "closed_duplicate" in bands, f"missing closed row: {bands}"
+assert "no_match" not in bands, "no-match queries are not labelable pairs"
+assert all(row["match_title"] for row in rows)
+assert any(row["match_rank"] == "2" for row in rows), "only top matches sampled"
+closed = next(row for row in rows if row["match_band"] == "closed_duplicate")
+assert '"days_ago": 1' in closed["match_closed"]
+assert all(row["label"] == "" for row in rows), "label column must start empty"
+summary = open(summary_path, encoding="utf-8").read()
+for section in ("Firing rates", "Top-band counts", "Timings"):
+    assert section in summary, f"summary missing section: {section}"
+EOF
+
+# Output dir inside the vault must be rejected.
+if BOB_BIN=bob CALIBRATE_TIMING_RUNS=1 bash "$sampler" "$root/vault" "$root/vault/out" >/dev/null 2>&1; then
+    fail "vault-nested output directory was accepted"
+fi
+
+[[ ! -e $root/vault/out ]] || fail "rejecting nested output still created a vault directory"
+
+# The monotonic timing clock must work without GNU date (including on macOS).
+write_exe "$root/bin/date" <<'EOF'
+#!/usr/bin/env bash
+exit 99
+EOF
+BOB_BIN=bob CALIBRATE_TIMING_RUNS=1 bash "$sampler" "$root/vault" "$root/portable" >/dev/null \
+    || fail "sampler requires GNU date"
+
+# Invalid timing counts fail before producing output.
+for runs in 0 -1 nope; do
+    if CALIBRATE_TIMING_RUNS=$runs bash "$sampler" "$root/vault" "$root/invalid" >/dev/null 2>&1; then
+        fail "invalid timing count was accepted: $runs"
+    fi
+done
+[[ ! -e $root/invalid ]] || fail "invalid timing count created output"
+
+# Non-empty output dir must be rejected.
+mkdir -p "$root/full"
+touch "$root/full/existing"
+if BOB_BIN=bob CALIBRATE_TIMING_RUNS=1 bash "$sampler" "$root/vault" "$root/full" >/dev/null 2>&1; then
+    fail "non-empty output directory was accepted"
+fi
+
+# A large common band must not crowd rare bands out of the 100-row sample.
+for sample in large-a large-b; do
+    FAKE_BOB_LARGE=1 bash "$sampler" "$root/vault" "$root/$sample" >/dev/null \
+        || fail "stratified sample failed"
+done
+cmp -s "$root/large-a/calibration_worksheet.csv" "$root/large-b/calibration_worksheet.csv" \
+    || fail "worksheet sampling is not reproducible"
+python3 - "$root/large-a/calibration_worksheet.csv" <<'PYTHON' || exit 1
+import csv, sys
+with open(sys.argv[1], newline="") as handle:
+    rows = list(csv.DictReader(handle))
+assert len(rows) == 100, len(rows)
+assert {row["match_band"] for row in rows} == {
+    "same_title", "possible_duplicate", "similar", "closed_duplicate", "hold"}
+identities = [(row["query_note"], row["query_line"], row["match_note"], row["match_line"]) for row in rows]
+assert len(set(identities)) == 100, "duplicate directed pair"
+PYTHON
+
+# Every query failure, including a zero-exit malformed payload, invalidates data.
+for failure in exit json ok; do
+    if FAKE_BOB_FAILURE=$failure bash "$sampler" "$root/vault" "$root/fail-$failure" >/dev/null 2>&1; then
+        fail "query failure was accepted: $failure"
+    fi
+done
+if FAKE_GIT_CHANGED=$root/git-changed bash "$sampler" "$root/vault" "$root/changed" >/dev/null 2>&1; then
+    fail "vault status change was accepted"
+fi
+
+# The implicit temporary directory must also be rejected before touching the vault.
+if TMPDIR=$root/vault bash "$sampler" "$root/vault" >/dev/null 2>&1; then
+    fail "vault TMPDIR was accepted"
+fi
+[[ -z $(find "$root/vault" -mindepth 1 -print -quit) ]] || fail "vault was modified"
+
+printf 'capture-related-calibrate-test: PASS\n'

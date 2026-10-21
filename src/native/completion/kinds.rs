@@ -425,6 +425,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &["capture-related"],
+        arg: "exclude",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["capture-related"],
         arg: "query",
         kind: Kind::FreeText,
     },
