@@ -51,9 +51,12 @@ Use the branch name you created. Delete a ci/** branch the same way after its CI
 
 ## If it goes wrong
 
-GitHub only dispatches workflow files present on the default branch. Use the push
-trigger for a new or changed release workflow; a manual dispatch cannot test a workflow
-definition that GitHub has not registered from master.
+GitHub only dispatches workflow files present on the default branch. A dispatch with
+`--ref` runs that branch's version of an already registered workflow (`ci.yml`,
+`release.yml`). Only a brand-new workflow file that is triggered directly needs a push
+first so GitHub can register it. Use the `ci/release/**` push trigger to exercise a
+changed release.yml before it lands; `binaries_tag` recovery can then be dispatched
+against the same scratch ref.
 
 ## Related
 

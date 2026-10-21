@@ -9,10 +9,16 @@
 # - schedule at 17 8 * * * and 47 10 * * * UTC (04:17 and 06:47 New York in
 #   summer; the second slot is the retry and the guard makes it a no-op
 #   after a release).
-# - workflow_dispatch with dry_run and override_reason (hotfix_override).
+# - workflow_dispatch with dry_run, override_reason (hotfix_override), and
+#   binaries_tag (rebuild archives for an existing vX.Y.Z Release; skips
+#   the guard, CI and release, and ignores the other inputs).
 # - push to ci/release/**, always a forced dry run (GitHub only dispatches
 #   workflows that exist on the default branch, so scratch branches test the
 #   train through a push trigger before landing).
+#
+# Binaries live in `.github/workflows/release-binaries.yml`. They build from
+# the release tag (the bump commit release-plz tags) so `bob --version`
+# matches the GitHub Release.
 #
 # Concurrency: serialized on `release`, never cancelled. The group must never
 # equal the CI `ci-*` groups: reusable workflows evaluate `github.workflow`
@@ -37,6 +43,10 @@ on:
         description: Hotfix reason that bypasses the once-per-day ceiling (leave empty for normal runs)
         type: string
         default: ""
+      binaries_tag:
+        description: Rebuild and upload the Linux and macOS archives for an existing vX.Y.Z Release; skips the guard, CI and release, and ignores the other inputs.
+        type: string
+        default: ""
   push:
     branches: ["ci/release/**"]
 
@@ -47,12 +57,17 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   plan:
     name: plan
+    if: ${{ !inputs.binaries_tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -75,14 +90,16 @@ jobs:
           # export GITHUB_TOKEN into the environment unless we pass it.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          OVERRIDE_REASON: ${{ inputs.override_reason }}
         run: |
           SHA="$(git rev-parse HEAD)"
           ARGS=(--sha "$SHA")
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "$DRY_RUN" = "true" ]; then
             ARGS+=(--dry-run)
           fi
           python3 tools/release/train_guard.py "${ARGS[@]}" \
-            --override-reason "${{ inputs.override_reason }}" \
+            --override-reason "$OVERRIDE_REASON" \
             --repo "${{ github.repository }}"
 
   ci:
@@ -144,24 +161,18 @@ jobs:
         id: publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ needs.plan.outputs.mode }}
         run: |
           # Runs whenever the bump step succeeded, even with no bump, so a
           # bump left over from a failed run still ships. Never set
           # CARGO_REGISTRY_TOKEN and never add rust-lang/crates-io-auth-action:
           # in live mode release-plz performs the Trusted Publishing OIDC
           # exchange itself.
-          release-plz release --git-token "$GITHUB_TOKEN" -o json | tee /tmp/release-plz.json
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')"
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Release: ${TAG}"
-            echo ""
-            echo "- version: \`${VERSION}\`"
-            echo "- tag: \`${TAG}\`"
-            echo "- mode: \`${{ needs.plan.outputs.mode }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          release-plz release --git-token "$GITHUB_TOKEN" -o json \
+            | tee /tmp/release-plz.json
+          python3 tools/release/release_outputs.py /tmp/release-plz.json \
+            --package bob-obsidian \
+            --mode "$MODE"
 
   preview:
     name: preview
@@ -216,36 +227,20 @@ jobs:
           # the supported preview.
 
   binaries:
-    name: binaries (${{ matrix.target }})
-    needs: [plan, release]
+    name: binaries
+    needs: [release]
     if: needs.release.outputs.tag != ''
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
     permissions:
       contents: write
-    steps:
-      - name: Check out the planned SHA
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          fetch-depth: 0
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
 
-      - name: Build and upload binaries to the GitHub Release
-        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
-        with:
-          bin: bob,bob_pomodoro,bob_notify,tmux_bob_pomodoro
-          tar: unix
-          zip: windows
-          # `ref`, not `tag`: `tag` is not an input of
-          # upload-rust-binary-action (the run ignores it and the step
-          # fails on the workflow_dispatch ref). Point at the tag the
-          # release job published so assets attach to that Release.
-          ref: refs/tags/${{ needs.release.outputs.tag }}
+  binaries-retry:
+    name: binaries-retry
+    if: ${{ inputs.binaries_tag != '' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ inputs.binaries_tag }}

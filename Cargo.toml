@@ -39,7 +39,7 @@ include = [
 ]
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ bin }-{ target }.tar.gz"
+pkg-url = "{ repo }/releases/download/v{ version }/bob-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 

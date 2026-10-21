@@ -1,0 +1,71 @@
+# Build and upload Linux and macOS archives for an existing GitHub Release.
+#
+# Called from release.yml after release-plz reports a tag, and from the
+# binaries_tag retry path. Archives are built from the tagged commit (the
+# bump commit that release-plz tags) so `bob --version` matches the tag.
+# Do not add concurrency here: a reusable workflow evaluates
+# `github.workflow` as its caller's, and release.yml already serializes on
+# the `release` group.
+name: Release binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to build and upload (vX.Y.Z)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  binaries:
+    name: binaries (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Validate the tag
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid tag '$TAG'. Expected vX.Y.Z."
+            exit 1
+          fi
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY"; then
+            echo "No GitHub Release exists for '$TAG'."
+            exit 1
+          fi
+
+      - name: Check out the release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      - name: Build and upload binaries to the GitHub Release
+        uses: taiki-e/upload-rust-binary-action@f0d45ae91ee7b8ee928de7a9d04d893a08bcbec6 # v1.30.2
+        with:
+          bin: bob,bob_pomodoro,bob_notify,tmux_bob_pomodoro
+          # Literal `bob`, not `$bin`: the action rejects `$bin` (and the
+          # default `$bin-$target`) when more than one binary is listed.
+          archive: bob-$target
+          target: ${{ matrix.target }}
+          tar: unix
+          locked: true
+          ref: refs/tags/${{ inputs.tag }}

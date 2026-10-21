@@ -51,6 +51,23 @@ rehearsal, check GitHub CLI authentication and Release visibility. For live mode
 the crates.io sparse-index request and network access. Retry only after the data source
 is readable; a hotfix override does not bypass lookup failure.
 
+## The Release is missing its archives
+
+Rebuild and upload the Linux and macOS archives for an existing GitHub Release:
+
+~~~bash
+gh workflow run release.yml -R bobs-org/bob-cli -f binaries_tag=vX.Y.Z
+~~~
+
+Confirm the assets:
+
+~~~bash
+gh release view vX.Y.Z -R bobs-org/bob-cli --json assets
+~~~
+
+The retry builds from the release tag, replaces existing archives of the same name, and
+skips the daily guard and CI.
+
 ## If it goes wrong
 
 If the run's mode or SHA is unclear, compare the run summary with the

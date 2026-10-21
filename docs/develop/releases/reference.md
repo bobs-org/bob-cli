@@ -25,7 +25,7 @@ that had no successful release; after a release, it skips.
 | Trigger | Behavior |
 | --- | --- |
 | schedule | Runs at both UTC slots with a real release request |
-| workflow_dispatch | Accepts dry_run (boolean, default false) and override_reason (string, default empty) |
+| workflow_dispatch | Accepts dry_run (boolean, default false), override_reason (string, default empty), and binaries_tag (string, default empty). binaries_tag rebuilds archives for an existing vX.Y.Z Release and skips the guard, CI, and release. |
 | push to ci/release/** | Always forces dry-run behavior |
 
 A dry run can execute the guard, full CI, and preview. It does not push, tag, create a
@@ -49,10 +49,13 @@ paused. Neither state proceeds to release.
 | ci | plan | Reusable ci.yml with the planned SHA and full=true | contents: read |
 | release | plan, ci | Run release-plz update, fast-forward push, and release-plz release | contents: write; id-token: write; environment release |
 | preview | plan, ci | Update in the checked-out SHA and print the dry-run diff | contents: read |
-| binaries | release | Build and upload archives for the emitted tag | contents: write |
+| binaries | release | Call release-binaries.yml for the tag release-plz reported | contents: write |
+| binaries-retry | — | Call release-binaries.yml for workflow_dispatch binaries_tag | contents: write |
 
-The release job needs CI and a GO verdict. The preview job needs a dry-run verdict. The
-binary job runs only after release-plz emitted a tag.
+The release job needs CI and a GO verdict. The preview job needs a dry-run verdict.
+`binaries` and `binaries-retry` call `.github/workflows/release-binaries.yml`. They run
+only when release-plz's JSON reported a release (or a `binaries_tag` was given), and
+they build from the release tag with `--locked`.
 
 ## Daily guard
 
@@ -135,8 +138,8 @@ makes no changes, so it can finish a bump left pending by an earlier failed run.
 | astral-sh/setup-uv | v10.3.0 |
 | taiki-e/upload-rust-binary-action | v1.30.2 |
 
-Workflow actions are pinned to commit SHAs in .github/workflows/ci.yml and
-.github/workflows/release.yml.
+Workflow actions are pinned to commit SHAs in .github/workflows/ci.yml,
+.github/workflows/release.yml, and .github/workflows/release-binaries.yml.
 
 ## Package contents and size
 
@@ -159,8 +162,9 @@ tmux_bob_pomodoro for:
 | Linux x86_64 | x86_64-unknown-linux-gnu | bob-TARGET.tar.gz |
 | macOS arm64 | aarch64-apple-darwin | bob-TARGET.tar.gz |
 
-The Cargo binstall metadata uses the same GitHub Release URL pattern:
-{ repo }/releases/download/v{ version }/{ bin }-{ target }.tar.gz.
+Each archive holds all four binaries at the root. The Cargo binstall metadata uses the
+same GitHub Release URL pattern:
+{ repo }/releases/download/v{ version }/bob-{ target }.tar.gz.
 
 ## Scratch-branch hooks
 
