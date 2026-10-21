@@ -394,9 +394,6 @@ pass (no `[id::]`, no `[fresh::]`), except when the owning note is
 quiet-deferred — that source is skipped until the next run and never
 listed on uncertainty (malformed LINKS, duplicate block ids).
 Reconcile never edits a LINKS line: it only reads, warns, and mints.
-A plain incoming entry is omitted when the target already names its
-source on its own LINKS line; labelled incoming entries are always
-mirrored. A malformed LINKS line on the target names nobody.
 
 `relations.linked_from_lines: false` removes every LINKED FROM line on
 a writable task, mints nothing, and leaves LINKS alone.
@@ -406,10 +403,7 @@ JSON reports the additive `linked_from_line_updates`,
 (`{kind, path, line, message}`) arrays. Warning kinds are
 `malformed_links_line`, `malformed_linked_from_line`,
 `unresolved_relation_link`, `relation_target_not_task`,
-`self_relation`, `duplicate_block_id`, and `redundant_relation`.
-`redundant_relation` fires once per pair holding a redundant plain
-record, only when that record is writable, anchored on that record's
-LINKS line. Human output adds a `🪢`
+`self_relation`, and `duplicate_block_id`. Human output adds a `🪢`
 group in the dependency style, and `--dry-run` previews all of it. A
 second run over a reconciled vault reports no relation changes.
 

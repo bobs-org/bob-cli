@@ -15,10 +15,6 @@ use super::super::task_dependencies::format::{
     canonical_link, has_final_newline, note_line_ending,
 };
 use super::super::task_dependencies::is_archive_path;
-use super::super::task_relations::pair::{
-    mirror_entry, pair_state, PairRecords, PairState, RecordKind, Side,
-    Writability,
-};
 use super::super::task_relations::parse::{
     linked_from_children_of, links_children_of,
 };
@@ -222,27 +218,13 @@ struct EdgeSource {
     path: PathBuf,
     loc: TaskRef,
     label: Option<String>,
-    line: usize,
 }
-
-struct DirectedEdge {
-    from: (PathBuf, String),
-    to: (PathBuf, String),
-    label: Option<String>,
-    source_path: PathBuf,
-    loc: TaskRef,
-    line: usize,
-}
-
-type OrderedEdgeKey = (PathBuf, String, PathBuf, String);
-type UnorderedPairKey = ((PathBuf, String), (PathBuf, String));
 
 impl RelationsPass<'_> {
     fn run(&mut self) {
         let collected = self.collect_edges();
         if self.enabled {
             self.mint_sources(&collected.mint_needed);
-            self.emit_redundant_warnings(&collected);
         }
         let owners = self.collect_owners(&collected);
         let mut planned: BTreeMap<usize, Vec<BlocksEdit>> = BTreeMap::new();
@@ -451,7 +433,6 @@ impl RelationsPass<'_> {
                         path: source_path.to_path_buf(),
                         loc,
                         label: entry.label.clone(),
-                        line,
                     },
                 );
             }
@@ -719,171 +700,6 @@ impl RelationsPass<'_> {
         }
     }
 
-    fn source_writable(&self, loc: TaskRef) -> bool {
-        self.side_writability(loc).is_writable()
-    }
-
-    fn side_writability(&self, loc: TaskRef) -> Writability {
-        match loc {
-            TaskRef::Active { file, .. } => {
-                if self.previous_daily_file == Some(file) {
-                    Writability::PreviousDaily
-                } else {
-                    Writability::Writable
-                }
-            }
-            TaskRef::Archive { .. } => Writability::Archived,
-        }
-    }
-
-    fn edge_label(
-        &self,
-        from: &(PathBuf, String),
-        to: &(PathBuf, String),
-        collected: &CollectedEdges,
-    ) -> Option<Option<String>> {
-        let sources = collected.by_target.get(to)?;
-        for source in sources {
-            let Some(block_id) = self.source_block_id(source.loc) else {
-                continue;
-            };
-            if (source.path.clone(), block_id) == *from {
-                return Some(source.label.clone());
-            }
-        }
-        None
-    }
-
-    fn record_kind(label: Option<Option<String>>) -> RecordKind {
-        match label {
-            None => RecordKind::Absent,
-            Some(None) => RecordKind::Plain,
-            Some(Some(value)) => RecordKind::Labelled(value),
-        }
-    }
-
-    fn emit_redundant_warnings(&mut self, collected: &CollectedEdges) {
-        let mut ordered: BTreeMap<OrderedEdgeKey, DirectedEdge> =
-            BTreeMap::new();
-        for (target, sources) in &collected.by_target {
-            for source in sources {
-                let Some(block_id) = self.source_block_id(source.loc) else {
-                    continue;
-                };
-                let from = (source.path.clone(), block_id);
-                let to = target.clone();
-                if from == to {
-                    continue;
-                }
-                ordered
-                    .entry((
-                        from.0.clone(),
-                        from.1.clone(),
-                        to.0.clone(),
-                        to.1.clone(),
-                    ))
-                    .or_insert(DirectedEdge {
-                        from,
-                        to,
-                        label: source.label.clone(),
-                        source_path: source.path.clone(),
-                        loc: source.loc,
-                        line: source.line,
-                    });
-            }
-        }
-        let mut pairs: BTreeMap<UnorderedPairKey, Vec<OrderedEdgeKey>> =
-            BTreeMap::new();
-        for key in ordered.keys() {
-            let from = (key.0.clone(), key.1.clone());
-            let to = (key.2.clone(), key.3.clone());
-            let pair = if from <= to {
-                (from.clone(), to.clone())
-            } else {
-                (to.clone(), from.clone())
-            };
-            pairs.entry(pair).or_default().push(key.clone());
-        }
-        for directed in pairs.values() {
-            if directed.len() != 2 {
-                continue;
-            }
-            let edge_a = &ordered[&directed[0]];
-            let edge_b = &ordered[&directed[1]];
-            let records = PairRecords {
-                here: Self::record_kind(Some(edge_a.label.clone())),
-                here_writability: self.side_writability(edge_a.loc),
-                there: Self::record_kind(Some(edge_b.label.clone())),
-                there_writability: self.side_writability(edge_b.loc),
-            };
-            let state = pair_state(&records);
-            let redundant: Option<(&DirectedEdge, &DirectedEdge)> = match state
-            {
-                PairState::Directed {
-                    redundant_here,
-                    redundant_there,
-                    ..
-                } => {
-                    if redundant_here && !redundant_there {
-                        if self.source_writable(edge_a.loc) {
-                            Some((edge_a, edge_b))
-                        } else {
-                            None
-                        }
-                    } else if redundant_there && !redundant_here {
-                        if self.source_writable(edge_b.loc) {
-                            Some((edge_b, edge_a))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                PairState::Undirected { .. } => {
-                    let a_writable = self.source_writable(edge_a.loc);
-                    let b_writable = self.source_writable(edge_b.loc);
-                    match (a_writable, b_writable) {
-                        (true, true) => {
-                            if edge_a.from >= edge_b.from {
-                                Some((edge_a, edge_b))
-                            } else {
-                                Some((edge_b, edge_a))
-                            }
-                        }
-                        (true, false) => Some((edge_a, edge_b)),
-                        (false, true) => Some((edge_b, edge_a)),
-                        (false, false) => None,
-                    }
-                }
-                PairState::Unrelated => None,
-            };
-            let Some((redundant_edge, other_edge)) = redundant else {
-                continue;
-            };
-            let link = canonical_link(
-                &redundant_edge.to.0,
-                &redundant_edge.to.1,
-                &redundant_edge.source_path,
-                self.note_index,
-            );
-            let message = match &other_edge.label {
-                Some(label) => format!(
-                    "plain link to {link} is subsumed by \u{2018}{label}\u{2019} from {link} \u{b7} remove it"
-                ),
-                None => format!(
-                    "plain link to {link} is redundant: {link} already links here \u{b7} remove one"
-                ),
-            };
-            self.outcome.warnings.push(RelationWarning {
-                kind: "redundant_relation".to_string(),
-                path: display_path(&redundant_edge.source_path),
-                line: redundant_edge.line,
-                message,
-            });
-        }
-    }
-
     fn desired_entries(
         &self,
         owner_path: &Path,
@@ -909,20 +725,6 @@ impl RelationsPass<'_> {
                     .contains(&(source.path.clone(), block_id.clone()))
                 {
                     continue;
-                }
-                if source.label.is_none() {
-                    let source_id = (source.path.clone(), block_id.clone());
-                    let back =
-                        self.edge_label(&identity, &source_id, collected);
-                    let records = PairRecords {
-                        here: Self::record_kind(back),
-                        here_writability: Writability::Writable,
-                        there: RecordKind::Plain,
-                        there_writability: Writability::Writable,
-                    };
-                    if mirror_entry(&records, Side::Here).is_none() {
-                        continue;
-                    }
                 }
                 let link = canonical_link(
                     &source.path,

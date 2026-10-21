@@ -130,10 +130,8 @@ Writer form: `⛓️` (U+26D3 U+FE0F), space, `**DEPENDS ON:**`, space, then
 plain Task Links joined by ` • `. No aliases, embeds, or strikes. An empty
 list deletes the line and the field.
 
-A task relation is plain and undirected when it has no label, and
-directed when it has a label. Storage is unchanged: each record lives
-on one authored LINKS line, and reconcile maintains the generated
-LINKED FROM mirror:
+A task's directed relations live on one authored line, with a generated
+mirror maintained by reconcile:
 
 ```markdown
 - [ ] #task Fix flaky capture retries ^fix-retries

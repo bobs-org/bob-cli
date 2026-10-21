@@ -8,7 +8,6 @@
 
 pub(crate) mod format;
 pub(crate) mod label;
-pub(crate) mod pair;
 pub(crate) mod parse;
 pub(crate) mod plan;
 

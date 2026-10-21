@@ -31,7 +31,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Randomize](../randomize.md) — `bob task reroll` bulk re-roll of due prioritized tasks
 - [Daily Stats](../stats.md) — Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page
 - [Task dependency links](../task-dependencies.md) — Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors
-- [Task relations](../task-relations.md) — Task relations: undirected plain links, labelled directed statements, the generated LINKED FROM mirror, and `~` / `~~` capture
+- [Task relations](../task-relations.md) — Task relations: directed LINKS edges, the generated LINKED FROM mirror, and `~` / `~~` capture
 - [Move open tasks between notes](../task-move.md) — `bob task move` selection, preservation, link repair, guarded writes, and sync behavior
 - [Task Status Hooks](../task-status-hooks.md) — `bob task reconcile` Pomodoro-driven task status
 - [Task tag marks](../task-tag-marks.md) — Task tag marks: the teal hash glyph that replaces the `#task` pill

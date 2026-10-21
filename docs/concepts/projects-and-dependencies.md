@@ -14,7 +14,7 @@ This concept explains the difference between living in a project, descending fro
 
 Residence is where a task lives: the project note whose file holds the line. A parent project is the note's declared ancestor through a scalar frontmatter `parent:` wikilink, as in the demo vault where `Projects/seedlings.md` descends from `[[garden]]`. A prerequisite is a task that must finish first, recorded as a plain task link on the dependent's managed Depends-On line. The three answers compose: a task can live in a child project, inherit blocking from a grandparent, and still wait on its own prerequisites.
 
-To describe a connection that does not control work state, use a [task relation](../guides/link-related-tasks.md): relations appear in the live 🪢 links view but never block a task.
+To describe a connection that does not control work state, use a [task relation](../guides/link-related-tasks.md): relations appear in the live LINKS and LINKED FROM views but never block a task.
 
 A project's `^prj` task states the outcome, for example "Raise healthy seedlings for the garden." That line represents the project itself: its prerequisites and its inline schedule decide whether the whole project is blocked, and while that line is Blocked every open resident is Blocked too.
 
