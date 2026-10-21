@@ -1307,7 +1307,7 @@ renders as one block:
 >
 > > [!note] Comment PR Merge Master?!
 
-^h-06d27eae3c84
+^h-ba93bec527bb
 ```
 
 Same-page gap, with `<` on the later piece:
@@ -1328,9 +1328,9 @@ under `### Removed highlights`, never a tombstone:
 
 > [!info] Merged highlight
 >
-> Now part of [[#^h-06d27eae3c84|the Pages 11–12 highlight]].
+> Now part of [[#^h-ba93bec527bb|the Pages 11–12 highlight]].
 
-^h-434a5e5a2bc4
+^h-609a556c1cb0
 ```
 
 The head `^h-` ID is unchanged with or without followers. The follower ID is
@@ -1419,11 +1419,9 @@ callouts alone:
 
 The source snippet is `~/bob/.obsidian/snippets/ref-highlights.css`; add
 `"ref-highlights"` to `enabledCssSnippets` in `appearance.json`. This rule
-applies to `strong` text in quote callouts. A known limitation tracked by
-`bob-cli-9o`: underlines still count toward the per-page annotation ordinal,
-so underlining a published passage can change IDs for later blocks on that
-page, or the host ID when the underline sorts first. The separate identity
-migration will address that churn.
+applies to `strong` text in quote callouts. Absorbed underlines share their
+host highlight's `^h-` ID, so underlining a published passage never changes
+the host ID or later blocks on that page.
 
 Annotation text is beautified only while rendering the generated region:
 
@@ -1440,10 +1438,13 @@ Annotation text is beautified only while rendering the generated region:
 - For PDFs whose projection has `return_links: true`, highlight text drops
   return-link tag glyphs and `↩ p. N` pill fragments before that cleanup.
 
-The cleanup is render-only. Block IDs, annotation-task source links, and
-processed `[h:: ...]` markers continue to use the raw normalized sidecar text,
-so unchanged sidecar annotations keep their existing `^h-...` IDs when a note is
-regenerated with the callout format.
+The cleanup is render-only for display, but block identity uses the same
+normalized semantic text: return-link pill/tag glyphs and underline `**`
+emphasis are stripped, PDF text is beautified, and whitespace is collapsed,
+so emphasis and return-link decoration never change an ID. Block IDs,
+annotation-task source links, and processed `[h:: ...]` markers use that
+stable content key, so unchanged sidecar annotations keep their existing
+`^h-...` IDs when a note is regenerated with the callout format.
 
 The legacy (v1) generated task line is the reference-reading lifecycle:
 
@@ -1600,11 +1601,19 @@ not update the PDF marker or reference-note reading status.
 
 Generated blocks use Obsidian block IDs beginning with `^h-`. Text highlight
 and standalone-note IDs are deterministic content hashes over source PDF path,
-page label, annotation kind, sidecar order on the page, and quote/note text.
-Highlight comments are not part of the hash, so editing only a comment updates
-the block without changing its ID. Image IDs use the source PDF path plus image
-bytes instead, so asset renames and nearby annotation order changes do not churn
-the image block. If a previously generated block disappears from the sidecar,
+page label, annotation kind, and normalized quote/note text, with no sidecar
+order. The normalized text strips return-link pill/tag glyphs and underline
+`**` emphasis, beautifies PDF text, and collapses whitespace, so insertion
+above, emphasis, and return-link decoration never change an ID. Identical text
+on the same page, kind, and page shares one content key with a deterministic
+collision disambiguator only within that group; the same text on different
+pages or kinds hashes differently. Existing live and removed IDs are reused
+one to one for provably unchanged annotations before allocating new IDs, and
+are reserved against accidental reuse, so inserting annotations never renumbers
+unrelated blocks. Highlight comments are not part of the hash, so editing only
+a comment updates the block without changing its ID. Image IDs use the source
+PDF path plus image bytes instead, so asset renames and nearby annotation order
+changes do not churn the image block. If a previously generated block disappears from the sidecar,
 the command keeps the old block ID under `### Removed highlights` with a
 tombstone message. Absorbed continuation followers never tombstone: the group
 keeps the head `^h-` ID, and a previously published follower gets a redirect

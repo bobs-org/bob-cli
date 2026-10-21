@@ -16,6 +16,7 @@ pub(super) fn render_sidecar_highlights(
         BTreeMap::<PathBuf, ImageAssetWrite>::new();
     let mut current_ids = BTreeSet::new();
     let mut block_ids_by_annotation_order = BTreeMap::new();
+    let mut standalone_ids_by_annotation_order = BTreeMap::new();
     let mut rendered = String::new();
     let mut current_page = None;
     let mut image_count = 0usize;
@@ -29,20 +30,15 @@ pub(super) fn render_sidecar_highlights(
         .iter()
         .map(|ann| (ann.order, ann))
         .collect();
-    let absorbed_ids = plan
-        .head_of
-        .keys()
-        .filter_map(|order| annotations_by_order.get(order).copied())
-        .map(|ann| annotation_block_id(config, pdf, ann))
-        .chain(
-            folds
-                .underlines
-                .host_of
-                .keys()
-                .filter_map(|order| annotations_by_order.get(order).copied())
-                .map(|ann| annotation_block_id(config, pdf, ann)),
-        )
-        .collect::<BTreeSet<_>>();
+    let id_plan = plan_block_ids(
+        config,
+        pdf,
+        sidecar,
+        note,
+        &folds,
+        &annotations_by_order,
+    )?;
+    let absorbed_ids = id_plan.absorbed_standalone_ids.clone();
 
     for image_asset in image_assets_by_order.values() {
         image_asset_writes_by_dest
@@ -73,10 +69,22 @@ pub(super) fn render_sidecar_highlights(
                 for (order, _) in followers {
                     members.push(annotations_by_order[order]);
                 }
-                let block_id = annotation_block_id(config, pdf, annotation);
+                let Some(block_id) =
+                    id_plan.effective_by_order.get(&annotation.order).cloned()
+                else {
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: no planned block ID for highlight head",
+                    ));
+                };
                 for member in &members {
                     block_ids_by_annotation_order
                         .insert(member.order, block_id.clone());
+                    if let Some(standalone) =
+                        id_plan.standalone_by_order.get(&member.order)
+                    {
+                        standalone_ids_by_annotation_order
+                            .insert(member.order, standalone.clone());
+                    }
                 }
                 let member_index_by_order = members
                     .iter()
@@ -88,10 +96,27 @@ pub(super) fn render_sidecar_highlights(
                     if member_index_by_order.contains_key(&host_order) {
                         block_ids_by_annotation_order
                             .insert(underline_order, block_id.clone());
+                        if let Some(standalone) =
+                            id_plan.standalone_by_order.get(&underline_order)
+                        {
+                            standalone_ids_by_annotation_order
+                                .insert(underline_order, standalone.clone());
+                        } else {
+                            standalone_ids_by_annotation_order.insert(
+                                underline_order,
+                                id_plan
+                                    .effective_by_order
+                                    .get(&underline_order)
+                                    .cloned()
+                                    .unwrap_or_else(|| block_id.clone()),
+                            );
+                        }
                     }
                 }
                 if !current_ids.insert(block_id.clone()) {
-                    continue;
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: duplicate block ID for distinct highlights",
+                    ));
                 }
 
                 let labels: Vec<Option<&str>> = members
@@ -285,17 +310,37 @@ pub(super) fn render_sidecar_highlights(
                                 "image annotation was not resolved",
                             )
                         })?,
-                    SidecarAnnotationKind::StandaloneNote => {
-                        annotation_block_id(config, pdf, annotation)
-                    }
+                    SidecarAnnotationKind::StandaloneNote => id_plan
+                        .effective_by_order
+                        .get(&annotation.order)
+                        .cloned()
+                        .ok_or_else(|| {
+                            CommandError::new(
+                                "ambiguous highlight identity: no planned block ID for standalone note",
+                            )
+                        })?,
                     SidecarAnnotationKind::Highlight => {
                         unreachable!("highlights render through the group path")
                     }
                 };
                 block_ids_by_annotation_order
                     .insert(annotation.order, block_id.clone());
+                if annotation.kind == SidecarAnnotationKind::Image {
+                    standalone_ids_by_annotation_order
+                        .insert(annotation.order, block_id.clone());
+                } else if let Some(standalone) =
+                    id_plan.standalone_by_order.get(&annotation.order)
+                {
+                    standalone_ids_by_annotation_order
+                        .insert(annotation.order, standalone.clone());
+                } else {
+                    standalone_ids_by_annotation_order
+                        .insert(annotation.order, block_id.clone());
+                }
                 if !current_ids.insert(block_id.clone()) {
-                    continue;
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: duplicate block ID for distinct annotations",
+                    ));
                 }
                 if annotation.kind == SidecarAnnotationKind::Image {
                     image_count += 1;
@@ -357,10 +402,9 @@ pub(super) fn render_sidecar_highlights(
         .cloned()
         .collect::<Vec<_>>();
     let continuation_stubs = continuation_redirect_stubs(
-        config,
-        pdf,
         plan,
         &annotations_by_order,
+        &id_plan,
         &existing_ids,
     );
     let previously_removed = note
@@ -372,8 +416,7 @@ pub(super) fn render_sidecar_highlights(
         .underlines
         .host_of
         .keys()
-        .filter_map(|order| annotations_by_order.get(order).copied())
-        .map(|annotation| annotation_block_id(config, pdf, annotation))
+        .filter_map(|order| id_plan.standalone_by_order.get(order).cloned())
         .filter(|block_id| {
             existing_ids.contains(block_id)
                 && !previously_removed.contains(block_id)
@@ -390,10 +433,9 @@ pub(super) fn render_sidecar_highlights(
             ))
         })?;
     let emphasis_stubs = underline_redirect_stubs(
-        config,
-        pdf,
         &folds,
         &annotations_by_order,
+        &id_plan,
         &existing_ids,
         &previously_removed,
         &linked_absorbed,
@@ -451,6 +493,35 @@ pub(super) fn render_sidecar_highlights(
         }
     }
 
+    for (&order, id) in &id_plan.effective_by_order {
+        block_ids_by_annotation_order
+            .entry(order)
+            .or_insert_with(|| id.clone());
+        standalone_ids_by_annotation_order
+            .entry(order)
+            .or_insert_with(|| {
+                id_plan
+                    .standalone_by_order
+                    .get(&order)
+                    .cloned()
+                    .unwrap_or_else(|| id.clone())
+            });
+    }
+    for (&order, id) in &id_plan.standalone_by_order {
+        standalone_ids_by_annotation_order
+            .entry(order)
+            .or_insert_with(|| id.clone());
+    }
+    for (order, asset) in &image_assets_by_order {
+        if let Some(id) = block_ids_by_annotation_order.get(order) {
+            standalone_ids_by_annotation_order
+                .entry(*order)
+                .or_insert_with(|| id.clone());
+        } else {
+            let _ = asset;
+        }
+    }
+
     Ok(RenderedHighlights {
         content: rendered,
         count: current_ids.len(),
@@ -481,6 +552,7 @@ pub(super) fn render_sidecar_highlights(
             .collect(),
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
+        standalone_ids_by_annotation_order,
     })
 }
 
@@ -522,22 +594,20 @@ struct EmphasisStub {
 }
 
 fn underline_redirect_stubs(
-    config: &Config,
-    pdf: &Path,
     folds: &AnnotationFolds,
     annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+    id_plan: &BlockIdPlan,
     existing_ids: &BTreeSet<String>,
     previously_removed: &BTreeSet<String>,
     linked_absorbed: &BTreeSet<String>,
 ) -> Vec<EmphasisStub> {
     let mut stubs = Vec::new();
     for (&underline_order, &host_order) in &folds.underlines.host_of {
-        let Some(underline) =
-            annotations_by_order.get(&underline_order).copied()
+        let Some(underline_id) =
+            id_plan.standalone_by_order.get(&underline_order).cloned()
         else {
             continue;
         };
-        let underline_id = annotation_block_id(config, pdf, underline);
         if !existing_ids.contains(&underline_id)
             || (!previously_removed.contains(&underline_id)
                 && !linked_absorbed.contains(&underline_id))
@@ -569,9 +639,14 @@ fn underline_redirect_stubs(
         let alias = group_page_label(&labels)
             .map(|label| format!("the {label} highlight"))
             .unwrap_or_else(|| "the merged highlight".to_string());
+        let Some(host_id) =
+            id_plan.effective_by_order.get(&head_order).cloned()
+        else {
+            continue;
+        };
         stubs.push(EmphasisStub {
             underline_id,
-            host_id: annotation_block_id(config, pdf, head),
+            host_id,
             alias,
         });
     }
@@ -579,10 +654,9 @@ fn underline_redirect_stubs(
 }
 
 fn continuation_redirect_stubs(
-    config: &Config,
-    pdf: &Path,
     plan: &ContinuationPlan,
     annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+    id_plan: &BlockIdPlan,
     existing_ids: &BTreeSet<String>,
 ) -> Vec<ContinuationStub> {
     let mut stubs = Vec::new();
@@ -590,7 +664,11 @@ fn continuation_redirect_stubs(
         let Some(&head_order) = plan.head_of.get(&annotation.order) else {
             continue;
         };
-        let follower_id = annotation_block_id(config, pdf, annotation);
+        let Some(follower_id) =
+            id_plan.standalone_by_order.get(&annotation.order).cloned()
+        else {
+            continue;
+        };
         if !existing_ids.contains(&follower_id) {
             continue;
         }
@@ -613,9 +691,14 @@ fn continuation_redirect_stubs(
             Some(label) => format!("the {label} highlight"),
             None => "the merged highlight".to_string(),
         };
+        let Some(head_id) =
+            id_plan.effective_by_order.get(&head_order).cloned()
+        else {
+            continue;
+        };
         stubs.push(ContinuationStub {
             follower_id,
-            head_id: annotation_block_id(config, pdf, head),
+            head_id,
             alias,
         });
     }
@@ -710,7 +793,113 @@ fn render_highlight_group_block(
     rendered
 }
 
+/// Normalized semantic text for stable highlight identity (bob-cli-9o).
+///
+/// Presentation-only decoration never changes identity: return-link pill/tag
+/// glyphs are stripped, PDF text is beautified (reflow, hyphen healing,
+/// ligatures), Markdown emphasis (`**`) added by underline absorption or
+/// standalone healing is removed, and whitespace is collapsed. Comments and
+/// task sources are never part of the quote identity; see
+/// [`identity_comment_key`] for the duplicate tiebreaker.
+pub(super) fn identity_quote_key(text: &str) -> String {
+    let stripped = strip_return_link_glyphs(text);
+    let beautified = beautify_annotation_text(&stripped);
+    let no_emphasis = beautified.replace("**", "");
+    normalized_identity_text(&no_emphasis)
+}
+
+/// Normalized comment key used only as a duplicate tiebreaker within an
+/// identical-quote group (bob-cli-9o). Comment edits alone never change the
+/// block ID: when the tiebreaker no longer matches, the primary quote key
+/// still preserves the existing ID one-to-one in order.
+pub(super) fn identity_comment_key(text: &str) -> String {
+    let stripped = strip_return_link_glyphs(text);
+    let beautified = beautify_annotation_text(&stripped);
+    let no_emphasis = beautified.replace("**", "");
+    normalized_identity_text(&no_emphasis)
+}
+
+fn stable_base_block_id(
+    config: &Config,
+    pdf: &Path,
+    kind_str: &str,
+    page_label: Option<&str>,
+    normalized_text: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source_pdf_value(config, pdf));
+    hasher.update([0]);
+    hasher.update(kind_str);
+    hasher.update([0]);
+    hasher.update(page_label.unwrap_or_default());
+    hasher.update([0]);
+    hasher.update(normalized_text);
+    let digest = hex::encode(hasher.finalize());
+    format!("h-{}", &digest[..12])
+}
+
+fn stable_block_id_with_index(
+    config: &Config,
+    pdf: &Path,
+    kind_str: &str,
+    page_label: Option<&str>,
+    normalized_text: &str,
+    index: usize,
+) -> String {
+    if index == 0 {
+        return stable_base_block_id(
+            config,
+            pdf,
+            kind_str,
+            page_label,
+            normalized_text,
+        );
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(source_pdf_value(config, pdf));
+    hasher.update([0]);
+    hasher.update(kind_str);
+    hasher.update([0]);
+    hasher.update(page_label.unwrap_or_default());
+    hasher.update([0]);
+    hasher.update(normalized_text);
+    hasher.update([0]);
+    hasher.update(format!("#{index}"));
+    let digest = hex::encode(hasher.finalize());
+    format!("h-{}", &digest[..12])
+}
+
 pub(super) fn annotation_block_id(
+    config: &Config,
+    pdf: &Path,
+    annotation: &SidecarAnnotation,
+) -> String {
+    debug_assert_ne!(annotation.kind, SidecarAnnotationKind::Image);
+    stable_base_block_id(
+        config,
+        pdf,
+        annotation.kind.as_str(),
+        annotation.page_label.as_deref(),
+        &identity_quote_key(&annotation.text),
+    )
+}
+
+pub(super) fn image_annotation_block_id(
+    config: &Config,
+    pdf: &Path,
+    image_sha256: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source_pdf_value(config, pdf));
+    hasher.update([0]);
+    hasher.update(SidecarAnnotationKind::Image.as_str());
+    hasher.update([0]);
+    hasher.update(image_sha256);
+    let digest = hex::encode(hasher.finalize());
+    format!("h-{}", &digest[..12])
+}
+
+fn legacy_ordinal_block_id(
     config: &Config,
     pdf: &Path,
     annotation: &SidecarAnnotation,
@@ -730,19 +919,806 @@ pub(super) fn annotation_block_id(
     format!("h-{}", &digest[..12])
 }
 
-pub(super) fn image_annotation_block_id(
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct IdentityPrimary {
+    kind: String,
+    page: Option<String>,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentHead {
+    order: usize,
+    kind_str: String,
+    head_page: Option<String>,
+    head_text: String,
+    head_comment: String,
+    full_page: Option<String>,
+    full_text: String,
+    full_comment: String,
+    members: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct ExistingLive {
+    block_id: String,
+    kind_str: String,
+    page: Option<String>,
+    text: String,
+    comment: String,
+    note_index: usize,
+}
+
+fn region_kind_str(kind: RegionBlockKind) -> &'static str {
+    match kind {
+        RegionBlockKind::Highlight => "highlight",
+        RegionBlockKind::Note => "note",
+        RegionBlockKind::Image => "image",
+    }
+}
+
+fn first_number_in_label(label: &str) -> Option<u32> {
+    let mut current = String::new();
+    for character in label.chars() {
+        if character.is_ascii_digit() {
+            current.push(character);
+        } else if !current.is_empty() {
+            break;
+        }
+    }
+    if current.is_empty() {
+        None
+    } else {
+        current.parse().ok()
+    }
+}
+
+fn pages_compatible_for_prefix(
+    head_page: Option<&str>,
+    existing_page: Option<&str>,
+) -> bool {
+    if head_page == existing_page {
+        return true;
+    }
+    let (Some(head), Some(existing)) = (head_page, existing_page) else {
+        return false;
+    };
+    match (first_number_in_label(head), first_number_in_label(existing)) {
+        (Some(head_number), Some(existing_number)) => {
+            head_number == existing_number
+        }
+        _ => false,
+    }
+}
+
+struct BlockIdPlan {
+    effective_by_order: BTreeMap<usize, String>,
+    standalone_by_order: BTreeMap<usize, String>,
+    absorbed_standalone_ids: BTreeSet<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_block_ids(
     config: &Config,
     pdf: &Path,
-    image_sha256: &str,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(source_pdf_value(config, pdf));
-    hasher.update([0]);
-    hasher.update(SidecarAnnotationKind::Image.as_str());
-    hasher.update([0]);
-    hasher.update(image_sha256);
-    let digest = hex::encode(hasher.finalize());
-    format!("h-{}", &digest[..12])
+    sidecar: &SidecarInput,
+    note: &ParsedNote,
+    folds: &AnnotationFolds,
+    annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+) -> Result<BlockIdPlan> {
+    let existing_ids = note.generated_block_ids()?;
+    let silently_dropped = silently_dropped_block_ids(note);
+    let managed_region = note.managed_region()?;
+    let parsed = managed_region.map(parse_managed_region);
+    let mut existing_live: Vec<ExistingLive> = Vec::new();
+    if let Some(region) = parsed.as_ref() {
+        for (index, block) in region.blocks.iter().enumerate() {
+            if block.mirror || block.in_preamble {
+                continue;
+            }
+            if silently_dropped.contains(&block.block_id) {
+                continue;
+            }
+            match block.kind {
+                RegionBlockKind::Image => continue,
+                RegionBlockKind::Highlight => {
+                    let quote = block.quote.clone().unwrap_or_default();
+                    existing_live.push(ExistingLive {
+                        block_id: block.block_id.clone(),
+                        kind_str: region_kind_str(block.kind).to_string(),
+                        page: block.page_label.clone(),
+                        text: identity_quote_key(&quote),
+                        comment: identity_comment_key(
+                            block.comment.as_deref().unwrap_or_default(),
+                        ),
+                        note_index: index,
+                    });
+                }
+                RegionBlockKind::Note => {
+                    let text = block.comment.clone().unwrap_or_default();
+                    existing_live.push(ExistingLive {
+                        block_id: block.block_id.clone(),
+                        kind_str: region_kind_str(block.kind).to_string(),
+                        page: block.page_label.clone(),
+                        text: identity_quote_key(&text),
+                        comment: String::new(),
+                        note_index: index,
+                    });
+                }
+            }
+        }
+    }
+
+    let plan_continuations = &folds.continuations;
+    let mut heads: Vec<CurrentHead> = Vec::new();
+    let mut absorbed_orders: Vec<usize> = Vec::new();
+    for annotation in &sidecar.annotations {
+        if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        if annotation.kind == SidecarAnnotationKind::Image {
+            continue;
+        }
+        if plan_continuations.head_of.contains_key(&annotation.order) {
+            absorbed_orders.push(annotation.order);
+            continue;
+        }
+        if folds.underlines.host_of.contains_key(&annotation.order) {
+            absorbed_orders.push(annotation.order);
+            continue;
+        }
+        match annotation.kind {
+            SidecarAnnotationKind::Highlight => {
+                let followers = plan_continuations
+                    .followers
+                    .get(&annotation.order)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let mut members: Vec<usize> = vec![annotation.order];
+                for (order, _) in followers {
+                    members.push(*order);
+                }
+                let member_refs: Vec<&SidecarAnnotation> = members
+                    .iter()
+                    .filter_map(|order| {
+                        annotations_by_order.get(order).copied()
+                    })
+                    .collect();
+                let head_effective =
+                    plan_continuations.effective_annotation(annotation);
+                let head_comment_raw = head_effective
+                    .task_source
+                    .as_deref()
+                    .or(head_effective.comment.as_deref())
+                    .unwrap_or("");
+                let head_effective_comment = if head_comment_raw.is_empty() {
+                    head_effective.comment.clone().unwrap_or_default()
+                } else {
+                    format!(
+                        "{}\n{}",
+                        head_effective.comment.clone().unwrap_or_default(),
+                        head_effective.task_source.clone().unwrap_or_default()
+                    )
+                };
+                let head_text = identity_quote_key(&annotation.text);
+                let head_comment =
+                    identity_comment_key(&head_effective_comment);
+                let head_page = annotation.page_label.clone();
+                let labels: Vec<Option<&str>> = member_refs
+                    .iter()
+                    .map(|member| member.page_label.as_deref())
+                    .collect();
+                let full_page = group_page_label(&labels)
+                    .or_else(|| annotation.page_label.clone());
+                let mut piece_texts: Vec<String> = Vec::new();
+                for member in &member_refs {
+                    piece_texts.push(strip_return_link_glyphs(&member.text));
+                }
+                let mut pieces: Vec<(&str, Seam)> = Vec::new();
+                if !piece_texts.is_empty() {
+                    pieces.push((piece_texts[0].as_str(), Seam::Join));
+                    for (index, (_, seam)) in followers.iter().enumerate() {
+                        if let Some(text) = piece_texts.get(index + 1) {
+                            pieces.push((text.as_str(), *seam));
+                        }
+                    }
+                }
+                let combined = assemble_group_quote(&pieces);
+                let full_text = identity_quote_key(&combined);
+                let mut full_comment_parts: Vec<String> = Vec::new();
+                for member in &member_refs {
+                    let effective =
+                        plan_continuations.effective_annotation(member);
+                    if let Some(comment) = effective.comment.as_deref() {
+                        if !comment.trim().is_empty() {
+                            full_comment_parts.push(comment.to_string());
+                        }
+                    }
+                    if let Some(task_source) = effective.task_source.as_deref()
+                    {
+                        if !task_source.trim().is_empty() {
+                            full_comment_parts.push(task_source.to_string());
+                        }
+                    }
+                }
+                let full_comment =
+                    identity_comment_key(&full_comment_parts.join("\n"));
+                heads.push(CurrentHead {
+                    order: annotation.order,
+                    kind_str: annotation.kind.as_str().to_string(),
+                    head_page,
+                    head_text,
+                    head_comment,
+                    full_page,
+                    full_text,
+                    full_comment,
+                    members,
+                });
+            }
+            SidecarAnnotationKind::StandaloneNote => {
+                let text = identity_quote_key(&annotation.text);
+                let page = annotation.page_label.clone();
+                heads.push(CurrentHead {
+                    order: annotation.order,
+                    kind_str: annotation.kind.as_str().to_string(),
+                    head_page: page.clone(),
+                    head_text: text.clone(),
+                    head_comment: String::new(),
+                    full_page: page,
+                    full_text: text,
+                    full_comment: String::new(),
+                    members: vec![annotation.order],
+                });
+            }
+            SidecarAnnotationKind::Image => {}
+        }
+    }
+
+    let mut effective_by_order: BTreeMap<usize, String> = BTreeMap::new();
+    let mut standalone_by_order: BTreeMap<usize, String> = BTreeMap::new();
+    let mut used_ids: BTreeSet<String> = existing_ids.clone();
+    let mut reused_existing: BTreeSet<String> = BTreeSet::new();
+
+    let mut existing_by_full: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for (index, live) in existing_live.iter().enumerate() {
+        existing_by_full
+            .entry(IdentityPrimary {
+                kind: live.kind_str.clone(),
+                page: live.page.clone(),
+                text: live.text.clone(),
+            })
+            .or_default()
+            .push(index);
+    }
+
+    let mut heads_by_full: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for (head_index, head) in heads.iter().enumerate() {
+        heads_by_full
+            .entry(IdentityPrimary {
+                kind: head.kind_str.clone(),
+                page: head.full_page.clone(),
+                text: head.full_text.clone(),
+            })
+            .or_default()
+            .push(head_index);
+    }
+
+    let mut head_effective_assigned: Vec<Option<String>> =
+        vec![None; heads.len()];
+    let mut full_matched_existing: BTreeSet<usize> = BTreeSet::new();
+
+    for (primary, head_indices) in heads_by_full.iter() {
+        let Some(existing_indices) = existing_by_full.get(primary) else {
+            continue;
+        };
+        let mut existing_by_secondary: BTreeMap<String, Vec<usize>> =
+            BTreeMap::new();
+        for &existing_index in existing_indices {
+            if full_matched_existing.contains(&existing_index) {
+                continue;
+            }
+            let secondary = existing_live[existing_index].comment.clone();
+            existing_by_secondary
+                .entry(secondary)
+                .or_default()
+                .push(existing_index);
+        }
+        let mut current_by_secondary: BTreeMap<String, Vec<usize>> =
+            BTreeMap::new();
+        for &head_index in head_indices {
+            let secondary = heads[head_index].full_comment.clone();
+            current_by_secondary
+                .entry(secondary)
+                .or_default()
+                .push(head_index);
+        }
+        for (secondary, current_list) in current_by_secondary.iter() {
+            if let Some(existing_list) = existing_by_secondary.get(secondary) {
+                let count = current_list.len().min(existing_list.len());
+                for position in 0..count {
+                    let head_index = current_list[position];
+                    let existing_index = existing_list[position];
+                    if head_effective_assigned[head_index].is_some()
+                        || full_matched_existing.contains(&existing_index)
+                    {
+                        continue;
+                    }
+                    let id = existing_live[existing_index].block_id.clone();
+                    head_effective_assigned[head_index] = Some(id.clone());
+                    full_matched_existing.insert(existing_index);
+                    reused_existing.insert(id);
+                }
+            }
+        }
+        let mut remaining_existing: Vec<usize> = existing_indices
+            .iter()
+            .copied()
+            .filter(|index| !full_matched_existing.contains(index))
+            .collect();
+        remaining_existing
+            .sort_by_key(|index| existing_live[*index].note_index);
+        let mut remaining_current: Vec<usize> = head_indices
+            .iter()
+            .copied()
+            .filter(|index| head_effective_assigned[*index].is_none())
+            .collect();
+        remaining_current.sort_by_key(|index| heads[*index].order);
+        let count = remaining_current.len().min(remaining_existing.len());
+        for position in 0..count {
+            let head_index = remaining_current[position];
+            let existing_index = remaining_existing[position];
+            let id = existing_live[existing_index].block_id.clone();
+            head_effective_assigned[head_index] = Some(id.clone());
+            full_matched_existing.insert(existing_index);
+            reused_existing.insert(id);
+        }
+    }
+
+    let mut heads_by_head: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for (head_index, head) in heads.iter().enumerate() {
+        if head_effective_assigned[head_index].is_some() {
+            continue;
+        }
+        if head.full_page == head.head_page && head.full_text == head.head_text
+        {
+            continue;
+        }
+        heads_by_head
+            .entry(IdentityPrimary {
+                kind: head.kind_str.clone(),
+                page: head.head_page.clone(),
+                text: head.head_text.clone(),
+            })
+            .or_default()
+            .push(head_index);
+    }
+    if !heads_by_head.is_empty() {
+        let mut existing_head_map: BTreeMap<IdentityPrimary, Vec<usize>> =
+            BTreeMap::new();
+        for (existing_index, live) in existing_live.iter().enumerate() {
+            if full_matched_existing.contains(&existing_index) {
+                continue;
+            }
+            existing_head_map
+                .entry(IdentityPrimary {
+                    kind: live.kind_str.clone(),
+                    page: live.page.clone(),
+                    text: live.text.clone(),
+                })
+                .or_default()
+                .push(existing_index);
+        }
+        for (primary, head_indices) in heads_by_head.iter() {
+            let Some(existing_indices) = existing_head_map.get(primary) else {
+                continue;
+            };
+            let mut existing_by_secondary: BTreeMap<String, Vec<usize>> =
+                BTreeMap::new();
+            for &existing_index in existing_indices {
+                if full_matched_existing.contains(&existing_index) {
+                    continue;
+                }
+                existing_by_secondary
+                    .entry(existing_live[existing_index].comment.clone())
+                    .or_default()
+                    .push(existing_index);
+            }
+            let mut current_by_secondary: BTreeMap<String, Vec<usize>> =
+                BTreeMap::new();
+            for &head_index in head_indices {
+                current_by_secondary
+                    .entry(heads[head_index].head_comment.clone())
+                    .or_default()
+                    .push(head_index);
+            }
+            for (secondary, current_list) in current_by_secondary.iter() {
+                if let Some(existing_list) =
+                    existing_by_secondary.get(secondary)
+                {
+                    let count = current_list.len().min(existing_list.len());
+                    for position in 0..count {
+                        let head_index = current_list[position];
+                        let existing_index = existing_list[position];
+                        if head_effective_assigned[head_index].is_some()
+                            || full_matched_existing.contains(&existing_index)
+                        {
+                            continue;
+                        }
+                        let id = existing_live[existing_index].block_id.clone();
+                        head_effective_assigned[head_index] = Some(id.clone());
+                        full_matched_existing.insert(existing_index);
+                        reused_existing.insert(id);
+                    }
+                }
+            }
+            let mut remaining_existing: Vec<usize> = existing_indices
+                .iter()
+                .copied()
+                .filter(|index| !full_matched_existing.contains(index))
+                .collect();
+            remaining_existing
+                .sort_by_key(|index| existing_live[*index].note_index);
+            let mut remaining_current: Vec<usize> = head_indices
+                .iter()
+                .copied()
+                .filter(|index| head_effective_assigned[*index].is_none())
+                .collect();
+            remaining_current.sort_by_key(|index| heads[*index].order);
+            let count = remaining_current.len().min(remaining_existing.len());
+            for position in 0..count {
+                let head_index = remaining_current[position];
+                let existing_index = remaining_existing[position];
+                let id = existing_live[existing_index].block_id.clone();
+                head_effective_assigned[head_index] = Some(id.clone());
+                full_matched_existing.insert(existing_index);
+                reused_existing.insert(id);
+            }
+        }
+    }
+
+    for (head_index, head) in heads.iter().enumerate() {
+        if head_effective_assigned[head_index].is_some() {
+            continue;
+        }
+        if head.kind_str != "highlight" {
+            continue;
+        }
+        let head_norm = head.head_text.clone();
+        if head_norm.is_empty() {
+            continue;
+        }
+        let mut candidates: Vec<usize> = Vec::new();
+        for (existing_index, live) in existing_live.iter().enumerate() {
+            if full_matched_existing.contains(&existing_index) {
+                continue;
+            }
+            if live.kind_str != head.kind_str {
+                continue;
+            }
+            if !pages_compatible_for_prefix(
+                head.head_page.as_deref(),
+                live.page.as_deref(),
+            ) {
+                continue;
+            }
+            let existing_norm = live.text.clone();
+            if existing_norm == head_norm {
+                continue;
+            }
+            if existing_norm.starts_with(&format!("{head_norm} "))
+                || existing_norm.starts_with(&format!("{head_norm} ["))
+                || existing_norm.starts_with(&head_norm)
+                    && existing_norm[head_norm.len()..]
+                        .chars()
+                        .next()
+                        .is_none_or(|character| {
+                            character.is_whitespace() || character == '['
+                        })
+            {
+                candidates.push(existing_index);
+            }
+        }
+        if candidates.len() == 1 {
+            let existing_index = candidates[0];
+            let conflicting =
+                heads.iter().enumerate().any(|(other_index, other)| {
+                    other_index != head_index
+                        && head_effective_assigned[other_index].is_none()
+                        && other.kind_str == head.kind_str
+                        && other.head_text == head_norm
+                        && pages_compatible_for_prefix(
+                            other.head_page.as_deref(),
+                            existing_live[existing_index].page.as_deref(),
+                        )
+                });
+            if !conflicting {
+                let id = existing_live[existing_index].block_id.clone();
+                head_effective_assigned[head_index] = Some(id.clone());
+                full_matched_existing.insert(existing_index);
+                reused_existing.insert(id);
+            } else {
+                return Err(CommandError::new(
+                    "ambiguous highlight identity: a new highlight is a prefix of multiple existing blocks; rerun after editing the note to disambiguate",
+                ));
+            }
+        } else if candidates.len() > 1 {
+            return Err(CommandError::new(
+                "ambiguous highlight identity: a new highlight is a prefix of multiple existing blocks; rerun after editing the note to disambiguate",
+            ));
+        }
+    }
+
+    let mut legacy_by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for annotation in &sidecar.annotations {
+        if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        if annotation.kind == SidecarAnnotationKind::Image {
+            continue;
+        }
+        let legacy = legacy_ordinal_block_id(config, pdf, annotation);
+        if existing_ids.contains(&legacy) && !reused_existing.contains(&legacy)
+        {
+            legacy_by_id
+                .entry(legacy)
+                .or_default()
+                .push(annotation.order);
+        }
+    }
+
+    for (head_index, head) in heads.iter().enumerate() {
+        if head_effective_assigned[head_index].is_some() {
+            continue;
+        }
+        let Some(annotation) = annotations_by_order.get(&head.order).copied()
+        else {
+            continue;
+        };
+        let legacy = legacy_ordinal_block_id(config, pdf, annotation);
+        if existing_ids.contains(&legacy) && !reused_existing.contains(&legacy)
+        {
+            let users = legacy_by_id.get(&legacy).map_or(0, Vec::len);
+            if users == 1 {
+                head_effective_assigned[head_index] = Some(legacy.clone());
+                reused_existing.insert(legacy.clone());
+                continue;
+            } else if users > 1 {
+                return Err(CommandError::new(
+                    "ambiguous highlight identity: multiple annotations share one legacy block ID; rerun after editing the note to disambiguate",
+                ));
+            }
+        }
+        let stable = stable_base_block_id(
+            config,
+            pdf,
+            &head.kind_str,
+            head.head_page.as_deref(),
+            &head.head_text,
+        );
+        if existing_ids.contains(&stable) && !reused_existing.contains(&stable)
+        {
+            head_effective_assigned[head_index] = Some(stable.clone());
+            reused_existing.insert(stable);
+        }
+    }
+
+    let mut primary_groups: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for (head_index, head) in heads.iter().enumerate() {
+        if head_effective_assigned[head_index].is_some() {
+            continue;
+        }
+        primary_groups
+            .entry(IdentityPrimary {
+                kind: head.kind_str.clone(),
+                page: head.head_page.clone(),
+                text: head.head_text.clone(),
+            })
+            .or_default()
+            .push(head_index);
+    }
+    for head_indices in primary_groups.values() {
+        let mut sorted = head_indices.clone();
+        sorted.sort_by_key(|index| heads[*index].order);
+        for &head_index in &sorted {
+            let head = &heads[head_index];
+            let mut index = 0usize;
+            loop {
+                let candidate = stable_block_id_with_index(
+                    config,
+                    pdf,
+                    &head.kind_str,
+                    head.head_page.as_deref(),
+                    &head.head_text,
+                    index,
+                );
+                if !used_ids.contains(&candidate)
+                    && !reused_existing.contains(&candidate)
+                {
+                    let conflicting_primary =
+                        existing_live.iter().any(|live| {
+                            live.block_id == candidate
+                                && (live.kind_str != head.kind_str
+                                    || live.page != head.head_page
+                                    || live.text != head.head_text)
+                        });
+                    if conflicting_primary {
+                        return Err(CommandError::new(
+                            "ambiguous highlight identity: a new block ID collides with an existing ID for different content; rerun after editing the note to disambiguate",
+                        ));
+                    }
+                    head_effective_assigned[head_index] =
+                        Some(candidate.clone());
+                    used_ids.insert(candidate);
+                    break;
+                }
+                index += 1;
+                if index > 1000 {
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: could not allocate a fresh block ID",
+                    ));
+                }
+            }
+        }
+    }
+
+    for (head_index, head) in heads.iter().enumerate() {
+        let Some(id) = head_effective_assigned[head_index].clone() else {
+            return Err(CommandError::new(
+                "ambiguous highlight identity: no block ID planned",
+            ));
+        };
+        for &order in &head.members {
+            effective_by_order.insert(order, id.clone());
+            if standalone_by_order.contains_key(&order) {
+                return Err(CommandError::new(
+                    "ambiguous highlight identity: duplicate annotation order",
+                ));
+            }
+            standalone_by_order.insert(order, id.clone());
+        }
+        for (&underline_order, &host_order) in &folds.underlines.host_of {
+            if head.members.contains(&host_order) {
+                effective_by_order.insert(underline_order, id.clone());
+            }
+        }
+    }
+
+    let mut absorbed_standalone_ids: BTreeSet<String> = BTreeSet::new();
+    let mut standalone_primary_groups: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for &order in &absorbed_orders {
+        if let Some(annotation) = annotations_by_order.get(&order).copied() {
+            if annotation.kind == SidecarAnnotationKind::Image {
+                continue;
+            }
+            standalone_primary_groups
+                .entry(IdentityPrimary {
+                    kind: annotation.kind.as_str().to_string(),
+                    page: annotation.page_label.clone(),
+                    text: identity_quote_key(&annotation.text),
+                })
+                .or_default()
+                .push(order);
+        }
+    }
+    for orders in standalone_primary_groups.values() {
+        let mut sorted = orders.clone();
+        sorted.sort();
+        for &order in &sorted {
+            let Some(annotation) = annotations_by_order.get(&order).copied()
+            else {
+                continue;
+            };
+            let legacy = legacy_ordinal_block_id(config, pdf, annotation);
+            if existing_ids.contains(&legacy)
+                && !reused_existing.contains(&legacy)
+            {
+                let users = legacy_by_id.get(&legacy).map_or(0, Vec::len);
+                if users == 1 {
+                    standalone_by_order.insert(order, legacy.clone());
+                    absorbed_standalone_ids.insert(legacy.clone());
+                    reused_existing.insert(legacy.clone());
+                    continue;
+                } else if users > 1 {
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: multiple absorbed annotations share one legacy block ID",
+                    ));
+                }
+            }
+            let stable = stable_base_block_id(
+                config,
+                pdf,
+                annotation.kind.as_str(),
+                annotation.page_label.as_deref(),
+                &identity_quote_key(&annotation.text),
+            );
+            if existing_ids.contains(&stable)
+                && !reused_existing.contains(&stable)
+            {
+                standalone_by_order.insert(order, stable.clone());
+                absorbed_standalone_ids.insert(stable.clone());
+                reused_existing.insert(stable);
+                continue;
+            }
+            let mut matched: Option<String> = None;
+            for live in &existing_live {
+                if reused_existing.contains(&live.block_id) {
+                    continue;
+                }
+                if live.kind_str == annotation.kind.as_str()
+                    && live.page == annotation.page_label
+                    && live.text == identity_quote_key(&annotation.text)
+                {
+                    matched = Some(live.block_id.clone());
+                    break;
+                }
+            }
+            if let Some(id) = matched {
+                standalone_by_order.insert(order, id.clone());
+                absorbed_standalone_ids.insert(id.clone());
+                reused_existing.insert(id.clone());
+                used_ids.insert(id);
+                continue;
+            }
+            let mut index = 0usize;
+            loop {
+                let candidate = stable_block_id_with_index(
+                    config,
+                    pdf,
+                    annotation.kind.as_str(),
+                    annotation.page_label.as_deref(),
+                    &identity_quote_key(&annotation.text),
+                    index,
+                );
+                if !used_ids.contains(&candidate)
+                    && !reused_existing.contains(&candidate)
+                {
+                    standalone_by_order.insert(order, candidate.clone());
+                    absorbed_standalone_ids.insert(candidate.clone());
+                    used_ids.insert(candidate);
+                    break;
+                }
+                index += 1;
+                if index > 1000 {
+                    return Err(CommandError::new(
+                        "ambiguous highlight identity: could not allocate a fresh absorbed block ID",
+                    ));
+                }
+            }
+        }
+    }
+
+    for annotation in &sidecar.annotations {
+        if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        if annotation.kind != SidecarAnnotationKind::StandaloneNote {
+            continue;
+        }
+        if standalone_by_order.contains_key(&annotation.order) {
+            continue;
+        }
+        let legacy = legacy_ordinal_block_id(config, pdf, annotation);
+        if existing_ids.contains(&legacy)
+            && !reused_existing.contains(&legacy)
+            && !used_ids.contains(&legacy)
+        {
+            standalone_by_order.insert(annotation.order, legacy.clone());
+            effective_by_order.insert(annotation.order, legacy.clone());
+            reused_existing.insert(legacy);
+            continue;
+        }
+    }
+
+    Ok(BlockIdPlan {
+        effective_by_order,
+        standalone_by_order,
+        absorbed_standalone_ids,
+    })
 }
 
 pub(super) fn render_annotation_block(

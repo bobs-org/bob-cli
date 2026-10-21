@@ -4,8 +4,8 @@ use super::*;
 const ELLIPSIS: char = '\u{2026}';
 const EN_DASH: char = '\u{2013}';
 const NBSP: char = '\u{00a0}';
-const GAS_TOWN_HEAD_ID: &str = "h-06d27eae3c84";
-const GAS_TOWN_FOLLOWER_ID: &str = "h-434a5e5a2bc4";
+const GAS_TOWN_HEAD_ID: &str = "h-ba93bec527bb";
+const GAS_TOWN_FOLLOWER_ID: &str = "h-609a556c1cb0";
 const GAS_TOWN_SIDECAR: &str = "\
 #### [Page 11](highlights://gas_town_emergency_user_manual#page=11)
 

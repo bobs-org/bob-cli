@@ -40,8 +40,16 @@ pub(super) fn annotation_task_candidates(
                 let Some(source) = source.as_deref() else {
                     continue;
                 };
-                let identity_block_id =
-                    annotation_block_id(config, pdf, annotation);
+                let identity_block_id = rendered_highlights
+                    .and_then(|rendered| {
+                        rendered
+                            .standalone_ids_by_annotation_order
+                            .get(&annotation.order)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        annotation_block_id(config, pdf, annotation)
+                    });
                 let link_block_id = rendered_highlights
                     .and_then(|rendered| {
                         rendered
@@ -82,7 +90,16 @@ pub(super) fn annotation_task_candidates(
                 )?);
             }
             SidecarAnnotationKind::StandaloneNote => {
-                let block_id = annotation_block_id(config, pdf, annotation);
+                let block_id = rendered_highlights
+                    .and_then(|rendered| {
+                        rendered
+                            .standalone_ids_by_annotation_order
+                            .get(&annotation.order)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        annotation_block_id(config, pdf, annotation)
+                    });
                 candidates.extend(annotation_task_candidates_from_text(
                     config,
                     ref_note_path,

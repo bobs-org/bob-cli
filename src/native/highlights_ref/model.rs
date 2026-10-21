@@ -383,6 +383,7 @@ pub(super) struct RenderedHighlights {
     pub(super) standalone_underlines: Vec<StandaloneUnderline>,
     pub(super) image_assets: Vec<ImageAssetWrite>,
     pub(super) block_ids_by_annotation_order: BTreeMap<usize, String>,
+    pub(super) standalone_ids_by_annotation_order: BTreeMap<usize, String>,
 }
 
 /// A `<` marker that could not merge because no earlier text highlight exists.
