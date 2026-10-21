@@ -39,7 +39,7 @@ groups:
         summary: "Dashboard Review / Work / Browse navigation and collection pages"
         order: 5
       - stem: date-marks
-        summary: "Task date marks: calendar-label display contract for canonical task dates"
+        summary: "Task date marks: calendar-label display contract for canonical task dates and recurrence rules"
         order: 6
       - stem: freshness
         summary: "Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14"

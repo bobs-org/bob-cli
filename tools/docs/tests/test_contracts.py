@@ -10,7 +10,7 @@ from bob_docs.gen_contracts import check_or_generate, generate_contracts
 from bob_docs.yaml_tools import dump_yaml, load_yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-README_TABLE_SHA256 = "9d361df465fae835c4adeb929e12a674f42469356694cdb3361018d0f1069269"
+README_TABLE_SHA256 = "9b88cf620b6e3093fd003df7b57691cea94d91bb715d3401d679788800429676"
 
 
 def _generated_region(text: str, name: str) -> str:

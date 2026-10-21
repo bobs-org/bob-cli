@@ -100,6 +100,7 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 | `refresh` | `[refresh:: N]` | Optional per-task interval, 1–365 days. |
 | `keeps` | `[keeps:: N]` | Human keep streak, 1–999. Automation never increments it. |
 | `unblocked` | `[unblocked:: YYYY-MM-DD]` | Machine WRITE on automatic Blocked → Ready recovery, unless a skip applies. |
+| `repeat` | `[repeat:: every day when done]` | Authored Tasks recurrence rule that must start with `every`; PRE/POST checklist rows need `when done`; rendered as a [recurrence mark](../date-marks.md#recurrence-not-a-date). |
 
 `start` on a task line is out of scope for date marks; Pomodoro entries use
 `[t:: 15m]` on the session row, not on the task.

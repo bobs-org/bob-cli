@@ -23,7 +23,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 ## Tasks and projects
 
 - [Dashboard navigation and child pages](../dashboard.md) — Dashboard Review / Work / Browse navigation and collection pages
-- [Task date marks](../date-marks.md) — Task date marks: calendar-label display contract for canonical task dates
+- [Task date marks](../date-marks.md) — Task date marks: calendar-label display contract for canonical task dates and recurrence rules
 - [Task freshness](../freshness.md) — Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14
 - [Plan budget, Today, and lanes](../plan.md) — Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples
 - [Project Task Sync](../projects.md) — `bob projects` `^prj` lifecycle, schedules, and reporting-only rollup

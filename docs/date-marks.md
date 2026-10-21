@@ -1,16 +1,18 @@
 # Task date marks
 
-This guide is the authoritative display contract for task date marks,
-in the style of `docs/freshness.md` §11 and the `docs/projects.md`
-"Priority marks" section. The JavaScript mirror is `api.dateMarks`
-(namespace v1, top-level api v3) in bob-ledger-tools; its tests run
-the conformance vectors below verbatim.
+This guide is the authoritative display contract for task date-family
+marks (canonical task dates plus recurrence rules), in the style of
+`docs/freshness.md` §11 and the `docs/projects.md` "Priority marks"
+section. The JavaScript mirror is `api.dateMarks` (namespace v1,
+top-level api v3) in bob-ledger-tools, which stays dates-only; its
+tests run the conformance vectors below verbatim.
 
 ## What you see
 
 Every canonical `created`, `scheduled`, `completion`, and `cancelled`
 task date renders as a small monochrome icon plus a calendar label
-instead of a `KEY | YYYY-MM-DD` Dataview pill:
+instead of a `KEY | YYYY-MM-DD` Dataview pill, and every readable
+`[repeat:: …]` rule renders as a quiet loop plus a spoken cadence:
 
 ```text
 before: - [ ] Add ability to install agent CLIs  CREATED│2026-08-31  SCHEDULED│2026-09-04
@@ -24,6 +26,8 @@ More examples (glyphs approximated in plain text):
 - [ ] Rename the queue input  + Sep 29  ⧗ today          ← scheduled today reads a touch stronger
 - [x] Review the /sase_memory_write skill  + Aug 29  ✓ Sep 3   ← closed tasks rest (faint)
 - [-] Old idea  + Mar 2  ⊘ today
+- [?] Brush teeth  ⟲ daily  + today  ⧗ tomorrow
+- [ ] Pay Kelly salary!  ⟲ monthly · 1st  + Oct 8  ⧗ Nov 1
 ```
 
 Hovering any mark shows the exact date and its distance, for example
@@ -61,6 +65,7 @@ button).
 | `scheduled`  | `Scheduled`  | hourglass        | ⏳                      |
 | `completion` | `Done`       | check            | ✅                      |
 | `cancelled`  | `Cancelled`  | circle-slash (⊘) | ❌                      |
+| `repeat`     | — (not a date; see below) | loop (⟲) | 🔁 (Tasks recurrence) |
 
 `due` and `start` are out of scope: the vault uses `start` for clock
 times and `due` only 3 times. Adding one later is a new row here, a
@@ -165,13 +170,82 @@ Folded spaces still never reveal the field.
 ## Repair flag
 
 While marks are on, any leftover
-`created`/`scheduled`/`completion`/`cancelled` Dataview pill in Live
-Preview is a field Tasks cannot read: a bad date, a word, a
-datetime, a duplicate, mismatched brackets, an uppercase key, or a
-space before `::`. CSS flags it with full opacity and a dashed
-orange border, matching the freshness and priority flags. Template
-placeholders in `_templates` are also flagged: the flag truthfully
-says Tasks cannot read the value as a date.
+`created`/`scheduled`/`completion`/`cancelled`/`repeat` Dataview pill
+in Live Preview is a field Tasks cannot read (or a guarded repeat):
+a bad date, a word, a datetime, a duplicate, mismatched brackets, an
+uppercase key, a space before `::`, or the checklist guard. CSS flags
+it with full opacity and a dashed orange border, matching the
+freshness and priority flags. Template placeholders in `_templates`
+are also flagged: the flag truthfully says Tasks cannot read the
+value as a date.
+
+## Recurrence (not a date)
+
+A recurrence mark is `span.bob-date-mark[data-field="repeat"]` with
+`data-rule` (the rule as written, whitespace-collapsed),
+`data-when-done` (`true`/`false`), and `data-fold-space`
+(`data-rendered="true"` on rendered views). It contains the usual
+`span.bob-date-mark-glyph` + `span.bob-date-mark-label`. It has no
+`data-date` and no `data-when`, and keeps `role="img"`,
+`aria-label`, and `data-tooltip-position="top"`.
+
+Glyph: a rectangular two-arrow loop, a refined monochrome 🔁. It
+deliberately avoids the circular arrow, which already means `⟳ Review`
+and due freshness. Geometry (viewBox `0 0 16 16`, black stroke,
+`stroke-width 1.8`, round caps and joins): `M2.6 9.4V6.6A2.6 2.6 0 0 1
+5.2 4h8.2M11 1.6 13.4 4 11 6.4M13.4 6.6v2.8A2.6 2.6 0 0 1 10.8 12H2.6M5
+9.6 2.6 12 5 14.4`. Defined as `--bob-date-glyph-repeat`.
+
+Ink is always the quiet tone: `--bob-date-color-repeat`, else
+`--text-muted`, at opacity 0.7 (like `created`). There is no emphasis
+state and no hue. Closed rows rest faint via explicit
+`li.task-list-item[data-task=x|X|-] .bob-date-mark[data-field="repeat"]`
+and `.HyperMD-task-line[...]` rules, because the existing resting
+selector requires `[data-when]`.
+
+Validity gate (all must hold, else the native pill stays): exactly one
+`/(^|[^A-Za-z0-9_-])repeat\s*::/gi` on the line or text node;
+`[repeat:: …]` or `(repeat:: …)` with matching brackets, a lowercase
+key touching `::`, and padding spaces only; after trimming, the value
+matches Tasks' charset `^[a-zA-Z0-9, !]+$` and starts with `every`
+plus a space and more text (case-insensitive); code positions are
+excluded exactly as for dates; and the checklist guard below does not
+fire. Known limit: the charset check is necessary but not sufficient —
+`every blursday` gets a verbatim label, which is still truthful text.
+
+Checklist guard: no mark when the line is a checklist member
+(`checklistKindForText` non-null), the task is open (status not `x`,
+`X`, `-`), and the rule lacks `when done`. This mirrors the
+`checklist_repeat_not_when_done` lint scope (open members), so the
+display never hides what the lint flags. Live Preview reads the whole
+line plus `freshnessTaskStatus`; rendered views read the nearest
+`li.task-list-item` ancestor's own `a.tag` anchors (skipping nested
+lists and code) and its `data-task`, lazily and only for text that
+contains a repeat source.
+
+Label grammar ("say it the way a person would"): normalize by
+trimming, collapsing whitespace, and stripping a trailing `when done`
+(case-insensitive). Labels are lowercase except weekday and month
+names, use `·` (U+00B7 with spaces) between cadence and detail, and
+are never truncated. `day`/`weekday` → `daily`/`weekdays`;
+`week`/`month`/`year` (or `1 week` etc.) → `weekly`/`monthly`/`yearly`;
+`N days`/`weeks`/`months`/`years` (N ≥ 2) → `every N days` (and so on);
+`<Weekday>` or `week on <Weekday>` → `Mondays`; `week on <Weekday
+list>` → `weekly · Tue, Fri`; `N weeks on <Weekday list>` (N ≥ 2) →
+`every N weeks · Fri`; `month on the <ordinal>`/`last`/`last
+<Weekday>`/`<ordinal> <Weekday>` → `monthly · 1st`/`monthly ·
+last`/`monthly · last Fri`/`monthly · 2nd Wed`; `N months on the
+<ordinal>[ <Weekday>]` (N ≥ 2) → `every N months · 1st`; `<Month> on
+the <ordinal>` → `yearly · Jan 15`; anything else stays verbatim
+(collapsed, minus `when done`). Ordinals keep their written token,
+lowercased. The grammar covers every rule in the vault today.
+
+Tooltip: two lines, never containing `::`. Line 1 is `Repeats <rule as
+written, collapsed>`; line 2 is `Next date counts from completion`
+when `whenDone`, else `Next date follows the schedule`.
+`relabelRenderedDateMarks` already skips repeat marks because
+`dateMarkModel` returns `null` for `repeat`. `api.dateMarks` v1 stays
+dates-only: `fields` is unchanged and `model("repeat", …)` is `null`.
 
 ## Surfaces and interaction
 
@@ -350,6 +424,26 @@ lines. `fold N` is `foldLength` in Live Preview.
 | T7   | `" ⏳ 2026-13-01"` | untouched |
 | T8   | marks off; a non-Tasks connected `el` | nothing is scheduled |
 | T9   | a Tasks-host `Fri` mark on rollover | relabels to `tomorrow` |
+| RM1  | `- [?] #task #gtd #pre Brush teeth  [repeat:: every day when done]  [created:: 2026-10-21]` | `daily`, fold 2, quiet; `Repeats every day when done⏎Next date counts from completion`; created mark unaffected and disjoint |
+| RM2  | `- [ ] #task Water plants [repeat:: every day]` | `daily`; `…⏎Next date follows the schedule` (not a checklist row, so no guard) |
+| RM3  | `every week on Monday when done` / `every week on Sunday` / `every Friday` | `Mondays` / `Sundays` / `Fridays` |
+| RM4  | `every month on the 1st` / `every month on the last Friday` / `every month on the 2nd Wednesday` | `monthly · 1st` / `monthly · last Fri` / `monthly · 2nd Wed` |
+| RM5  | `every 30 days when done` / `every 28 days` | `every 30 days` / `every 28 days` |
+| RM6  | `every 1 week` / `every 3 weeks on Friday` / `every January on the 15th` | `weekly` / `every 3 weeks · Fri` / `yearly · Jan 15` |
+| RM7  | `every week on Tuesday, Friday` / `every week on Tuesday and Friday` / `every weekday` | `weekly · Tue, Fri` (both) / `weekdays` |
+| RM8  | `every April and December on the 1st and 24th` | verbatim `every April and December on the 1st and 24th` |
+| RM9  | `(repeat:: every week)` / `[ repeat:: every  day ]` | `weekly` / `daily` |
+| RM10 | `Every Day When Done` | `daily`; tooltip `Repeats Every Day When Done⏎Next date counts from completion` |
+| RM11 | cursor inside the field / in its folded run | reveals that field only / unfolds to fold 0 |
+| RM12 | `- [x] #task #gtd #pre Old [repeat:: every day]` (closed member) | mark shown (guard covers open rows only), resting tone |
+| RN1  | `[repeat:: weekly]`, `[Repeat:: every day]`, `[repeat :: every day]`, `[repeat:: every day; when done]`, two `repeat::` fields, `[repeat:: every day)` | no mark (pill; repair-flag selector covers `repeat`) |
+| RN2  | `- [?] #task #gtd #pre Brush [repeat:: every day]` / `- [ ] #task Brush #gtd #post [repeat:: every day]` | no mark on either (the guard follows membership, not the glyph slot); the pill keeps the dashed orange flag |
+| RN3  | ``- [ ] `[repeat:: every day]` `` | untouched (code) |
+| RR1  | reading view: CR1-style PRE li whose text holds `[repeat:: every day]` / `… when done` | no mark / `daily` mark (`data-rendered="true"`) |
+| RO2  | rollover over a rendered repeat mark | untouched; no error |
+| RA1  | `api.dateMarks.fields` / `api.dateMarks.model("repeat", "every day")` | unchanged four fields / `null` |
+
+Today for RM/RN/RR/RO vectors is `2026-10-21` unless noted; ⏎ separates tooltip lines.
 
 ## Live verification (Bryan, in Obsidian)
 
@@ -369,3 +463,5 @@ lines. `fold N` is `foldLength` in Live Preview.
 - [ ] Clicking one opens Tasks' date editor, and right-click postpone works
 - [ ] `rotten.md` and `crowded.md` (short mode) show glyphs instead of emoji
 - [ ] Toggling off restores Tasks' emoji dates
+- [ ] `gtd_daily.md`, `recur.md`, and `cash.md` rows show `daily`, `Mondays`, `monthly · 1st` in Live Preview and reading view
+- [ ] A hand-typed `#task #gtd #pre … [repeat:: every day]` without `when done` keeps the dashed orange repair pill

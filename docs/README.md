@@ -35,7 +35,7 @@ then creates the notes that `bob ref list` shows. The
 | [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
 | [dashboard.md](dashboard.md) | Dashboard Review / Work / Browse navigation and collection pages |
-| [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates |
+| [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates and recurrence rules |
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14 |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
