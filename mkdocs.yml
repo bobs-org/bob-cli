@@ -233,6 +233,24 @@ nav:
       - Overview: develop/index.md
       - Plugin development: develop/plugins/index.md
       - Mac Capture development: develop/mac-capture/index.md
+      - Releases:
+          - Overview: develop/releases/index.md
+          - Learn:
+              - Preview the next release: develop/releases/preview-the-next-release.md
+          - Understand:
+              - How the release train works: develop/releases/how-the-release-train-works.md
+          - Do:
+              - Pause and resume releases: develop/releases/pause-and-resume-releases.md
+              - Ship a hotfix: develop/releases/ship-a-hotfix.md
+              - Withdraw a bad release: develop/releases/withdraw-a-bad-release.md
+              - Recover a failed release: develop/releases/recover-a-failed-release.md
+              - Publish the first crates.io release: develop/releases/publish-to-crates-io.md
+              - Keep the package under the size cap: develop/releases/keep-the-package-under-the-size-cap.md
+              - Update the Rust toolchain: develop/releases/update-the-rust-toolchain.md
+              - Test release workflow changes: develop/releases/test-release-workflow-changes.md
+          - Look up:
+              - Release train reference: develop/releases/reference.md
+      - CI: develop/ci.md
       - Build: develop/build.md
       - Writing docs: develop/writing-docs.md
       - Reader testing: develop/reader-testing.md

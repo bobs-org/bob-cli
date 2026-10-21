@@ -13,6 +13,9 @@ pages remain beside the code they specify.
   and deployment of the Obsidian plugins.
 - [Mac Capture development](mac-capture/index.md) for the capture panel's
   architecture, build recipes, and CI gates.
+- [Releases](releases/index.md) for the maintainer release train, preview, and
+  operational guides.
+- [bob-cli CI](ci.md) for the per-push workflow and contributor checks.
 - Follow [Writing docs](writing-docs.md) when adding or changing a page.
 - [Migration notes](migration-notes.md) for old command spellings and retired
   capture tokens.
