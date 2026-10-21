@@ -18,6 +18,7 @@ uses more than one surface appears in each matching group.
 - [Fix Mac Capture when bob is not resolved](../guides/fix-mac-capture-bob-resolution.md)
 - [Freshness and the review walk](../concepts/freshness-and-the-review-walk.md)
 - [How Bob fits together](../concepts/how-bob-fits-together.md)
+- [Install a specific Bob release](../guides/install-a-tagged-release.md)
 - [Install everything with one command](../guides/install-everything.md)
 - [Keep Ready lanes under their cap](../guides/keep-ready-under-cap.md)
 - [Link related tasks](../guides/link-related-tasks.md)

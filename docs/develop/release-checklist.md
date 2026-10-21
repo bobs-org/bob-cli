@@ -1,11 +1,29 @@
 ---
 title: Release checklist
-description: Package, documentation, and vault smoke checks before a bob-cli release.
+description: Manual package, documentation, and vault smoke checks that complement the release train.
 ---
 
 # Release checklist
 
-Run the package checks from a clean worktree:
+The [release train](releases/index.md) already runs full CI and
+`just package-check` on the SHA it ships. Use this page for the local
+smoke checks that still need a human, before or after a train run.
+
+## Automated gate
+
+A real release requires the reusable CI workflow with `full: true` on
+the exact SHA, then `release-plz` on that same revision. CI covers
+`just fmt`, `just lint`, `just check-scripts`, `just check-release-tools`,
+`cargo test --locked --no-fail-fast` on Linux and macOS, and
+`just package-check` (fail above 9 MiB, warn above 8 MiB). Preview the
+next version locally with `just release-preview`. See
+[bob-cli CI](ci.md) and
+[Release train reference](releases/reference.md).
+
+## Local package and docs confirmation
+
+From a clean worktree, you can re-run the same package and suite gates
+the train already requires:
 
 ```bash
 just check
@@ -23,7 +41,8 @@ unmasked test step on its own. `just all` runs the same three checks
 through separate recipes.
 
 For documentation changes, run the documentation gate and the Rust docs
-build:
+build. The train does not run `just docs-check`; the docs publishing
+pipeline owns that gate.
 
 ```bash
 just docs-check
@@ -37,6 +56,8 @@ context, then checks the docs contract, generated-file drift, a strict
 Zensical build, published URLs, offline links, search smoke cases, the
 executable tutorial, CLI media determinism, and the documentation package
 tests. See [Build the docs](build.md).
+
+## Install and vault smoke tests
 
 Run a local install smoke test:
 
@@ -72,6 +93,8 @@ Git commit was pushed.
 
 ## Related
 
+- [Releases](releases/index.md)
+- [bob-cli CI](ci.md)
 - [Build the docs](build.md)
 - [Migration notes](migration-notes.md)
 - [Install Bob](../start/install.md)

@@ -33,3 +33,5 @@ These pages explain how bob-cli previews, schedules, and recovers releases.
 - [Release train reference](reference.md) — workflow inputs, guard decisions,
   release metadata, and tool versions.
 - [bob-cli CI](../ci.md) — the checks the train requires.
+- [Releases and versions](../../reference/releases.md) — GitHub Releases,
+  0.x numbering, and how to check the installed CLI.

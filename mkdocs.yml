@@ -149,6 +149,7 @@ nav:
       - Overview: guides/index.md
       - Set up:
           - Install everything with one command: guides/install-everything.md
+          - Install a specific Bob release: guides/install-a-tagged-release.md
           - Point bob at your vault: guides/point-bob-at-your-vault.md
           - Deploy the Obsidian plugins: guides/deploy-obsidian-plugins.md
           - Sync the vault across machines: guides/sync-vault-across-machines.md
@@ -227,6 +228,7 @@ nav:
           # END GENERATED: cli nav
       - Configuration: reference/configuration.md
       - JSON outputs: reference/json-outputs.md
+      - Releases and versions: reference/releases.md
       - Requirements and compatibility: reference/compatibility.md
       - Glossary: reference/glossary.md
   - Develop:

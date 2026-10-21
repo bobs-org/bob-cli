@@ -104,6 +104,7 @@ install.
 ## Related
 
 - [Install Bob](../start/install.md)
+- [Install a specific Bob release](install-a-tagged-release.md)
 - [Deploy the Obsidian plugins](deploy-obsidian-plugins.md)
 - [Continue with Mac Capture](../start/mac-capture.md)
 - [Requirements and compatibility](../reference/compatibility.md)

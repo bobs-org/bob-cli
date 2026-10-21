@@ -89,4 +89,5 @@ checkouts, use [Install everything with one command](../guides/install-everythin
 
 - [Your first Bob day](first-bob-day.md) — capture and plan in a demo vault
 - [Install everything with one command](../guides/install-everything.md) — plugins and Mac Capture
+- [Install a specific Bob release](../guides/install-a-tagged-release.md) — pin a Git tag or a prebuilt archive
 - [Requirements and compatibility](../reference/compatibility.md) — supported platforms and floors

@@ -175,3 +175,4 @@ mode. Remove scratch branches when the experiment is complete; see
 - [bob-cli CI](../ci.md)
 - [Pause and resume releases](pause-and-resume-releases.md)
 - [Recover a failed release](recover-a-failed-release.md)
+- [Releases and versions](../../reference/releases.md)
