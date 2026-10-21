@@ -316,6 +316,20 @@ mode (`rotten.md`, `crowded.md`), CSS alone turns each date span
 into a 1.08em glyph box drawing the shared field mask at the default
 ink, resting from the row's `data-task`.
 
+Recurring Tasks results use `span.task-recurring` as a fifth Tasks
+host. In full mode the frame pass strips the leading `🔁` (with an
+optional variation selector), validates the remaining rule with the
+shared recurrence grammar, and appends the same loop mark used
+elsewhere. The mark carries `data-host="tasks"`; the native inner span
+is clipped while Tasks keeps its event listeners. Unknown shapes,
+invalid rules, and open PRE/POST checklist members whose rule lacks
+`when done` keep the native rule visible. Checklist membership comes
+only from the row's `.task-description` tag pills, and the guard applies
+only to open rows. In short mode, CSS replaces the recurring component
+with the shared loop mask and rests it faintly for closed rows. With
+date marks off, the existing Tasks-host cover hides stale marks until
+Tasks redraws.
+
 ## Rollover and toggle
 
 The existing minute interval calls
@@ -424,6 +438,12 @@ lines. `fold N` is `foldLength` in Live Preview.
 | T7   | `" ⏳ 2026-13-01"` | untouched |
 | T8   | marks off; a non-Tasks connected `el` | nothing is scheduled |
 | T9   | a Tasks-host `Fri` mark on rollover | relabels to `tomorrow` |
+| RT1  | complete li with `span.task-recurring > span` text `" 🔁 every day when done"` | a `daily` mark appended inside the span; span flagged; second pass adds nothing |
+| RT2  | `" 🔁 every week on Monday when done"` / `" 🔁 every month on the 1st"` | `Mondays` / `monthly · 1st` |
+| RT3  | short-mode `span.task-recurring > span` text `" 🔁"` | JS leaves it untouched; CSS draws the loop |
+| RT4  | open li whose description has `#gtd` + `#pre` pills, rule `" 🔁 every day"` | untouched (checklist guard) |
+| RT5  | `" 🔁 every day; x"` / an li without `data-task` | untouched / retried, then decorated or dropped as for dates |
+| RT6  | marks off | nothing scheduled; a stale Tasks-host repeat mark is hidden by the cover rule |
 | RM1  | `- [?] #task #gtd #pre Brush teeth  [repeat:: every day when done]  [created:: 2026-10-21]` | `daily`, fold 2, quiet; `Repeats every day when done⏎Next date counts from completion`; created mark unaffected and disjoint |
 | RM2  | `- [ ] #task Water plants [repeat:: every day]` | `daily`; `…⏎Next date follows the schedule` (not a checklist row, so no guard) |
 | RM3  | `every week on Monday when done` / `every week on Sunday` / `every Friday` | `Mondays` / `Sundays` / `Fridays` |
