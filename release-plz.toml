@@ -1,0 +1,35 @@
+# Release train configuration for bob-cli (package `bob-obsidian`).
+# Rehearsal mode: tags + GitHub Releases only. The train switches to crates.io
+# by landing `git_only = false`; the guard reads this file to pick its data
+# source, so `just release-preview` and CI stay consistent automatically.
+
+[workspace]
+git_only = true            # rehearsal: tags + GitHub Releases only; never set publish = true alongside
+semver_check = false       # src/lib.rs is an internal seam, not the product's contract
+dependencies_update = false
+publish_timeout = "30m"
+release_commits = "^(feat|fix|perf|revert)(\\(.+\\))?!?:|^[a-z]+(\\(.+\\))?!:"
+git_tag_name = "v{{ version }}"
+
+[changelog]
+protect_breaking_commits = true
+commit_parsers = [
+    # Breaking changes first: any conventional type with `!` (e.g. `feat!:`,
+    # `docs!:`) lands here even when its type would otherwise be skipped.
+    { message = "^[a-z]+(\\(.+\\))?!:", group = "Breaking" },
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^revert", group = "Reverted" },
+    # Everything below is skipped: none of these types trigger a release on
+    # their own (see `release_commits` above), and the GitHub Release notes
+    # stay focused on user-visible changes. `protect_breaking_commits` still
+    # keeps a breaking `docs!:` / `refactor!:` commit via the Breaking group.
+    { message = "^chore", skip = true },
+    { message = "^docs", skip = true },
+    { message = "^refactor", skip = true },
+    { message = "^test", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^style", skip = true },
+    { message = "^build", skip = true },
+]

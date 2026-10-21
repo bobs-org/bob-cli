@@ -38,6 +38,11 @@ include = [
     "/scripts/web_clip/fonts/**",
 ]
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ bin }-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [lib]
 name = "bob_cli"
 path = "src/lib.rs"

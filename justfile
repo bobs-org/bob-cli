@@ -62,6 +62,13 @@ package-check *args:
 check-release-tools:
     python3 -m unittest discover -s tools/release -p 'test_*.py'
 
+# Preview the next release-plz train run (pinned release-plz 0.3.173, must
+# match .github/workflows/release.yml). Side-effect free outside a temp dir:
+# clones origin/master, runs `release-plz update`, prints the next version
+# and diff, then runs the guard in explain mode against live data.
+release-preview *args:
+    python3 tools/release/release_preview.py {{args}}
+
 # Install bob and its shims from this checkout, then install or refresh shell
 # completion. Pass shells to choose explicitly: `just install zsh bash`.
 [positional-arguments]
