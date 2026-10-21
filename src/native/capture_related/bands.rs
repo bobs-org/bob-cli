@@ -7,7 +7,7 @@ use super::score::{round_score, round_sort_score};
 use super::tokenize::{self, Token};
 
 pub(super) const POSSIBLE_DUPLICATE: f64 = 0.70;
-pub(super) const SIMILAR: f64 = 0.55;
+pub(super) const SIMILAR: f64 = 0.48;
 pub(super) const CLOSED_DUPLICATE: f64 = 0.70;
 pub(super) const HOLD_MARGIN: f64 = 0.10;
 pub(super) const SHORT_QUERY_TERMS: usize = 3;
@@ -68,6 +68,7 @@ pub(super) fn rank<'a>(
     let similar_bar = SIMILAR + boost;
     let closed_bar = CLOSED_DUPLICATE + boost;
     let query_normalized = tokenize::normalize_title(query_title);
+    let query_numbers = tokenize::numbers(query_tokens);
 
     let mut classified = Vec::new();
     for (index, candidate) in candidates.iter().enumerate() {
@@ -75,11 +76,17 @@ pub(super) fn rank<'a>(
         let same_title = tokenize::normalize_title(&candidate.title)
             == query_normalized
             && !query_normalized.is_empty();
+        // Only a score at a duplicate bar needs the number comparison.
+        let numbers_differ = score >= possible_bar.min(closed_bar)
+            && tokenize::numbers(&candidate.tokens) != query_numbers;
         let Some(band) = classify(
             candidate,
-            score,
-            same_title,
-            terms,
+            Evidence {
+                score,
+                same_title,
+                numbers_differ,
+                terms,
+            },
             possible_bar,
             similar_bar,
             closed_bar,
@@ -154,15 +161,30 @@ pub(super) fn rank<'a>(
     shown
 }
 
-fn classify(
-    candidate: &Candidate,
+/// What one candidate has in common with the query title.
+struct Evidence {
     score: f64,
     same_title: bool,
+    /// Titles naming different numbers ("Part 1" / "Part 2", "2025" /
+    /// "2026") describe different instances, so they can be similar but
+    /// never a possible or closed duplicate.
+    numbers_differ: bool,
     terms: usize,
+}
+
+fn classify(
+    candidate: &Candidate,
+    evidence: Evidence,
     possible_bar: f64,
     similar_bar: f64,
     closed_bar: f64,
 ) -> Option<Band> {
+    let Evidence {
+        score,
+        same_title,
+        numbers_differ,
+        terms,
+    } = evidence;
     if same_title {
         return Some(if candidate.open {
             Band::SameTitle
@@ -174,7 +196,7 @@ fn classify(
         return None;
     }
     if candidate.open {
-        if score >= possible_bar {
+        if score >= possible_bar && !numbers_differ {
             Some(Band::PossibleDuplicate)
         } else if score >= similar_bar {
             Some(Band::Similar)
@@ -183,7 +205,7 @@ fn classify(
         } else {
             None
         }
-    } else if score >= closed_bar {
+    } else if score >= closed_bar && !numbers_differ {
         Some(Band::ClosedDuplicate)
     } else {
         None

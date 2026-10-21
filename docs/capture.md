@@ -5621,7 +5621,7 @@ clean.
 ## `bob capture-related`
 
 ```bash
-bob capture-related [-b|--bob-dir DIR] [-d|--days N] [-f|--format human|json] [-l|--limit N] [-q|--query TEXT] [-- DRAFT...]
+bob capture-related [-b|--bob-dir DIR] [-d|--days N] [-e|--exclude NOTE:LINE] [-f|--format human|json] [-l|--limit N] [-q|--query TEXT] [-- DRAFT...]
 ```
 
 This read-only command shows existing tasks that a capture draft may duplicate
@@ -5641,10 +5641,17 @@ destination is listed under `linked` and omitted from the matches.
 Each item is tokenized with Bob's task-title rules and ranked against the
 candidate set. The bands are `same_title`, `possible_duplicate`, `similar`,
 `closed_duplicate`, and `hold`; same-title matching is case-insensitive and
-ignores punctuation, tags, fields, and emoji. The exact score bars and
-default action mapping can change without a schema-version bump. Draft JSON
-never includes scores. The separate `--query TEXT` harness ranks one title
-and includes numeric scores for calibration.
+ignores punctuation, tags, fields, and emoji. Titles that name different
+numbers, such as `Part 1` and `Part 2` or `2025` and `2026`, can be
+`similar` but are never `possible_duplicate` or `closed_duplicate`. The
+exact score bars and default action mapping can change without a
+schema-version bump. Draft JSON never includes scores. The separate
+`--query TEXT` harness ranks one title and includes numeric scores for
+calibration. With `--query`, `-e|--exclude NOTE:LINE` removes exactly one
+candidate before scoring and ranking, for example `--exclude dev.md:42`. The
+note is vault-relative and the line is 1-based. This allows leave-one-out
+evaluation to see recently closed matches that the query task itself would
+otherwise suppress. It is invalid in draft mode; no file is edited.
 
 **Draft JSON contract.** Success uses `schema_version: 1` and returns
 `ok`, `warnings`, and `items`. Each item contains:

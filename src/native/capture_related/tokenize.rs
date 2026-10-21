@@ -6,10 +6,21 @@ use regex::Regex;
 
 use super::super::{capture_block_ids, capture_pomodoro_close, note_tasks};
 
-const STOPWORDS: &[&str] = &[
-    "a", "an", "and", "as", "at", "be", "by", "for", "from", "in", "into",
-    "is", "it", "its", "my", "of", "on", "or", "our", "so", "that", "the",
-    "their", "this", "to", "via", "w", "with", "your",
+/// Closed-class function words: articles, pronouns, auxiliary and modal
+/// verbs, wh-words, and connective prepositions. Particles, quantifiers,
+/// and negations (`up`, `out`, `all`, `not`) stay terms because they change
+/// what a task asks for. Calibration showed that shared boilerplate such as
+/// "are ready to be talked about" otherwise outweighs the distinct subject.
+/// Kept sorted for `binary_search`.
+pub(super) const STOPWORDS: &[&str] = &[
+    "a", "about", "am", "an", "and", "are", "as", "at", "be", "been", "being",
+    "but", "by", "can", "could", "did", "do", "does", "for", "from", "had",
+    "has", "have", "he", "her", "him", "his", "how", "i", "if", "in", "into",
+    "is", "it", "its", "me", "my", "of", "on", "or", "our", "she", "should",
+    "so", "than", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "to", "us", "via", "w", "was", "we", "were",
+    "what", "when", "where", "which", "while", "who", "whom", "why", "will",
+    "with", "would", "you", "your",
 ];
 
 static INLINE_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -134,6 +145,25 @@ pub(super) fn tokenize(display: &str) -> Vec<Token> {
     tokens
 }
 
+/// The distinct numbers in a title's terms, without leading zeros.
+pub(super) fn numbers(tokens: &[Token]) -> Vec<&str> {
+    let mut numbers: Vec<&str> = tokens
+        .iter()
+        .filter(|token| is_number(&token.term))
+        .map(|token| {
+            let trimmed = token.term.trim_start_matches('0');
+            if trimmed.is_empty() {
+                "0"
+            } else {
+                trimmed
+            }
+        })
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    numbers
+}
+
 pub(super) fn unique_term_count(tokens: &[Token]) -> usize {
     let mut seen = Vec::new();
     for token in tokens {
@@ -178,7 +208,9 @@ fn push_ident_tokens(
             continue;
         }
         let stemmed = stem(&lower);
-        if stemmed.len() < 2 {
+        // Single letters are possessive or contraction debris, but a
+        // single digit is a real term ("Part 2", "Download 9").
+        if stemmed.len() < 2 && !is_number(&stemmed) {
             continue;
         }
         tokens.push(Token {
@@ -277,8 +309,12 @@ fn stem(word: &str) -> String {
     }
 }
 
+fn is_number(term: &str) -> bool {
+    !term.is_empty() && term.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn is_stopword(word: &str) -> bool {
-    STOPWORDS.contains(&word)
+    STOPWORDS.binary_search(&word).is_ok()
 }
 
 fn code_span_at(display: &str, index: usize) -> Option<(usize, usize, usize)> {

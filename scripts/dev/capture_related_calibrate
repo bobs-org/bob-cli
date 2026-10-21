@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+# Leave-one-out calibration sampler for `bob capture-related`.
+#
+# For every open task in the routable catalog, run its title through
+# `bob capture-related --query`, drop the self-match, and keep the top
+# matches. Stratify up to 100 pairs across score bins and bands into a
+# labeling worksheet, and report firing rates plus local timings.
+#
+# Read-only: output goes outside the vault (default under ${TMPDIR:-/tmp}),
+# and the script fails on query errors or a changed vault git status.
+#
+# Usage: scripts/dev/capture_related_calibrate [BOB_DIR] [OUTPUT_DIR]
+#
+# BOB_DIR defaults to $BOB_DIR or ~/bob. OUTPUT_DIR defaults to a new
+# directory under ${TMPDIR:-/tmp}; it must be outside the vault and empty
+# if it exists. Set BOB_BIN to choose the bob executable (defaults to bob)
+# and CALIBRATE_TIMING_RUNS to change the timing loop count (default 30).
+
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+Leave-one-out calibration sampler for `bob capture-related`.
+
+Usage: scripts/dev/capture_related_calibrate [BOB_DIR] [OUTPUT_DIR]
+
+BOB_DIR defaults to $BOB_DIR or ~/bob. OUTPUT_DIR defaults to a new directory
+under ${TMPDIR:-/tmp}; it must be outside the vault and empty if it exists.
+Set BOB_BIN to choose the bob executable (defaults to bob) and
+CALIBRATE_TIMING_RUNS to change the timing loop count (default 30).
+EOF
+}
+
+fail() {
+    printf 'capture-related-calibrate: error: %s\n' "$*" >&2
+    exit 2
+}
+
+if [[ ${1-} == -h || ${1-} == --help ]]; then
+    usage
+    exit 0
+fi
+(( $# <= 2 )) || { usage >&2; exit 2; }
+
+bob_dir=${1:-${BOB_DIR:-$HOME/bob}}
+bob_bin=${BOB_BIN:-bob}
+timing_runs=${CALIBRATE_TIMING_RUNS:-30}
+[[ $timing_runs =~ ^[1-9][0-9]*$ ]] || fail "CALIBRATE_TIMING_RUNS must be a positive integer"
+command -v python3 >/dev/null 2>&1 || fail "required command not found: python3"
+
+[[ -d $bob_dir ]] || fail "vault directory does not exist: $bob_dir"
+bob_dir=$(cd -P -- "$bob_dir" && pwd) || fail "cannot resolve vault directory"
+
+if [[ -n ${2-} ]]; then
+    out_dir=$(python3 - "$2" <<'PYTHON'
+from pathlib import Path
+import sys
+print(Path(sys.argv[1]).resolve())
+PYTHON
+    ) || fail "cannot resolve output directory"
+    case "$out_dir/" in
+        "$bob_dir/"*) fail "output directory must be outside the vault: $out_dir" ;;
+    esac
+    mkdir -p -- "$out_dir" || fail "cannot create output directory: $out_dir"
+else
+    temp_root=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve())' "${TMPDIR:-/tmp}") || fail "cannot resolve temporary directory"
+    case "$temp_root/" in
+        "$bob_dir/"*) fail "temporary output directory must be outside the vault: $temp_root" ;;
+    esac
+    out_dir=$(mktemp -d "${TMPDIR:-/tmp}/bob-capture-related-calibrate.XXXXXX") || fail "cannot create scratch output directory"
+fi
+out_dir=$(cd -P -- "$out_dir" && pwd) || fail "cannot resolve output directory"
+case "$out_dir/" in
+    "$bob_dir/"*) fail "output directory must be outside the vault: $out_dir" ;;
+esac
+[[ -z $(find "$out_dir" -mindepth 1 -maxdepth 1 -print -quit) ]] || fail "output directory must be empty: $out_dir"
+
+command -v "$bob_bin" >/dev/null 2>&1 || fail "bob executable not found: $bob_bin"
+command -v python3 >/dev/null 2>&1 || fail "required command not found: python3"
+git -C "$bob_dir" rev-parse --show-toplevel >/dev/null 2>&1 || fail "vault is not a git checkout: $bob_dir"
+
+before_status="$out_dir/vault-status.before"
+after_status="$out_dir/vault-status.after"
+git -C "$bob_dir" status --porcelain --untracked-files=all >"$before_status" || fail "cannot read vault git status"
+
+catalog="$out_dir/catalog.tsv"
+queries="$out_dir/queries.jsonl"
+worksheet="$out_dir/calibration_worksheet.csv"
+summary="$out_dir/summary.md"
+: >"$catalog" || fail "cannot write catalog: $catalog"
+: >"$queries" || fail "cannot write queries: $queries"
+
+targets_json=$("$bob_bin" capture-targets --bob-dir "$bob_dir" --format json) || fail "capture-targets failed"
+route_count=$(printf '%s' "$targets_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])') || fail "cannot parse capture-targets output"
+
+# Enumerate the live catalog with the same discovery inputs capture-related uses:
+# routable routes via capture-targets, then open tasks per route.
+while IFS=$'\t' read -r route relative_path; do
+    [[ -n $route ]] || continue
+    tasks_json=$("$bob_bin" capture-tasks --bob-dir "$bob_dir" --route "$route" --format json) || fail "capture-tasks failed for route: $route"
+    ROUTE=$route NOTE=$relative_path python3 -c '
+import json, os, sys
+tasks = json.load(sys.stdin)
+route, note = os.environ["ROUTE"], os.environ["NOTE"]
+with open(sys.argv[1], "a", encoding="utf-8") as handle:
+    for task in tasks.get("tasks", []):
+        title = (task.get("text") or "").replace("\t", " ").replace("\n", " ")
+        line = task.get("line")
+        handle.write(f"{route}\t{note}\t{line}\t{title}\n")
+' "$catalog" <<<"$tasks_json" || fail "cannot record catalog for route: $route"
+done < <(printf '%s' "$targets_json" | python3 -c '
+import json, sys
+for target in json.load(sys.stdin).get("targets", []):
+    print(target["route"] + "\t" + target["relative_path"])
+') || fail "catalog enumeration failed"
+
+catalog_count=$(grep -c . "$catalog" || true)
+(( catalog_count > 0 )) || fail "empty task catalog"
+
+# Pin the closed window across the census. Exclude self before scoring and
+# ranking so it cannot suppress closed matches or consume the result limit.
+export BOB_NOW=${BOB_NOW:-$(python3 -c 'import datetime; print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))')}
+# Keep a broad ranked pool for score-bin sampling, not only the first hit.
+query_failures=0
+while IFS=$'\t' read -r route note line title; do
+    response=$("$bob_bin" capture-related --bob-dir "$bob_dir" --days 30 --limit 100 --format json --exclude="$note:$line" --query="$title" 2>&1) || query_failures=$((query_failures + 1))
+    QUERY_ROUTE=$route QUERY_NOTE=$note QUERY_LINE=$line QUERY_TITLE=$title python3 -c '
+import json, os, sys
+record = {
+    "route": os.environ["QUERY_ROUTE"],
+    "note": os.environ["QUERY_NOTE"],
+    "line": int(os.environ["QUERY_LINE"]),
+    "title": os.environ["QUERY_TITLE"],
+}
+try:
+    record["response"] = json.loads(sys.stdin.read())
+except json.JSONDecodeError:
+    record["response"] = None
+with open(sys.argv[1], "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+' "$queries" <<<"$response" || fail "cannot record query response"
+done <"$catalog" || fail "leave-one-out query loop failed"
+
+# Timings: release-build medians and p95s for one qualifying draft, one
+# non-creating draft, one template draft, and the spawn floor.
+timings="$out_dir/timings.tsv"
+: >"$timings" || fail "cannot write timings: $timings"
+time_kind() {
+    local label=$1
+    shift
+    python3 - "$label" "$timing_runs" "$timings" "$bob_bin" "$@" <<'PYTHON'
+import subprocess
+import sys
+import time
+
+label, runs, output, *command = sys.argv[1:]
+with open(output, "a", encoding="utf-8") as handle:
+    for _ in range(int(runs)):
+        start = time.perf_counter_ns()
+        subprocess.run(command, stdout=subprocess.DEVNULL, check=True)
+        elapsed_ms = (time.perf_counter_ns() - start) / 1_000_000
+        handle.write(f"{label}\t{elapsed_ms:.6f}\n")
+PYTHON
+}
+time_kind qualifying capture-related --bob-dir "$bob_dir" --format json -- "Install new UPS battery @dev" || fail "qualifying timing failed"
+time_kind non_creating capture-related --bob-dir "$bob_dir" --format json -- "Remember a thought @dev#Ideas" || fail "non-creating timing failed"
+time_kind template capture-related --bob-dir "$bob_dir" --format json -- "@@template:" || fail "template timing failed"
+time_kind spawn_floor --version || fail "spawn-floor timing failed"
+
+# Stratify the worksheet and firing-rate summary in one audited pass.
+BOB_BIN_LABEL="$bob_bin" QUERIES="$queries" WORKSHEET="$worksheet" TIMINGS="$timings" SUMMARY="$summary" QUERY_FAILURES="$query_failures" ROUTE_COUNT="$route_count" python3 - <<'EOF' || exit 2
+import csv, hashlib, json, os
+from collections import Counter, defaultdict, deque
+
+FIRED = ("same_title", "possible_duplicate", "similar", "closed_duplicate")
+BAND_RANK = {band: rank for rank, band in enumerate(
+    ("same_title", "possible_duplicate", "similar", "closed_duplicate", "hold"))}
+
+with open(os.environ["QUERIES"], encoding="utf-8") as handle:
+    records = [json.loads(line) for line in handle if line.strip()]
+
+fired, hold, no_match, errors = [], [], [], 0
+pool = []
+for record in records:
+    response = record.get("response") or {}
+    items = response.get("items") or []
+    matches = items[0].get("matches", []) if items else []
+    if response.get("ok") is not True or len(items) != 1:
+        errors += 1
+        continue
+    nonself = [match for match in matches
+               if not (match.get("note_path") == record["note"]
+                       and match.get("line") == record["line"])]
+    pool.extend((record, match, rank) for rank, match in enumerate(nonself, 1))
+    top = nonself[0] if nonself else None
+    entry = (record, top)
+    if top is None:
+        no_match.append(entry)
+    elif top.get("band") in FIRED:
+        fired.append(entry)
+    elif top.get("band") == "hold":
+        hold.append(entry)
+    else:
+        no_match.append(entry)
+
+fired.sort(key=lambda e: (BAND_RANK[e[1]["band"]], -e[1].get("score", 0),
+                          e[0]["note"], e[0]["line"]))
+hold.sort(key=lambda e: (-e[1].get("score", 0), e[0]["note"], e[0]["line"]))
+no_match.sort(key=lambda e: (e[0]["note"], e[0]["line"]))
+
+# Round-robin across band, 0.05 score bin, and closed/open strata. Prefer a
+# query's top match within each stratum, then use a stable hash to avoid note-
+# name bias. No-match queries stay in the census; they are not labelable pairs.
+strata = defaultdict(list)
+for record, match, rank in pool:
+    key = (match["band"], int(round(match.get("score", 0) * 1000)) // 50,
+           bool(match.get("closed")))
+    strata[key].append((record, match, rank))
+
+def identity(entry):
+    record, match, _ = entry
+    return (record["note"], record["line"], match["note_path"], match["line"])
+
+def sample_order(entry):
+    digest = hashlib.sha256(json.dumps(identity(entry)).encode()).hexdigest()
+    return (entry[2], digest)
+
+queues = [deque(sorted(strata[key], key=sample_order))
+          for key in sorted(strata)]
+rows = []
+seen = set()
+while queues and len(rows) < 100:
+    remaining = []
+    for queue in queues:
+        while queue and identity(queue[0]) in seen:
+            queue.popleft()
+        if queue and len(rows) < 100:
+            entry = queue.popleft()
+            rows.append(entry)
+            seen.add(identity(entry))
+        if queue:
+            remaining.append(queue)
+    queues = remaining
+
+with open(os.environ["WORKSHEET"], "w", encoding="utf-8", newline="") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(("id", "query_title", "query_note", "query_line",
+                     "match_title", "match_note", "match_line",
+                     "match_band", "match_score", "label", "match_closed",
+                     "match_rank"))
+    for number, (record, top, rank) in enumerate(rows, 1):
+        writer.writerow((number, record["title"], record["note"],
+                         record["line"], top["title"], top["note_path"],
+                         top["line"], top["band"], top.get("score", ""), "",
+                         json.dumps(top.get("closed")), rank))
+
+pairs = set()
+for record, top, _ in rows:
+    left = (record["note"], record["line"])
+    right = (top["note_path"], top["line"])
+    pairs.add(tuple(sorted((left, right))))
+
+def percentile(sorted_values, percent):
+    if not sorted_values:
+        return float("nan")
+    rank = (len(sorted_values) - 1) * percent / 100
+    low, high = int(rank), min(int(rank) + 1, len(sorted_values) - 1)
+    frac = rank - low
+    return sorted_values[low] + (sorted_values[high] - sorted_values[low]) * frac
+
+timings = {}
+with open(os.environ["TIMINGS"], encoding="utf-8") as handle:
+    for line in handle:
+        label, millis = line.rstrip("\n").split("\t")
+        timings.setdefault(label, []).append(float(millis))
+timing_rows = []
+for label in ("qualifying", "non_creating", "template", "spawn_floor"):
+    values = sorted(timings.get(label, []))
+    if not values:
+        timing_rows.append((label, len(values), float("nan"), float("nan")))
+    else:
+        timing_rows.append((label, len(values),
+                            percentile(values, 50), percentile(values, 95)))
+
+top_scores = [top.get("score", 0) if top else 0.0
+              for group in (fired, hold, no_match) for _, top in group]
+band_counts = Counter(entry[1]["band"] for entry in fired)
+band_counts.update({"hold": len(hold), "no_match": len(no_match)})
+
+with open(os.environ["SUMMARY"], "w", encoding="utf-8") as handle:
+    handle.write("# capture-related calibration summary\n\n")
+    handle.write(f"Queries: {len(records)} open tasks across "
+                 f"{os.environ['ROUTE_COUNT']} routes, "
+                 f"{os.environ['QUERY_FAILURES']} query errors, {errors} bad responses.\n\n")
+    handle.write(f"Closed window pinned at BOB_NOW={os.environ['BOB_NOW']}.\n\n")
+    handle.write("## Firing rates (top non-self score >= bar)\n\n")
+    handle.write("| Bar | Queries | Share |\n| --- | --- | --- |\n")
+    for bar in (0.70, 0.60, 0.55, 0.50):
+        count = sum(1 for score in top_scores if score >= bar)
+        share = count / len(records) * 100 if records else 0.0
+        handle.write(f"| {bar:.2f} | {count} | {share:.1f}% |\n")
+    handle.write("\n## Top-band counts at the current bars\n\n")
+    handle.write("| Band | Queries |\n| --- | --- |\n")
+    for band in ("same_title", "possible_duplicate", "similar",
+                 "closed_duplicate", "hold", "no_match"):
+        handle.write(f"| {band} | {band_counts.get(band, 0)} |\n")
+    fired_count = sum(band_counts.get(band, 0) for band in FIRED)
+    handle.write(f"\nFired: {fired_count}. Worksheet rows: {len(rows)} "
+                 f"({len(pairs)} unique unordered pairs; {len(pool)} directed candidates).\n\n")
+    handle.write("Sampled across band, 0.05 score bin, and closed/open strata; "
+                 "top matches preferred within each stratum. No-match queries "
+                 "are excluded from the worksheet. Raw score counts are not "
+                 "predicted band firing rates: short-query rules still apply.\n\n")
+    handle.write("## Timings (selected executable, ms)\n\n")
+    handle.write("| Draft | Runs | Median | p95 |\n| --- | --- | --- | --- |\n")
+    for label, runs, median, p95 in timing_rows:
+        handle.write(f"| {label} | {runs} | {median:.1f} | {p95:.1f} |\n")
+if errors or int(os.environ["QUERY_FAILURES"]):
+    raise SystemExit("calibration has query failures or invalid responses; output is unusable")
+EOF
+
+git -C "$bob_dir" status --porcelain --untracked-files=all >"$after_status" || fail "cannot re-read vault git status"
+if ! cmp -s "$before_status" "$after_status"; then
+    fail "vault git status changed during calibration; output is unusable"
+fi
+
+printf 'calibration complete: %s\n' "$out_dir"
+printf 'worksheet: %s\nsummary: %s\n' "$worksheet" "$summary"

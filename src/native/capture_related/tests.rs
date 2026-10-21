@@ -140,7 +140,19 @@ fn tokenizer_table_covers_bob_aware_cases() {
             &["snake", "case", "kebab", "case", "name"],
         ),
         ("templated templates", &["templat", "templat"]),
-        ("The tasks are ready", &["task", "are", "ready"]),
+        ("The tasks are ready", &["task", "ready"]),
+        (
+            "Sase projects should be ready to be talked about",
+            &["sase", "project", "ready", "talk"],
+        ),
+        (
+            "Read Part 2 of Bryan's essay",
+            &["read", "part", "2", "bryan", "essay"],
+        ),
+        (
+            "Sign up for job_2026_apply_29",
+            &["sign", "up", "job", "2026", "apply", "29"],
+        ),
     ];
     for (title, expected) in cases {
         assert_eq!(
@@ -165,6 +177,14 @@ fn tokenizer_table_covers_bob_aware_cases() {
             term == "%d" && (*weight - 2.0).abs() < f64::EPSILON
         }),
         "{code_weights:?}"
+    );
+}
+
+#[test]
+fn stopwords_stay_sorted_for_binary_search() {
+    assert!(
+        tokenize::STOPWORDS.windows(2).all(|pair| pair[0] < pair[1]),
+        "STOPWORDS must be sorted and unique"
     );
 }
 
@@ -239,7 +259,7 @@ fn query(root: &Path, text: &str) -> CaptureRelatedResult {
         "BOB_NOW",
         Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
     )]);
-    query_related_in(root, text, 30, 5)
+    query_related_in(root, text, 30, 5, None)
 }
 
 fn bands_for(result: &CaptureRelatedResult, title: &str) -> Vec<String> {
@@ -316,6 +336,62 @@ fn band_edges_and_short_query_rules() {
         }),
         "short query must not fire lexical bands: {:?}",
         short.items[0].matches
+    );
+}
+
+#[test]
+fn numbers_that_differ_cap_duplicates_at_similar() {
+    let temp = TempDir::new("bob-cli-capture-related-numbers");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("reading.md"),
+        &area_note(
+            "Reading",
+            "- [ ] #task Watch Stripe one-shot coding agents talk part 2 ^talk-2\n\
+- [ ] #task Order printer paper ^paper\n\
+- [ ] #task Call the dentist ^dentist\n\
+- [x] #task File passport renewal forms 2025 [completion:: 2026-10-19] ^passport\n",
+        ),
+    );
+
+    let control = query(
+        temp.path(),
+        "Watch the Stripe one-shot coding agents talk, part 2!",
+    );
+    assert_eq!(
+        bands_for(&control, "agents talk part 2"),
+        ["possible_duplicate"],
+        "{control:?}"
+    );
+
+    let other_part = query(
+        temp.path(),
+        "Watch Stripe one-shot coding agents talk part 3",
+    );
+    assert_eq!(
+        bands_for(&other_part, "agents talk part 2"),
+        ["similar"],
+        "{other_part:?}"
+    );
+
+    let unnumbered =
+        query(temp.path(), "Watch Stripe one-shot coding agents talk part");
+    assert_eq!(
+        bands_for(&unnumbered, "agents talk part 2"),
+        ["similar"],
+        "{unnumbered:?}"
+    );
+
+    let closed_twin = query(temp.path(), "File passport renewal forms 2025!");
+    assert_eq!(
+        bands_for(&closed_twin, "passport renewal"),
+        ["closed_duplicate"],
+        "{closed_twin:?}"
+    );
+    let next_year = query(temp.path(), "File passport renewal forms 2026");
+    assert!(
+        bands_for(&next_year, "passport renewal").is_empty(),
+        "{next_year:?}"
     );
 }
 
@@ -455,9 +531,9 @@ fn synthetic_vault_query_is_under_250ms() {
         Some(std::ffi::OsStr::new("2026-10-20 12:00:00")),
     )]);
     let query = "Perf note 7 task 3 unique-7-3";
-    let _warmup = query_related_in(temp.path(), query, 30, 5);
+    let _warmup = query_related_in(temp.path(), query, 30, 5, None);
     let started = std::time::Instant::now();
-    let result = query_related_in(temp.path(), query, 30, 5);
+    let result = query_related_in(temp.path(), query, 30, 5, None);
     let elapsed = started.elapsed();
     assert!(
         elapsed.as_millis() < 500,
