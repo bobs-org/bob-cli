@@ -274,6 +274,60 @@ its absence is expected until then. Do not move or delete host files to
 make a metric look complete. The journal contract lives in
 [stats.md](stats.md#review-journal).
 
+## Authored content coverage
+
+The vault allowlist ignores everything by default (`*`) and re-includes only
+selected extensions. That allowlist used to miss authored content outside notes
+and standard attachments: mind maps (`*.xmind`), zorg templates (`*.zot`),
+diagrams (`*.puml`), text files (`*.txt`), textbundle bodies (`*.markdown`),
+the textbundle manifest, one extensionless installer note, and the legacy
+migration reports and helper sources. Those paths had no off-host copy once
+Obsidian Sync was retired. The vault root `.gitignore` now carries narrow
+re-includes for them:
+
+```gitignore
+!*.zot
+!*.xmind
+!*.puml
+!*.tsv
+!*.markdown
+!*.txt
+!/_meta/migration/inventory.json
+!/_meta/migration/reports/*.tsv
+!/_meta/migration/*.txt
+!/_meta/migration/tools/*.py
+!/lib/docs/sase_INSTALL
+!/lib/docs/*.textbundle/*.json
+!/lib/docs/*.textbundle/*.markdown
+```
+
+`*.py` and `*.json` stay narrowly scoped to those migration and textbundle
+paths so caches, plugin builds, and machine-local state stay ignored. The
+migration reports and helper sources were checked for secrets and regenerable
+junk before inclusion; `__pycache__` output stays excluded.
+
+Intentional exclusions that remain ignored: `lit_review/` and `xlib/` (out of
+band by design), custom `bob-*` plugin builds including
+`block-id-prompt` (redeploy from the `bob-plugins` source repo),
+caches and bytecode, editor and OS state, `sdd/` machine-local state, and the
+two over-100-MiB `old_lib` PDFs (GitHub rejects them; they stay in the athena
+`old_lib` backup copy). Apollo-only `.bob/gkeep/migrate-tasks/*.json` files
+are also still ignored; they are outside this coverage and need their own
+per-extension decision.
+
+Verify coverage with exit codes (`1` means trackable, `0` means ignored):
+
+```bash
+git -C ~/bob check-ignore -q xmind/zorg.xmind || echo "trackable"
+git -C ~/bob check-ignore -q lit_review/acx_dev_syntax_1.pdf && echo "ignored"
+```
+
+Text files commit through the vault's `* text=auto eol=lf` normalization, so a
+restored working-tree copy can differ from the pre-backup bytes by line
+endings alone (the migration TSVs carry CRLF). Blob-level comparison is the
+check that matters: every covered file's `git hash-object` matches its
+`origin/master` blob.
+
 The vault root `.gitattributes` also unions concurrent journal appends:
 
 ```gitattributes
