@@ -1,6 +1,6 @@
 [package]
 name = "bob-obsidian"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Command-line tools for Bob, a GTD workflow that lives in one Obsidian vault"
