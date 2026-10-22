@@ -258,7 +258,7 @@ fn overview_axis(
     let bar = "─".repeat(inner.max(1));
     let span = format!("{start} {bar} {end}");
     format!(
-        "{}  {}  yesterday   summary   vs prior\n",
+        "{}  {}  yesterday   median/day   vs prior\n",
         pad_right("", label_w),
         pad_right(&styler.dim(&span), spark_w.max(span.len())),
     )
@@ -298,11 +298,8 @@ fn overview_row(
 
 fn headline_cell(metric: &MetricReport) -> String {
     match metric.summary.headline.suffix.as_deref() {
-        Some(suffix) if suffix.starts_with('/') => {
-            format!("{}{suffix}", metric.summary.headline.display)
-        }
         Some(suffix) => {
-            format!("{} {suffix}", metric.summary.headline.display)
+            format!("{}{suffix}", metric.summary.headline.display)
         }
         None => metric.summary.headline.display.clone(),
     }
@@ -559,13 +556,7 @@ fn detail_header(
         .summary
         .delta
         .as_ref()
-        .map(|delta| {
-            if metric.id == "net" {
-                format!(" {}", delta.display)
-            } else {
-                format!(" {} vs prior", delta.display)
-            }
-        })
+        .map(|delta| format!(" {} vs prior", delta.display))
         .unwrap_or_default();
     format!(
         "{} {sep} {unit} {sep} {window}          {headline}{delta}\n",
@@ -1251,53 +1242,6 @@ mod tests {
         assert!(!text.contains("●"));
         let colored = detail(&report, &Styler::colored());
         assert!(colored.contains("\u{1b}[38;5;208m●"), "{colored:?}");
-    }
-
-    #[test]
-    fn overview_header_says_summary_and_total_suffix_has_space() {
-        let base = report(vec![point(9, Some(32), "32m")]);
-        let text = overview(&base, &Styler::plain());
-        assert!(text.contains("summary"), "{text:?}");
-        assert!(!text.contains("median/day"), "{text:?}");
-
-        let mut total_report = report(vec![point(9, Some(-89), "−89")]);
-        total_report.metrics[0].summary.headline.display = "−89".to_string();
-        total_report.metrics[0].summary.headline.suffix =
-            Some("total".to_string());
-        let total_text = overview(&total_report, &Styler::plain());
-        assert!(total_text.contains("−89 total"), "{total_text:?}");
-        assert!(!total_text.contains("−89total"), "{total_text:?}");
-
-        let slash_text = overview(&base, &Styler::plain());
-        assert!(slash_text.contains("32m/day"), "{slash_text:?}");
-    }
-
-    #[test]
-    fn net_detail_header_drops_vs_prior() {
-        use crate::native::stats::report::Delta;
-        let mut net_report = report(vec![point(9, Some(-1), "−1")]);
-        net_report.metrics[0].id = "net".to_string();
-        net_report.metrics[0].label = "Net flow".to_string();
-        net_report.metrics[0].summary.headline.display = "−89".to_string();
-        net_report.metrics[0].summary.headline.suffix =
-            Some("total".to_string());
-        net_report.metrics[0].summary.delta = Some(Delta {
-            display: "shrinking".to_string(),
-            words: "net flow is shrinking".to_string(),
-            sign: -1,
-        });
-        let net_text = detail(&net_report, &Styler::plain());
-        assert!(net_text.contains("−89 total shrinking"), "{net_text:?}");
-        assert!(!net_text.contains("vs prior"), "{net_text:?}");
-
-        let mut other_report = report(vec![point(9, Some(32), "32m")]);
-        other_report.metrics[0].summary.delta = Some(Delta {
-            display: "▲ 6%".to_string(),
-            words: "up 6% vs the prior 7 days".to_string(),
-            sign: 1,
-        });
-        let other_text = detail(&other_report, &Styler::plain());
-        assert!(other_text.contains("vs prior"), "{other_text:?}");
     }
 
     #[test]

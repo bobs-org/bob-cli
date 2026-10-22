@@ -191,7 +191,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `reviewed` | journal, reviewed, decision tiers | count / violet / up | Distinct walk row keys answered on day D in decision tiers. |
 | `done` | tasks, done, recurring exclude | count / green / up | Non-recurring DONE tasks completed on D, minus the daily `^gtd` row. |
 | `created` | tasks, created, recurring exclude | count / blue / neutral | Non-recurring tasks created on D, any status, same exclusions as Done. |
-| `net` | formula, `created - done - dropped` | signed / gray / down | Daily flow balance; the headline is the window total, and the delta reads shrinking/growing/flat from that same total. |
+| `net` | formula, `created - done - dropped` | signed / gray / down | Daily flow balance; the delta reads shrinking/growing/flat by total sign. |
 | `review_closed` | checklist, tags gtd+post, match Morning review, bool | bool / violet / up | The `#gtd #post` Morning review chore completed on D. |
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
@@ -358,8 +358,7 @@ today as a separate final provisional point (date = end = today,
 merged into a bucket.
 
 **Summaries** always use raw complete daily values: the numeric headline is
-the daily median (`/day` suffix), _except_ `net`, whose headline is the window
-total (`stat: "total"`, suffix `total`), bool is met days over days with data
+the daily median (`/day` suffix), bool is met days over days with data
 (`–` when that is 0 of 0), and ratios pool across days. Totals, means,
 linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
@@ -407,8 +406,7 @@ rounds to 0 pts), multipliers at ≥2× or ≤0.5×, `new` against a zero prior
 (sign −1 when the current value is negative), `–` against a null prior,
 `▼ 100%` for a drop to zero, percentage points for ratios, days for bools;
 sign-crossing uses a raw amount. `net` instead reads shrinking/growing/flat
-by total sign. The net label describes the window itself, not a comparison
-against the prior period. Every other delta names the prior period in words. Parts summary
+by total sign. Every delta names the prior period in words. Parts summary
 values use minutes formatting only when the metric unit is minutes.
 
 `all` with no history uses the same end convention as presets (end =
