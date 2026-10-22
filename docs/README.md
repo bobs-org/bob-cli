@@ -22,10 +22,10 @@ the STATS page), the [Task Card](projects.md#task-card),
 
 For reading, start with the [reference-library guide](ref.md). Import material
 with [`bob ref create`](highlights-create.md), or save bare links with
-[`bob capture`](capture.md#saving-links-to-your-reading-queue). Capture jobs
-create PDFs and file their reference notes in the background. Deferred intake
-is retried by [`bob ref scan --intake-only`](highlights-ref-sync.md#intake-only-scan).
-Full scans also synchronize annotations. The
+[`bob capture`](capture.md#saving-links-to-your-reading-queue). Background jobs
+create PDFs, then attempt intake: filing PDFs and creating reference notes.
+[`bob ref scan --intake-only`](highlights-ref-sync.md#intake-only-scan) retries
+queued intake; full scans also synchronize annotations. The
 [job guide](ref-jobs.md) explains progress, failures, and recovery.
 
 <!-- BEGIN GENERATED: contract table -->

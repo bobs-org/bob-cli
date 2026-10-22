@@ -407,8 +407,8 @@ bob capture '@work:outline=bugs'
 | `=focus@` | Incomplete: timing is still needed |
 | `=3#focus@2` | Rejected: timing appears twice |
 
-A link-and-start needs an untimed placeholder or creates a started session.
-It refuses while any timed Pomodoro is open. The whole-item [`=name`
+A link-and-start fills an open `()` placeholder or creates a started session.
+It refuses while any timed Pomodoro in today's daily note is open. The whole-item [`=name`
 start](#equals-named) has separate restart and swap behavior.
 
 Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
@@ -665,8 +665,9 @@ targets). Relations are inert: no status, lane, Pomodoro, or field
 changes.
 
 The label pipe attaches directly to the target. Editors using
-[`capture-rewrite`](../capture.md#bob-capture-rewrite) can attach a newly
-typed pipe across spaces or tabs (`~note:id |` → `~note:id|`); direct
+[`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor` just
+after a newly typed pipe can attach it across spaces or tabs
+(`~note:id |` → `~note:id|`); direct
 `bob capture` input does not apply that rewrite.
 
 ```bash

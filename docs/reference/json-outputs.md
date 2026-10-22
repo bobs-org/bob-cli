@@ -91,29 +91,34 @@ previews, pickers, and discovery calls for the Mac app and editors.
 ### Similar-task draft results
 
 `bob capture-related -f json -- DRAFT` returns one `items` entry per
-task-creating draft item. `index` is the item's position in the full draft,
+task-creating draft item. `index` is the item's 0-based position in the full draft,
 including items that do not create tasks. Templates and drafts without new
 tasks return `items: []`.
 
 | Field | Wire representation |
 | --- | --- |
-| `range`, `route_range`, `discard_range` | Half-open `{start, end}` UTF-8 byte offsets in the submitted draft; optional ranges are omitted when unavailable |
+| `range` | Half-open `{start, end}` UTF-8 byte offsets for the item in the submitted draft |
+| `route_range` | The item's own destination-token range; omitted when absent |
+| `discard_range` | Range for removing the item and adjacent separator; omitted when the item has authored children |
 | `marker_at` | UTF-8 byte offset for inserting an action marker |
-| `matches[].matched_ranges` | Array of `[start, end]` UTF-8 byte pairs in that match's clean `title` |
+| `matches[].matched_ranges` | Array of half-open `[start, end]` UTF-8 byte pairs in that match's clean `title` |
 | `matches[].band` | `same_title`, `possible_duplicate`, `similar`, `closed_duplicate`, or `hold` |
-| `matches[].actions`, `default_action` | Bob-verified actions and the selected default; linking actions edit the draft |
+| `matches[].actions`, `matches[].default_action` | Available actions and the recommended default; clients apply draft edits only after user selection |
 | `matches[].replacements` | Present for targets with block IDs; ID-less targets use `requires_block_id` and `block_id_suggestions` |
 | `linked` | Keys already referenced by the item, with their link kind |
 
 A candidate appears under only the item with its highest match score; ties
 go to the earliest eligible item. Tasks explicitly linked by any task-creating
-item are excluded from every item's matches. Short titles need two meaningful
-terms unless the normalized title matches exactly. A `hold` row preserves an
-already-visible suggestion while wording changes; it does not introduce a
-new suggestion. Draft results omit scores. `--query TEXT` is a separate
+item are excluded from every item's matches. Non-exact matches need at least
+two distinct meaningful terms. A `hold` row is below the display threshold;
+clients use it only to retain an already-visible suggestion while wording
+changes. Bob can return it even if the client has never displayed it.
+Draft results omit scores. `--query TEXT` is a separate
 calibration shape with scores and without draft anchors or actions.
 
-Ranges are valid only for the exact submitted text. The full
+`route_range` and `discard_range` use the same object shape as `range`.
+Draft offsets are valid only for the exact submitted text; match offsets
+index the returned `title`. End offsets are exclusive. The full
 [capture-related contract](../capture.md#bob-capture-related) owns actions,
 candidate eligibility, and error behavior.
 
@@ -132,13 +137,16 @@ candidate eligibility, and error behavior.
 Do not copy the freshness `14` onto stored files: it is the command
 envelope version. The freshness contract owns the stored review state.
 
-Stats consumers render `summary.headline.display`, `suffix`, and `stat`
-from the report. For `net`, a nonempty window has `stat: "total"` and
-`suffix: "total"`; `value` sums complete, non-null daily values and excludes
-provisional today. Its delta says `shrinking`, `growing`, or `flat` from
-that total's sign. Other numeric headlines use daily medians. An empty net
-window has `value: null`, `display: "–"`, and no suffix or stat. The envelope
-remains schema 1; see [Stats summaries](../stats.md#ranges-grouping-summaries-display).
+`summary.headline.display` is the formatted headline; optional `suffix` is
+its display suffix, and optional `stat` identifies the calculation. For `net`,
+`value` sums complete, non-null daily values, excluding provisional today.
+With at least one such value, `stat` and `suffix` are both `"total"`;
+otherwise `value` is `null`, `display` is `"–"`, and both fields are omitted.
+When present, the net delta says `shrinking`, `growing`, or `flat` from the
+total's sign. Other numeric headlines use daily medians; ratios pool
+numerators and denominators, and booleans count met days over days with data.
+The envelope remains schema 1; see
+[Stats summaries](../stats.md#ranges-grouping-summaries-display).
 
 ## Tasks, reconciliation, and queries
 

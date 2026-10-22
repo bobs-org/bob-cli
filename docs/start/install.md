@@ -7,7 +7,7 @@ search:
 
 # Install Bob
 
-Start from a Git checkout with Rust managed by `rustup` and `just` installed.
+You need Git, Rust managed by `rustup`, and `just` installed.
 The steps below install from source and confirm the binary answers.
 
 ## 1. Check out the source
@@ -25,14 +25,14 @@ run from its root.
 
 <!-- tutorial-test: skip toolchain install changes the host and needs network -->
 ```bash
-rustup show
+rustup toolchain install
 cargo --version
 rustc --version
 just --version
 ```
 
-The checkout selects its pinned Rust toolchain through `rust-toolchain.toml`;
-`rustup show` installs it if needed. Bob also needs `just` for its recipes. See
+Run these commands from the checkout root so `rustup toolchain install` uses
+the toolchain selected by `rust-toolchain.toml`. See
 [Requirements and compatibility](../reference/compatibility.md) for the full
 matrix rather than a version pinned here.
 
