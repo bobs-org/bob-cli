@@ -455,6 +455,13 @@ linked annotation's page label as a dim suffix, plus a dim `· <path>`
 for follow-ups found elsewhere. Empty sections stay omitted; several
 `REF`s are separated by a dim rule.
 
+Paired `**…**` runs in highlight quotes render as bold underline (ANSI SGR
+`1;4`) in color-enabled human output. Plain human output, Markdown, and JSON
+retain the literal `**` markers. The emphasis stays paired across wrapped
+lines; unmatched markers remain literal. See
+[Underline emphasis](highlights-ref-sync.md#underline-emphasis) for how PDF
+underlines become these quote runs.
+
 Markdown output is a quotable digest per note: `## <title>`, bullets for
 the note link, reading state with evidence and date, a `- **Reading
 task:** …` bullet with the same text as the human line, source URL and

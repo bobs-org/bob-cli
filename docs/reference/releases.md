@@ -60,7 +60,8 @@ bob 0.2.0
 
 The printed number is the version compiled into that binary. Compare it
 with the newest `vX.Y.Z` tag on GitHub Releases. A Git checkout of `master`
-can be newer than the latest release by up to one day.
+can contain changes that have not reached a tagged release. The daily
+schedule does not guarantee a release: the train must pass its guard and CI.
 
 ## Companion tools
 
@@ -71,8 +72,8 @@ keeps working when new fields appear. A `!` commit is the signal that a
 CLI or JSON consumer must change.
 
 Pinning `bob` to a GitHub Release while the plugins and Mac Capture follow
-`HEAD` is the usual split. Hosts that track `HEAD` for every component stay
-on the same commit and can sit ahead of the latest tag.
+`HEAD` is the usual split. Hosts that track `HEAD` for every component use
+each repository's current source and can sit ahead of the latest CLI tag.
 
 ## Prebuilt archives
 

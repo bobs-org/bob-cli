@@ -387,8 +387,9 @@ Contract: [Pomodoro-linked tasks](../capture.md#pomodoro-linked-tasks).
 
 ### `@route:block-id=<X>` / `@route:block-id=name` {#at-route-colon-start}
 
-Same, and atomically start the selected session. `<X>` mirrors the `se<X>`
-snippet (empty is 25 minutes). Combine with `#pomodoro`, or write the short suffix name (`@work:outline=bugs`, same as `@work:outline#bugs=`).
+Same, and atomically start the selected session. `<X>` uses five-minute units:
+`=3` means 15 minutes; empty `=` means 25 minutes. A bare suffix name
+(`@work:outline=bugs`) means `@work:outline#bugs=`.
 
 ```bash
 bob capture '@work:outline=3'
@@ -397,6 +398,18 @@ bob capture '@work:outline=3'
 ```bash
 bob capture '@work:outline=bugs'
 ```
+
+| Suffix on `@work:outline` or `^work:outline` | Session and timing |
+| --- | --- |
+| `=focus@3` | FOCUS, 15 minutes; equivalent to `=3#focus` or `#focus=3` |
+| `=focus@-2` | FOCUS, 25 minutes; start is now minus 10 minutes, rounded up to a five-minute boundary |
+| `=#2fa` | A name starting with a digit, using the explicit `#` form |
+| `=focus@` | Incomplete: timing is still needed |
+| `=3#focus@2` | Rejected: timing appears twice |
+
+A link-and-start needs an untimed placeholder or creates a started session.
+It refuses while any timed Pomodoro is open. The whole-item [`=name`
+start](#equals-named) has separate restart and swap behavior.
 
 Contract: [Starting the session atomically](../capture.md#starting-the-session-atomically).
 
@@ -650,6 +663,11 @@ the shell. The target may be open, closed, in any active note, a daily
 note, or `done/` (a mirror is skipped for archived and previous-daily
 targets). Relations are inert: no status, lane, Pomodoro, or field
 changes.
+
+The label pipe attaches directly to the target. Editors using
+[`capture-rewrite`](../capture.md#bob-capture-rewrite) can attach a newly
+typed pipe across spaces or tabs (`~note:id |` → `~note:id|`); direct
+`bob capture` input does not apply that rewrite.
 
 ```bash
 bob capture 'Fix flaky capture retries ~sase:retry-design|see'

@@ -88,6 +88,35 @@ previews, pickers, and discovery calls for the Mac app and editors.
 | `bob capture-templates delete` | `-f json` | Removed entries plus remaining count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
+### Similar-task draft results
+
+`bob capture-related -f json -- DRAFT` returns one `items` entry per
+task-creating draft item. `index` is the item's position in the full draft,
+including items that do not create tasks. Templates and drafts without new
+tasks return `items: []`.
+
+| Field | Wire representation |
+| --- | --- |
+| `range`, `route_range`, `discard_range` | Half-open `{start, end}` UTF-8 byte offsets in the submitted draft; optional ranges are omitted when unavailable |
+| `marker_at` | UTF-8 byte offset for inserting an action marker |
+| `matches[].matched_ranges` | Array of `[start, end]` UTF-8 byte pairs in that match's clean `title` |
+| `matches[].band` | `same_title`, `possible_duplicate`, `similar`, `closed_duplicate`, or `hold` |
+| `matches[].actions`, `default_action` | Bob-verified actions and the selected default; linking actions edit the draft |
+| `matches[].replacements` | Present for targets with block IDs; ID-less targets use `requires_block_id` and `block_id_suggestions` |
+| `linked` | Keys already referenced by the item, with their link kind |
+
+A candidate appears under only the item with its highest match score; ties
+go to the earliest eligible item. Tasks explicitly linked by any task-creating
+item are excluded from every item's matches. Short titles need two meaningful
+terms unless the normalized title matches exactly. A `hold` row preserves an
+already-visible suggestion while wording changes; it does not introduce a
+new suggestion. Draft results omit scores. `--query TEXT` is a separate
+calibration shape with scores and without draft anchors or actions.
+
+Ranges are valid only for the exact submitted text. The full
+[capture-related contract](../capture.md#bob-capture-related) owns actions,
+candidate eligibility, and error behavior.
+
 ## Plan, readiness, freshness, and stats
 
 | Command | Flag | Shape | Version | Contract |
@@ -102,6 +131,14 @@ previews, pickers, and discovery calls for the Mac app and editors.
 
 Do not copy the freshness `14` onto stored files: it is the command
 envelope version. The freshness contract owns the stored review state.
+
+Stats consumers render `summary.headline.display`, `suffix`, and `stat`
+from the report. For `net`, a nonempty window has `stat: "total"` and
+`suffix: "total"`; `value` sums complete, non-null daily values and excludes
+provisional today. Its delta says `shrinking`, `growing`, or `flat` from
+that total's sign. Other numeric headlines use daily medians. An empty net
+window has `value: null`, `display: "–"`, and no suffix or stat. The envelope
+remains schema 1; see [Stats summaries](../stats.md#ranges-grouping-summaries-display).
 
 ## Tasks, reconciliation, and queries
 

@@ -8,7 +8,7 @@ vault, with optional plugins and a Mac capture panel.
 ## Requirements
 
 - Linux or macOS
-- A current stable Rust toolchain that supports edition 2024, plus `just`
+- Rust 1.95.0 or later (the checkout pins 1.95.0), plus `just`
 - An existing vault directory (default `~/bob`; set `BOB_DIR` to override)
 - Obsidian 1.8.7 or later with the Tasks plugin, for the desktop interface
 

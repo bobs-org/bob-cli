@@ -339,8 +339,17 @@ source_pdf: "[[lib/papers/example.pdf]]"
 - [ ] #task #ref [[lib/papers/example.pdf]] #hide ^ref
 ```
 
-Lookup and filing live in `bob ref`. Bare URL capture queues a job; the
-note appears in `bob ref list` after intake (`bob ref scan -i`).
+Lookup and filing live in `bob ref`. Bare URL capture queues a job; its worker
+creates the PDF and attempts intake immediately. The note appears in
+`bob ref list` after successful intake. `bob ref scan --intake-only` retries
+deferred intake; a full `bob ref scan` also synchronizes annotations.
+
+The `<!-- highlights:begin -->` / `<!-- highlights:end -->` region is
+generated; keep authored notes outside it. Highlight quotes store underline
+emphasis as `**…**` and use `^h-…` block IDs. Reordering distinct exported
+annotations preserves those IDs. Removed annotations leave tombstones, and
+previously published highlights absorbed into a continuation or underline
+leave redirect stubs so existing block links still resolve.
 
 Contract: [Reference library](../ref.md),
 [Highlights Reference Note Sync](../highlights-ref-sync.md),

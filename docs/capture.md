@@ -5661,8 +5661,8 @@ otherwise suppress. It is invalid in draft mode; no file is edited.
 - `range`: the item's half-open UTF-8 byte range in the original draft;
 - `marker_at`: the UTF-8 byte offset where an action marker can be inserted
   on the parent line before a trailing Pomodoro suffix;
-- `route_range`: the item's own destination-token range, or `null`;
-- `discard_range`: the item and one adjacent blank-line separator, or `null`
+- `route_range`: the item's own destination-token range, omitted when absent;
+- `discard_range`: the item and one adjacent blank-line separator, omitted
   when it has authored children;
 - `matches`: ranked candidate rows;
 - `linked`: resolved candidate keys already referenced by this item, with
@@ -5676,7 +5676,7 @@ A match row contains `key`, `band`, clean `title`, `matched_ranges`, `kind`,
 `status_symbol`, `status_name`, `status_type`, nullable `closed`, `route`,
 `locator`, `note_path`, `target`, `line`, `ref`, nullable `block_id`,
 `requires_block_id`, `block_id_suggestions`, `actions`, and `default_action`.
-`matched_ranges` are UTF-8 byte ranges in `title`. `closed` is `null` for an
+`matched_ranges` are `[start, end]` UTF-8 byte pairs in `title`. `closed` is `null` for an
 open task or `{ "status": "done" | "canceled", "date": "YYYY-MM-DD",
 "days_ago": N }`. `kind` is `task`, `project`, or `reading`. `key` is the
 stable note-path-and-block-ID identity, or a digest for an ID-less task.
