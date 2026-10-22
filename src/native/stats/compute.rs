@@ -839,9 +839,6 @@ mod tests {
         expect_point(&net.points[3], day(11), Some(0), DataQuality::Ok, true);
         assert_eq!(net.points[2].display, "−1");
         assert_eq!(net.summary.headline.value, Some(-1));
-        assert_eq!(net.summary.headline.display, "−1");
-        assert_eq!(net.summary.headline.suffix.as_deref(), Some("total"));
-        assert_eq!(net.summary.headline.stat.as_deref(), Some("total"));
         assert_eq!(net.summary.days_with_data, 1);
         let delta = net.summary.delta.as_ref().expect("net delta");
         assert_eq!(delta.display, "shrinking");

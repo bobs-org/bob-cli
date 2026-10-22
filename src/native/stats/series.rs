@@ -392,9 +392,8 @@ pub(crate) fn build_metric_series(
         })
         .cloned()
         .collect();
-    let prior_summary = range
-        .prior
-        .map(|_| summarize(&prior_for_summary, unit, metric_id == "net"));
+    let prior_summary =
+        range.prior.map(|_| summarize(&prior_for_summary, unit));
     let summary = summarize_with_prior(
         &complete_daily,
         unit,
@@ -762,7 +761,7 @@ fn summarize_with_prior(
     comparison_label: &str,
     is_net: bool,
 ) -> MetricSummary {
-    let mut current = summarize(values, unit, is_net);
+    let mut current = summarize(values, unit);
     if let Some(prior) = prior {
         current.prior = Some(PriorHeadline {
             headline: prior.headline.clone(),
@@ -773,11 +772,7 @@ fn summarize_with_prior(
     current
 }
 
-fn summarize(
-    values: &[DailyValue],
-    unit: MetricUnit,
-    is_net: bool,
-) -> MetricSummary {
+fn summarize(values: &[DailyValue], unit: MetricUnit) -> MetricSummary {
     let values: Vec<_> = values
         .iter()
         .filter(|day| !day.provisional)
@@ -790,69 +785,48 @@ fn summarize(
             .unwrap_or(u32::MAX)
     });
 
-    let headline = if is_net {
-        if numbers.is_empty() {
+    let headline = match unit {
+        MetricUnit::Bool if days_with_data == 0 => Headline {
+            value: None,
+            display: "–".to_string(),
+            suffix: None,
+            stat: Some("days".to_string()),
+        },
+        MetricUnit::Bool => {
+            let met = days_met.unwrap_or_default();
             Headline {
-                value: None,
-                display: "–".to_string(),
-                suffix: None,
-                stat: None,
-            }
-        } else {
-            let total = numbers
-                .iter()
-                .fold(0_i64, |sum, value| sum.saturating_add(*value));
-            Headline {
-                value: Some(total),
-                display: format_value(Some(total), unit),
-                suffix: Some("total".to_string()),
-                stat: Some("total".to_string()),
-            }
-        }
-    } else {
-        match unit {
-            MetricUnit::Bool if days_with_data == 0 => Headline {
-                value: None,
-                display: "–".to_string(),
+                value: Some(i64::from(met)),
+                display: format!("{met} of {days_with_data} days"),
                 suffix: None,
                 stat: Some("days".to_string()),
-            },
-            MetricUnit::Bool => {
-                let met = days_met.unwrap_or_default();
-                Headline {
-                    value: Some(i64::from(met)),
-                    display: format!("{met} of {days_with_data} days"),
-                    suffix: None,
-                    stat: Some("days".to_string()),
-                }
             }
-            MetricUnit::Ratio => {
-                let (num, den) = values.iter().fold(
-                    (0_i64, 0_i64),
-                    |acc, (day, _)| match (day.num, day.den) {
+        }
+        MetricUnit::Ratio => {
+            let (num, den) =
+                values.iter().fold((0_i64, 0_i64), |acc, (day, _)| {
+                    match (day.num, day.den) {
                         (Some(num), Some(den)) => (
                             acc.0.saturating_add(num),
                             acc.1.saturating_add(den),
                         ),
                         _ => acc,
-                    },
-                );
-                let value = (den > 0).then(|| ratio_basis_points(num, den));
-                Headline {
-                    value,
-                    display: format_value(value, unit),
-                    suffix: None,
-                    stat: Some("pooled".to_string()),
-                }
+                    }
+                });
+            let value = (den > 0).then(|| ratio_basis_points(num, den));
+            Headline {
+                value,
+                display: format_value(value, unit),
+                suffix: None,
+                stat: Some("pooled".to_string()),
             }
-            _ => {
-                let value = median(&numbers);
-                Headline {
-                    value,
-                    display: format_value(value, unit),
-                    suffix: value.map(|_| "/day".to_string()),
-                    stat: value.map(|_| "median".to_string()),
-                }
+        }
+        _ => {
+            let value = median(&numbers);
+            Headline {
+                value,
+                display: format_value(value, unit),
+                suffix: value.map(|_| "/day".to_string()),
+                stat: value.map(|_| "median".to_string()),
             }
         }
     };
@@ -1681,10 +1655,10 @@ mod tests {
                 ..daily(date(2026, 1, 3), Some(1))
             },
         ];
-        let bool_summary = summarize(&values, MetricUnit::Bool, false);
+        let bool_summary = summarize(&values, MetricUnit::Bool);
         assert_eq!(bool_summary.headline.display, "2 of 3 days");
         assert_eq!(bool_summary.days_met, Some(2));
-        let ratio_summary = summarize(&values, MetricUnit::Ratio, false);
+        let ratio_summary = summarize(&values, MetricUnit::Ratio);
         assert_eq!(ratio_summary.headline.value, Some(4_286));
         assert_eq!(ratio_summary.headline.display, "43%");
         assert_eq!(ratio_summary.total, None);
@@ -1729,16 +1703,10 @@ mod tests {
 
     #[test]
     fn signed_net_delta_uses_range_total_words() {
-        let current = summarize(
-            &[daily(date(2026, 1, 1), Some(-3))],
-            MetricUnit::Signed,
-            true,
-        );
-        let previous = summarize(
-            &[daily(date(2025, 12, 1), Some(4))],
-            MetricUnit::Signed,
-            true,
-        );
+        let current =
+            summarize(&[daily(date(2026, 1, 1), Some(-3))], MetricUnit::Signed);
+        let previous =
+            summarize(&[daily(date(2025, 12, 1), Some(4))], MetricUnit::Signed);
         let delta = make_delta(
             &current,
             &previous,
@@ -1751,176 +1719,11 @@ mod tests {
     }
 
     #[test]
-    fn net_headline_is_window_total_not_median() {
-        // Screenshot repro: positive median (+3/+4/+5/-116 → median +4)
-        // but negative total (-104) must read shrinking.
-        let days = [3, 4, 5, -116];
-        let values: Vec<_> = days
-            .into_iter()
-            .enumerate()
-            .map(|(offset, value)| {
-                daily(
-                    date(2026, 1, 1) + Duration::days(offset as i64),
-                    Some(value),
-                )
-            })
-            .collect();
-        let summary = summarize(&values, MetricUnit::Signed, true);
-        assert_eq!(summary.headline.value, Some(-104));
-        assert_eq!(summary.headline.display, "−104");
-        assert_eq!(summary.headline.suffix.as_deref(), Some("total"));
-        assert_eq!(summary.headline.stat.as_deref(), Some("total"));
-        let prior = summarize(
-            &[daily(date(2025, 12, 1), Some(1))],
-            MetricUnit::Signed,
-            true,
-        );
-        let delta =
-            make_delta(&summary, &prior, MetricUnit::Signed, "4 weeks", true);
-        assert_eq!(delta.display, "shrinking");
-        assert_eq!(delta.sign, -1);
-        assert_eq!(summary.headline.value.is_some_and(|v| v < 0), true);
-        assert_eq!(delta.sign < 0, summary.headline.value.unwrap() < 0);
-
-        // Mirror: negative median but positive total → growing.
-        let mirror = [(-5), (-4), (-3), 116];
-        let mirror_values: Vec<_> = mirror
-            .into_iter()
-            .enumerate()
-            .map(|(offset, value)| {
-                daily(
-                    date(2026, 2, 1) + Duration::days(offset as i64),
-                    Some(value),
-                )
-            })
-            .collect();
-        let mirror_summary =
-            summarize(&mirror_values, MetricUnit::Signed, true);
-        assert_eq!(mirror_summary.headline.value, Some(104));
-        assert_eq!(mirror_summary.headline.display, "+104");
-        assert_eq!(mirror_summary.headline.suffix.as_deref(), Some("total"));
-        assert_eq!(mirror_summary.headline.stat.as_deref(), Some("total"));
-        let mirror_delta = make_delta(
-            &mirror_summary,
-            &prior,
-            MetricUnit::Signed,
-            "4 weeks",
-            true,
-        );
-        assert_eq!(mirror_delta.display, "growing");
-        assert_eq!(mirror_delta.sign, 1);
-
-        // Zero total → flat.
-        let zero = [3, -3];
-        let zero_values: Vec<_> = zero
-            .into_iter()
-            .enumerate()
-            .map(|(offset, value)| {
-                daily(
-                    date(2026, 3, 1) + Duration::days(offset as i64),
-                    Some(value),
-                )
-            })
-            .collect();
-        let zero_summary = summarize(&zero_values, MetricUnit::Signed, true);
-        assert_eq!(zero_summary.headline.value, Some(0));
-        assert_eq!(zero_summary.headline.display, "0");
-        assert_eq!(zero_summary.headline.suffix.as_deref(), Some("total"));
-        let zero_delta = make_delta(
-            &zero_summary,
-            &prior,
-            MetricUnit::Signed,
-            "4 weeks",
-            true,
-        );
-        assert_eq!(zero_delta.display, "flat");
-        assert_eq!(zero_delta.sign, 0);
-
-        // Empty net window keeps the empty shape.
-        let empty = summarize(&[], MetricUnit::Signed, true);
-        assert_eq!(empty.headline.value, None);
-        assert_eq!(empty.headline.display, "–");
-        assert_eq!(empty.headline.suffix, None);
-    }
-
-    #[test]
-    fn non_net_signed_and_count_metrics_keep_median_headline() {
-        let values: Vec<_> = [3, 4, 5, -116]
-            .into_iter()
-            .enumerate()
-            .map(|(offset, value)| {
-                daily(
-                    date(2026, 1, 1) + Duration::days(offset as i64),
-                    Some(value),
-                )
-            })
-            .collect();
-        let signed = summarize(&values, MetricUnit::Signed, false);
-        assert_eq!(signed.headline.value, Some(4));
-        assert_eq!(signed.headline.display, "+4");
-        assert_eq!(signed.headline.suffix.as_deref(), Some("/day"));
-        assert_eq!(signed.headline.stat.as_deref(), Some("median"));
-        let count_values: Vec<_> = [1, 2, 3, 100]
-            .into_iter()
-            .enumerate()
-            .map(|(offset, value)| {
-                daily(
-                    date(2026, 1, 1) + Duration::days(offset as i64),
-                    Some(value),
-                )
-            })
-            .collect();
-        let counted = summarize(&count_values, MetricUnit::Count, false);
-        assert_eq!(counted.headline.suffix.as_deref(), Some("/day"));
-        assert_eq!(counted.headline.stat.as_deref(), Some("median"));
-    }
-
-    #[test]
-    fn net_prior_headline_uses_window_total() {
-        let today = date(2026, 10, 11);
-        let range = request_range("7d", today, true);
-        let mut values = Vec::new();
-        for (offset, value) in [3, 4, 5, -116, 1, 2, 3].into_iter().enumerate()
-        {
-            values.push(daily(
-                date(2026, 10, 4) + Duration::days(offset as i64),
-                Some(value),
-            ));
-        }
-        for offset in 0..7 {
-            let day = range.prior.unwrap().start + Duration::days(offset);
-            values.push(daily(day, Some(10)));
-        }
-        let built = build_metric_series(
-            &values,
-            "net",
-            MetricUnit::Signed,
-            &range,
-            false,
-        );
-        // Current total: 3+4+5-116+1+2+3 = -98.
-        assert_eq!(built.summary.headline.value, Some(-98));
-        assert_eq!(built.summary.headline.suffix.as_deref(), Some("total"));
-        assert_eq!(built.summary.headline.stat.as_deref(), Some("total"));
-        let prior = built.summary.prior.as_ref().expect("prior headline");
-        assert_eq!(prior.headline.value, Some(70));
-        assert_eq!(prior.headline.suffix.as_deref(), Some("total"));
-        assert_eq!(prior.headline.stat.as_deref(), Some("total"));
-        assert_eq!(built.summary.delta.as_ref().unwrap().display, "shrinking");
-    }
-
-    #[test]
     fn delta_uses_multipliers_for_large_changes_and_points_for_ratios() {
-        let current = summarize(
-            &[daily(date(2026, 1, 1), Some(5))],
-            MetricUnit::Count,
-            false,
-        );
-        let prior = summarize(
-            &[daily(date(2025, 12, 1), Some(2))],
-            MetricUnit::Count,
-            false,
-        );
+        let current =
+            summarize(&[daily(date(2026, 1, 1), Some(5))], MetricUnit::Count);
+        let prior =
+            summarize(&[daily(date(2025, 12, 1), Some(2))], MetricUnit::Count);
         let delta =
             make_delta(&current, &prior, MetricUnit::Count, "4 weeks", false);
         assert_eq!(delta.display, "▲ 2.5×");
@@ -1931,8 +1734,8 @@ mod tests {
         let mut prior_day = daily(date(2025, 12, 1), Some(5_600));
         prior_day.num = Some(14);
         prior_day.den = Some(25);
-        let ratio_current = summarize(&[current_day], MetricUnit::Ratio, false);
-        let ratio_prior = summarize(&[prior_day], MetricUnit::Ratio, false);
+        let ratio_current = summarize(&[current_day], MetricUnit::Ratio);
+        let ratio_prior = summarize(&[prior_day], MetricUnit::Ratio);
         let delta = make_delta(
             &ratio_current,
             &ratio_prior,
@@ -2034,7 +1837,7 @@ mod tests {
         let mut second = daily(date(2026, 1, 2), Some(0));
         second.num = Some(0);
         second.den = Some(9);
-        let summary = summarize(&[first, second], MetricUnit::Ratio, false);
+        let summary = summarize(&[first, second], MetricUnit::Ratio);
         assert_eq!(summary.headline.value, Some(1_000));
         assert_eq!(summary.headline.display, "10%");
     }
@@ -2085,16 +1888,8 @@ mod tests {
 
     fn count_delta(current: Option<i64>, prior: Option<i64>) -> Delta {
         make_delta(
-            &summarize(
-                &[daily(date(2026, 1, 1), current)],
-                MetricUnit::Count,
-                false,
-            ),
-            &summarize(
-                &[daily(date(2025, 12, 1), prior)],
-                MetricUnit::Count,
-                false,
-            ),
+            &summarize(&[daily(date(2026, 1, 1), current)], MetricUnit::Count),
+            &summarize(&[daily(date(2025, 12, 1), prior)], MetricUnit::Count),
             MetricUnit::Count,
             "4 weeks",
             false,
@@ -2126,8 +1921,8 @@ mod tests {
         prior_day.num = Some(1251);
         prior_day.den = Some(2500);
         let ratio = make_delta(
-            &summarize(&[current_day], MetricUnit::Ratio, false),
-            &summarize(&[prior_day], MetricUnit::Ratio, false),
+            &summarize(&[current_day], MetricUnit::Ratio),
+            &summarize(&[prior_day], MetricUnit::Ratio),
             MetricUnit::Ratio,
             "4 weeks",
             false,
@@ -2135,23 +1930,15 @@ mod tests {
         assert_eq!(ratio.display, "≈ same");
 
         let bool_delta = make_delta(
-            &summarize(
-                &[daily(date(2026, 1, 1), Some(1))],
-                MetricUnit::Bool,
-                false,
-            ),
-            &summarize(
-                &[daily(date(2025, 12, 1), Some(0))],
-                MetricUnit::Bool,
-                false,
-            ),
+            &summarize(&[daily(date(2026, 1, 1), Some(1))], MetricUnit::Bool),
+            &summarize(&[daily(date(2025, 12, 1), Some(0))], MetricUnit::Bool),
             MetricUnit::Bool,
             "4 weeks",
             false,
         );
         assert_eq!(bool_delta.display, "▲ 1 days");
 
-        let empty_bool = summarize(&[], MetricUnit::Bool, false);
+        let empty_bool = summarize(&[], MetricUnit::Bool);
         assert_eq!(empty_bool.headline.display, "–");
         assert_eq!(empty_bool.headline.value, None);
     }
