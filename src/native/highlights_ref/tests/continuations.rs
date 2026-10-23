@@ -481,7 +481,7 @@ fn continuation_page_index_parsing() {
 }
 
 #[test]
-fn gas_town_golden_merge_stub_and_idempotent_rerender() {
+fn gas_town_golden_tucked_group_stub_and_idempotent_rerender() {
     let bob_dir = temp_bob_dir("gas-town-golden");
     let (pdf, ref_note, config) = gas_town_paths(&bob_dir);
     let annotations = parse_sidecar_markdown(GAS_TOWN_SIDECAR);
@@ -510,14 +510,10 @@ fn gas_town_golden_merge_stub_and_idempotent_rerender() {
         "{}",
         first.content
     );
+    let expected_group = "### Pages 11–12\n\n> [!quote|Page 11] One last Crew tip: I have a new ad-hoc role that I’ve been using for the past week, called the “PR Sheriff.One of my B eads crew has a permanent hook: b d-4f43s: PR Sheriff Standing Orders. On every\n>\n> > [!quote|Page 12] session startup, the sheriff checks open PRs and divides them into easy wins and those needing human review, then slings the easy wins to other crew for merging and cleanup\n> >\n> > > [!note] Comment PR Merge Master?!\n\n^h-ba93bec527bb\n";
     assert!(
-        first.content.contains("On every session startup,"),
-        "{}",
-        first.content
-    );
-    assert!(
-        first.content.contains("PR Merge Master?!"),
-        "{}",
+        first.content.contains(expected_group),
+        "expected tucked gas-town group:\n{}",
         first.content
     );
     assert!(
@@ -542,7 +538,7 @@ fn gas_town_golden_merge_stub_and_idempotent_rerender() {
     )
     .expect("render with prior region");
     assert!(
-        with_prior.content.contains("[!info] Merged highlight"),
+        with_prior.content.contains("[!info] Grouped highlight"),
         "{}",
         with_prior.content
     );
@@ -568,6 +564,70 @@ fn gas_town_golden_merge_stub_and_idempotent_rerender() {
     )
     .expect("rerender");
     assert_eq!(second.content, with_prior.content);
+}
+
+#[test]
+fn same_page_and_ellipsis_markers_keep_piece_boundaries_without_gaps() {
+    let bob_dir = temp_bob_dir("continuation-no-cross-piece-seams");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    for marker in ["<", "<…"] {
+        let rendered = render_annotations(
+            &bob_dir,
+            &pdf,
+            &ref_note,
+            vec![
+                highlight(1, "Page 11", Some(11), "left words", None),
+                highlight(2, "Page 11", Some(11), "right words", Some(marker)),
+            ],
+            &ParsedNote::empty(),
+            false,
+        );
+        assert!(rendered.content.contains("> [!quote|Page 11] left words"));
+        assert!(rendered
+            .content
+            .contains("> > [!quote|Page 11] right words"));
+        assert!(!rendered.content.contains("[…]"), "{}", rendered.content);
+        assert!(!rendered.content.contains("[...]"), "{}", rendered.content);
+    }
+}
+
+#[test]
+fn legacy_fused_group_migrates_without_id_churn_or_tombstones() {
+    let bob_dir = temp_bob_dir("continuation-legacy-migration");
+    let (pdf, ref_note, config) = gas_town_paths(&bob_dir);
+    let annotations = parse_sidecar_markdown(GAS_TOWN_SIDECAR);
+    let sidecar = SidecarInput {
+        path: bob_dir.join("lib/blogs/gas_town_emergency_user_manual.md"),
+        annotations,
+    };
+    let prior = region_note(&format!(
+        "### Pages 11–12\n\n> [!quote] One last Crew tip: … PR Sheriff Standing Orders. On every session startup,\n> the sheriff checks open PRs and divides them into easy wins and those needing human\n> review, then slings the easy wins to other crew for merging and cleanup\n>\n> > [!note] Comment PR Merge Master?!\n\n^{GAS_TOWN_HEAD_ID}\n\n### Removed highlights\n\n> [!info] Merged highlight\n>\n> Now part of [[#^{GAS_TOWN_HEAD_ID}|the Pages 11–12 highlight]].\n\n^{GAS_TOWN_FOLLOWER_ID}\n"
+    ));
+    let migrated = super::render_sidecar_highlights(
+        &config, &pdf, &ref_note, &prior, &sidecar, false,
+    )
+    .expect("migrate fused group");
+    assert!(migrated.content.contains("^h-ba93bec527bb"));
+    assert!(migrated.content.contains("[!info] Grouped highlight"));
+    assert!(migrated.content.contains("the Pages 11–12 group"));
+    assert!(!migrated.content.contains("[!warning] Removed highlight"));
+    assert!(!migrated.content.contains("[!info] Merged highlight"));
+    let parsed = super::parse_managed_region(&migrated.content);
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    assert_eq!(parsed.blocks[0].block_id, GAS_TOWN_HEAD_ID);
+    assert_eq!(parsed.blocks[0].pieces.len(), 2);
+
+    let rerendered = super::render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &region_note(&migrated.content),
+        &sidecar,
+        false,
+    )
+    .expect("rerender tucked group");
+    assert_eq!(rerendered.content, migrated.content);
 }
 
 #[test]
@@ -611,7 +671,7 @@ fn continuation_identity_toggle_is_stable() {
     );
     assert_eq!(merged.block_ids_by_annotation_order[&1], head_id);
     assert_eq!(merged.block_ids_by_annotation_order[&2], head_id);
-    assert!(merged.content.contains("[!info] Merged highlight"));
+    assert!(merged.content.contains("[!info] Grouped highlight"));
     assert!(!merged.content.contains("[!warning] Removed highlight"));
 
     let unmerged = render_annotations(
@@ -624,7 +684,7 @@ fn continuation_identity_toggle_is_stable() {
     );
     assert_eq!(unmerged.content, pre.content);
     assert!(!unmerged.content.contains("[!warning] Removed highlight"));
-    assert!(!unmerged.content.contains("[!info] Merged highlight"));
+    assert!(!unmerged.content.contains("[!info] Grouped highlight"));
 }
 
 #[test]
@@ -751,7 +811,7 @@ fn continuation_image_notes_embed_under_the_group() {
     );
     assert_eq!(rendered.image_note_count, 1);
     assert!(rendered.content.contains("![["), "{}", rendered.content);
-    let quote_pos = rendered.content.find("[!quote]").unwrap();
+    let quote_pos = rendered.content.find("[!quote|").unwrap();
     let image_pos = rendered.content.find("![[").unwrap();
     let id_pos = rendered.content.find('^').unwrap();
     assert!(
@@ -790,13 +850,31 @@ fn continuation_round_trip_group_and_stub() {
         .collect();
     assert_eq!(highlights.len(), 1);
     assert_eq!(highlights[0].page_label.as_deref(), Some("Pages 11–12"));
-    assert!(
-        highlights[0]
-            .quote
-            .as_deref()
-            .is_some_and(|quote| quote.contains("On every session startup,")),
-        "{:?}",
-        highlights[0].quote
+    assert_eq!(highlights[0].pieces.len(), 2);
+    assert_eq!(
+        highlights[0].pieces[0].page_label.as_deref(),
+        Some("Page 11")
+    );
+    assert_eq!(
+        highlights[0].pieces[1].page_label.as_deref(),
+        Some("Page 12")
+    );
+    assert!(highlights[0].pieces[0].quote.ends_with("On every"));
+    assert!(highlights[0].pieces[1]
+        .quote
+        .starts_with("session startup,"));
+    assert_eq!(highlights[0].pieces[0].comment, None);
+    assert_eq!(
+        highlights[0].pieces[1].comment.as_deref(),
+        Some("PR Merge Master?!")
+    );
+    let flattened_quote = format!(
+        "{}\n\n{}",
+        highlights[0].pieces[0].quote, highlights[0].pieces[1].quote
+    );
+    assert_eq!(
+        highlights[0].quote.as_deref(),
+        Some(flattened_quote.as_str())
     );
     assert_eq!(highlights[0].comment.as_deref(), Some("PR Merge Master?!"));
 }

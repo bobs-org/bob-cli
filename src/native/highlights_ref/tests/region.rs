@@ -77,6 +77,41 @@ fn region_round_trip_highlight_with_multiline_comment() {
 }
 
 #[test]
+fn region_parses_three_tucked_pieces_with_their_own_notes() {
+    let parsed = super::parse_managed_region(
+        "### Pages 6–8\n\n> [!quote|Page 6] Head words\n>\n> > [!note] Comment Head note\n>\n> > [!quote|Page 7] Middle words\n> >\n> > ![[ref/example.assets/middle.png]]\n>\n> > [!quote|Page 8] Tail words\n> >\n> > > [!note] Comment Tail note\n\n^h-ba93bec527bb\n",
+    );
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    assert_eq!(parsed.blocks.len(), 1);
+    let block = &parsed.blocks[0];
+    assert_eq!(block.pieces.len(), 3);
+    assert_eq!(
+        block
+            .pieces
+            .iter()
+            .map(|piece| piece.page_label.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("Page 6"), Some("Page 7"), Some("Page 8")]
+    );
+    assert_eq!(block.pieces[0].quote, "Head words");
+    assert_eq!(block.pieces[1].quote, "Middle words");
+    assert_eq!(block.pieces[2].quote, "Tail words");
+    assert_eq!(block.pieces[0].comment.as_deref(), Some("Head note"));
+    assert_eq!(block.pieces[1].comment, None);
+    assert_eq!(
+        block.pieces[1].images,
+        vec!["ref/example.assets/middle.png"]
+    );
+    assert_eq!(block.pieces[2].comment.as_deref(), Some("Tail note"));
+    assert_eq!(
+        block.quote.as_deref(),
+        Some("Head words\n\nMiddle words\n\nTail words")
+    );
+    assert_eq!(block.comment.as_deref(), Some("Head note\n\nTail note"));
+    assert_eq!(block.images, vec!["ref/example.assets/middle.png"]);
+}
+
+#[test]
 fn region_round_trip_standalone_note() {
     // The renderer skips standalone notes whose text is a status/parent
     // marker list, so the fixture carries a realistic mirror first: it is

@@ -655,7 +655,7 @@ fn repeated_whole_word_and_inside_word_stay_standalone() {
 }
 
 #[test]
-fn continuation_member_keeps_emphasis_in_the_selected_host_window() {
+fn continuation_member_keeps_emphasis_and_comments_with_each_piece() {
     let bob_dir = temp_bob_dir("underline-continuation-window");
     let pdf = bob_dir.join("lib/papers/example.pdf");
     let ref_note = bob_dir.join("ref/papers/example.md");
@@ -673,28 +673,44 @@ fn continuation_member_keeps_emphasis_in_the_selected_host_window() {
         "Later it proves nothing else.",
         Some("- < continue"),
     );
-    let underline = highlight(3, "Page 1", Some(1), "**proves**", None);
+    let head_underline = highlight(3, "Page 1", Some(1), "**approves**", None);
+    let follower_underline = highlight(
+        4,
+        "Page 3",
+        Some(3),
+        "**proves nothing else**",
+        Some("Comment: follower note"),
+    );
     let rendered = render(
         &bob_dir,
         &pdf,
         &ref_note,
-        vec![host, follower, underline],
+        vec![host, follower, head_underline, follower_underline],
         &ParsedNote::empty(),
     );
     assert_eq!(rendered.count, 1);
-    assert_eq!(rendered.underlines_merged, 1);
+    assert_eq!(rendered.underlines_merged, 2);
     assert_eq!(rendered.continuation_count, 1);
+    let parsed = parse_managed_region(&rendered.content);
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    assert_eq!(parsed.blocks.len(), 1);
+    assert_eq!(parsed.blocks[0].pieces.len(), 2);
     assert!(
-        rendered.content.contains(
-            "It approves and **proves** the change. […] Later it proves nothing else."
-        ),
+        parsed.blocks[0].pieces[0]
+            .quote
+            .contains("It **approves** and proves the change."),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        parsed.blocks[0].pieces[1]
+            .quote
+            .contains("Later it **proves nothing else**."),
         "{}",
         rendered.content
     );
     assert_eq!(
-        rendered.content.matches("**proves**").count(),
-        1,
-        "{}",
-        rendered.content
+        parsed.blocks[0].pieces[1].comment.as_deref(),
+        Some("continue\n\n“proves nothing else” — follower note")
     );
 }

@@ -14,7 +14,7 @@ fn scan(vault: &Path, extra: &[&str]) -> std::process::Output {
 }
 
 #[test]
-fn continuation_scan_merges_two_pages_and_is_idempotent() {
+fn continuation_scan_tucks_two_pages_and_is_idempotent() {
     let temp = TempDir::new("bob-cli-highlights-continuations");
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/blogs/example.pdf");
@@ -98,7 +98,18 @@ fn continuation_scan_merges_two_pages_and_is_idempotent() {
     let note = vault.join("ref/blogs/example.md");
     let contents = fs::read_to_string(&note).expect("read note");
     assert!(contents.contains("### Pages 11–12"), "{contents}");
-    assert!(contents.contains("On every session startup,"), "{contents}");
+    assert!(
+        contents.contains(
+            "> [!quote|Page 11] PR Sheriff Standing Orders. On every"
+        ),
+        "head piece keeps its page:\n{contents}"
+    );
+    assert!(
+        contents.contains(
+            "> > [!quote|Page 12] session startup, the sheriff checks open PRs"
+        ),
+        "follower stays in its own nested quote:\n{contents}"
+    );
     assert!(contents.contains("PR Merge Master?!"), "{contents}");
     assert!(!contents.contains("< PR Merge Master"), "{contents}");
     assert!(contents.contains("highlights_count: 1\n"), "{contents}");
@@ -130,6 +141,12 @@ fn continuation_scan_merges_two_pages_and_is_idempotent() {
     assert_eq!(
         highlights[0]["page_label"],
         serde_json::json!("Pages 11–12")
+    );
+    assert_eq!(
+        highlights[0]["quote"],
+        serde_json::json!(
+            "PR Sheriff Standing Orders. On every\n\nsession startup, the sheriff checks open PRs"
+        )
     );
 }
 

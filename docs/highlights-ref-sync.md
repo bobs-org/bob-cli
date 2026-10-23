@@ -1208,26 +1208,27 @@ Troubleshooting:
 
 ### Continuation highlights (`<`)
 
-A Highlights note that starts with `<` folds that text highlight into the
-one before it when `bob ref` renders the reference note. Type the marker on
-the **later** piece, while looking at the overflow. The first piece is never
-touched. The fold is stateless and deterministic, and deleting the `<`
-undoes it. Nothing is written to the PDF or the sidecar.
+A Highlights note that starts with `<` groups that text highlight with the
+nearest earlier text highlight when `bob ref` renders the reference note.
+Type the marker on the **later** piece, while looking at the overflow. The
+group keeps every piece's words, page, images, and comment together. It is
+stateless and deterministic, and deleting the `<` removes the group. Nothing
+is written to the PDF or the sidecar.
 
 | Note typed on the later highlight                              | Result in the ref note                                  |
 | -------------------------------------------------------------- | ------------------------------------------------------- |
-| `<`                                                            | Joins the previous highlight; adds no comment           |
-| `< PR Merge Master?!`                                          | Joins; comment paragraph `PR Merge Master?!`            |
-| `- < keep going` / `Comment: < keep going`                     | Joins; comment `keep going`                             |
-| `<` then a new line `- #task Check the sheriff`                | Joins; the task imports normally                        |
-| `- < #task Check the sheriff`                                  | Joins; task text has no `<`                             |
-| `<` then a new line `~/tmp/screenshots/x.png`                  | Joins; the image embeds under the merged quote          |
-| `<… why skip this?` / `<... why skip this?`                    | Joins with a forced `[…]` gap; comment `why skip this?` |
-| `\< 5 ms is the target`                                        | No merge; renders `< 5 ms is the target`                |
+| `<`                                                            | Groups the previous highlight; adds no comment          |
+| `< PR Merge Master?!`                                          | Groups; comment stays on this piece                     |
+| `- < keep going` / `Comment: < keep going`                     | Groups; comment `keep going` stays on this piece        |
+| `<` then a new line `- #task Check the sheriff`                | Groups; the task imports normally                       |
+| `- < #task Check the sheriff`                                  | Groups; task text has no `<`                            |
+| `<` then a new line `~/tmp/screenshots/x.png`                  | Groups; the image stays on this piece                   |
+| `<… why skip this?` / `<... why skip this?`                    | Groups; either spelling of `<` keeps comment `why skip this?` |
+| `\< 5 ms is the target`                                        | No group; renders `< 5 ms is the target`                |
 | `<div>`, `<-`, `<= 5`, `<3`, `<https://x.org>`, `</tmp/x.png>` | Ordinary note; `<` kept                                 |
 | `…see above`, or a `<` on any later line                       | Ordinary note                                           |
 
-**If you still see a `<`, it did not merge.** A dangling marker keeps its raw
+**If you still see a `<`, it did not form a group.** A dangling marker keeps its raw
 note, so the `<` stays visible in the generated comment.
 
 The grammar runs only on text highlights, never on sticky notes
@@ -1241,27 +1242,26 @@ label has already been stripped:
    byte-identical.
 2. Set aside leading whitespace and at most one unordered-list prefix (`-`,
    `*`, or `+`, then whitespace).
-3. At the start of the remaining body, test tokens in this order. Each token
+3. At the start of the remaining body, test these spellings in this order. Each marker
    must be followed by whitespace (including NBSP) or the end of the line:
-   - **Gap token:** `<…` (U+2026) or `<...`. macOS smart punctuation turns
-     `...` into `…`, so both spellings match.
-   - **Join token:** `<`. ASCII only.
-   - **Escape:** `\` immediately followed by a gap or join token that meets
-     the same boundary rule. Remove that one backslash and treat the note as
-     ordinary. Only a would-be marker is unescaped, so `\<div>` stays exactly
-     as typed.
+   - **Marker:** `<` (ASCII), `<…` (U+2026), or `<...`. macOS smart
+     punctuation turns `...` into `…`, so both longer spellings match.
+   - **Escape:** `\` immediately followed by one of those spellings that
+     meets the same boundary rule. Remove that one backslash and treat the
+     note as ordinary. Only a would-be marker is unescaped, so `\<div>` stays
+     exactly as typed.
 
 The effective first line is the set-aside prefix plus the text after the
 token, with leading whitespace trimmed. If that text is empty, the line is
 dropped. A dangling marker keeps the raw note; the effective note is used
-only when the follower actually merged, or for an escape.
+only when the follower actually forms a group, or for an escape.
 
 **Previous** is the nearest earlier annotation, in sidecar order (Highlights'
 sidebar order), that is a text highlight and not a marker mirror. The walk
 skips marker mirrors, sticky notes, and image selections; those keep their
 own blocks and render after the group, in sidecar order. If that nearest
-text highlight is itself a follower, the new piece joins the same group, so
-A, `<`B, `<`C is one group. If no earlier text highlight exists, the marker
+text highlight is itself a follower, the new piece becomes another follower
+of the same head, so A, `<`B, `<`C is one group. If no earlier text highlight exists, the marker
 dangles and the highlight renders on its own, verbatim. There is no distance
 limit: a wide page jump shows up through the gap and the heading.
 
@@ -1269,13 +1269,9 @@ The group renders at the head's position. Exporting Highlights sorted by
 color or date changes sidecar order, so "previous" is no longer the visual
 predecessor. That sort is unsupported.
 
-The seam is computed between each member and the member just before it, not
-the head. A next-page pair (`page_index` N then N+1) joins with hyphen
-healing. Same page, skipped pages, and an unknown `page_index` insert
-`[…]`. The gap token (`<…` / `<...`) always forces a gap, even across a
-page turn. The renderer never doubles an existing `[…]` or `[...]`. The
-rule errs toward `[…]` so a same-page split or a missing page number never
-looks like one continuous sentence.
+Each highlight is beautified on its own. Text is never fused, hyphens are
+never healed across pieces, and no `[…]` is inserted. The `<…` and `<...`
+spellings have the same grouping behavior as `<`.
 
 Heading ranges use the members' page labels: `Pages 11–12`, `Pages 11–13`,
 `Pages 11, 14`, `Pages 11–12, 14`. A `p.` prefix becomes `pp.`. A single
@@ -1298,52 +1294,68 @@ Page-turn sidecar:
 < PR Merge Master?!
 ```
 
-renders as one block:
+renders as one block with two visibly separate pieces:
 
 ```md
 ### Pages 11–12
 
-> [!quote] PR Sheriff Standing Orders. On every session startup, the sheriff checks open PRs
+> [!quote|Page 11] PR Sheriff Standing Orders. On every
 >
-> > [!note] Comment PR Merge Master?!
+> > [!quote|Page 12] session startup, the sheriff checks open PRs
+> >
+> > > [!note] Comment PR Merge Master?!
 
 ^h-ba93bec527bb
 ```
 
-Same-page gap, with `<` on the later piece:
+Each piece keeps its own page, image notes, and Comment card. A longer group
+keeps all followers as siblings inside the head quote:
 
 ```md
-### Page 11
+### Pages 6–8
 
-> [!quote] left words […] right words
+> [!quote|Page 6] In Scion, the unit of work is **a “changeset,” an entry in a
+> write-ahead log.** … along with
+>
+> > [!note] Comment Changesets again.
+>
+> > [!quote|Page 7] content-addressed pointers to the compressed file contents in blob
+> > storage. …
+> >
+> > ![[ref/blogs/redesigning_source_control.assets/20261020_182622-dcaced15.png|568]]
+>
+> > [!quote|Page 8] support refs, but since neither creating nor fetching commits
+> > involves them, …
+> >
+> > > [!note] Comment Changesets are what “patches” should be!
 
-^h-headid012345
+^h-40fb23af3c7b
 ```
 
 A previously published follower that is later absorbed keeps a redirect stub
-under `### Removed highlights`, never a tombstone:
+under `### Removed highlights`:
 
 ```md
 ### Removed highlights
 
-> [!info] Merged highlight
+> [!info] Grouped highlight
 >
-> Now part of [[#^h-ba93bec527bb|the Pages 11–12 highlight]].
+> Now shown in [[#^h-ba93bec527bb|the Pages 11–12 group]].
 
 ^h-609a556c1cb0
 ```
 
 The head `^h-` ID is unchanged with or without followers. The follower ID is
-the same merged and unmerged. A stub appears only for a follower that was
+the same grouped and ungrouped. A stub appears only for a follower that was
 already published. Existing tasks never have their 🔖 rewritten: a task
-created before a retroactive merge keeps pointing at the follower ID, whose
-stub forwards to the group. New tasks on a merged piece keep a per-piece
-`[h::]` processed ID and a 🔖 link to the group's head block.
+created before a group keeps pointing at the follower ID, whose stub points
+to the group. New tasks on a grouped piece keep a per-piece `[h::]` processed
+ID and a 🔖 link to the group's head block.
 
 Troubleshooting:
 
 - `bob ref sync <pdf> --dry-run` shows `continuations:` when any follower
-  merged or any marker dangles, then one
+  was grouped or any marker dangles, then one
   `continuation_dangling: <page label | no page> (no earlier text highlight)`
   line per dangling marker.
 - Concise `bob ref scan` adds `1 continuation` / `N continuations` and
@@ -1415,13 +1427,40 @@ callouts alone:
   text-underline-offset: 0.12em;
   text-decoration-skip-ink: none;
 }
+
+/* bob ref: a `<` group tucks each later highlight into the first
+   highlight's quote callout. Draw the group as one card: every tucked
+   highlight opens at a dashed seam, captioned at the right with the page
+   it was highlighted on, and keeps its own Comment callout. */
+.callout[data-callout="quote"] .callout[data-callout="quote"] {
+  margin: 0.8em 0 0;
+  padding: 0.8em 0 0;
+  border: 0;
+  border-top: 1px dashed rgba(var(--callout-color), 0.6);
+  border-radius: 0;
+  background: transparent;
+}
+.callout[data-callout="quote"]
+  .callout[data-callout="quote"][data-callout-metadata]:not(
+    [data-callout-metadata=""]
+  )::before {
+  content: attr(data-callout-metadata);
+  float: right;
+  margin: -0.55em 0 0 1em;
+  font-size: var(--font-smallest);
+  font-variant: all-small-caps;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: var(--text-faint);
+}
 ```
 
 The source snippet is `~/bob/.obsidian/snippets/ref-highlights.css`; add
-`"ref-highlights"` to `enabledCssSnippets` in `appearance.json`. This rule
-applies to `strong` text in quote callouts. Absorbed underlines share their
-host highlight's `^h-` ID, so underlining a published passage never changes
-the host ID or later blocks on that page.
+`"ref-highlights"` to `enabledCssSnippets` in `appearance.json`. The underline
+rule applies to `strong` text in quote callouts. The nested quote rules turn
+group pieces into one card with dashed, page-captioned seams. Absorbed
+underlines share their host highlight's `^h-` ID, so underlining a published
+passage never changes the host ID or later blocks on that page.
 
 Annotation text is beautified only while rendering the generated region:
 

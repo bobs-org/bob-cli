@@ -29,9 +29,22 @@ pub(crate) struct RegionBlock {
     pub(crate) images: Vec<String>,
     pub(crate) unresolved_images: Vec<String>,
     pub(crate) unresolved_image_states: Vec<UnresolvedImageNoteState>,
+    /// Present only for tucked continuation groups. The block-level fields
+    /// remain the flattened compatibility view of these pieces.
+    pub(crate) pieces: Vec<RegionPiece>,
     pub(crate) block_id: String,
     pub(crate) mirror: bool,
     pub(crate) in_preamble: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegionPiece {
+    pub(crate) page_label: Option<String>,
+    pub(crate) quote: String,
+    pub(crate) comment: Option<String>,
+    pub(crate) images: Vec<String>,
+    pub(crate) unresolved_images: Vec<String>,
+    pub(crate) unresolved_image_states: Vec<UnresolvedImageNoteState>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -302,22 +315,11 @@ fn classify_region_block(
     } else {
         format!("{}\n^{block_id}", chunk.join("\n"))
     };
-    let mut stripped = Vec::with_capacity(chunk.len());
-    for line in chunk {
-        let after_first = line
-            .trim_start()
-            .strip_prefix('>')
-            .ok_or_else(|| raw.clone())?;
-        let after_first = after_first.strip_prefix(' ').unwrap_or(after_first);
-        if let Some(after_second) = after_first.strip_prefix('>') {
-            stripped.push((
-                2,
-                after_second.strip_prefix(' ').unwrap_or(after_second),
-            ));
-        } else {
-            stripped.push((1, after_first));
-        }
-    }
+    let stripped = chunk
+        .iter()
+        .map(|line| strip_blockquote_levels(line))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| raw.clone())?;
     let Some(((first_depth, first_content), remaining)) =
         stripped.split_first()
     else {
@@ -326,14 +328,14 @@ fn classify_region_block(
     if *first_depth != 1 {
         return Err(raw);
     }
-    let (callout, rest) =
+    let (callout, metadata, rest) =
         split_callout_header(first_content).ok_or_else(|| raw.clone())?;
     if callout.eq_ignore_ascii_case("quote")
         && (rest == "Image" || rest.starts_with("Image "))
     {
         let asset =
             image_embed_target(&rest[5..]).ok_or_else(|| raw.clone())?;
-        let body = parse_callout_body(remaining, &raw)?;
+        let body = parse_callout_body(remaining, &raw, 1)?;
         if body
             .text_lines
             .iter()
@@ -352,34 +354,114 @@ fn classify_region_block(
             images: body.images,
             unresolved_images: body.unresolved_images,
             unresolved_image_states: body.unresolved_image_states,
+            pieces: Vec::new(),
             block_id,
             mirror: false,
             in_preamble,
         });
     }
     if callout.eq_ignore_ascii_case("quote") {
-        let body = parse_callout_body(remaining, &raw)?;
-        let mut quote_lines = vec![rest.to_string()];
-        quote_lines.extend(body.text_lines);
-        let quote = trim_blank_ends(&quote_lines.join("\n"));
-        let mirror =
-            is_marker_mirror_text(body.comment.as_deref().unwrap_or_default());
+        let follower_separators = continuation_follower_separators(remaining);
+        if follower_separators.is_empty() {
+            let body = parse_callout_body(remaining, &raw, 1)?;
+            let quote = piece_quote(rest, body.text_lines);
+            let mirror = is_marker_mirror_text(
+                body.comment.as_deref().unwrap_or_default(),
+            );
+            return Ok(RegionBlock {
+                page_label,
+                kind: RegionBlockKind::Highlight,
+                quote: Some(quote),
+                comment: body.comment,
+                asset: None,
+                images: body.images,
+                unresolved_images: body.unresolved_images,
+                unresolved_image_states: body.unresolved_image_states,
+                pieces: Vec::new(),
+                block_id,
+                mirror,
+                in_preamble,
+            });
+        }
+
+        let (first_blank, _) = follower_separators[0];
+        let head_body = parse_callout_body(&remaining[..first_blank], &raw, 1)?;
+        let mut pieces = vec![RegionPiece {
+            page_label: metadata,
+            quote: piece_quote(rest, head_body.text_lines),
+            comment: head_body.comment,
+            images: head_body.images,
+            unresolved_images: head_body.unresolved_images,
+            unresolved_image_states: head_body.unresolved_image_states,
+        }];
+        for (position, &(_, header_index)) in
+            follower_separators.iter().enumerate()
+        {
+            let end = follower_separators
+                .get(position + 1)
+                .map_or(remaining.len(), |(blank, _)| *blank);
+            let follower = &remaining[header_index..end];
+            let Some((2, header)) = follower.first().copied() else {
+                return Err(raw);
+            };
+            let (follower_kind, page_label, follower_rest) =
+                split_callout_header(header).ok_or_else(|| raw.clone())?;
+            if !follower_kind.eq_ignore_ascii_case("quote") {
+                return Err(raw);
+            }
+            let body = parse_callout_body(&follower[1..], &raw, 2)?;
+            pieces.push(RegionPiece {
+                page_label,
+                quote: piece_quote(follower_rest, body.text_lines),
+                comment: body.comment,
+                images: body.images,
+                unresolved_images: body.unresolved_images,
+                unresolved_image_states: body.unresolved_image_states,
+            });
+        }
+        let quote = pieces
+            .iter()
+            .map(|piece| piece.quote.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let comments = pieces
+            .iter()
+            .filter_map(|piece| piece.comment.as_deref())
+            .filter(|comment| !comment.is_empty())
+            .collect::<Vec<_>>();
+        let comment = (!comments.is_empty()).then(|| comments.join("\n\n"));
+        let images = pieces
+            .iter()
+            .flat_map(|piece| piece.images.iter().cloned())
+            .collect();
+        let unresolved_images = pieces
+            .iter()
+            .flat_map(|piece| piece.unresolved_images.iter().cloned())
+            .collect();
+        let unresolved_image_states = pieces
+            .iter()
+            .flat_map(|piece| piece.unresolved_image_states.iter().cloned())
+            .collect();
+        let mirror = is_marker_mirror_text(
+            pieces[0].comment.as_deref().unwrap_or_default(),
+        );
         return Ok(RegionBlock {
             page_label,
             kind: RegionBlockKind::Highlight,
             quote: Some(quote),
-            comment: body.comment,
+            comment,
             asset: None,
-            images: body.images,
-            unresolved_images: body.unresolved_images,
-            unresolved_image_states: body.unresolved_image_states,
+            images,
+            unresolved_images,
+            unresolved_image_states,
+            pieces,
             block_id,
             mirror,
             in_preamble,
         });
     }
     if callout.eq_ignore_ascii_case("note") {
-        let body = parse_callout_body(remaining, &raw)?;
+        let body = parse_callout_body(remaining, &raw, 1)?;
         if body.comment.is_some() {
             return Err(raw);
         }
@@ -395,6 +477,7 @@ fn classify_region_block(
             images: body.images,
             unresolved_images: body.unresolved_images,
             unresolved_image_states: body.unresolved_image_states,
+            pieces: Vec::new(),
             block_id,
             mirror: is_marker_mirror_text(&text),
             in_preamble,
@@ -403,16 +486,57 @@ fn classify_region_block(
     Err(raw)
 }
 
-/// Split a callout header line into its `(name, rest)` where `name` is the
-/// text between `[!` and `]` and `rest` is the first line's text after the
-/// header and one optional space.
-fn split_callout_header(content: &str) -> Option<(String, &str)> {
+/// Split a callout header into its kind, optional Obsidian metadata, and the
+/// first line's text after the header and one optional space.
+fn strip_blockquote_levels(line: &str) -> Option<(usize, &str)> {
+    let mut rest = line.trim_start();
+    let mut depth = 0;
+    while let Some(after_marker) = rest.strip_prefix('>') {
+        depth += 1;
+        rest = after_marker.strip_prefix(' ').unwrap_or(after_marker);
+    }
+    (depth > 0).then_some((depth, rest))
+}
+
+fn split_callout_header(
+    content: &str,
+) -> Option<(String, Option<String>, &str)> {
     let inner = content.strip_prefix("[!")?;
     let end = inner.find(']')?;
+    let header = &inner[..end];
+    let (name, metadata) = match header.split_once('|') {
+        Some((name, metadata)) => (name, Some(metadata.to_string())),
+        None => (header, None),
+    };
     let rest = inner[end + 1..]
         .strip_prefix(' ')
         .unwrap_or(&inner[end + 1..]);
-    Some((inner[..end].to_string(), rest))
+    Some((name.to_string(), metadata, rest))
+}
+
+fn piece_quote(rest: &str, body_lines: Vec<String>) -> String {
+    let mut quote_lines = vec![rest.to_string()];
+    quote_lines.extend(body_lines);
+    trim_blank_ends(&quote_lines.join("\n"))
+}
+
+fn continuation_follower_separators(
+    remaining: &[(usize, &str)],
+) -> Vec<(usize, usize)> {
+    remaining
+        .windows(2)
+        .enumerate()
+        .filter_map(|(index, pair)| {
+            let (1, spacer) = pair[0] else { return None };
+            let (2, header) = pair[1] else { return None };
+            if !spacer.is_empty() {
+                return None;
+            }
+            split_callout_header(header)
+                .is_some_and(|(kind, _, _)| kind.eq_ignore_ascii_case("quote"))
+                .then_some((index, index + 1))
+        })
+        .collect()
 }
 
 fn image_embed_target(rest: &str) -> Option<String> {
@@ -436,6 +560,7 @@ struct ParsedCalloutBody {
 fn parse_callout_body(
     remaining: &[(usize, &str)],
     raw: &str,
+    base_depth: usize,
 ) -> RegionResult<ParsedCalloutBody> {
     let mut body = ParsedCalloutBody {
         text_lines: Vec::new(),
@@ -450,16 +575,20 @@ fn parse_callout_body(
             return Err(raw.to_string());
         }
         let (depth, content) = remaining[index];
-        if depth == 1
+        if depth == base_depth
             && content.is_empty()
-            && remaining.get(index + 1).is_some_and(|(next, _)| *next == 2)
+            && remaining
+                .get(index + 1)
+                .is_some_and(|(next, _)| *next == base_depth + 1)
         {
             let group_start = index + 1;
             let mut group_end = group_start + 1;
-            while group_end < remaining.len() && remaining[group_end].0 == 2 {
+            while group_end < remaining.len()
+                && remaining[group_end].0 == base_depth + 1
+            {
                 group_end += 1;
             }
-            parse_depth2_group(
+            parse_nested_group(
                 &remaining[group_start..group_end],
                 raw,
                 &mut body,
@@ -467,7 +596,7 @@ fn parse_callout_body(
             index = group_end;
             continue;
         }
-        if depth != 1 {
+        if depth != base_depth {
             return Err(raw.to_string());
         }
         if let Some(target) = image_note_embed_target(content) {
@@ -480,7 +609,7 @@ fn parse_callout_body(
     Ok(body)
 }
 
-fn parse_depth2_group(
+fn parse_nested_group(
     group: &[(usize, &str)],
     raw: &str,
     body: &mut ParsedCalloutBody,
@@ -488,7 +617,7 @@ fn parse_depth2_group(
     let Some((_, header)) = group.first() else {
         return Err(raw.to_string());
     };
-    let (callout, label) =
+    let (callout, _, label) =
         split_callout_header(header).ok_or_else(|| raw.to_string())?;
     if callout.eq_ignore_ascii_case("warning") {
         let state =
@@ -545,7 +674,7 @@ fn comment_text(
     let Some((header, rest)) = lines.split_first() else {
         return Err(raw.to_string());
     };
-    let (callout, label) =
+    let (callout, _, label) =
         split_callout_header(header).ok_or_else(|| raw.to_string())?;
     if !callout.eq_ignore_ascii_case("note") {
         return Err(raw.to_string());

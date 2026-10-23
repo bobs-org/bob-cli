@@ -1442,7 +1442,7 @@ fn is_single_embed_line(line: &str) -> bool {
 fn parse_callout_header(line: &str) -> Option<(String, String)> {
     let rest = line.strip_prefix('[')?;
     let (kind, title) = rest.split_once(']')?;
-    let kind = kind.strip_prefix('!')?;
+    let kind = kind.strip_prefix('!')?.split('|').next()?;
     if kind.is_empty()
         || !kind.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-'
@@ -4618,6 +4618,11 @@ mod tests {
         };
         assert_eq!(kind, "note");
         assert_eq!(shapes(blocks), vec!["P:plain quote"]);
+
+        assert_eq!(
+            parse_callout_header("[!quote|Page 11] Head piece"),
+            Some(("quote".to_string(), "Head piece".to_string()))
+        );
     }
 
     #[test]

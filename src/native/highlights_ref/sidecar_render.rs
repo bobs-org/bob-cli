@@ -140,79 +140,73 @@ pub(super) fn render_sidecar_highlights(
                         piece_texts.push(member.text.clone());
                     }
                 }
-                let mut pieces = Vec::with_capacity(members.len());
-                pieces.push((piece_texts[0].as_str(), Seam::Join));
-                for (index, (_, seam)) in followers.iter().enumerate() {
-                    pieces.push((piece_texts[index + 1].as_str(), *seam));
-                }
-                let standalone_underline = members.len() == 1
-                    && followers.is_empty()
-                    && folds.underlines.standalone.contains(&annotation.order);
-                let quote = if standalone_underline {
-                    let inner = underline_inner(&annotation.text)
-                        .expect("planned underline has an inner quote");
-                    standalone_underline_quote(&clean_for_matching(
-                        &inner,
-                        strip_return_links,
-                    ))
-                } else {
-                    assemble_group_quote(&pieces)
-                };
-                let member_texts = piece_texts
-                    .iter()
-                    .map(|text| beautify_annotation_text(text))
-                    .collect::<Vec<_>>();
-                let mut underline_ranges = Vec::new();
-                let mut underline_contributions = Vec::new();
-                for (&underline_order, &host_order) in &folds.underlines.host_of
-                {
-                    let Some(&host_member) =
-                        member_index_by_order.get(&host_order)
-                    else {
-                        continue;
+                let mut rendered_pieces = Vec::with_capacity(members.len());
+                for (member_index, member) in members.iter().enumerate() {
+                    let member_text = &piece_texts[member_index];
+                    let standalone_underline =
+                        folds.underlines.standalone.contains(&member.order);
+                    let mut quote = if standalone_underline {
+                        let inner = underline_inner(&member.text)
+                            .expect("planned underline has an inner quote");
+                        standalone_underline_quote(&clean_for_matching(
+                            &inner,
+                            strip_return_links,
+                        ))
+                    } else {
+                        beautify_annotation_text(member_text)
                     };
-                    let Some(underline) =
-                        annotations_by_order.get(&underline_order).copied()
-                    else {
-                        continue;
-                    };
-                    let Some(inner) = underline_inner(&underline.text) else {
-                        continue;
-                    };
-                    let cleaned_inner =
-                        clean_for_matching(&inner, strip_return_links);
-                    let host_key_start = *folds
-                        .underlines
-                        .host_key_start
-                        .get(&underline_order)
-                        .expect(
-                            "absorbed underline records its host key start",
+                    let member_text_key = beautify_annotation_text(member_text);
+                    let mut underline_ranges = Vec::new();
+                    let mut underline_contributions = Vec::new();
+                    for (&underline_order, &host_order) in
+                        &folds.underlines.host_of
+                    {
+                        if host_order != member.order {
+                            continue;
+                        }
+                        let Some(underline) =
+                            annotations_by_order.get(&underline_order).copied()
+                        else {
+                            continue;
+                        };
+                        let Some(inner) = underline_inner(&underline.text)
+                        else {
+                            continue;
+                        };
+                        let cleaned_inner =
+                            clean_for_matching(&inner, strip_return_links);
+                        let host_key_start = *folds
+                            .underlines
+                            .host_key_start
+                            .get(&underline_order)
+                            .expect(
+                                "absorbed underline records its host key start",
+                            );
+                        let ranges = emphasis_ranges(
+                            &quote,
+                            &[member_text_key.clone()],
+                            0,
+                            &cleaned_inner,
+                            host_key_start,
                         );
-                    let ranges = emphasis_ranges(
-                        &quote,
-                        &member_texts,
-                        host_member,
-                        &cleaned_inner,
-                        host_key_start,
-                    );
-                    underline_ranges.extend(ranges.iter().cloned());
-                    underline_contributions.push(UnderlineContribution {
-                        order: underline_order,
-                        ranges,
-                        inner: cleaned_inner,
-                    });
-                }
-                let quote_chars = quote.chars().collect::<Vec<_>>();
-                let merged_run_count = merge_emphasis_ranges(
-                    &quote_chars,
-                    underline_ranges.clone(),
-                )
-                .len();
-                let quote = apply_emphasis(&quote, &underline_ranges);
+                        underline_ranges.extend(ranges.iter().cloned());
+                        underline_contributions.push(UnderlineContribution {
+                            order: underline_order,
+                            ranges,
+                            inner: cleaned_inner,
+                        });
+                    }
+                    let quote_chars = quote.chars().collect::<Vec<_>>();
+                    let merged_run_count = merge_emphasis_ranges(
+                        &quote_chars,
+                        underline_ranges.clone(),
+                    )
+                    .len();
+                    quote = apply_emphasis(&quote, &underline_ranges);
 
-                let mut image_note_renders = Vec::new();
-                let mut comment_parts = Vec::<(String, Option<String>)>::new();
-                for member in &members {
+                    let mut image_note_renders = Vec::new();
+                    let mut comment_parts =
+                        Vec::<(String, Option<String>)>::new();
                     let effective = plan.effective_annotation(member);
                     let source = effective
                         .task_source
@@ -238,64 +232,74 @@ pub(super) fn render_sidecar_highlights(
                     if !comment.trim().is_empty() {
                         comment_parts.push((comment, None));
                     }
-                }
-                underline_contributions.sort_by_key(|contribution| {
-                    (
-                        contribution
-                            .ranges
-                            .first()
-                            .map_or(usize::MAX, |range| range.start),
-                        contribution.order,
-                    )
-                });
-                for contribution in underline_contributions {
-                    let underline = annotations_by_order[&contribution.order];
-                    let source = effective_underline_source(underline);
-                    let (image_note_refs, remaining_text) =
-                        split_image_note_lines(&source);
-                    append_resolved_image_notes(
-                        config,
-                        ref_note_path,
-                        contribution.order,
-                        &block_id,
-                        &image_note_refs,
-                        &mut image_note_renders,
-                        &mut image_note_count,
-                        &mut image_notes_unresolved,
-                        &mut image_asset_writes_by_dest,
-                    )?;
-                    let comment = strip_comment_label(
-                        &beautify_annotation_text(&remaining_text),
-                    );
-                    if !comment.trim().is_empty() {
-                        let anchor = contribution
-                            .ranges
-                            .first()
-                            .map(|range| {
-                                quote_chars[range.clone()]
-                                    .iter()
-                                    .copied()
-                                    .collect::<String>()
-                            })
-                            .unwrap_or(contribution.inner);
-                        comment_parts.push((comment, Some(anchor)));
-                    }
-                }
-                let add_anchors =
-                    comment_parts.len() >= 2 || merged_run_count >= 2;
-                let comment_parts = comment_parts
-                    .into_iter()
-                    .map(|(comment, anchor)| match (add_anchors, anchor) {
-                        (true, Some(anchor)) => {
-                            format!("{}{}", emphasis_anchor(&anchor), comment)
+
+                    underline_contributions.sort_by_key(|contribution| {
+                        (
+                            contribution
+                                .ranges
+                                .first()
+                                .map_or(usize::MAX, |range| range.start),
+                            contribution.order,
+                        )
+                    });
+                    for contribution in underline_contributions {
+                        let underline =
+                            annotations_by_order[&contribution.order];
+                        let source = effective_underline_source(underline);
+                        let (image_note_refs, remaining_text) =
+                            split_image_note_lines(&source);
+                        append_resolved_image_notes(
+                            config,
+                            ref_note_path,
+                            contribution.order,
+                            &block_id,
+                            &image_note_refs,
+                            &mut image_note_renders,
+                            &mut image_note_count,
+                            &mut image_notes_unresolved,
+                            &mut image_asset_writes_by_dest,
+                        )?;
+                        let comment = strip_comment_label(
+                            &beautify_annotation_text(&remaining_text),
+                        );
+                        if !comment.trim().is_empty() {
+                            let anchor = contribution
+                                .ranges
+                                .first()
+                                .map(|range| {
+                                    quote_chars[range.clone()]
+                                        .iter()
+                                        .copied()
+                                        .collect::<String>()
+                                })
+                                .unwrap_or(contribution.inner);
+                            comment_parts.push((comment, Some(anchor)));
                         }
-                        _ => comment,
-                    })
-                    .collect::<Vec<_>>();
+                    }
+                    let add_anchors =
+                        comment_parts.len() >= 2 || merged_run_count >= 2;
+                    let comment_parts = comment_parts
+                        .into_iter()
+                        .map(|(comment, anchor)| match (add_anchors, anchor) {
+                            (true, Some(anchor)) => {
+                                format!(
+                                    "{}{}",
+                                    emphasis_anchor(&anchor),
+                                    comment
+                                )
+                            }
+                            _ => comment,
+                        })
+                        .collect();
+                    rendered_pieces.push(RenderedPiece {
+                        page_label: member.page_label.clone(),
+                        quote,
+                        image_notes: image_note_renders,
+                        comment_parts,
+                    });
+                }
                 rendered.push_str(&render_highlight_group_block(
-                    &quote,
-                    &image_note_renders,
-                    &comment_parts,
+                    &rendered_pieces,
                     &block_id,
                 ));
             }
@@ -450,12 +454,14 @@ pub(super) fn render_sidecar_highlights(
         rendered.push_str(REMOVED_HIGHLIGHTS_HEADING);
         rendered.push_str("\n\n");
         for stub in continuation_stubs {
-            let body =
-                format!("\nNow part of [[#^{}|{}]].", stub.head_id, stub.alias);
+            let body = format!(
+                "\n\nNow shown in [[#^{}|{}]].",
+                stub.head_id, stub.alias
+            );
             push_callout_block(
                 &mut rendered,
                 1,
-                "[!info] Merged highlight",
+                "[!info] Grouped highlight",
                 &body,
             );
             rendered.push('\n');
@@ -688,8 +694,8 @@ fn continuation_redirect_stubs(
             .map(|member| member.page_label.as_deref())
             .collect();
         let alias = match group_page_label(&labels) {
-            Some(label) => format!("the {label} highlight"),
-            None => "the merged highlight".to_string(),
+            Some(label) => format!("the {label} group"),
+            None => "the grouped highlight".to_string(),
         };
         let Some(head_id) =
             id_plan.effective_by_order.get(&head_order).cloned()
@@ -772,19 +778,50 @@ fn append_resolved_image_notes(
     Ok(())
 }
 
+struct RenderedPiece {
+    page_label: Option<String>,
+    quote: String,
+    image_notes: Vec<ImageNoteRender>,
+    comment_parts: Vec<String>,
+}
+
 fn render_highlight_group_block(
-    quote: &str,
-    image_notes: &[ImageNoteRender],
-    comment_parts: &[String],
+    pieces: &[RenderedPiece],
     block_id: &str,
 ) -> String {
     let mut rendered = String::new();
-    push_callout_block(&mut rendered, 1, "[!quote]", quote);
-    push_image_note_renders(&mut rendered, image_notes);
-    if !comment_parts.is_empty() {
-        let comment = comment_parts.join("\n\n");
-        rendered.push_str(">\n");
-        push_callout_block(&mut rendered, 2, "[!note] Comment", &comment);
+    let is_group = pieces.len() > 1;
+    for (index, piece) in pieces.iter().enumerate() {
+        let depth = if index == 0 { 1 } else { 2 };
+        if index > 0 {
+            push_blockquote_spacer(&mut rendered, 1);
+        }
+        let header = if is_group {
+            match piece.page_label.as_deref() {
+                Some(label)
+                    if !label.chars().any(|character| {
+                        matches!(character, ']' | '|' | '\n' | '\r')
+                    }) =>
+                {
+                    format!("[!quote|{label}]")
+                }
+                _ => "[!quote]".to_string(),
+            }
+        } else {
+            "[!quote]".to_string()
+        };
+        push_callout_block(&mut rendered, depth, &header, &piece.quote);
+        push_image_note_renders(&mut rendered, &piece.image_notes, depth);
+        if !piece.comment_parts.is_empty() {
+            let comment = piece.comment_parts.join("\n\n");
+            push_blockquote_spacer(&mut rendered, depth);
+            push_callout_block(
+                &mut rendered,
+                depth + 1,
+                "[!note] Comment",
+                &comment,
+            );
+        }
     }
     rendered.push('\n');
     rendered.push('^');
@@ -806,6 +843,21 @@ pub(super) fn identity_quote_key(text: &str) -> String {
     let beautified = beautify_annotation_text(&stripped);
     let no_emphasis = beautified.replace("**", "");
     normalized_identity_text(&no_emphasis)
+}
+
+/// Stable identity for a rendered continuation group. Separating normalized
+/// piece keys with a newline keeps each piece boundary significant while
+/// retaining the whitespace prefix relation used by legacy ID matching.
+fn group_identity_text(pieces: &[&str]) -> String {
+    match pieces {
+        [] => String::new(),
+        [piece] => identity_quote_key(piece),
+        _ => pieces
+            .iter()
+            .map(|piece| identity_quote_key(piece))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
 }
 
 /// Normalized comment key used only as a duplicate tiebreaker within an
@@ -935,6 +987,7 @@ struct CurrentHead {
     head_comment: String,
     full_page: Option<String>,
     full_text: String,
+    legacy_full_text: String,
     full_comment: String,
     members: Vec<usize>,
 }
@@ -1023,11 +1076,22 @@ fn plan_block_ids(
                 RegionBlockKind::Image => continue,
                 RegionBlockKind::Highlight => {
                     let quote = block.quote.clone().unwrap_or_default();
+                    let text = if block.pieces.is_empty() {
+                        identity_quote_key(&quote)
+                    } else {
+                        group_identity_text(
+                            &block
+                                .pieces
+                                .iter()
+                                .map(|piece| piece.quote.as_str())
+                                .collect::<Vec<_>>(),
+                        )
+                    };
                     existing_live.push(ExistingLive {
                         block_id: block.block_id.clone(),
                         kind_str: region_kind_str(block.kind).to_string(),
                         page: block.page_label.clone(),
-                        text: identity_quote_key(&quote),
+                        text,
                         comment: identity_comment_key(
                             block.comment.as_deref().unwrap_or_default(),
                         ),
@@ -1123,8 +1187,11 @@ fn plan_block_ids(
                         }
                     }
                 }
+                let full_text = group_identity_text(
+                    &piece_texts.iter().map(String::as_str).collect::<Vec<_>>(),
+                );
                 let combined = assemble_group_quote(&pieces);
-                let full_text = identity_quote_key(&combined);
+                let legacy_full_text = identity_quote_key(&combined);
                 let mut full_comment_parts: Vec<String> = Vec::new();
                 for member in &member_refs {
                     let effective =
@@ -1151,6 +1218,7 @@ fn plan_block_ids(
                     head_comment,
                     full_page,
                     full_text,
+                    legacy_full_text,
                     full_comment,
                     members,
                 });
@@ -1166,6 +1234,7 @@ fn plan_block_ids(
                     head_comment: String::new(),
                     full_page: page,
                     full_text: text,
+                    legacy_full_text: String::new(),
                     full_comment: String::new(),
                     members: vec![annotation.order],
                 });
@@ -1231,6 +1300,91 @@ fn plan_block_ids(
             let secondary = heads[head_index].full_comment.clone();
             current_by_secondary
                 .entry(secondary)
+                .or_default()
+                .push(head_index);
+        }
+        for (secondary, current_list) in current_by_secondary.iter() {
+            if let Some(existing_list) = existing_by_secondary.get(secondary) {
+                let count = current_list.len().min(existing_list.len());
+                for position in 0..count {
+                    let head_index = current_list[position];
+                    let existing_index = existing_list[position];
+                    if head_effective_assigned[head_index].is_some()
+                        || full_matched_existing.contains(&existing_index)
+                    {
+                        continue;
+                    }
+                    let id = existing_live[existing_index].block_id.clone();
+                    head_effective_assigned[head_index] = Some(id.clone());
+                    full_matched_existing.insert(existing_index);
+                    reused_existing.insert(id);
+                }
+            }
+        }
+        let mut remaining_existing: Vec<usize> = existing_indices
+            .iter()
+            .copied()
+            .filter(|index| !full_matched_existing.contains(index))
+            .collect();
+        remaining_existing
+            .sort_by_key(|index| existing_live[*index].note_index);
+        let mut remaining_current: Vec<usize> = head_indices
+            .iter()
+            .copied()
+            .filter(|index| head_effective_assigned[*index].is_none())
+            .collect();
+        remaining_current.sort_by_key(|index| heads[*index].order);
+        let count = remaining_current.len().min(remaining_existing.len());
+        for position in 0..count {
+            let head_index = remaining_current[position];
+            let existing_index = remaining_existing[position];
+            let id = existing_live[existing_index].block_id.clone();
+            head_effective_assigned[head_index] = Some(id.clone());
+            full_matched_existing.insert(existing_index);
+            reused_existing.insert(id);
+        }
+    }
+
+    // Existing fused groups have no piece boundaries, so their parsed quote
+    // matches the pre-tucked assembly key. Reuse those IDs after the new
+    // per-piece identity pass has had first claim on all exact matches.
+    let mut legacy_heads_by_full: BTreeMap<IdentityPrimary, Vec<usize>> =
+        BTreeMap::new();
+    for (head_index, head) in heads.iter().enumerate() {
+        if head.members.len() < 2
+            || head_effective_assigned[head_index].is_some()
+        {
+            continue;
+        }
+        legacy_heads_by_full
+            .entry(IdentityPrimary {
+                kind: head.kind_str.clone(),
+                page: head.full_page.clone(),
+                text: head.legacy_full_text.clone(),
+            })
+            .or_default()
+            .push(head_index);
+    }
+    for (primary, head_indices) in legacy_heads_by_full.iter() {
+        let Some(existing_indices) = existing_by_full.get(primary) else {
+            continue;
+        };
+        let mut existing_by_secondary: BTreeMap<String, Vec<usize>> =
+            BTreeMap::new();
+        for &existing_index in existing_indices {
+            if full_matched_existing.contains(&existing_index) {
+                continue;
+            }
+            existing_by_secondary
+                .entry(existing_live[existing_index].comment.clone())
+                .or_default()
+                .push(existing_index);
+        }
+        let mut current_by_secondary: BTreeMap<String, Vec<usize>> =
+            BTreeMap::new();
+        for &head_index in head_indices {
+            current_by_secondary
+                .entry(heads[head_index].full_comment.clone())
                 .or_default()
                 .push(head_index);
         }
@@ -1746,7 +1900,7 @@ pub(super) fn render_annotation_block(
             };
             let text = beautify_annotation_text(raw);
             push_callout_block(&mut rendered, 1, "[!quote]", &text);
-            push_image_note_renders(&mut rendered, image_notes);
+            push_image_note_renders(&mut rendered, image_notes, 1);
             push_remaining_comment_callout(&mut rendered, remaining_text);
         }
         SidecarAnnotationKind::Image => {
@@ -1757,13 +1911,13 @@ pub(super) fn render_annotation_block(
                 });
             let embed = format!("![[{embed_path}]]");
             push_callout_block(&mut rendered, 1, "[!quote] Image", &embed);
-            push_image_note_renders(&mut rendered, image_notes);
+            push_image_note_renders(&mut rendered, image_notes, 1);
             push_remaining_comment_callout(&mut rendered, remaining_text);
         }
         SidecarAnnotationKind::StandaloneNote => {
             let text = beautify_annotation_text(remaining_text);
             push_callout_block(&mut rendered, 1, "[!note]", &text);
-            push_image_note_renders(&mut rendered, image_notes);
+            push_image_note_renders(&mut rendered, image_notes, 1);
         }
     }
     rendered.push('\n');
@@ -1789,12 +1943,14 @@ pub(super) fn push_remaining_comment_callout(
 pub(super) fn push_image_note_renders(
     rendered: &mut String,
     image_notes: &[ImageNoteRender],
+    base_depth: usize,
 ) {
     for image_note in image_notes {
-        rendered.push_str(">\n");
+        push_blockquote_spacer(rendered, base_depth);
+        let prefix = blockquote_prefix(base_depth);
         match image_note {
             ImageNoteRender::Embedded { vault_path, width } => {
-                rendered.push_str("> ");
+                rendered.push_str(&prefix);
                 rendered
                     .push_str(&image_note_embed_markdown(vault_path, *width));
                 rendered.push('\n');
@@ -1811,13 +1967,18 @@ pub(super) fn push_image_note_renders(
                 };
                 push_callout_block(
                     rendered,
-                    2,
+                    base_depth + 1,
                     &format!("[!warning] {}", state.warning_title()),
                     &body,
                 );
             }
         }
     }
+}
+
+fn push_blockquote_spacer(rendered: &mut String, depth: usize) {
+    rendered.push_str(blockquote_prefix(depth).trim_end());
+    rendered.push('\n');
 }
 
 pub(super) fn push_callout_block(
