@@ -24,7 +24,7 @@ const SCAN_LOCK_POLL: std::time::Duration =
 
 /// The `hook` object inside the success envelope.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonHook {
+pub(super) struct ScanJsonHook {
     status: &'static str,
     command: Option<String>,
 }
@@ -33,31 +33,35 @@ struct ScanJsonHook {
 /// Sidecar and audio companion moves are not listed.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ScanJsonIntakeMove {
-    from: String,
-    to: String,
+    pub(super) from: String,
+    pub(super) to: String,
 }
 
 /// The `summary` object: the same counts the human summary line prints.
+/// `held` is always present and comes last.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonSummary {
-    pdfs: usize,
-    created: usize,
-    updated: usize,
-    unchanged: usize,
-    markers: usize,
-    tasks: usize,
-    failures: usize,
+pub(super) struct ScanJsonSummary {
+    pub(super) pdfs: usize,
+    pub(super) created: usize,
+    pub(super) updated: usize,
+    pub(super) unchanged: usize,
+    pub(super) markers: usize,
+    pub(super) tasks: usize,
+    pub(super) failures: usize,
+    pub(super) held: usize,
 }
 
 /// One created or updated reference note, in scan order.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonNote {
+pub(super) struct ScanJsonNote {
     action: &'static str,
     path: String,
     title: String,
     ref_type: Option<String>,
     source_pdf: String,
     marker: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    marker_write: Option<ScanJsonMarkerWrite>,
     #[serde(skip_serializing_if = "is_zero_usize")]
     image_notes: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -74,7 +78,7 @@ struct ScanJsonNote {
 
 /// One unresolved image note on a scanned reference.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonUnresolvedImageNote {
+pub(super) struct ScanJsonUnresolvedImageNote {
     source: String,
     state: UnresolvedImageNoteState,
 }
@@ -85,7 +89,7 @@ fn is_zero_usize(value: &usize) -> bool {
 
 /// One per-PDF failure: the same text the human report prints.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonFailure {
+pub(super) struct ScanJsonFailure {
     pdf: String,
     stage: &'static str,
     message: String,
@@ -95,15 +99,44 @@ struct ScanJsonFailure {
 /// on a dry run): vault-relative PDF or audio path, a stable
 /// [`QueueReason`] slug, and the human detail.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonQueued {
+pub(super) struct ScanJsonQueued {
     pdf: String,
+    reason: &'static str,
+    message: String,
+}
+
+/// One marker write's machine-readable facts, right after `marker`.
+/// Present exactly when a marker was written in write mode; `status` is
+/// present only when the marker's `status` line changed.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ScanJsonMarkerWrite {
+    mode: &'static str,
+    editor_saved_first: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<ScanJsonStatusChange>,
+}
+
+/// A marker `status` line change (`ready|next|wip|read|abandoned` values).
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ScanJsonStatusChange {
+    from: String,
+    to: String,
+}
+
+/// One held PDF: nothing was written for it and the next scan retries.
+/// Always the last field of the success envelope, `[]` for dry runs.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ScanJsonHold {
+    pdf: String,
+    note: String,
+    title: String,
     reason: &'static str,
     message: String,
 }
 
 /// Success and partial-failure envelope. Field order is the contract.
 #[derive(Debug, Clone, Serialize)]
-struct ScanReportEnvelope {
+pub(super) struct ScanReportEnvelope {
     ok: bool,
     schema_version: u32,
     command: &'static str,
@@ -117,6 +150,7 @@ struct ScanReportEnvelope {
     failures: Vec<ScanJsonFailure>,
     intake_only: bool,
     queued: Vec<ScanJsonQueued>,
+    held: Vec<ScanJsonHold>,
 }
 
 /// The `error` body inside the hard-failure envelope.
@@ -314,6 +348,7 @@ pub(super) fn scan_library_json(
             &[],
             0,
             &error,
+            false,
         );
     }
 
@@ -328,6 +363,7 @@ pub(super) fn scan_library_json(
                 &[],
                 0,
                 &error,
+                false,
             );
         }
     };
@@ -341,6 +377,7 @@ pub(super) fn scan_library_json(
                 &[],
                 0,
                 &error,
+                false,
             );
         }
     };
@@ -358,38 +395,16 @@ pub(super) fn scan_library_json(
                     &[],
                     0,
                     &error,
+                    true,
                 );
             }
         }
     };
-    let (hook_status, hook_command) = if no_hooks {
-        let peeked = configured_pre_scan_hook(false)
-            .ok()
-            .flatten()
-            .map(|hook| hook.display());
-        ("skipped", peeked)
-    } else {
-        match &resolved_hook {
-            Some(hook) => (
-                if options.dry_run { "would_run" } else { "ran" },
-                Some(hook.display()),
-            ),
-            None => (
-                if bob_env::var_os(ENV_PRE_SCAN_HOOK).is_some_and(|value| {
-                    value.to_string_lossy().trim().is_empty()
-                }) {
-                    "skipped"
-                } else {
-                    "none"
-                },
-                None,
-            ),
-        }
-    };
-    let hook = ScanJsonHook {
-        status: hook_status,
-        command: hook_command,
-    };
+    let hook = scan_hook_for_envelope(
+        no_hooks,
+        options.dry_run,
+        resolved_hook.as_ref(),
+    );
 
     if let Err(error) =
         run_pre_scan_hook_json(config, resolved_hook.as_ref(), options.dry_run)
@@ -401,6 +416,7 @@ pub(super) fn scan_library_json(
             &[],
             0,
             &error,
+            true,
         );
     }
 
@@ -414,6 +430,7 @@ pub(super) fn scan_library_json(
                 &[],
                 0,
                 &error,
+                true,
             );
         }
     };
@@ -429,6 +446,7 @@ pub(super) fn scan_library_json(
                 &intake,
                 completed_intake,
                 &error,
+                true,
             );
         }
         completed_intake = intake.len();
@@ -444,6 +462,7 @@ pub(super) fn scan_library_json(
                 &intake,
                 completed_intake,
                 &error,
+                true,
             );
         }
     };
@@ -455,6 +474,7 @@ pub(super) fn scan_library_json(
             &intake,
             completed_intake,
             &error,
+            true,
         );
     }
 
@@ -488,6 +508,7 @@ pub(super) fn scan_library_json(
             &intake,
             completed_intake,
             &error,
+            true,
         );
     }
     let plans = plan_outcomes
@@ -505,6 +526,7 @@ pub(super) fn scan_library_json(
             &intake,
             completed_intake,
             &error,
+            true,
         );
     }
     let plan_failures = plan_outcomes
@@ -528,6 +550,7 @@ pub(super) fn scan_library_json(
                         plan,
                         plan.stable_note_action,
                         plan.marker_write_needed,
+                        None,
                     ))
                 }
                 ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Failed(_) => {
@@ -550,6 +573,8 @@ pub(super) fn scan_library_json(
             plan_failures.len(),
             notes,
             failures,
+            Vec::new(),
+            false,
         );
     }
 
@@ -561,6 +586,7 @@ pub(super) fn scan_library_json(
             &intake,
             completed_intake,
             &error,
+            true,
         );
     }
     let mut session = match MarkerWriteSession::for_scan(attended) {
@@ -573,6 +599,7 @@ pub(super) fn scan_library_json(
                 &intake,
                 completed_intake,
                 &error,
+                true,
             );
         }
     };
@@ -601,40 +628,10 @@ pub(super) fn scan_library_json(
             ScanWriteOutcome::Held(_) | ScanWriteOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
-    let counts = ScanCounts::from_reports(&reports);
-    let mut write_index = 0usize;
-    let mut notes = Vec::new();
-    let mut failures = Vec::new();
-    for outcome in &plan_outcomes {
-        match outcome {
-            ScanPlanOutcome::Planned(plan) => {
-                let write_outcome = write_outcomes.get(write_index);
-                write_index += 1;
-                match write_outcome {
-                    Some(ScanWriteOutcome::Written(report))
-                        if report.note_action != "none" =>
-                    {
-                        notes.push(scan_note_entry(
-                            config,
-                            plan,
-                            report.note_action,
-                            report.marker_action != "none",
-                        ));
-                    }
-                    Some(ScanWriteOutcome::Failed(failure)) => {
-                        failures
-                            .push(scan_failure_entry(config, failure, "write"));
-                    }
-                    Some(ScanWriteOutcome::Written(_))
-                    | Some(ScanWriteOutcome::Held(_))
-                    | None => {}
-                }
-            }
-            ScanPlanOutcome::Failed(failure) => {
-                failures.push(scan_failure_entry(config, failure, "plan"));
-            }
-        }
-    }
+    let mut counts = ScanCounts::from_reports(&reports);
+    counts.held = held_count(&write_outcomes);
+    let assembled =
+        assemble_full_scan_entries(config, &plan_outcomes, &write_outcomes);
     let failure_count = plan_failures.len()
         + write_outcomes
             .iter()
@@ -649,9 +646,48 @@ pub(super) fn scan_library_json(
         counts,
         pdfs.len(),
         failure_count,
-        notes,
-        failures,
+        assembled.notes,
+        assembled.failures,
+        assembled.held,
+        true,
     )
+}
+
+/// One marker write's JSON facts, or `None` when no marker was written
+/// in write mode (dry runs never carry `marker_write`).
+pub(super) fn marker_write_json(
+    report: &SyncWriteReport,
+) -> Option<ScanJsonMarkerWrite> {
+    let info = report.marker_write.as_ref()?;
+    if report.marker_action == "none" {
+        return None;
+    }
+    Some(ScanJsonMarkerWrite {
+        mode: match info.mode {
+            MarkerWriteMode::Coordinated => "coordinated",
+            MarkerWriteMode::Direct => "direct",
+        },
+        editor_saved_first: info.editor_saved_first,
+        status: info
+            .status_change
+            .clone()
+            .map(|(from, to)| ScanJsonStatusChange { from, to }),
+    })
+}
+
+/// One held PDF's JSON row: vault-relative paths plus the stable reason
+/// slug and the human message.
+pub(super) fn scan_hold_entry(
+    config: &Config,
+    hold: &ScanHold,
+) -> ScanJsonHold {
+    ScanJsonHold {
+        pdf: scan_vault_relative(config, &hold.pdf),
+        note: scan_vault_relative(config, &hold.note_path),
+        title: hold.title.clone(),
+        reason: hold.reason.as_str(),
+        message: hold.message.clone(),
+    }
 }
 
 /// One note entry: the path `ref list` reports, the title the scan
@@ -661,6 +697,7 @@ fn scan_note_entry(
     plan: &PdfSyncPlan,
     action: &'static str,
     marker: bool,
+    marker_write: Option<ScanJsonMarkerWrite>,
 ) -> ScanJsonNote {
     let (
         image_notes,
@@ -697,6 +734,7 @@ fn scan_note_entry(
         ref_type: plan.stable_metadata.ref_type.clone(),
         source_pdf: plan.stable_metadata.source_pdf.clone(),
         marker,
+        marker_write,
         image_notes,
         image_notes_unresolved,
         continuations,
@@ -725,8 +763,159 @@ fn scan_failure_entry(
     }
 }
 
+/// Notes, failures, and holds assembled from one full scan, in scan
+/// order. Shared by JSON mode (stdout) and human mode (receipt) so both
+/// envelopes carry the same entries.
+pub(super) struct AssembledScanEntries {
+    pub(super) notes: Vec<ScanJsonNote>,
+    pub(super) failures: Vec<ScanJsonFailure>,
+    pub(super) held: Vec<ScanJsonHold>,
+}
+
+/// Assemble one full scan's JSON entries from its plan and write outcomes.
+/// Held PDFs are neither notes nor failures.
+pub(super) fn assemble_full_scan_entries(
+    config: &Config,
+    plan_outcomes: &[ScanPlanOutcome],
+    write_outcomes: &[ScanWriteOutcome],
+) -> AssembledScanEntries {
+    let mut notes = Vec::new();
+    let mut failures = Vec::new();
+    let mut held = Vec::new();
+    let mut write_index = 0usize;
+    for outcome in plan_outcomes {
+        match outcome {
+            ScanPlanOutcome::Planned(plan) => {
+                let write_outcome = write_outcomes.get(write_index);
+                write_index += 1;
+                match write_outcome {
+                    Some(ScanWriteOutcome::Written(report))
+                        if report.note_action != "none" =>
+                    {
+                        notes.push(scan_note_entry(
+                            config,
+                            plan,
+                            report.note_action,
+                            report.marker_action != "none",
+                            marker_write_json(report),
+                        ));
+                    }
+                    Some(ScanWriteOutcome::Failed(failure)) => {
+                        failures
+                            .push(scan_failure_entry(config, failure, "write"));
+                    }
+                    Some(ScanWriteOutcome::Held(hold)) => {
+                        held.push(scan_hold_entry(config, hold));
+                    }
+                    Some(ScanWriteOutcome::Written(_)) | None => {}
+                }
+            }
+            ScanPlanOutcome::Failed(failure) => {
+                failures.push(scan_failure_entry(config, failure, "plan"));
+            }
+        }
+    }
+    AssembledScanEntries {
+        notes,
+        failures,
+        held,
+    }
+}
+
+/// The `hook` object for an envelope, from the resolved hook (or a peek at
+/// the configured hook when hooks are skipped). Write mode reports `ran`;
+/// dry runs report `would_run`.
+pub(super) fn scan_hook_for_envelope(
+    no_hooks: bool,
+    dry_run: bool,
+    resolved: Option<&PreScanHook>,
+) -> ScanJsonHook {
+    if no_hooks {
+        let peeked = configured_pre_scan_hook(false)
+            .ok()
+            .flatten()
+            .map(|hook| hook.display());
+        return ScanJsonHook {
+            status: "skipped",
+            command: peeked,
+        };
+    }
+    match resolved {
+        Some(hook) => ScanJsonHook {
+            status: if dry_run { "would_run" } else { "ran" },
+            command: Some(hook.display()),
+        },
+        None => ScanJsonHook {
+            status: if bob_env::var_os(ENV_PRE_SCAN_HOOK)
+                .is_some_and(|value| value.to_string_lossy().trim().is_empty())
+            {
+                "skipped"
+            } else {
+                "none"
+            },
+            command: None,
+        },
+    }
+}
+
+/// The `summary` object: the same counts the human summary line prints,
+/// with `held` last.
+pub(super) fn scan_summary_json(
+    counts: &ScanCounts,
+    pdf_count: usize,
+    failure_count: usize,
+) -> ScanJsonSummary {
+    ScanJsonSummary {
+        pdfs: pdf_count,
+        created: counts.creates,
+        updated: counts.updates,
+        unchanged: counts.unchanged,
+        markers: counts.marker_updates,
+        tasks: counts.annotation_tasks_created,
+        failures: failure_count,
+        held: counts.held,
+    }
+}
+
+/// Render the success/partial envelope line shared by JSON stdout and both
+/// modes' receipts. Field order is the contract.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_scan_report_envelope(
+    ok: bool,
+    mode: &'static str,
+    write_pdfs: bool,
+    hook: ScanJsonHook,
+    intake: Vec<ScanJsonIntakeMove>,
+    summary: ScanJsonSummary,
+    notes: Vec<ScanJsonNote>,
+    failures: Vec<ScanJsonFailure>,
+    intake_only: bool,
+    queued: Vec<ScanJsonQueued>,
+    held: Vec<ScanJsonHold>,
+) -> String {
+    let envelope = ScanReportEnvelope {
+        ok,
+        schema_version: REF_SCHEMA_VERSION,
+        command: SCAN_COMMAND,
+        generated_at: generated_at(),
+        mode,
+        write_pdfs,
+        hook,
+        intake,
+        summary,
+        notes,
+        failures,
+        intake_only,
+        queued,
+        held,
+    };
+    serde_json::to_string(&envelope).expect("scan envelope serializes")
+}
+
 /// Print the success/partial envelope as one compact JSON line and
-/// return its exit code: 0 exactly when `failures` is empty.
+/// return its exit code: 0 exactly when `failures` is empty. A writing
+/// scan that holds the writer lock also writes that exact line as the
+/// scan receipt.
 #[allow(clippy::too_many_arguments)]
 fn print_scan_report_envelope(
     config: &Config,
@@ -739,45 +928,33 @@ fn print_scan_report_envelope(
     failure_count: usize,
     notes: Vec<ScanJsonNote>,
     failures: Vec<ScanJsonFailure>,
+    held: Vec<ScanJsonHold>,
+    write_receipt: bool,
 ) -> i32 {
     let ok = failures.is_empty();
-    let envelope = ScanReportEnvelope {
+    let line = render_scan_report_envelope(
         ok,
-        schema_version: REF_SCHEMA_VERSION,
-        command: SCAN_COMMAND,
-        generated_at: generated_at(),
         mode,
-        write_pdfs: options.write_pdf,
+        options.write_pdf,
         hook,
-        intake: intake_moves(config, intake),
-        summary: ScanJsonSummary {
-            pdfs: pdf_count,
-            created: counts.creates,
-            updated: counts.updates,
-            unchanged: counts.unchanged,
-            markers: counts.marker_updates,
-            tasks: counts.annotation_tasks_created,
-            failures: failure_count,
-        },
+        intake_moves(config, intake),
+        scan_summary_json(&counts, pdf_count, failure_count),
         notes,
         failures,
-        intake_only: false,
-        queued: Vec::new(),
-    };
-    emit_scan_report_envelope(&envelope)
-}
-
-/// Print one report envelope line; the exit code is 0 exactly when `ok`.
-fn emit_scan_report_envelope(envelope: &ScanReportEnvelope) -> i32 {
-    println!(
-        "{}",
-        serde_json::to_string(envelope).expect("scan envelope serializes")
+        false,
+        Vec::new(),
+        held,
     );
-    i32::from(!envelope.ok)
+    println!("{line}");
+    if write_receipt {
+        emit_scan_receipt(&line);
+    }
+    i32::from(!ok)
 }
 
 /// Print the hard-failure envelope as one compact JSON line (exit 1),
-/// with no `bob ref:` stderr line.
+/// with no `bob ref:` stderr line. A writing scan that holds the writer
+/// lock also writes that exact line as the scan receipt.
 fn print_scan_error_envelope(
     config: &Config,
     options: SyncOptions,
@@ -785,6 +962,7 @@ fn print_scan_error_envelope(
     intake: &[IntakeMove],
     completed_intake: usize,
     error: &CommandError,
+    write_receipt: bool,
 ) -> i32 {
     emit_scan_error_envelope(
         config,
@@ -793,6 +971,7 @@ fn print_scan_error_envelope(
         intake_moves(config, &intake[..completed_intake.min(intake.len())]),
         error,
         false,
+        write_receipt,
     )
 }
 
@@ -803,7 +982,33 @@ fn emit_scan_error_envelope(
     intake: Vec<ScanJsonIntakeMove>,
     error: &CommandError,
     intake_only: bool,
+    write_receipt: bool,
 ) -> i32 {
+    let line = render_scan_error_envelope(
+        config,
+        options,
+        mode,
+        intake,
+        error,
+        intake_only,
+    );
+    println!("{line}");
+    if write_receipt {
+        emit_scan_receipt(&line);
+    }
+    1
+}
+
+/// Render the hard-failure envelope line shared by JSON stdout and both
+/// modes' receipts. The error envelope has no `held` field.
+pub(super) fn render_scan_error_envelope(
+    config: &Config,
+    options: SyncOptions,
+    mode: &'static str,
+    intake: Vec<ScanJsonIntakeMove>,
+    error: &CommandError,
+    intake_only: bool,
+) -> String {
     let (code, message, hint, paths) = scan_error_parts(config, error);
     let envelope = ScanErrorEnvelope {
         ok: false,
@@ -822,12 +1027,7 @@ fn emit_scan_error_envelope(
         intake_only,
         queued: Vec::new(),
     };
-    println!(
-        "{}",
-        serde_json::to_string(&envelope)
-            .expect("scan error envelope serializes")
-    );
-    1
+    serde_json::to_string(&envelope).expect("scan error envelope serializes")
 }
 
 /// Vault-relative PDF intake moves, in move order. Standalone audio moves
@@ -911,9 +1111,13 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
         prefer: None,
     };
     let mut progress = |line: &str| eprintln!("{line}");
-    let run =
-        intake::run_intake_only(config, dry_run, &mut progress, &mut |_| {});
-    let run = match run {
+    let outcome = intake::run_intake_only_tracked(
+        config,
+        dry_run,
+        &mut progress,
+        &mut |_| {},
+    );
+    let run = match outcome.run {
         Ok(run) => run,
         Err(error) => {
             return emit_scan_error_envelope(
@@ -923,10 +1127,32 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                 Vec::new(),
                 &error,
                 true,
+                outcome.lock_held,
             );
         }
     };
 
+    // A writing drain holds the scan writer lock; dry runs, empty queues,
+    // and lock-busy scans never do.
+    let write_receipt =
+        !dry_run && matches!(run, intake::IntakeOnlyRun::Drained(_));
+    let (line, code) = render_intake_only_envelope(config, mode, dry_run, &run);
+    println!("{line}");
+    if write_receipt {
+        emit_scan_receipt(&line);
+    }
+    code
+}
+
+/// Render the `--intake-only` envelope line shared by JSON stdout and both
+/// modes' receipts: filed notes in `notes`, completed PDF moves in
+/// `intake`, and anything still waiting in `queued`. `held` is always `[]`.
+pub(super) fn render_intake_only_envelope(
+    config: &Config,
+    mode: &'static str,
+    dry_run: bool,
+    run: &intake::IntakeOnlyRun,
+) -> (String, i32) {
     let mut intake = Vec::new();
     let mut notes = Vec::new();
     let mut failures = Vec::new();
@@ -940,7 +1166,7 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
             for preview in previews {
                 match preview {
                     intake::QueuePreview::Would { unit, .. } => {
-                        if let Some(entry) = pdf_move_entry(config, &unit) {
+                        if let Some(entry) = pdf_move_entry(config, unit) {
                             intake.push(entry);
                         }
                     }
@@ -948,17 +1174,20 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                         unit,
                         reason,
                         detail,
-                    } => {
-                        queued.push(queued_entry(config, &unit, reason, detail))
-                    }
+                    } => queued.push(queued_entry(
+                        config,
+                        unit,
+                        *reason,
+                        detail.clone(),
+                    )),
                 }
             }
         }
         intake::IntakeOnlyRun::Drained(report) => {
             pdfs = report.items.len();
-            for item in report.items {
+            for item in &report.items {
                 match item {
-                    intake::DrainItem::Filed { ingested, .. } => {
+                    intake::DrainItem::Filed { unit: _, ingested } => {
                         intake.extend(
                             ingested
                                 .moved
@@ -980,6 +1209,9 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                                 ref_type: ingested.ref_type.clone(),
                                 source_pdf: ingested.source_pdf.clone(),
                                 marker: ingested.write.marker_action != "none",
+                                marker_write: marker_write_json(
+                                    &ingested.write,
+                                ),
                                 image_notes: ingested.write.image_note_count,
                                 image_notes_unresolved: ingested
                                     .write
@@ -1012,12 +1244,15 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                         unit,
                         reason,
                         detail,
-                    } => {
-                        queued.push(queued_entry(config, &unit, reason, detail))
-                    }
+                    } => queued.push(queued_entry(
+                        config,
+                        unit,
+                        *reason,
+                        detail.clone(),
+                    )),
                     intake::DrainItem::Incomplete { unit, error } => {
                         // The PDF already moved into lib/ before the stop.
-                        if let Some(entry) = pdf_move_entry(config, &unit) {
+                        if let Some(entry) = pdf_move_entry(config, unit) {
                             intake.push(entry);
                         }
                         failures.push(ScanJsonFailure {
@@ -1026,7 +1261,7 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                                 unit.library_pdf(),
                             ),
                             stage: "write",
-                            message: error,
+                            message: error.clone(),
                         });
                     }
                 }
@@ -1036,32 +1271,23 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
 
     let counts = ScanCounts::from_reports(&reports);
     let ok = failures.is_empty() && (dry_run || queued.is_empty());
-    emit_scan_report_envelope(&ScanReportEnvelope {
+    let line = render_scan_report_envelope(
         ok,
-        schema_version: REF_SCHEMA_VERSION,
-        command: SCAN_COMMAND,
-        generated_at: generated_at(),
         mode,
-        write_pdfs: false,
-        hook: ScanJsonHook {
+        false,
+        ScanJsonHook {
             status: "skipped",
             command: None,
         },
         intake,
-        summary: ScanJsonSummary {
-            pdfs,
-            created: counts.creates,
-            updated: counts.updates,
-            unchanged: counts.unchanged,
-            markers: counts.marker_updates,
-            tasks: counts.annotation_tasks_created,
-            failures: failures.len(),
-        },
+        scan_summary_json(&counts, pdfs, failures.len()),
         notes,
         failures,
-        intake_only: true,
+        true,
         queued,
-    })
+        Vec::new(),
+    );
+    (line, i32::from(!ok))
 }
 
 /// The xlib→lib move of a PDF unit; audio units move no PDF.

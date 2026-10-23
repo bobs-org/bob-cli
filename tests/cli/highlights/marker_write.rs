@@ -132,9 +132,19 @@ fn json_unattended_scan_counts_a_hold_as_neither_note_nor_failure() {
     assert_eq!(document["summary"]["unchanged"], 0);
     assert_eq!(document["summary"]["markers"], 0);
     assert_eq!(document["summary"]["failures"], 0);
-    assert!(document["summary"].get("held").is_none());
+    assert_eq!(document["summary"]["held"], 1);
     assert_eq!(document["notes"].as_array().map(Vec::len), Some(0));
     assert_eq!(document["failures"].as_array().map(Vec::len), Some(0));
+    let held = document["held"].as_array().expect("held must be an array");
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0]["pdf"], "lib/example.pdf");
+    assert_eq!(held[0]["note"], "ref/example.md");
+    assert!(!held[0]["title"].as_str().unwrap_or_default().is_empty());
+    assert_eq!(held[0]["reason"], "editor_active");
+    assert_eq!(
+        held[0]["message"],
+        "waiting while you read in Highlights · retrying next scan"
+    );
     assert_eq!(fs::read(&pdf).expect("pdf after"), pdf_before);
     assert!(
         fs::read_to_string(&note)

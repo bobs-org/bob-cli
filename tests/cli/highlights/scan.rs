@@ -1615,11 +1615,13 @@ fn ref_scan_json_success_envelope_names_created_and_updated_notes() {
             "failures",
             "intake_only",
             "queued",
+            "held",
         ],
     );
     assert_eq!(document["ok"], true);
     assert_eq!(document["intake_only"], false);
     assert_eq!(document["queued"], serde_json::json!([]));
+    assert_eq!(document["held"], serde_json::json!([]));
     assert_eq!(document["schema_version"], 1);
     assert_eq!(document["command"], "ref scan");
     assert_eq!(document["generated_at"], "2026-10-06T12:00:00");
@@ -1640,6 +1642,7 @@ fn ref_scan_json_success_envelope_names_created_and_updated_notes() {
             "markers": 0,
             "tasks": 0,
             "failures": 0,
+            "held": 0,
         })
     );
     let notes = document["notes"]
@@ -1733,8 +1736,10 @@ fn ref_scan_json_partial_failure_reports_pdf_stage_and_message() {
             "markers": 0,
             "tasks": 0,
             "failures": 1,
+            "held": 0,
         })
     );
+    assert_eq!(document["held"], serde_json::json!([]));
     let failures = document["failures"].as_array().expect("failures array");
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert_scan_json_key_order(
@@ -2323,4 +2328,460 @@ fn ref_scan_writes_when_maintenance_lock_is_free() {
         format_output(&output)
     );
     assert!(note.is_file(), "writing scan must still create the note");
+}
+
+/// Receipt path for a sandboxed state dir: `<state>/bob-cli/ref/last-scan.json`.
+fn scan_receipt_path(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join("bob-cli/ref/last-scan.json")
+}
+
+#[test]
+fn ref_scan_json_marker_write_direct_with_status_change() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-marker-write");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/status_flip.pdf");
+    let note = vault.join("ref/chat/status_flip.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Status Flip\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    let created = fs::read_to_string(&note).expect("read created note");
+    assert!(
+        created.contains("status: ready"),
+        "created note must carry the marker status:\n{created}"
+    );
+    write_file(&note, &created.replacen("status: ready", "status: next", 1));
+
+    let output = run_ref_scan(&vault, &["--write-pdfs", "-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "marker write-back scan should succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(
+        document["summary"],
+        serde_json::json!({
+            "pdfs": 1,
+            "created": 0,
+            "updated": 1,
+            "unchanged": 0,
+            "markers": 1,
+            "tasks": 0,
+            "failures": 0,
+            "held": 0,
+        })
+    );
+    assert_eq!(document["held"], serde_json::json!([]));
+    let notes = document["notes"]
+        .as_array()
+        .expect("notes must be an array");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_scan_json_key_order(
+        &output,
+        "\"notes\":[",
+        &[
+            "action",
+            "path",
+            "title",
+            "ref_type",
+            "source_pdf",
+            "marker",
+            "marker_write",
+        ],
+    );
+    assert_eq!(notes[0]["action"], "update");
+    assert_eq!(notes[0]["path"], "ref/chat/status_flip.md");
+    assert_eq!(notes[0]["marker"], true);
+    assert_eq!(
+        notes[0]["marker_write"],
+        serde_json::json!({
+            "mode": "direct",
+            "editor_saved_first": false,
+            "status": {"from": "ready", "to": "next"},
+        })
+    );
+    assert!(
+        pdf_marker_contents(&pdf).contains("- status: next\n"),
+        "the marker write must land on the PDF"
+    );
+}
+
+#[test]
+fn ref_scan_json_receipt_matches_stdout() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/receipt.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Receipt\n",
+    );
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("json scan with sandboxed state");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "json scan should succeed:\n{}",
+        format_output(&output)
+    );
+    let text = stdout(&output);
+    let receipt = scan_receipt_path(&state_dir);
+    let bytes = fs::read(&receipt).expect("scan must write the receipt");
+    assert_eq!(
+        bytes,
+        format!("{text}").into_bytes(),
+        "the receipt must be the exact envelope line from stdout"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(text.trim()).expect("stdout parses as JSON");
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["schema_version"], 1);
+    assert_eq!(document["held"], serde_json::json!([]));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&receipt)
+                .expect("receipt metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "the receipt must be mode 0600"
+        );
+        assert_eq!(
+            fs::metadata(receipt.parent().expect("receipt parent"))
+                .expect("receipt dir metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "the receipt directory must be mode 0700"
+        );
+    }
+}
+
+#[test]
+fn ref_scan_human_scan_writes_equivalent_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/human.pdf");
+    let note = vault.join("ref/chat/human.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Human\n",
+    );
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("human scan with sandboxed state");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "human scan should succeed:\n{}",
+        format_output(&output)
+    );
+    assert!(note.is_file(), "human scan must still create the note");
+    let report = stdout(&output);
+    assert!(
+        report.contains("Scanning 1 PDF in lib"),
+        "human stdout keeps the display lines:\n{report}"
+    );
+    let receipt: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(scan_receipt_path(&state_dir))
+            .expect("human scan must write the receipt"),
+    )
+    .expect("receipt parses as JSON");
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(receipt["command"], "ref scan");
+    assert_eq!(receipt["mode"], "write");
+    assert_eq!(receipt["intake_only"], false);
+    assert_eq!(receipt["summary"]["pdfs"], 1);
+    assert_eq!(receipt["summary"]["created"], 1);
+    assert_eq!(receipt["summary"]["held"], 0);
+    assert_eq!(receipt["held"], serde_json::json!([]));
+    let notes = receipt["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0]["path"], "ref/chat/human.md");
+}
+
+#[test]
+fn ref_scan_json_dry_run_writes_no_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dry-run-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/preview.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview\n",
+    );
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("dry-run json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "dry-run json scan should succeed:\n{}",
+        format_output(&output)
+    );
+    let _ = scan_json_stdout(&output);
+    assert!(
+        !scan_receipt_path(&state_dir).exists(),
+        "a dry run must not write the scan receipt"
+    );
+}
+
+#[test]
+fn ref_scan_json_lock_busy_writes_no_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-busy-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/locked.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Locked\n",
+    );
+    let state_dir = temp.path().join("state");
+    let _held = hold_scan_writer_lock(&state_dir);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("busy json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "busy json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["error"]["code"], "scan_busy");
+    assert!(
+        !scan_receipt_path(&state_dir).exists(),
+        "a scan that never got the lock must not write the receipt"
+    );
+}
+
+#[test]
+fn ref_scan_json_hard_failure_writes_error_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dirty-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/memo.pdf");
+    let note = vault.join("ref/chat/memo.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_note = fs::read_to_string(&note)
+        .expect("read note")
+        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
+    write_file(&note, &dirty_note);
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
+    );
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("dirty json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dirty json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    let text = stdout(&output);
+    let bytes = fs::read(scan_receipt_path(&state_dir))
+        .expect("a hard failure after the lock must write the receipt");
+    assert_eq!(
+        bytes,
+        format!("{text}").into_bytes(),
+        "the error receipt must be the exact envelope line from stdout"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(text.trim()).expect("stdout parses as JSON");
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "dirty_targets");
+    assert!(
+        document.get("held").is_none(),
+        "the error envelope has no held field:\n{text}"
+    );
+}
+
+#[test]
+fn ref_scan_human_hard_failure_writes_error_receipt() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-dirty-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/memo.pdf");
+    let note = vault.join("ref/chat/memo.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_note = fs::read_to_string(&note)
+        .expect("read note")
+        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
+    write_file(&note, &dirty_note);
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
+    );
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("dirty human scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dirty human scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    let receipt: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(scan_receipt_path(&state_dir))
+            .expect("a hard failure after the lock must write the receipt"),
+    )
+    .expect("receipt parses as JSON");
+    assert_eq!(receipt["ok"], false);
+    assert_eq!(receipt["command"], "ref scan");
+    assert_eq!(receipt["mode"], "write");
+    assert_eq!(receipt["intake_only"], false);
+    assert_eq!(receipt["error"]["code"], "dirty_targets");
+    assert!(
+        receipt.get("held").is_none(),
+        "the error envelope has no held field"
+    );
+}
+
+#[test]
+fn ref_sync_writes_no_receipt() {
+    let temp = TempDir::new("bob-cli-ref-sync-no-receipt");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/memo.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    let state_dir = temp.path().join("state");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("ref sync");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "ref sync should succeed:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !scan_receipt_path(&state_dir).exists(),
+        "ref sync must never write the scan receipt"
+    );
+}
+
+#[test]
+fn ref_scan_json_receipt_failure_only_warns() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-receipt-warn");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/receipt.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Receipt\n",
+    );
+    let state_dir = temp.path().join("state");
+    let receipt = scan_receipt_path(&state_dir);
+    fs::create_dir_all(receipt.parent().expect("receipt parent"))
+        .expect("create receipt dir");
+    fs::create_dir_all(&receipt).expect("block the receipt with a directory");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("json scan with blocked receipt");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a receipt failure must not change the exit code:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert!(
+        stderr(&output).contains("could not write scan receipt"),
+        "a receipt failure warns on stderr:\n{}",
+        format_output(&output)
+    );
 }

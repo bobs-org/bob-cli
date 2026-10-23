@@ -750,3 +750,100 @@ fn intake_status_records_a_writing_full_scan_but_not_a_dry_run() {
     assert_eq!(status["last_success"]["command"], "bob ref scan");
     assert_eq!(status["last_success"]["filed"], 1);
 }
+
+#[test]
+fn intake_only_json_drain_writes_matching_receipt() {
+    let temp = TempDir::new("bob-cli-scan-intake-json-receipt");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "receipt_drain");
+
+    let output = scan_command(&temp, &vault, &["-i", "-f", "json"])
+        .output()
+        .expect("run scan --intake-only -f json");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "json intake-only drain should succeed:\n{}",
+        format_output(&output)
+    );
+    let text = stdout(&output);
+    let receipt_path = temp.path().join("state/bob-cli/ref/last-scan.json");
+    let bytes = fs::read(&receipt_path)
+        .expect("a writing drain must write the receipt");
+    assert_eq!(
+        bytes,
+        format!("{text}").into_bytes(),
+        "the receipt must be the exact envelope line from stdout"
+    );
+    let document: serde_json::Value =
+        serde_json::from_str(text.trim()).expect("stdout parses as JSON");
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["schema_version"], 1);
+    assert_eq!(document["command"], "ref scan");
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["intake_only"], true);
+    assert_eq!(document["summary"]["held"], 0);
+    assert_eq!(document["held"], serde_json::json!([]));
+    assert_eq!(
+        document["intake"],
+        serde_json::json!([{
+            "from": "xlib/chat/receipt_drain.pdf",
+            "to": "lib/chat/receipt_drain.pdf",
+        }])
+    );
+}
+
+#[test]
+fn intake_only_human_drain_writes_receipt() {
+    let temp = TempDir::new("bob-cli-scan-intake-human-receipt");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "human_drain");
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "human intake-only drain should succeed:\n{}",
+        format_output(&output)
+    );
+    let receipt: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            temp.path().join("state/bob-cli/ref/last-scan.json"),
+        )
+        .expect("a writing drain must write the receipt"),
+    )
+    .expect("receipt parses as JSON");
+    assert_eq!(receipt["ok"], true);
+    assert_eq!(receipt["command"], "ref scan");
+    assert_eq!(receipt["mode"], "write");
+    assert_eq!(receipt["intake_only"], true);
+    assert_eq!(receipt["summary"]["held"], 0);
+    assert_eq!(receipt["held"], serde_json::json!([]));
+}
+
+#[test]
+fn intake_only_empty_queue_writes_no_receipt() {
+    let temp = TempDir::new("bob-cli-scan-intake-empty-receipt");
+    let (vault, _peer) = seed_synced_vault(&temp);
+
+    let output = scan_command(&temp, &vault, &["-i", "-f", "json"])
+        .output()
+        .expect("run scan --intake-only on empty queue");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "empty intake-only drain should succeed:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !temp
+            .path()
+            .join("state/bob-cli/ref/last-scan.json")
+            .exists(),
+        "an empty drain never takes the lock and writes no receipt"
+    );
+}

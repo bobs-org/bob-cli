@@ -68,12 +68,27 @@ pub(super) fn scan_library(
     validate_library_layout(config)?;
     let _maintenance_lock = acquire_scan_maintenance_lock(options.dry_run)?;
     let _scan_lock = acquire_scan_writer_lock(options.dry_run)?;
+    if options.dry_run {
+        return scan_library_dry_run(
+            config, options, jobs, verbose, no_hooks, attended,
+        );
+    }
+    scan_library_write(config, options, jobs, verbose, no_hooks, attended)
+}
+
+/// Dry-run full scan: planning and human reporting only. Dry runs never
+/// take the writer lock and never write the scan receipt.
+fn scan_library_dry_run(
+    config: &Config,
+    options: SyncOptions,
+    jobs: usize,
+    verbose: bool,
+    no_hooks: bool,
+    attended: bool,
+) -> Result<()> {
     let pre_scan_hook = configured_pre_scan_hook(no_hooks)?;
     run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)?;
     let intake = plan_xlib_intake(config)?;
-    if !options.dry_run {
-        execute_xlib_intake(&intake)?;
-    }
     let pdfs = collect_pdf_paths(config, options.dry_run)?;
     validate_output_collisions(config, &pdfs)?;
 
@@ -122,7 +137,7 @@ pub(super) fn scan_library(
         .collect::<Vec<_>>();
 
     let styler = Styler::detect();
-    let mut session = MarkerWriteSession::for_scan(attended)?;
+    let session = MarkerWriteSession::for_scan(attended)?;
     if verbose {
         print_verbose_scan_plan_report(
             config,
@@ -138,27 +153,155 @@ pub(super) fn scan_library(
         print_scan_header(config, pdfs.len(), options.dry_run, &styler);
     }
 
-    if options.dry_run {
-        if verbose {
-            print_scan_plan_summary(&plans, plan_failures.len());
-            println!("writes: none");
-        } else {
-            print_concise_scan_plan_report(
-                &plan_outcomes,
-                &plans,
-                pdfs.len(),
-                plan_failures.len(),
-                &styler,
-            );
+    if verbose {
+        print_scan_plan_summary(&plans, plan_failures.len());
+        println!("writes: none");
+    } else {
+        print_concise_scan_plan_report(
+            &plan_outcomes,
+            &plans,
+            pdfs.len(),
+            plan_failures.len(),
+            &styler,
+        );
+    }
+    if plan_failures.is_empty() {
+        Ok(())
+    } else {
+        Err(scan_partial_failure_error(&plan_failures, &[]))
+    }
+}
+
+/// Writing full scan: the writer lock is held, so every outcome — success,
+/// partial failure, and hard failure after the lock — writes the same
+/// envelope line JSON mode would print as the scan receipt.
+fn scan_library_write(
+    config: &Config,
+    options: SyncOptions,
+    jobs: usize,
+    verbose: bool,
+    no_hooks: bool,
+    attended: bool,
+) -> Result<()> {
+    let mut receipt = WriteScanReceipt::new(config, options);
+    let pre_scan_hook = match configured_pre_scan_hook(no_hooks) {
+        Ok(hook) => hook,
+        Err(error) => {
+            receipt.write_error(&error);
+            return Err(error);
         }
-        return if plan_failures.is_empty() {
-            Ok(())
-        } else {
-            Err(scan_partial_failure_error(&plan_failures, &[]))
-        };
+    };
+    if let Err(error) =
+        run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)
+    {
+        receipt.write_error(&error);
+        return Err(error);
+    }
+    let intake = match plan_xlib_intake(config) {
+        Ok(intake) => intake,
+        Err(error) => {
+            receipt.write_error(&error);
+            return Err(error);
+        }
+    };
+    let (moved, result) = execute_xlib_intake_counting(&intake);
+    receipt.set_intake(intake.clone(), moved);
+    if let Err(error) = result {
+        receipt.write_error(&error);
+        return Err(error);
+    }
+    receipt.set_intake(intake.clone(), intake.len());
+    let pdfs = match collect_pdf_paths(config, options.dry_run) {
+        Ok(pdfs) => pdfs,
+        Err(error) => {
+            receipt.write_error(&error);
+            return Err(error);
+        }
+    };
+    if let Err(error) = validate_output_collisions(config, &pdfs) {
+        receipt.write_error(&error);
+        return Err(error);
     }
 
-    ensure_safe_to_write(config, plans.iter().copied())?;
+    // One locator index for the whole scan, shared across scoped planning
+    // threads (plus the invocation date). Planning never mutates it.
+    let ctx = ScanContext::build(config);
+    // `plan_pdf_sync` is a pure, read-only computation over an independent
+    // `&Config`, one PDF path, and the shared context, so planning is
+    // embarrassingly parallel. We collect into a position-keyed vector and
+    // reassemble in `pdfs` order so reporting output stays deterministic
+    // regardless of completion order.
+    let mut plan_outcomes = pdfs
+        .iter()
+        .zip(plan_pdfs(config, &pdfs, options, jobs, &ctx))
+        .map(|(pdf, result)| match result {
+            Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
+            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
+                pdf: pdf.clone(),
+                error,
+            }),
+        })
+        .collect::<Vec<_>>();
+    let mut plans_to_finalize = plan_outcomes
+        .iter_mut()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
+            ScanPlanOutcome::Failed(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if let Err(error) =
+        finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)
+    {
+        receipt.write_error(&error);
+        return Err(error);
+    }
+    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    let plans = plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
+            ScanPlanOutcome::Failed(_) => None,
+        })
+        .collect::<Vec<_>>();
+    if let Err(error) = validate_planned_asset_collisions(&plans) {
+        receipt.write_error(&error);
+        return Err(error);
+    }
+    let plan_failures = plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(_) => None,
+            ScanPlanOutcome::Failed(failure) => Some(failure),
+        })
+        .collect::<Vec<_>>();
+
+    let styler = Styler::detect();
+    let mut session = match MarkerWriteSession::for_scan(attended) {
+        Ok(session) => session,
+        Err(error) => {
+            receipt.write_error(&error);
+            return Err(error);
+        }
+    };
+    if verbose {
+        print_verbose_scan_plan_report(
+            config,
+            options,
+            pdfs.len(),
+            &intake,
+            &plan_outcomes,
+            &session,
+            &plans,
+        );
+    } else {
+        print_concise_intake_report(config, &intake, options.dry_run, &styler);
+        print_scan_header(config, pdfs.len(), options.dry_run, &styler);
+    }
+
+    if let Err(error) = ensure_safe_to_write(config, plans.iter().copied()) {
+        receipt.write_error(&error);
+        return Err(error);
+    }
     let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
@@ -218,6 +361,31 @@ pub(super) fn scan_library(
             &styler,
         );
     }
+    let mut counts = ScanCounts::from_reports(&reports);
+    counts.held = held_count(&write_outcomes);
+    let assembled =
+        assemble_full_scan_entries(config, &plan_outcomes, &write_outcomes);
+    emit_scan_receipt(&render_scan_report_envelope(
+        plan_failures.is_empty() && write_failures.is_empty(),
+        "write",
+        options.write_pdf,
+        scan_hook_for_envelope(
+            no_hooks,
+            options.dry_run,
+            pre_scan_hook.as_ref(),
+        ),
+        intake_moves(config, &intake),
+        scan_summary_json(
+            &counts,
+            pdfs.len(),
+            plan_failures.len() + write_failures.len(),
+        ),
+        assembled.notes,
+        assembled.failures,
+        false,
+        Vec::new(),
+        assembled.held,
+    ));
     if plan_failures.is_empty() && write_failures.is_empty() {
         Ok(())
     } else {

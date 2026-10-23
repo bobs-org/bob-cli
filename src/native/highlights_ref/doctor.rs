@@ -946,14 +946,6 @@ pub(super) fn collect_orphan_audio(config: &Config) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Move every planned intake pair, returning the count of completed
-/// top-level renames so a later failure can report which moves already
-/// happened.
-pub(super) fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<usize> {
-    let (moved, result) = execute_xlib_intake_counting(moves);
-    result.map(|()| moved)
-}
-
 /// Move every planned intake pair, reporting how many top-level renames
 /// completed before the first error alongside that error. A main rename
 /// counts immediately, before companions are attempted, so an already

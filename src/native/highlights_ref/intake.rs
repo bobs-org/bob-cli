@@ -1086,19 +1086,6 @@ fn session_error(failure: QueueFailure) -> CommandError {
 /// pushes once. A unit that cannot be filed stays queued and the drain
 /// moves on; a unit that stops mid-ingest ends the drain. `on_item` sees
 /// each result as it happens.
-pub(super) fn run_intake_only(
-    config: &Config,
-    dry_run: bool,
-    progress: &mut dyn FnMut(&str),
-    on_item: &mut dyn FnMut(&DrainItem),
-) -> Result<IntakeOnlyRun> {
-    let run = drain_queue(config, dry_run, progress, on_item);
-    if !dry_run {
-        record_drain_status(&run);
-    }
-    run
-}
-
 /// Update the per-host intake status record for one real drain. An empty
 /// queue leaves the record alone.
 fn record_drain_status(run: &Result<IntakeOnlyRun>) {
@@ -1142,27 +1129,67 @@ fn record_drain_status(run: &Result<IntakeOnlyRun>) {
     }
 }
 
+/// Whether an intake-only drain acquired the scan writer lock. A drain
+/// writes the scan receipt exactly when the lock was acquired: writing
+/// drains and hard failures after the lock. Dry runs, empty queues, and
+/// scans that never got the lock write none.
+pub(super) struct IntakeOnlyOutcome {
+    pub(super) run: Result<IntakeOnlyRun>,
+    pub(super) lock_held: bool,
+}
+
+/// Drain with lock tracking for the scan receipt. See [`drain_queue`]: the
+/// flag is true exactly when the scan writer lock was acquired.
+pub(super) fn run_intake_only_tracked(
+    config: &Config,
+    dry_run: bool,
+    progress: &mut dyn FnMut(&str),
+    on_item: &mut dyn FnMut(&DrainItem),
+) -> IntakeOnlyOutcome {
+    let (run, lock_held) = drain_queue(config, dry_run, progress, on_item);
+    if !dry_run {
+        record_drain_status(&run);
+    }
+    IntakeOnlyOutcome { run, lock_held }
+}
+
 fn drain_queue(
     config: &Config,
     dry_run: bool,
     progress: &mut dyn FnMut(&str),
     on_item: &mut dyn FnMut(&DrainItem),
-) -> Result<IntakeOnlyRun> {
-    validate_library_layout(config)?;
-    let units = enumerate_queue(config)?;
+) -> (Result<IntakeOnlyRun>, bool) {
+    let layout = (|| -> Result<Vec<IntakeUnit>> {
+        validate_library_layout(config)?;
+        enumerate_queue(config)
+    })();
+    let units = match layout {
+        Ok(units) => units,
+        Err(error) => return (Err(error), false),
+    };
     if units.is_empty() {
-        return Ok(IntakeOnlyRun::Empty);
+        return (Ok(IntakeOnlyRun::Empty), false);
     }
     if dry_run {
-        return Ok(IntakeOnlyRun::Preview(preview_queue(config, units)));
+        return (
+            Ok(IntakeOnlyRun::Preview(preview_queue(config, units))),
+            false,
+        );
     }
 
-    let session =
-        IntakeSession::open(config, progress).map_err(session_error)?;
-    session.pre_sync().map_err(session_error)?;
+    let session = match IntakeSession::open(config, progress) {
+        Ok(session) => session,
+        Err(failure) => return (Err(session_error(failure)), false),
+    };
+    if let Err(error) = session.pre_sync().map_err(session_error) {
+        return (Err(error), true);
+    }
     // The pull cannot add to the gitignored queue, but another drain may have
     // emptied it while this one waited for the locks.
-    let units = enumerate_queue(config)?;
+    let units = match enumerate_queue(config) {
+        Ok(units) => units,
+        Err(error) => return (Err(error), true),
+    };
     let mut items = Vec::new();
     let mut stopped = false;
     for unit in units {
@@ -1211,19 +1238,42 @@ fn drain_queue(
                 .to_string(),
         ),
     };
-    Ok(IntakeOnlyRun::Drained(DrainReport { items, sync_status }))
+    (
+        Ok(IntakeOnlyRun::Drained(DrainReport { items, sync_status })),
+        true,
+    )
 }
 
 /// Human `bob ref scan --intake-only`. Returns the process exit code: 0 when
 /// the queue is empty or fully filed (or on `--dry-run`), 1 when an item is
-/// stuck or the drain could not start.
+/// stuck or the drain could not start. A writing drain holds the scan
+/// writer lock, so it writes the same envelope line JSON mode would print
+/// as the scan receipt; dry runs, empty queues, and lock-busy scans write
+/// none.
 pub(super) fn scan_intake_only(config: &Config, dry_run: bool) -> i32 {
+    let mode = if dry_run { "dry_run" } else { "write" };
     let styler = Styler::detect();
     let mut progress = |line: &str| eprintln!("{line}");
     let mut on_item =
         |item: &DrainItem| print_drain_item(config, &styler, item);
-    match run_intake_only(config, dry_run, &mut progress, &mut on_item) {
+    let outcome =
+        run_intake_only_tracked(config, dry_run, &mut progress, &mut on_item);
+    match outcome.run {
         Err(error) => {
+            if outcome.lock_held {
+                emit_scan_receipt(&render_scan_error_envelope(
+                    config,
+                    SyncOptions {
+                        dry_run,
+                        write_pdf: false,
+                        prefer: None,
+                    },
+                    mode,
+                    Vec::new(),
+                    &error,
+                    true,
+                ));
+            }
             eprintln!("{COMMAND_NAME}: {error}");
             1
         }
@@ -1244,7 +1294,11 @@ pub(super) fn scan_intake_only(config: &Config, dry_run: bool) -> i32 {
                 report.filed_count(),
                 report.stuck_count()
             );
-            i32::from(report.stuck_count() > 0)
+            let run = IntakeOnlyRun::Drained(report);
+            let (line, code) =
+                render_intake_only_envelope(config, mode, dry_run, &run);
+            emit_scan_receipt(&line);
+            code
         }
     }
 }

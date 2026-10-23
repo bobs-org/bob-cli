@@ -864,7 +864,7 @@ queued in `queued`.
 A successful or partially failed scan prints this envelope (field order is
 fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 `write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`,
-`intake_only`, `queued`):
+`intake_only`, `queued`, `held`):
 
 | Field | Meaning |
 | --- | --- |
@@ -877,13 +877,14 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `hook.status` | `"ran"`, `"would_run"` (dry run), `"skipped"` (`--no-hooks` or an empty override), or `"none"` (not configured) |
 | `hook.command` | The hook command, or `null` when none is configured |
 | `intake` | PDF intake moves as vault-relative `from`/`to` pairs in move order; sidecar and audio moves are not listed |
-| `summary` | `pdfs`, `created`, `updated`, `unchanged`, `markers`, `tasks`, `failures`: the same counts the human summary line prints |
+| `summary` | `pdfs`, `created`, `updated`, `unchanged`, `markers`, `tasks`, `failures`, `held`: the same counts the human summary line prints (`held` is always last) |
 | `notes` | One entry per PDF whose reference note was created or updated (or would be, in a dry run), in scan order |
 | `notes[].action` | `"create"` or `"update"`; marker-only changes are counted in `summary.markers` and not listed |
 | `notes[].path` | Vault-relative note path, byte-identical to the `path` that `bob ref list -f json` reports for the same note |
 | `notes[].title` | The note title the scan wrote |
 | `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
+| `notes[].marker_write` | Present exactly when a marker was written in write mode (never on dry runs), right after `marker`: `mode` (`"coordinated"` or `"direct"`), `editor_saved_first`, and `status` (`{from, to}` marker `status` values) only when the marker's `status` line changed |
 | `notes[].continuations` | Absorbed follower pieces on this note; omitted when zero |
 | `notes[].continuations_dangling` | `<` markers that could not form a group; omitted when zero |
 | `notes[].underlines_merged` | Underline annotations folded into host quotes; omitted when zero |
@@ -891,6 +892,7 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
+| `held` | PDFs held instead of written (coordinated marker writes waiting on Highlights), always last and `[]` for dry runs: `{pdf, note, title, reason, message}` with vault-relative `pdf`/`note`, a stable `reason` slug (`editor_active`, `coordination_timeout`, `marker_changed`), and the same message the human `held` line prints. The error envelope has no `held` field |
 
 A hard failure prints the error envelope instead (`ok`, `schema_version`,
 `command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`,
@@ -953,6 +955,26 @@ can detect it and avoid shelling back into `bob ref scan`. A nested
 writing scan would wait on the held locks and fail with `lock_busy`.
 Human mode is otherwise byte-identical, except for the lock-wait lines
 on stderr and the `lock_busy` / `scan_busy` failures.
+
+### Scan receipt
+
+Every writing `bob ref scan` that acquired the scan writer lock writes the
+exact envelope line JSON mode would print to
+`<state>/bob-cli/ref/last-scan.json` (`$XDG_STATE_HOME`, else
+`~/.local/state`). That covers human and JSON modes, full and
+`--intake-only` drains, success, partial success, and hard failures after
+the lock (where the receipt holds the error envelope). In JSON mode the
+receipt bytes are identical to stdout. Dry runs, `ref sync`, and scans that
+never got the lock write no receipt. The receipt is written by temp file
+plus rename, mode 0600, in a 0700 directory. A receipt failure prints one
+`bob ref: could not write scan receipt: …` line to stderr and never changes
+stdout or the exit code.
+
+On macOS, bob then posts the `org.bobs.bob.ref.scan-finished` Darwin
+notification so Bob Mac Capture re-reads the receipt off the main thread.
+Receipts are serialized by the scan writer lock, so the newest file always
+describes a scan that actually ran. That also gives unattended cron scans a
+readable record beyond the (usually empty) cron log.
 
 ## Generated Body Contract
 
