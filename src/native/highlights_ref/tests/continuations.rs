@@ -601,14 +601,18 @@ fn legacy_fused_group_migrates_without_id_churn_or_tombstones() {
         path: bob_dir.join("lib/blogs/gas_town_emergency_user_manual.md"),
         annotations,
     };
+    // Exact pre-epic renderer output from 5376dc6e^ for GAS_TOWN_SIDECAR:
+    // the fused quote keeps every word on one beautified line, so the
+    // legacy_full_text pass (not the abbreviated head prefix) must match.
     let prior = region_note(&format!(
-        "### Pages 11–12\n\n> [!quote] One last Crew tip: … PR Sheriff Standing Orders. On every session startup,\n> the sheriff checks open PRs and divides them into easy wins and those needing human\n> review, then slings the easy wins to other crew for merging and cleanup\n>\n> > [!note] Comment PR Merge Master?!\n\n^{GAS_TOWN_HEAD_ID}\n\n### Removed highlights\n\n> [!info] Merged highlight\n>\n> Now part of [[#^{GAS_TOWN_HEAD_ID}|the Pages 11–12 highlight]].\n\n^{GAS_TOWN_FOLLOWER_ID}\n"
+        "### Pages 11–12\n\n> [!quote] One last Crew tip: I have a new ad-hoc role that I’ve been using for the past week, called the “PR Sheriff.One of my B eads crew has a permanent hook: b d-4f43s: PR Sheriff Standing Orders. On every session startup, the sheriff checks open PRs and divides them into easy wins and those needing human review, then slings the easy wins to other crew for merging and cleanup\n>\n> > [!note] Comment PR Merge Master?!\n\n^{GAS_TOWN_HEAD_ID}\n\n### Removed highlights\n\n> [!info] Merged highlight\n>\n> Now part of [[#^{GAS_TOWN_HEAD_ID}|the Pages 11–12 highlight]].\n\n^{GAS_TOWN_FOLLOWER_ID}\n"
     ));
     let migrated = super::render_sidecar_highlights(
         &config, &pdf, &ref_note, &prior, &sidecar, false,
     )
     .expect("migrate fused group");
-    assert!(migrated.content.contains("^h-ba93bec527bb"));
+    assert!(migrated.content.contains(GAS_TOWN_HEAD_ID));
+    assert!(migrated.content.contains(GAS_TOWN_FOLLOWER_ID));
     assert!(migrated.content.contains("[!info] Grouped highlight"));
     assert!(migrated.content.contains("the Pages 11–12 group"));
     assert!(!migrated.content.contains("[!warning] Removed highlight"));
@@ -627,6 +631,89 @@ fn legacy_fused_group_migrates_without_id_churn_or_tombstones() {
         false,
     )
     .expect("rerender tucked group");
+    assert_eq!(rerendered.content, migrated.content);
+}
+
+#[test]
+fn legacy_hyphen_seam_migrates_through_legacy_full_text() {
+    // A head ending in `inter-` with a follower starting `national` healed
+    // to `international` in the pre-tucked renderer. The old fused quote
+    // does not start with the head text plus whitespace, so preserving the
+    // old ID must exercise the legacy_full_text pass, not the prefix
+    // fallback. The old ID is a valid non-generated `h-` ID, so a fresh
+    // deterministic regeneration cannot accidentally satisfy the assertion.
+    let bob_dir = temp_bob_dir("continuation-legacy-hyphen");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    let head = highlight(1, "Page 11", Some(11), "The inter-", None);
+    let follower = highlight(
+        2,
+        "Page 12",
+        Some(12),
+        "national standard is open",
+        Some("<"),
+    );
+    let sidecar = SidecarInput {
+        path: bob_dir.join("lib/papers/example.md"),
+        annotations: vec![head, follower],
+    };
+    const OLD_HEAD_ID: &str = "h-0123456789ab";
+    let follower_plain =
+        highlight(2, "Page 12", Some(12), "national standard is open", None);
+    let follower_id =
+        super::annotation_block_id(&config, &pdf, &follower_plain);
+    let prior = region_note(&format!(
+        "### Pages 11–12\n\n> [!quote] The international standard is open\n\n^{OLD_HEAD_ID}\n\n### Removed highlights\n\n> [!info] Merged highlight\n>\n> Now part of [[#^{OLD_HEAD_ID}|the Pages 11–12 highlight]].\n\n^{follower_id}\n"
+    ));
+    let migrated = super::render_sidecar_highlights(
+        &config, &pdf, &ref_note, &prior, &sidecar, false,
+    )
+    .expect("migrate hyphen fused group");
+    assert!(
+        migrated.content.contains(OLD_HEAD_ID),
+        "{}",
+        migrated.content
+    );
+    assert!(
+        migrated.content.contains(follower_id.as_str()),
+        "{}",
+        migrated.content
+    );
+    assert!(migrated.content.contains("[!info] Grouped highlight"));
+    assert!(!migrated.content.contains("[!warning] Removed highlight"));
+    assert!(!migrated.content.contains("[!info] Merged highlight"));
+    assert!(
+        !migrated.content.contains("international"),
+        "{}",
+        migrated.content
+    );
+    assert!(
+        migrated.content.contains("> [!quote|Page 11] The inter-"),
+        "{}",
+        migrated.content
+    );
+    assert!(
+        migrated
+            .content
+            .contains("> > [!quote|Page 12] national standard is open"),
+        "{}",
+        migrated.content
+    );
+    let parsed = super::parse_managed_region(&migrated.content);
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    assert_eq!(parsed.blocks[0].block_id, OLD_HEAD_ID);
+    assert_eq!(parsed.blocks[0].pieces.len(), 2);
+
+    let rerendered = super::render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &region_note(&migrated.content),
+        &sidecar,
+        false,
+    )
+    .expect("rerender hyphen tucked group");
     assert_eq!(rerendered.content, migrated.content);
 }
 

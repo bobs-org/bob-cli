@@ -150,6 +150,15 @@ pub(super) fn plan_continuations(
     plan
 }
 
+/// Legacy fused-quote assembly, kept only to recognize pre-tucked IDs.
+///
+/// Do not use for current display: tucked groups render each piece verbatim
+/// with no fusing, healing, or `[…]`. This helper feeds `legacy_full_text`
+/// in `plan_block_ids` so notes written by the pre-epic renderer keep their
+/// block IDs through migration. The seam rules in `seam_between` (Join on
+/// consecutive pages with `<`, Gap on `<…`/`<...` or non-consecutive pages)
+/// stay for the same migration key; `<…` and `<...` remain accepted spellings
+/// of `<` for grouping.
 pub(super) fn assemble_group_quote(pieces: &[(&str, Seam)]) -> String {
     if pieces.is_empty() {
         return String::new();

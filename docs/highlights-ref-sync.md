@@ -38,7 +38,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `bob ref` implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
 copying, image notes (a screenshot path pasted into a highlight comment),
-continuation highlights (a `<` note folds a highlight into the one before it),
+continuation highlights (a `<` note groups a highlight with the one before it),
 recursive library scan with `xlib` intake, prerequisite checks, output
 collision detection, dirty-target refusal, and atomic note writes.
 
@@ -833,7 +833,7 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
 | `notes[].continuations` | Absorbed follower pieces on this note; omitted when zero |
-| `notes[].continuations_dangling` | `<` markers that could not merge; omitted when zero |
+| `notes[].continuations_dangling` | `<` markers that could not form a group; omitted when zero |
 | `notes[].underlines_merged` | Underline annotations folded into host quotes; omitted when zero |
 | `notes[].underlines_standalone` | Underlines that stayed separate; omitted when zero |
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
@@ -1871,7 +1871,7 @@ MacBook validation checklist:
   under the quote. `bob ref sync <pdf> --dry-run` reports `image_notes:` /
   `image_note_unresolved:`; `bob ref doctor` lists `unresolved_image_note`.
 - For a continuation highlight (`<` on the later piece), the first real write
-  folds that quote into the previous text highlight. `bob ref sync <pdf>
+  groups that quote with the previous text highlight. `bob ref sync <pdf>
   --dry-run` reports `continuations:` / `continuation_dangling:`.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a generated lifecycle-task change require PDF marker
