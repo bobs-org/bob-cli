@@ -140,7 +140,9 @@ due, where the cursor sits in the walk, and whether the commitment tiers are don
 (after them come ROTTEN upkeep, which is fine to stop partway, and the POST
 closeout). Off a queue row it reads `⟳ Review N due · K commitments` (or
 `Commitments done` / `Upkeep budget met`) with a `]s next` hint; on a queue row it
-reads `⟳ Review r/N · TIER i/M` plus that row's detail. The other nonempty tier
+reads `⟳ Review r/N · TIER i/M` plus that row's detail and, when the row has a
+recommended roll, the `Alt+P` preview in the hint slot (for example
+`Alt+P roll P2 1/1`). The other nonempty tier
 groups follow in walk order, then the `✓ upkeep/budget today` meter. To fit the
 status bar it uses short tier labels — `WIP` for PENDING (WIP is an official alias of
 the Pending status), `TICKS` for TICKLER, `REFS` for REFERENCES — explained in its

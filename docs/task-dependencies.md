@@ -538,6 +538,11 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
     version: 1,
     showUnblocked(model),     // additive: renders the Unblocked notice card (§12.6); returns true when shown
   }),
+  quickRoll: Object.freeze({
+    version: 1,
+    keyLabel,
+    preview({ content | lines, line, tier }), // sync, never throws: frozen preview result
+  }),
   successors: Object.freeze({
     version: 1,
     pick(model),              // Promise<{picks: [{key, destination?}]} | null>; never rejects; null = none (§12.13)
@@ -582,6 +587,16 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   `not pulled in` and writes no links. A second call while one picker
   is open resolves `null`. The null-plugin variant (after unload)
   resolves `null`.
+- Additive `quickRoll` v1 namespace: `keyLabel` is the recommended-roll
+  key label (`Alt+P`), and `preview({ content | lines, line, tier })`
+  synchronously returns the frozen preview `{ ok: true, kind, line,
+  compact, detail }` or `{ ok: false, reason }`. `line` is a 0-based task
+  line index; pass either note `content` or its `lines`, plus the review
+  `tier`. PRE and POST checklist rows have no preview. The method never
+  throws; a null plugin (after unload) returns
+  `{ ok: false, reason: "unavailable" }`. This additive namespace leaves
+  root `api.version` at 3; consumers feature-detect
+  `api.quickRoll?.version >= 1` and keep today's behavior otherwise.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 - Additive `inboxRoute` v1 namespace (nav 2.9.0+; `api.version` stays 3,

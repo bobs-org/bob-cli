@@ -632,8 +632,13 @@ task stays due and Ctrl+Alt+F does not advance.
    answer or `]s` skip rows or jump ahead. Alt+F is the one answer that
    stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
-   answered. For a tickler, "not
-   now" is a priority roll, not Alt+F. Clear CROWDED to 0 (split,
+   answered. For a tickler, "not now" is a priority roll: press Alt+P to
+   take the Task Card's recommended roll or decay in one key. An immediate
+   roll or decay uses the existing Ctrl+Enter path and advances the walk;
+   when the recommendation is cancel, the card appears and a second Alt+P
+   confirms it. A Next or Pending task still offers the optional Work Log
+   summary. Ctrl+Shift+P `1`–`4` remains available to choose a specific
+   priority. Clear CROWDED to 0 (split,
    sequence, defer, drop via `bob ready`) and choose a highlight (≤3
    themes, highlight first). CROWDED does not depend on how far ROTTEN
    review got.
@@ -646,8 +651,10 @@ task stays due and Ctrl+Alt+F does not advance.
    closes on the last row. POST never wraps.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
-visible while the cursor is on a review task, and the `]s next` hint
-otherwise. Its trailing group summary omits the current review group;
+visible while the cursor is on a review task, including the compact Alt+P
+roll preview in its hint slot when the row has a recommendation; the full
+preview detail is in its tooltip. It shows the `]s next` hint otherwise.
+Its trailing group summary omits the current review group;
 the full summary shows when no review row is current. Wrap and boundary preambles stay transient in the notice.
 
 **First walk:** release the lanes to their caps.
@@ -657,8 +664,9 @@ lengthen `next_interval` to 2–3 and leave Pending at 1.
 
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
-(Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
-`1`–`4` → next); do today (Ctrl+Shift+Enter picks a Pomodoro / Alt+N → next); route an
+(Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Alt+P takes the
+recommended roll or decay → next; a cancel requires a second press; use
+Ctrl+Shift+P `1`–`4` to choose a level); do today (Ctrl+Shift+Enter picks a Pomodoro / Alt+N → next); route an
 inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where it goes
 as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
@@ -827,8 +835,8 @@ an invalid `freshness:` block or a non-Dataview task format.
 | ------- | ----- |
 | bob freshness | fresh-cli: schema 14 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, approved-decay policy, and `[unblocked::]` ticklers. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; a `*` edit to T stamps T the same way; capture never stamps trackers, a new N, or an existing owner's target-ID and lane edits) |
-| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
-| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
+| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView` and the compact `api.quickRoll` preview in its hint slot) |
+| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; `]s` landing notices append the Alt+P recommended-roll preview; additive `api.quickRoll` v1) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present TICKLER and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
