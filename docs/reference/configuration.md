@@ -19,6 +19,8 @@ environment values count as unset. Bob expands a leading `~` or `~/` in the
 selected file path and in `XDG_CONFIG_HOME`; it does not expand `~someone`.
 
 ```yaml
+timezone: America/New_York
+
 properties:
   - name: scheduled
     values: date
@@ -44,6 +46,16 @@ windows are required by `$<N>` priority rolls and `bob task reroll`; commands
 that need them report a setup error when the `priority` property is absent.
 
 ## Supported keys
+
+### `timezone`
+
+| Key | Type and rules | Default or effect |
+| --- | --- | --- |
+| `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host's system timezone. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
+
+`BOB_NOW` and `DATE` clock overrides keep precedence over the configured
+timezone. The key makes Bob's clock consistent across hosts without requiring
+each host's system timezone to match. See the [plan contract](../plan.md).
 
 ### `properties` and priority windows
 
@@ -208,8 +220,8 @@ interpret shell quotes unless their contract says otherwise.
 | --- | --- | --- |
 | `BOB_DIR` | `$HOME/bob` | Default vault root when `--bob-dir` is omitted; a leading `~` is expanded. |
 | `BOB_CONFIG_FILE` | `XDG_CONFIG_HOME/bob/config.yml`, else `~/.config/bob/config.yml` | Exact config file; empty means unset; leading `~` and `~/` expand. |
-| `BOB_DAY_FILE` | `<BOB_DIR>/YYYY/YYYYMMDD.md` for the selected local day | Exact daily note path for commands that read the Pomodoro ledger. |
-| `BOB_NOW` | Current local date and time | Valid `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, or `T`-separated timestamp pins Bob's clock. Invalid text is ignored. |
+| `BOB_DAY_FILE` | `<BOB_DIR>/YYYY/YYYYMMDD.md` for the selected day | Exact daily note path for commands that read the Pomodoro ledger. The configured `timezone` determines the selected day when set. |
+| `BOB_NOW` | Current time in configured `timezone`, else the host's system timezone | Valid `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, or `T`-separated timestamp pins Bob's clock. Invalid text is ignored. |
 | `BOB_PRIORITY_ROLL_SEED` | Fresh time/process-derived seed | A nonnegative integer seed makes `$<N>` priority rolls reproducible. |
 | `BOB_CAPTURE_TEMPLATES_FILE` | `$XDG_STATE_HOME/bob-cli/capture/templates.json`, else `$HOME/.local/state/bob-cli/capture/templates.json` | Exact saved-template shelf file. |
 | `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, and task reroll. |

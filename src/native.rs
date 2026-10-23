@@ -194,6 +194,15 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     }
 }
 
+pub(crate) fn validate_day_timezone() -> Result<(), config::ConfigError> {
+    config::load_day_timezone(&config::config_path()).map(|_| ())
+}
+
+pub(crate) fn day_timezone(
+) -> Result<Option<chrono_tz::Tz>, config::ConfigError> {
+    config::load_day_timezone(&config::config_path())
+}
+
 pub(crate) fn pomodoro_status() -> Result<Option<String>, pomodoro::Error> {
     pomodoro::status_from_env()
 }

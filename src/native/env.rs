@@ -8,7 +8,10 @@ use std::{
 #[cfg(test)]
 use std::{cell::RefCell, collections::HashMap};
 
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{
+    DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc,
+};
+use chrono_tz::Tz;
 
 // Thread-local test overrides for environment variables.
 //
@@ -353,7 +356,22 @@ pub fn current_datetime() -> NaiveDateTime {
         }
     }
 
-    Local::now().naive_local()
+    let timezone =
+        super::config::load_day_timezone(&super::config::config_path())
+            .unwrap_or_else(|error| {
+                panic!("invalid Bob timezone configuration: {error}")
+            });
+    localized_datetime(Utc::now(), timezone)
+}
+
+fn localized_datetime(
+    now: DateTime<Utc>,
+    timezone: Option<Tz>,
+) -> NaiveDateTime {
+    match timezone {
+        Some(timezone) => now.with_timezone(&timezone).naive_local(),
+        None => now.with_timezone(&Local).naive_local(),
+    }
 }
 
 pub fn default_day_file(bob_dir: &Path) -> PathBuf {
@@ -364,6 +382,47 @@ pub fn default_day_file(bob_dir: &Path) -> PathBuf {
         today.month(),
         today.day()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Timelike, Utc};
+
+    use super::localized_datetime;
+
+    #[test]
+    fn configured_timezone_keeps_the_eastern_day_through_utc_midnight() {
+        let eastern: chrono_tz::Tz = "America/New_York".parse().unwrap();
+
+        for (hour, minute, expected_hour, expected_minute) in
+            [(0, 0, 20, 0), (1, 0, 21, 0), (2, 0, 22, 0), (3, 59, 23, 59)]
+        {
+            let utc =
+                Utc.with_ymd_and_hms(2026, 10, 24, hour, minute, 0).unwrap();
+            let local = localized_datetime(utc, Some(eastern));
+            assert_eq!(local.date().to_string(), "2026-10-23");
+            assert_eq!(
+                (local.time().hour(), local.time().minute()),
+                (expected_hour, expected_minute)
+            );
+        }
+
+        let eastern_midnight =
+            Utc.with_ymd_and_hms(2026, 10, 24, 4, 0, 0).unwrap();
+        assert_eq!(
+            localized_datetime(eastern_midnight, Some(eastern))
+                .date()
+                .to_string(),
+            "2026-10-24"
+        );
+    }
+
+    #[test]
+    fn no_configured_timezone_uses_the_host_timezone() {
+        let utc = Utc.with_ymd_and_hms(2026, 10, 24, 0, 0, 0).unwrap();
+        let host_local = utc.with_timezone(&chrono::Local).naive_local();
+        assert_eq!(localized_datetime(utc, None), host_local);
+    }
 }
 
 pub fn parse_datetime_override(value: &str) -> Option<NaiveDateTime> {

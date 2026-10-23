@@ -941,9 +941,15 @@ pub fn run_script(
     let script_path = script_dir.join(script.install_path);
     let path = path_with_script_dir(&script_dir)?;
 
-    let status = ProcessCommand::new(&script_path)
-        .args(args)
-        .env("PATH", path)
+    let mut command = ProcessCommand::new(&script_path);
+    command.args(args).env("PATH", path);
+    if let Some(timezone) = crate::native::day_timezone()
+        .map_err(|error| RunnerError::new(error.to_string()))?
+    {
+        command.env("TZ", timezone.to_string());
+    }
+
+    let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -1270,6 +1276,11 @@ fn run_command_or_report(
     native_command: NativeCommand,
     args: Vec<OsString>,
 ) -> i32 {
+    if let Err(error) = native::validate_day_timezone() {
+        eprintln!("{invocation}: {error}");
+        return 2;
+    }
+
     if use_script_fallback()
         && let Some(script_command) = script_command
     {

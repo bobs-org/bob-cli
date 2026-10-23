@@ -8,6 +8,7 @@ use serde::Deserialize;
 use super::env as bob_env;
 
 pub(crate) mod capture;
+pub(crate) mod day_timezone;
 pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod plan;
@@ -15,6 +16,7 @@ pub(crate) mod relations;
 pub(crate) mod stats;
 
 pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
+pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
