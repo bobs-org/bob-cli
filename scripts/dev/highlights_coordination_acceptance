@@ -1,0 +1,636 @@
+#!/usr/bin/env bash
+# Guided acceptance runbook for `highlights.coordinate_pdf_writes`.
+#
+# Interactive mode walks the research's nine real-Highlights steps on the Mac:
+# it builds a throwaway vault and config under $TMPDIR (never ~/bob or the
+# real config), copies library PDFs you pick into the scratch vault, flips the
+# scratch note's `status:`, runs `bob ref sync -w` / `bob ref scan -w` with
+# verbose detail, records each outcome in results.md, and prints a verdict
+# with the exact line to enable on the Mac.
+#
+# `--self-test` exercises the non-GUI plumbing on any OS against the real
+# `bob` from this checkout (override with BOB_BIN): scratch setup, a
+# coordinated marker write, the scan receipt, the reading hold, `-a`, and
+# the dry-run receipt rule. `just check-scripts` runs it.
+#
+# Usage: scripts/dev/highlights_coordination_acceptance [--self-test]
+
+set -uo pipefail
+
+prog=highlights-coordination-acceptance
+
+fail() {
+    printf '%s: error: %s\n' "$prog" "$*" >&2
+    exit 2
+}
+
+usage() {
+    cat <<'EOF'
+Guided acceptance runbook for `highlights.coordinate_pdf_writes`.
+
+Usage: scripts/dev/highlights_coordination_acceptance [--self-test]
+
+No arguments: interactive guided run on the Mac (needs Highlights and two
+library PDFs you pick to copy; nothing is ever written outside $TMPDIR).
+
+--self-test: non-interactive plumbing check on any OS using the bob from
+this checkout (set BOB_BIN to use an installed bob instead).
+EOF
+}
+
+if [[ ${1-} == -h || ${1-} == --help ]]; then
+    usage
+    exit 0
+fi
+
+# --- color/banners (same convention as scripts/install_all) -----------------
+if [[ -t 1 && -z "${NO_COLOR+x}" ]]; then
+    use_color=1
+else
+    use_color=0
+fi
+
+paint() {
+    local color="$1" value="$2"
+    if [[ "$use_color" -eq 1 ]]; then
+        printf '\033[%sm%s\033[0m' "$color" "$value"
+    else
+        printf '%s' "$value"
+    fi
+}
+
+banner() {
+    local color="$1" icon="$2" title="$3"
+    local rule='────────────────────────────────────────────────'
+    if [[ "$use_color" -eq 1 ]]; then
+        printf '\n%s  \033[1;%sm%s\033[0m\n\033[%sm%s\033[0m\n' \
+            "$icon" "$color" "$title" "$color" "$rule"
+    else
+        printf '\n%s  %s\n%s\n' "$icon" "$title" "$rule"
+    fi
+}
+
+# --- repo root (this script lives at scripts/dev/...) ------------------------
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) \
+    || fail "cannot resolve script directory"
+repo_root=$(cd -- "$script_dir/../.." && pwd) \
+    || fail "cannot resolve repository root"
+
+# --- scratch setup (shared by guided and self-test) --------------------------
+# Never touch the real vault or config: every path below hangs off $root,
+# which always lives directly under ${TMPDIR:-/tmp}.
+new_scratch_root() {
+    root=$(mktemp -d "${TMPDIR:-/tmp}/bob-coordination-acceptance.XXXXXX") \
+        || fail "cannot create scratch root"
+    root=$(cd -P -- "$root" && pwd) || fail "cannot resolve scratch root"
+    case $root in
+        "${TMPDIR:-/tmp}"/*) ;;
+        *) fail "scratch root escaped TMPDIR: $root" ;;
+    esac
+    if [[ $root == "$HOME/bob" || $root == "$HOME/bob/"* ]]; then
+        fail "scratch root must never be the real vault: $root"
+    fi
+    vault=$root/vault
+    state_home=$root/state
+    config_on=$root/config-on.yml
+    config_off=$root/config-off.yml
+    results=$root/results.md
+    mkdir -p "$vault/lib" "$vault/ref" "$vault/xlib" "$state_home" \
+        || fail "cannot create scratch vault directories"
+}
+
+write_configs() {
+    printf 'highlights:\n  coordinate_pdf_writes: true\n' >"$config_on" \
+        || fail "cannot write scratch config"
+    printf 'highlights:\n  coordinate_pdf_writes: false\n' >"$config_off" \
+        || fail "cannot write scratch config"
+    # The scratch vault is selected explicitly on every invocation; the
+    # caller's BOB_DIR/BOB_CONFIG_FILE/XDG_STATE_HOME must never leak in.
+    export BOB_DIR="$vault"
+    export BOB_CONFIG_FILE="$config_on"
+    export XDG_STATE_HOME="$state_home"
+    unset BOB_HIGHLIGHTS_LIB_DIR BOB_HIGHLIGHTS_REF_DIR BOB_HIGHLIGHTS_XLIB_DIR \
+        || true
+}
+
+# bob_bin is one pre-quoted eval-ready command: either "$BOB_BIN" or
+# `cargo run -q --` from this checkout, so the kit always tests live source.
+resolve_bob_bin() {
+    if [[ -n "${BOB_BIN-}" ]]; then
+        bob_bin=("$BOB_BIN")
+    else
+        command -v cargo >/dev/null 2>&1 \
+            || fail "cargo not found: set BOB_BIN to an installed bob"
+        bob_bin=(cargo run -q --manifest-path "$repo_root/Cargo.toml" --)
+    fi
+}
+
+bobr() {
+    "${bob_bin[@]}" "$@"
+}
+
+init_git_vault() {
+    git -C "$vault" init -q \
+        || fail "cannot git-init scratch vault"
+    git -C "$vault" -c user.email=acceptance@example.com \
+        -c user.name="Acceptance Kit" commit -q --allow-empty -m init \
+        || fail "cannot seed scratch vault git history"
+    git init -q --bare "$root/origin.git" \
+        || fail "cannot create scratch origin"
+    git -C "$vault" remote add origin "$root/origin.git" \
+        || fail "cannot add scratch origin"
+    git -C "$vault" -c user.email=acceptance@example.com \
+        -c user.name="Acceptance Kit" push -q origin HEAD:refs/heads/master \
+        || fail "cannot push scratch vault to scratch origin"
+    printf -- '---\ntype: "[[area]]"\n---\n\n# Obsidian\n' >"$vault/obsidian.md" \
+        || fail "cannot write scratch area note"
+}
+
+commit_vault() {
+    git -C "$vault" add -A \
+        || fail "cannot stage scratch vault"
+    git -C "$vault" -c user.email=acceptance@example.com \
+        -c user.name="Acceptance Kit" commit -q --allow-empty -m "$1" \
+        || fail "cannot commit scratch vault"
+}
+
+flip_note_status() {
+    local note=$1 to=$2
+    sed -i '' "s/^status: .*/status: $to/" "$note" 2>/dev/null \
+        || sed -i "s/^status: .*/status: $to/" "$note" \
+        || fail "cannot flip status in $note"
+}
+
+note_status() {
+    sed -n 's/^status: //p' "$1" | head -n 1
+}
+
+marker_status() {
+    bobr ref marker "$1" --bob-dir "$vault" 2>/dev/null \
+        | sed -n 's/^- status: //p' | head -n 1
+}
+
+# --- --self-test (non-GUI plumbing, any OS) ---------------------------------
+self_test_fail() {
+    printf '%s: FAIL: %s\n' "$prog" "$*" >&2
+    exit 1
+}
+
+self_test_ok() {
+    paint 32 "  ok $1"
+    printf '\n'
+}
+
+self_test() {
+    resolve_bob_bin
+    new_scratch_root
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$root'" EXIT
+    write_configs
+    init_git_vault
+    local checks=0 log=$root/self-test.log
+    : >"$log" || self_test_fail "cannot write self-test log"
+
+    # 1. Intake: mint a Highlights-ready PDF from Markdown, drain xlib.
+    # (create ingests inline when the vaults match, else it queues.)
+    printf -- '# Self-test note\n\nSome text for PDF creation.\n' >"$root/seed.md"
+    bobr ref create "$root/seed.md" --no-audio \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        --ref-type chat --title "Acceptance Self-Test" -P obsidian \
+        >>"$log" 2>&1 \
+        || self_test_fail "ref create failed (see $log)"
+    if [[ -f $vault/xlib/chat/seed.pdf ]]; then
+        bobr ref scan --intake-only \
+            --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+            >>"$log" 2>&1 \
+            || self_test_fail "intake drain failed (see $log)"
+    fi
+    local pdf=$vault/lib/chat/seed.pdf note=$vault/ref/chat/seed.md
+    [[ -f $pdf && -f $note ]] \
+        || self_test_fail "create/drain did not file PDF and note"
+    checks=$((checks + 1)); self_test_ok "intake files the minted PDF and note"
+    commit_vault "self-test intake"
+
+    # 2. Uncoordinated control (key off): no coordination lines, write lands.
+    flip_note_status "$note" next
+    BOB_CONFIG_FILE=$config_off bobr ref scan --write-pdfs --verbose \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/control.out" 2>>"$log" \
+        || self_test_fail "key-off scan failed (see $log)"
+    grep -q 'pdf_write_coordination' "$root/control.out" \
+        && self_test_fail "key-off scan printed coordination lines"
+    [[ $(marker_status "$pdf") == next ]] \
+        || self_test_fail "key-off scan did not write the marker"
+    checks=$((checks + 1)); self_test_ok "control: key off writes, no coordination lines"
+    commit_vault "self-test control"
+
+    # 3. Coordinated write: verbose names the key, receipt lands 0600.
+    flip_note_status "$note" wip
+    bobr ref scan --write-pdfs --verbose \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/scan.out" 2>>"$log" \
+        || self_test_fail "coordinated scan failed (see $log)"
+    grep -q 'pdf_write_coordination: on' "$root/scan.out" \
+        || self_test_fail "scan did not report pdf_write_coordination: on"
+    [[ $(marker_status "$pdf") == wip ]] \
+        || self_test_fail "coordinated scan did not write the marker"
+    local receipt=$state_home/bob-cli/ref/last-scan.json
+    [[ -f $receipt ]] || self_test_fail "scan wrote no receipt"
+    [[ $(stat -c %a "$receipt" 2>/dev/null || stat -f %Lp "$receipt") == 600 ]] \
+        || self_test_fail "receipt is not mode 0600"
+    python3 - "$receipt" <<'EOF' || self_test_fail "receipt is not valid JSON"
+import json, sys
+env = json.load(open(sys.argv[1]))
+assert env["summary"]["held"] == 0, env["summary"]
+assert env["held"] == [], env["held"]
+mw = env["notes"][0]["marker_write"]
+assert mw["editor_saved_first"] is False, mw
+if sys.platform == "darwin":
+    assert mw["mode"] == "coordinated", mw
+else:
+    assert mw["mode"] == "direct", mw
+EOF
+    checks=$((checks + 1)); self_test_ok "coordinated scan writes marker + 0600 receipt"
+    commit_vault "self-test coordinated"
+
+    # 4. JSON stdout is byte-identical to the receipt in the same run.
+    flip_note_status "$note" read
+    commit_vault "self-test flip"
+    BOB_REF_READING_PROBE=away bobr ref scan --write-pdfs --format json \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/stdout.json" 2>>"$log" \
+        || self_test_fail "JSON scan failed (see $log)"
+    cmp -s "$root/stdout.json" "$receipt" \
+        || self_test_fail "JSON stdout differs from the receipt"
+    checks=$((checks + 1)); self_test_ok "JSON stdout is byte-identical to the receipt"
+    commit_vault "self-test json"
+
+    # 5. Reading hold: exit 0, yellow held line, PDF bytes untouched.
+    flip_note_status "$note" ready
+    local before after
+    before=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    BOB_REF_READING_PROBE=reading BOB_REF_HID_IDLE_SECONDS=1 \
+        bobr ref scan --write-pdfs \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/hold.out" 2>>"$log" \
+        || self_test_fail "hold scan exited non-zero (see $log)"
+    grep -q 'waiting while you read in Highlights' "$root/hold.out" \
+        || self_test_fail "hold scan printed no editor_active line"
+    grep -q '1 held' "$root/hold.out" \
+        || self_test_fail "hold scan summary counts no held PDF"
+    after=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    [[ $before == "$after" ]] \
+        || self_test_fail "held scan wrote the PDF"
+    checks=$((checks + 1)); self_test_ok "unattended hold: exit 0, nothing written"
+
+    # 6. Attended scan bypasses the reading hold.
+    BOB_REF_READING_PROBE=reading BOB_REF_HID_IDLE_SECONDS=1 \
+        bobr ref scan --write-pdfs --attended \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "attended scan failed (see $log)"
+    [[ $(marker_status "$pdf") == ready ]] \
+        || self_test_fail "attended scan did not write the marker"
+    checks=$((checks + 1)); self_test_ok "-a bypasses the reading hold"
+
+    # 7. Dry runs write no receipt, even in a fresh state dir.
+    rm -rf "$root/state2" || self_test_fail "cannot clear state probe dir"
+    XDG_STATE_HOME=$root/state2 bobr ref scan --write-pdfs --dry-run \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "dry-run scan failed (see $log)"
+    [[ -e $root/state2/bob-cli/ref/last-scan.json ]] \
+        && self_test_fail "dry run wrote a receipt"
+    checks=$((checks + 1)); self_test_ok "dry run writes no receipt"
+
+    banner 32 "✓" "SELF-TEST: $checks checks passed"
+}
+
+# --- guided run (interactive, Mac) -------------------------------------------
+pass_2=pass_3=pass_5=pass_6=
+page_jump_only=
+lost_or_dialog=
+
+pause_enter() {
+    printf '\n%s' "$(paint 33 'Press Enter when ready…')"
+    read -r _ </dev/tty || fail "cannot read from terminal"
+}
+
+ask_outcome() {
+    # $1 = step number, $2 = short name. Sets globals, records results.md.
+    local no=$1 name=$2 ans
+    while true; do
+        printf '\nOutcome for step %s [%s]: (p)ass / (f)ail / (s)kip? ' \
+            "$no" "$name" >/dev/tty
+        read -r ans </dev/tty || fail "cannot read from terminal"
+        case $ans in
+            p|P)
+                printf -- '- Step %s (%s): pass\n' "$no" "$name" >>"$results"
+                return 0 ;;
+            f|F)
+                printf -- '- Step %s (%s): FAIL\n' "$no" "$name" >>"$results"
+                return 1 ;;
+            s|S)
+                printf -- '- Step %s (%s): skipped\n' "$no" "$name" >>"$results"
+                return 2 ;;
+            *) printf 'Answer p, f, or s.\n' >/dev/tty ;;
+        esac
+    done
+}
+
+guided_header() {
+    cat >"$results" <<EOF || fail "cannot write results"
+# Highlights coordination acceptance — $(date +%Y-%m-%d)
+
+- bob: $(bobr --version 2>/dev/null || echo unknown)
+- host: $(sw_vers -productName 2>/dev/null || uname -s) $(sw_vers -productVersion 2>/dev/null || uname -r)
+- scratch root: $root (throwaway vault; ~/bob and the real config untouched)
+- config under test: highlights.coordinate_pdf_writes: true
+
+EOF
+}
+
+pick_pdf() {
+    # $1 = label shown to Bryan. Copies the picked library PDF into scratch xlib.
+    local label=$1 src=""
+    banner 36 "◆" "Pick a library PDF ($label)"
+    printf 'Enter the path of the %s (a copy is made; the original is never touched).\n' "$label"
+    printf 'Tip: drag the file from Finder into this terminal.\n'
+    printf 'Path: ' >/dev/tty
+    read -r src </dev/tty || fail "cannot read from terminal"
+    # Finder drag-and-drop pastes a backslash-escaped path; unescape spaces.
+    src=${src//\\ / }
+    src=${src%[[:space:]]}
+    [[ -f $src && $src == *.pdf ]] \
+        || fail "not a PDF file: $src"
+    case $(cd -P -- "$(dirname -- "$src")" && pwd) in
+        "$vault"/*) fail "pick a library PDF, not one inside the scratch vault" ;;
+    esac
+    cp -p -- "$src" "$vault/xlib/pick.pdf" \
+        || fail "cannot copy $src"
+    printf 'Copied %s (%s bytes) to the scratch intake queue.\n' \
+        "$src" "$(wc -c <"$vault/xlib/pick.pdf" | tr -d ' ')"
+}
+
+drain_pick() {
+    # $1 = ref-type dir for the filed PDF. Sets globals: pdf, note.
+    local rtype=${1-chat}
+    mkdir -p "$vault/xlib/$rtype" || fail "cannot stage intake type dir"
+    mv -- "$vault/xlib/pick.pdf" "$vault/xlib/$rtype/pick.pdf" \
+        || fail "cannot stage picked PDF"
+    bobr ref scan --intake-only \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        || fail "intake drain failed; fix the scratch vault and rerun"
+    pdf=$vault/lib/$rtype/pick.pdf
+    note=$vault/ref/$rtype/pick.md
+    [[ -f $pdf && -f $note ]] \
+        || fail "intake drain did not file the picked PDF"
+    commit_vault "acceptance intake $rtype/pick"
+    printf 'Scratch PDF: %s\nScratch note: %s\nMarker status now: %s\n' \
+        "$pdf" "$note" "$(marker_status "$pdf")"
+}
+
+flip_and_sync() {
+    # $1 = new status. Flips the scratch note, commits nothing (frontmatter
+    # flips are the allowed dirty case), runs sync -w, shows the outcome.
+    local to=$1
+    flip_note_status "$note" "$to"
+    printf '\n%s\n' "$(paint 36 "$ bob ref sync <pdf> -w (status -> $to)")"
+    bobr ref sync "$pdf" --write-pdf \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib
+    printf 'Marker status now: %s\n' "$(marker_status "$pdf")"
+    commit_vault "acceptance sync -> $to"
+}
+
+flip_and_scan() {
+    # $1 = new status, rest = extra scan args. For qsteps that need -v detail.
+    local to=$1; shift
+    flip_note_status "$note" "$to"
+    printf '\n%s\n' "$(paint 36 "$ bob ref scan -w $* (status -> $to)")"
+    bobr ref scan --write-pdfs "$@" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib
+    printf 'Marker status now: %s\n' "$(marker_status "$pdf")"
+    commit_vault "acceptance scan -> $to"
+}
+
+guided() {
+    resolve_bob_bin
+    [[ "$(uname)" == Darwin ]] \
+        || fail "guided mode needs a Mac with Highlights; use --self-test elsewhere"
+    new_scratch_root
+    write_configs
+    init_git_vault
+    guided_header
+
+    banner 35 "◈" "Highlights coordination acceptance"
+    printf 'Scratch root: %s\n' "$root"
+    printf 'This kit never touches ~/bob or the real config: every bob call\n'
+    printf 'passes --bob-dir/--lib-dir/--ref-dir/--xlib-dir under that root,\n'
+    printf 'with BOB_CONFIG_FILE and XDG_STATE_HOME pinned there too.\n'
+    printf 'Outcomes append to %s.\n' "$results"
+
+    # Steps 1-6, 8-9 share one small PDF; step 7 adds a ~20 MB one.
+    pick_pdf "small PDF that already carries a page-1 marker"
+    drain_pick chat
+
+    # -- Step 1: uncoordinated control -------------------------------------
+    banner 33 "1" "Step 1 — Uncoordinated control (key off)"
+    cat <<'EOF'
+With the key off, bob writes the old way: a temp file renamed over the
+original, no coordination, no hold. Keep Highlights CLOSED for this step.
+EOF
+    pause_enter
+    printf '\n%s\n' "$(paint 36 '$ BOB_CONFIG_FILE=<off> bob ref sync <pdf> -w')"
+    flip_note_status "$note" next
+    BOB_CONFIG_FILE=$config_off bobr ref sync "$pdf" --write-pdf \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib
+    printf 'Marker status now: %s\n' "$(marker_status "$pdf")"
+    commit_vault "acceptance step 1 control"
+    ask_outcome 1 control || true
+
+    # -- Step 2: main case ---------------------------------------------------
+    banner 33 "2" "Step 2 — Main case: save first, reload in place"
+    cat <<'EOF'
+1. Open the SCRATCH PDF in Highlights (the copy under the scratch root,
+   not your library original).
+2. Make two highlights. Do NOT save. Switch to this terminal.
+EOF
+    pause_enter
+    flip_and_sync wip
+    cat <<'EOF'
+Pass when: the write lands, Highlights reloads the same tab in place with
+your two highlights intact, and no conflict dialog appears. The concise
+line may note "unsaved annotations saved first".
+EOF
+    if ask_outcome 2 main; then pass_2=1; else
+        printf 'Were annotations lost, or did a dialog appear? (y/N) ' >/dev/tty
+        local ans; read -r ans </dev/tty || true
+        [[ $ans == [yY]* ]] && lost_or_dialog=1
+        printf 'Did ONLY the page position jump? (y/N) ' >/dev/tty
+        read -r ans </dev/tty || true
+        [[ $ans == [yY]* ]] && page_jump_only=1
+    fi
+
+    # -- Step 3: frontmost and background tab --------------------------------
+    banner 33 "3" "Step 3 — Frontmost and background tab"
+    cat <<'EOF'
+1. Keep the scratch PDF open in Highlights and open a second library PDF
+   in another tab. Leave the scratch PDF in a BACKGROUND tab.
+2. Make one highlight in the background tab. Do NOT save.
+EOF
+    pause_enter
+    flip_and_scan read --verbose
+    cat <<'EOF'
+Pass when the background tab reloads in place with the highlight kept.
+Then bring it frontmost and repeat once more if you like; both must land.
+EOF
+    ask_outcome 3 tabs && pass_3=1 || true
+
+    # -- Step 4: half-typed popover ------------------------------------------
+    banner 33 "4" "Step 4 — Half-typed popover"
+    cat <<'EOF'
+1. In Highlights, start typing in a search field or a highlight comment
+   popover — leave the text half-typed and the popover open.
+2. Run the scan below.
+EOF
+    pause_enter
+    flip_and_scan next --verbose
+    cat <<'EOF'
+Pass when EITHER the write lands with the popover text intact, OR bob
+holds cleanly ("retrying next scan", nothing written) and the retry after
+closing the popover lands.
+EOF
+    ask_outcome 4 popover || true
+
+    # -- Step 5: modal sheet ---------------------------------------------------
+    banner 33 "5" "Step 5 — Modal sheet blocks the save"
+    cat <<'EOF'
+1. In Highlights, open a modal sheet (e.g. Preferences, or File > Print
+   left open). It must stay open while bob writes.
+EOF
+    pause_enter
+    flip_and_scan wip --verbose
+    cat <<'EOF'
+Pass when bob HOLDS with "Highlights didn't answer within 10 s (a dialog
+may be open) · retrying next scan", writes nothing, and exits 0. Close
+the sheet afterwards; the next scan retries.
+EOF
+    ask_outcome 5 sheet && pass_5=1 || true
+
+    # -- Step 6: from SSH or cron ----------------------------------------------
+    banner 33 "6" "Step 6 — From SSH or cron (no terminal)"
+    cat <<'EOF'
+1. From ANOTHER session — `ssh <this-mac>` or a cron-style detached env —
+   with Highlights frontmost on the screen, run the printed command below
+   yourself (this terminal only shows it; it does not run it).
+EOF
+    printf '\n%s\n' "$(paint 36 "BOB_CONFIG_FILE=$config_on BOB_DIR=$vault XDG_STATE_HOME=$state_home $(printf '%s ' "${bob_bin[@]}")ref scan -w --bob-dir $vault --lib-dir lib --ref-dir ref --xlib-dir xlib")"
+    printf 'Flip the scratch note status first if you want a write this round.\n'
+    pause_enter
+    cat <<'EOF'
+Pass when the detached run reports the same outcome you would get here
+(write or a named hold) — the probe works without your login session.
+EOF
+    ask_outcome 6 remote && pass_6=1 || true
+
+    # -- Step 7: large-PDF timing ----------------------------------------------
+    banner 33 "7" "Step 7 — Large-PDF timing (~20 MB)"
+    pick_pdf "~20 MB PDF that already carries a page-1 marker"
+    drain_pick papers
+    cat <<'EOF'
+Open the scratch copy in Highlights, make one highlight, do NOT save,
+and switch back here.
+EOF
+    pause_enter
+    printf 'Timing the coordinated write (budget: 10 s per PDF)…\n'
+    flip_note_status "$note" next
+    local start end
+    start=$(date +%s)
+    bobr ref sync "$pdf" --write-pdf \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib
+    end=$(date +%s)
+    printf 'Write took %s s. Marker status now: %s\n' "$((end - start))" "$(marker_status "$pdf")"
+    commit_vault "acceptance step 7 large pdf"
+    ask_outcome 7 large-pdf || true
+
+    # -- Step 8: sidecar import -------------------------------------------------
+    banner 33 "8" "Step 8 — Sidecar import (saved highlights arrive)"
+    cat <<'EOF'
+1. In Highlights, add one more highlight to the scratch PDF and SAVE
+   (Cmd+S) so the sidecar updates.
+2. Run the scan below, then check the scratch note picked up the new
+   annotation text on the NEXT scan (saved highlights import one scan
+   later when the write races the save).
+EOF
+    pause_enter
+    flip_and_scan wip
+    printf 'Scratch note now contains:\n'
+    sed -n '/<!-- highlights:begin -->/,/<!-- highlights:end -->/p' "$note" | head -n 20
+    ask_outcome 8 sidecar || true
+
+    # -- Step 9: renumbered marker ----------------------------------------------
+    banner 33 "9" "Step 9 — Marker re-found after renumbering"
+    cat <<'EOF'
+A Highlights save may renumber PDF objects, moving the marker annotation
+to a new id. This step proves bob follows it: edit the scratch note
+status once more, save any pending Highlights edits first this time,
+and scan.
+EOF
+    pause_enter
+    flip_and_scan read --verbose
+    cat <<'EOF'
+Pass when the marker lands on the freshly located annotation (verbose
+shows "coordinated …", possibly "unsaved annotations saved first")
+even though the PDF bytes changed under bob.
+EOF
+    ask_outcome 9 renumber || true
+
+    # -- Step 10: Mac notification ----------------------------------------------
+    banner 33 "◆" "Step 10 — Bob Mac Capture notification"
+    cat <<'EOF'
+Run a scratch scan and watch Bob Mac Capture: with the panel hidden it
+should post one quiet "Updated in Highlights" notification (threaded,
+no sound); with Bob Refs visible it shows a footer clause instead.
+EOF
+    pause_enter
+    bobr ref scan --write-pdfs \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib
+    commit_vault "acceptance step 10 notification scan" || true
+    cat <<'EOF'
+Pass when the notification (or footer clause) names the scratch PDF's
+title. At most one notification per PDF counts: busy holds dedupe.
+EOF
+    ask_outcome 10 notification || true
+
+    # -- verdict ------------------------------------------------------------------
+    {
+        printf '\n## Verdict\n\n'
+        if [[ -n $lost_or_dialog ]]; then
+            printf 'KEEP THE KEY OFF. Annotations were lost or a dialog appeared: do not enable.\n'
+            printf 'This is the Plan B trigger — file the app-driven "Apply now" follow-up.\n'
+        elif [[ $pass_2$pass_3$pass_5$pass_6 == 1111 ]]; then
+            printf 'ENABLE on the Mac with exactly this line in the Highlights config:\n\n'
+            printf '```yaml\nhighlights:\n  coordinate_pdf_writes: true\n```\n'
+            if [[ -n $page_jump_only ]]; then
+                printf '\nNote: only the page position jumped — still enable, and flag the page-restore follow-up.\n'
+                printf -- '- PROPOSED FOLLOW-UP: page-restore follow-up — remember page position across coordinated reloads.\n'
+            fi
+        else
+            printf 'NOT YET. Steps 2, 3, 5, and 6 must all pass before enabling; failing steps stay open for a rerun.\n'
+            printf 'Keep `highlights.coordinate_pdf_writes: false` until then.\n'
+        fi
+        printf '\nFull log: %s\n' "$root"
+    } | tee -a "$results"
+    banner 32 "✓" "Acceptance complete — results in $results"
+}
+
+if [[ ${1-} == --self-test ]]; then
+    shift
+    (( $# == 0 )) || { usage >&2; exit 2; }
+    self_test
+    exit 0
+fi
+
+(( $# == 0 )) || { usage >&2; exit 2; }
+guided
+

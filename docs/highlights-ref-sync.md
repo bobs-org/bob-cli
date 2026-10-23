@@ -368,8 +368,10 @@ on the MacBook before enabling PDF marker write-back:
   real Highlights-authored files may expose annotation shapes not covered by
   Linux fixtures. Use `--write-pdf` or `--write-pdfs` only after backing up the
   target PDFs.
-- Scheduled `scan` should stay dry-run or note-only unless bulk PDF marker
-  writes are intentionally wanted and backed up.
+- Scheduled `scan` should stay dry-run or note-only until the guided
+  acceptance test passes and `highlights.coordinate_pdf_writes` is on (see
+  [PDFs open in Highlights](#pdfs-open-in-highlights)). Until then, bulk
+  PDF marker writes need an explicit backup and a watched terminal run.
 - Confirm a real underline renders as underlined bold inside its host quote in
   `bob ref show`; verify SGR `1;4` in a color terminal and literal `**` in
   plain output. Enable `ref-highlights` in Obsidian and check the gold
@@ -719,6 +721,52 @@ overrides, for tests and the acceptance kit:
 - `BOB_REF_FRONTMOST_BUNDLE_ID` and `BOB_REF_HID_IDLE_SECONDS`
 
 Unknown probe results do not hold. Dry runs never coordinate and never probe.
+
+### Enabling
+
+The key ships off and stays off until the guided acceptance test below
+passes on the Mac. To enable afterwards, set exactly this in the Mac
+config file:
+
+```yaml
+highlights:
+  coordinate_pdf_writes: true
+```
+
+Until then, an uncoordinated write that races Highlights ends in the
+"The file has been changed by another application" dialog (see
+[Expected failures](#expected-failures)): prefer **Save Anyway**, then set
+the page-1 `status:` back to the current value instead of re-annotating.
+
+### Acceptance kit
+
+`scripts/dev/highlights_coordination_acceptance` is the guided runbook.
+It creates a throwaway vault and config under `$TMPDIR` (never `~/bob`
+or the real config), asks you to pick a small library PDF and then a
+~20 MB one to copy, and walks the research's nine steps: uncoordinated
+control, the main save-first case, frontmost and background tabs, a
+half-typed popover, a modal sheet, a detached SSH/cron run, large-PDF
+timing, sidecar import, and marker re-location after renumbering. Each
+step prints what to do in Highlights, runs `bob ref sync --write-pdf`
+or `bob ref scan --write-pdfs` with verbose detail, and records
+pass/fail in `results.md`. The closing verdict prints the enable line
+above when steps 2, 3, 5, and 6 pass; it keeps the key off and flags
+Plan B if annotations are lost or a dialog appears.
+
+`--self-test` runs the non-GUI plumbing anywhere without Highlights
+(scratch vault, coordinated write, receipt, hold, `-a`, dry-run rule)
+and is wired into `just check-scripts`.
+
+### Mac notification
+
+Every writing `bob ref scan` that holds the writer lock already drops the
+[scan receipt](#scan-receipt). Bob Mac Capture watches the matching
+Darwin notification and renders it: one quiet, threaded "Updated in
+Highlights" notification when Bob Refs is hidden, a footer clause when
+it is visible, and a "Highlights needs you" banner only for
+`coordination_timeout` holds. The kit's last step confirms the
+notification fires for a scratch scan. Keep Bob Mac Capture's
+Settings › References toggle on (the default) to receive it.
 
 ## Scan, Safety, and Git/ob Behavior
 
@@ -2185,6 +2233,7 @@ preflight failures remain hard global failures before writes.
 | `ready`, `next`, or `in-progress PDF task conflicts` | The generated task selects `ready`, `next`, or `wip`, but marker or frontmatter changed `status` to a different value from the stored base. | Move the task to the intended state or set marker/frontmatter status to match it. |
 | `marker/frontmatter conflict` | Marker and frontmatter changed the same field differently, or the note has no stored base snapshot for a safe merge. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
+| `The file has been changed by another application` | Highlights opened its save-conflict dialog: an uncoordinated bob write raced the open document (the key is off or the write predates coordination). | Prefer **Save Anyway**, then open the page-1 marker and set `status:` back to the current value instead of re-annotating. Enable `highlights.coordinate_pdf_writes` after the acceptance test passes so future writes coordinate instead. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
 | `could not acquire the vault maintenance lock` | A writing scan found `bob_sync.lock` held past the 120 s wait. | Wait for vault-sync, nightly, or rename to finish, then scan again. |
 | `another bob ref scan is still running` | A writing scan found the `scan.lock` writer lock held past the 120 s wait. | Wait for the other scan to finish, then scan again. |
