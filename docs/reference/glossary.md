@@ -203,6 +203,22 @@ sync reconciles this with note and PDF status. New lines include `#ref`; legacy 
 without that tag remain recognized. Follow-up tasks track separate work. See
 `docs/highlights-ref-sync.md`.
 
+### Rotten Log {#rotten-log}
+
+*Aliases: keep log.*
+
+A task-local history of rotten keeps, stored as a `🥀 **ROTTEN LOG**` direct child
+with newest-first `*YYYY-MM-DD* — <reason> · kept N×` entries. Alt+F or Ctrl+Alt+F on
+an exact due Ready ROTTEN or scheduled TICKLER row (the same keep that increments the
+[Keep Streak](#keep-streak)) and Keep on the approved-decay card first ask "Why keep it as
+written?": the reason is optional (blank logs `🤷 no reason given`) but the entry is
+not, and Esc writes nothing. N is the streak after that keep. The entry count is the
+number of keeps logged since rollout: unlike `[keeps:: N]` it never resets, and
+nothing reads it to change decay, lanes, Today, schedule, priority, or
+[Task Freshness](#task-freshness). NEW, early, Pending, Next, PROJECTS, and unblock-tickler keeps
+never write it; Pending summaries stay in the [Work Log](#work-log) and deferrals in the
+[Schedule Log](#schedule-log). See [Rotten Keeps Are Logged](../develop/decisions.md#rotten-keeps-are-logged).
+
 ### Schedule Log {#schedule-log}
 
 When the `<ctrl+shift+p>` Obsidian keymap is used to add the `scheduled` or `priority` dataview property to a task — Task Card `1`–`4` picks a P-level and its frozen date, Enter opens explicit Schedule, and classic search (`/` or type to filter) reaches the same properties — or when `bob capture` uses `$<N>`, we add a `SCHEDULE LOG` bullet that contains one sub-bullet for each scheduling. Log grammar, opt-in markers, and blank-reason `🤷 no reason given` are unchanged.

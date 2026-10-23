@@ -213,35 +213,39 @@ edited in place.
     next_interval (default 1, false walks that lane off); tiers never feed buckets or
     chips; upkeep outside the lanes counts the budget; stamps stay and the seed never
     re-runs.
-20. **Rotten Keeps Decay Through The Priority Ladder**
+20. **Rotten Keeps Are Logged** (`rotten-keeps-are-logged`) - Every counted keep —
+    Alt+F/Ctrl+Alt+F on an exact due Ready ROTTEN or scheduled TICKLER row, or the decay
+    card's Keep — asks an optional reason and writes one dated 🥀 ROTTEN LOG entry with
+    the stamp; the entry count is display-only history, never a field or a decay input.
+21. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
-    ]_ Repeated due-Ready keeps earn an explicit approved decision that enters the
-    existing priority ladder; nothing decays silently and freshness itself still never
-    changes priority or schedule.
-21. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
+    , `rotten-keeps-are-logged`]_ Repeated due-Ready keeps earn an explicit approved
+    decision that enters the existing priority ladder; nothing decays silently and
+    freshness itself still never changes priority or schedule.
+22. **Similar Tasks Are A Settled Heads-Up** (`similar-tasks-are-a-settled-heads-up`) -
     Capture shows a "Similar tasks" band only after typing settles and only when a match
     clears bob's calibrated bars; every row action is an explicit draft edit and Return
     never changes.
-22. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
+23. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`) -
     _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
     passes its dependency or schedule reason through its project descendants, with
     reconcile as the authority and the ^prj tag as the proxy for other engines.
-23. **Task Dependencies Are Links On One Depends-On Line**
+24. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-24. **Today Is Read From The Ledger, Never Written To Tasks**
+25. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-25. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+26. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-26. **Unblocked Tasks Resurface As Ticklers**
+27. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in
@@ -258,10 +262,10 @@ once. Terms are separated by semicolons; aliases follow in parentheses.
 **GLOSSARY TERMS:** Area Note; Bulk Capture (multi-item capture, batch capture);
 Capture; Inbox File (inbox note); Keep Streak (keeps); Mac Menu Bar Pomodoro Indicator
 (mac pom); Morning GTD Review Footer (review footer); Pomodoro; Project Note (prj note);
-Project Task (prj task); Reference Note (ref note); Reference Task (ref task); Schedule
-Log; Successor Offer; Task Dependency Link (task dep link, dep link); Task Freshness
-(freshness); Task Link (task block link); Task Relation (relation, LINKS line, LINKED
-FROM line); Work Log
+Project Task (prj task); Reference Note (ref note); Reference Task (ref task); Rotten
+Log (keep log); Schedule Log; Successor Offer; Task Dependency Link (task dep link, dep
+link); Task Freshness (freshness); Task Link (task block link); Task Relation (relation,
+LINKS line, LINKED FROM line); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

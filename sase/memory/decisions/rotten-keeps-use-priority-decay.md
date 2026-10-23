@@ -13,6 +13,7 @@ metadata:
   superseded_by:
     - decisions/decay-decisions-are-available-immediately
     - decisions/unblocked-tasks-resurface-as-ticklers
+    - decisions/rotten-keeps-are-logged
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -74,3 +75,8 @@ Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is rename
 
 Superseded in part: a keep on an unblock tickler leaves the streak
 unchanged — see [[decisions/unblocked-tasks-resurface-as-ticklers]].
+
+Superseded in part: the rejection of a new REVIEW LOG structure and
+'Keep anyway leaves only the line increment' only — Keep now asks why and writes one
+Rotten Log entry; see [[decisions/rotten-keeps-are-logged]]. Counting, explicit
+consent, the priority ladder, and the other card outcomes stand.
