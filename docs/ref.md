@@ -418,12 +418,17 @@ it is absent.
   legacy notes), or `unparsed` (with `raw_region`).
 - `annotations`: one entry per live block — `page_label`, `kind`
   (`highlight`, `note`, or `image`), `quote`, `comment`, `asset`,
-  `images`, `unresolved_images`, `block_id`, and `link`
+  `images`, `unresolved_images`, `pieces`, `block_id`, and `link`
   (`[[ref/x#^h-…]]`). Quote and comment stay in separate fields;
   standalone notes carry their text as `comment`. `images` is the list of
   vault-relative image-note paths (without any `|width` hint);
   `unresolved_images` is the list of source texts from warning callouts.
-  Both arrays are always present. A note with unresolved image notes
+  Both arrays are always present. `pieces` is present only on `<` groups:
+  one entry per tucked piece, head first, each with its own `page_label`,
+  `quote`, `comment`, `images`, and `unresolved_images`. The top-level
+  `quote` / `comment` / `images` / `unresolved_images` keep the flattened
+  group view (piece quotes joined with a blank line), so current consumers
+  still see every word. A note with unresolved image notes
   carries the row diagnostic `unresolved_image_note`.
 - `excluded`: counts of `marker_mirrors`, `preamble`, and `removed`
   (tombstoned) blocks. Tombstones carry no text, so they are counted
@@ -435,7 +440,9 @@ it is absent.
 - `also`: superseded companion paths.
 
 `-c/--comments-only` keeps only annotations with a comment, standalone
-notes, or image notes (embedded or unresolved), with their quotes.
+notes, or image notes (embedded or unresolved), with their quotes. A `<`
+group is kept when any piece has a comment or image note, and all of its
+pieces are shown.
 `-N/--no-annotations` keeps
 metadata and notes only. The `annotations` array honors the flags; the
 status, counts, and `excluded` facts always describe the whole region.
@@ -446,7 +453,10 @@ a value, then the annotations grouped by page with wrapped quotes
 (`“…”`), `[image: <vault path>]` lines for image notes,
 yellow `[image not found: <source>]` (or `unreadable` / `unsupported`)
 lines, and cyan `↳` comments, the exclusion parenthetical, and the
-`NOTES` and `TASKS` sections. The reading-task line is `📖 Reading task
+`NOTES` and `TASKS` sections. A `<` group prints each piece's wrapped
+quote, image lines, and cyan `↳` comment in order, with each follower
+preceded by a dim seam line at the quote indent (`┄ Page 12`, or a bare
+`┄` without a label). Single annotations print exactly as before. The reading-task line is `📖 Reading task
 <residence> · <lane> → <link>` for open v2, `📖 Read/Dropped · <date> ·
 <residence> [(archived)]` for closed v2, `📖 Reading task in this note
 (v1) · <lane>` for v1, and `📖 Reading task ⚠ N open tasks claim this
@@ -471,7 +481,9 @@ arXiv/DOI, origin and type, annotation counts and snapshot date (plus
 blockquotes, image notes as `Image: <vault path>` or
 `Image not found: <source>` lines, comments as `Comment: …` lines,
 standalone notes as `Note: …`), `### Notes`, and `### Tasks` (keeping each task's real
-mark, so a `[-]` task stays `[-]`).
+mark, so a `[-]` task stays `[-]`). A `<` group prints each piece as its
+own `>` quote with its own image and `Comment:` lines, with each follower
+preceded by an italic `*┄ Page 12*` seam line.
 
 Agent usage: resolve candidates with `bob ref find` first, then read
 exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for

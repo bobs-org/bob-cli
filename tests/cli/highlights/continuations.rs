@@ -4,6 +4,124 @@ use crate::support::*;
 use std::fs;
 use std::path::Path;
 
+#[test]
+fn show_exposes_group_pieces_with_seams_and_omits_them_for_singles() {
+    let temp = TempDir::new("bob-cli-ref-show-pieces");
+    let vault = temp.path().join("vault");
+    let note = vault.join("ref/blogs/pieces_case.md");
+    fs::create_dir_all(note.parent().expect("note parent"))
+        .expect("create note parent");
+    write_file(
+        &note,
+        "---\nstatus: read\ntitle: Pieces Case\n---\n\n# Pieces Case\n\n- [x] #task #ref [[lib/papers/pieces.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n### Pages 11–12\n\n> [!quote|Page 11] Head words on eleven\n>\n> > [!quote|Page 12] Tail words on twelve\n> >\n> > > [!note] Comment Follower note\n\n^h-aaaaaaaaaaaaaaaa\n\n### Page 3\n\n> [!quote] A lonely single.\n\n^h-bbbbbbbbbbbbbbbb\n\n<!-- highlights:end -->\n",
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("show")
+        .arg("pieces_case")
+        .args(["-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 12:00:00")
+        .output()
+        .expect("run bob ref show");
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("show json parses");
+    let annotations = document["refs"][0]["annotations"]
+        .as_array()
+        .expect("annotations");
+    assert_eq!(annotations.len(), 2, "{annotations:?}");
+    let group = &annotations[0];
+    assert_eq!(group["kind"], serde_json::json!("highlight"));
+    assert_eq!(
+        group["quote"],
+        serde_json::json!("Head words on eleven\n\nTail words on twelve")
+    );
+    let pieces = group["pieces"].as_array().expect("group pieces");
+    assert_eq!(pieces.len(), 2, "{pieces:?}");
+    assert_eq!(pieces[0]["page_label"], serde_json::json!("Page 11"));
+    assert_eq!(
+        pieces[0]["quote"],
+        serde_json::json!("Head words on eleven")
+    );
+    assert!(pieces[0].get("comment").is_none(), "{pieces:?}");
+    assert_eq!(pieces[1]["page_label"], serde_json::json!("Page 12"));
+    assert_eq!(
+        pieces[1]["quote"],
+        serde_json::json!("Tail words on twelve")
+    );
+    assert_eq!(pieces[1]["comment"], serde_json::json!("Follower note"));
+    assert!(
+        annotations[1].get("pieces").is_none(),
+        "singles omit pieces: {}",
+        annotations[1]
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("show")
+        .arg("pieces_case")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 12:00:00")
+        .output()
+        .expect("run bob ref show human");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("Head words on eleven"), "{human}");
+    assert!(human.contains("Tail words on twelve"), "{human}");
+    assert!(human.contains("┄ Page 12"), "follower seam:\n{human}");
+    assert_eq!(
+        human.matches('┄').count(),
+        1,
+        "no seam on the single:\n{human}"
+    );
+    assert!(human.contains("↳ Follower note"), "{human}");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("show")
+        .arg("pieces_case")
+        .args(["-f", "markdown"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 12:00:00")
+        .output()
+        .expect("run bob ref show markdown");
+    assert_success(&output);
+    let markdown = stdout(&output);
+    assert!(markdown.contains("> Head words on eleven"), "{markdown}");
+    assert!(markdown.contains("> Tail words on twelve"), "{markdown}");
+    assert!(markdown.contains("*┄ Page 12*"), "seam line:\n{markdown}");
+    assert!(markdown.contains("Comment: Follower note"), "{markdown}");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("show")
+        .arg("pieces_case")
+        .args(["-c", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 12:00:00")
+        .output()
+        .expect("run bob ref show comments-only");
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("show json parses");
+    let annotations = document["refs"][0]["annotations"]
+        .as_array()
+        .expect("annotations");
+    assert_eq!(
+        annotations.len(),
+        1,
+        "group commented only on its follower is kept: {annotations:?}"
+    );
+    assert_eq!(
+        annotations[0]["pieces"].as_array().expect("pieces").len(),
+        2,
+        "all pieces shown: {:?}",
+        annotations[0]["pieces"]
+    );
+}
+
 fn scan(vault: &Path, extra: &[&str]) -> std::process::Output {
     let mut command = bob_command();
     command.arg("ref").arg("scan").env("BOB_DIR", vault);

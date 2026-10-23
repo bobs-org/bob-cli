@@ -41,8 +41,28 @@ pub(crate) struct ShowAnnotation {
     pub unresolved_images: Vec<String>,
     #[serde(skip)]
     pub unresolved_image_states: Vec<UnresolvedImageNoteState>,
+    /// Tucked `<` group pieces, head first. Present only for groups; empty
+    /// for every single highlight, note, and image.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<ShowPiece>,
     pub block_id: String,
     pub link: String,
+}
+
+/// One tucked `<` group piece: the highlight's own words, page, comment,
+/// and image notes, in sidecar order. The top-level annotation fields keep
+/// the flattened group view so current consumers still see every word.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ShowPiece {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_label: Option<String>,
+    pub quote: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    pub images: Vec<String>,
+    pub unresolved_images: Vec<String>,
+    #[serde(skip)]
+    pub unresolved_image_states: Vec<UnresolvedImageNoteState>,
 }
 
 /// The annotation kind, serialized as `highlight`, `note`, or `image`.
@@ -265,6 +285,20 @@ pub(crate) fn load_show_row(
                     unresolved_image_states: block
                         .unresolved_image_states
                         .clone(),
+                    pieces: block
+                        .pieces
+                        .iter()
+                        .map(|piece| ShowPiece {
+                            page_label: piece.page_label.clone(),
+                            quote: piece.quote.clone(),
+                            comment: piece.comment.clone(),
+                            images: piece.images.clone(),
+                            unresolved_images: piece.unresolved_images.clone(),
+                            unresolved_image_states: piece
+                                .unresolved_image_states
+                                .clone(),
+                        })
+                        .collect(),
                     block_id: block.block_id.clone(),
                     link: format!("[[{stem}#^{}]]", block.block_id),
                 });
@@ -845,12 +879,28 @@ fn image_note_lines(
     styler: Styler,
     width: usize,
 ) -> Vec<String> {
+    piece_image_note_lines(
+        &annotation.images,
+        &annotation.unresolved_images,
+        &annotation.unresolved_image_states,
+        styler,
+        width,
+    )
+}
+
+fn piece_image_note_lines(
+    images: &[String],
+    unresolved_images: &[String],
+    unresolved_image_states: &[UnresolvedImageNoteState],
+    styler: Styler,
+    width: usize,
+) -> Vec<String> {
     let mut out = Vec::new();
-    for path in &annotation.images {
+    for path in images {
         out.push(styler.dim(&truncate(&format!("    [image: {path}]"), width)));
     }
-    for (index, source) in annotation.unresolved_images.iter().enumerate() {
-        let label = match annotation.unresolved_image_states.get(index) {
+    for (index, source) in unresolved_images.iter().enumerate() {
+        let label = match unresolved_image_states.get(index) {
             Some(UnresolvedImageNoteState::Unreadable) => "image unreadable",
             Some(UnresolvedImageNoteState::Unsupported) => "image unsupported",
             Some(UnresolvedImageNoteState::NotFound) | None => {
@@ -863,6 +913,20 @@ fn image_note_lines(
         );
     }
     out
+}
+
+/// The dim seam before each follower piece in human output, at the quote
+/// indent: `┄ <page label>`, or a bare `┄` without a label.
+fn piece_seam_human(
+    page_label: Option<&str>,
+    styler: Styler,
+    width: usize,
+) -> String {
+    let plain = match page_label.filter(|label| !label.is_empty()) {
+        Some(label) => format!("    ┄ {label}"),
+        None => "    ┄".to_string(),
+    };
+    styler.dim(&truncate(&plain, width))
 }
 
 /// Render one comment: a cyan `↳` leader with a hanging indent.
@@ -882,7 +946,8 @@ fn comment_lines(comment: &str, styler: Styler, width: usize) -> Vec<String> {
 }
 
 /// Render one annotation block: the quote (unless empty), then the
-/// comment for highlights and images, or the bare note text.
+/// comment for highlights and images, or the bare note text. A tucked `<`
+/// group prints each piece in order with a dim seam before every follower.
 fn annotation_lines(
     annotation: &ShowAnnotation,
     styler: Styler,
@@ -891,6 +956,33 @@ fn annotation_lines(
     let mut out = Vec::new();
     match annotation.kind {
         ShowAnnotationKind::Highlight => {
+            if !annotation.pieces.is_empty() {
+                for (index, piece) in annotation.pieces.iter().enumerate() {
+                    if index > 0 {
+                        out.push(piece_seam_human(
+                            piece.page_label.as_deref(),
+                            styler,
+                            width,
+                        ));
+                    }
+                    if !piece.quote.is_empty() {
+                        out.extend(quote_lines(&piece.quote, styler, width));
+                    }
+                    out.extend(piece_image_note_lines(
+                        &piece.images,
+                        &piece.unresolved_images,
+                        &piece.unresolved_image_states,
+                        styler,
+                        width,
+                    ));
+                    if let Some(comment) = piece.comment.as_deref()
+                        && !comment.is_empty()
+                    {
+                        out.extend(comment_lines(comment, styler, width));
+                    }
+                }
+                return out;
+            }
             if let Some(quote) = annotation.quote.as_deref()
                 && !quote.is_empty()
             {
@@ -1243,25 +1335,47 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
             }
             match annotation.kind {
                 ShowAnnotationKind::Highlight => {
-                    if let Some(quote) = annotation.quote.as_deref()
-                        && !quote.is_empty()
-                    {
-                        out.push('\n');
-                        for line in quote.lines() {
-                            out.push_str(&format!("> {line}\n"));
+                    if !annotation.pieces.is_empty() {
+                        for (index, piece) in
+                            annotation.pieces.iter().enumerate()
+                        {
+                            if index > 0 {
+                                out.push('\n');
+                                out.push_str(&format!(
+                                    "{}\n",
+                                    piece_seam_markdown(
+                                        piece.page_label.as_deref()
+                                    )
+                                ));
+                            }
+                            push_markdown_piece_quote(&mut out, &piece.quote);
+                            push_markdown_piece_image_notes(&mut out, piece);
+                            push_markdown_piece_comment(
+                                &mut out,
+                                piece.comment.as_deref(),
+                            );
                         }
-                    }
-                    push_markdown_image_notes(&mut out, annotation);
-                    if let Some(comment) = annotation.comment.as_deref()
-                        && !comment.is_empty()
-                    {
-                        out.push('\n');
-                        let mut lines = comment.lines();
-                        if let Some(first) = lines.next() {
-                            out.push_str(&format!("Comment: {first}\n"));
+                    } else {
+                        if let Some(quote) = annotation.quote.as_deref()
+                            && !quote.is_empty()
+                        {
+                            out.push('\n');
+                            for line in quote.lines() {
+                                out.push_str(&format!("> {line}\n"));
+                            }
                         }
-                        for line in lines {
-                            out.push_str(&format!("{line}\n"));
+                        push_markdown_image_notes(&mut out, annotation);
+                        if let Some(comment) = annotation.comment.as_deref()
+                            && !comment.is_empty()
+                        {
+                            out.push('\n');
+                            let mut lines = comment.lines();
+                            if let Some(first) = lines.next() {
+                                out.push_str(&format!("Comment: {first}\n"));
+                            }
+                            for line in lines {
+                                out.push_str(&format!("{line}\n"));
+                            }
                         }
                     }
                 }
@@ -1319,6 +1433,55 @@ fn push_markdown_image_notes(out: &mut String, annotation: &ShowAnnotation) {
             }
         };
         out.push_str(&format!("\n{label}: {source}\n"));
+    }
+}
+
+/// The italic seam before each follower piece in Markdown output.
+fn piece_seam_markdown(page_label: Option<&str>) -> String {
+    match page_label.filter(|label| !label.is_empty()) {
+        Some(label) => format!("*┄ {label}*"),
+        None => "*┄*".to_string(),
+    }
+}
+
+fn push_markdown_piece_quote(out: &mut String, quote: &str) {
+    if quote.is_empty() {
+        return;
+    }
+    out.push('\n');
+    for line in quote.lines() {
+        out.push_str(&format!("> {line}\n"));
+    }
+}
+
+fn push_markdown_piece_image_notes(out: &mut String, piece: &ShowPiece) {
+    for path in &piece.images {
+        out.push_str(&format!("\nImage: {path}\n"));
+    }
+    for (index, source) in piece.unresolved_images.iter().enumerate() {
+        let label = match piece.unresolved_image_states.get(index) {
+            Some(UnresolvedImageNoteState::Unreadable) => "Image unreadable",
+            Some(UnresolvedImageNoteState::Unsupported) => "Image unsupported",
+            Some(UnresolvedImageNoteState::NotFound) | None => {
+                "Image not found"
+            }
+        };
+        out.push_str(&format!("\n{label}: {source}\n"));
+    }
+}
+
+fn push_markdown_piece_comment(out: &mut String, comment: Option<&str>) {
+    if let Some(comment) = comment
+        && !comment.is_empty()
+    {
+        out.push('\n');
+        let mut lines = comment.lines();
+        if let Some(first) = lines.next() {
+            out.push_str(&format!("Comment: {first}\n"));
+        }
+        for line in lines {
+            out.push_str(&format!("{line}\n"));
+        }
     }
 }
 
@@ -1411,6 +1574,7 @@ mod tests {
                     images: Vec::new(),
                     unresolved_images: Vec::new(),
                     unresolved_image_states: Vec::new(),
+                    pieces: Vec::new(),
                     block_id: "h-aaaaaaaaaaaaaaaa".to_string(),
                     link: "[[ref/papers/ea_graph#^h-aaaaaaaaaaaaaaaa]]"
                         .to_string(),
@@ -1424,6 +1588,7 @@ mod tests {
                     images: Vec::new(),
                     unresolved_images: Vec::new(),
                     unresolved_image_states: Vec::new(),
+                    pieces: Vec::new(),
                     block_id: "h-bbbbbbbbbbbbbbbb".to_string(),
                     link: "[[ref/papers/ea_graph#^h-bbbbbbbbbbbbbbbb]]"
                         .to_string(),
