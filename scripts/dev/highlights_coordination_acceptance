@@ -173,7 +173,45 @@ marker_status() {
 # --- --self-test (non-GUI plumbing, any OS) ---------------------------------
 self_test_fail() {
     printf '%s: FAIL: %s\n' "$prog" "$*" >&2
+    # The EXIT trap removes the scratch root, so show the log before it goes.
+    if [[ -n ${log-} && -s $log ]]; then
+        printf -- '--- last lines of %s ---\n' "$log" >&2
+        tail -n 40 "$log" >&2
+    fi
     exit 1
+}
+
+# One-page PDF with a valid xref table, so `bob ref create` takes the
+# stamp-as-is route.
+write_seed_pdf() {
+    python3 -I - "$1" <<'EOF' || self_test_fail "cannot write seed PDF"
+import sys
+
+stream = b"BT /F1 24 Tf 72 720 Td (Acceptance self-test) Tj ET"
+objects = [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+    b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+]
+out = bytearray(b"%PDF-1.4\n")
+offsets = []
+for number, body in enumerate(objects, start=1):
+    offsets.append(len(out))
+    out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+xref = len(out)
+out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+for offset in offsets:
+    out += b"%010d 00000 n \n" % offset
+out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+    len(objects) + 1,
+    xref,
+)
+with open(sys.argv[1], "wb") as handle:
+    handle.write(out)
+EOF
 }
 
 self_test_ok() {
@@ -191,10 +229,11 @@ self_test() {
     local checks=0 log=$root/self-test.log
     : >"$log" || self_test_fail "cannot write self-test log"
 
-    # 1. Intake: mint a Highlights-ready PDF from Markdown, drain xlib.
+    # 1. Intake: stamp a minimal local PDF, drain xlib. A local PDF needs
+    # no pandoc or xelatex, so this runs on bare CI runners.
     # (create ingests inline when the vaults match, else it queues.)
-    printf -- '# Self-test note\n\nSome text for PDF creation.\n' >"$root/seed.md"
-    bobr ref create "$root/seed.md" --no-audio \
+    write_seed_pdf "$root/seed.pdf"
+    bobr ref create "$root/seed.pdf" --no-audio \
         --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
         --ref-type chat --title "Acceptance Self-Test" -P obsidian \
         >>"$log" 2>&1 \

@@ -187,15 +187,6 @@ pub(super) fn hold_verbose_message(message: &str) -> String {
     message.replace(" · ", "; ")
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn hold_verbose_phrase(
-    reason: HoldReason,
-    policy: &PdfWritePolicy,
-    cap_spent: bool,
-) -> String {
-    hold_verbose_message(&hold_message(reason, policy, cap_spent))
-}
-
 pub(super) fn scan_hold_for(
     plan: &PdfSyncPlan,
     reason: HoldReason,
@@ -515,6 +506,14 @@ mod tests {
         PdfWritePolicy::from_config(
             &crate::native::config::HighlightsConfig::default(),
         )
+    }
+
+    fn hold_verbose_phrase(
+        reason: HoldReason,
+        policy: &PdfWritePolicy,
+        cap_spent: bool,
+    ) -> String {
+        hold_verbose_message(&hold_message(reason, policy, cap_spent))
     }
 
     #[test]

@@ -624,7 +624,6 @@ pub(super) enum HoldReason {
 }
 
 impl HoldReason {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::EditorActive => "editor_active",
