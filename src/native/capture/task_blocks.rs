@@ -657,6 +657,54 @@ mod tests {
     }
 
     #[test]
+    fn plain_insertion_reports_one_added_row_before_rotten_log() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let vault = write_vault(
+            &dir,
+            &[(
+                "sase.md",
+                concat!(
+                    "- [/] #task Port capture to PIW sase-core [created:: 2026-09-30] ^capture\n",
+                    "\t- REQUIREMENTS\n",
+                    "\t\t- existing\n",
+                    "\t- 🥀 **ROTTEN LOG**\n",
+                    "\t\t- *2026-10-16* — old reason · kept 2×\n",
+                ),
+            )],
+        );
+        let batch = plan(
+            &vault,
+            "Should reuse as much of PIW sase-core code as possible! @sase+capture",
+        );
+        assert_eq!(batch.task_blocks.len(), 1);
+        let block = &batch.task_blocks[0];
+        assert_eq!(
+            row_tuples(block),
+            vec![
+                (
+                    "- [/] #task Port capture to PIW sase-core [created:: 2026-09-30] ^capture",
+                    0,
+                    BlockLineChange::Unchanged
+                ),
+                ("\t- REQUIREMENTS", 1, BlockLineChange::Unchanged),
+                ("\t\t- existing", 2, BlockLineChange::Unchanged),
+                (
+                    "\t- Should reuse as much of PIW sase-core code as possible!",
+                    1,
+                    BlockLineChange::Added
+                ),
+                ("\t- 🥀 **ROTTEN LOG**", 1, BlockLineChange::Unchanged),
+                (
+                    "\t\t- *2026-10-16* — old reason · kept 2×",
+                    2,
+                    BlockLineChange::Unchanged
+                ),
+            ]
+        );
+        assert!(block.lines.iter().all(|row| row.before.is_none()));
+    }
+
+    #[test]
     fn section_insertion_nests_the_added_row_at_depth_two() {
         let dir = tempfile::tempdir().expect("tempdir");
         let vault = write_vault(

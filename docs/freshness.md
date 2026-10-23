@@ -873,7 +873,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 | keep-reason prompt (single keeps, counted batches, Task Link sessions) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; one prompt asks why, one dated `🥀 **ROTTEN LOG**` entry per counted target) |
 | decay-card Keep stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices) |
-| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.64.0; `🥀 N keeps logged · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
+| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.65.0; `🥀 N keeps logged · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
 | note snapshots (`bob` highlights/ref) | rotten-log (open tasks: one condensed `KEPT` row with the newest entry; include-closed snapshots: every entry) |
 | Mac idle agenda rotten chip | rotten-log (`🥀 Rotten log` header folding with the other logs, `🥀 N` chip after `⚒ N` / `🗓 N`) |
 
@@ -1352,7 +1352,7 @@ builder near the `Alt+F to decide` string (tests
   (`Kept N reviews in a row` alone without the card capability,
   `· decay off` with decay off, `· Bob asks every review` for a zero
   threshold).
-- Rotten-log line (shipped ledger-tools 1.64.0):
+- Rotten-log line (shipped ledger-tools 1.65.0):
   `🥀 3 keeps logged · last Oct 16 — waiting for the weekend…` after
   the keeps line and before the action line (`🥀 1 keep logged · …`
   for one entry). The reason truncates to 48 characters with `…`;
@@ -1532,7 +1532,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
   keep it as written?" and writes one dated `🥀 **ROTTEN LOG**` entry
   with the stamp (bob-navigation-hotkeys 2.53.0 grammar/reader, 2.54.0
   single keeps, 2.55.0 decay-card Keep stage, 2.56.0 counted and Task
-  Link batches; bob-ledger-tools 1.64.0 mark tooltip line; Mac agenda
+  Link batches, 2.56.1 card header fix; bob-ledger-tools 1.65.0 mark tooltip line; Mac agenda
   `🥀 N` chip; bob-cli managed-log registry with agenda `log:
   "rotten"` and snapshot `KEPT` rows).
 

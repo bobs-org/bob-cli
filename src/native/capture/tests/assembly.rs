@@ -182,6 +182,39 @@ fn finds_the_earliest_direct_child_managed_log() {
         first_direct_managed_log_start(&lines, 0, lookalike.len()),
         None
     );
+
+    let rotten_only = concat!(
+        "- [ ] #task Parent\n",
+        "\t- keep me\n",
+        "\t- 🥀 **ROTTEN LOG**\n",
+        "\t\t- *2026-10-16* — old reason · kept 2×\n",
+    );
+    let lines = line_spans(rotten_only);
+    assert_eq!(
+        first_direct_managed_log_start(&lines, 0, rotten_only.len()),
+        Some(
+            rotten_only
+                .find("\t- 🥀 **ROTTEN LOG**")
+                .expect("rotten log")
+        ),
+    );
+
+    let rotten_before_work = concat!(
+        "- [ ] #task Parent\n",
+        "\t- 🥀 **ROTTEN LOG**\n",
+        "\t\t- *2026-10-16* — old reason · kept 2×\n",
+        "\t- 🛠️ **WORK LOG**\n",
+        "\t\t- *2026-10-20* — work\n",
+    );
+    let lines = line_spans(rotten_before_work);
+    assert_eq!(
+        first_direct_managed_log_start(&lines, 0, rotten_before_work.len()),
+        Some(
+            rotten_before_work
+                .find("\t- 🥀 **ROTTEN LOG**")
+                .expect("rotten log")
+        ),
+    );
 }
 
 #[test]

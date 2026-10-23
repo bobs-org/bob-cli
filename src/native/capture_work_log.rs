@@ -344,6 +344,33 @@ mod tests {
     }
 
     #[test]
+    fn creates_work_log_after_rotten_log_and_leaves_rotten_untouched() {
+        let source = concat!(
+            "- [/] #task Work ^work\n",
+            "\t- 🥀 **ROTTEN LOG**\n",
+            "\t\t- *2026-10-16* — old reason · kept 2×\n",
+        );
+        let result = write_work_log_group(
+            source,
+            0,
+            &[node("Did work")],
+            "2026-09-28",
+            None,
+        )
+        .expect("log write");
+        assert_eq!(
+            result.contents,
+            concat!(
+                "- [/] #task Work ^work\n",
+                "\t- 🥀 **ROTTEN LOG**\n",
+                "\t\t- *2026-10-16* — old reason · kept 2×\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-09-28* — Did work\n",
+            )
+        );
+    }
+
+    #[test]
     fn prepends_under_existing_work_marker_and_inherits_entry_prefix() {
         let source = concat!(
             "- [/] #task Work ^work\n",
