@@ -311,9 +311,11 @@ band by design), custom `bob-*` plugin builds including
 `block-id-prompt` (redeploy from the `bob-plugins` source repo),
 caches and bytecode, editor and OS state, `sdd/` machine-local state, and the
 two over-100-MiB `old_lib` PDFs (GitHub rejects them; they stay in the athena
-`old_lib` backup copy). Apollo-only `.bob/gkeep/migrate-tasks/*.json` files
-are also still ignored; they are outside this coverage and need their own
-per-extension decision.
+`old_lib` backup copy). `.bob/gkeep/migrate-tasks/*.json` receipts also stay
+ignored. They are the crash-recovery and commit-retry journal of
+`bob gkeep migrate-tasks` on the host that ran it ([gkeep.md](gkeep.md)), so
+they are machine-local state. The migrated notes commit normally, and the
+shared Keep import history in `.bob/gkeep/imports/` stays tracked.
 
 Verify coverage with exit codes (`1` means trackable, `0` means ignored):
 
