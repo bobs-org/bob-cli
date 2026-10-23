@@ -1,4 +1,5 @@
 mod native;
+mod print_fonts;
 pub mod runner;
 pub mod scripts;
 

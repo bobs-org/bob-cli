@@ -37,7 +37,7 @@ Run ``python3 -m py_compile`` plus ``--self-test`` via
 
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["playwright==1.62.0", "pillow==12.3.0", "nh3==0.3.7"]
+# dependencies = ["playwright==1.62.0", "pillow==12.3.0", "nh3==0.3.7", "fonttools==4.64.0"]
 # [tool.uv]
 # exclude-newer = "2026-09-01T00:00:00Z"
 # ///
@@ -623,21 +623,36 @@ def headed_capability() -> str | None:
     return None
 
 
+def _reader_font_dirs() -> list[str]:
+    """Installed ``fonts/`` plus the source-tree print-font directory."""
+    dirs = []
+    fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
+    if os.path.isdir(fonts_dir):
+        dirs.append(fonts_dir)
+    print_fonts = os.path.normpath(
+        os.path.join(WEB_CLIP_DIR, "..", "..", "assets", "print_fonts"))
+    if os.path.isdir(print_fonts) and print_fonts not in dirs:
+        dirs.append(print_fonts)
+    return dirs
+
+
 def available_fonts() -> list[str]:
     """Bundled reader families present next to this script (empty pre-template)."""
-    fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
-    try:
-        names = os.listdir(fonts_dir)
-    except OSError:
-        return []
+    names: list[str] = []
+    for directory in _reader_font_dirs():
+        try:
+            names.extend(os.listdir(directory))
+        except OSError:
+            pass
     lowered = [name.lower() for name in names]
     found = []
-    for prefix, family in (
-        ("source-serif", "Source Serif 4"),
-        ("inter", "Inter"),
-        ("jetbrains-mono", "JetBrains Mono"),
+    for prefixes, family in (
+        (("sourceserif", "source-serif"), "Source Serif 4"),
+        (("inter",), "Inter"),
+        (("jetbrainsmono", "jetbrains-mono"), "JetBrains Mono"),
     ):
-        if any(name.startswith(prefix) for name in lowered):
+        if any(name.startswith(prefix)
+               for name in lowered for prefix in prefixes):
             found.append(family)
     return found
 
@@ -2626,26 +2641,44 @@ def self_test() -> int:
     import web_clip_render as _render
 
     expected_fonts = (
-        "source-serif-4-latin-wght-normal.woff2",
-        "source-serif-4-latin-wght-italic.woff2",
-        "source-serif-4-latin-ext-wght-normal.woff2",
-        "source-serif-4-latin-ext-wght-italic.woff2",
-        "inter-latin-wght-normal.woff2",
-        "inter-latin-wght-italic.woff2",
-        "inter-latin-ext-wght-normal.woff2",
-        "inter-latin-ext-wght-italic.woff2",
-        "jetbrains-mono-latin-wght-normal.woff2",
+        "SourceSerif4SmText-Regular.otf",
+        "SourceSerif4SmText-It.otf",
+        "SourceSerif4SmText-Semibold.otf",
+        "SourceSerif4SmText-SemiboldIt.otf",
+        "Inter-Regular.otf",
+        "Inter-Italic.otf",
+        "Inter-Medium.otf",
+        "Inter-SemiBold.otf",
+        "Inter-SemiBoldItalic.otf",
+        "JetBrainsMono-Regular.ttf",
+        "JetBrainsMono-Bold.ttf",
     )
     fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
-    font_sizes = []
     for name in expected_fonts:
-        path = os.path.join(fonts_dir, name)
-        check(f"reader font present {name}", os.path.isfile(path))
-        try:
-            font_sizes.append(os.path.getsize(path))
-        except OSError:
-            pass
-    check("reader font payload under 1 MiB", sum(font_sizes) < 1024 * 1024)
+        check(f"reader font present {name}",
+              _render.resolve_font_path(name) is not None)
+    inter = _render.resolve_font_path("Inter-Regular.otf")
+    jetbrains = _render.resolve_font_path("JetBrainsMono-Regular.ttf")
+    if inter:
+        converted = _render.ensure_truetype(inter)
+        check("cff print face converts to truetype",
+              converted.endswith(".ttf") and converted != inter)
+    else:
+        check("cff print face converts to truetype", False)
+    if jetbrains:
+        check("truetype print face is served as-is",
+              _render.ensure_truetype(jetbrains) == jetbrains)
+    else:
+        check("truetype print face is served as-is", False)
+    leftover_woff2 = []
+    try:
+        leftover_woff2 = [
+            name for name in os.listdir(fonts_dir)
+            if name.endswith(".woff2")
+        ]
+    except OSError:
+        pass
+    check("reader fonts have no variable woff2", leftover_woff2 == [])
     check("reader OFL present",
           os.path.isfile(os.path.join(fonts_dir, "OFL.txt")))
     check("reader fonts readme present",
@@ -2663,8 +2696,11 @@ def self_test() -> int:
                    "counter(pages)", "hyphens: manual",
                    "font-variant-ligatures: none", "@font-face",
                    "Source Serif 4", "Inter", "JetBrains Mono",
-                   "/fonts/", "#2b4c7e"):
+                   "/fonts/", "#2b4c7e", "format(\"opentype\")",
+                   "SourceSerif4SmText-Regular.otf"):
         check(f"reader css has {needle!r}", needle in css)
+    check("reader css has no variable woff2 faces",
+          "woff2-variations" not in css and ".woff2" not in css)
 
     check("long date formats",
           _render.format_long_date("2026-04-27") == "April 27, 2026")
@@ -2984,8 +3020,22 @@ def self_test() -> int:
         check("reader pdf written", pdf_bytes > 1000)
         reader_pdf = os.path.join(workdir, "render.pdf")
         with open(reader_pdf, "rb") as handle:
-            head = handle.read(5)
-        check("reader pdf header", head == b"%PDF-")
+            pdf_head = handle.read()
+        check("reader pdf header", pdf_head.startswith(b"%PDF-"))
+        check("reader pdf bytes have no Type 3 fonts",
+              b"/Type3" not in pdf_head)
+        if shutil.which("pdffonts"):
+            try:
+                proc = subprocess.run(
+                    ["pdffonts", reader_pdf], capture_output=True,
+                    text=True, timeout=10,
+                )
+                check("reader pdffonts succeeds", proc.returncode == 0)
+                check("reader pdf has no Type 3 body fonts",
+                      proc.returncode == 0 and "Type 3" not in proc.stdout)
+            except (OSError, subprocess.SubprocessError):
+                check("reader pdffonts succeeds", False)
+                check("reader pdf has no Type 3 body fonts", False)
 
         skip_workdir = tempfile.mkdtemp(prefix="bob-clip-norender-")
         skip_req = {"protocol": 1, "op": "capture",

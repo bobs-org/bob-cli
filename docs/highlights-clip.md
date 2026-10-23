@@ -67,7 +67,9 @@ plus the episode instead.
    Import deduplication reads every URL from scalar or list-valued
    `source_url`/`url` metadata in ref notes and queued intake markers.
 3. For one URL, the pinned adapter fetches the page, extracts the article in reader
-   mode, and renders a Bob-owned print template to PDF.
+   mode, and renders a Bob-owned print template to PDF. The template loads the same
+   static Source Serif 4 Text, Inter, and JetBrains Mono faces note snapshots embed,
+   so Chromium writes CID fonts rather than Type 3.
 4. For a collection, each page is captured into private scratch without
    printing; the adapter composes the ordered article data into one document
    and prints it once. The collection marker records `source_url` as an ordered

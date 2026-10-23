@@ -7,6 +7,8 @@ use std::{
 
 use ttf_parser::Face;
 
+use crate::print_fonts;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FontRole {
     Serif,
@@ -25,93 +27,67 @@ const FONT_ASSETS: &[FontAsset] = &[
     FontAsset {
         name: "SourceSerif4SmText-Regular.otf",
         role: FontRole::Serif,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/SourceSerif4SmText-Regular.otf"
-        ),
+        bytes: print_fonts::SOURCE_SERIF4_SM_TEXT_REGULAR,
     },
     FontAsset {
         name: "SourceSerif4SmText-It.otf",
         role: FontRole::Serif,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/SourceSerif4SmText-It.otf"
-        ),
+        bytes: print_fonts::SOURCE_SERIF4_SM_TEXT_IT,
     },
     FontAsset {
         name: "SourceSerif4SmText-Semibold.otf",
         role: FontRole::Serif,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/SourceSerif4SmText-Semibold.otf"
-        ),
+        bytes: print_fonts::SOURCE_SERIF4_SM_TEXT_SEMIBOLD,
     },
     FontAsset {
         name: "SourceSerif4SmText-SemiboldIt.otf",
         role: FontRole::Serif,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/SourceSerif4SmText-SemiboldIt.otf"
-        ),
+        bytes: print_fonts::SOURCE_SERIF4_SM_TEXT_SEMIBOLD_IT,
     },
     FontAsset {
         name: "Inter-Regular.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/Inter-Regular.otf"
-        ),
+        bytes: print_fonts::INTER_REGULAR,
     },
     FontAsset {
         name: "Inter-Italic.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/Inter-Italic.otf"
-        ),
+        bytes: print_fonts::INTER_ITALIC,
     },
     FontAsset {
         name: "Inter-Medium.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/Inter-Medium.otf"
-        ),
+        bytes: print_fonts::INTER_MEDIUM,
     },
     FontAsset {
         name: "Inter-SemiBold.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/Inter-SemiBold.otf"
-        ),
+        bytes: print_fonts::INTER_SEMIBOLD,
     },
     FontAsset {
         name: "Inter-SemiBoldItalic.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/Inter-SemiBoldItalic.otf"
-        ),
+        bytes: print_fonts::INTER_SEMIBOLD_ITALIC,
     },
     FontAsset {
         name: "InterDisplay-SemiBold.otf",
         role: FontRole::Sans,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/InterDisplay-SemiBold.otf"
-        ),
+        bytes: print_fonts::INTER_DISPLAY_SEMIBOLD,
     },
     FontAsset {
         name: "JetBrainsMono-Regular.ttf",
         role: FontRole::Mono,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/JetBrainsMono-Regular.ttf"
-        ),
+        bytes: print_fonts::JETBRAINS_MONO_REGULAR,
     },
     FontAsset {
         name: "JetBrainsMono-Bold.ttf",
         role: FontRole::Mono,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/JetBrainsMono-Bold.ttf"
-        ),
+        bytes: print_fonts::JETBRAINS_MONO_BOLD,
     },
     FontAsset {
         name: "NotoEmoji-Regular.ttf",
         role: FontRole::Fallback,
-        bytes: include_bytes!(
-            "../../../../assets/print_fonts/NotoEmoji-Regular.ttf"
-        ),
+        bytes: print_fonts::NOTO_EMOJI_REGULAR,
     },
 ];
 

@@ -1,10 +1,12 @@
 # Bundled print fonts
 
-Pinned static fonts for Bob note snapshots. Source Serif 4 Text supplies serif body
-text, Inter supplies sans-serif text and structure (including the Inter Display title
-face), JetBrains Mono supplies code, and Noto Emoji supplies monochrome fallback glyphs.
-All faces are static OTF/TTF files; no variable font is shipped. Noto Sans Symbols 2 is
-not needed for the current snapshot corpus.
+Pinned static fonts for Bob note snapshots and the web-clip reader template.
+Source Serif 4 Text supplies serif body text, Inter supplies sans-serif text
+and structure (including the Inter Display title face), JetBrains Mono supplies
+code, and Noto Emoji supplies monochrome fallback glyphs. All faces are static
+OTF/TTF files; no variable font is shipped. Noto Sans Symbols 2 is not needed
+for the current snapshot corpus. The web-clip reader reuses these bytes
+(`src/print_fonts.rs`) rather than embedding a second copy.
 
 Each file is pinned by upstream release and SHA-256. The payload included in the Bob
 binary is **5,976,700 bytes** (5.977 MB), below the 6 MB budget.

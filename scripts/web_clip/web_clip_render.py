@@ -16,14 +16,19 @@ linked contents, then a fresh page and bookmark per part.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import html
 import os
 import re
 import shutil
+import sys
+import tempfile
 from urllib.parse import urljoin, urlsplit
 
 RENDER_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(RENDER_DIR, "fonts")
+PRINT_FONTS_DIR = os.path.normpath(
+    os.path.join(RENDER_DIR, "..", "..", "assets", "print_fonts"))
 TEMPLATE_DIR = os.path.join(RENDER_DIR, "template")
 READER_CSS_PATH = os.path.join(TEMPLATE_DIR, "reader.css")
 
@@ -63,6 +68,8 @@ _CONTENT_TYPE = {
     ".css": "text/css",
     ".html": "text/html; charset=utf-8",
     ".woff2": "font/woff2",
+    ".otf": "font/otf",
+    ".ttf": "font/ttf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
@@ -71,6 +78,104 @@ _CONTENT_TYPE = {
     ".avif": "image/avif",
     ".svg": "image/svg+xml",
 }
+
+
+def resolve_font_path(name: str) -> str | None:
+    """Return a readable font path, or ``None`` when ``name`` is unsafe.
+
+    Installed copies live in ``fonts/`` next to this renderer. The source
+    tree reuses ``assets/print_fonts/`` so the crate does not ship a second
+    copy of the static faces.
+    """
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return None
+    local = os.path.join(FONTS_DIR, name)
+    if os.path.isfile(local):
+        return local
+    shared = os.path.join(PRINT_FONTS_DIR, name)
+    if os.path.isfile(shared):
+        return shared
+    return None
+
+
+_TTF_CACHE: dict[str, str] = {}
+_TTF_DIR: str | None = None
+
+
+def _ttf_cache_dir() -> str:
+    global _TTF_DIR
+    if _TTF_DIR is None:
+        _TTF_DIR = tempfile.mkdtemp(prefix="bob-clip-ttf-")
+    return _TTF_DIR
+
+
+def ensure_truetype(src: str) -> str:
+    """Return a glyf TrueType path Chromium can embed as CID TrueType.
+
+    Source Serif 4 Text and Inter are CFF OpenType. Skia embeds those as
+    Type 3, which is what splits Highlights quote words in PDFKit.
+    Convert cubic outlines to quadratic glyf once per process. Faces that
+    are already TrueType (JetBrains Mono, DejaVu) are returned unchanged.
+    """
+    cached = _TTF_CACHE.get(src)
+    if cached and os.path.isfile(cached):
+        return cached
+    try:
+        served = _convert_cff_to_ttf(src)
+    except Exception as exc:  # noqa: BLE001 - fall back to the source face
+        print(f"web-clip font convert failed for {src}: {exc}",
+              file=sys.stderr)
+        served = src
+    _TTF_CACHE[src] = served
+    return served
+
+
+def _convert_cff_to_ttf(src: str) -> str:
+    from fontTools.pens.cu2quPen import Cu2QuPen
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    from fontTools.ttLib import TTFont, newTable
+
+    dest = src
+    with TTFont(src) as font:
+        if "CFF " not in font:
+            return src
+        glyph_order = font.getGlyphOrder()
+        charstrings = font["CFF "].cff.topDictIndex[0].CharStrings
+        glyf = newTable("glyf")
+        glyf.glyphs = {}
+        glyf.glyphOrder = glyph_order
+        for name in glyph_order:
+            tt_pen = TTGlyphPen(glyf.glyphs)
+            cu_pen = Cu2QuPen(tt_pen, 1.0, reverse_direction=True)
+            try:
+                charstrings[name].draw(cu_pen)
+            except Exception:  # noqa: BLE001 - empty glyf keeps the name
+                pass
+            glyf.glyphs[name] = tt_pen.glyph()
+        del font["CFF "]
+        font["glyf"] = glyf
+        font["loca"] = newTable("loca")
+        font.sfntVersion = "\x00\x01\x00\x00"
+        maxp = newTable("maxp")
+        maxp.tableVersion = 0x00010000
+        maxp.numGlyphs = len(glyph_order)
+        maxp.maxZones = 2
+        maxp.maxTwilightPoints = 0
+        maxp.maxStorage = 0
+        maxp.maxFunctionDefs = 0
+        maxp.maxInstructionDefs = 0
+        maxp.maxStackElements = 0
+        maxp.maxSizeOfInstructions = 0
+        maxp.maxComponentElements = 0
+        maxp.maxComponentDepth = 0
+        font["maxp"] = maxp
+        digest = hashlib.sha256(
+            f"{src}:{os.path.getsize(src)}:{os.path.getmtime(src)}".encode()
+        ).hexdigest()[:16]
+        dest = os.path.join(_ttf_cache_dir(), digest + ".ttf")
+        font.save(dest)
+    return dest
+
 
 
 def _clean_inline_svg(markup: str) -> str:
@@ -723,10 +828,11 @@ def _route_handler(render_dir: str):
             base = os.path.join(render_dir, "assets", name)
         elif path.startswith("/fonts/"):
             name = path[len("/fonts/"):]
-            if not name or "/" in name or "\\" in name:
+            base = resolve_font_path(name)
+            if base is None:
                 route.abort()
                 return
-            base = os.path.join(FONTS_DIR, name)
+            base = ensure_truetype(base)
         elif path.startswith("/template/"):
             name = path[len("/template/"):]
             if not name or "/" in name or "\\" in name:
