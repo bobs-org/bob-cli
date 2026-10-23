@@ -900,9 +900,13 @@ retains the anchor; stale inputs rebuild for a fresh choice.
   interval (7 → 14 → 30 → 90); at 90+ the existing custom refresh picker
   takes over constrained to a longer value ≤ 365, and at 365 the row is
   unavailable.
-- **Keep (Alt+F)** counts once with saturation at 999 and never resets;
-  **Reword (E)** and **Less often** stamp and clear; **Drop (D)** cancels
-  through the existing guarded cancel writer.
+- **Keep (Alt+F)** opens a reason stage inside the same card ("Keep
+  as written?", with the logged-keeps history and the exact entry
+  preview): Enter commits the stamp, counts once with saturation at
+  999 and never resets, and writes one dated Rotten Log entry in the
+  same transaction; Esc returns to the card's choices and a second Esc
+  writes nothing. **Reword (E)** and **Less often** stamp and clear;
+  **Drop (D)** cancels through the existing guarded cancel writer.
 - **Kept-count tails.** Schedule-changing decisions append `· kept N×` after
   the existing reason head (`🎲 P0 → P2 decay · in **17** (8–30) days ·
   kept 3×`), so the classification table above keeps its meaning.
@@ -911,7 +915,9 @@ retains the anchor; stale inputs rebuild for a fresh choice.
   `🎲 reword · kept 3×`) with no fabricated scheduled date change; both
   classify as `other` and deliberately reset the roll streak. Drop writes a
   dated Cancel Log entry (`🍂 dropped after 3 keeps`) and preserves keeps
-  history on the closed line. Keep and dismissals write no log.
+  history on the closed line. Dismissals (Not now, Less often, Reword,
+  Drop) write only their own Schedule/Cancel entries and never a Rotten
+  Log entry.
 - **Explicit levels (1–4)** preview one roll per configured level in ladder
   order, each with reset; absent levels are never invented. An invalid
   priority config disables every priority-changing action while keeping

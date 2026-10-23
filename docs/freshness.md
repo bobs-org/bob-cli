@@ -130,7 +130,9 @@ covers `keeps` and `unblocked` inside the Tasks suffix. A successful keep
 canonicalizes and repairs malformed/duplicate placement. Generic
 stamps remove all `keeps` fields and all `unblocked` fields. An uncounted keep preserves the
 valid semantic value while canonicalizing it. Do not introduce a
-second lifetime counter or alias.
+second lifetime counter or alias: the Rotten Log entry count below
+is display-only history, counted from dated entries at read time and
+never stored as a field.
 
 Canonical form:
 
@@ -199,6 +201,20 @@ No backfill: seeded dates, captured dates, and old `fresh` stamps are
 not evidence of keeps. Git sync may lose an increment during conflict
 recovery; this scalar is not an exact global event counter. Cache
 uncertainty under-counts. Hand editing remains unobserved.
+
+**Rotten Log.** Every counted keep — Alt+F/Ctrl+Alt+F on an exact
+due Ready ROTTEN or scheduled TICKLER row, or the decay card's Keep —
+first asks "Why keep it as written?" and then writes one dated entry
+under a `🥀 **ROTTEN LOG**` direct child, in the same write as the
+stamp. The reason is optional (a blank Enter logs `🤷 no reason
+given`) but the entry is not; Esc writes nothing. Each entry reads
+`*YYYY-MM-DD* — <reason> · kept N×` with N the streak after that
+keep, newest first. The entry count ("N keeps logged") is
+display-only history: unlike `[keeps:: N]` it never resets, and
+nothing reads it to change decay, buckets, tiers, lanes, Today,
+schedule, priority, or freshness. Grammar lives in
+[the vault format](reference/vault-format.md). See
+[Rotten Keeps Are Logged](develop/decisions.md#rotten-keeps-are-logged).
 
 **Configuration.**
 
@@ -598,6 +614,12 @@ accepted target still refreshes. Enter on an empty summary still keeps
 the task and writes no Work Log entry. Escape cancels the refresh, so the
 task stays due and Ctrl+Alt+F does not advance.
 
+Only bob-navigation-hotkeys writes the Rotten Log (single keeps,
+counted batches, Task Link sessions, and the decay card's Keep
+stage). `bob capture`, Rust, hooks, and all other automation never
+write it: capture's stamps stay generic and clear `keeps` through the
+same default as any other generic stamp.
+
 ## 6. Review ritual
 
 **Morning:**
@@ -644,7 +666,10 @@ task stays due and Ctrl+Alt+F does not advance.
    review got.
 4. ROTTEN is optional upkeep until 0, the budget, or you stop. The
    commitments → ROTTEN boundary notice includes `]S closes the review`
-   when POST remains.
+   when POST remains. A counted keep on a due Ready ROTTEN or
+   scheduled TICKLER row asks "Why keep it as written?" and writes one
+   dated Rotten Log entry with the stamp; a blank Enter logs `🤷 no
+   reason given`, while Esc writes nothing.
 5. `]S` jumps to POST; complete Morning review last with Ctrl+Enter or
    Alt+F. On a multi-row POST checklist, Ctrl+Enter and Ctrl+Alt+F move to
    the next row, Alt+F stays and counts remaining rows, and the review
@@ -696,8 +721,11 @@ not end it.
 A due at-limit task's Alt+F opens the decision card (Not now / Less
 often / Reword / Drop / Keep) as soon as compatible plugins are
 loaded. Counted and Task Link sessions skip such tasks with
-`N needs a decision`. See `docs/projects.md` "Approved-decay
-decision planner".
+`N needs a decision`. The card's Keep swaps the rows for a reason
+stage inside the same card: Enter commits stamp, increment, and one
+Rotten Log entry together, while Esc returns to the choices — no
+reason in mind means picking Not now, Less often, or Drop instead.
+See `docs/projects.md` "Approved-decay decision planner".
 
 ## 7. `bob freshness`
 
@@ -843,6 +871,11 @@ an invalid `freshness:` block or a non-Dataview task format.
 | `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Review / Work / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
+| keep-reason prompt (single keeps, counted batches, Task Link sessions) | rotten-log (landed: nav 2.54.0 single keeps, 2.56.0 batches; one prompt asks why, one dated `🥀 **ROTTEN LOG**` entry per counted target) |
+| decay-card Keep stage | rotten-log (landed: nav 2.55.0; in-card reason stage, one transaction, Esc back to the choices) |
+| freshness mark tooltip rotten line | rotten-log (landed: bob-ledger-tools 1.64.0; `🥀 N keeps logged · last …` in source-note Live Preview + reading views only, never Tasks query rows) |
+| note snapshots (`bob` highlights/ref) | rotten-log (open tasks: one condensed `KEPT` row with the newest entry; include-closed snapshots: every entry) |
+| Mac idle agenda rotten chip | rotten-log (`🥀 Rotten log` header folding with the other logs, `🥀 N` chip after `⚒ N` / `🗓 N`) |
 
 ## 9. Placement conformance examples
 
@@ -1319,6 +1352,15 @@ builder near the `Alt+F to decide` string (tests
   (`Kept N reviews in a row` alone without the card capability,
   `· decay off` with decay off, `· Bob asks every review` for a zero
   threshold).
+- Rotten-log line (shipped ledger-tools 1.64.0):
+  `🥀 3 keeps logged · last Oct 16 — waiting for the weekend…` after
+  the keeps line and before the action line (`🥀 1 keep logged · …`
+  for one entry). The reason truncates to 48 characters with `…`;
+  `🤷 no reason given` shows as is. It appears only where the task's
+  child block is available from the same source document (Live
+  Preview, reading view of the source note); absent, empty, or
+  ambiguous logs show nothing, and Tasks query rows, the dashboard,
+  and `rotten.md` results never show it.
 
 **Live verification (Bryan, in Obsidian).**
 
@@ -1486,6 +1528,13 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-10: closeout removed the transitional hidden-tag bypass for exact reference rows (schema 12, historical shape; ledger 1.39.0 / namespace v10): hidden rows stay out of the walk like any hidden task.
 - 2026-10-10: schema 13 and freshness namespace v11 removed the reference cadence and REFERENCES review group. References now use ordinary freshness, lane groups, keep/decay eligibility, and commitment/upkeep rules.
 - 2026-10-12: schema 14 and freshness namespace v12 add `[unblocked::]` (returned_by / unblocked_on, `markUnblockedLine`). Automatic Blocked → Ready recoveries resurface as TICKLER.
+- 2026-10-23: Rotten Log went live — every counted keep asks "Why
+  keep it as written?" and writes one dated `🥀 **ROTTEN LOG**` entry
+  with the stamp (bob-navigation-hotkeys 2.53.0 grammar/reader, 2.54.0
+  single keeps, 2.55.0 decay-card Keep stage, 2.56.0 counted and Task
+  Link batches; bob-ledger-tools 1.64.0 mark tooltip line; Mac agenda
+  `🥀 N` chip; bob-cli managed-log registry with agenda `log:
+  "rotten"` and snapshot `KEPT` rows).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
@@ -1521,3 +1570,9 @@ narrow widths, Live Preview and reading/Tasks/embeds views, dots and
 leaf, raw reveal on selection and click, card focus order and key hints,
 explicit cancellation, and one undo step — on fixture tasks only, never
 by forcing live task dates or counters.
+
+Rotten Log rollback: the logs remain as plain bullets — no cleanup
+write exists and none is planned. There is no off-switch; at about
+0.6 prompts a morning a plugin rollback is enough. An older nav
+without the registered grammar would convert the marker into a task
+during project conversion, so roll forward rather than back.

@@ -51,6 +51,8 @@ The human choices are small: confirm, change, defer, link, release, complete, or
 
 Repeated unchanged keeps on a due Ready row can prompt an explicit approved decision — choices such as doing it less often, rewording, dropping, or keeping anyway — through the existing schedule and log writers. The prompt is never automatic decay: nothing changes until a choice is approved, and a keep on an unblock tickler leaves the streak unchanged. Exact keep counting and card behavior belong in the contract.
 
+A counted keep asks "Why keep it as written?" and records the answer — or `🤷 no reason given` for a blank Enter — as a dated entry under the task's `🥀 **ROTTEN LOG**` child, in the same write as the stamp. The entry count is display-only history: it never resets like the keep streak, and nothing reads it to change decay, lanes, or schedule. Esc writes nothing.
+
 ## Related
 
 - [Your first Bob day](../start/first-bob-day.md) — confirm work during morning review.

@@ -71,6 +71,13 @@ On the row `]s` just landed on, pick one explicit answer:
   never leaves that group; `Ctrl+Alt+F` can cross into the next tier.
   Checklist rows are never stamped.
 
+A counted keep on a due Ready ROTTEN or scheduled TICKLER row asks "Why
+keep it as written?" before writing. The reason is optional — a blank
+Enter logs `🤷 no reason given` — and Esc cancels the keep entirely.
+Each answer lands as a dated entry under the task's `🥀 **ROTTEN
+LOG**`, newest first, so later reviews show how many times, when, and
+why the task was kept.
+
 An inbox task asks where it goes before a non-closing answer writes. After
 each keep, `bob freshness` drops that row from today's queue.
 
