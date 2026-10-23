@@ -2,6 +2,18 @@
 
 All notable changes to Bob are documented here.
 
+## [0.3.1](https://github.com/bobs-org/bob-cli/compare/v0.3.0...v0.3.1) - 2026-10-23
+
+### Added
+
+- *(managed-log)* register Rotten Log kind with agenda and snapshot support
+- *(ref)* expose annotation group pieces with seams in show
+- *(highlights-ref)* render continuation pieces as tucked groups
+
+### Fixed
+
+- *(highlights-ref)* harden legacy migration coverage and grouping docs
+
 ## [0.3.0](https://github.com/bobs-org/bob-cli/compare/v0.2.0...v0.3.0) - 2026-10-22
 
 ### Added
