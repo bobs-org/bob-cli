@@ -435,12 +435,21 @@ impl IntakeSession {
         // `scoped_write_path_set` once their destination already contains
         // the candidate identity.
         let mut path_set = scoped_write_path_set(config, &plan).write_paths;
+        let mut session = MarkerWriteSession::for_explicit_write()
+            .map_err(|error| IngestFailure::Incomplete(error.to_string()))?;
         let write = match execute_pdf_sync(
             config,
             &plan,
             &mut RunWriteState::default(),
+            &mut session,
         ) {
-            Ok(report) => report,
+            Ok(PdfSyncOutcome::Written(report)) => report,
+            Ok(PdfSyncOutcome::Held(hold)) => {
+                return rollback_or_queue(
+                    &mut moves,
+                    QueueFailure::new(QueueReason::Refused, hold.message),
+                );
+            }
             Err(error) => {
                 if git_changes_only_moved_files(config, &self.child_env, &moves)
                 {

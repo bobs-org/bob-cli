@@ -302,6 +302,7 @@ pub(super) fn scan_library_json(
     options: SyncOptions,
     jobs: usize,
     no_hooks: bool,
+    attended: bool,
 ) -> i32 {
     let mode = if options.dry_run { "dry_run" } else { "write" };
 
@@ -562,12 +563,28 @@ pub(super) fn scan_library_json(
             &error,
         );
     }
+    let mut session = match MarkerWriteSession::for_scan(attended) {
+        Ok(session) => session,
+        Err(error) => {
+            return print_scan_error_envelope(
+                config,
+                options,
+                mode,
+                &intake,
+                completed_intake,
+                &error,
+            );
+        }
+    };
     let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
-        match execute_pdf_sync(config, plan, &mut run_state) {
-            Ok(report) => {
+        match execute_pdf_sync(config, plan, &mut run_state, &mut session) {
+            Ok(PdfSyncOutcome::Written(report)) => {
                 write_outcomes.push(ScanWriteOutcome::Written(report))
+            }
+            Ok(PdfSyncOutcome::Held(hold)) => {
+                write_outcomes.push(ScanWriteOutcome::Held(hold))
             }
             Err(error) => {
                 write_outcomes.push(ScanWriteOutcome::Failed(ScanFailure {
@@ -581,7 +598,7 @@ pub(super) fn scan_library_json(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanWriteOutcome::Written(report) => Some(report.clone()),
-            ScanWriteOutcome::Failed(_) => None,
+            ScanWriteOutcome::Held(_) | ScanWriteOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     let counts = ScanCounts::from_reports(&reports);
@@ -608,7 +625,9 @@ pub(super) fn scan_library_json(
                         failures
                             .push(scan_failure_entry(config, failure, "write"));
                     }
-                    Some(ScanWriteOutcome::Written(_)) | None => {}
+                    Some(ScanWriteOutcome::Written(_))
+                    | Some(ScanWriteOutcome::Held(_))
+                    | None => {}
                 }
             }
             ScanPlanOutcome::Failed(failure) => {
@@ -695,7 +714,9 @@ fn scan_failure_entry(
 ) -> ScanJsonFailure {
     let message = match ScanLine::from_failure(failure, stage == "write") {
         ScanLine::Failed { message, .. } => message,
-        ScanLine::Success { .. } => failure.error.to_string(),
+        ScanLine::Success { .. } | ScanLine::Held { .. } => {
+            failure.error.to_string()
+        }
     };
     ScanJsonFailure {
         pdf: scan_vault_relative(config, &failure.pdf),

@@ -8,8 +8,15 @@ pub(super) fn read_pdf_marker(path: &Path) -> Result<PdfMarker> {
     let bytes = fs::read(path).map_err(|error| {
         CommandError::new(format!("read PDF {}: {error}", path.display()))
     })?;
-    let source_pdf_sha256 = hex::encode(Sha256::digest(&bytes));
-    let document = Document::load_mem(&bytes).map_err(|error| {
+    read_pdf_marker_from_bytes(path, &bytes)
+}
+
+pub(super) fn read_pdf_marker_from_bytes(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<PdfMarker> {
+    let source_pdf_sha256 = hex::encode(Sha256::digest(bytes));
+    let document = Document::load_mem(bytes).map_err(|error| {
         CommandError::new(format!("read PDF {}: {error}", path.display()))
     })?;
     let Some(first_page_id) = document.page_iter().next() else {
@@ -154,7 +161,19 @@ pub(super) fn write_pdf_marker(
     annotation_id: ObjectId,
     contents: &str,
 ) -> Result<()> {
-    let mut document = Document::load(path).map_err(|error| {
+    let bytes = fs::read(path).map_err(|error| {
+        CommandError::new(format!("read PDF {}: {error}", path.display()))
+    })?;
+    write_pdf_marker_from_bytes(path, &bytes, annotation_id, contents)
+}
+
+pub(super) fn write_pdf_marker_from_bytes(
+    path: &Path,
+    bytes: &[u8],
+    annotation_id: ObjectId,
+    contents: &str,
+) -> Result<()> {
+    let mut document = Document::load_mem(bytes).map_err(|error| {
         CommandError::new(format!("read PDF {}: {error}", path.display()))
     })?;
     let annotation = document

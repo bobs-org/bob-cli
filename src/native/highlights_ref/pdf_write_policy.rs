@@ -2,7 +2,6 @@
 //!
 //! This module only describes policy. Callers decide when and how to consume
 //! it; the reading probe is lazy so non-writing commands do not spawn tools.
-#![allow(dead_code)] // The following executor phase consumes this staged policy.
 
 use std::{sync::OnceLock, time::Duration};
 
@@ -40,14 +39,21 @@ pub(crate) enum ReadingActivity {
     Unknown(String),
 }
 
+/// Whether this command may hold marker writes because Highlights is in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadingHoldMode {
+    Evaluate,
+    Exempt,
+}
+
 /// Immutable per-command write settings. The potentially slow machine probe
 /// runs at most once, on first access.
-#[allow(dead_code)] // Consumed by the executor phase.
 pub(crate) struct PdfWritePolicy {
     pub(crate) coordinate_pdf_writes: bool,
     pub(crate) per_pdf_budget: Duration,
     pub(crate) scan_budget: Duration,
     pub(crate) reading_window: Duration,
+    pub(crate) reading_hold: ReadingHoldMode,
     reading_activity: OnceLock<ReadingActivity>,
 }
 
@@ -67,13 +73,32 @@ impl PdfWritePolicy {
                 ENV_READING_WINDOW,
                 READING_WINDOW,
             ),
+            reading_hold: ReadingHoldMode::Evaluate,
             reading_activity: OnceLock::new(),
         }
     }
 
-    #[allow(dead_code)] // Consumed by the executor phase.
+    pub(crate) fn with_reading_hold(mut self, mode: ReadingHoldMode) -> Self {
+        self.reading_hold = mode;
+        self
+    }
+
     pub(crate) fn reading_activity(&self) -> &ReadingActivity {
         self.reading_activity.get_or_init(probe_reading_activity)
+    }
+
+    /// True when an unattended scan should skip this PDF because you are
+    /// reading in Highlights. Unknown never holds.
+    pub(crate) fn should_hold_for_reading(&self) -> bool {
+        if !self.coordinate_pdf_writes
+            || self.reading_hold != ReadingHoldMode::Evaluate
+        {
+            return false;
+        }
+        matches!(
+            self.reading_activity(),
+            ReadingActivity::Reading { idle } if *idle < self.reading_window
+        )
     }
 }
 
@@ -86,6 +111,7 @@ fn duration_override(name: &str, default: Duration) -> Duration {
 }
 
 /// Extract the first bundle identifier emitted by `lsappinfo front`.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn parse_frontmost_bundle_id(output: &str) -> Option<String> {
     let marker = "bundleID=";
     let start = output.find(marker)? + marker.len();
@@ -105,6 +131,7 @@ pub(crate) fn parse_frontmost_bundle_id(output: &str) -> Option<String> {
 }
 
 /// Parse IOHIDSystem's nanosecond `HIDIdleTime` property into elapsed time.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub(crate) fn parse_hid_idle_time(output: &str) -> Option<Duration> {
     let marker = "HIDIdleTime";
     let start = output.find(marker)? + marker.len();

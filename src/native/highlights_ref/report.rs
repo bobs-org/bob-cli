@@ -105,7 +105,7 @@ pub(super) fn print_pdf_sync_report(
 
 pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
     println!("note_action: {}", report.note_action);
-    println!("pdf_marker_action: {}", report.marker_action);
+    println!("pdf_marker_action: {}", pdf_marker_action_display(report));
     if report.image_count > 0 || report.image_assets_written > 0 {
         println!("images: {}", report.image_count);
         println!("image_assets_written: {}", report.image_assets_written);
@@ -142,6 +142,15 @@ pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
         println!("{line}");
     }
     println!("writes: {}", write_summary(report));
+}
+
+pub(super) fn print_sync_hold_report(hold: &ScanHold) {
+    println!("note_action: none");
+    println!(
+        "pdf_marker_action: held ({})",
+        hold_verbose_message(&hold.message)
+    );
+    println!("writes: none");
 }
 
 pub(super) fn write_summary(report: &SyncWriteReport) -> &'static str {
@@ -431,10 +440,19 @@ pub(super) fn print_verbose_scan_plan_report(
     pdf_count: usize,
     intake: &[IntakeMove],
     plan_outcomes: &[ScanPlanOutcome],
+    session: &MarkerWriteSession,
+    plans: &[&PdfSyncPlan],
 ) {
     print_config_report("scan", config);
     println!("dry_run: {}", options.dry_run);
     println!("write_pdfs: {}", options.write_pdf);
+    if session.policy.coordinate_pdf_writes {
+        println!("pdf_write_coordination: on");
+        println!(
+            "reading_hold: {}",
+            session.reading_hold_report(plans, options.dry_run)
+        );
+    }
     println!("ob_sync: not-run");
     println!("pdf_count: {pdf_count}");
     println!("intake_moves: {}", intake.len());
@@ -620,6 +638,9 @@ pub(super) fn print_concise_scan_write_report(
                             lines.push(line);
                         }
                     }
+                    Some(ScanWriteOutcome::Held(hold)) => {
+                        lines.push(ScanLine::from_hold(plan, hold));
+                    }
                     Some(ScanWriteOutcome::Failed(failure)) => {
                         lines.push(ScanLine::from_failure(failure, true));
                     }
@@ -637,7 +658,7 @@ pub(super) fn print_concise_scan_write_report(
         "{}",
         scan_summary_line(
             pdf_count,
-            ScanCounts::from_reports(reports),
+            ScanCounts::from_write_outcomes(write_outcomes, reports),
             plan_failure_count + write_failure_count,
             write_summary_from_reports(reports),
             styler,
@@ -684,6 +705,10 @@ pub(super) enum ScanLine {
         action: String,
         details: Vec<String>,
     },
+    Held {
+        name: String,
+        message: String,
+    },
     Failed {
         name: String,
         message: String,
@@ -709,17 +734,35 @@ impl ScanLine {
         plan: &PdfSyncPlan,
         report: &SyncWriteReport,
     ) -> Option<Self> {
-        scan_report_changed(report).then(|| Self::Success {
-            name: scan_display_name(&plan.note_path),
-            action: scan_change_action(
-                report.note_action,
-                report.marker_action != "none",
-                report.image_assets_written,
-                report.routed_note_actions,
-                false,
-            ),
-            details: scan_details(plan, report.annotation_tasks_created),
+        scan_report_changed(report).then(|| {
+            let mut details =
+                scan_details(plan, report.annotation_tasks_created);
+            if report
+                .marker_write
+                .as_ref()
+                .is_some_and(|info| info.editor_saved_first)
+            {
+                details.push("unsaved annotations saved first".to_string());
+            }
+            Self::Success {
+                name: scan_display_name(&plan.note_path),
+                action: scan_change_action(
+                    report.note_action,
+                    report.marker_action != "none",
+                    report.image_assets_written,
+                    report.routed_note_actions,
+                    false,
+                ),
+                details,
+            }
         })
+    }
+
+    pub(super) fn from_hold(plan: &PdfSyncPlan, hold: &ScanHold) -> Self {
+        Self::Held {
+            name: scan_display_name(&plan.note_path),
+            message: hold.message.clone(),
+        }
     }
 
     pub(super) fn from_failure(
@@ -739,13 +782,16 @@ impl ScanLine {
 
     pub(super) fn name(&self) -> &str {
         match self {
-            Self::Success { name, .. } | Self::Failed { name, .. } => name,
+            Self::Success { name, .. }
+            | Self::Held { name, .. }
+            | Self::Failed { name, .. } => name,
         }
     }
 
     pub(super) fn prefix_label(&self, dry_run: bool) -> &'static str {
         match self {
             Self::Success { .. } => success_prefix_label(dry_run),
+            Self::Held { .. } => "held",
             Self::Failed { .. } => "error",
         }
     }
@@ -760,6 +806,7 @@ impl ScanLine {
         let prefix_label = pad_right(self.prefix_label(dry_run), prefix_width);
         let prefix = match self {
             Self::Success { .. } => styler.green(&prefix_label),
+            Self::Held { .. } => styler.yellow(&prefix_label),
             Self::Failed { .. } => styler.red(&prefix_label),
         };
         let name = styler.cyan(&pad_right(self.name(), name_width));
@@ -789,7 +836,7 @@ impl ScanLine {
                 }
                 rendered
             }
-            Self::Failed { message, .. } => {
+            Self::Held { message, .. } | Self::Failed { message, .. } => {
                 format!("  {prefix}  {name}  {message}")
             }
         }
@@ -1013,6 +1060,7 @@ pub(super) struct ScanCounts {
     pub(super) updates: usize,
     pub(super) unchanged: usize,
     pub(super) marker_updates: usize,
+    pub(super) held: usize,
     pub(super) images: usize,
     pub(super) image_assets: usize,
     pub(super) annotation_tasks_created: usize,
@@ -1042,6 +1090,7 @@ impl ScanCounts {
                 .iter()
                 .filter(|plan| plan.marker_write_needed)
                 .count(),
+            held: 0,
             images: plans
                 .iter()
                 .filter_map(|plan| plan.rendered_highlights.as_ref())
@@ -1087,6 +1136,7 @@ impl ScanCounts {
                 .iter()
                 .filter(|report| report.marker_action != "none")
                 .count(),
+            held: 0,
             images: reports.iter().map(|report| report.image_count).sum(),
             image_assets: reports
                 .iter()
@@ -1106,6 +1156,22 @@ impl ScanCounts {
                 .sum(),
         }
     }
+
+    pub(super) fn from_write_outcomes(
+        write_outcomes: &[ScanWriteOutcome],
+        reports: &[SyncWriteReport],
+    ) -> Self {
+        let mut counts = Self::from_reports(reports);
+        counts.held = held_count(write_outcomes);
+        counts
+    }
+}
+
+pub(super) fn held_count(write_outcomes: &[ScanWriteOutcome]) -> usize {
+    write_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, ScanWriteOutcome::Held(_)))
+        .count()
 }
 
 pub(super) fn scan_summary_line(
@@ -1138,6 +1204,12 @@ pub(super) fn scan_summary_line(
         summary.push_str(&format!(
             " {separator} {}",
             count_phrase(counts.image_assets, "image asset", "image assets")
+        ));
+    }
+    if counts.held > 0 {
+        summary.push_str(&format!(
+            " {separator} {}",
+            styler.yellow(&count_phrase(counts.held, "held", "held"))
         ));
     }
     if failure_count > 0 {
@@ -1290,6 +1362,47 @@ pub(super) fn print_scan_write_failure_entry(failure: &ScanFailure) {
     println!("  error: {}", failure.error);
 }
 
+pub(super) fn print_verbose_scan_write_marker_lines(
+    plan_outcomes: &[ScanPlanOutcome],
+    write_outcomes: &[ScanWriteOutcome],
+    session: &MarkerWriteSession,
+) {
+    if !session.policy.coordinate_pdf_writes {
+        return;
+    }
+    let mut write_index = 0usize;
+    for outcome in plan_outcomes {
+        match outcome {
+            ScanPlanOutcome::Planned(plan) => {
+                let write_outcome = write_outcomes.get(write_index);
+                write_index += 1;
+                match write_outcome {
+                    Some(ScanWriteOutcome::Written(report))
+                        if report.marker_write.as_ref().is_some_and(
+                            |info| info.mode == MarkerWriteMode::Coordinated,
+                        ) =>
+                    {
+                        println!("pdf: {}", plan.pdf.display());
+                        println!(
+                            "  pdf_marker_action: {}",
+                            pdf_marker_action_display(report)
+                        );
+                    }
+                    Some(ScanWriteOutcome::Held(hold)) => {
+                        println!("pdf: {}", plan.pdf.display());
+                        println!(
+                            "  pdf_marker_action: held ({})",
+                            hold_verbose_message(&hold.message)
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            ScanPlanOutcome::Failed(_) => {}
+        }
+    }
+}
+
 pub(super) fn print_scan_plan_summary(
     plans: &[&PdfSyncPlan],
     plan_failure_count: usize,
@@ -1333,6 +1446,7 @@ pub(super) fn print_scan_write_summary(
     plans: &[&PdfSyncPlan],
     plan_failure_count: usize,
     write_failure_count: usize,
+    held_count: usize,
 ) {
     let counts = ScanCounts::from_reports(reports);
     println!("summary:");
@@ -1360,6 +1474,9 @@ pub(super) fn print_scan_write_summary(
     println!("  reading_tasks_updated: {}", reading.updated);
     println!("  open_v1_ref_tasks: {}", count_open_v1(plans));
     println!("  pdf_markers_updated: {}", counts.marker_updates);
+    if held_count > 0 {
+        println!("  pdf_markers_held: {held_count}");
+    }
     println!("  write_successes: {}", reports.len());
     println!("  plan_failures: {plan_failure_count}");
     println!("  write_failures: {write_failure_count}");

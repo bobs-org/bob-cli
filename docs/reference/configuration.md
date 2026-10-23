@@ -147,6 +147,7 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 | `highlights.audio_library` | Path | `$XDG_DATA_HOME/sase-listen/library`, else `~/.local/share/sase-listen/library` | SASE Listen library searched for companion audio. |
 | `highlights.listen_command` | String command template | Unset | Optional `bob ref create --listen` command. It must be a direct `sase listen render {target} ... -o {audio}` invocation; Bob does not run a shell. |
 | `highlights.ingest_on_create` | Boolean | `true` | Whether create-time intake files the PDF and reference note immediately when safe. `BOB_HIGHLIGHTS_INGEST_ON_CREATE` overrides it. |
+| `highlights.coordinate_pdf_writes` | Boolean | `false` | When on, wrap each PDF marker write in a bounded macOS `.forMerging` coordination and hold when Highlights is in use or uncertain. Stays off until the Mac acceptance test passes. On Linux the key is accepted and inert for OS coordination. See [PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights). |
 | `highlights.url_routing.capture` | Boolean | `true` | Whether eligible bare links in capture queue a reference job. |
 | `highlights.url_routing.gkeep` | Boolean | `true` | Whether eligible URL-only Keep notes are clipped during pull. |
 | `highlights.url_routing.exclude_hosts` | Sequence of host strings | `[google.com, googleplex.com, youtube.com, youtu.be, github.com, x.com, twitter.com]` | Replaces the built-in exclusions; an empty list excludes none. Entries are normalized and match a host and its subdomains. |
@@ -154,7 +155,8 @@ sections. See [freshness fields and configuration](../freshness.md#2-fields-over
 The old `highlights.pre_scan_command` key is rejected; use
 `pre_scan_hook`. Invalid URL-routing config warns and leaves the URL as a task.
 See [URL routing](../ref.md#url-routing),
-[reference audio](../highlights-ref-sync.md#companion-audio-on-scan), and
+[reference audio](../highlights-ref-sync.md#companion-audio-on-scan),
+[PDFs open in Highlights](../highlights-ref-sync.md#pdfs-open-in-highlights), and
 [web article capture](../highlights-clip.md#hosts-and-browsers).
 
 ### `gkeep`
@@ -248,7 +250,13 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_WEB_CLIP_KEEP_WORKDIR` | Temporary work files are removed | Set to `1` to retain the web-clip scratch directory for debugging. |
 | `BOB_CHROME` | Discovered Google Chrome, then Playwright's bundled Chromium (newest installed revision first) | Browser executable for web article capture and Mermaid rendering. Bundled Chromium launches by its discovered path even when pinned Playwright's default revision is missing. |
 | `BOB_REF_JOBS_KICK` | Eligible capture attempts to start the background worker | Exact values `off`, `0`, or `false` suppress the detached worker kick; queued jobs remain available to `bob ref jobs run`. |
+| `BOB_REF_FRONTMOST_BUNDLE_ID` | Unset | Test override for the frontmost app bundle id used by the reading-activity probe. |
+| `BOB_REF_HID_IDLE_SECONDS` | Unset | Test override for HID idle time in seconds, used with `BOB_REF_READING_PROBE` or `BOB_REF_FRONTMOST_BUNDLE_ID`. |
 | `BOB_REF_INTAKE_LOCK_WAIT_SECONDS` | `60` seconds for maintenance lock and `30` seconds for scan lock | Bounds how long inline intake waits for vault maintenance locks. |
+| `BOB_REF_PDF_SCAN_BUDGET_SECONDS` | `30` | Internal override for the coordinated-write scan-wide cap. |
+| `BOB_REF_PDF_WRITE_BUDGET_SECONDS` | `10` | Internal override for the per-PDF coordinated-write budget. |
+| `BOB_REF_READING_PROBE` | Unset | Internal override: `reading` or `away` forces the Highlights reading-activity probe. |
+| `BOB_REF_READING_WINDOW_SECONDS` | `30` | Internal override for how recently HID input must be for an `editor_active` hold. |
 | `BOB_GKEEP_ADAPTER` | `uv` runs Bob's pinned Keep adapter | Replaces the whole Keep adapter invocation. |
 
 See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.md),

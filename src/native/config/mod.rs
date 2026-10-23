@@ -210,7 +210,6 @@ impl HighlightsConfig {
         self.ingest_on_create
     }
 
-    #[allow(dead_code)] // Consumed by the Highlights executor phase.
     pub(crate) fn coordinate_pdf_writes(&self) -> bool {
         self.coordinate_pdf_writes
     }

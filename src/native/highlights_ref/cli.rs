@@ -230,6 +230,7 @@ pub(super) fn with_config_args(command: ClapCommand) -> ClapCommand {
 
 pub(super) fn with_scan_args(command: ClapCommand) -> ClapCommand {
     command
+        .arg(attended_arg())
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(format_arg())
@@ -241,6 +242,16 @@ pub(super) fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(verbose_arg())
         .arg(write_pdfs_arg())
         .arg(xlib_dir_arg())
+}
+
+pub(super) fn attended_arg() -> Arg {
+    Arg::new("attended")
+        .long("attended")
+        .short('a')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Treat this as a scan you started: never hold marker writes because Highlights is in use",
+        )
 }
 
 pub(super) fn no_hooks_arg() -> Arg {

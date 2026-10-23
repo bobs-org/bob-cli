@@ -905,6 +905,13 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
         "expected short and long write-pdfs flag in scan help:\n{help}"
     );
     assert!(
+        help.contains("-a, --attended")
+            && help.contains(
+                "Treat this as a scan you started: never hold marker writes because Highlights is in use"
+            ),
+        "expected attended scan flag help:\n{help}"
+    );
+    assert!(
         help.contains(
             "Output format: human (default) or json, a one-line machine-readable report"
         ) && help.contains("bob ref scan -w -f json"),
@@ -913,6 +920,7 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-a, --attended",
             "-b, --bob-dir",
             "-d, --dry-run",
             "-f, --format",

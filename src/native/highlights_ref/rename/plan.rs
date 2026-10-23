@@ -885,8 +885,13 @@ fn write_id_marker(
         );
     }
 
-    let execution =
-        execute_pdf_sync(config, &plan, &mut RunWriteState::default());
+    let mut session = MarkerWriteSession::uncoordinated();
+    let execution = execute_pdf_sync(
+        config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    );
     if let Ok(bytes) = fs::read(&pdf_path) {
         transaction.pdf_after = Some(bytes);
     }
@@ -895,9 +900,13 @@ fn write_id_marker(
             .after
             .insert(config.bob_dir.join(&prepared.report.from.path), bytes);
     }
-    execution
-        .map(|_| ())
-        .map_err(|error| format!("write id to PDF marker: {error}"))
+    match execution {
+        Ok(PdfSyncOutcome::Written(_)) => Ok(()),
+        Ok(PdfSyncOutcome::Held(hold)) => {
+            Err(format!("write id to PDF marker: {}", hold.message))
+        }
+        Err(error) => Err(format!("write id to PDF marker: {error}")),
+    }
 }
 
 fn verify_renamed(

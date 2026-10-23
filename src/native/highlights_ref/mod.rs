@@ -54,6 +54,7 @@ mod intake_status;
 mod io;
 mod listen;
 mod marker;
+mod marker_write;
 mod model;
 mod note;
 // Model and serializer are intentionally defined before their production callers;
@@ -100,6 +101,7 @@ use image_notes::*;
 use io::*;
 use listen::*;
 use marker::*;
+use marker_write::*;
 use model::*;
 use note::*;
 use projection::*;
@@ -367,6 +369,7 @@ fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
             options,
             jobs_from_matches(matches),
             no_hooks,
+            matches.get_flag("attended"),
         );
         let failure = (code != 0).then(|| {
             format!("bob ref scan --format json exited with code {code}")
@@ -383,6 +386,7 @@ fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
         jobs_from_matches(matches),
         matches.get_flag("verbose"),
         no_hooks,
+        matches.get_flag("attended"),
     );
     let failure = result.as_ref().err().map(|error| {
         (error.code.unwrap_or("scan_failed"), error.message.clone())

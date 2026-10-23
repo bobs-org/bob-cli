@@ -20,6 +20,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Marker note grammar](#marker-note-grammar)
 - [Required parent, type, and ref type](#required-parent-type-and-ref-type)
 - [Synced properties](#synced-properties)
+- [PDFs open in Highlights](#pdfs-open-in-highlights)
 - [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
 - [Generated body contract](#generated-body-contract)
   - [Image notes](#image-notes)
@@ -665,8 +666,59 @@ updated.
 
 PDF marker writes are performed by saving a temporary PDF next to the original
 and renaming it over the target. Before first PDF writes, commit or otherwise
-back up the PDF library. Keep Highlights and Obsidian idle while testing PDF
-writes so the apps do not race the CLI.
+back up the PDF library. See [PDFs open in Highlights](#pdfs-open-in-highlights)
+for how marker writes behave when a PDF is open.
+
+## PDFs open in Highlights
+
+When `highlights.coordinate_pdf_writes` is on, `bob ref scan --write-pdfs` and
+`bob ref sync --write-pdf` wrap each PDF whose plan needs a marker write in one
+bounded macOS file-coordination write (`NSFileCoordinator`, `.forMerging`).
+Highlights saves unsaved annotations first, bob re-checks the marker in those
+fresh bytes, writes on top of them, and Highlights reloads the same tab in
+place. Create-time ingest uses the same executor.
+
+The key defaults to off until a guided acceptance test on the Mac passes. On
+Linux the key is accepted and inert: there is no OS coordination, and the
+reading probe always reports not reading unless an internal override is set.
+
+### Holds
+
+If anything is uncertain, bob holds that PDF: nothing is written for it, the
+scan exits 0, and the next scan retries. A hold is not a failure.
+
+| Reason | When | Message |
+| --- | --- | --- |
+| `editor_active` | Unattended scan; Highlights frontmost; last input less than 30 s ago | `waiting while you read in Highlights · retrying next scan` |
+| `coordination_timeout` | Access not granted within 10 s, or the scan's 30 s cap is spent | `Highlights didn't answer within 10 s (a dialog may be open) · retrying next scan` (cap variant: `Highlights didn't answer this scan (30 s spent) · retrying next scan`) |
+| `marker_changed` | Fresh bytes carry a marker other than the planned one | `marker changed in Highlights during the scan · retrying next scan` |
+
+Concise scan output prints a yellow `held` line and a `N held` summary count.
+Verbose scan (`-v`) prints `pdf_write_coordination: on` and a `reading_hold`
+line when the key is on, then `pdf_marker_action: updated (coordinated in 0.42
+s)` or `held (<reason>; retrying next scan)`. `bob ref sync` uses the same
+phrases and still exits 0 on a hold.
+
+### `-a, --attended`
+
+`bob ref scan -a, --attended` means a person asked for this scan right now:
+never hold marker writes because Highlights is in use. It changes nothing else.
+Bob Refs ⌘S passes it. `bob ref sync` and create-time ingest never hold for
+reading. The scheduled cron scan does not pass `-a`.
+
+### Budgets and overrides
+
+Defaults are 10 s per PDF, a 30 s scan-wide cap, and a 30 s reading window.
+Once the cap is spent, remaining marker-write PDFs hold immediately. Internal
+overrides, for tests and the acceptance kit:
+
+- `BOB_REF_PDF_WRITE_BUDGET_SECONDS`
+- `BOB_REF_PDF_SCAN_BUDGET_SECONDS`
+- `BOB_REF_READING_WINDOW_SECONDS`
+- `BOB_REF_READING_PROBE=reading|away`
+- `BOB_REF_FRONTMOST_BUNDLE_ID` and `BOB_REF_HID_IDLE_SECONDS`
+
+Unknown probe results do not hold. Dry runs never coordinate and never probe.
 
 ## Scan, Safety, and Git/ob Behavior
 
@@ -1928,8 +1980,8 @@ generated `^ref` checkbox toggle, and the file still matches what the command
 planned from. Other body edits, managed-region edits, staged changes, untracked
 notes, and dirty PDFs are still refused.
 
-Keep Highlights and Obsidian idle while testing PDF marker writes so the apps do
-not race the CLI.
+See [PDFs open in Highlights](#pdfs-open-in-highlights) for how marker writes
+behave when a PDF is open.
 
 ## Scheduled Scan
 

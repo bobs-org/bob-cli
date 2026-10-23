@@ -1,6 +1,7 @@
 //! Shared types and their inherent impls for highlights_ref.
 use super::*;
 use crate::native::env as bob_env;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Config {
@@ -594,6 +595,60 @@ pub(super) struct SyncWriteReport {
     /// Successful reading-task checkbox edit this PDF performed, with the
     /// destination file and block ID.
     pub(super) reading_updated: Option<ReadingTaskOutcome>,
+    /// Present when this PDF's marker was written in write mode.
+    pub(super) marker_write: Option<MarkerWriteInfo>,
+}
+
+/// How one marker write ran: coordinated `.forMerging` or a direct replace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkerWriteMode {
+    Coordinated,
+    Direct,
+}
+
+/// Facts about a successful marker write, for human and JSON reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MarkerWriteInfo {
+    pub(super) mode: MarkerWriteMode,
+    pub(super) editor_saved_first: bool,
+    pub(super) status_change: Option<(String, String)>,
+    pub(super) waited: Duration,
+}
+
+/// Why a coordinated marker write held instead of writing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HoldReason {
+    EditorActive,
+    CoordinationTimeout,
+    MarkerChanged,
+}
+
+impl HoldReason {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::EditorActive => "editor_active",
+            Self::CoordinationTimeout => "coordination_timeout",
+            Self::MarkerChanged => "marker_changed",
+        }
+    }
+}
+
+/// One PDF whose marker write was held: nothing for that PDF was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ScanHold {
+    pub(super) pdf: PathBuf,
+    pub(super) note_path: PathBuf,
+    pub(super) title: String,
+    pub(super) reason: HoldReason,
+    pub(super) message: String,
+}
+
+/// Result of executing one PDF plan when coordination may hold.
+#[derive(Debug, Clone)]
+pub(super) enum PdfSyncOutcome {
+    Written(SyncWriteReport),
+    Held(ScanHold),
 }
 
 /// What one PDF's reading-task write did, for human reports.
@@ -648,6 +703,7 @@ pub(super) enum ScanPlanOutcome {
 #[derive(Debug, Clone)]
 pub(super) enum ScanWriteOutcome {
     Written(SyncWriteReport),
+    Held(ScanHold),
     Failed(ScanFailure),
 }
 

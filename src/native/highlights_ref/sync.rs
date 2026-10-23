@@ -25,8 +25,10 @@ pub(super) fn sync_pdf(
         return Ok(());
     }
 
-    let report = write_single_pdf_sync(config, &plan)?;
-    print_sync_write_report(&report);
+    match write_single_pdf_sync(config, &plan)? {
+        PdfSyncOutcome::Written(report) => print_sync_write_report(&report),
+        PdfSyncOutcome::Held(hold) => print_sync_hold_report(&hold),
+    }
     Ok(())
 }
 
@@ -49,9 +51,10 @@ pub(super) fn plan_single_pdf_sync(
 pub(super) fn write_single_pdf_sync(
     config: &Config,
     plan: &PdfSyncPlan,
-) -> Result<SyncWriteReport> {
+) -> Result<PdfSyncOutcome> {
     ensure_safe_to_write(config, iter::once(plan))?;
-    execute_pdf_sync(config, plan, &mut RunWriteState::default())
+    let mut session = MarkerWriteSession::for_explicit_write()?;
+    execute_pdf_sync(config, plan, &mut RunWriteState::default(), &mut session)
 }
 
 pub(super) fn scan_library(
@@ -60,6 +63,7 @@ pub(super) fn scan_library(
     jobs: usize,
     verbose: bool,
     no_hooks: bool,
+    attended: bool,
 ) -> Result<()> {
     validate_library_layout(config)?;
     let _maintenance_lock = acquire_scan_maintenance_lock(options.dry_run)?;
@@ -118,6 +122,7 @@ pub(super) fn scan_library(
         .collect::<Vec<_>>();
 
     let styler = Styler::detect();
+    let mut session = MarkerWriteSession::for_scan(attended)?;
     if verbose {
         print_verbose_scan_plan_report(
             config,
@@ -125,6 +130,8 @@ pub(super) fn scan_library(
             pdfs.len(),
             &intake,
             &plan_outcomes,
+            &session,
+            &plans,
         );
     } else {
         print_concise_intake_report(config, &intake, options.dry_run, &styler);
@@ -155,9 +162,12 @@ pub(super) fn scan_library(
     let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
-        match execute_pdf_sync(config, plan, &mut run_state) {
-            Ok(report) => {
+        match execute_pdf_sync(config, plan, &mut run_state, &mut session) {
+            Ok(PdfSyncOutcome::Written(report)) => {
                 write_outcomes.push(ScanWriteOutcome::Written(report))
+            }
+            Ok(PdfSyncOutcome::Held(hold)) => {
+                write_outcomes.push(ScanWriteOutcome::Held(hold))
             }
             Err(error) => {
                 write_outcomes.push(ScanWriteOutcome::Failed(ScanFailure {
@@ -171,17 +181,22 @@ pub(super) fn scan_library(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanWriteOutcome::Written(report) => Some(report.clone()),
-            ScanWriteOutcome::Failed(_) => None,
+            ScanWriteOutcome::Held(_) | ScanWriteOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     let write_failures = write_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanWriteOutcome::Written(_) => None,
             ScanWriteOutcome::Failed(failure) => Some(failure),
+            ScanWriteOutcome::Written(_) | ScanWriteOutcome::Held(_) => None,
         })
         .collect::<Vec<_>>();
     if verbose {
+        print_verbose_scan_write_marker_lines(
+            &plan_outcomes,
+            &write_outcomes,
+            &session,
+        );
         for failure in &write_failures {
             print_scan_write_failure_entry(failure);
         }
@@ -190,6 +205,7 @@ pub(super) fn scan_library(
             &plans,
             plan_failures.len(),
             write_failures.len(),
+            held_count(&write_outcomes),
         );
     } else {
         print_concise_scan_write_report(
@@ -1253,19 +1269,20 @@ pub(super) fn refresh_stable_rendered_note(plan: &mut PdfSyncPlan) {
     );
 }
 
-pub(super) fn execute_pdf_sync(
+pub(super) fn execute_pdf_sync_inner(
     config: &Config,
     plan: &PdfSyncPlan,
     run_state: &mut RunWriteState,
+    marker_prep: Option<&ResolvedMarkerWrite>,
 ) -> Result<SyncWriteReport> {
     let is_v2 = plan
         .reading_task_plan
         .as_ref()
         .is_some_and(|reading| reading.branch == NoteBranch::V2);
     if is_v2 {
-        execute_pdf_sync_v2(config, plan, run_state)
+        execute_pdf_sync_v2(config, plan, run_state, marker_prep)
     } else {
-        execute_pdf_sync_v1(config, plan, run_state)
+        execute_pdf_sync_v1(config, plan, run_state, marker_prep)
     }
 }
 
@@ -1273,6 +1290,7 @@ fn execute_pdf_sync_v1(
     config: &Config,
     plan: &PdfSyncPlan,
     run_state: &mut RunWriteState,
+    marker_prep: Option<&ResolvedMarkerWrite>,
 ) -> Result<SyncWriteReport> {
     if note_write_planned(plan) {
         ensure_note_unchanged_for_write(plan)?;
@@ -1283,12 +1301,7 @@ fn execute_pdf_sync_v1(
         }
     }
     if plan.marker_write_needed {
-        ensure_pdf_unchanged_for_write(plan)?;
-        write_pdf_marker(
-            &plan.pdf,
-            plan.marker.annotation_id,
-            &plan.rendered_marker,
-        )?;
+        write_planned_pdf_marker(plan, marker_prep)?;
     }
 
     let mut image_assets_written = 0usize;
@@ -1418,6 +1431,7 @@ fn execute_pdf_sync_v1(
         // `execute_pdf_sync_v2`.
         reading_created: None,
         reading_updated: None,
+        marker_write: None,
     })
 }
 
@@ -1598,6 +1612,7 @@ fn execute_pdf_sync_v2(
     config: &Config,
     plan: &PdfSyncPlan,
     run_state: &mut RunWriteState,
+    marker_prep: Option<&ResolvedMarkerWrite>,
 ) -> Result<SyncWriteReport> {
     // Non-mutating pre-validation before any writes: the selected reading
     // line, the required ref-note preimage, the authorized PDF preimage,
@@ -1611,7 +1626,7 @@ fn execute_pdf_sync_v2(
     if note_write_planned(plan) {
         ensure_note_unchanged_for_write(plan)?;
     }
-    if plan.marker_write_needed {
+    if plan.marker_write_needed && marker_prep.is_none() {
         ensure_pdf_unchanged_for_write(plan)?;
     }
     validate_v2_asset_preconditions(plan)?;
@@ -1624,12 +1639,7 @@ fn execute_pdf_sync_v2(
     }
     let intent_outcome = execute_routed_intents(config, plan, run_state)?;
     if plan.marker_write_needed {
-        ensure_pdf_unchanged_for_write(plan)?;
-        write_pdf_marker(
-            &plan.pdf,
-            plan.marker.annotation_id,
-            &plan.rendered_marker,
-        )?;
+        write_planned_pdf_marker(plan, marker_prep)?;
     }
 
     let mut image_assets_written = 0usize;
@@ -1777,6 +1787,7 @@ fn execute_pdf_sync_v2(
             .saturating_add(intent_outcome.deduped),
         reading_created,
         reading_updated,
+        marker_write: None,
     })
 }
 

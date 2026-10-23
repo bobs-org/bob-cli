@@ -118,6 +118,7 @@ mod continuations;
 mod highlight_identity;
 mod image_notes;
 mod marker;
+mod marker_write;
 mod projection;
 mod reading_execute;
 mod reading_plan;

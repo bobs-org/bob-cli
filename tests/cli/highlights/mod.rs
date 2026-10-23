@@ -11,6 +11,7 @@ mod ingest;
 mod jobs;
 mod listen;
 mod marker;
+mod marker_write;
 mod scan;
 mod scan_hooks;
 mod scan_intake;
