@@ -74,6 +74,194 @@ pub(super) const MARKER_EXTRA_ORDER: &[&str] = &[
     "return_links",
 ];
 
+/// Existing names and ids that a default target must not duplicate.
+/// The requested type comes first so same-reference checks retain their
+/// existing preferred occupant, followed by every sibling type directory.
+struct DefaultTargetOccupancy {
+    intake_dirs: Vec<PathBuf>,
+    library_dirs: Vec<PathBuf>,
+    reference_dirs: Vec<PathBuf>,
+    reference_ids: BTreeMap<String, Vec<PathBuf>>,
+}
+
+impl DefaultTargetOccupancy {
+    fn build(config: &Config, ref_type: &str) -> Result<Self> {
+        let mut reference_ids = BTreeMap::new();
+        if config.ref_dir.is_dir() {
+            collect_reference_ids(&config.ref_dir, &mut reference_ids)?;
+        }
+        Ok(Self {
+            intake_dirs: type_directories(&config.xlib_dir, ref_type)?,
+            library_dirs: type_directories(&config.lib_dir, ref_type)?,
+            reference_dirs: type_directories(&config.ref_dir, ref_type)?,
+            reference_ids,
+        })
+    }
+
+    fn occupants(&self, stem: &str) -> Vec<PathBuf> {
+        let mut occupants = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut add = |path: PathBuf| {
+            if path.exists() && seen.insert(path.clone()) {
+                occupants.push(path);
+            }
+        };
+
+        for directory in &self.intake_dirs {
+            for extension in ["pdf", "md", "textbundle"] {
+                add(directory.join(stem).with_extension(extension));
+            }
+        }
+        for directory in &self.library_dirs {
+            let pdf = directory.join(stem).with_extension("pdf");
+            add(pdf.clone());
+            for sidecar in library_destination_sidecars(&pdf) {
+                add(sidecar);
+            }
+        }
+        for directory in &self.reference_dirs {
+            add(directory.join(stem).with_extension("md"));
+        }
+
+        if let Some(paths) = self.reference_ids.get(&stem.to_lowercase()) {
+            for path in paths {
+                add(path.clone());
+            }
+        }
+        occupants
+    }
+}
+
+fn type_directories(root: &Path, requested: &str) -> Result<Vec<PathBuf>> {
+    let requested_path = root.join(requested);
+    if !root.exists() {
+        return Ok(vec![requested_path]);
+    }
+    if !root.is_dir() {
+        return Err(CommandError::new(format!(
+            "reference target root is not a directory: {}",
+            root.display()
+        )));
+    }
+
+    let entries = fs::read_dir(root).map_err(|error| {
+        CommandError::new(format!(
+            "scan reference target root {}: {error}",
+            root.display()
+        ))
+    })?;
+    let mut siblings = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CommandError::new(format!(
+                "scan reference target root {}: {error}",
+                root.display()
+            ))
+        })?;
+        let path = entry.path();
+        if path.is_dir() && path != requested_path {
+            siblings.push(path);
+        }
+    }
+    siblings.sort();
+
+    let mut directories = Vec::with_capacity(siblings.len() + 1);
+    directories.push(requested_path);
+    directories.extend(siblings);
+    Ok(directories)
+}
+
+fn collect_reference_ids(
+    directory: &Path,
+    ids: &mut BTreeMap<String, Vec<PathBuf>>,
+) -> Result<()> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        CommandError::new(format!(
+            "scan reference IDs in {}: {error}",
+            directory.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CommandError::new(format!(
+                "scan reference IDs in {}: {error}",
+                directory.display()
+            ))
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            CommandError::new(format!(
+                "inspect reference note {}: {error}",
+                path.display()
+            ))
+        })?;
+        if file_type.is_dir() {
+            let name =
+                path.file_name().and_then(OsStr::to_str).unwrap_or_default();
+            if !name.starts_with('.') && !name.ends_with(".assets") {
+                collect_reference_ids(&path, ids)?;
+            }
+            continue;
+        }
+        let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
+        if !file_type.is_file()
+            || crate::native::ref_tasks::is_conflict_copy_name(name)
+            || !path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).map_err(|error| {
+            CommandError::new(format!(
+                "read reference note {}: {error}",
+                path.display()
+            ))
+        })?;
+        let Some((frontmatter, _)) =
+            super::frontmatter::split_frontmatter(&contents)
+        else {
+            continue;
+        };
+        let parsed =
+            crate::native::ref_library::ParsedFrontmatter::parse(&frontmatter);
+        let Some(id) = parsed
+            .get_str("id")
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        ids.entry(id.to_lowercase()).or_default().push(path);
+    }
+    Ok(())
+}
+
+/// Refuse an explicit output basename already used as a reference id.
+/// Exact output paths cannot be collision-suffixed without violating the
+/// caller's request to keep that path.
+pub(super) fn ensure_reference_id_available(
+    config: &Config,
+    id: &str,
+) -> Result<()> {
+    let mut ids = BTreeMap::new();
+    if config.ref_dir.is_dir() {
+        collect_reference_ids(&config.ref_dir, &mut ids)?;
+    }
+    if let Some(paths) = ids.get(&id.to_lowercase()) {
+        let locations = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CommandError::new(format!(
+            "reference id `{id}` is already used by {locations}; choose a different --output filename"
+        )));
+    }
+    Ok(())
+}
+
 /// Plan the default intake target `xlib/<ref_type>/<stem>.pdf`.
 ///
 /// Walks `<stem>`, `<stem>_2`, … up to `<stem>_999`: a free candidate is
@@ -98,6 +286,7 @@ pub(super) fn plan_default_target(
             )
         })?
         .to_string();
+    let occupancy = DefaultTargetOccupancy::build(config, ref_type)?;
     let mut base_first_occupant: Option<PathBuf> = None;
     for index in 1..=999 {
         let candidate = if index == 1 {
@@ -124,7 +313,7 @@ pub(super) fn plan_default_target(
             .join(ref_type)
             .join(&candidate)
             .with_extension("md");
-        let occupants = default_stem_occupants(config, ref_type, &candidate);
+        let occupants = occupancy.occupants(&candidate);
         if index == 1
             && let Some(first) = occupants.first().cloned()
         {
@@ -223,57 +412,6 @@ pub(super) fn plan_default_target(
     Err(CommandError::new(format!(
         "no free default filename for {base}; pass -N/--name or -o/--output"
     )))
-}
-
-/// Every path that blocks a default stem: intake PDF and Highlights
-/// sidecars, library PDF and sidecars, and the ref note `scan` would
-/// write. Companion audio is deliberately excluded.
-pub(super) fn default_stem_occupants(
-    config: &Config,
-    ref_type: &str,
-    stem: &str,
-) -> Vec<PathBuf> {
-    let intake_pdf = config
-        .xlib_dir
-        .join(ref_type)
-        .join(stem)
-        .with_extension("pdf");
-    let intake_md = config
-        .xlib_dir
-        .join(ref_type)
-        .join(stem)
-        .with_extension("md");
-    let intake_bundle = config
-        .xlib_dir
-        .join(ref_type)
-        .join(stem)
-        .with_extension("textbundle");
-    let library_pdf = config
-        .lib_dir
-        .join(ref_type)
-        .join(stem)
-        .with_extension("pdf");
-    let library_sidecars = library_destination_sidecars(&library_pdf);
-    let ref_note = config
-        .ref_dir
-        .join(ref_type)
-        .join(stem)
-        .with_extension("md");
-    let mut occupants = Vec::new();
-    for path in [
-        intake_pdf,
-        intake_md,
-        intake_bundle,
-        library_pdf,
-        library_sidecars[0].clone(),
-        library_sidecars[1].clone(),
-        ref_note,
-    ] {
-        if path.exists() {
-            occupants.push(path);
-        }
-    }
-    occupants
 }
 
 fn normalize_title_for_report(identity: &DefaultTargetIdentity<'_>) -> String {
@@ -1091,6 +1229,60 @@ mod tests {
                 "{name}: {line}"
             );
         }
+    }
+
+    #[test]
+    fn default_target_collision_walk_covers_other_ref_type_directories() {
+        let cases = [("xlib", "pdf"), ("lib", "pdf"), ("ref", "md")];
+        for (root, extension) in cases {
+            let temp = TempDir::new(&format!("cross-type-{root}"));
+            let occupant = temp
+                .path
+                .join(root)
+                .join("papers")
+                .join(format!("report.{extension}"));
+            fs::create_dir_all(occupant.parent().expect("occupant parent"))
+                .expect("create occupant parent");
+            fs::write(&occupant, b"existing").expect("write occupant");
+
+            let plan = plan_default_target(
+                &config(&temp.path),
+                OsStr::new("report"),
+                "chat",
+                false,
+                &title_identity("Different"),
+            )
+            .expect("cross-type occupant should suffix");
+
+            assert_eq!(plan.stem, "report_2", "{root}");
+            assert_eq!(
+                plan.renamed_from.expect("renamed").occupant,
+                occupant,
+                "{root}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_target_collision_walk_reserves_ids_from_other_ref_types() {
+        let temp = TempDir::new("cross-type-id");
+        let reference = temp.path.join("ref/papers/old-name.md");
+        fs::create_dir_all(reference.parent().expect("reference parent"))
+            .expect("create ref type directory");
+        fs::write(&reference, "---\nid: report\ntitle: Existing\n---\n")
+            .expect("write reference note");
+
+        let plan = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            false,
+            &title_identity("Different"),
+        )
+        .expect("an existing id should reserve the candidate");
+
+        assert_eq!(plan.stem, "report_2");
+        assert_eq!(plan.renamed_from.expect("renamed").occupant, reference);
     }
 
     #[test]

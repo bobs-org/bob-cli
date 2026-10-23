@@ -520,11 +520,14 @@ part is refused as already captured, and `bob ref find <part URL>` locates the
 collection.
 
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
-(up to `<stem>_999`): a free candidate is chosen, a candidate occupied by a
-different reference is skipped, and a candidate occupied by the same
-reference refuses (`already captured as <path>` for library or ref-note
-occupants, `already queued in <path>; pass --force to overwrite it` for
-intake occupants). Both refusals keep
+(up to `<stem>_999`): a candidate is occupied when its matching PDF, sidecar,
+or note exists in any reference-type directory under `xlib/`, `lib/`, or
+`ref/`, or when any note under `ref/` already records that id. A free
+candidate is chosen, a candidate occupied by a different reference is
+skipped, and a candidate occupied by the same reference refuses
+(`already captured as <path>` for library or ref-note occupants,
+`already queued in <path>; pass --force to overwrite it` for intake
+occupants). Both refusals keep
 `hint: to add audio to that capture, run bob ref create <library PDF> --listen`.
 For Markdown and local PDFs the identity is the create-time title (the `-T`
 override, else frontmatter/H1/stem or Info title/filename): a candidate is
@@ -535,7 +538,11 @@ title is suffixed; two different sources with the same stem and title still
 refuse (pass `-N`). For URL routes the identity is the source URL dedupe
 key (arXiv checks both the paper and URL keys): in practice only the
 `--force` same-intake overwrite refuses, everything else suffixes. An
-explicit `-o/--output` path keeps the exact path with today's strict checks.
+explicit `-o/--output` path keeps the exact path. Whenever the route records
+an id, it uses that output PDF's basename as the id; if another note already
+uses that id, Bob refuses and asks for a different output filename because the
+exact path cannot be collision-suffixed. On default targets, the collision walk
+also reserves ids case-insensitively across all of `ref/`.
 When the walk skips at least one candidate, dry-run and success output print
 `renamed: <base>.pdf is taken by <first occupant>; using <final>.pdf` just
 before `pdf:`. `--force` only overwrites the same reference's intake PDF,

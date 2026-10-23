@@ -1343,6 +1343,35 @@ mod tests {
     }
 
     #[test]
+    fn ingest_default_target_reserves_reference_ids_across_types() {
+        let root = test_root("cross-type-id");
+        let reference = root.join("ref/blogs/old-name.md");
+        fs::create_dir_all(reference.parent().expect("ref parent"))
+            .expect("create reference type directory");
+        fs::write(&reference, "---\nid: paper\ntitle: Existing\n---\n")
+            .expect("write reference note");
+        let config = Config {
+            bob_dir: root.clone(),
+            lib_dir: root.join("lib"),
+            ref_dir: root.join("ref"),
+            xlib_dir: root.join("xlib"),
+        };
+
+        let plan = plan_default_target(
+            &config,
+            std::ffi::OsStr::new("paper"),
+            INGEST_PDF_REF_TYPE,
+            false,
+            &DefaultTargetIdentity::AlwaysDifferent,
+        )
+        .expect("ingest should suffix the cross-type id collision");
+
+        assert_eq!(plan.stem, "paper_2");
+        assert_eq!(plan.target, root.join("xlib/papers/paper_2.pdf"));
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn error_kinds_and_retryable_flags() {
         let cases = [
             ("network: down", IngestErrorKind::Network, true),

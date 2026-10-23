@@ -32,6 +32,16 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, and index diagnostics |
 | Bring old reading records into the index | `bob ref migrate-zorg`, then `--write` | Preview, then create and commit legacy notes; see [migration](#migrating-zorg-era-records-bob-ref-migrate-zorg) |
 
+When `bob ref create` records a reference `id`, the id matches the final output
+basename, which is also the reference note stem. Default targets add `_2`,
+`_3`, and so on when that candidate is occupied by a file or sidecar under
+`xlib/`, `lib/`, or `ref/`, or by an id already recorded anywhere under
+`ref/`. Id collisions are compared case-insensitively. With `--output`, Bob
+keeps the exact path and derives the id from its basename; if that id is
+already used under `ref/`, create refuses and asks for a different output
+filename. Existing references are left unchanged; use `bob ref rename` to
+repair an existing id/stem mismatch.
+
 `bob ref create --dry-run` skips installing the final PDF and audio. A local
 PDF or Markdown file stays local: Markdown returns before pandoc runs. A PDF
 URL is downloaded, and an arXiv target downloads both the metadata and the

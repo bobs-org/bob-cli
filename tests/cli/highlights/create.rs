@@ -769,9 +769,9 @@ fn highlights_create_collection_dry_run_skips_compose_and_writes() {
 fn highlights_create_collection_collision_walk_and_exact_output() {
     let (temp, vault, fake, curl, curl_root, log) =
         collection_harness("bob-cli-highlights-create-collection-collision");
-    write_highlights_pdf(
-        &vault.join("xlib/blogs/tokio_internals.pdf"),
-        "- status: ready\n- parent: sase\n- title: Other Series\n- source_url: https://example.com/other-series\n",
+    write_file(
+        &vault.join("ref/papers/old-series-name.md"),
+        "---\nid: tokio_internals\ntitle: Other Series\n---\n",
     );
 
     let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
@@ -803,6 +803,20 @@ fn highlights_create_collection_collision_walk_and_exact_output() {
         stdout(&output).contains(&exact.display().to_string()),
         "{}",
         format_output(&output)
+    );
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&exact)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect exact-output collection marker");
+    assert_success(&marker_output);
+    assert!(
+        stdout(&marker_output).contains("- id: exact-collection\n"),
+        "{}",
+        format_output(&marker_output)
     );
 }
 
@@ -1469,6 +1483,46 @@ fn highlights_create_output_dry_run_reports_direct_library_target() {
 }
 
 #[test]
+fn highlights_create_exact_output_refuses_an_existing_reference_id() {
+    let temp = TempDir::new("bob-cli-highlights-create-output-id-collision");
+    let source = temp.path().join("source.md");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/papers/other-name.md"),
+        "---\nid: custom-output\ntitle: Existing\n---\n",
+    );
+    write_file(&source, "# New Reference\n");
+    let exact_output = temp.path().join("custom-output.pdf");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--include-id")
+        .arg("--output")
+        .arg(&exact_output)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run duplicate exact-output id check");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output)
+            .contains("reference id `custom-output` is already used")
+            && stderr(&output).contains("choose a different --output filename"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!exact_output.exists(), "refusal must not write the PDF");
+}
+
+#[test]
 fn highlights_create_rejects_output_combined_with_ref_type() {
     let temp = TempDir::new("bob-cli-highlights-create-output-conflict");
     let source = temp.path().join("report.md");
@@ -2021,7 +2075,7 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     assert!(
         report.contains("created Highlights-ready PDF")
             && report.contains(&pdf.display().to_string())
-            && report.contains("id: report")
+            && report.contains("id: exact-output")
             && report.contains("next: bob ref sync")
             && report.contains("recursive scan will not discover this PDF"),
         "{report}"
@@ -2061,7 +2115,7 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
         marker.contains("- title: Exact Output Report\n"),
         "{marker}"
     );
-    assert!(marker.contains("- id: report\n"), "{marker}");
+    assert!(marker.contains("- id: exact-output\n"), "{marker}");
 }
 
 #[test]
@@ -3671,6 +3725,90 @@ fn highlights_create_article_routes_through_clip_engine() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
         stderr(&output).contains("already queued"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_article_output_stem_becomes_marker_id() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-output-id");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+    let output_pdf = temp.path().join("custom/article-export.pdf");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-P")
+        .arg("sase")
+        .arg("-o")
+        .arg(&output_pdf);
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command
+        .output()
+        .expect("run create article to exact output");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("id: article-export"),
+        "{}",
+        format_output(&output)
+    );
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&output_pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect exact-output article marker");
+    assert_success(&marker_output);
+    assert!(
+        stdout(&marker_output).contains("- id: article-export\n"),
+        "{}",
+        format_output(&marker_output)
+    );
+}
+
+#[test]
+fn highlights_create_article_default_target_avoids_ids_in_other_types() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-cross-type-id");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/papers/old-name.md"),
+        "---\nid: hello\ntitle: Existing\n---\n",
+    );
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-P")
+        .arg("sase");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run cross-type article capture");
+
+    assert_success(&output);
+    assert!(
+        vault.join("xlib/blogs/hello_2.pdf").is_file()
+            && stdout(&output).contains("id: hello_2"),
         "{}",
         format_output(&output)
     );

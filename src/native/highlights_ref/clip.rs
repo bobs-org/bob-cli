@@ -392,11 +392,7 @@ pub(super) fn capture_article(
             &final_identity,
         )?,
     };
-    let final_stem = if options.output.is_some() {
-        stem.clone()
-    } else {
-        plan.stem.clone()
-    };
+    let final_stem = plan.stem.clone();
     let marker = compose_marker(
         &options.status,
         &options.parent,
@@ -665,6 +661,7 @@ fn plan_exact_output_guarded(
             plan.target.display()
         )));
     }
+    super::stamp::ensure_reference_id_available(config, &plan.stem)?;
     Ok(plan)
 }
 

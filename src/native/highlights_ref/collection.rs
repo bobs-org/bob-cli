@@ -337,7 +337,9 @@ fn plan_collection_target(
     recorded: &[RecordedSource],
 ) -> Result<TargetPlan, CommandError> {
     if let Some(output) = output {
-        return stamp::plan_exact_output(config, output, force);
+        let plan = stamp::plan_exact_output(config, output, force)?;
+        stamp::ensure_reference_id_available(config, &plan.stem)?;
+        return Ok(plan);
     }
     let identity = DefaultTargetIdentity::Url {
         keys: urls.iter().map(|url| url.dedupe_key.clone()).collect(),

@@ -1143,10 +1143,19 @@ fn plan_target_for(
     ref_type: &str,
     output: Option<&PathBuf>,
     force: bool,
+    include_id: bool,
     identity: &DefaultTargetIdentity<'_>,
 ) -> Result<TargetPlan> {
     match output {
-        Some(output) => plan_exact_output(config, output, force),
+        Some(output) => {
+            let plan = plan_exact_output(config, output, force)?;
+            if include_id {
+                super::stamp::ensure_reference_id_available(
+                    config, &plan.stem,
+                )?;
+            }
+            Ok(plan)
+        }
         None => plan_default_target(
             config,
             std::ffi::OsStr::new(stem),
@@ -1199,13 +1208,10 @@ fn create_vault_note_route(
         &ref_type,
         options.output.as_ref(),
         options.force,
+        options.include_id,
         &identity,
     )?;
-    let final_stem = if options.output.is_some() {
-        stem.clone()
-    } else {
-        target_plan.stem.clone()
-    };
+    let final_stem = target_plan.stem.clone();
     let id = if options.include_id {
         Some(final_stem)
     } else {
@@ -2162,13 +2168,10 @@ fn create_local_pdf_route(
         &ref_type,
         options.output.as_ref(),
         options.force,
+        options.include_id,
         &identity,
     )?;
-    let final_stem = if options.output.is_some() {
-        pdf_plan.stem.clone()
-    } else {
-        target_plan.stem.clone()
-    };
+    let final_stem = target_plan.stem.clone();
     // An out-of-vault marked PDF is already captured: refuse before any
     // write (in-vault cases were handled by attach/identity above).
     {
@@ -2351,13 +2354,10 @@ fn create_pdf_url_route(
         &ref_type,
         options.output.as_ref(),
         options.force,
+        true,
         &identity,
     )?;
-    let final_stem = if options.output.is_some() {
-        pdf_plan.stem.clone()
-    } else {
-        target_plan.stem.clone()
-    };
+    let final_stem = target_plan.stem.clone();
     // The stem is only known after the fetch, so a race that captured
     // the URL mid-fetch attaches here instead of refusing.
     if let Some(command) = listen
@@ -2588,13 +2588,10 @@ fn create_arxiv_route(
         &ref_type,
         options.output.as_ref(),
         options.force,
+        true,
         &identity,
     )?;
-    let final_stem = if options.output.is_some() {
-        pdf_plan.stem.clone()
-    } else {
-        target_plan.stem.clone()
-    };
+    let final_stem = target_plan.stem.clone();
     // Post-capture dedupe with the final target (stem known only now).
     // Also check the user's URL spelling key (same arXiv key).
     // With --listen a hit attaches instead of refusing.
@@ -2985,17 +2982,13 @@ fn plan_markdown(
         &ref_type,
         options.output.as_ref(),
         options.force,
+        options.include_id,
         &identity,
     )?;
-    // With -i, the id follows the final (possibly suffixed) stem; the
-    // marker is composed after planning for the same reason. For
-    // `--output` there is no walk, so the id stays the base stem.
+    // The marker id always follows the final output basename, including
+    // an exact `--output` path.
     let id = if options.include_id {
-        if options.output.is_some() {
-            Some(stem.clone())
-        } else {
-            Some(target_plan.stem.clone())
-        }
+        Some(target_plan.stem.clone())
     } else {
         None
     };
@@ -3691,7 +3684,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_embeds_markdown_stem_id_when_opted_in() {
+    fn plan_embeds_exact_output_stem_id_when_opted_in() {
         let temp = TempDir::new("include-id");
         let source = temp
             .path
@@ -3701,16 +3694,18 @@ mod tests {
         fs::write(&source, "# Xprompt Role Binding\n").expect("write source");
         let mut options = options();
         options.include_id = true;
+        options.output = Some(temp.path.join("custom-export.pdf"));
 
         let plan =
             plan_create(&config(&temp.path), &source, &options).expect("plan");
 
-        assert_eq!(plan.id.as_deref(), Some("xprompt_role_binding"));
+        assert_eq!(plan.target, temp.path.join("custom-export.pdf"));
+        assert_eq!(plan.id.as_deref(), Some("custom-export"));
         let marker =
             parse_marker_with_normalization(&plan.marker).expect("marker");
         assert_eq!(
             marker.projection.get(FIELD_ID),
-            Some(&MarkerValue::String("xprompt_role_binding".to_string()))
+            Some(&MarkerValue::String("custom-export".to_string()))
         );
     }
 
