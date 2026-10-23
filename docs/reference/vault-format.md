@@ -150,7 +150,11 @@ Relations never block, count as Pomodoro Task Links, or change status.
 Other machine-owned direct children (closed registry): `❌ **CANCEL LOG**`,
 `🧱 **BLOCKS:**`, `🧩 **Sub-projects:**` on `^prj`,
 `🪢 **LINKS:**`, `🪢 **LINKED FROM:**`, `🗓️ **SCHEDULE LOG**`,
-`🛠️ **WORK LOG**`. None of these is a Pomodoro Task Link.
+`🛠️ **WORK LOG**`, `🥀 **ROTTEN LOG**` with newest-first
+`*YYYY-MM-DD* — <reason> · kept N×` entries. Writers emit `🥀 **ROTTEN LOG**`
+(U+1F940, no VS16); parsers also accept an optional U+FE0F, the emoji-less
+`**ROTTEN LOG**`, and the legacy `**Rotten log**`, each with an optional colon
+and only trailing spaces or tabs. None of these is a Pomodoro Task Link.
 
 Contract: [Task dependency links](../task-dependencies.md).
 

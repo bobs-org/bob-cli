@@ -462,6 +462,7 @@ pub(super) fn contract_view() -> SnapshotView {
             omitted_sections: 0,
             schedule_logs: 1,
             work_logs: 1,
+            rotten_logs: 0,
         },
         warnings: vec![SnapshotWarning {
             kind: SnapshotWarningKind::UnresolvedLink,

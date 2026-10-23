@@ -285,7 +285,7 @@ pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
     if let Some(closed_section) = &closed {
         collect_section_anchors(closed_section, &mut anchors);
     }
-    let (bob_schedule_logs, bob_work_logs) =
+    let (bob_schedule_logs, bob_work_logs, bob_rotten_logs) =
         count_visible_log_entries(&preamble, &sections, closed.as_ref());
     let mut summary = expander.summary;
     summary.sections = sections.len() as u64;
@@ -316,6 +316,7 @@ pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
         .saturating_add(bob_omitted_sections);
     summary.schedule_logs = bob_schedule_logs;
     summary.work_logs = bob_work_logs;
+    summary.rotten_logs = bob_rotten_logs;
     if is_bob {
         compose_bob_masthead(
             &mut bob_masthead,
@@ -1806,8 +1807,8 @@ fn count_visible_log_entries(
     preamble: &[Block],
     sections: &[SnapshotSection],
     closed: Option<&SnapshotSection>,
-) -> (u64, u64) {
-    let mut counts = (0, 0);
+) -> (u64, u64, u64) {
+    let mut counts = (0, 0, 0);
     count_log_blocks(preamble, &mut counts);
     for section in sections {
         count_log_blocks(&section.blocks, &mut counts);
@@ -1818,7 +1819,7 @@ fn count_visible_log_entries(
     counts
 }
 
-fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
+fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64, u64)) {
     for block in blocks {
         match block {
             Block::Task(task) => {
@@ -1868,6 +1869,7 @@ fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
                         match kind {
                             ManagedTaskLogKind::Schedule => counts.0 += entries,
                             ManagedTaskLogKind::Work => counts.1 += entries,
+                            ManagedTaskLogKind::Rotten => counts.2 += entries,
                         }
                     }
                     count_log_blocks(&item.children, counts);
@@ -1882,6 +1884,7 @@ fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
                 match plain_inline_text(label).as_str() {
                     "MOVED" => counts.0 += 1,
                     "WORKED" => counts.1 += 1 + older_count.unwrap_or(0),
+                    "KEPT" => counts.2 += 1 + older_count.unwrap_or(0),
                     _ => {}
                 }
                 count_log_inlines(label, counts);
@@ -1911,7 +1914,7 @@ fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
     }
 }
 
-fn count_log_inlines(inlines: &[Inline], counts: &mut (u64, u64)) {
+fn count_log_inlines(inlines: &[Inline], counts: &mut (u64, u64, u64)) {
     for inline in inlines {
         match inline {
             Inline::EmbeddedBlock(inner) => {

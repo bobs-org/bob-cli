@@ -271,27 +271,34 @@ pub(crate) fn first_child_indentation(
         .map(str::to_string)
 }
 
-// Plugin-compatible Schedule Log / Work Log markers: optional matching emoji,
-// the canonical or legacy bold label, an optional colon, and no trailing
-// text. Direct-child ancestry skips blanks and uses the nearest shallower
-// list item, so a log nested under another child does not move insertion.
+// Plugin-compatible Schedule Log / Work Log / Rotten Log markers: optional
+// matching emoji, the canonical or legacy bold label, an optional colon, and
+// no trailing text. Direct-child ancestry skips blanks and uses the nearest
+// shallower list item, so a log nested under another child does not move
+// insertion.
 // Parity note: the navigation-hotkeys-only `❌ **CANCEL LOG**` is
 // deliberately NOT a managed-log anchor here. It is placed first under the
-// task, so newly captured notes land below it via the Schedule/Work Log
-// anchors, and emoji-led bullets are never task sections anyway.
+// task, so newly captured notes land below it via the managed-log anchors,
+// and emoji-led bullets are never task sections anyway. Mirrors
+// `plugins/bob-navigation-hotkeys` managed-log grammar, which now also knows
+// the Rotten kind.
 pub(super) const SCHEDULE_LOG_EMOJI: &str = "🗓️";
 pub(super) const WORK_LOG_EMOJI: &str = "🛠️";
+pub(super) const ROTTEN_LOG_EMOJI: &str = "🥀";
 pub(super) const MANAGED_TASK_LOG_LABELS: &[(&str, ManagedTaskLogKind)] = &[
     ("SCHEDULE LOG", ManagedTaskLogKind::Schedule),
     ("Schedule log", ManagedTaskLogKind::Schedule),
     ("WORK LOG", ManagedTaskLogKind::Work),
     ("Work log", ManagedTaskLogKind::Work),
+    ("ROTTEN LOG", ManagedTaskLogKind::Rotten),
+    ("Rotten log", ManagedTaskLogKind::Rotten),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedTaskLogKind {
     Schedule,
     Work,
+    Rotten,
 }
 
 pub(crate) fn first_direct_managed_log_start(
@@ -351,7 +358,22 @@ pub(crate) fn parse_managed_task_log_marker(
         return parse_managed_task_log_label(after_emoji)
             .filter(|kind| *kind == ManagedTaskLogKind::Work);
     }
+    if let Some(after_emoji) = strip_rotten_log_emoji(rest) {
+        return parse_managed_task_log_label(after_emoji)
+            .filter(|kind| *kind == ManagedTaskLogKind::Rotten);
+    }
     parse_managed_task_log_label(rest)
+}
+
+/// `🥀` (U+1F940, no VS16) with an optional U+FE0F after it, then at least
+/// one space or tab. A present emoji must agree with the label, so
+/// `🗓️ **ROTTEN LOG**` is not a marker.
+fn strip_rotten_log_emoji(rest: &str) -> Option<&str> {
+    let after_emoji = rest.strip_prefix(ROTTEN_LOG_EMOJI)?;
+    let after_emoji =
+        after_emoji.strip_prefix('\u{FE0F}').unwrap_or(after_emoji);
+    let whitespace = leading_spaces_or_tabs_len(after_emoji);
+    (whitespace > 0).then_some(&after_emoji[whitespace..])
 }
 
 pub(super) fn parse_managed_task_log_label(

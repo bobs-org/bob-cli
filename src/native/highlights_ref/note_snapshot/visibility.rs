@@ -2,11 +2,11 @@
 //!
 //! After chips and relationship rows land, this pass:
 //!
-//! - recognizes direct-child SCHEDULE / WORK / CANCEL logs from raw source
-//!   with the shared marker helpers, counting entries rather than nested
-//!   reason bullets
-//! - condenses logs in reading mode (`moved N×` chips, newest work
-//!   [`LogRow`], cancel logs hidden) and prints full logs when
+//! - recognizes direct-child SCHEDULE / WORK / CANCEL / ROTTEN logs from raw
+//!   source with the shared marker helpers, counting entries rather than
+//!   nested reason bullets
+//! - condenses logs in reading mode (`moved N×` chips, newest work and kept
+//!   [`LogRow`] rows, cancel logs hidden) and prints full logs when
 //!   `include_closed` is set
 //! - omits done/canceled subtrees (counting each closed task once) or
 //!   restores them into one compact `Closed tasks` appendix
@@ -61,6 +61,7 @@ pub(crate) struct BobVisibilityOutcome {
     pub omitted_self_snapshot_tasks: u64,
     pub schedule_logs: u64,
     pub work_logs: u64,
+    pub rotten_logs: u64,
     pub warnings: Vec<SnapshotWarning>,
 }
 
@@ -83,6 +84,7 @@ pub(crate) fn apply_bob_visibility<L: SourceLoader>(
         omitted_self: 0,
         schedule_logs: 0,
         work_logs: 0,
+        rotten_logs: 0,
         warnings: Vec::new(),
         source_note_of: HashMap::new(),
     };
@@ -103,6 +105,7 @@ pub(crate) fn apply_bob_visibility<L: SourceLoader>(
         omitted_self_snapshot_tasks: pass.omitted_self,
         schedule_logs: pass.schedule_logs,
         work_logs: pass.work_logs,
+        rotten_logs: pass.rotten_logs,
         warnings: pass.warnings,
     }
 }
@@ -116,6 +119,7 @@ struct VisibilityPass<'a, L: SourceLoader> {
     omitted_self: u64,
     schedule_logs: u64,
     work_logs: u64,
+    rotten_logs: u64,
     warnings: Vec<SnapshotWarning>,
     /// Canonical path of a referenced note → resolved `source_note` path.
     /// `None` means the note is not a confirmed self-snapshot source.
@@ -127,6 +131,7 @@ enum LogKind {
     Schedule,
     Work,
     Cancel,
+    Rotten,
 }
 
 impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
@@ -370,6 +375,33 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                     )
                 } else {
                     (Vec::new(), Vec::new())
+                }
+            }
+            LogKind::Rotten => {
+                if entries.is_empty() {
+                    return (Vec::new(), Vec::new());
+                }
+                self.rotten_logs += entries.len() as u64;
+                if self.context.include_closed {
+                    (
+                        Vec::new(),
+                        full_log_rows(
+                            "KEPT",
+                            &entries,
+                            self.context.snapshot_date,
+                        ),
+                    )
+                } else if closed {
+                    (Vec::new(), Vec::new())
+                } else {
+                    (
+                        Vec::new(),
+                        condensed_log_row(
+                            "KEPT",
+                            &entries,
+                            self.context.snapshot_date,
+                        ),
+                    )
                 }
             }
         }
@@ -1177,6 +1209,7 @@ fn log_kind_for_item(item: &ListItem) -> Option<LogKind> {
     match parse_managed_task_log_marker(raw) {
         Some(ManagedTaskLogKind::Schedule) => Some(LogKind::Schedule),
         Some(ManagedTaskLogKind::Work) => Some(LogKind::Work),
+        Some(ManagedTaskLogKind::Rotten) => Some(LogKind::Rotten),
         None => None,
     }
 }
@@ -1196,11 +1229,19 @@ fn condensed_work_row(
     entries: &[&ListItem],
     snapshot_date: NaiveDate,
 ) -> Vec<Block> {
+    condensed_log_row("WORKED", entries, snapshot_date)
+}
+
+fn condensed_log_row(
+    label: &str,
+    entries: &[&ListItem],
+    snapshot_date: NaiveDate,
+) -> Vec<Block> {
     let Some(newest) = entries.first() else {
         return Vec::new();
     };
     let older = (entries.len() as u64).saturating_sub(1);
-    let mut row = entry_log_row("WORKED", newest, snapshot_date);
+    let mut row = entry_log_row(label, newest, snapshot_date);
     row.older_count = (older > 0).then_some(older);
     let mut blocks = vec![Block::LogRow {
         label: row.label,
@@ -1920,6 +1961,76 @@ mod tests {
         assert!(!md.contains("SCHEDULE LOG"), "{md}");
         assert!(!md.contains("WORK LOG"), "{md}");
         assert!(!md.contains("extra reason detail"), "{md}");
+    }
+
+    #[test]
+    fn rotten_logs_condense_to_a_kept_row_and_count_entries() {
+        let directory = vault(&[(
+            "Host.md",
+            &area(
+                "- [ ] Kept #task ^kept\n\
+                 \t- 🥀 **ROTTEN LOG**\n\
+                 \t\t- *2026-10-23* — still the primer · kept 3×\n\
+                 \t\t- *2026-10-16* — no reason given · kept 2×\n",
+            ),
+        )]);
+        let projection = project(&directory, "Host.md", false);
+        let blocks = body_blocks(&projection);
+        let logs = log_rows(&blocks);
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        assert!(logs[0].contains("KEPT"), "{logs:?}");
+        assert!(logs[0].contains("Oct 23"), "{logs:?}");
+        assert!(logs[0].contains("still the primer"), "{logs:?}");
+        assert!(logs[0].contains("+1 older"), "{logs:?}");
+        assert_eq!(projection.view.summary.rotten_logs, 2);
+        assert_eq!(projection.view.summary.schedule_logs, 0);
+        assert_eq!(projection.view.summary.work_logs, 0);
+        let md =
+            serialize_projected_markdown(&projection.view).expect("serialize");
+        assert!(!md.contains("ROTTEN LOG"), "{md}");
+    }
+
+    #[test]
+    fn include_closed_prints_full_kept_rows_and_hides_them_on_closed_tasks() {
+        let directory = vault(&[(
+            "Host.md",
+            &area(
+                "- [ ] Open #task ^open\n\
+                 \t- 🥀 **ROTTEN LOG**\n\
+                 \t\t- *2026-10-23* — newest · kept 3×\n\
+                 \t\t- *2026-10-16* — older · kept 2×\n\
+                 - [x] Done #task ^done\n\
+                 \t- 🥀 **ROTTEN LOG**\n\
+                 \t\t- *2026-10-20* — closed keep · kept 1×\n",
+            ),
+        )]);
+        let reading = project(&directory, "Host.md", false);
+        let reading_logs = log_rows(&body_blocks(&reading));
+        assert_eq!(
+            reading_logs
+                .iter()
+                .filter(|row| row.contains("KEPT"))
+                .count(),
+            1,
+            "{reading_logs:?}"
+        );
+        assert!(
+            !reading_logs
+                .iter()
+                .any(|row| row.contains("+1 older")
+                    && row.contains("closed keep")),
+            "{reading_logs:?}"
+        );
+        assert_eq!(reading.view.summary.rotten_logs, 2);
+        let closed = project(&directory, "Host.md", true);
+        let all = log_rows(&all_blocks(&closed));
+        assert_eq!(
+            all.iter().filter(|row| row.contains("KEPT")).count(),
+            3,
+            "{all:?}"
+        );
+        assert!(!all.iter().any(|row| row.contains("+1 older")), "{all:?}");
+        assert_eq!(closed.view.summary.rotten_logs, 3);
     }
 
     #[test]

@@ -113,14 +113,15 @@ target.
 
 | Line | Owner | Writer | Slot | Recognisers that reject it |
 | --- | --- | --- | --- | --- |
-| `❌ **CANCEL LOG**` | any `#task` with a cancel history | nav cancel / decay cancel | first direct child | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, and Work Log parsers; R8 legacy-child |
-| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage and Blocks stage (§15), capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `❌ **CANCEL LOG**` | any `#task` with a cancel history | nav cancel / decay cancel | first direct child | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, Work Log, and Rotten Log parsers; R8 legacy-child |
+| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage and Blocks stage (§15), capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, Rotten Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
 | `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` / `*` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
-| `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
-| `🪢 **LINKS:**` | any `#task` with outgoing relations | nav Links stage, capture `~` / `~~` ([task-relations.md](task-relations.md) §8) | after the last direct-child subtree of Cancel Log, Depends-On, BLOCKS, or Sub-projects, else first | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, Rotten Log, and Cancel Log parsers |
+| `🪢 **LINKS:**` | any `#task` with outgoing relations | nav Links stage, capture `~` / `~~` ([task-relations.md](task-relations.md) §8) | after the last direct-child subtree of Cancel Log, Depends-On, BLOCKS, or Sub-projects, else first | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, Work Log, Rotten Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
 | `🪢 **LINKED FROM:**` | any writable `#task` that other tasks relate to | reconcile (authority); nav and capture courtesy writes ([task-relations.md](task-relations.md) §6–§8) | after the LINKS subtree, else in the LINKS slot | same as LINKS, plus the LINKS parser |
-| `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
-| `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
+| `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, Work Log, and Rotten Log parsers |
+| `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, Schedule Log, and Rotten Log parsers |
+| `🥀 **ROTTEN LOG**` and its dated entries | any `#task` with a keep history | nav counted keep and decay-card Keep | appended as the last direct child on creation, then reused | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, LINKS/LINKED FROM, Schedule Log, Work Log, and Cancel Log parsers; R8 legacy-child |
 
 ## 3. Identity and link form
 
@@ -890,7 +891,7 @@ tests.
 | MC4 | T closes or reopens elsewhere | cycler strike/restore never touches a BLOCKS line |
 | MC5 | `!`, Ctrl+Shift+Enter on a BLOCKS line | refused with the generated-line notice |
 | MC6 | R8 legacy-child recogniser on a BLOCKS line | not a legacy child |
-| MC7 | section titles, Schedule / Cancel / Work Log, and Sub-projects recognisers | never claim a BLOCKS line; the BLOCKS parser never claims theirs |
+| MC7 | section titles, Schedule / Cancel / Work / Rotten Log, and Sub-projects recognisers | never claim a BLOCKS line; the BLOCKS parser never claims theirs |
 | MC8 | `bob projects sync` on `^prj` with Depends-On and BLOCKS | marker after both subtrees; a marker before BLOCKS moves after it |
 | MC9 | `bob task archive` of a closed T with a frozen `[[#^d]]` | link qualified to `[[note#^d]]` |
 | MC10 | a task under an open Pomodoro entry has LINKS / LINKED FROM lines | no Task Link effects: promotion, consumption, successor anchor, plan budget, completable sighting, close / cleanup (Rust and JS) |
@@ -898,9 +899,13 @@ tests.
 | MC12 | T closes or reopens elsewhere | strike / restore never touches relation lines |
 | MC13 | `!` / Ctrl+Shift+Enter on either line | refused with the [task-relations.md](task-relations.md#9-gestures-on-relation-lines) §9 notices |
 | MC14 | Ctrl+Enter / Alt+] on a link in either line | acts on the linked task root-only, without reformatting the bullet |
-| MC15 | R8 and the section-title, Schedule / Cancel / Work Log, Sub-projects, Depends-On, and BLOCKS recognisers | never claim relation lines; relation parsers never claim theirs |
+| MC15 | R8 and the section-title, Schedule / Cancel / Work / Rotten Log, Sub-projects, Depends-On, and BLOCKS recognisers | never claim relation lines; relation parsers never claim theirs |
 | MC16 | `bob projects sync`; nav project conversion | never moves or anchors on relation lines; conversion keeps LINKS with its task and drops LINKED FROM |
 | MC17 | `bob task archive`, `bob task move`, Ctrl+Shift+M | relation-line links rebased; LINKS moves with its task; never two LINKS lines |
+| MC18 | a task with a `🥀 **ROTTEN LOG**` under an open Pomodoro entry | never a Task Link or section: no promotion, consumption, successor anchor, plan-budget link, completable sighting, or close / cleanup target (Rust and JS) |
+| MC19 | section-title, Schedule / Cancel / Work Log, Sub-projects, Depends-On, BLOCKS, LINKS/LINKED FROM, and R8 legacy-child recognisers on a Rotten Log | never claim it; the Rotten Log parser never claims their lines |
+| MC20 | `bob randomize` / `bob task reroll` on a task with only a Work Log or only a Rotten Log | never files a schedule entry under it: creates a Schedule Log as the last direct child |
+| MC21 | nav project conversion carrying a `^prj` task with a Rotten Log | carries the log with the task as a log, not a task |
 
 ## 12. Successor offers
 

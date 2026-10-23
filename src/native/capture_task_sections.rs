@@ -1071,6 +1071,11 @@ mod tests {
             "\t+ **Work log:**",
             "\t10. **Work log**",
             "\t3) 🛠️ **WORK LOG:**",
+            "\t- 🥀 **ROTTEN LOG**",
+            "\t* **ROTTEN LOG**",
+            "\t+ **Rotten log:**",
+            "\t10. **Rotten log**",
+            "\t3) 🥀 **ROTTEN LOG:**",
         ];
         for marker in recognized {
             let contents = format!("- [ ] #task Parent\n{marker}\n\t- NOTES\n");
@@ -1081,8 +1086,12 @@ mod tests {
             "- [ ] #task Parent\n",
             "\t- SCHEDULE LOG\n",
             "\t- WORK LOG\n",
+            "\t- ROTTEN LOG\n",
         );
-        assert_eq!(titles_of(plain), ["SCHEDULE LOG", "WORK LOG"]);
+        assert_eq!(
+            titles_of(plain),
+            ["SCHEDULE LOG", "WORK LOG", "ROTTEN LOG"]
+        );
     }
 
     #[test]

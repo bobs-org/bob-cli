@@ -384,6 +384,7 @@ pub(crate) struct SnapshotSummary {
     pub omitted_sections: u64,
     pub schedule_logs: u64,
     pub work_logs: u64,
+    pub rotten_logs: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

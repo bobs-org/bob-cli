@@ -76,6 +76,13 @@ fn recognizes_plugin_compatible_managed_log_markers() {
         ("\t+ **Work log:**", ManagedTaskLogKind::Work),
         ("  10. **Work log**", ManagedTaskLogKind::Work),
         ("3) 🛠️ **WORK LOG:**", ManagedTaskLogKind::Work),
+        ("\t- 🥀 **ROTTEN LOG**", ManagedTaskLogKind::Rotten),
+        ("  * **ROTTEN LOG**", ManagedTaskLogKind::Rotten),
+        ("\t+ **ROTTEN LOG:**", ManagedTaskLogKind::Rotten),
+        ("  1. **Rotten log:**", ManagedTaskLogKind::Rotten),
+        ("2) 🥀 **Rotten log**", ManagedTaskLogKind::Rotten),
+        ("\t- 🥀️ **ROTTEN LOG**", ManagedTaskLogKind::Rotten),
+        ("  * 🥀️ **Rotten log:**", ManagedTaskLogKind::Rotten),
     ];
     for (line, kind) in accepted {
         assert_eq!(parse_managed_task_log_marker(line), Some(kind), "{line}");
@@ -88,12 +95,21 @@ fn recognizes_plugin_compatible_managed_log_markers() {
         "\t- **WORK LOG** extra",
         "\t- **work log**",
         "\t- **Work Log:**",
+        "\t- **ROTTEN LOG** trailing",
+        "\t- **rotten log**",
+        "\t- **Rotten Log:**",
         "\t- SCHEDULE LOG",
         "\t- [ ] 🗓️ **SCHEDULE LOG**",
         "\t- 🗓️ **WORK LOG**",
         "\t- 🛠️ **SCHEDULE LOG**",
         "\t- 🗓️**SCHEDULE LOG**",
+        "\t- 🗓️ **ROTTEN LOG**",
+        "\t- 🛠️ **ROTTEN LOG**",
+        "\t- 🥀 **SCHEDULE LOG**",
+        "\t- 🥀 **WORK LOG**",
+        "\t- 🥀**ROTTEN LOG**",
         "- [ ] #task 🗓️ **SCHEDULE LOG**",
+        "- [ ] #task 🥀 **ROTTEN LOG**",
         // Depends-On lines are never managed logs
         // (`docs/task-dependencies.md` §2.4).
         "\t- ⛓️ **DEPENDS ON:** [[#^a]]",

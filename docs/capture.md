@@ -4129,12 +4129,13 @@ parent task. For example,
   - Called Morgan Stanley today.
 ```
 
-When the selected task already has a direct-child Schedule Log or Work Log, the
-complete new child — including any authored children, clipboard children, or a
-`$<N>`-generated Schedule Log nested under that child — is inserted immediately
-before the earliest of those managed logs. A Schedule Log is the
+When the selected task already has a direct-child Schedule Log, Work Log, or
+Rotten Log, the complete new child — including any authored children, clipboard
+children, or a `$<N>`-generated Schedule Log nested under that child — is
+inserted immediately before the earliest of those managed logs. A Schedule Log is the
 `🗓️ **SCHEDULE LOG**` child that records schedule changes; a Work Log is the
-`🛠️ **WORK LOG**` child that records work summaries. Nested or lookalike log
+`🛠️ **WORK LOG**` child that records work summaries; a Rotten Log is the
+`🥀 **ROTTEN LOG**` child that records keep history. Nested or lookalike log
 markers do not move the insertion point. Tasks with neither managed log still
 append at the end of the task block.
 
@@ -6479,7 +6480,7 @@ counts the rest), the link line's `ledger_notes`, and a human
 lines use the clean description, bullets the body after the list marker, other
 lines the line without indentation), relative `depth`, `kind` (`bullet`,
 `task`, `text`, `code`, or `log_marker`), `status_symbol` on task lines, and a
-`work`/`schedule` `log` tag on managed log markers and their subtrees.
+`work`/`schedule`/`rotten` `log` tag on managed log markers and their subtrees.
 
 Numbering follows the session operators exactly: on the current entry `index`
 is the `x` number, and on every other open entry it is the `=` lineup number

@@ -10,9 +10,9 @@
 use serde::Serialize;
 
 use super::capture::{
-    dominant_indent_unit, first_child_indentation,
-    first_direct_managed_log_start, leading_spaces_or_tabs_len, line_spans,
-    LineSpan,
+    dominant_indent_unit, first_child_indentation, leading_spaces_or_tabs_len,
+    line_spans, nearest_shallower_list_item_parent,
+    parse_managed_task_log_marker, LineSpan, ManagedTaskLogKind,
 };
 
 /// `SCHEDULE_LOG_EMOJI` + `SCHEDULE_LOG_LABEL` in main.js. The calendar emoji
@@ -120,14 +120,16 @@ pub(crate) enum LogInsertion {
 }
 
 /// Insert one Schedule Log `entry` line for the task at `task_line_index`:
-/// prepend it as the first child of an existing direct-child log marker
+/// prepend it as the first child of an existing direct-child Schedule marker
 /// (newest first), or append a marker plus the entry as the task's last
 /// direct child, mirroring how the picker creates a missing log. Marker
 /// recognition (including the legacy `**Schedule log**` label) comes from
-/// `capture::first_direct_managed_log_start`, so a marker nested under
-/// another child is ignored. Indentation reuses the first existing child
-/// indentation, then the note's dominant indent unit, then a tab. Bullets
-/// are always `-`. Returns the full postimage and how the entry landed.
+/// [`find_schedule_marker`], in the style of
+/// `capture_work_log::find_work_marker`, so a marker nested under another
+/// child is ignored and Work or Rotten logs never claim a schedule entry.
+/// Indentation reuses the first existing child indentation, then the note's
+/// dominant indent unit, then a tab. Bullets are always `-`. Returns the full
+/// postimage and how the entry landed.
 pub(crate) fn plan_entry_insertion(
     contents: &str,
     task_line_index: usize,
@@ -144,10 +146,9 @@ pub(crate) fn plan_entry_insertion(
     let task_end_offset = lines[task_end_line].end;
     let indent_unit = dominant_indent_unit(&lines).unwrap_or("\t").to_string();
 
-    if let Some(marker_offset) =
-        first_direct_managed_log_start(&lines, task_line_index, task_end_offset)
+    if let Some(marker_line_index) =
+        find_schedule_marker(&lines, task_line_index, task_end_line)
     {
-        let marker_line_index = line_index_at_start(&lines, marker_offset);
         let marker_text = lines[marker_line_index].text;
         let marker_indent_len = leading_spaces_or_tabs_len(marker_text);
         let marker_indentation = marker_text[..marker_indent_len].to_string();
@@ -180,6 +181,22 @@ pub(crate) fn plan_entry_insertion(
     (updated, LogInsertion::Created)
 }
 
+/// First direct-child Schedule Log marker under the task, in the style of
+/// `capture_work_log::find_work_marker`. Work and Rotten markers never match,
+/// so schedule entries are never filed under another log's marker.
+fn find_schedule_marker(
+    lines: &[LineSpan<'_>],
+    task_line_index: usize,
+    task_end_line: usize,
+) -> Option<usize> {
+    (task_line_index + 1..=task_end_line).find(|&index| {
+        parse_managed_task_log_marker(lines[index].text)
+            == Some(ManagedTaskLogKind::Schedule)
+            && nearest_shallower_list_item_parent(lines, index)
+                == Some(task_line_index)
+    })
+}
+
 /// The last line index of `parent_index`'s child block: every later line
 /// that is blank or indented deeper than the parent, stopping at the first
 /// nonblank line indented at or shallower than the parent.
@@ -201,17 +218,6 @@ fn child_block_end_line(lines: &[LineSpan<'_>], parent_index: usize) -> usize {
         break;
     }
     end_index
-}
-
-fn line_index_at_start(lines: &[LineSpan<'_>], offset: usize) -> usize {
-    let mut start = 0;
-    for (index, line) in lines.iter().enumerate() {
-        if start == offset {
-            return index;
-        }
-        start = line.end;
-    }
-    lines.len().saturating_sub(1)
 }
 
 fn line_start_offset(lines: &[LineSpan<'_>], index: usize) -> usize {
@@ -421,6 +427,58 @@ mod tests {
         assert_eq!(
             updated,
             "- [ ] Task #task\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- fresh\n- [ ] Next #task\n"
+        );
+    }
+
+    #[test]
+    fn insertion_creates_a_schedule_marker_beside_a_work_log_only_task() {
+        let contents =
+            "- [ ] Task #task\n\t- 🛠️ **WORK LOG**\n\t\t- *2026-09-28* — Did work\n";
+        let (updated, landed) = plan_entry_insertion(contents, 0, "fresh");
+        assert_eq!(landed, LogInsertion::Created);
+        assert_eq!(
+            updated,
+            "- [ ] Task #task\n\t- 🛠️ **WORK LOG**\n\t\t- *2026-09-28* — Did work\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- fresh\n"
+        );
+    }
+
+    #[test]
+    fn insertion_creates_a_schedule_marker_beside_a_rotten_log_only_task() {
+        let contents =
+            "- [ ] Task #task\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-23* — reason · kept 3×\n";
+        let (updated, landed) = plan_entry_insertion(contents, 0, "fresh");
+        assert_eq!(landed, LogInsertion::Created);
+        assert_eq!(
+            updated,
+            "- [ ] Task #task\n\t- 🥀 **ROTTEN LOG**\n\t\t- *2026-10-23* — reason · kept 3×\n\t- 🗓️ **SCHEDULE LOG**\n\t\t- fresh\n"
+        );
+    }
+
+    #[test]
+    fn insertion_prefers_the_schedule_marker_over_other_logs() {
+        let contents = concat!(
+            "- [ ] Task #task\n",
+            "\t- 🛠️ **WORK LOG**\n",
+            "\t\t- *2026-09-28* — Did work\n",
+            "\t- 🗓️ **SCHEDULE LOG**\n",
+            "\t\t- *2026-09-01* — old\n",
+            "\t- 🥀 **ROTTEN LOG**\n",
+            "\t\t- *2026-10-23* — reason · kept 3×\n",
+        );
+        let (updated, landed) = plan_entry_insertion(contents, 0, "fresh");
+        assert_eq!(landed, LogInsertion::Prepended);
+        assert_eq!(
+            updated,
+            concat!(
+                "- [ ] Task #task\n",
+                "\t- 🛠️ **WORK LOG**\n",
+                "\t\t- *2026-09-28* — Did work\n",
+                "\t- 🗓️ **SCHEDULE LOG**\n",
+                "\t\t- fresh\n",
+                "\t\t- *2026-09-01* — old\n",
+                "\t- 🥀 **ROTTEN LOG**\n",
+                "\t\t- *2026-10-23* — reason · kept 3×\n",
+            )
         );
     }
 

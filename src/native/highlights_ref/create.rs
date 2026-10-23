@@ -1764,8 +1764,10 @@ fn print_snapshot_projection_summary(
         snapshot.summary.omitted_sections
     );
     println!(
-        "logs: {} schedule logs · {} work logs",
-        snapshot.summary.schedule_logs, snapshot.summary.work_logs
+        "logs: {} schedule logs · {} work logs · {} rotten logs",
+        snapshot.summary.schedule_logs,
+        snapshot.summary.work_logs,
+        snapshot.summary.rotten_logs
     );
     println!(
         "embeds: {} images ({} missing) · {} transclusions · {} guarded omissions",

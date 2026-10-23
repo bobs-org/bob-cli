@@ -66,12 +66,13 @@ pub(crate) enum AgendaResolution {
     Unreadable,
 }
 
-/// `work` or `schedule` log tag on a display line.
+/// `work`, `schedule`, or `rotten` log tag on a display line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum AgendaLog {
     Work,
     Schedule,
+    Rotten,
 }
 
 impl AgendaLog {
@@ -79,6 +80,7 @@ impl AgendaLog {
         match kind {
             ManagedTaskLogKind::Work => Self::Work,
             ManagedTaskLogKind::Schedule => Self::Schedule,
+            ManagedTaskLogKind::Rotten => Self::Rotten,
         }
     }
 }
@@ -965,7 +967,7 @@ fn checkbox_parts(body: &str) -> Option<(char, &str)> {
     Some((symbol, rest.trim_start_matches([' ', '\t'])))
 }
 
-/// Tag each line with its enclosing managed log (`work`/`schedule`):
+/// Tag each line with its enclosing managed log (`work`/`schedule`/`rotten`):
 /// the marker line and every line of its subtree. Prose that merely
 /// mentions "work log" never matches, because only
 /// [`parse_managed_task_log_marker`] arms the tag.
@@ -1327,6 +1329,46 @@ mod tests {
             .find(|line| line.text.contains("mentions work log"))
             .expect("prose line");
         assert_eq!(prose.log, None);
+    }
+
+    #[test]
+    fn rotten_log_markers_serialize_as_rotten() {
+        let temp = TempDir::new("bob-cli-agenda-rotten");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(
+            &vault.join("tasks.md"),
+            concat!(
+                "## Tasks\n",
+                "- [ ] #task Kept ^kept\n",
+                "\t- \u{1F940} **ROTTEN LOG**\n",
+                "\t\t- *2026-10-23* — still the primer · kept 3×\n",
+                "\t\t- *2026-10-16* — no reason given · kept 2×\n",
+            ),
+        );
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- [[tasks#^kept]]\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        let lines = &entries[0].items[0].lines;
+        let marker = lines
+            .iter()
+            .find(|line| line.kind == AgendaLineKind::LogMarker)
+            .expect("rotten log marker");
+        assert_eq!(marker.log, Some(AgendaLog::Rotten));
+        assert_eq!(marker.text, "\u{1F940} **ROTTEN LOG**");
+        let entry = lines
+            .iter()
+            .find(|line| line.text.contains("still the primer"))
+            .expect("rotten entry");
+        assert_eq!(entry.log, Some(AgendaLog::Rotten));
+        let second = lines
+            .iter()
+            .find(|line| line.text.contains("no reason given"))
+            .expect("second rotten entry");
+        assert_eq!(second.log, Some(AgendaLog::Rotten));
     }
 
     #[test]
