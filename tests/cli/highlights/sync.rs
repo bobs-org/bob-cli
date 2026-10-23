@@ -2,6 +2,60 @@
 
 use crate::support::*;
 use std::fs;
+
+#[test]
+fn highlights_ref_sync_resolves_relative_library_pdf_paths_before_mapping() {
+    let temp = TempDir::new("bob-cli-highlights-ref-relative-library-path");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/relative-library-path.pdf");
+    let nested_note = vault.join("ref/chat/relative-library-path.md");
+    let flat_note = vault.join("ref/relative-library-path.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Relative Library Path\n",
+    );
+
+    let relative_pdf = "lib/chat/../chat/relative-library-path.pdf";
+    let output = bob_command()
+        .arg("ref")
+        .arg("sync")
+        .arg(relative_pdf)
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .current_dir(&vault)
+        .output()
+        .expect("dry-run sync with relative library path");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(&format!("note: {}", nested_note.display()))
+            && report.contains("note_action: create")
+            && report.contains("writes: none"),
+        "relative library path should map to its nested reference note:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !flat_note.exists(),
+        "dry-run must not create a flat duplicate note"
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("marker")
+        .arg(relative_pdf)
+        .env("BOB_DIR", &vault)
+        .current_dir(&vault)
+        .output()
+        .expect("inspect marker with relative library path");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(&format!("pdf: {}", pdf.display())),
+        "marker should report the absolute, normalized PDF path:\n{}",
+        format_output(&output)
+    );
+}
 use std::path::Path;
 
 #[test]

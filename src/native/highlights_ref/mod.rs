@@ -453,7 +453,12 @@ fn default_jobs() -> usize {
 
 fn run_sync(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    let pdf = required_path(matches, "pdf");
+    let pdf = match stamp::resolve_exact_output_path(&required_path(
+        matches, "pdf",
+    )) {
+        Ok(pdf) => pdf,
+        Err(error) => return report_result(Err(error)),
+    };
     let options = SyncOptions {
         dry_run: matches.get_flag("dry-run"),
         write_pdf: matches.get_flag("write-pdf"),
@@ -470,7 +475,12 @@ fn run_doctor(matches: &ArgMatches, no_hooks: bool) -> i32 {
 
 fn run_marker(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    let pdf = required_path(matches, "pdf");
+    let pdf = match stamp::resolve_exact_output_path(&required_path(
+        matches, "pdf",
+    )) {
+        Ok(pdf) => pdf,
+        Err(error) => return report_result(Err(error)),
+    };
     report_result(show_marker(&config, &pdf))
 }
 
