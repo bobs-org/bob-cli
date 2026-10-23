@@ -85,6 +85,7 @@ pub(crate) struct HighlightsConfig {
     url_routing_gkeep: Option<bool>,
     url_routing_exclude_hosts: Option<Vec<String>>,
     ingest_on_create: Option<bool>,
+    coordinate_pdf_writes: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -207,6 +208,11 @@ impl HighlightsConfig {
 
     pub(crate) fn ingest_on_create(&self) -> Option<bool> {
         self.ingest_on_create
+    }
+
+    #[allow(dead_code)] // Consumed by the Highlights executor phase.
+    pub(crate) fn coordinate_pdf_writes(&self) -> bool {
+        self.coordinate_pdf_writes
     }
 }
 
@@ -415,6 +421,8 @@ struct RawHighlights {
     listen_command: Option<String>,
     #[serde(default)]
     ingest_on_create: Option<bool>,
+    #[serde(default)]
+    coordinate_pdf_writes: Option<bool>,
     #[serde(default)]
     url_routing: Option<RawUrlRouting>,
 }
@@ -630,6 +638,11 @@ pub(crate) fn parse_highlights_config(
             .highlights
             .as_ref()
             .and_then(|highlights| highlights.ingest_on_create),
+        coordinate_pdf_writes: config
+            .highlights
+            .as_ref()
+            .and_then(|highlights| highlights.coordinate_pdf_writes)
+            .unwrap_or(false),
     })
 }
 
@@ -869,6 +882,29 @@ highlights:
             None,
             "omitting ingest_on_create leaves the default (on)"
         );
+    }
+
+    #[test]
+    fn parses_highlights_coordinate_pdf_writes_switch() {
+        let enabled = parse_highlights_config(
+            "highlights:\n  coordinate_pdf_writes: true\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid enabled config");
+        let disabled = parse_highlights_config(
+            "highlights:\n  coordinate_pdf_writes: false\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid disabled config");
+        let absent = parse_highlights_config(
+            "highlights:\n  future_key: ignored\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid config without switch");
+
+        assert!(enabled.coordinate_pdf_writes());
+        assert!(!disabled.coordinate_pdf_writes());
+        assert!(!absent.coordinate_pdf_writes());
     }
 
     #[test]

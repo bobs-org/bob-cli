@@ -62,6 +62,7 @@ mod note;
 pub(crate) mod note_snapshot;
 mod pdf_meta;
 mod pdf_target;
+pub(crate) mod pdf_write_policy;
 mod projection;
 mod reading_execute;
 mod reading_plan;
