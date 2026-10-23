@@ -71,6 +71,9 @@ ttf-parser = { version = "0.25.1", default-features = false }
 url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSFileCoordinator", "NSFilePresenter", "NSURL", "NSError", "NSString"] }
 plist = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 
