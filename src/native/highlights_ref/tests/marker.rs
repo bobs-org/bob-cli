@@ -334,6 +334,7 @@ Body
     let rendered = note.render_with_projection(
         &projection,
         &hash,
+        None,
         &PipelineMetadata {
             source_pdf: "lib/example.pdf".to_string(),
             source_pdf_sha256: "abc123".to_string(),
@@ -373,6 +374,7 @@ fn new_note_render_emits_exactly_one_created_line() {
     let rendered = note.render_with_projection(
         &projection,
         &hash,
+        None,
         &PipelineMetadata {
             source_pdf: "lib/example.pdf".to_string(),
             source_pdf_sha256: "abc123".to_string(),
@@ -420,6 +422,7 @@ Manual body.
     let rendered = note.render_with_projection(
         &projection,
         &hash,
+        None,
         &PipelineMetadata {
             source_pdf: "lib/example.pdf".to_string(),
             source_pdf_sha256: "abc123".to_string(),

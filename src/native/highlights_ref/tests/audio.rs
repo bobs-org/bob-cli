@@ -283,6 +283,7 @@ fn command_managed_audio_is_quoted_wikilink_and_omitted_without_companion() {
     let with_audio = note.render_with_projection(
         &projection,
         &hash,
+        None,
         &test_metadata(Some("lib/chat/report.mp3")),
         "# Report\n",
     );
@@ -298,6 +299,7 @@ fn command_managed_audio_is_quoted_wikilink_and_omitted_without_companion() {
     let without_audio = note.render_with_projection(
         &projection,
         &hash,
+        None,
         &test_metadata(None),
         "# Report\n",
     );

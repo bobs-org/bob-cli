@@ -119,6 +119,16 @@ fn pipeline_fields_exclude_marker_user_projection() {
     assert!(super::PIPELINE_FIELDS.contains(&"source_pdf"));
     assert!(super::PIPELINE_FIELDS.contains(&"highlights_marker_hash"));
     assert!(super::PIPELINE_FIELDS.contains(&"highlights_marker_base"));
+    assert!(super::PIPELINE_FIELDS.contains(&"highlights_marker_replaced_hash"));
+    let base = super::PIPELINE_FIELDS
+        .iter()
+        .position(|field| *field == "highlights_marker_base")
+        .expect("base field");
+    let replaced = super::PIPELINE_FIELDS
+        .iter()
+        .position(|field| *field == "highlights_marker_replaced_hash")
+        .expect("replaced-hash field");
+    assert_eq!(replaced, base + 1);
     assert!(!super::PIPELINE_FIELDS.contains(&"status"));
     assert!(!super::PIPELINE_FIELDS.contains(&"parent"));
     assert!(!super::PIPELINE_FIELDS.contains(&"type"));
@@ -416,5 +426,174 @@ fn pdf_path_metadata_derives_nested_reference_paths() {
         ref_note_path(&config, Path::new("/tmp/elsewhere/example.pdf"))
             .expect("outside note path"),
         PathBuf::from("/tmp/bob/ref/example.md")
+    );
+}
+
+#[test]
+fn stale_editor_save_requires_replaced_hash_base_and_mismatch() {
+    assert!(is_stale_editor_save(
+        Some("replaced"),
+        Some("last"),
+        true,
+        "replaced",
+    ));
+    assert!(!is_stale_editor_save(
+        Some("replaced"),
+        Some("last"),
+        true,
+        "last",
+    ));
+    assert!(!is_stale_editor_save(
+        Some("replaced"),
+        Some("last"),
+        true,
+        "other",
+    ));
+    assert!(!is_stale_editor_save(
+        Some("replaced"),
+        Some("last"),
+        false,
+        "replaced",
+    ));
+    assert!(!is_stale_editor_save(None, Some("last"), true, "replaced"));
+    assert!(!is_stale_editor_save(
+        Some("replaced"),
+        None,
+        true,
+        "replaced",
+    ));
+}
+
+#[test]
+fn replaced_hash_stores_on_marker_write_drops_on_agreement() {
+    assert_eq!(
+        replaced_hash_to_store(Some("old"), "pre-write", Some("last"), true)
+            .as_deref(),
+        Some("pre-write")
+    );
+    assert_eq!(
+        replaced_hash_to_store(Some("old"), "last", Some("last"), false),
+        None
+    );
+    assert_eq!(
+        replaced_hash_to_store(Some("old"), "other", Some("last"), false)
+            .as_deref(),
+        Some("old")
+    );
+    assert!(is_dropping_replaced_hash(
+        Some("last"),
+        "last",
+        false,
+        Some("old")
+    ));
+    assert!(!is_dropping_replaced_hash(
+        Some("last"),
+        "last",
+        true,
+        Some("old")
+    ));
+}
+
+#[test]
+fn skip_stale_restore_without_write_opt_in_is_restore_alone() {
+    let scan = SyncOptions {
+        dry_run: false,
+        write_pdf: false,
+        prefer: None,
+    };
+    assert!(skip_stale_restore_without_write_opt_in(
+        true, false, false, scan
+    ));
+    assert!(!skip_stale_restore_without_write_opt_in(
+        true, true, false, scan
+    ));
+    assert!(!skip_stale_restore_without_write_opt_in(
+        true, false, true, scan
+    ));
+    assert!(!skip_stale_restore_without_write_opt_in(
+        true,
+        false,
+        false,
+        SyncOptions {
+            write_pdf: true,
+            ..scan
+        }
+    ));
+    assert!(!skip_stale_restore_without_write_opt_in(
+        true,
+        false,
+        false,
+        SyncOptions {
+            dry_run: true,
+            ..scan
+        }
+    ));
+}
+
+#[test]
+fn finalize_replaced_hash_render_skips_a_drop_only_note_write() {
+    let bob = temp_bob_dir("replaced-hash-drop-only");
+    let path = bob.join("ref/example.md");
+    write_test_file(
+        &path,
+        "---\nstatus: next\nhighlights_marker_replaced_hash: abcdef\n---\n\n# Example\n",
+    );
+    let note = read_note(&path).expect("read note");
+    let rendered = "---\nstatus: next\n---\n\n# Example\n".to_string();
+    let (out, kept) =
+        finalize_replaced_hash_render(&note, rendered, None, true);
+    assert_eq!(out, note.contents().expect("note contents"));
+    assert_eq!(kept.as_deref(), Some("abcdef"));
+    fs::remove_dir_all(bob).expect("remove temp bob dir");
+}
+
+#[test]
+fn render_places_replaced_hash_after_marker_base() {
+    let note = ParsedNote::empty();
+    let mut projection = Projection::new();
+    projection.insert(
+        "status".to_string(),
+        MarkerValue::String("next".to_string()),
+    );
+    projection.insert(
+        "parent".to_string(),
+        MarkerValue::String("[[obsidian]]".to_string()),
+    );
+    let hash = projection_hash(&projection).expect("hash");
+    let rendered = note.render_with_projection(
+        &projection,
+        &hash,
+        Some("deadbeef"),
+        &PipelineMetadata {
+            source_pdf: "lib/example.pdf".to_string(),
+            source_pdf_sha256: "abc".to_string(),
+            ref_type: None,
+            highlights_sidecar: None,
+            highlights_count: None,
+            highlights_synced_at: None,
+            created: None,
+            audio: None,
+        },
+        "",
+    );
+    let hash_at = rendered.find("highlights_marker_hash:").expect("hash line");
+    let base_at = rendered.find("highlights_marker_base:").expect("base line");
+    let replaced_at = rendered
+        .find("highlights_marker_replaced_hash: deadbeef")
+        .expect("replaced line");
+    assert!(hash_at < base_at, "{rendered}");
+    assert!(base_at < replaced_at, "{rendered}");
+}
+
+#[test]
+fn append_stale_save_reason_joins_existing_reason() {
+    let mut empty = String::new();
+    append_stale_save_reason(&mut empty);
+    assert_eq!(empty, STALE_SAVE_REASON);
+    let mut existing = String::from("frontmatter changed since last sync");
+    append_stale_save_reason(&mut existing);
+    assert_eq!(
+        existing,
+        format!("frontmatter changed since last sync; {STALE_SAVE_REASON}")
     );
 }

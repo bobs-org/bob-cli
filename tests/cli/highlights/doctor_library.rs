@@ -75,6 +75,20 @@ fn doctor_library_rows_report_ok_on_clean_vault() {
         ),
         "{report}"
     );
+    if cfg!(target_os = "macos") {
+        assert!(
+            report.contains("pdf_write_coordination: on")
+                || report.contains("pdf_write_coordination: off"),
+            "{report}"
+        );
+    } else {
+        assert!(
+            report.contains(
+                "pdf_write_coordination: n/a (no OS file coordination)"
+            ),
+            "{report}"
+        );
+    }
     assert!(report.contains("result: ok"), "{report}");
 }
 

@@ -316,6 +316,7 @@ fn attach_marker_write(
             editor_saved_first,
             status_change: marker_status_change(plan),
             waited,
+            restored: plan.stale_restore,
         });
     }
     report
@@ -589,6 +590,7 @@ mod tests {
             editor_saved_first: false,
             status_change: None,
             waited: Duration::from_millis(420),
+            restored: false,
         }));
         assert_eq!(pdf_marker_action_display(&direct), "updated");
 
@@ -597,6 +599,7 @@ mod tests {
             editor_saved_first: false,
             status_change: None,
             waited: Duration::from_millis(30),
+            restored: false,
         }));
         assert_eq!(
             pdf_marker_action_display(&coordinated),
@@ -608,6 +611,7 @@ mod tests {
             editor_saved_first: true,
             status_change: Some(("wip".into(), "read".into())),
             waited: Duration::from_millis(420),
+            restored: false,
         }));
         assert_eq!(
             pdf_marker_action_display(&saved),

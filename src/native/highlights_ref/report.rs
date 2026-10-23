@@ -981,6 +981,9 @@ pub(super) fn scan_details(
     if plan.decision.source == SyncSource::AutoMerge {
         details.push(format!("auto-merge ({})", plan.decision.reason));
     }
+    if plan.stale_restore && plan.marker_write_needed {
+        details.push(STALE_SAVE_SCAN_DETAIL.to_string());
+    }
     details
 }
 
@@ -1271,7 +1274,7 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
             .unwrap_or_else(|| "none".to_string())
     );
     println!("  sync_source: {}", plan.decision.source.as_str());
-    if plan.decision.source == SyncSource::AutoMerge {
+    if plan.decision.source == SyncSource::AutoMerge || plan.stale_restore {
         println!("  sync_reason: {}", plan.decision.reason);
     }
     println!("  pdf_task: {}", plan.pdf_task_signal.status.label());

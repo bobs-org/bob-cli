@@ -37,6 +37,122 @@ pub(super) fn marker_projection_with_parent_hint(
     marker
 }
 
+/// Appended to `sync_reason` when a stale editor save is restored.
+pub(super) const STALE_SAVE_REASON: &str =
+    "marker reverted to the copy bob replaced (stale editor save); restoring it";
+
+/// Dim concise-scan detail when a stale editor save is restored.
+pub(super) const STALE_SAVE_SCAN_DETAIL: &str =
+    "marker restored after a stale save";
+
+/// True when the PDF marker matches the copy bob's latest marker write
+/// replaced (`M == R && M != L`) and the note still has a stored base.
+pub(super) fn is_stale_editor_save(
+    replaced_hash: Option<&str>,
+    last_hash: Option<&str>,
+    has_base: bool,
+    pdf_marker_hash: &str,
+) -> bool {
+    match (replaced_hash, last_hash) {
+        (Some(replaced), Some(last)) => {
+            has_base && pdf_marker_hash == replaced && pdf_marker_hash != last
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn append_stale_save_reason(reason: &mut String) {
+    if !reason.is_empty() {
+        reason.push_str("; ");
+    }
+    reason.push_str(STALE_SAVE_REASON);
+}
+
+/// Restore-alone writes are deferred to the next `-w` run instead of
+/// raising `needs_write_pdfs`. Dry runs still preview them.
+pub(super) fn skip_stale_restore_without_write_opt_in(
+    stale_restore: bool,
+    frontmatter_contributed: bool,
+    marker_normalized: bool,
+    options: SyncOptions,
+) -> bool {
+    stale_restore
+        && !frontmatter_contributed
+        && !marker_normalized
+        && !options.write_pdf
+        && !options.dry_run
+}
+
+/// Value of `highlights_marker_replaced_hash` for this note write.
+///
+/// A marker write stores the pre-write PDF marker hash. A note write that
+/// observes agreement (`M == L`) drops the field. Any other note write
+/// keeps the existing value.
+pub(super) fn replaced_hash_to_store(
+    existing: Option<&str>,
+    pdf_marker_hash: &str,
+    last_hash: Option<&str>,
+    marker_write_needed: bool,
+) -> Option<String> {
+    if marker_write_needed {
+        Some(pdf_marker_hash.to_string())
+    } else if last_hash == Some(pdf_marker_hash) {
+        None
+    } else {
+        existing.map(str::to_string)
+    }
+}
+
+pub(super) fn is_dropping_replaced_hash(
+    last_hash: Option<&str>,
+    pdf_marker_hash: &str,
+    marker_write_needed: bool,
+    existing: Option<&str>,
+) -> bool {
+    !marker_write_needed
+        && last_hash == Some(pdf_marker_hash)
+        && existing.is_some()
+}
+
+/// Never write a note whose only change is dropping the replaced hash.
+/// Returns the kept original contents when that would have been the
+/// only edit, plus the existing hash to keep storing.
+pub(super) fn finalize_replaced_hash_render(
+    note: &ParsedNote,
+    rendered: String,
+    replaced_hash: Option<String>,
+    dropping: bool,
+) -> (String, Option<String>) {
+    if dropping
+        && let Some(current) = note.contents()
+        && same_except_replaced_hash_line(&current, &rendered)
+    {
+        return (current.to_string(), note.marker_replaced_hash());
+    }
+    (rendered, replaced_hash)
+}
+
+fn same_except_replaced_hash_line(left: &str, right: &str) -> bool {
+    strip_replaced_hash_lines(left) == strip_replaced_hash_lines(right)
+}
+
+fn strip_replaced_hash_lines(text: &str) -> String {
+    let trailing = text.ends_with('\n');
+    let mut out = String::new();
+    let prefix = format!("{FIELD_MARKER_REPLACED_HASH}:");
+    for line in text.lines() {
+        if line.starts_with(&prefix) {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !trailing && out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
 pub(super) fn resolve_sync_projection(
     inputs: SyncInputs<'_>,
 ) -> Result<SyncResolution> {

@@ -74,9 +74,11 @@ destinations that already exist and duplicate output paths such as two PDFs
 that would both write the same `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
-the configured pre-scan hook, sidecar presence, marker readability, Git
-worktree status, the Markdown render tools (pandoc, xelatex, LaTeX packages),
-and optional `ob` availability. Companion audio sitting in
+the configured pre-scan hook, sidecar presence, marker readability, PDF write
+coordination, Git worktree status, the Markdown render tools (pandoc, xelatex,
+LaTeX packages), and optional `ob` availability. The `pdf_write_coordination:`
+row is `on` or `off` on macOS (a warning when off) and
+`n/a (no OS file coordination)` elsewhere. Companion audio sitting in
 `xlib/` with no matching PDF in `xlib/` or `lib/` is a warning, not a
 failure. The warning-level `xelatex` and `latex_packages` rows report the
 Markdown render prerequisites: a missing xelatex warns that PDF creation is
@@ -579,6 +581,7 @@ highlights_sidecar
 highlights_count
 highlights_synced_at
 highlights_marker_base
+highlights_marker_replaced_hash
 highlights_marker_hash
 highlights_marker_fields
 pipeline_version
@@ -659,9 +662,15 @@ Implemented conflict policy:
   `--prefer marker` or `--prefer frontmatter` is supplied.
 
 The last synced user-property projection is stored as `highlights_marker_hash`
-and as compact JSON in `highlights_marker_base`. The hash keeps old-note
-compatibility; the base snapshot lets the command prove safe field-level
-merges. `--prefer frontmatter`, any generated-task lifecycle change, and any
+and as compact JSON in `highlights_marker_base`. After a marker write, the note
+also stores `highlights_marker_replaced_hash`: the parent-free projection hash
+of the marker that write overwrote. A later scan that finds the PDF marker
+equal to that replaced copy treats it as a stale editor save (see
+[Stale saves](#stale-saves)). The field is dropped on a later note write that
+observes the PDF marker matching `highlights_marker_hash`. A missing field
+(legacy notes) disables the guard. The hash keeps old-note compatibility; the
+base snapshot lets the command prove safe field-level merges.
+`--prefer frontmatter`, any generated-task lifecycle change, and any
 auto-merge that includes frontmatter changes require `--write-pdf` for targeted
 `sync`, or `--write-pdfs` for recursive `scan`, whenever the PDF marker must be
 updated.
@@ -735,8 +744,22 @@ highlights:
 
 Until then, an uncoordinated write that races Highlights ends in the
 "The file has been changed by another application" dialog (see
-[Expected failures](#expected-failures)): prefer **Save Anyway**, then set
-the page-1 `status:` back to the current value instead of re-annotating.
+[Expected failures](#expected-failures)): prefer **Save Anyway** so your
+annotations are kept. The next `-w` scan restores the marker; do not edit
+`status:` by hand.
+
+### Stale saves
+
+A PDF marker that matches the copy bob's latest marker write replaced is a
+stale editor save, not a status edit. The next `-w` scan keeps the note and
+the reading-task lane and restores the marker. Concise scan output adds the
+dim detail `marker restored after a stale save`. Verbose `sync_reason` (and
+`ref sync`) appends `marker reverted to the copy bob replaced (stale editor
+save); restoring it`. JSON `notes[].marker_write.restored` is `true` only for
+that restore.
+
+One limit: deliberately setting the marker back to the exact copy bob
+replaced is undone. Change status through the reading task instead.
 
 ### Acceptance kit
 
@@ -932,7 +955,7 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].title` | The note title the scan wrote |
 | `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
-| `notes[].marker_write` | Present exactly when a marker was written in write mode (never on dry runs), right after `marker`: `mode` (`"coordinated"` or `"direct"`), `editor_saved_first`, and `status` (`{from, to}` marker `status` values) only when the marker's `status` line changed |
+| `notes[].marker_write` | Present exactly when a marker was written in write mode (never on dry runs), right after `marker`: `mode` (`"coordinated"` or `"direct"`), `editor_saved_first`, `status` (`{from, to}` marker `status` values) only when the marker's `status` line changed, and `restored: true` only when this write restored a stale editor save |
 | `notes[].continuations` | Absorbed follower pieces on this note; omitted when zero |
 | `notes[].continuations_dangling` | `<` markers that could not form a group; omitted when zero |
 | `notes[].underlines_merged` | Underline annotations folded into host quotes; omitted when zero |
@@ -1969,10 +1992,10 @@ MacBook validation checklist:
 - `cargo install --path ~/projects/bob-cli --locked --force` installs the local
   checkout.
 - `bob ref doctor` reports valid vault/library/ref paths, the xlib intake
-  path and pending count, the pre-scan hook status, marker readability, Git
-  status, optional `ob` availability, and the library health and coverage
-  rows. A missing `~/bob/xlib` is
-  warning-only because `create` creates it on demand.
+  path and pending count, the pre-scan hook status, marker readability, PDF
+  write coordination (`on`/`off` on macOS, `n/a` elsewhere), Git status,
+  optional `ob` availability, and the library health and coverage rows. A
+  missing `~/bob/xlib` is warning-only because `create` creates it on demand.
 - `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If
@@ -2233,7 +2256,7 @@ preflight failures remain hard global failures before writes.
 | `ready`, `next`, or `in-progress PDF task conflicts` | The generated task selects `ready`, `next`, or `wip`, but marker or frontmatter changed `status` to a different value from the stored base. | Move the task to the intended state or set marker/frontmatter status to match it. |
 | `marker/frontmatter conflict` | Marker and frontmatter changed the same field differently, or the note has no stored base snapshot for a safe merge. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
-| `The file has been changed by another application` | Highlights opened its save-conflict dialog: an uncoordinated bob write raced the open document (the key is off or the write predates coordination). | Prefer **Save Anyway**, then open the page-1 marker and set `status:` back to the current value instead of re-annotating. Enable `highlights.coordinate_pdf_writes` after the acceptance test passes so future writes coordinate instead. |
+| `The file has been changed by another application` | Highlights opened its save-conflict dialog: an uncoordinated bob write raced the open document (the key is off or the write predates coordination). | Prefer **Save Anyway** so your annotations are kept. The next `-w` scan restores the marker with no hand edit. Enable `highlights.coordinate_pdf_writes` after the acceptance test passes so future writes coordinate instead. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
 | `could not acquire the vault maintenance lock` | A writing scan found `bob_sync.lock` held past the 120 s wait. | Wait for vault-sync, nightly, or rename to finish, then scan again. |
 | `another bob ref scan is still running` | A writing scan found the `scan.lock` writer lock held past the 120 s wait. | Wait for the other scan to finish, then scan again. |

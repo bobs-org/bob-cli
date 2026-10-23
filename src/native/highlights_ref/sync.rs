@@ -504,11 +504,31 @@ pub(super) fn plan_pdf_sync(
         frontmatter: frontmatter_input.status_normalized,
         base: base_status_normalized,
     };
+    let stale_restore = is_stale_editor_save(
+        note.marker_replaced_hash().as_deref(),
+        last_hash.as_deref(),
+        base_projection.is_some(),
+        &marker_hash,
+    );
+    let resolve_marker = if stale_restore {
+        base_projection
+            .as_ref()
+            .expect("stale save requires a stored base")
+    } else {
+        &marker_projection
+    };
+    let resolve_hash = if stale_restore {
+        last_hash
+            .as_deref()
+            .expect("stale save requires a stored hash")
+    } else {
+        marker_hash.as_str()
+    };
     let mut resolution = resolve_sync_projection(SyncInputs {
         last_hash: last_hash.as_deref(),
         base_projection: base_projection.as_ref(),
-        marker_projection: &marker_projection,
-        marker_hash: &marker_hash,
+        marker_projection: resolve_marker,
+        marker_hash: resolve_hash,
         frontmatter_projection: &frontmatter_projection,
         frontmatter_hash: &frontmatter_hash,
         note_exists: note.exists(),
@@ -525,9 +545,12 @@ pub(super) fn plan_pdf_sync(
         &mut resolution,
         &pdf_task_line,
         base_projection.as_ref(),
-        &marker_projection,
+        resolve_marker,
         &frontmatter_projection,
     )?;
+    if stale_restore {
+        append_stale_save_reason(&mut resolution.decision.reason);
+    }
     let annotation_task_intake_allowed = intake_allowed_before_signal
         || projection_status_is_open(&resolution.projection);
     let decision = resolution.decision;
@@ -538,16 +561,26 @@ pub(super) fn plan_pdf_sync(
     )?;
     let synced_hash = projection_hash(&synced_projection)?;
     let rendered_marker = render_marker(&synced_projection)?;
-    let marker_write_needed = (decision.frontmatter_contributed
-        || status_normalization.marker.is_some())
+    let mut marker_write_needed = (decision.frontmatter_contributed
+        || status_normalization.marker.is_some()
+        || stale_restore)
         && normalize_line_endings(&rendered_marker)
             != normalize_line_endings(&marker.contents);
 
     if marker_write_needed && !options.write_pdf && !options.dry_run {
-        return Err(CommandError::new(
-            "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
-        )
-        .with_code("needs_write_pdfs"));
+        if skip_stale_restore_without_write_opt_in(
+            stale_restore,
+            decision.frontmatter_contributed,
+            status_normalization.marker.is_some(),
+            options,
+        ) {
+            marker_write_needed = false;
+        } else {
+            return Err(CommandError::new(
+                "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
+            )
+            .with_code("needs_write_pdfs"));
+        }
     }
 
     let sidecar = read_sidecar_for_pdf(pdf)?;
@@ -601,11 +634,31 @@ pub(super) fn plan_pdf_sync(
     } else {
         Vec::new()
     };
-    let stable_rendered_note = note.render_with_projection(
+    let existing_replaced = note.marker_replaced_hash();
+    let dropping_replaced = is_dropping_replaced_hash(
+        last_hash.as_deref(),
+        &marker_hash,
+        marker_write_needed,
+        existing_replaced.as_deref(),
+    );
+    let replaced_hash = replaced_hash_to_store(
+        existing_replaced.as_deref(),
+        &marker_hash,
+        last_hash.as_deref(),
+        marker_write_needed,
+    );
+    let rendered_with_hash = note.render_with_projection(
         &synced_projection,
         &synced_hash,
+        replaced_hash.as_deref(),
         &stable_metadata,
         &rendered_body,
+    );
+    let (stable_rendered_note, replaced_hash) = finalize_replaced_hash_render(
+        &note,
+        rendered_with_hash,
+        replaced_hash,
+        dropping_replaced,
     );
     let stable_note_action = change_action(
         note.exists(),
@@ -642,6 +695,8 @@ pub(super) fn plan_pdf_sync(
         synced_hash,
         rendered_marker,
         marker_write_needed,
+        stale_restore,
+        replaced_hash,
         note,
         sidecar,
         rendered_highlights,
@@ -702,11 +757,29 @@ fn plan_pdf_sync_v2(
         frontmatter: frontmatter_input.status_normalized,
         base: base_status_normalized,
     };
+    let stale_restore = is_stale_editor_save(
+        note.marker_replaced_hash().as_deref(),
+        last_hash.as_deref(),
+        base_pf.is_some(),
+        &marker_hash,
+    );
+    let resolve_marker = if stale_restore {
+        base_pf.as_ref().expect("stale save requires a stored base")
+    } else {
+        &marker_pf
+    };
+    let resolve_hash = if stale_restore {
+        last_hash
+            .as_deref()
+            .expect("stale save requires a stored hash")
+    } else {
+        marker_hash.as_str()
+    };
     let mut resolution = resolve_sync_projection(SyncInputs {
         last_hash: last_hash.as_deref(),
         base_projection: base_pf.as_ref(),
-        marker_projection: &marker_pf,
-        marker_hash: &marker_hash,
+        marker_projection: resolve_marker,
+        marker_hash: resolve_hash,
         frontmatter_projection: &frontmatter_pf,
         frontmatter_hash: &frontmatter_hash,
         note_exists: note.exists(),
@@ -725,7 +798,7 @@ fn plan_pdf_sync_v2(
             base.get(FIELD_STATUS).and_then(MarkerValue::as_string)
         })
         .map(str::to_string);
-    let marker_status = status_of(&marker_pf);
+    let marker_status = status_of(resolve_marker);
     let frontmatter_status = status_of(&frontmatter_pf);
     // Preliminary selection to size the reopen fallback: when the selected
     // task is archived-terminal, its source residence decides the reopen
@@ -785,6 +858,9 @@ fn plan_pdf_sync_v2(
             .decision
             .reason
             .push_str("reading task set status");
+    }
+    if stale_restore {
+        append_stale_save_reason(&mut resolution.decision.reason);
     }
     // Preserve annotation eligibility before and after the status signal so
     // closing and reopening runs import pending work from any open status.
@@ -857,10 +933,21 @@ fn plan_pdf_sync_v2(
     let semantic_rendered = render_marker(&synced_pf)?;
     let semantic_current = render_marker(&marker_pf)?;
     let semantic_needed = (decision.frontmatter_contributed
-        || status_normalization.marker.is_some())
+        || status_normalization.marker.is_some()
+        || stale_restore)
         && normalize_line_endings(&semantic_rendered)
             != normalize_line_endings(&semantic_current);
-    if semantic_needed && !options.write_pdf && !options.dry_run {
+    let skip_restore = skip_stale_restore_without_write_opt_in(
+        stale_restore,
+        decision.frontmatter_contributed,
+        status_normalization.marker.is_some(),
+        options,
+    );
+    if semantic_needed
+        && !options.write_pdf
+        && !options.dry_run
+        && !skip_restore
+    {
         return Err(CommandError::new(
             "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
         )
@@ -879,7 +966,9 @@ fn plan_pdf_sync_v2(
             // Without opt-in (and outside dry-run preview) preserve the
             // marker bytes; the semantic refusal above already fired when
             // needed, so here `needed` is only true under opt-in/dry-run.
-            if options.write_pdf || options.dry_run {
+            if skip_restore {
+                (marker.contents.clone(), false)
+            } else if options.write_pdf || options.dry_run {
                 (rendered, needed)
             } else {
                 (marker.contents.clone(), false)
@@ -1020,14 +1109,34 @@ fn plan_pdf_sync_v2(
     {
         render_projection.insert(FIELD_PARENT.to_string(), parent.clone());
     }
+    let existing_replaced = note.marker_replaced_hash();
+    let dropping_replaced = is_dropping_replaced_hash(
+        last_hash.as_deref(),
+        &marker_hash,
+        marker_write_needed,
+        existing_replaced.as_deref(),
+    );
+    let replaced_hash = replaced_hash_to_store(
+        existing_replaced.as_deref(),
+        &marker_hash,
+        last_hash.as_deref(),
+        marker_write_needed,
+    );
     let mut stable_rendered_note = note.render_with_projection(
         &render_projection,
         &synced_hash,
+        replaced_hash.as_deref(),
         &stable_metadata,
         &rendered_body,
     );
     stable_rendered_note =
         restamp_parent_free_base(&stable_rendered_note, &synced_pf);
+    let (stable_rendered_note, replaced_hash) = finalize_replaced_hash_render(
+        &note,
+        stable_rendered_note,
+        replaced_hash,
+        dropping_replaced,
+    );
     let stable_note_action = change_action(
         note.exists(),
         note.contents().as_deref(),
@@ -1054,6 +1163,8 @@ fn plan_pdf_sync_v2(
         synced_hash,
         rendered_marker,
         marker_write_needed,
+        stale_restore,
+        replaced_hash,
         note,
         sidecar,
         rendered_highlights,
@@ -1427,6 +1538,7 @@ pub(super) fn refresh_stable_rendered_note(plan: &mut PdfSyncPlan) {
     plan.stable_rendered_note = plan.note.render_with_projection(
         &plan.synced_projection,
         &plan.synced_hash,
+        plan.replaced_hash.as_deref(),
         &plan.stable_metadata,
         &plan.rendered_body,
     );
@@ -1515,6 +1627,7 @@ fn execute_pdf_sync_v1(
         plan.note.render_with_projection(
             &plan.synced_projection,
             &plan.synced_hash,
+            plan.replaced_hash.as_deref(),
             &metadata,
             &plan.rendered_body,
         )
@@ -1865,6 +1978,7 @@ fn execute_pdf_sync_v2(
         let rendered = plan.note.render_with_projection(
             &render_projection,
             &plan.synced_hash,
+            plan.replaced_hash.as_deref(),
             &metadata,
             body,
         );

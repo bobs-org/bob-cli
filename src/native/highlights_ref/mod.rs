@@ -204,6 +204,7 @@ const FIELD_HIGHLIGHTS_SIDECAR: &str = "highlights_sidecar";
 const FIELD_HIGHLIGHTS_COUNT: &str = "highlights_count";
 const FIELD_HIGHLIGHTS_SYNCED_AT: &str = "highlights_synced_at";
 const FIELD_MARKER_BASE: &str = "highlights_marker_base";
+const FIELD_MARKER_REPLACED_HASH: &str = "highlights_marker_replaced_hash";
 const FIELD_MARKER_HASH: &str = "highlights_marker_hash";
 const FIELD_MARKER_FIELDS: &str = "highlights_marker_fields";
 const FIELD_PIPELINE_VERSION: &str = "pipeline_version";
@@ -215,6 +216,7 @@ const PIPELINE_FIELDS: &[&str] = &[
     FIELD_HIGHLIGHTS_COUNT,
     FIELD_HIGHLIGHTS_SYNCED_AT,
     FIELD_MARKER_BASE,
+    FIELD_MARKER_REPLACED_HASH,
     FIELD_MARKER_HASH,
     FIELD_MARKER_FIELDS,
     FIELD_PIPELINE_VERSION,

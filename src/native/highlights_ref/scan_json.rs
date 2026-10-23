@@ -87,6 +87,10 @@ fn is_zero_usize(value: &usize) -> bool {
     *value == 0
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// One per-PDF failure: the same text the human report prints.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ScanJsonFailure {
@@ -114,6 +118,8 @@ pub(super) struct ScanJsonMarkerWrite {
     editor_saved_first: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<ScanJsonStatusChange>,
+    #[serde(skip_serializing_if = "is_false")]
+    restored: bool,
 }
 
 /// A marker `status` line change (`ready|next|wip|read|abandoned` values).
@@ -672,6 +678,7 @@ pub(super) fn marker_write_json(
             .status_change
             .clone()
             .map(|(from, to)| ScanJsonStatusChange { from, to }),
+        restored: info.restored,
     })
 }
 

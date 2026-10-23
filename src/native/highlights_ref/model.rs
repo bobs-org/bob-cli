@@ -547,6 +547,11 @@ pub(super) struct PdfSyncPlan {
     pub(super) synced_hash: String,
     pub(super) rendered_marker: String,
     pub(super) marker_write_needed: bool,
+    /// True when this plan treats the PDF marker as a stale editor save
+    /// of the copy bob last replaced, and will restore it under `-w`.
+    pub(super) stale_restore: bool,
+    /// `highlights_marker_replaced_hash` to persist on this note write.
+    pub(super) replaced_hash: Option<String>,
     pub(super) note: ParsedNote,
     pub(super) sidecar: Option<SidecarInput>,
     pub(super) rendered_highlights: Option<RenderedHighlights>,
@@ -613,6 +618,9 @@ pub(super) struct MarkerWriteInfo {
     pub(super) editor_saved_first: bool,
     pub(super) status_change: Option<(String, String)>,
     pub(super) waited: Duration,
+    /// True when this write restored a stale editor save of the copy bob
+    /// last replaced.
+    pub(super) restored: bool,
 }
 
 /// Why a coordinated marker write held instead of writing.
@@ -925,6 +933,14 @@ impl ParsedNote {
         })
     }
 
+    pub(super) fn marker_replaced_hash(&self) -> Option<String> {
+        self.frontmatter.iter().find_map(|entry| {
+            (entry.key.as_deref() == Some(FIELD_MARKER_REPLACED_HASH))
+                .then(|| entry.value.as_ref()?.as_string().map(str::to_string))
+                .flatten()
+        })
+    }
+
     pub(super) fn marker_base_projection_with_normalization(
         &self,
     ) -> Result<(Option<Projection>, Option<DeprecatedStatusNormalization>)>
@@ -1009,6 +1025,7 @@ impl ParsedNote {
         &self,
         projection: &Projection,
         marker_hash: &str,
+        replaced_hash: Option<&str>,
         metadata: &PipelineMetadata,
         body: &str,
     ) -> String {
@@ -1106,6 +1123,13 @@ impl ParsedNote {
             MarkerValue::String(projection_snapshot_json(projection))
                 .as_frontmatter_value()
         ));
+        if let Some(replaced) = replaced_hash {
+            lines.push(format!(
+                "{FIELD_MARKER_REPLACED_HASH}: {}",
+                MarkerValue::String(replaced.to_string())
+                    .as_frontmatter_value()
+            ));
+        }
         if !marker_fields.is_empty() {
             let value = MarkerValue::List(
                 marker_fields

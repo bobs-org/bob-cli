@@ -11,7 +11,9 @@ use std::time::Duration;
 
 const WIP_MARKER: &str = "- status: wip\n- parent: obsidian\n";
 const NEXT_MARKER: &str = "- status: next\n- parent: obsidian\n";
+const READY_MARKER: &str = "- status: ready\n- parent: obsidian\n";
 const V1_TASK: &str = "- [/] #task #ref [[lib/example.pdf]] #hide ^ref";
+const V1_READY_TASK: &str = "- [ ] #task #ref [[lib/example.pdf]] #hide ^ref";
 
 fn write_opts() -> SyncOptions {
     SyncOptions {
@@ -609,6 +611,82 @@ fn v2_hold_leaves_the_reading_task_untouched() {
     assert_eq!(bytes_of(&pdf), pdf_before);
     assert_eq!(text_of(&note), note_before);
     assert_eq!(text_of(&parent), parent_before);
+}
+
+fn plan_v1_stale_restore(
+    bob: &Path,
+    stem: &str,
+) -> (Config, PathBuf, PathBuf, PdfSyncPlan) {
+    let pdf = bob.join(format!("lib/{stem}.pdf"));
+    let note = bob.join(format!("ref/{stem}.md"));
+    seed_area(bob);
+    write_pdf_with_marker(&pdf, READY_MARKER, false);
+    seed_v1(&note, &V1_READY_TASK.replace("example", stem));
+    let config = vault_config(bob);
+    settle_v1(&config, &pdf);
+    let generated = text_of(&note);
+    let updated = generated.replace("- [ ] #task", "- [*] #task");
+    assert_ne!(updated, generated, "checkbox should change");
+    write_test_file(&note, &updated);
+    let write_plan = plan_single_pdf_sync(&config, &pdf, write_opts())
+        .expect("next-marker write plan");
+    assert!(write_plan.marker_write_needed);
+    execute_pdf_sync_inner(
+        &config,
+        &write_plan,
+        &mut RunWriteState::default(),
+        None,
+    )
+    .expect("write next marker");
+    let current = read_pdf_marker(&pdf).expect("read next marker");
+    write_pdf_marker(&pdf, current.annotation_id, READY_MARKER)
+        .expect("revert marker to the replaced copy");
+    let plan = plan_single_pdf_sync(&config, &pdf, write_opts())
+        .expect("stale restore plan");
+    assert!(plan.stale_restore, "stale save should restore");
+    assert!(plan.marker_write_needed, "restore needs a marker write");
+    (config, pdf, note, plan)
+}
+
+#[test]
+fn coordinated_saved_first_restores_a_stale_marker_inside_the_accessor() {
+    let bob = temp_bob_dir("marker-write-stale-restore");
+    let (config, pdf, note, plan) = plan_v1_stale_restore(&bob, "example");
+    write_pdf_with_marker(&pdf, &plan.marker.contents, true);
+    let fake = FakeCoordinator::grant(Duration::from_millis(30));
+    let mut session = write_session(
+        MarkerWriteCoordinator::Fake(fake),
+        ReadingHoldMode::Exempt,
+    );
+    let outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    )
+    .expect("stale restore execute");
+    match outcome {
+        PdfSyncOutcome::Written(report) => {
+            let info = report.marker_write.as_ref().expect("marker write info");
+            assert_eq!(info.mode, MarkerWriteMode::Coordinated);
+            assert!(info.editor_saved_first);
+            assert!(info.restored);
+        }
+        other => panic!("expected restore write, got {other:?}"),
+    }
+    let written = read_pdf_marker(&pdf).expect("restored marker");
+    assert!(
+        written.contents.contains("- status: next\n"),
+        "{}",
+        written.contents
+    );
+    let note_after = text_of(&note);
+    assert!(note_after.contains("status: next\n"), "{note_after}");
+    assert!(note_after.contains("- [*] #task #ref"), "{note_after}");
+    assert!(
+        note_after.contains("highlights_marker_replaced_hash:"),
+        "{note_after}"
+    );
 }
 
 #[test]

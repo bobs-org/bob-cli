@@ -257,6 +257,8 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
         pdfs.len().saturating_sub(readable_markers)
     );
 
+    append_pdf_write_coordination_row(&mut warnings);
+
     match git_status(config, &[])? {
         GitStatus::MissingCommand => {
             println!("git: fail (command not found)");
@@ -371,6 +373,61 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
             "doctor found failing checks:\n  {}",
             failures.join("\n  ")
         )))
+    }
+}
+
+/// macOS reports `on`/`off`; elsewhere the key is accepted and inert.
+pub(super) struct PdfWriteCoordinationDoctor {
+    pub line: &'static str,
+    pub warning: Option<&'static str>,
+}
+
+/// Both branches stay compile-visible on Linux via `cfg!`.
+pub(super) fn pdf_write_coordination_doctor(
+    coordinate: bool,
+) -> PdfWriteCoordinationDoctor {
+    if cfg!(target_os = "macos") {
+        if coordinate {
+            PdfWriteCoordinationDoctor {
+                line: "on",
+                warning: None,
+            }
+        } else {
+            PdfWriteCoordinationDoctor {
+                line: "off",
+                warning: Some(
+                    "highlights.coordinate_pdf_writes is off: marker writes replace PDFs open in Highlights without asking it to save first",
+                ),
+            }
+        }
+    } else {
+        PdfWriteCoordinationDoctor {
+            line: "n/a (no OS file coordination)",
+            warning: None,
+        }
+    }
+}
+
+fn append_pdf_write_coordination_row(warnings: &mut Vec<String>) {
+    let coordinate =
+        match bob_config::load_highlights_config(&bob_config::config_path()) {
+            Ok(config) => config.coordinate_pdf_writes(),
+            Err(error) => {
+                let message = match error {
+                    bob_config::ConfigError::Read(message)
+                    | bob_config::ConfigError::Invalid(message) => message,
+                };
+                println!("pdf_write_coordination: warn ({message})");
+                warnings.push(format!(
+                "highlights.coordinate_pdf_writes could not be read: {message}"
+            ));
+                return;
+            }
+        };
+    let status = pdf_write_coordination_doctor(coordinate);
+    println!("pdf_write_coordination: {}", status.line);
+    if let Some(warning) = status.warning {
+        warnings.push(warning.to_string());
     }
 }
 
@@ -1057,4 +1114,31 @@ pub(super) fn is_pdf_path(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pdf_write_coordination_doctor;
+
+    #[test]
+    fn pdf_write_coordination_doctor_keeps_both_cfg_branches() {
+        let on = pdf_write_coordination_doctor(true);
+        let off = pdf_write_coordination_doctor(false);
+        if cfg!(target_os = "macos") {
+            assert_eq!(on.line, "on");
+            assert_eq!(on.warning, None);
+            assert_eq!(off.line, "off");
+            assert_eq!(
+                off.warning,
+                Some(
+                    "highlights.coordinate_pdf_writes is off: marker writes replace PDFs open in Highlights without asking it to save first",
+                )
+            );
+        } else {
+            assert_eq!(on.line, "n/a (no OS file coordination)");
+            assert_eq!(on.warning, None);
+            assert_eq!(off.line, "n/a (no OS file coordination)");
+            assert_eq!(off.warning, None);
+        }
+    }
 }

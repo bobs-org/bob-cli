@@ -16,6 +16,7 @@ mod scan;
 mod scan_hooks;
 mod scan_intake;
 mod scan_integration;
+mod stale_save;
 mod sync;
 mod sync_tasks;
 mod tasks;
