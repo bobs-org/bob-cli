@@ -126,6 +126,7 @@ fn build_result_inner(
             owner: None,
             relation: None,
             picker: None,
+            hidden_count: None,
         });
     }
 
@@ -197,10 +198,12 @@ fn build_result_inner(
             owner: None,
             relation: None,
             picker: None,
+            hidden_count: None,
         });
     }
 
     let editor_item = capture_language::editor_item_at(raw_text, cursor);
+    let mut hidden_count = None;
     let (mut candidates, warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
@@ -366,7 +369,10 @@ fn build_result_inner(
             )
         }
         CompletionContext::RelationLabel => {
-            relation_label_suggestions(bob_dir, &field.query)
+            let (candidates, warnings, count) =
+                relation_label_suggestions(bob_dir, &field.query);
+            hidden_count = Some(count);
+            (candidates, warnings)
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
@@ -472,6 +478,7 @@ fn build_result_inner(
         owner,
         relation,
         picker,
+        hidden_count,
     })
 }
 

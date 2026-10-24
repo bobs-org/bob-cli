@@ -477,7 +477,7 @@ pub(crate) fn shell_completion(
             }
         }
         CompletionContext::RelationLabel => {
-            let (candidates, _) =
+            let (candidates, _, _) =
                 relation_label_suggestions(bob_dir, &field.query);
             let Candidates::RelationLabel(items) = candidates else {
                 return Ok(None);
@@ -507,7 +507,10 @@ pub(crate) fn shell_completion(
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
                     full,
-                    description: item.label,
+                    description: format!(
+                        "{} links",
+                        item.count.unwrap_or_default()
+                    ),
                     group: "relation labels".to_string(),
                 });
             }

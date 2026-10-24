@@ -11,11 +11,11 @@ fn relation_fixture() -> TempDir {
     write_settings(temp.path());
     write_file(
         &temp.path().join("mac_inbox.md"),
-        "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[tasks#^target|follow-up of]]\n  - ⛓️ **DEPENDS ON:** [[tasks#^target]]\n- [ ] #task Owner neighbor ^owner-neighbor\n",
+        "- [ ] #task Owner ^owner\n  - 🪢 **LINKS:** [[tasks#^target|follow-up of]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - 🪢 **LINKS:** [[tasks#^target|inspired by]]\n  - ⛓️ **DEPENDS ON:** [[tasks#^target]]\n- [ ] #task Owner neighbor ^owner-neighbor\n",
     );
     write_file(
         &temp.path().join("tasks.md"),
-        "- [ ] #task Target ^target\n- [ ] #task Source ^source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [ ] #task Malformed source ^malformed\n  - 🪢 **LINKS:** see (old) [[mac_inbox#^owner]]\n- [ ] #task Idless source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [/] #task In progress ^progress\n- [*] #task Next ^next\n- [x] #task Closed ^closed\n",
+        "- [ ] #task Target ^target\n- [ ] #task Source ^source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n  - 🪢 **LINKS:** Inspired By [[mac_inbox#^owner]]\n- [ ] #task Malformed source ^malformed\n  - 🪢 **LINKS:** see (old) [[mac_inbox#^owner]]\n- [ ] #task Idless source\n  - 🪢 **LINKS:** follow-up of [[mac_inbox#^owner]]\n- [/] #task In progress ^progress\n- [*] #task Next ^next\n- [x] #task Closed ^closed\n",
     );
     write_file(
         &temp.path().join("done/archive.md"),
@@ -169,6 +169,67 @@ fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
             && row.count == Some(4)
             && row.replacement == "|\"follow-up of\""
     }));
+    assert_eq!(serde_json::to_value(&value).unwrap()["hidden_count"], 0);
+    let canonical = result(
+        temp.path(),
+        "New task ~tasks:target|\"INSPIRED BY",
+        "New task ~tasks:target|\"INSPIRED BY".len(),
+    );
+    let canonical_json = serde_json::to_value(canonical).unwrap();
+    let typed = &canonical_json["candidates"][0];
+    assert_eq!(typed["label"], "inspired by");
+    assert_eq!(typed["key"], "inspired by");
+    assert_eq!(typed["existing"], true);
+    assert_eq!(typed["count"], 3);
+    assert_eq!(typed["replacement"], "|\"inspired by\"");
+
+    write_file(
+        &temp.path().join(".bob/relations/test.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-10-24T09:41:07Z\",\"host\":\"test\",\"kind\":\"relation_label.hide\",\"key\":\"follow-up of\",\"name\":\"follow-up of\",\"via\":\"test\"}\n",
+    );
+    let prefix = result(
+        temp.path(),
+        "New task ~tasks:target|follow",
+        "New task ~tasks:target|follow".len(),
+    );
+    let prefix_json = serde_json::to_value(prefix).unwrap();
+    assert_eq!(prefix_json["hidden_count"], 1);
+    assert!(!prefix_json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["key"] == "follow-up of"));
+    let exact = result(
+        temp.path(),
+        "New task ~tasks:target|\"follow-up of",
+        "New task ~tasks:target|\"follow-up of".len(),
+    );
+    let exact_json = serde_json::to_value(exact).unwrap();
+    assert_eq!(exact_json["candidates"][0]["typed"], true);
+    assert_eq!(exact_json["candidates"][0]["existing"], true);
+    assert_eq!(exact_json["candidates"][0]["hidden"], true);
+    assert_eq!(exact_json["candidates"][0]["count"], 4);
+
+    let tasks_path = temp.path().join("tasks.md");
+    let mut tasks = std::fs::read_to_string(&tasks_path).unwrap();
+    tasks.push_str(
+        "- [ ] #task New source ^new-source\n  - 🪢 **LINKS:** prompted by [[mac_inbox#^owner]]\n",
+    );
+    write_file(&tasks_path, &tasks);
+    crate::native::relation_labels::invalidate_scan(temp.path());
+    let refreshed = result(
+        temp.path(),
+        "New task ~tasks:target|prompted",
+        "New task ~tasks:target|prompted".len(),
+    );
+    let refreshed_json = serde_json::to_value(refreshed).unwrap();
+    let refreshed_row = refreshed_json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "prompted by")
+        .expect("new relation label appears after the note changes");
+    assert_eq!(refreshed_row["count"], 1);
     let raw = "Use this @mac_inbox+owner ~";
     let to = result(temp.path(), raw, raw.len());
     let json = serde_json::to_value(to).expect("serialize archived rows");

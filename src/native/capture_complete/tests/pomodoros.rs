@@ -722,6 +722,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         owner: None,
         relation: None,
         picker: None,
+        hidden_count: None,
     })
     .expect("creation json");
 

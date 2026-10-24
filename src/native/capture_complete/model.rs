@@ -225,6 +225,9 @@ pub(super) struct RelationCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RelationLabelSuggestion {
     pub(super) label: String,
+    pub(super) key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) inverse: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) count: Option<usize>,
     pub(super) replacement: String,
@@ -232,6 +235,10 @@ pub(super) struct RelationLabelSuggestion {
     pub(super) typed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) disabled_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) existing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hidden: Option<bool>,
 }
 
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
@@ -633,6 +640,8 @@ pub(super) struct CaptureCompleteResult {
     /// other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) picker: Option<PickerDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hidden_count: Option<usize>,
 }
 
 impl CaptureCompleteResult {
@@ -654,6 +663,7 @@ impl CaptureCompleteResult {
             owner: None,
             relation: None,
             picker: None,
+            hidden_count: None,
         }
     }
 }

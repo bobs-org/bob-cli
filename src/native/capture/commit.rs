@@ -18,6 +18,7 @@ pub(crate) fn validate_target_parent(
 
 pub(super) fn commit_capture_batch(
     batch: &mut PlannedCaptureBatch,
+    bob_dir: &Path,
 ) -> Result<(), CaptureError> {
     let created_clip_files = save_clip_plans(&batch.items)?;
     let created_jobs = match save_ref_job_plans(&batch.staged_jobs) {
@@ -44,6 +45,7 @@ pub(super) fn commit_capture_batch(
         }
         return Err(error);
     }
+    crate::native::relation_labels::invalidate_scan(bob_dir);
     for (item, path) in created_jobs {
         let id = path
             .file_stem()

@@ -19,7 +19,7 @@ mod journal;
 mod scan;
 
 pub(crate) use journal::Prefs;
-pub(crate) use scan::load_scan;
+pub(crate) use scan::{invalidate as invalidate_scan, load_scan};
 
 pub(crate) use cli::run_list;
 pub(crate) use write::{run_hide, run_unhide};
@@ -40,14 +40,14 @@ pub(crate) fn relation_label_key(label: &str) -> String {
 }
 
 /// One spelling of a key with its use count, so case drift is visible.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub(crate) struct LabelSpelling {
     pub(crate) name: String,
     pub(crate) count: u64,
 }
 
 /// One catalog row: every accepted LINKS entry with one key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub(crate) struct LabelRecord {
     pub(crate) key: String,
     /// Most-used spelling; ties go to the first seen.

@@ -94,7 +94,7 @@ pub(crate) fn link_existing_task(
             template_rows: Vec::new(),
             staged_jobs: Vec::new(),
         };
-        commit_capture_batch(&mut batch)?;
+        commit_capture_batch(&mut batch, bob_dir)?;
     }
     Ok(ExistingTaskLinkOutcome {
         capture,

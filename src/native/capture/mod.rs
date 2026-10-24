@@ -281,7 +281,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let theme_refs = append_theme_refs(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
     if !request.dry_run {
-        commit_capture_batch(&mut batch)?;
+        commit_capture_batch(&mut batch, &request.bob_dir)?;
         if !batch.staged_jobs.is_empty()
             && let Err(error) = ref_jobs::kick()
         {

@@ -413,8 +413,12 @@ group in the dependency style, and `--dry-run` previews all of it.
 - `capture-complete`: contexts `relation_to` and `relation_from`
   (the `DependencyCandidate` shape, plus `already_linked`,
   `existing_label`, `also_prerequisite`, and `disabled_reason`);
-  context `relation_label` with `suggestions[] {label, count,
-  replacement}`; `picker.relationship` gains `relations[]`; shell
+  context `relation_label` with catalog-backed `suggestions[]` (visible rows
+  `{label, key, count, replacement, inverse?}` and a leading typed row
+  `{label, key, replacement, typed: true, existing?, count?, hidden?,
+  disabled_reason?}`); hidden rows are omitted except for an exact typed match.
+  The response includes `hidden_count` in this context. Typed key matches use
+  the catalog display spelling. Shell
   completion gains `links to` / `linked from` groups.
 - `capture-task-id`: `relation_to_replacement` (`~note:id`) and
   `relation_from_replacement` (`~~note:id`).
@@ -661,6 +665,10 @@ phase lands.
   Malformed lines are skipped with a bounded warning. Completion
   tolerates them; rename refuses them. Never calls
   `capture_dependency_tasks::discover`.
+  Parsed note rows use the machine-local bob-cli cache and per-file
+  modification-time and size fingerprints. The full snapshot is reused
+  for up to 60 seconds; a cache miss checks changed, new, and deleted
+  notes, and successful `bob capture` writes invalidate it immediately.
 - **Display spelling.** The most-used spelling of the key, with ties
   going to the first seen. `spellings[]` lists every spelling with
   its count, so case drift is visible.
@@ -764,8 +772,11 @@ Every `schema_version` stays 1; JSON grows additively.
   `lock_busy`. `dirty_paths`, `not_a_worktree`, `sync_failed`,
   `verify_failed`, and `stale_note` arrive with `planned (phase
   label-rename)`.
-- **`capture-complete` `relation_label`** and **`capture` /
-  `--dry-run`**: `planned (phase label-complete, phase double-pipe)`.
+- **`capture-complete` `relation_label`**: rows come from the fast relation-label
+  catalog, use canonical keys and display spelling, include inverse phrases and
+  counts, omit hidden rows, expose exact typed matches (including hidden state),
+  and return `hidden_count`. zsh describes each row as `N links`.
+- **`capture` / `--dry-run`**: `planned (phase double-pipe)`.
 
 ### RV8 The rename transaction
 

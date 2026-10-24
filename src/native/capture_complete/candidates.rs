@@ -1592,35 +1592,45 @@ struct TaskLinks {
 pub(super) fn relation_label_suggestions(
     bob_dir: &Path,
     query: &str,
-) -> (Candidates, Vec<String>) {
-    let discovered = capture_dependency_tasks::discover(bob_dir);
-    let (_, warnings, labels) = task_links_catalog(bob_dir, &discovered);
+) -> (Candidates, Vec<String>, usize) {
+    let catalog = match crate::native::relation_labels::Catalog::load(bob_dir) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return (
+                Candidates::RelationLabel(Vec::new()),
+                vec![format!("relation label catalog: {error}")],
+                0,
+            );
+        }
+    };
     let validation =
         crate::native::task_relations::label::normalize_relation_label(query);
     let normalized_query = validation.as_ref().cloned().unwrap_or_else(|_| {
         crate::native::task_relations::label::collapse_label_text(query)
     });
-    let ranked = rank(labels, &normalized_query, |(label, _)| label);
-    let mut suggestions = ranked
+    let mut suggestions = catalog
+        .rank_for_query(
+            &normalized_query,
+            crate::native::relation_labels::HiddenFilter::Exclude,
+        )
         .into_iter()
-        .map(|(label, count)| RelationLabelSuggestion {
-            replacement: crate::native::task_relations::label::relation_label_quoted_form(&label),
-            label,
-            count: Some(count),
+        .map(|record| RelationLabelSuggestion {
+            replacement: record.replacement(),
+            label: record.name.clone(),
+            key: record.key.clone(),
+            inverse: record.inverse.clone(),
+            count: Some(record.count as usize),
             typed: false,
             disabled_reason: None,
+            existing: None,
+            hidden: None,
         })
         .collect::<Vec<_>>();
     if !normalized_query.is_empty() {
-        let (label, replacement, disabled_reason) = match validation {
-            Ok(label) => (
-                label.clone(),
-                crate::native::task_relations::label::relation_label_quoted_form(&label),
-                None,
-            ),
+        let (label, disabled_reason) = match validation {
+            Ok(label) => (label, None),
             Err(error) => (
                 normalized_query.clone(),
-                String::new(),
                 Some(match error {
                     crate::native::task_relations::label::LabelError::Empty => {
                         "label can't be empty"
@@ -1638,19 +1648,40 @@ pub(super) fn relation_label_suggestions(
                 .to_string()),
             ),
         };
-        suggestions.retain(|item| !item.label.eq_ignore_ascii_case(&label));
+        let key = crate::native::relation_labels::relation_label_key(&label);
+        let existing = catalog.get(&key);
+        let canonical_label =
+            existing.map_or(label, |record| record.name.clone());
+        let hidden =
+            existing.is_some_and(|record| catalog.is_hidden(&record.key));
+        let replacement = if disabled_reason.is_some() {
+            String::new()
+        } else {
+            crate::native::task_relations::label::relation_label_quoted_form(
+                &canonical_label,
+            )
+        };
+        suggestions.retain(|item| item.key != key);
         suggestions.insert(
             0,
             RelationLabelSuggestion {
                 replacement,
-                label,
-                count: None,
+                label: canonical_label,
+                key,
+                inverse: existing.and_then(|record| record.inverse.clone()),
+                count: existing.map(|record| record.count as usize),
                 typed: true,
                 disabled_reason,
+                existing: Some(existing.is_some()),
+                hidden: Some(hidden),
             },
         );
     }
-    (Candidates::RelationLabel(suggestions), warnings)
+    (
+        Candidates::RelationLabel(suggestions),
+        catalog.warnings().to_vec(),
+        catalog.hidden_count(),
+    )
 }
 
 fn is_done_path(path: &Path) -> bool {

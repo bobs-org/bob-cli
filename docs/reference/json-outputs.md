@@ -80,6 +80,13 @@ previews, pickers, and discovery calls for the Mac app and editors.
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings | `schema_version: 1` | [Capture](../capture.md) |
+
+For `bob capture-complete` in `relation_label` context, visible catalog rows include
+`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A typed row
+is first and includes `typed: true`, `existing`, and `hidden`; when the typed key exists,
+it also includes `count` and uses the catalog spelling. Hidden labels are omitted from
+the visible rows, but an exact typed hidden label remains available with `hidden: true`.
+The response includes `hidden_count` for this context.
 | `bob capture-task-sections` | `-f json` | ALL-CAPS child sections of one task | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
