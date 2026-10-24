@@ -5,6 +5,7 @@
 //! printing display lines. Stdout carries exactly one compact JSON line;
 //! hook chatter goes to stderr, and hard failures print a coded error
 //! envelope with exit 1 and no `bob ref:` stderr line.
+use super::sections::SectionDiagnosticKind;
 use super::*;
 
 use crate::native::ref_library::output::{generated_at, REF_SCHEMA_VERSION};
@@ -74,6 +75,10 @@ pub(super) struct ScanJsonNote {
     underlines_merged: usize,
     #[serde(skip_serializing_if = "is_zero_usize")]
     underlines_standalone: usize,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    sections: usize,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    section_tags_unknown: usize,
 }
 
 /// One unresolved image note on a scanned reference.
@@ -713,6 +718,8 @@ fn scan_note_entry(
         continuations_dangling,
         underlines_merged,
         underlines_standalone,
+        sections,
+        section_tags_unknown,
     ) = plan
         .rendered_highlights
         .as_ref()
@@ -731,9 +738,17 @@ fn scan_note_entry(
                 rendered.dangling_continuations.len(),
                 rendered.underlines_merged,
                 rendered.standalone_underlines.len(),
+                rendered.sections.len(),
+                rendered
+                    .section_diagnostics
+                    .iter()
+                    .filter(|diagnostic| {
+                        diagnostic.kind == SectionDiagnosticKind::TagUnknown
+                    })
+                    .count(),
             )
         })
-        .unwrap_or((0, Vec::new(), 0, 0, 0, 0));
+        .unwrap_or((0, Vec::new(), 0, 0, 0, 0, 0, 0));
     ScanJsonNote {
         action,
         path: scan_vault_relative(config, &plan.note_path),
@@ -748,6 +763,8 @@ fn scan_note_entry(
         continuations_dangling,
         underlines_merged,
         underlines_standalone,
+        sections,
+        section_tags_unknown,
     }
 }
 
@@ -1243,6 +1260,16 @@ pub(super) fn render_intake_only_envelope(
                                     .write
                                     .standalone_underlines
                                     .len(),
+                                sections: ingested.write.section_count,
+                                section_tags_unknown: ingested
+                                    .write
+                                    .section_diagnostics
+                                    .iter()
+                                    .filter(|diagnostic| {
+                                        diagnostic.kind
+                                            == SectionDiagnosticKind::TagUnknown
+                                    })
+                                    .count(),
                             });
                         }
                         reports.push(ingested.write.clone());
@@ -1327,5 +1354,59 @@ fn queued_entry(
             .replace('\\', "/"),
         reason: reason.as_str(),
         message: detail,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn note(sections: usize, section_tags_unknown: usize) -> ScanJsonNote {
+        ScanJsonNote {
+            action: "update",
+            path: "ref/paper.md".to_string(),
+            title: "Paper".to_string(),
+            ref_type: None,
+            source_pdf: "paper.pdf".to_string(),
+            marker: false,
+            marker_write: None,
+            image_notes: 0,
+            image_notes_unresolved: Vec::new(),
+            continuations: 0,
+            continuations_dangling: 0,
+            underlines_merged: 0,
+            underlines_standalone: 0,
+            sections,
+            section_tags_unknown,
+        }
+    }
+
+    #[test]
+    fn section_fields_are_omitted_when_zero() {
+        let value = serde_json::to_value(note(0, 0)).expect("note serializes");
+        assert!(!value
+            .as_object()
+            .expect("note is object")
+            .contains_key("sections"));
+        assert!(!value
+            .as_object()
+            .expect("note is object")
+            .contains_key("section_tags_unknown"));
+    }
+
+    #[test]
+    fn section_fields_are_present_when_nonzero() {
+        let value = serde_json::to_value(note(2, 1)).expect("note serializes");
+        let object = value.as_object().expect("note is object");
+        assert_eq!(
+            object.get("sections").and_then(|value| value.as_u64()),
+            Some(2)
+        );
+        assert_eq!(
+            object
+                .get("section_tags_unknown")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
     }
 }

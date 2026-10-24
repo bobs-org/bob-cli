@@ -817,7 +817,7 @@ pub(super) fn plan_sections(
                     section.keys.extend(declaration.keys);
                     plan.diagnostics.push(SectionDiagnostic {
                         kind: SectionDiagnosticKind::Duplicate,
-                        page_label: annotation.page_label.clone(),
+                        page_label: None,
                         detail: format!(
                             "\"{}\" ({}) merged into \"{}\" ({})",
                             declaration.title,
@@ -854,23 +854,29 @@ pub(super) fn plan_sections(
                 }
             }
             Err(rejection) => {
-                let (kind, detail) = match rejection {
+                let (kind, page_label, detail) = match rejection {
                     Rejection::TitleEmpty => (
                         SectionDiagnosticKind::TitleEmpty,
+                        annotation.page_label.clone(),
                         format!("\"# {heading}\" has no letters or digits"),
                     ),
                     Rejection::ReservedTitle => (
                         SectionDiagnosticKind::ReservedTitle,
+                        None,
                         format!(
-                            "\"{}\" ignored",
-                            sanitize_section_title(heading)
+                            "\"{}\" ({}) ignored",
+                            sanitize_section_title(heading),
+                            annotation
+                                .page_label
+                                .as_deref()
+                                .unwrap_or("unknown page"),
                         ),
                     ),
                 };
                 plan.rejected.insert(annotation.order, rejection);
                 plan.diagnostics.push(SectionDiagnostic {
                     kind,
-                    page_label: annotation.page_label.clone(),
+                    page_label,
                     detail,
                 });
             }
@@ -959,7 +965,7 @@ pub(super) fn plan_sections(
                     kind: SectionDiagnosticKind::DeclarationInComment,
                     page_label: annotation.page_label.clone(),
                     detail: format!(
-                        "{} is literal; declare sections on a sticky note",
+                        "\"{}\" is literal; declare sections on a sticky note",
                         line.trim_start_matches('\\')
                     ),
                 });

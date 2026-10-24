@@ -1,4 +1,5 @@
 //! Annotation task candidates, routes, and index.
+use super::sections::{plan_sections, section_key, PlannedSection};
 use super::*;
 
 pub(super) fn annotation_task_candidates(
@@ -15,6 +16,11 @@ pub(super) fn annotation_task_candidates(
 
     let folds = plan_annotation_folds(&sidecar.annotations, strip_return_links);
     let plan = &folds.continuations;
+    let section_plan = plan_sections(
+        &sidecar.annotations,
+        &folds,
+        &source_pdf_value(config, pdf),
+    );
     let mut candidates = Vec::new();
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
@@ -64,6 +70,7 @@ pub(super) fn annotation_task_candidates(
                     source,
                     &identity_block_id,
                     &link_block_id,
+                    &section_plan.sections,
                 )?);
             }
             SidecarAnnotationKind::Image => {
@@ -87,6 +94,7 @@ pub(super) fn annotation_task_candidates(
                     source,
                     block_id,
                     block_id,
+                    &section_plan.sections,
                 )?);
             }
             SidecarAnnotationKind::StandaloneNote => {
@@ -106,6 +114,7 @@ pub(super) fn annotation_task_candidates(
                     &annotation.text,
                     &block_id,
                     &block_id,
+                    &section_plan.sections,
                 )?);
             }
         }
@@ -119,6 +128,7 @@ pub(super) fn annotation_task_candidates_from_text(
     text: &str,
     identity_block_id: &str,
     link_block_id: &str,
+    sections: &[PlannedSection],
 ) -> Result<Vec<AnnotationTaskCandidate>> {
     let mut candidates = Vec::new();
     for line in text.lines() {
@@ -128,6 +138,7 @@ pub(super) fn annotation_task_candidates_from_text(
             line,
             identity_block_id,
             link_block_id,
+            sections,
         )? {
             candidates.push(candidate);
         }
@@ -141,14 +152,28 @@ pub(super) fn annotation_task_candidate_from_source_line(
     line: &str,
     identity_block_id: &str,
     link_block_id: &str,
+    sections: &[PlannedSection],
 ) -> Result<Option<AnnotationTaskCandidate>> {
     let Some(source) = annotation_task_source_from_source_line(line) else {
         return Ok(None);
     };
     let target = match source.route_name {
-        Some(route_name) => AnnotationTaskTarget::RoutedNote(
-            route_name_to_note_path(config, &route_name)?,
-        ),
+        Some(route_name) => {
+            match route_name_to_note_path(config, &route_name) {
+                Ok(path) => AnnotationTaskTarget::RoutedNote(path),
+                Err(error) => {
+                    if let Some(section) =
+                        section_for_route(sections, &route_name)
+                    {
+                        return Err(CommandError::new(format!(
+                        "{error}; to join section \"{}\", put {} on its own line",
+                        section.title, section.tag
+                    )));
+                    }
+                    return Err(error);
+                }
+            }
+        }
         None => AnnotationTaskTarget::ReferenceNote,
     };
     let processed_id = annotation_task_processed_id(
@@ -227,6 +252,17 @@ pub(super) fn strict_annotation_task_route_name(token: &str) -> Option<String> {
             character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
         })
         .then(|| name.to_string())
+}
+
+/// The declared section a missing route target names, if any. A `#task`
+/// route that matches a section key keeps today's missing-target error and
+/// gains a hint pointing at the section's own-line tag form.
+fn section_for_route<'a>(
+    sections: &'a [PlannedSection],
+    route_name: &str,
+) -> Option<&'a PlannedSection> {
+    let key = section_key(route_name);
+    sections.iter().find(|section| section.keys.contains(&key))
 }
 
 pub(super) fn route_name_to_note_path(

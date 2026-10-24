@@ -471,7 +471,7 @@ fn region_page_heading(line: &str) -> Option<String> {
     }
 }
 
-fn region_block_id(line: &str) -> Option<String> {
+pub(super) fn region_block_id(line: &str) -> Option<String> {
     let id = line.trim().strip_prefix('^')?;
     if !id.starts_with("h-") || !is_valid_block_id(id) {
         return None;
@@ -479,7 +479,7 @@ fn region_block_id(line: &str) -> Option<String> {
     Some(id.to_string())
 }
 
-fn region_section_id(line: &str) -> Option<String> {
+pub(super) fn region_section_id(line: &str) -> Option<String> {
     let id = line.trim().strip_prefix('^')?;
     if !id.starts_with("s-") || !is_valid_block_id(id) {
         return None;

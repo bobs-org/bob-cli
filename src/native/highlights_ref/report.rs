@@ -1,4 +1,5 @@
 //! Sync and scan reporting and summaries.
+use super::sections::{SectionDiagnostic, SectionDiagnosticKind};
 use super::*;
 use crate::native::ref_tasks::LocatedRefTask;
 
@@ -89,6 +90,11 @@ pub(super) fn print_pdf_sync_report(
     ) {
         println!("{line}");
     }
+    if let Some(rendered) = &plan.rendered_highlights {
+        for line in section_report_lines(&rendered.section_diagnostics) {
+            println!("{line}");
+        }
+    }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
     println!("annotation_tasks_skip: {}", plan.annotation_tasks_skipped);
     println!(
@@ -127,6 +133,9 @@ pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
         report.underlines_merged,
         &report.standalone_underlines,
     ) {
+        println!("{line}");
+    }
+    for line in section_report_lines(&report.section_diagnostics) {
         println!("{line}");
     }
     println!(
@@ -971,6 +980,10 @@ pub(super) fn scan_details(
                 "standalone underlines",
             ));
         }
+        details.extend(section_concise_details(
+            rendered.sections.len(),
+            &rendered.section_diagnostics,
+        ));
     }
     if annotation_tasks_created > 0 {
         details.push(format!(
@@ -1020,6 +1033,62 @@ pub(super) fn continuation_report_lines(
         ));
     }
     lines
+}
+
+/// One PDF's section lines for verbose reports: the `sections` summary
+/// first, then every section diagnostic in plan order. Empty when the PDF
+/// declares no sections, so unsectioned notes stay quiet.
+pub(super) fn section_report_lines(
+    diagnostics: &[SectionDiagnostic],
+) -> Vec<String> {
+    let mut summary = Vec::new();
+    let mut rest = Vec::new();
+    for diagnostic in diagnostics {
+        let line = match &diagnostic.page_label {
+            Some(page) => {
+                format!(
+                    "{}: {page} {}",
+                    diagnostic.kind.as_str(),
+                    diagnostic.detail
+                )
+            }
+            None => {
+                format!("{}: {}", diagnostic.kind.as_str(), diagnostic.detail)
+            }
+        };
+        if diagnostic.kind == SectionDiagnosticKind::Sections {
+            summary.push(line);
+        } else {
+            rest.push(line);
+        }
+    }
+    summary.into_iter().chain(rest).collect()
+}
+
+/// Concise `bob ref scan` section counts: `N sections` and
+/// `N unknown section tags`, each only when nonzero.
+pub(super) fn section_concise_details(
+    section_count: usize,
+    diagnostics: &[SectionDiagnostic],
+) -> Vec<String> {
+    if section_count == 0 {
+        return Vec::new();
+    }
+    let mut details = vec![count_phrase(section_count, "section", "sections")];
+    let unknown = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.kind == SectionDiagnosticKind::TagUnknown
+        })
+        .count();
+    if unknown > 0 {
+        details.push(count_phrase(
+            unknown,
+            "unknown section tag",
+            "unknown section tags",
+        ));
+    }
+    details
 }
 
 pub(super) fn underline_report_lines(
@@ -1337,6 +1406,11 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
             .unwrap_or(&[]),
     ) {
         println!("  {line}");
+    }
+    if let Some(rendered) = &plan.rendered_highlights {
+        for line in section_report_lines(&rendered.section_diagnostics) {
+            println!("  {line}");
+        }
     }
     println!(
         "  annotation_tasks_create: {}",

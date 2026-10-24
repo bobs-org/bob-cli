@@ -636,10 +636,11 @@ pub(super) fn render_sidecar_highlights(
         &id_plan,
         &existing_ids,
     );
-    let previously_removed = note
-        .managed_region()?
-        .map(parse_managed_region)
-        .map(|region| region.removed.into_iter().collect::<BTreeSet<_>>())
+    let existing_region_text = note.managed_region()?;
+    let existing_region = existing_region_text.map(parse_managed_region);
+    let previously_removed = existing_region
+        .as_ref()
+        .map(|region| region.removed.iter().cloned().collect::<BTreeSet<_>>())
         .unwrap_or_default();
     let newly_absorbed_published = folds
         .underlines
@@ -669,8 +670,94 @@ pub(super) fn render_sidecar_highlights(
         &previously_removed,
         &linked_absorbed,
     );
+    // Accepted declarations absorb previously published sticky notes, and
+    // vanished sections leave redirect stubs only while something points at
+    // them: an existing tombstone or a vault Markdown link. The vault link
+    // scan runs once for both, and only when such IDs exist.
+    let declared_section_ids: BTreeSet<&str> = section_plan
+        .sections
+        .iter()
+        .map(|section| section.block_id.as_str())
+        .collect();
+    // (block ID, title, already stubbed in the existing region).
+    let mut disappeared_sections: Vec<(String, String, bool)> = Vec::new();
+    if let Some(region) = existing_region.as_ref() {
+        for section in &region.sections {
+            if !declared_section_ids.contains(section.block_id.as_str()) {
+                disappeared_sections.push((
+                    section.block_id.clone(),
+                    section.title.clone(),
+                    false,
+                ));
+            }
+        }
+        if let Some(text) = existing_region_text {
+            let stub_titles = removed_section_stub_titles(text);
+            let mut stubbed: BTreeSet<String> =
+                region.removed_sections.iter().cloned().collect();
+            stubbed.extend(removed_section_ids_in_text(text));
+            for id in stubbed {
+                if declared_section_ids.contains(id.as_str()) {
+                    continue;
+                }
+                if let Some(title) = stub_titles.get(&id) {
+                    disappeared_sections.push((id, title.clone(), true));
+                }
+            }
+        }
+    }
+    let mut section_link_candidates: BTreeSet<String> =
+        id_plan.declaration_redirects.keys().cloned().collect();
+    section_link_candidates.extend(
+        disappeared_sections
+            .iter()
+            .map(|(block_id, _, _)| block_id.clone()),
+    );
+    let linked_sections = if section_link_candidates.is_empty() {
+        BTreeSet::new()
+    } else {
+        crate::native::vault_links::markdown_links_to_block_ids(
+            &config.bob_dir,
+            &section_link_candidates,
+        )
+        .map_err(|error| {
+            CommandError::new(format!(
+                "could not scan vault Markdown for section links: {error}"
+            ))
+        })?
+    };
+    let mut declaration_stubs = Vec::new();
+    for (old_id, section_id) in &id_plan.declaration_redirects {
+        let Some(planned) = section_plan
+            .sections
+            .iter()
+            .find(|section| &section.block_id == section_id)
+        else {
+            continue;
+        };
+        if previously_removed.contains(old_id)
+            || linked_sections.contains(old_id)
+        {
+            declaration_stubs.push(SectionDeclarationStub {
+                old_id: old_id.clone(),
+                section_block_id: planned.block_id.clone(),
+                title: planned.title.clone(),
+            });
+        }
+    }
+    let mut removed_section_stubs = Vec::new();
+    for (block_id, title, already_stubbed) in &disappeared_sections {
+        if *already_stubbed || linked_sections.contains(block_id) {
+            removed_section_stubs.push(RemovedSectionStub {
+                block_id: block_id.clone(),
+                title: title.clone(),
+            });
+        }
+    }
     if !continuation_stubs.is_empty()
         || !emphasis_stubs.is_empty()
+        || !declaration_stubs.is_empty()
+        || !removed_section_stubs.is_empty()
         || !removed_ids.is_empty()
     {
         if !rendered.is_empty() {
@@ -708,6 +795,38 @@ pub(super) fn render_sidecar_highlights(
             rendered.push('\n');
             rendered.push('^');
             rendered.push_str(&stub.underline_id);
+            rendered.push_str("\n\n");
+        }
+        for stub in &declaration_stubs {
+            let body = format!(
+                "\n\nNow the card of [[#^{}|{}]].",
+                stub.section_block_id, stub.title
+            );
+            push_callout_block(
+                &mut rendered,
+                1,
+                "[!info] Section declaration",
+                &body,
+            );
+            rendered.push('\n');
+            rendered.push('^');
+            rendered.push_str(&stub.old_id);
+            rendered.push_str("\n\n");
+        }
+        for stub in &removed_section_stubs {
+            let body = format!(
+                "\n\"{}\" is no longer declared in the Highlights notes.",
+                stub.title
+            );
+            push_callout_block(
+                &mut rendered,
+                1,
+                "[!info] Removed section",
+                &body,
+            );
+            rendered.push('\n');
+            rendered.push('^');
+            rendered.push_str(&stub.block_id);
             rendered.push_str("\n\n");
         }
         for block_id in removed_ids {
@@ -851,6 +970,104 @@ struct ContinuationStub {
     follower_id: String,
     head_id: String,
     alias: String,
+}
+
+struct SectionDeclarationStub {
+    old_id: String,
+    section_block_id: String,
+    title: String,
+}
+
+struct RemovedSectionStub {
+    block_id: String,
+    title: String,
+}
+
+/// Old sticky-note `^h-` IDs a previous sync already redirected at a
+/// section card: old ID to the `s-` section block ID named in the
+/// `Section declaration` stub's `Now the card of` link. Lets the redirect
+/// — and the tombstone exclusion — persist after the live note is gone.
+fn declaration_stub_targets(region: &str) -> BTreeMap<String, String> {
+    const PREFIX: &str = "Now the card of [[#^";
+    let lines: Vec<&str> = region.lines().collect();
+    let mut targets = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(old_id) = region::region_block_id(line) else {
+            continue;
+        };
+        let mut target = None;
+        for back in lines[..index].iter().rev().take(8) {
+            let mut text = back.trim_start();
+            while let Some(rest) = text.strip_prefix('>') {
+                text = rest.trim_start();
+            }
+            if let Some(link) = text.strip_prefix(PREFIX)
+                && let Some(section_id) = link
+                    .split(['|', ']'])
+                    .next()
+                    .filter(|id| id.starts_with("s-"))
+            {
+                target = Some(section_id.to_string());
+                break;
+            }
+        }
+        if let Some(section_id) = target {
+            targets.insert(old_id, section_id);
+        }
+    }
+    targets
+}
+
+/// `^s-` IDs listed under the `Removed highlights` heading, read from the
+/// raw region text. The managed-region parser only collects these for
+/// sectioned regions, but a vanished section's own stub can leave its
+/// region unsectioned — the raw scan keeps that stub recoverable too.
+fn removed_section_ids_in_text(region: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut in_removed = false;
+    for line in region.lines() {
+        if let Some((3, title)) = crate::native::markdown::atx_heading(line) {
+            in_removed = title.eq_ignore_ascii_case("removed highlights");
+            continue;
+        }
+        if in_removed && let Some(id) = region::region_section_id(line) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Titles of already-stubbed `^s-` IDs, recovered from the `Removed section`
+/// callouts the previous sync rendered. Titles are the quoted text ahead of
+/// the fixed `is no longer declared` sentence; foreign `^s-` lines with no
+/// such stub above them stay untitled and are left to drop.
+fn removed_section_stub_titles(region: &str) -> BTreeMap<String, String> {
+    const MARKER: &str = " is no longer declared in the Highlights notes.";
+    let lines: Vec<&str> = region.lines().collect();
+    let mut titles = BTreeMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(block_id) = region::region_section_id(line) else {
+            continue;
+        };
+        let mut title = None;
+        for back in lines[..index].iter().rev().take(8) {
+            let mut text = back.trim_start();
+            while let Some(rest) = text.strip_prefix('>') {
+                text = rest.trim_start();
+            }
+            if let Some(quoted) = text.strip_suffix(MARKER)
+                && let Some(without_open) = quoted.strip_prefix('"')
+                && let Some(without_close) = without_open.strip_suffix('"')
+            {
+                title = Some(without_close.to_string());
+                break;
+            }
+        }
+        if let Some(title) = title {
+            titles.insert(block_id, title);
+        }
+    }
+    titles
 }
 
 struct EmphasisStub {
@@ -1333,6 +1550,9 @@ struct BlockIdPlan {
     effective_by_order: BTreeMap<usize, String>,
     standalone_by_order: BTreeMap<usize, String>,
     absorbed_standalone_ids: BTreeSet<String>,
+    /// Previously published sticky-note `^h-` IDs an accepted declaration
+    /// absorbed: old ID to the section block ID whose card carries it now.
+    declaration_redirects: BTreeMap<String, String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2125,6 +2345,66 @@ fn plan_block_ids(
         }
     }
 
+    // An accepted declaration absorbs a previously published sticky note
+    // so its `^h-` ID neither tombstones nor duplicates: the section card
+    // carries the description now. Match it against existing notes by the
+    // same `@`-insensitive page and text identity current heads use; once
+    // the note is gone, recover the link from the redirect stub the
+    // previous sync rendered so the stub persists instead of degrading to
+    // a generic warning.
+    let mut declaration_redirects: BTreeMap<String, String> = BTreeMap::new();
+    for planned in &section_plan.sections {
+        for &order in &planned.declaration_orders {
+            let Some(annotation) = annotations_by_order.get(&order).copied()
+            else {
+                continue;
+            };
+            let description = annotation.text.trim();
+            if description.is_empty() {
+                continue;
+            }
+            let key = note_identity_key(description);
+            let mut matched: Option<String> = None;
+            for live in &existing_live {
+                if reused_existing.contains(&live.block_id) {
+                    continue;
+                }
+                if live.kind_str == annotation.kind.as_str()
+                    && live.page == annotation.page_label
+                    && live.text == key
+                {
+                    matched = Some(live.block_id.clone());
+                    break;
+                }
+            }
+            if let Some(id) = matched {
+                absorbed_standalone_ids.insert(id.clone());
+                reused_existing.insert(id.clone());
+                used_ids.insert(id.clone());
+                declaration_redirects.insert(id, planned.block_id.clone());
+            }
+        }
+    }
+    if let Ok(Some(region_text)) = note.managed_region() {
+        for (old_id, section_id) in declaration_stub_targets(region_text) {
+            let still_declared = section_plan
+                .sections
+                .iter()
+                .any(|section| section.block_id == section_id);
+            if !still_declared
+                || !existing_ids.contains(&old_id)
+                || silently_dropped.contains(&old_id)
+                || reused_existing.contains(&old_id)
+            {
+                continue;
+            }
+            absorbed_standalone_ids.insert(old_id.clone());
+            reused_existing.insert(old_id.clone());
+            used_ids.insert(old_id.clone());
+            declaration_redirects.insert(old_id, section_id);
+        }
+    }
+
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
             continue;
@@ -2151,6 +2431,7 @@ fn plan_block_ids(
         effective_by_order,
         standalone_by_order,
         absorbed_standalone_ids,
+        declaration_redirects,
     })
 }
 

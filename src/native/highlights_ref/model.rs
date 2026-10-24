@@ -607,6 +607,9 @@ pub(super) struct SyncWriteReport {
     pub(super) dangling_continuations: Vec<DanglingContinuation>,
     pub(super) underlines_merged: usize,
     pub(super) standalone_underlines: Vec<StandaloneUnderline>,
+    pub(super) section_diagnostics:
+        Vec<crate::native::highlights_ref::sections::SectionDiagnostic>,
+    pub(super) section_count: usize,
     pub(super) image_assets_written: usize,
     pub(super) image_assets_skipped: usize,
     pub(super) routed_note_actions: usize,

@@ -572,6 +572,8 @@ mod tests {
             dangling_continuations: Vec::new(),
             underlines_merged: 0,
             standalone_underlines: Vec::new(),
+            section_diagnostics: Vec::new(),
+            section_count: 0,
             image_assets_written: 0,
             image_assets_skipped: 0,
             routed_note_actions: 0,

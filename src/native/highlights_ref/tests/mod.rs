@@ -124,6 +124,7 @@ mod reading_execute;
 mod reading_plan;
 mod region;
 mod seams;
+mod section_edges;
 mod sections;
 mod sections_render;
 mod sidecar;
