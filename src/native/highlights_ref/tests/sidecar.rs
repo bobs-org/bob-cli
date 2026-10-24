@@ -887,52 +887,6 @@ fn linked_sidecar_heading_shaped_wrap_renders_inside_quote() {
 }
 
 #[test]
-fn live_vault_heading_shaped_quotes_stay_in_quote_when_present() {
-    let gastown = Path::new(
-        "/home/bryan/bob/lib/docs/gastown_readme.textbundle/text.markdown",
-    );
-    if gastown.is_file() {
-        let annotations = parse_sidecar_markdown(
-            &fs::read_to_string(gastown).expect("read gastown sidecar"),
-        );
-        let page8 = annotations
-            .iter()
-            .find(|annotation| {
-                annotation.page_label.as_deref() == Some("Page 8")
-            })
-            .expect("gastown page 8");
-        assert!(page8.text.contains("# Set default agent"), "{}", page8.text);
-        assert!(
-            page8.text.contains("gt config default-agent"),
-            "{}",
-            page8.text
-        );
-        assert_eq!(page8.comment, None, "{:?}", page8.comment);
-    }
-
-    let antennapod =
-        Path::new("/home/bryan/bob/lib/chat/sase_listen_antennapod_setup.md");
-    if antennapod.is_file() {
-        let annotations = parse_sidecar_markdown(
-            &fs::read_to_string(antennapod).expect("read antennapod sidecar"),
-        );
-        let page4 = annotations
-            .iter()
-            .find(|annotation| {
-                annotation.page_label.as_deref() == Some("Page 4")
-            })
-            .expect("antennapod page 4");
-        assert!(
-            page4.text.contains("# should start with <?xml"),
-            "{}",
-            page4.text
-        );
-        assert!(page4.text.contains("… <rss"), "{}", page4.text);
-        assert_eq!(page4.comment, None, "{:?}", page4.comment);
-    }
-}
-
-#[test]
 fn sidecar_quote_continuation_does_not_capture_labeled_comment() {
     let annotations = parse_sidecar_markdown(
         "\

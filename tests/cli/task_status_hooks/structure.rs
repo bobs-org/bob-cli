@@ -345,6 +345,53 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
 }
 
 #[test]
+fn task_status_hooks_drops_carried_link_already_in_completed_fallback() {
+    // bob-cli-2l: the completed fallback already links the done task, so the
+    // copy carried by a later untimed placeholder is dropped, not relocated
+    // as a second struck link.
+    let temp = TempDir::new("bob-cli-task-status-hooks-fallback-dedupe");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260929.md");
+    let tasks = vault.join("bob.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] (**1350-1425** [t:: 35m]) — GTD\n",
+            "  - 🍅 [[bob#^roadmap]]\n",
+            "- [ ] () — GTD\n",
+            "  - [[bob#^roadmap]]\n",
+        ),
+    );
+    write_file(&tasks, "- [x] #task Roadmap ^roadmap\n");
+
+    let output = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("run completed fallback dedupe case");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("dedupe JSON");
+    assert!(json["moved_completed_references"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        fs::read_to_string(&daily).unwrap(),
+        concat!(
+            "## Pomodoros\n\n",
+            "- [x] (**1350-1425** [t:: 35m]) — GTD\n",
+            "  - 🍅 ~~[[bob#^roadmap]]~~\n",
+        )
+    );
+}
+
+#[test]
 fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     let temp = TempDir::new("bob-cli-task-status-hooks-canceled-links");
     let vault = temp.path().join("vault");
