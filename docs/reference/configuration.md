@@ -53,9 +53,11 @@ that need them report a setup error when the `priority` property is absent.
 | --- | --- | --- |
 | `timezone` | IANA timezone name, such as `America/New_York` | Unset uses the host's system timezone. When set, Bob uses this timezone for its current date and time, daily-note selection, and date stamps. Invalid names are configuration errors. |
 
-`BOB_NOW` and `DATE` clock overrides keep precedence over the configured
-timezone. The key makes Bob's clock consistent across hosts without requiring
-each host's system timezone to match. See the [plan contract](../plan.md).
+A `BOB_NOW` or `DATE` date/time keeps precedence over the configured
+timezone. A `DATE` command, such as `DATE=date`, runs with `TZ` set to the
+configured timezone. The key makes Bob's clock consistent across hosts without
+requiring each host's system timezone to match. See the
+[plan contract](../plan.md).
 
 ### `properties` and priority windows
 
@@ -312,7 +314,7 @@ deploy from this documentation.
 | `XDG_CACHE_HOME` | Base for Bob's local cache; defaults to `$HOME/.cache`. |
 | `XDG_DATA_HOME` | Base for SASE Listen audio discovery and shell-completion data; defaults to `$HOME/.local/share`. |
 | `XDG_RUNTIME_DIR` | Runtime location for the shared vault-sync lock when it exists; otherwise Bob uses `/tmp`. |
-| `DATE` | Optional clock fallback after `BOB_NOW`: an ISO date/time, or a command whose output accepts Bob's date-time format. |
+| `DATE` | Optional clock fallback after `BOB_NOW`: an ISO date/time, or a command whose output accepts Bob's date-time format. A command runs in the configured `timezone` when one is set. |
 | `TZ` | Time zone used by the operating system's local clock and calendar formatting. |
 | `NO_COLOR` | Any set value disables ANSI colors in terminal output. |
 | `COLUMNS` | Positive integer width for `bob plugins list` and `bob gkeep`; otherwise those tables use 100 columns. |

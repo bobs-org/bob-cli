@@ -351,7 +351,11 @@ pub fn current_datetime() -> NaiveDateTime {
             return parsed;
         }
 
-        if let Some(parsed) = date_command_datetime(&date_value) {
+        // A date *command* (the dotfiles export `DATE=date` on every
+        // host) reads the current time, so it runs in Bob's day zone.
+        if let Some(parsed) =
+            date_command_datetime(&date_value, configured_timezone())
+        {
             return parsed;
         }
     }
@@ -479,22 +483,28 @@ pub fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
-fn date_command_datetime(date_command: &str) -> Option<NaiveDateTime> {
-    let output = run_date_command(date_command, ["+%Y-%m-%d %H:%M:%S"])?;
+fn date_command_datetime(
+    date_command: &str,
+    timezone: Option<Tz>,
+) -> Option<NaiveDateTime> {
+    let output =
+        run_date_command(date_command, ["+%Y-%m-%d %H:%M:%S"], timezone)?;
     parse_datetime_override(output.trim())
 }
 
 fn run_date_command<const N: usize>(
     date_command: &str,
     args: [&str; N],
+    timezone: Option<Tz>,
 ) -> Option<String> {
     let parts = split_command(date_command);
     let (program, command_args) = parts.split_first()?;
-    let output = Command::new(program)
-        .args(command_args)
-        .args(args)
-        .output()
-        .ok()?;
+    let mut command = Command::new(program);
+    command.args(command_args).args(args);
+    if let Some(timezone) = timezone {
+        command.env("TZ", timezone.name());
+    }
+    let output = command.output().ok()?;
 
     output
         .status
@@ -508,9 +518,11 @@ fn split_command(command: &str) -> Vec<OsString> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Timelike, Utc};
+    use std::ffi::OsStr;
 
-    use super::localized_datetime;
+    use chrono::{Duration, TimeZone, Timelike, Utc};
+
+    use super::{current_datetime, localized_datetime, TestEnvGuard};
 
     #[test]
     fn configured_timezone_keeps_the_eastern_day_through_utc_midnight() {
@@ -544,5 +556,30 @@ mod tests {
         let utc = Utc.with_ymd_and_hms(2026, 10, 24, 0, 0, 0).unwrap();
         let host_local = utc.with_timezone(&chrono::Local).naive_local();
         assert_eq!(localized_datetime(utc, None), host_local);
+    }
+
+    #[test]
+    fn date_command_override_runs_in_the_configured_timezone() {
+        // The dotfiles export `DATE=date` on every host. UTC+14 is ahead of
+        // every host zone, so only the configured zone can produce it.
+        let dir = tempfile::tempdir().expect("config dir");
+        let config = dir.path().join("config.yml");
+        std::fs::write(&config, "timezone: Pacific/Kiritimati\n")
+            .expect("config");
+        let _guard = TestEnvGuard::set(&[
+            ("BOB_NOW", None),
+            ("DATE", Some(OsStr::new("date"))),
+            ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+        ]);
+        let kiritimati: chrono_tz::Tz = "Pacific/Kiritimati".parse().unwrap();
+        let local_now = || Utc::now().with_timezone(&kiritimati).naive_local();
+
+        let before = local_now() - Duration::seconds(1);
+        let reported = current_datetime();
+        let after = local_now();
+        assert!(
+            before <= reported && reported <= after,
+            "{reported} not within {before}..={after}"
+        );
     }
 }
