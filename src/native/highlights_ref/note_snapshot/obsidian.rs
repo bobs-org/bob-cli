@@ -4352,6 +4352,30 @@ mod tests {
     }
 
     #[test]
+    fn sectioned_ref_notes_keep_headings_without_raw_section_ids() {
+        let (_dir, projection) = host_only(
+            "## Highlights\n\n\
+             ### Memory\n\n\
+             > [!summary|section] @memory · 1 highlight · Page 4\n\
+             > Ideas to remember.\n\n\
+             ^s-memory\n\n\
+             #### Page 4\n\n\
+             > [!quote] A useful passage.\n\n\
+             ^h-496b1ca10117\n",
+        );
+        let view = syntax_test_view(&projection.parsed.identity, &projection);
+        let serialized =
+            serialize_projected_markdown(&view).expect("serialize");
+
+        assert!(serialized.contains("Memory"), "section heading was lost");
+        assert!(
+            !serialized.contains("^s-memory"),
+            "section block ID leaked into the PDF projection: {serialized}"
+        );
+        super::super::tests::assert_no_obsidian_residue(&serialized);
+    }
+
+    #[test]
     fn underscore_caret_tokens_do_not_emit_raw_carets() {
         let (_dir, projection) = host_only(
             "- [ ] Trip #task ^trip\n\

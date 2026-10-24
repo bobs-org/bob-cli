@@ -73,6 +73,74 @@ fn index_membership_and_coverage() {
 }
 
 #[test]
+fn section_cards_do_not_change_ref_list_annotation_or_reading_counts() {
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(OsStr::new("2026-10-24 12:00:00")),
+    )]);
+    let build = |region: &str| {
+        let vault = tempfile::tempdir().expect("temp vault");
+        let note = vault.path().join("ref/papers/sectioned.md");
+        std::fs::create_dir_all(note.parent().expect("note parent"))
+            .expect("create ref directory");
+        std::fs::write(
+            &note,
+            format!(
+                "---\nstatus: ready\nparent: reading_list\ntitle: Sectioned paper\nsource_pdf: \"[[lib/papers/sectioned.pdf]]\"\nhighlights_count: 2\n---\n\
+                 # Sectioned paper\n\n\
+                 - [ ] #task #ref [[lib/papers/sectioned.pdf]] #hide ^ref\n\n\
+                 ## Highlights\n\n\
+                 <!-- highlights:begin -->\n\n\
+                 {region}\n\n\
+                 <!-- highlights:end -->\n"
+            ),
+        )
+        .expect("write reference note");
+        let index = build_index(&LibraryConfig::for_ref_dir(
+            vault.path().to_path_buf(),
+            vault.path().join("ref"),
+        ))
+        .expect("build index");
+        (vault, index)
+    };
+    let plain_region = concat!(
+        "### Page 4\n\n",
+        "> [!quote] A useful passage.\n>\n",
+        "> > [!note] Comment A comment.\n\n",
+        "^h-111111111111\n\n",
+        "### Page 2\n\n",
+        "> [!quote] Another passage.\n\n",
+        "^h-222222222222"
+    );
+    let sectioned_region = concat!(
+        "### Memory\n\n",
+        "> [!summary|section] @memory · 1 highlight · Page 4\n",
+        "> Remember this.\n\n",
+        "^s-memory\n\n",
+        "#### Page 4\n\n",
+        "> [!quote] A useful passage.\n>\n",
+        "> > [!note] Comment A comment.\n\n",
+        "^h-111111111111\n\n",
+        "### Other highlights\n\n",
+        "#### Page 2\n\n",
+        "> [!quote] Another passage.\n\n",
+        "^h-222222222222"
+    );
+    let (_plain_vault, plain) = build(plain_region);
+    let (_sectioned_vault, sectioned) = build(sectioned_region);
+    let plain_row = row(&plain, "ref/papers/sectioned.md");
+    let sectioned_row = row(&sectioned, "ref/papers/sectioned.md");
+
+    assert_eq!(sectioned_row.annotation_count, plain_row.annotation_count);
+    assert_eq!(sectioned_row.comment_count, plain_row.comment_count);
+    assert_eq!(sectioned_row.annotation_count, 2);
+    assert_eq!(sectioned_row.comment_count, 1);
+    assert_eq!(sectioned_row.reading_state, plain_row.reading_state);
+    assert_eq!(sectioned.counts.notes, plain.counts.notes);
+    assert_eq!(sectioned.counts.queued, plain.counts.queued);
+}
+
+#[test]
 fn synced_paper_row_covers_the_core_fields() {
     let index = fixture_index();
     let row = row(&index, "ref/papers/synced_paper.md");

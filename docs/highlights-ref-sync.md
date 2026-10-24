@@ -26,6 +26,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
   - [Image notes](#image-notes)
   - [Continuation highlights (`<`)](#continuation-highlights)
   - [Underline emphasis](#underline-emphasis)
+  - [Sections (`#` and `@`)](#sections-and)
 - [Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2)
 - [MacBook setup guide](#macbook-setup-guide)
 - [Scheduled scan](#scheduled-scan)
@@ -962,6 +963,8 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].continuations_dangling` | `<` markers that could not form a group; omitted when zero |
 | `notes[].underlines_merged` | Underline annotations folded into host quotes; omitted when zero |
 | `notes[].underlines_standalone` | Underlines that stayed separate; omitted when zero |
+| `notes[].sections` | Declared sections after duplicate declarations are merged; omitted when zero |
+| `notes[].section_tags_unknown` | Positional tags that do not match a declared section; omitted when zero |
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
@@ -1612,6 +1615,32 @@ callouts alone:
   line-height: 1;
   color: var(--text-faint);
 }
+
+/* bob ref: a `# Name` sticky note opens a section. Its card sits right
+   under the section heading: a quiet violet rule, a faint small-caps line
+   with the @tag, count, and pages, then your description in muted ink.
+   Yellow quotes and gold underlines stay the loudest marks on the page. */
+.callout[data-callout="summary"][data-callout-metadata="section"] {
+  --callout-color: var(--color-purple-rgb);
+  margin: -0.35em 0 1.2em;
+  padding: 0.1em 0 0.1em 0.85em;
+  border: 0;
+  border-left: 3px solid rgba(var(--callout-color), 0.55);
+  border-radius: 0;
+  background: transparent;
+}
+.callout[data-callout-metadata="section"] > .callout-title {
+  font-size: var(--font-smallest);
+  font-variant: all-small-caps;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.callout[data-callout-metadata="section"] > .callout-title .callout-icon {
+  display: none;
+}
+.callout[data-callout-metadata="section"] > .callout-content {
+  color: var(--text-muted);
+}
 ```
 
 The source snippet is `~/bob/.obsidian/snippets/ref-highlights.css`; add
@@ -1620,6 +1649,102 @@ rule applies to `strong` text in quote callouts. The nested quote rules turn
 group pieces into one card with dashed, page-captioned seams. Absorbed
 underlines share their host highlight's `^h-` ID, so underlining a published
 passage never changes the host ID or later blocks on that page.
+
+### Sections (`#` and `@`)
+
+- **A sticky note whose first line is `# Name` starts a section.** Everything
+  after that line is the section description.
+- **Tag a note with `@name` at the start or end of a line to file it there.** If
+  you can still see the matching `@name` in the rendered annotation, it did not
+  group.
+
+In Highlights, write the declaration in a standalone sticky note. Its first
+non-empty line must be one `#`, a space, and a title. Exported date headings
+and an optional `Note:` label before that line are ignored. Add optional aliases
+at the end, such as `# Open questions @q`; the first alias becomes the card's
+tag, while both the title and aliases can match annotations. The remaining
+lines are its description. A `# ` line in a highlight, underline, or image
+comment is ordinary text, not a declaration. Rejected declarations remain
+visible as sticky notes.
+
+A positional tag is a whole `@name` token at the beginning or end of a line,
+after an optional `Note:` or `Comment:` label and one list marker. Matching
+ignores case and punctuation between letters and digits. Tags can be on
+highlight comments, underline comments, image comments, or ordinary sticky
+notes. Quoted PDF text and image paths are not scanned. Tags in the middle of
+prose, code, or a `#task` line do not group. A backslash escapes a tag.
+
+| Highlights text | Result |
+| --- | --- |
+| `@memory` | Joins Memory; the tag is consumed. |
+| `@Memory Compare with table 2` | Joins Memory; the rendered comment is `Compare with table 2`. |
+| `Use these as placeholders @visuals` | Joins Visuals; the trailing tag is consumed. |
+| `Keep @chat and @agent!` | Only the final `@agent!` is positional; `@chat` stays in the prose. |
+| `- #task Draft the intro @sase` | Routes the task to `sase.md`; the tag does not group this task line. |
+| `@memory` followed by `- #task Draft the intro @sase` | The first line joins Memory and the second still routes its task. |
+| `@memry` | Stays visible and reports `section_tag_unknown` when no section matches. |
+| `@memory @visuals` | Memory is the one home; Visuals stays visible and reports a conflict. |
+| `\@memory` | Renders as `@memory` and never groups. |
+
+Sections are real headings in the generated note, so they appear in Obsidian's
+Outline and can be folded, linked, or embedded. Each section card shows its tag,
+member count, pages, and description. For example:
+
+```md
+### Memory
+
+> [!summary|section] @memory · 1 highlight · Page 4
+> Ideas to remember.
+
+^s-memory
+
+#### Page 4
+
+> [!quote] A useful passage.
+
+^h-496b1ca10117
+
+### Other highlights
+
+#### Page 2
+
+> [!quote] A passage without a section tag.
+
+^h-38a082b00de9
+```
+
+Each displayed block has one home. For a continuation group, the head's tags
+are checked first, then its followers, then absorbed underlines in sidecar
+order. The first matching section wins. Repeated tags for that section are
+consumed; tags for another section stay visible and report `section_conflict`.
+Removing a tag or declaration re-derives membership on the next scan.
+
+An empty declaration still creates a section card that says “nothing tagged
+yet.” Sections render in declaration order, followed by `Other highlights` if
+any blocks remain, then `Removed highlights`. Stack the declaration stickies on
+page 1 to set the Outline order. Within each section, annotations keep sidecar
+order and page captions restart at each section heading.
+
+Section tags do not change published `^h-` IDs or recreate tasks. Section IDs
+use `^s-` blocks; the declaration's `#task` items link to that section block.
+Nothing new is stored in frontmatter. Scan dry-run output reports section
+diagnostics beside the existing per-PDF details, and concise scans include
+section and unknown-tag counts. The JSON fields `notes[].sections` and
+`notes[].section_tags_unknown` are omitted when zero; the schema version stays
+1.
+
+Install the release on every host (Mac, athena, and apollo) before writing the
+first declaration; **install everywhere first, then you hold the switch** by
+adding a `# ` sticky. Highlights has not yet been verified to export this
+spelling unchanged. Check the exported sidecar bytes on Mac and iPad before
+relying on it.
+
+The accepted costs are one home per displayed block, page order is grouped by
+section in a sectioned note, and Highlights has no section-tag autocomplete.
+
+The existing `ref-highlights` snippet also styles section cards with a quiet
+violet rule and muted description. This CSS has not been tested in Obsidian.
+Check reading view and Live Preview, in light and dark themes and on mobile.
 
 Annotation text is beautified only while rendering the generated region:
 

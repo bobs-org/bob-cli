@@ -865,6 +865,17 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_section_block_and_heading_links_with_the_note() {
+        let moves = bundle("old", "new");
+        let result = rewrite(
+            "[[old#^s-memory]] [[old#Memory]]",
+            &moves,
+            &["ref/blogs/old.md"],
+        );
+        assert_eq!(result.contents, "[[new#^s-memory]] [[new#Memory]]");
+    }
+
+    #[test]
     fn rewrites_unique_bare_markdown_note_links_and_reports_ambiguous_ones() {
         let moves = bundle("old", "new");
         let unique = rewrite(
