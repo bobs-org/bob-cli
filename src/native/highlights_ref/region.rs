@@ -35,6 +35,10 @@ pub(crate) struct RegionBlock {
     pub(crate) block_id: String,
     pub(crate) mirror: bool,
     pub(crate) in_preamble: bool,
+    /// Section `id` when this block sits under a parsed section card.
+    /// Ungrouped and unsectioned blocks leave this `None`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) section: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +56,27 @@ pub(crate) struct RegionParse {
     pub(crate) blocks: Vec<RegionBlock>,
     pub(crate) removed: Vec<String>,
     pub(crate) unparsed: Vec<String>,
+    /// Live section cards, in heading order. Empty when the region has no
+    /// `[!summary|section]` signature.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) sections: Vec<RegionSection>,
+    /// `^s-` IDs collected under `### Removed highlights`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) removed_sections: Vec<String>,
+}
+
+/// One live section card parsed from a sectioned managed region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct RegionSection {
+    pub(crate) id: String,
+    pub(crate) block_id: String,
+    pub(crate) title: String,
+    pub(crate) tag: String,
+    pub(crate) description: String,
+    pub(crate) images: Vec<String>,
+    pub(crate) unresolved_images: Vec<String>,
+    pub(crate) unresolved_image_states: Vec<UnresolvedImageNoteState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,52 +103,119 @@ pub(crate) struct NoteParts {
 /// `in_preamble`. Tombstone IDs under `### Removed highlights` go in
 /// `removed`. A block the parser cannot classify goes in `unparsed` as raw
 /// text and is never dropped silently.
+///
+/// A region is **sectioned** when at least one H3 is followed (after blank
+/// lines only) by a depth-1 `[!summary|section]` callout and then a `^s-<id>`
+/// line. Sectioned regions fill [`RegionParse::sections`], set
+/// [`RegionBlock::section`], read `####` captions as page labels (resetting
+/// the label at every H3), and collect `^s-` tombstones into
+/// `removed_sections`. Every region without that card signature parses
+/// exactly as it does today.
 pub(crate) fn parse_managed_region(region: &str) -> RegionParse {
     let mut parsed = RegionParse::default();
     let lines: Vec<&str> = region.lines().collect();
+    let sectioned = region_is_sectioned(&lines);
     let first_page_heading = lines
         .iter()
         .position(|line| region_page_heading(line).is_some());
+    let first_h3 = lines
+        .iter()
+        .position(|line| matches!(markdown::atx_heading(line), Some((3, _))));
     let mut page_label: Option<String> = None;
     let mut in_removed = false;
+    let mut current_section: Option<String> = None;
     let mut chunk: Vec<&str> = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if let Some((level, title)) = markdown::atx_heading(line)
-            && level == 3
-        {
-            flush_stray_chunk(&mut parsed, &mut chunk);
-            if title.eq_ignore_ascii_case("removed highlights") {
-                in_removed = true;
-            } else {
+    let mut index = 0usize;
+    while index < lines.len() {
+        let line = lines[index];
+        if let Some((level, title)) = markdown::atx_heading(line) {
+            if level == 3 {
+                flush_stray_chunk(&mut parsed, &mut chunk);
+                if title.eq_ignore_ascii_case("removed highlights") {
+                    in_removed = true;
+                    if sectioned {
+                        page_label = None;
+                        current_section = None;
+                    }
+                    index += 1;
+                    continue;
+                }
+                if sectioned {
+                    if title.eq_ignore_ascii_case("other highlights") {
+                        current_section = None;
+                        page_label = None;
+                        index += 1;
+                        continue;
+                    }
+                    if let Some((section, end)) =
+                        parse_section_opening(&lines, index, title)
+                    {
+                        current_section = Some(section.id.clone());
+                        page_label = None;
+                        parsed.sections.push(section);
+                        index = end + 1;
+                        continue;
+                    }
+                    current_section = None;
+                    page_label = Some(title.to_string());
+                    index += 1;
+                    continue;
+                }
                 page_label = Some(title.to_string());
+                index += 1;
+                continue;
             }
-            continue;
+            if sectioned && level == 4 {
+                flush_stray_chunk(&mut parsed, &mut chunk);
+                page_label = Some(title.to_string());
+                index += 1;
+                continue;
+            }
         }
         if in_removed {
             if let Some(block_id) = region_block_id(line) {
                 parsed.removed.push(block_id);
+            } else if sectioned
+                && let Some(section_id) = region_section_id(line)
+            {
+                parsed.removed_sections.push(section_id);
             }
+            index += 1;
             continue;
         }
         if let Some(block_id) = region_block_id(line) {
-            let in_preamble =
-                first_page_heading.is_some_and(|heading| index < heading);
+            let in_preamble = if sectioned {
+                first_h3.is_some_and(|heading| index < heading)
+            } else {
+                first_page_heading.is_some_and(|heading| index < heading)
+            };
             match classify_region_block(
                 &chunk,
                 page_label.clone(),
                 block_id,
                 in_preamble,
             ) {
-                Ok(block) => parsed.blocks.push(block),
+                Ok(mut block) => {
+                    block.section = current_section.clone();
+                    parsed.blocks.push(block);
+                }
                 Err(raw) => parsed.unparsed.push(raw),
             }
             chunk.clear();
+            index += 1;
+            continue;
+        }
+        if sectioned && region_section_id(line).is_some() {
+            flush_stray_chunk(&mut parsed, &mut chunk);
+            index += 1;
             continue;
         }
         if line.trim().is_empty() {
+            index += 1;
             continue;
         }
         chunk.push(line);
+        index += 1;
     }
     flush_stray_chunk(&mut parsed, &mut chunk);
     parsed
@@ -297,6 +389,96 @@ fn region_block_id(line: &str) -> Option<String> {
     Some(id.to_string())
 }
 
+fn region_section_id(line: &str) -> Option<String> {
+    let id = line.trim().strip_prefix('^')?;
+    if !id.starts_with("s-") || !is_valid_block_id(id) {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn region_is_sectioned(lines: &[&str]) -> bool {
+    lines.iter().enumerate().any(|(index, line)| {
+        match markdown::atx_heading(line) {
+            Some((3, title)) => {
+                parse_section_opening(lines, index, title).is_some()
+            }
+            _ => false,
+        }
+    })
+}
+
+/// If the H3 at `heading_index` opens a section, return the card and the
+/// index of its `^s-<id>` line.
+fn parse_section_opening(
+    lines: &[&str],
+    heading_index: usize,
+    title: &str,
+) -> Option<(RegionSection, usize)> {
+    if title.eq_ignore_ascii_case("other highlights")
+        || title.eq_ignore_ascii_case("removed highlights")
+    {
+        return None;
+    }
+    let mut index = heading_index + 1;
+    while index < lines.len() && lines[index].trim().is_empty() {
+        index += 1;
+    }
+    let header_line = lines.get(index).copied()?;
+    let (depth, content) = strip_blockquote_levels(header_line)?;
+    if depth != 1 {
+        return None;
+    }
+    let (callout, metadata, rest) = split_callout_header(content)?;
+    if !callout.eq_ignore_ascii_case("summary") {
+        return None;
+    }
+    let metadata = metadata?;
+    if !metadata.eq_ignore_ascii_case("section") {
+        return None;
+    }
+    let header_index = index;
+    index += 1;
+    while index < lines.len() && strip_blockquote_levels(lines[index]).is_some()
+    {
+        index += 1;
+    }
+    let card_lines = &lines[header_index..index];
+    while index < lines.len() && lines[index].trim().is_empty() {
+        index += 1;
+    }
+    let block_id = region_section_id(*lines.get(index)?)?;
+    let stripped = card_lines
+        .iter()
+        .copied()
+        .map(strip_blockquote_levels)
+        .collect::<Option<Vec<_>>>()?;
+    let remaining = stripped.get(1..).unwrap_or(&[]);
+    let raw = format!("{}\n^{block_id}", card_lines.join("\n"));
+    let body = parse_callout_body(remaining, &raw, 1).ok()?;
+    let tag = rest
+        .split_whitespace()
+        .next()
+        .filter(|token| token.starts_with('@'))
+        .unwrap_or("")
+        .to_string();
+    let description = trim_blank_ends(&body.text_lines.join("\n"));
+    let id = block_id.strip_prefix("s-").unwrap_or(&block_id).to_string();
+    Some((
+        RegionSection {
+            id,
+            block_id,
+            title: title.to_string(),
+            tag,
+            description,
+            images: body.images,
+            unresolved_images: body.unresolved_images,
+            unresolved_image_states: body.unresolved_image_states,
+        },
+        index,
+    ))
+}
+
 fn flush_stray_chunk(parsed: &mut RegionParse, chunk: &mut Vec<&str>) {
     if !chunk.is_empty() {
         parsed.unparsed.push(chunk.join("\n"));
@@ -358,6 +540,7 @@ fn classify_region_block(
             block_id,
             mirror: false,
             in_preamble,
+            section: None,
         });
     }
     if callout.eq_ignore_ascii_case("quote") {
@@ -381,6 +564,7 @@ fn classify_region_block(
                 block_id,
                 mirror,
                 in_preamble,
+                section: None,
             });
         }
 
@@ -458,6 +642,7 @@ fn classify_region_block(
             block_id,
             mirror,
             in_preamble,
+            section: None,
         });
     }
     if callout.eq_ignore_ascii_case("note") {
@@ -481,6 +666,7 @@ fn classify_region_block(
             block_id,
             mirror: is_marker_mirror_text(&text),
             in_preamble,
+            section: None,
         });
     }
     Err(raw)

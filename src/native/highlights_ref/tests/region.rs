@@ -59,8 +59,11 @@ fn region_round_trip_highlight_with_multiline_comment() {
     assert_eq!(parsed.blocks.len(), 1);
     assert!(parsed.removed.is_empty());
     assert!(parsed.unparsed.is_empty());
+    assert!(parsed.sections.is_empty());
+    assert!(parsed.removed_sections.is_empty());
     let block = &parsed.blocks[0];
     assert_eq!(block.kind, super::RegionBlockKind::Highlight);
+    assert_eq!(block.section, None);
     assert_eq!(block.page_label.as_deref(), Some("Page 2"));
     assert_eq!(
         block.quote.as_deref(),
@@ -430,4 +433,312 @@ fn region_existing_fixtures_have_no_image_notes() {
     let parsed = super::parse_managed_region(&rendered.content);
     assert!(parsed.blocks[0].images.is_empty());
     assert!(parsed.blocks[0].unresolved_images.is_empty());
+}
+
+const SECTIONED_MEMORY_HEAD: &str = "496b1ca10117";
+const SECTIONED_MEMORY_TAIL: &str = "6bbab22c999c";
+const SECTIONED_OTHER: &str = "38a082b00de9";
+const SECTIONED_REMOVED: &str = "0123456789ab";
+
+fn sectioned_region_with_other_and_removed() -> String {
+    format!(
+        "### Memory\n\
+         \n\
+         > [!summary|section] @memory · 2 highlights · Pages 4–5\n\
+         > Everything that belongs in the blog's memory section.\n\
+         \n\
+         ^s-memory\n\
+         \n\
+         #### Page 4\n\
+         \n\
+         > [!quote] Make a point about how if I were building AI from scratch right now, …\n\
+         \n\
+         ^h-{SECTIONED_MEMORY_HEAD}\n\
+         \n\
+         #### Page 5\n\
+         \n\
+         > [!quote] Mention that you've implemented project memory every wrong way possible …\n\
+         >\n\
+         > > [!note] Comment Compare with the intro\n\
+         \n\
+         ^h-{SECTIONED_MEMORY_TAIL}\n\
+         \n\
+         ### Other highlights\n\
+         \n\
+         #### Page 2\n\
+         \n\
+         > [!quote] POTENTIAL QUOTES: …\n\
+         \n\
+         ^h-{SECTIONED_OTHER}\n\
+         \n\
+         ### Removed highlights\n\
+         \n\
+         > [!info] Removed highlight\n\
+         >\n\
+         > Dropped from the sidecar.\n\
+         \n\
+         ^h-{SECTIONED_REMOVED}\n\
+         \n\
+         > [!info] Removed section\n\
+         >\n\
+         > “Old” is no longer declared in the Highlights notes.\n\
+         \n\
+         ^s-old\n"
+    )
+}
+
+#[test]
+fn region_parses_sections_other_and_removed() {
+    let region = sectioned_region_with_other_and_removed();
+    let parsed = super::parse_managed_region(&region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.sections.len(), 1);
+    let section = &parsed.sections[0];
+    assert_eq!(section.id, "memory");
+    assert_eq!(section.block_id, "s-memory");
+    assert_eq!(section.title, "Memory");
+    assert_eq!(section.tag, "@memory");
+    assert_eq!(
+        section.description,
+        "Everything that belongs in the blog's memory section."
+    );
+    assert!(section.images.is_empty());
+    assert!(section.unresolved_images.is_empty());
+    assert_eq!(parsed.blocks.len(), 3);
+    assert_eq!(
+        parsed.blocks[0].block_id,
+        format!("h-{SECTIONED_MEMORY_HEAD}")
+    );
+    assert_eq!(parsed.blocks[0].section.as_deref(), Some("memory"));
+    assert_eq!(parsed.blocks[0].page_label.as_deref(), Some("Page 4"));
+    assert_eq!(parsed.blocks[0].kind, super::RegionBlockKind::Highlight);
+    assert!(!parsed.blocks[0].in_preamble);
+    assert_eq!(
+        parsed.blocks[1].block_id,
+        format!("h-{SECTIONED_MEMORY_TAIL}")
+    );
+    assert_eq!(parsed.blocks[1].section.as_deref(), Some("memory"));
+    assert_eq!(parsed.blocks[1].page_label.as_deref(), Some("Page 5"));
+    assert_eq!(
+        parsed.blocks[1].comment.as_deref(),
+        Some("Compare with the intro")
+    );
+    assert_eq!(parsed.blocks[2].block_id, format!("h-{SECTIONED_OTHER}"));
+    assert_eq!(parsed.blocks[2].section, None);
+    assert_eq!(parsed.blocks[2].page_label.as_deref(), Some("Page 2"));
+    assert_eq!(parsed.removed, vec![format!("h-{SECTIONED_REMOVED}")]);
+    assert_eq!(parsed.removed_sections, vec!["s-old".to_string()]);
+}
+
+#[test]
+fn region_parses_empty_scaffold_section() {
+    let region = "### Related\n\n\
+         > [!summary|section] @related · nothing tagged yet\n\
+         \n\
+         ^s-related\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert!(parsed.blocks.is_empty());
+    assert_eq!(parsed.sections.len(), 1);
+    let section = &parsed.sections[0];
+    assert_eq!(section.id, "related");
+    assert_eq!(section.block_id, "s-related");
+    assert_eq!(section.title, "Related");
+    assert_eq!(section.tag, "@related");
+    assert!(section.description.is_empty());
+}
+
+#[test]
+fn region_parses_section_without_page_labels() {
+    let region = "### Memory\n\n\
+         > [!summary|section] @memory · 1 highlight\n\
+         > A section with no page captions.\n\
+         \n\
+         ^s-memory\n\
+         \n\
+         > [!quote] Ungrouped by page\n\
+         \n\
+         ^h-aa11bb22cc33\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.blocks.len(), 1);
+    assert_eq!(parsed.blocks[0].section.as_deref(), Some("memory"));
+    assert_eq!(parsed.blocks[0].page_label, None);
+    assert_eq!(parsed.blocks[0].quote.as_deref(), Some("Ungrouped by page"));
+}
+
+#[test]
+fn region_parses_group_spanning_pages() {
+    let region = "### Memory\n\n\
+         > [!summary|section] @memory · 1 highlight · Pages 3–4\n\
+         \n\
+         ^s-memory\n\
+         \n\
+         #### Pages 3–4\n\
+         \n\
+         > [!quote] Spanning quote\n\
+         \n\
+         ^h-aa11bb22cc33\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.blocks.len(), 1);
+    assert_eq!(parsed.blocks[0].section.as_deref(), Some("memory"));
+    assert_eq!(parsed.blocks[0].page_label.as_deref(), Some("Pages 3–4"));
+}
+
+#[test]
+fn region_parses_section_titled_page_turners() {
+    let region = "### Page turners\n\n\
+         > [!summary|section] @page-turners · 1 highlight · Page 1\n\
+         \n\
+         ^s-page-turners\n\
+         \n\
+         #### Page 1\n\
+         \n\
+         > [!quote] A turning point\n\
+         \n\
+         ^h-aa11bb22cc33\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.sections.len(), 1);
+    assert_eq!(parsed.sections[0].title, "Page turners");
+    assert_eq!(parsed.sections[0].id, "page-turners");
+    assert_eq!(parsed.sections[0].tag, "@page-turners");
+    assert_eq!(parsed.blocks.len(), 1);
+    assert_eq!(parsed.blocks[0].section.as_deref(), Some("page-turners"));
+    assert_eq!(parsed.blocks[0].page_label.as_deref(), Some("Page 1"));
+}
+
+#[test]
+fn region_stray_non_card_h3_in_sectioned_region_is_a_page_label() {
+    let region = "### Memory\n\n\
+         > [!summary|section] @memory · 1 highlight · Page 1\n\
+         \n\
+         ^s-memory\n\
+         \n\
+         #### Page 1\n\
+         \n\
+         > [!quote] In the section\n\
+         \n\
+         ^h-aa11bb22cc33\n\
+         \n\
+         ### Page 2\n\
+         \n\
+         > [!quote] Stray page heading\n\
+         \n\
+         ^h-dd44ee55ff66\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.sections.len(), 1);
+    assert_eq!(parsed.blocks.len(), 2);
+    assert_eq!(parsed.blocks[0].section.as_deref(), Some("memory"));
+    assert_eq!(parsed.blocks[0].page_label.as_deref(), Some("Page 1"));
+    assert_eq!(parsed.blocks[1].section, None);
+    assert_eq!(parsed.blocks[1].page_label.as_deref(), Some("Page 2"));
+}
+
+#[test]
+fn region_sectioned_annotation_counts_ignore_cards() {
+    let region = sectioned_region_with_other_and_removed();
+    let parsed = super::parse_managed_region(&region);
+    let annotations = parsed
+        .blocks
+        .iter()
+        .filter(|block| !block.mirror && !block.in_preamble)
+        .count();
+    assert_eq!(annotations, 3);
+    assert_eq!(parsed.sections.len(), 1);
+    let generated = super::generated_block_ids(&region);
+    assert_eq!(
+        generated,
+        [
+            format!("h-{SECTIONED_MEMORY_HEAD}"),
+            format!("h-{SECTIONED_MEMORY_TAIL}"),
+            format!("h-{SECTIONED_OTHER}"),
+            format!("h-{SECTIONED_REMOVED}"),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+    assert!(!generated.iter().any(|id| id.starts_with("s-")));
+}
+
+#[test]
+fn region_section_card_images_and_warnings() {
+    let region = "### Visuals\n\n\
+         > [!summary|section] @visuals · nothing tagged yet\n\
+         > A picture-first section.\n\
+         > ![[ref/notes/example.assets/shot.png]]\n\
+         >\n\
+         > > [!warning] Image not found\n\
+         > >\n\
+         > > `/missing.png`\n\
+         \n\
+         ^s-visuals\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.sections.len(), 1);
+    let section = &parsed.sections[0];
+    assert_eq!(section.description, "A picture-first section.");
+    assert_eq!(
+        section.images,
+        vec!["ref/notes/example.assets/shot.png".to_string()]
+    );
+    assert_eq!(section.unresolved_images, vec!["/missing.png".to_string()]);
+    assert_eq!(
+        section.unresolved_image_states,
+        vec![super::UnresolvedImageNoteState::NotFound]
+    );
+}
+
+#[test]
+fn region_sectioned_preamble_is_before_first_h3() {
+    let region = "> [!quote] Before any section\n\n\
+         ^h-aa11bb22cc33\n\
+         \n\
+         ### Memory\n\
+         \n\
+         > [!summary|section] @memory · 1 highlight\n\
+         \n\
+         ^s-memory\n\
+         \n\
+         > [!quote] Inside\n\
+         \n\
+         ^h-dd44ee55ff66\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.blocks.len(), 2);
+    assert!(parsed.blocks[0].in_preamble);
+    assert_eq!(parsed.blocks[0].section, None);
+    assert!(!parsed.blocks[1].in_preamble);
+    assert_eq!(parsed.blocks[1].section.as_deref(), Some("memory"));
+}
+
+#[test]
+fn region_summary_section_without_s_id_is_not_sectioned() {
+    let region = "### Memory\n\n\
+         > [!summary|section] @memory · nothing tagged yet\n\
+         \n\
+         > [!quote] Still today's stream\n\
+         \n\
+         ^h-abcdef123456\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.sections.is_empty());
+    assert!(parsed.blocks.is_empty());
+    assert_eq!(parsed.unparsed.len(), 1);
+}
+
+#[test]
+fn region_unsectioned_h4_is_not_a_page_caption() {
+    let region = "### Page 1\n\n\
+         #### Pages 3–4\n\
+         \n\
+         > [!quote] Caption-shaped but unsectioned\n\
+         \n\
+         ^h-abcdef123456\n";
+    let parsed = super::parse_managed_region(region);
+    assert!(parsed.sections.is_empty());
+    assert!(parsed.blocks.is_empty());
+    assert_eq!(parsed.unparsed.len(), 1);
+    assert!(parsed.unparsed[0].contains("#### Pages 3–4"));
 }
