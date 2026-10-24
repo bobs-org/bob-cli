@@ -84,7 +84,8 @@ Root-level notes with hierarchy from frontmatter `parent: "[[dash]]"`:
   and click/Enter/Ctrl-click behavior as the other Browse chips. The
   block draws the schema-1 report from `bob stats`; metric meanings,
   the review journal, and CLI options live in
-  [stats.md](stats.md).
+  [stats.md](stats.md). The daily-note counterpart is the
+  [Day strip](stats.md#day-strip).
 
 Neither child carries `type: [[project]]`, and no project or reference
 note moves. The two `.base` files keep all views, filters, columns,

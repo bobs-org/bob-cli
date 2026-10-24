@@ -812,6 +812,67 @@ closes the definition panel. Inputs and native controls keep their normal key be
 **Definition** discloses the metric's report-provided definition, unit, source, tracking
 start, and limits. No definition or metric value is reconstructed by the renderer.
 
+### Day strip
+
+Every canonical daily note (`YYYY/YYYYMMDD.md`) ends with a Day strip: a
+compact receipt of that note's own day — never a window, a target, or a
+comparison. Five tiles (`worked`, `reviewed`, `done`, `created`,
+`review_closed`, in that order) show each metric's D point `display`, with
+eight history marks for D−7…D beneath (bars for counts, dots for the
+review-closeout bool). A stacked area bar shows D's `worked` minutes by
+area in the same order and hues as the Stats page's "Where the time went"
+bar, with a three-entry legend plus `+N`. The meta row reads
+`so far · HH:MM` — the fetch time of the shown report, not the wall clock
+— on today's note only, then `Stats ↗` and the collapse chevron. A metric
+hidden by `stats.hide` is omitted from the strip, not faked.
+
+Bob owns every value: labels, values, part displays, definitions, and
+hues all come from the report. The strip writes its own fixed copy only
+(`so far`, `Stats ↗`, error lines) plus date words derived from D.
+
+Honest states, briefly: today is provisional with hollow marks and an
+unmet closeout reads `not yet`; past days use solid marks and `missed`
+is allowed. `not_tracked` shows `–`, `missing` (or a report warning for
+D) shows `–` plus `⚠`, a real `0m` worked day shows a baseline mix bar
+with a `no Pomodoros` legend, and a future daily note shows nothing. The
+first load paints a skeleton in the final geometry; a failed refresh
+keeps the frame with a stale dot, while a failure with nothing cached
+shows one muted `Day stats unavailable` line with `Retry` and `Stats ↗`.
+The strip never shows another date's result while loading.
+
+Where it renders: a virtual mount after the last line of canonical
+daily notes in Live Preview — nothing is written to the file. A
+` ```bob-day-stats ` fence embeds a strip elsewhere (for example a
+weekly note) and takes an optional `day: YYYY-MM-DD` body; without it,
+the fence uses its note's own date. When a daily note holds a fence for
+its own day, the virtual mount stands down so there is never a double
+strip. There is no Reading view mount; the fence still renders in
+Reading view. The strip renders nothing in hover popovers, embeds,
+canvas nodes, source mode, or on mobile.
+
+Data: the strip reads D from the shared default report — the Stats
+page's default arguments, so the page and every recent strip share one
+cache entry. Any other day (older than the window, or the window's first
+week) fetches `stats show -a -f json -g day -r <D-7>..<D>`. A cached
+report whose `today` predates the local date is never shown as "so far";
+the strip refetches instead.
+
+Refresh budget: painting from cache costs one frame and zero spawns;
+typing never rebuilds the strip; an off-screen or backgrounded strip
+spawns nothing; a visible strip spawns at most twice per minute while
+the vault changes and at most six per hour while idle; strips sharing a
+cache key with the page settle through one spawn at a time.
+
+Controls: `stats.day_strip` in `~/.config/bob/config.yml` (`true` by
+default) is the durable on/off for the virtual mount — explicit fences
+still render when it is `false`. The `Toggle Day stats` command is a
+session-only toggle. The collapse chevron collapses every strip on the
+device and persists per device, never in the vault. Opening, refreshing,
+or collapsing a strip never changes note bytes and never appends journal
+events. Clicking a tile, the mix bar, or `Stats ↗` opens Stats with the
+day pinned (and the metric focused, or "Where the time went" revealed
+for the mix bar).
+
 ### Browser preview and fixtures
 
 The fixture-driven real-browser preview exercises the production `bob-stats` block
