@@ -455,9 +455,7 @@ fn default_jobs() -> usize {
 
 fn run_sync(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    let pdf = match stamp::resolve_exact_output_path(&required_path(
-        matches, "pdf",
-    )) {
+    let pdf = match resolve_pdf_argument(&config, matches) {
         Ok(pdf) => pdf,
         Err(error) => return report_result(Err(error)),
     };
@@ -477,13 +475,49 @@ fn run_doctor(matches: &ArgMatches, no_hooks: bool) -> i32 {
 
 fn run_marker(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    let pdf = match stamp::resolve_exact_output_path(&required_path(
-        matches, "pdf",
-    )) {
+    let pdf = match resolve_pdf_argument(&config, matches) {
         Ok(pdf) => pdf,
         Err(error) => return report_result(Err(error)),
     };
     report_result(show_marker(&config, &pdf))
+}
+
+/// Resolve a `sync`/`marker` PDF argument against the cwd and normalize it
+/// lexically, keeping the configured `lib/` or `xlib/` spelling when only a
+/// symlinked directory separates them. The cwd is physical (macOS reports
+/// `/private/var` for `/var`), so a relative path could otherwise miss the
+/// library and plan a flat duplicate note.
+fn resolve_pdf_argument(
+    config: &Config,
+    matches: &ArgMatches,
+) -> Result<PathBuf> {
+    let pdf = stamp::resolve_exact_output_path(&required_path(matches, "pdf"))?;
+    Ok(rebase_onto_library(
+        pdf,
+        &[&config.lib_dir, &config.xlib_dir],
+    ))
+}
+
+fn rebase_onto_library(pdf: PathBuf, roots: &[&Path]) -> PathBuf {
+    if roots.iter().any(|root| pdf.starts_with(root)) {
+        return pdf;
+    }
+    // Canonicalize directories only, so a symlinked PDF file keeps its own
+    // path and identity.
+    let (Some(parent), Some(name)) = (pdf.parent(), pdf.file_name()) else {
+        return pdf;
+    };
+    let Ok(real_parent) = parent.canonicalize() else {
+        return pdf;
+    };
+    for root in roots {
+        if let Ok(real_root) = root.canonicalize()
+            && let Ok(relative) = real_parent.strip_prefix(&real_root)
+        {
+            return root.join(relative).join(name);
+        }
+    }
+    pdf
 }
 
 fn report_result(result: Result<()>) -> i32 {

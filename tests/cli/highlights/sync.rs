@@ -59,6 +59,52 @@ fn highlights_ref_sync_resolves_relative_library_pdf_paths_before_mapping() {
 }
 
 #[test]
+fn highlights_ref_sync_maps_relative_pdf_paths_through_a_symlinked_vault() {
+    // The cwd is physical, so from a symlinked vault (or macOS's /var ->
+    // /private/var temp dirs) a cwd-relative PDF must still map into lib/.
+    let temp = TempDir::new("bob-cli-highlights-ref-symlinked-vault");
+    let real_vault = temp.path().join("real-vault");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/symlinked-vault.pdf");
+    write_highlights_pdf(
+        &real_vault.join("lib/chat/symlinked-vault.pdf"),
+        "- status: wip\n- parent: obsidian\n- title: Symlinked Vault\n",
+    );
+    std::os::unix::fs::symlink(&real_vault, &vault).expect("vault symlink");
+
+    for args in [
+        &["sync", "lib/chat/symlinked-vault.pdf", "--dry-run"][..],
+        &["marker", "./lib/chat/symlinked-vault.pdf"][..],
+    ] {
+        let output = bob_command()
+            .arg("ref")
+            .args(args)
+            .env("BOB_DIR", &vault)
+            .current_dir(&vault)
+            .output()
+            .expect("ref command through a symlinked vault");
+
+        assert_success(&output);
+        let report = stdout(&output);
+        assert!(
+            report.contains(&format!("pdf: {}", pdf.display())),
+            "{args:?} should keep the configured library spelling:\n{}",
+            format_output(&output)
+        );
+        if args[0] == "sync" {
+            assert!(
+                report.contains(&format!(
+                    "note: {}",
+                    vault.join("ref/chat/symlinked-vault.md").display()
+                )),
+                "sync should map to the nested reference note:\n{}",
+                format_output(&output)
+            );
+        }
+    }
+}
+
+#[test]
 fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let temp = TempDir::new("bob-cli-highlights-ref-create");
     let vault = temp.path().join("vault");
