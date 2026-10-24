@@ -288,6 +288,91 @@ gt config default-agent
 }
 
 #[test]
+fn color_grouped_quote_fix_remints_highlight_id() {
+    // bob-cli-bf with color_grouped_quote_id = remint: when the
+    // color-grouped quote fix changes a live highlight's quote text, the id
+    // re-mints and the old id tombstones, as batch 5 did for linked-page
+    // quotes.
+    let bob_dir = temp_bob_dir("highlight-color-grouped-remint");
+    let pdf = bob_dir.join("lib/papers/color-grouped.pdf");
+    let ref_note = bob_dir.join("ref/papers/color-grouped.md");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+
+    let truncated_sidecar = SidecarInput {
+        path: bob_dir.join("lib/papers/color-grouped.md"),
+        annotations: parse_sidecar_markdown(
+            "#### Yellow\n\n##### 2026-06-06:\n\n> Execution host first. Put the always-online server on a private\n> tailnet and run the\n",
+        ),
+    };
+    let truncated = render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &ParsedNote::empty(),
+        &truncated_sidecar,
+        false,
+    )
+    .expect("render truncated color-grouped quote");
+    assert_eq!(truncated.count, 1);
+    let old_id = truncated
+        .block_ids_by_annotation_order
+        .values()
+        .next()
+        .expect("truncated id")
+        .clone();
+    assert!(
+        !truncated.content.contains("mobile gateway"),
+        "{}",
+        truncated.content
+    );
+
+    let wrapped_sidecar = SidecarInput {
+        path: truncated_sidecar.path.clone(),
+        annotations: parse_sidecar_markdown(
+            "#### Yellow\n\n##### 2026-06-06:\n\n> Execution host first. Put the always-online server on a private\n> tailnet and run the\nexisting SASE mobile gateway there.\n",
+        ),
+    };
+    let wrapped = render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &region_note(&truncated.content),
+        &wrapped_sidecar,
+        false,
+    )
+    .expect("remint after color-grouped quote text changes");
+    assert_eq!(wrapped.count, 1);
+    let new_id = wrapped
+        .block_ids_by_annotation_order
+        .values()
+        .next()
+        .expect("wrapped id")
+        .clone();
+    assert_ne!(old_id, new_id);
+    assert!(
+        wrapped.content.contains(&format!("^{new_id}")),
+        "{}",
+        wrapped.content
+    );
+    assert!(
+        wrapped
+            .content
+            .contains("existing SASE mobile gateway there."),
+        "{}",
+        wrapped.content
+    );
+    assert!(
+        wrapped.content.contains("[!warning] Removed highlight")
+            && wrapped.content.contains(&format!("^{old_id}")),
+        "changed quote text remints and tombstones {old_id}: {}",
+        wrapped.content
+    );
+    let live = live_ids(&wrapped.content);
+    assert!(live.contains(&new_id));
+    assert!(!live.contains(&old_id));
+}
+
+#[test]
 fn highlight_identity_handles_duplicates_comments_legacy_and_folds() {
     let bob_dir = temp_bob_dir("highlight-identity-vectors");
     let pdf = bob_dir.join("lib/papers/example.pdf");

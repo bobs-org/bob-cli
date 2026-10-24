@@ -1225,6 +1225,107 @@ Sticky about page layout.
     assert_eq!(annotations[3].page_label.as_deref(), Some("Page 2"));
 }
 
+const COLOR_GROUPED_QUOTE_SIDECAR: &str = include_str!(
+    "../../../../tests/fixtures/highlights_ref/color_grouped_quote_sidecar.md"
+);
+
+#[test]
+fn color_grouped_quote_hard_wrap_stays_quote_text() {
+    // bob-cli-bf: color-grouped exports use the same hard-wrap shape as
+    // linked-page exports, so bare wrap lines stay in the quote and only the
+    // blank-line-separated remark becomes the Comment.
+    let annotations = parse_sidecar_markdown(COLOR_GROUPED_QUOTE_SIDECAR);
+    assert_eq!(annotations.len(), 3, "{annotations:?}");
+    assert!(
+        annotations
+            .iter()
+            .all(|annotation| annotation.page_label.is_none()),
+        "color groups stay page-less: {annotations:?}"
+    );
+    assert!(
+        annotations
+            .iter()
+            .all(|annotation| !annotation.linked_page_style),
+        "color groups are never linked-page style: {annotations:?}"
+    );
+
+    let quote = &annotations[0];
+    assert_eq!(quote.kind, SidecarAnnotationKind::Highlight);
+    assert!(
+        quote.text.contains("Execution host first."),
+        "quote head must stay: {:?}",
+        quote.text
+    );
+    assert!(
+        quote.text.contains("existing SASE mobile gateway there."),
+        "bare wrap line must stay quote text: {:?}",
+        quote.text
+    );
+    assert!(
+        quote.text.contains("machines submit and monitor work as"),
+        "resumed `>` line must stay quote text without its marker: {:?}",
+        quote.text
+    );
+    assert!(
+        !quote.text.contains('>'),
+        "resumed lines must strip `>`: {:?}",
+        quote.text
+    );
+    assert!(
+        quote.text.contains("new\ncode.") || quote.text.contains("new code."),
+        "tail wrap lines must stay quote text: {:?}",
+        quote.text
+    );
+    assert_eq!(
+        quote.comment.as_deref(),
+        Some(
+            "sase already seems to support launching an agent on remote machine B from local machine A?"
+        ),
+        "only the blank-line-separated remark is the comment: {quote:?}"
+    );
+
+    assert_eq!(annotations[1].kind, SidecarAnnotationKind::Highlight);
+    assert_eq!(annotations[1].text, "A genuine highlight.");
+    assert_eq!(
+        annotations[1].comment.as_deref(),
+        Some("A genuine comment.")
+    );
+    assert_eq!(annotations[2].kind, SidecarAnnotationKind::StandaloneNote);
+    assert_eq!(annotations[2].text, "A genuine standalone note.");
+}
+
+#[test]
+fn color_grouped_quote_continuation_stops_at_boundaries() {
+    // Every ba boundary still ends the quote in color-grouped sidecars.
+    for (tail, expected_text, expected_comment) in [
+        (
+            "Comment: revised comment",
+            "Stable quoted text.",
+            Some("revised comment"),
+        ),
+        (
+            "Note: revised note",
+            "Stable quoted text.",
+            Some("revised note"),
+        ),
+        ("- status: wip", "Stable quoted text.", Some("status: wip")),
+        ("##### 2026-06-04:", "Stable quoted text.", None),
+        ("#### Yellow", "Stable quoted text.", None),
+    ] {
+        let contents = format!(
+            "#### Yellow\n\n##### 2026-06-06:\n\n> Stable quoted text.\n{tail}\n"
+        );
+        let annotations = parse_sidecar_markdown(&contents);
+        assert_eq!(annotations.len(), 1, "{tail}: {annotations:?}");
+        assert_eq!(annotations[0].text, expected_text, "{tail}");
+        assert_eq!(
+            annotations[0].comment.as_deref(),
+            expected_comment,
+            "{tail}"
+        );
+    }
+}
+
 #[test]
 fn return_link_strip_keeps_block_ids_stable() {
     let contents = "\

@@ -1170,9 +1170,12 @@ The linked-page Highlights export shape is also supported:
 - Highlights may be hard-wrapped so that only the first physical line starts
   with `>`. Immediate nonblank continuation lines are kept as highlight text,
   including heading-shaped wrap lines such as `# Set default agent`. Page
-  headings, annotation-date headers (`##### 2026-06-03:`), marker-list
-  fields, and explicit `Comment:`/`Note:` labels leave the quote instead.
-  A blank line also ends the quote and starts the comment side.
+  headings, color-group headings (`#### Yellow`), annotation-date headers
+  (`##### 2026-06-03:`), marker-list fields, and explicit `Comment:`/`Note:`
+  labels leave the quote instead. A blank line also ends the quote and starts
+  the comment side. Color-grouped exports with no page headings share this
+  hard-wrap rule; simple `## Page N` sidecars keep treating bare lines after
+  the quote as the comment.
 - User comments exported as Markdown list items after a highlight are rendered
   without the list marker.
 - A blockquoted marker mirror title followed by marker-list fields such as

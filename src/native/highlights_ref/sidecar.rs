@@ -221,6 +221,11 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
         .next()
         .map(|heading| heading.level);
     let mut seen_page_heading = page_heading_level.is_none();
+    // Color-grouped Highlights exports have no page headings at all; their
+    // hard-wrapped quotes use the same bare-line continuation shape as
+    // linked-page exports (bob-cli-bf). Simple `## Page N` sidecars always
+    // have page headings, so they never qualify.
+    let color_grouped_style = is_color_grouped_sidecar_contents(contents);
 
     for line in contents.lines() {
         let next_page_heading =
@@ -240,6 +245,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
                     page_label.as_deref(),
                     page_index,
                     linked_page_style,
+                    color_grouped_style,
                     &mut order,
                     &mut page_ordinals,
                 );
@@ -261,6 +267,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
                     page_label.as_deref(),
                     page_index,
                     linked_page_style,
+                    color_grouped_style,
                     &mut order,
                     &mut page_ordinals,
                 );
@@ -279,6 +286,7 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
         page_label.as_deref(),
         page_index,
         linked_page_style,
+        color_grouped_style,
         &mut order,
         &mut page_ordinals,
     );
@@ -291,12 +299,17 @@ pub(super) fn flush_sidecar_chunk(
     page_label: Option<&str>,
     page_index: Option<u32>,
     linked_page_style: bool,
+    color_grouped_style: bool,
     order: &mut usize,
     page_ordinals: &mut BTreeMap<String, usize>,
 ) {
-    for mut annotation in
-        parse_sidecar_chunk(chunk, page_label, page_index, linked_page_style)
-    {
+    for mut annotation in parse_sidecar_chunk(
+        chunk,
+        page_label,
+        page_index,
+        linked_page_style,
+        color_grouped_style,
+    ) {
         *order += 1;
         annotation.order = *order;
         let page_key = annotation.page_label.clone().unwrap_or_default();
@@ -313,6 +326,7 @@ pub(super) fn parse_sidecar_chunk(
     page_label: Option<&str>,
     page_index: Option<u32>,
     linked_page_style: bool,
+    color_grouped_style: bool,
 ) -> Vec<SidecarAnnotation> {
     let lines = trim_blank_lines(chunk);
     if lines.is_empty() {
@@ -345,7 +359,7 @@ pub(super) fn parse_sidecar_chunk(
                 continue;
             }
             if !last_quote_line_was_blank
-                && linked_page_style
+                && (linked_page_style || color_grouped_style)
                 && is_quote_continuation_line(&lines[index])
             {
                 quote_lines.push(trimmed.to_string());

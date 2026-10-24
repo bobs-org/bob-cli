@@ -62,6 +62,7 @@ fn sticky_declarations_keep_description_headings_and_empty_declarations() {
         Some("Page 1"),
         Some(1),
         false,
+        false,
     );
     assert_eq!(parsed.len(), 1);
     assert_eq!(parsed[0].section_heading.as_deref(), Some("Memory @m"));
@@ -71,6 +72,7 @@ fn sticky_declarations_keep_description_headings_and_empty_declarations() {
         &["# Memory".to_string()],
         Some("Page 2"),
         Some(2),
+        false,
         false,
     );
     assert_eq!(empty.len(), 1);
@@ -88,6 +90,7 @@ fn ordinary_stickies_and_comment_hash_lines_keep_their_grammar() {
         Some("Page 1"),
         Some(1),
         false,
+        false,
     );
     assert_eq!(ordinary.len(), 1);
     assert_eq!(ordinary[0].section_heading, None);
@@ -100,6 +103,7 @@ fn ordinary_stickies_and_comment_hash_lines_keep_their_grammar() {
         ],
         Some("Page 3"),
         Some(3),
+        false,
         false,
     );
     assert_eq!(
@@ -114,6 +118,7 @@ fn ordinary_stickies_and_comment_hash_lines_keep_their_grammar() {
         ],
         Some("Page 4"),
         Some(4),
+        false,
         false,
     );
     assert_eq!(image_comment.len(), 1);

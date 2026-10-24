@@ -2172,12 +2172,14 @@ pub(super) fn silently_dropped_block_ids(
 
 /// Immediate nonblank lines after a `>` quote stay in the quote, including
 /// heading-shaped wrap lines such as `# Set default agent` (bob-cli-ba).
-/// Page headings and annotation-date headers still bound the quote.
+/// Page headings, color-group headings, and annotation-date headers still
+/// bound the quote.
 pub(super) fn is_quote_continuation_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     !trimmed.is_empty()
         && sidecar_page_heading_details(line).is_none()
         && !is_annotation_date_header(line)
+        && !is_color_group_heading(line)
         && !is_comment_label_line(trimmed)
         && !is_marker_list_line(trimmed)
 }
@@ -2262,6 +2264,54 @@ pub(super) fn is_annotation_date_header(line: &str) -> bool {
     let heading = line.trim_start().trim_start_matches('#').trim();
     let date = heading.strip_suffix(':').unwrap_or(heading).trim();
     chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok()
+}
+
+/// Color-group heading Highlights inserts above each color group in
+/// color-grouped exports, e.g. `#### Yellow` (bob-cli-bf). These bound
+/// quotes; they are never quote text.
+pub(super) fn is_color_group_heading(line: &str) -> bool {
+    if markdown_heading_level(line).is_none() {
+        return false;
+    }
+    if sidecar_page_heading_details(line).is_some() {
+        return false;
+    }
+    if is_annotation_date_header(line) {
+        return false;
+    }
+    let heading = line.trim_start().trim_start_matches('#').trim();
+    let name = heading.strip_suffix(':').unwrap_or(heading).trim();
+    if name.is_empty() || name.contains(char::is_whitespace) {
+        return false;
+    }
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "yellow"
+            | "green"
+            | "blue"
+            | "pink"
+            | "red"
+            | "orange"
+            | "purple"
+            | "gray"
+            | "grey"
+    )
+}
+
+/// A sidecar is color-grouped when it has no page headings at all but
+/// contains a color heading or an annotation-date header (bob-cli-bf).
+/// Simple `## Page N` sidecars always have page headings, so they never
+/// qualify; linked-page sidecars qualify through `linked_page_style` instead.
+pub(super) fn is_color_grouped_sidecar_contents(contents: &str) -> bool {
+    if contents
+        .lines()
+        .any(|line| sidecar_page_heading_details(line).is_some())
+    {
+        return false;
+    }
+    contents.lines().any(|line| {
+        is_annotation_date_header(line) || is_color_group_heading(line)
+    })
 }
 
 pub(super) fn strip_blockquote_marker(line: &str) -> String {
