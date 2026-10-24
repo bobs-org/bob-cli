@@ -127,7 +127,10 @@ pub(crate) enum NativeCommand {
     StatsMetrics,
     StatsShow,
     TaskStatusHooks,
+    ThemesColor,
+    ThemesHide,
     ThemesList,
+    ThemesUnhide,
     TmuxPomodoro,
     VaultSync,
 }
@@ -192,7 +195,10 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::StatsMetrics => stats::cli::run_metrics(args),
         NativeCommand::StatsShow => stats::cli::run_show(args),
         NativeCommand::TaskStatusHooks => task_status_hooks::run(args),
-        NativeCommand::ThemesList => pomodoro_themes::run(args),
+        NativeCommand::ThemesColor => pomodoro_themes::run_color(args),
+        NativeCommand::ThemesHide => pomodoro_themes::run_hide(args),
+        NativeCommand::ThemesList => pomodoro_themes::run_list(args),
+        NativeCommand::ThemesUnhide => pomodoro_themes::run_unhide(args),
         NativeCommand::TmuxPomodoro => pomodoro::run_tmux(args),
         NativeCommand::VaultSync => vault_sync::run(args),
     }

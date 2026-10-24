@@ -12,7 +12,9 @@ Capture, and the CLI. Rust owns the meaning. JSON grows additively at
 
 Rules marked **planned (phase …)** are part of this contract and are not
 built yet. The `catalog` phase ships PT1–PT5, the journal *reader*, ranking
-for `bob themes list -q`, and the read-only list command.
+for `bob themes list -q`, and the read-only list command. The `prefs` phase
+ships the hide, unhide, and color writers, collision hints, and the vault
+journal allowlist.
 
 ## PT1 — Vocabulary and identity
 
@@ -73,9 +75,15 @@ for `bob themes list -q`, and the read-only list command.
   for the hidden state and for the pin. A rename moves the source key's
   explicit state to the target unless the target already has explicit state.
   Events after the rename on the old key apply to the old key.
-- **Writers:** bob is the only writer. **planned (phase prefs)** for hide,
-  unhide, and color; **planned (phase rename)** for rename. This phase ships
-  the reader and the fold.
+- **Writers:** bob is the only writer. `bob themes hide`, `unhide`, and
+  `color` append under `bob_sync.lock` (wait at most 3 s; a busy lock is
+  `lock_busy`). Each event is one `O_APPEND` write. The directory is created
+  on first use. Rename remains **planned (phase rename)**.
+- **Allowlist:** the vault tracks `.bob/themes/*.jsonl` (`!/.bob/themes/*.jsonl`
+  in `.gitignore`) and unions concurrent appends
+  (`.bob/themes/*.jsonl merge=union`). A host that has not synced the
+  allowlist keeps its hides local until it does. See
+  [Vault Git sync](vault-git-sync.md#pomodoro-theme-journal).
 
 ## PT5 — Hue rule
 
@@ -139,7 +147,9 @@ case-insensitive on slugs. A partial quoted literal matches on the
 normalized key prefix.
 
 `bob themes list -q` already ranks B then D over the catalog. Menu caps,
-today-row composition, and `similar_to` are **planned (phase suggest)**.
+today-row composition, and wiring `similar_to` into capture-complete are
+**planned (phase suggest)**. The `similar` vector section is in
+`tests/fixtures/pomodoro_themes/vectors.json`.
 
 Fetching, filtering, and accepting suggestions never touch the journal.
 
@@ -154,13 +164,12 @@ equality, never by slug or prefix.
 
 ## PT9 — Hide
 
-**planned (phase prefs / mac-menus / obsidian-pickers)**
-
 Hiding removes a theme from **Recent** rows only. Today's rows, typing the
 name, history, Stats, and colors are unaffected. Using a hidden name never
-unhides it. Ctrl+D in a Pomodoro-name menu hides a Recent row in place as a
-ghost, with undo. `bob themes list -H` already shows hidden themes; the
-hide/unhide writers are planned.
+unhides it. `bob themes hide NAME…` and `bob themes unhide NAME…` append
+journal events; `bob themes list -H` lists hidden themes. Ctrl+D in a
+Pomodoro-name menu (ghost row, undo) is **planned (phase mac-menus /
+obsidian-pickers)**.
 
 ## PT10 — Global rename
 
@@ -208,29 +217,42 @@ builds this shape.
       "today": "open"
     }
   ],
-  "hints": [],
+  "hints": [
+    {
+      "code": "theme_hue_collision",
+      "themes": ["SASE", "BLOG"],
+      "hue": "orange",
+      "days_together": 6,
+      "suggest": { "name": "BLOG", "hue": "red" }
+    }
+  ],
   "renamed_reappeared": [],
   "warnings": []
 }
 ```
 
-`hints` is empty until **planned (phase prefs)** fills `theme_hue_collision`.
-`renamed_reappeared` is empty until **planned (phase rename)**.
+`theme_hue_collision` pairs are unpinned, non-exempt themes that share a hue
+and met on at least 2 of the last 30 days. The theme with fewer `days_used`
+is the one to move. The suggested slot is the least used by the last 30
+days' themes, excluding hues of themes that met the moved theme in that
+window; ties follow palette order. `renamed_reappeared` is empty until
+**planned (phase rename)**.
 
-**Writers** (`hide`, `unhide`, `color`, `rename`) emit `{schema_version, ok,
-...}` and `{ok:false, code, message}` on refusal. **planned (phase prefs /
-rename)**
+**Writers** (`hide`, `unhide`, `color`) emit `{schema_version, ok, ...}` on
+success and `{ok:false, code, message}` on refusal, even on a nonzero exit.
+Refusal codes: `unknown_theme`, `invalid_hue`, `unchanged` (no journal
+write), `lock_busy`. Rename is **planned (phase rename)**.
 
 ## `bob themes` CLI
 
 The group is `bob themes`, a top-level catalog noun in Daily workflow after
 `stats`. Bare `bob themes` is `list`. Members, alphabetical in help:
 
-- `color NAME HUE|auto` **planned (phase prefs)**
-- `hide NAME…` **planned (phase prefs)**
+- `color NAME HUE|auto`
+- `hide NAME…`
 - `list [-a/--all] [-F/--fresh] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]`
 - `rename OLD NEW …` **planned (phase rename)**
-- `unhide NAME…` **planned (phase prefs)**
+- `unhide NAME…`
 
 List defaults: visible themes used in the last 90 days or today, newest
 first. `-a` shows every theme and flags hidden ones. `-H` shows only hidden
@@ -244,13 +266,14 @@ THEMES  81 known · 4 today · 2 hidden · last 90 days
   ■ JOB        Oct 23    24 days   aqua · area
   ■ BLOG       Oct 23    14 days   red · pinned
   □ GTD        today     51 days   muted · exempt
+  hint  SASE and BLOG share orange and met on 6 days → bob themes color BLOG red
 ```
 
 ## Shared vectors
 
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
-`components`, `hue` (including the `areas` input), `fold`, and `rank`.
-`menu`, `similar`, and `literal` are **planned (phase suggest)**. bob-plugins
+`components`, `hue` (including the `areas` input), `fold`, `rank`, and
+`similar`. `menu` and `literal` are **planned (phase suggest)**. bob-plugins
 copies the file byte-for-byte **planned (phase obsidian-colors)**.
 
 ## Related

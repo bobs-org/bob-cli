@@ -1,13 +1,14 @@
 use std::{
     collections::BTreeMap,
     fs, io,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use chrono::{DateTime, FixedOffset};
-use serde_json::Value;
+use chrono::{DateTime, FixedOffset, Local, TimeZone};
+use serde_json::{json, Value};
 
-use crate::native::pomodoro_homes::Hue;
+use crate::native::{env as bob_env, pomodoro_homes::Hue, vault_sync};
 
 const JOURNAL_DIR: &str = ".bob/themes";
 const MAX_MALFORMED_WARNINGS: usize = 8;
@@ -73,6 +74,122 @@ impl Prefs {
 pub(crate) fn load_prefs(vault: &Path) -> io::Result<(Prefs, Vec<String>)> {
     let (events, warnings) = read_journal(vault)?;
     Ok((fold_events(&events), warnings))
+}
+
+pub(crate) fn host_label() -> String {
+    vault_sync::hostname_slug()
+}
+
+pub(crate) fn journal_dir(vault: &Path) -> PathBuf {
+    vault.join(JOURNAL_DIR)
+}
+
+pub(crate) fn host_journal_path(vault: &Path, host: &str) -> PathBuf {
+    journal_dir(vault).join(format!("{host}.jsonl"))
+}
+
+pub(crate) fn event_timestamp() -> DateTime<FixedOffset> {
+    let naive = bob_env::current_datetime();
+    if let Some(timezone) = bob_env::configured_timezone()
+        && let Some(datetime) = timezone.from_local_datetime(&naive).single()
+    {
+        return datetime.fixed_offset();
+    }
+    Local
+        .from_local_datetime(&naive)
+        .single()
+        .or_else(|| Local.from_local_datetime(&naive).earliest())
+        .map(|datetime| datetime.fixed_offset())
+        .unwrap_or_else(|| {
+            DateTime::from_naive_utc_and_offset(
+                naive,
+                FixedOffset::east_opt(0).unwrap(),
+            )
+        })
+}
+
+pub(crate) fn serialize_event(
+    ts: DateTime<FixedOffset>,
+    host: &str,
+    payload: &EventPayload,
+    via: &str,
+) -> String {
+    let ts = ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let value = match payload {
+        EventPayload::Hide { key, name } => json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "theme.hide",
+            "key": key,
+            "name": name,
+            "via": via,
+        }),
+        EventPayload::Unhide { key, name } => json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "theme.unhide",
+            "key": key,
+            "name": name,
+            "via": via,
+        }),
+        EventPayload::Color { key, name, hue } => json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "theme.color",
+            "key": key,
+            "name": name,
+            "hue": hue.map(Hue::name),
+            "via": via,
+        }),
+        EventPayload::Rename {
+            from,
+            to,
+            from_name,
+            to_name,
+        } => json!({
+            "v": 1,
+            "ts": ts,
+            "host": host,
+            "kind": "theme.rename",
+            "from": from,
+            "to": to,
+            "from_name": from_name,
+            "to_name": to_name,
+            "via": via,
+        }),
+    };
+    let mut line =
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+    line.push('\n');
+    line
+}
+
+/// Append one journal event with a single `O_APPEND` write. Creates
+/// `.bob/themes/` on first use.
+pub(crate) fn append_event_at(
+    vault: &Path,
+    host: &str,
+    payload: &EventPayload,
+    via: &str,
+    ts: DateTime<FixedOffset>,
+) -> io::Result<String> {
+    let directory = journal_dir(vault);
+    fs::create_dir_all(&directory)?;
+    let path = host_journal_path(vault, host);
+    let line = serialize_event(ts, host, payload, via);
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o644);
+    }
+    let mut file = options.open(&path)?;
+    file.write_all(line.as_bytes())?;
+    Ok(line)
 }
 
 pub(crate) fn read_journal(

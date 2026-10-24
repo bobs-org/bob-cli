@@ -271,14 +271,40 @@ Examples:
 See docs/stats.md for the catalog, JSON contract, and display rules.
 Run 'bob stats <command> --help' for more information on a command.";
 
-const THEMES_MEMBERS: &[Member] = &[Member {
-    name: "list",
-    about: "List remembered Pomodoro themes (default)",
-    leaf: Leaf {
-        native_command: NativeCommand::ThemesList,
-        script_command: None,
+const THEMES_MEMBERS: &[Member] = &[
+    Member {
+        name: "color",
+        about: "Pin or unpin a theme's hue",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesColor,
+            script_command: None,
+        },
     },
-}];
+    Member {
+        name: "hide",
+        about: "Hide themes from Recent suggestion rows",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesHide,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List remembered Pomodoro themes (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "unhide",
+        about: "Show hidden themes in Recent suggestion rows again",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesUnhide,
+            script_command: None,
+        },
+    },
+];
 
 const THEMES_AFTER_HELP: &str = "\
 Bare `bob themes` runs the read-only list.
@@ -286,10 +312,12 @@ Bare `bob themes` runs the read-only list.
 Examples:
   bob themes                   Visible themes from the last 90 days
   bob themes -q fix -f json    Rank FIX before FIXES as JSON
-  bob themes -a -F             Every theme, rebuilt from daily notes
-  bob themes -H                Hidden themes only
+  bob themes hide BOOKS        Hide BOOKS from Recent rows
+  bob themes unhide BOOKS      Put BOOKS back in Recent rows
+  bob themes color BLOG red    Pin BLOG to red
+  bob themes color BLOG auto   Drop the BLOG pin
 
-See docs/pomodoro-themes.md for identity, cache, hue, and JSON.
+See docs/pomodoro-themes.md for identity, cache, hue, journal, and JSON.
 Run 'bob themes <command> --help' for more information on a command.";
 
 const GROUP_HELP_TEMPLATE: &str = "\
@@ -453,13 +481,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "themes",
-        about: "List remembered Pomodoro themes and their stable hues",
+        about: "List, hide, unhide, and color Pomodoro themes",
         section: Section::DailyWorkflow,
         target: Target::Group(Group {
             members: THEMES_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "The command is read-only. Bare `bob themes` runs list.",
+                "Bare `bob themes` runs the read-only list. hide, unhide, and color append to the vault journal.",
             ),
             after_help: THEMES_AFTER_HELP,
             usage: "bob themes [COMMAND]",
@@ -1642,7 +1670,10 @@ mod tests {
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,
             NativeCommand::TaskStatusHooks,
+            NativeCommand::ThemesColor,
+            NativeCommand::ThemesHide,
             NativeCommand::ThemesList,
+            NativeCommand::ThemesUnhide,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,
         ];

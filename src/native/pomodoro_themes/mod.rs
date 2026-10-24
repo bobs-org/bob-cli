@@ -16,17 +16,23 @@ use crate::native::{
 
 mod cache;
 pub(crate) mod cli;
+mod hints;
 mod hue;
 mod journal;
 mod rank;
 mod scan;
+#[allow(dead_code)]
+mod similar;
 #[cfg(test)]
 mod tests;
+pub(crate) mod write;
 
-pub(crate) use cli::run;
+pub(crate) use cli::run_list;
+pub(crate) use hints::CollisionHint;
 pub(crate) use hue::resolve_hue;
 pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
+pub(crate) use write::{run_color, run_hide, run_unhide};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,6 +83,7 @@ pub(crate) struct ThemeRecord {
 pub(crate) struct Catalog {
     pub(crate) today: NaiveDate,
     records: BTreeMap<String, ThemeRecord>,
+    days: BTreeMap<NaiveDate, BTreeSet<String>>,
     prefs: Prefs,
     areas: BTreeMap<String, Hue>,
     exempt: BTreeSet<String>,
@@ -92,10 +99,11 @@ impl Catalog {
         let exempt = load_exempt();
         let areas = scan::scan_root_areas(vault);
         let (prefs, mut warnings) = journal::load_prefs(vault)?;
-        let records = load_records(vault, today, fresh, &mut warnings);
+        let (records, days) = load_records(vault, today, fresh, &mut warnings);
         Ok(Self {
             today,
             records,
+            days,
             prefs,
             areas,
             exempt,
@@ -103,7 +111,6 @@ impl Catalog {
         })
     }
 
-    #[allow(dead_code)]
     pub(crate) fn get(&self, key: &str) -> Option<&ThemeRecord> {
         self.records.get(key)
     }
@@ -172,6 +179,17 @@ impl Catalog {
             .collect()
     }
 
+    pub(crate) fn collision_hints(&self) -> Vec<CollisionHint> {
+        hints::collision_hints(
+            self.today,
+            &self.records,
+            &self.days,
+            &self.prefs,
+            &self.exempt,
+            &self.areas,
+        )
+    }
+
     pub(crate) fn rank_for_query(
         &self,
         query: &str,
@@ -212,7 +230,10 @@ fn load_records(
     today: NaiveDate,
     fresh: bool,
     warnings: &mut Vec<String>,
-) -> BTreeMap<String, ThemeRecord> {
+) -> (
+    BTreeMap<String, ThemeRecord>,
+    BTreeMap<NaiveDate, BTreeSet<String>>,
+) {
     let key = cache::vault_key(vault);
     let mut cache_file = cache::load();
     let years = scan::year_dir_fingerprints(vault);
@@ -303,18 +324,23 @@ fn load_records(
         }
     };
 
-    let records = aggregate_records(vault_cache, today, today_summary.as_ref());
+    let (records, days) =
+        aggregate_records(vault_cache, today, today_summary.as_ref());
     cache_file.version = 1;
     cache::store(&cache_file);
-    records
+    (records, days)
 }
 
 fn aggregate_records(
     vault_cache: &cache::VaultCache,
     today: NaiveDate,
     today_live: Option<&scan::FileSummary>,
-) -> BTreeMap<String, ThemeRecord> {
+) -> (
+    BTreeMap<String, ThemeRecord>,
+    BTreeMap<NaiveDate, BTreeSet<String>>,
+) {
     let mut records: BTreeMap<String, ThemeRecord> = BTreeMap::new();
+    let mut days: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
     for cached in vault_cache.files.values() {
         let Some(date) = scan::parse_summary_date(&cached.summary.date) else {
             continue;
@@ -322,10 +348,10 @@ fn aggregate_records(
         if date > today || date == today {
             continue;
         }
-        merge_file(&mut records, date, &cached.summary.themes);
+        merge_file(&mut records, &mut days, date, &cached.summary.themes);
     }
     if let Some(today_live) = today_live {
-        merge_file(&mut records, today, &today_live.themes);
+        merge_file(&mut records, &mut days, today, &today_live.themes);
         for theme in &today_live.themes {
             if let Some(record) = records.get_mut(&theme.key) {
                 record.today = Some(if theme.open {
@@ -336,15 +362,18 @@ fn aggregate_records(
             }
         }
     }
-    records
+    (records, days)
 }
 
 fn merge_file(
     records: &mut BTreeMap<String, ThemeRecord>,
+    days: &mut BTreeMap<NaiveDate, BTreeSet<String>>,
     date: NaiveDate,
     themes: &[scan::FileTheme],
 ) {
+    let day_keys = days.entry(date).or_default();
     for theme in themes {
+        day_keys.insert(theme.key.clone());
         match records.get_mut(&theme.key) {
             Some(record) => {
                 if date < record.first_used {

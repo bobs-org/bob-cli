@@ -274,6 +274,44 @@ its absence is expected until then. Do not move or delete host files to
 make a metric look complete. The journal contract lives in
 [stats.md](stats.md#review-journal).
 
+## Pomodoro theme journal
+
+`.bob/themes/<host>.jsonl` is the per-host Pomodoro theme preference
+journal (hide, unhide, color pin, and later rename). Each host appends
+to its own file; readers union every `*.jsonl` in the directory and
+never rewrite them. Bob is the only writer. JSON is otherwise allowed
+only under `.obsidian`, so the vault root `.gitignore` also carries:
+
+```gitignore
+!/.bob/themes/*.jsonl
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/themes/apollo.jsonl
+```
+
+A negated last match (`!/.bob/themes/*.jsonl`) means the file is
+trackable. The directory is created on the first hide, unhide, or color
+write; its absence is expected until then. A host that has not synced
+this allowlist keeps its hides local until it does. The journal contract
+lives in [pomodoro-themes.md](pomodoro-themes.md#pt4-preferences-journal).
+
+The vault root `.gitattributes` unions concurrent theme-journal appends:
+
+```gitattributes
+.bob/themes/*.jsonl merge=union
+```
+
+Check the attribute with:
+
+```bash
+git -C ~/bob check-attr merge -- .bob/themes/apollo.jsonl
+```
+
+The expected output ends with `merge: union`.
+
 ## Authored content coverage
 
 The vault allowlist ignores everything by default (`*`) and re-includes only
@@ -334,6 +372,7 @@ The vault root `.gitattributes` also unions concurrent journal appends:
 
 ```gitattributes
 .bob/stats/**/*.jsonl merge=union
+.bob/themes/*.jsonl merge=union
 ```
 
 Check the attribute with:

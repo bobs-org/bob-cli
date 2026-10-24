@@ -14,13 +14,15 @@ use crate::native::{
     style::{pad_right, Styler},
 };
 
-use super::{Catalog, HueSource, ThemeRecord, TodayPresence};
+use super::{
+    hints, Catalog, CollisionHint, HueSource, ThemeRecord, TodayPresence,
+};
 
 const COMMAND_NAME: &str = "bob themes list";
 const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_WINDOW_DAYS: i64 = 90;
 
-pub(crate) fn run(args: Vec<OsString>) -> i32 {
+pub(crate) fn run_list(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
     let matches = match command.try_get_matches_from_mut(
         std::iter::once(OsString::from(COMMAND_NAME)).chain(args),
@@ -82,7 +84,7 @@ Exit codes:\n  \
 0  list\n  \
 1  vault I/O failure\n  \
 2  usage or config error\n\n\
-See docs/pomodoro-themes.md for identity, cache, hue, JSON, and planned writers.",
+See docs/pomodoro-themes.md for identity, cache, hue, JSON, and journal writers.",
         )
         .disable_help_flag(true)
         .arg(all_arg())
@@ -233,7 +235,7 @@ struct ListReport {
     window_days: u32,
     counts: ListCounts,
     themes: Vec<ListTheme>,
-    hints: Vec<serde_json::Value>,
+    hints: Vec<CollisionHint>,
     renamed_reappeared: Vec<serde_json::Value>,
     warnings: Vec<String>,
 }
@@ -318,7 +320,7 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
             hidden: catalog.hidden_count(),
         },
         themes,
-        hints: Vec::new(),
+        hints: catalog.collision_hints(),
         renamed_reappeared: Vec::new(),
         warnings: catalog.warnings().to_vec(),
     }
@@ -390,26 +392,29 @@ fn print_human(report: &ListReport) {
     );
     if report.themes.is_empty() {
         println!("  (no themes)");
-        return;
+    } else {
+        let name_width = report
+            .themes
+            .iter()
+            .map(|theme| theme.name.chars().count())
+            .max()
+            .unwrap_or(8)
+            .clamp(8, 20);
+        for theme in &report.themes {
+            let swatch = swatch(&styler, theme);
+            let when = human_when(&theme.last_used, &report.today);
+            let days = format!("{} days", theme.days_used);
+            let meta = human_meta(theme);
+            println!(
+                "  {swatch} {}  {}  {}  {meta}",
+                pad_right(&theme.name, name_width),
+                pad_right(&when, 8),
+                pad_right(&days, 10),
+            );
+        }
     }
-    let name_width = report
-        .themes
-        .iter()
-        .map(|theme| theme.name.chars().count())
-        .max()
-        .unwrap_or(8)
-        .clamp(8, 20);
-    for theme in &report.themes {
-        let swatch = swatch(&styler, theme);
-        let when = human_when(&theme.last_used, &report.today);
-        let days = format!("{} days", theme.days_used);
-        let meta = human_meta(theme);
-        println!(
-            "  {swatch} {}  {}  {}  {meta}",
-            pad_right(&theme.name, name_width),
-            pad_right(&when, 8),
-            pad_right(&days, 10),
-        );
+    for hint in &report.hints {
+        println!("  hint  {}", hints::human_hint(hint));
     }
     for warning in &report.warnings {
         eprintln!("{COMMAND_NAME}: {warning}");

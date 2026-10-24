@@ -10,7 +10,9 @@ use crate::native::{
 };
 
 use super::{
-    journal, rank_history, resolve_hue, scan, Catalog, HueSource, RankTheme,
+    journal, rank_history, resolve_hue, scan,
+    similar::{similar_to, SimilarTheme},
+    Catalog, HueSource, RankTheme,
 };
 
 fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
@@ -29,6 +31,23 @@ struct Vectors {
     hue: Vec<HueCase>,
     fold: Vec<FoldCase>,
     rank: Vec<RankCase>,
+    similar: Vec<SimilarCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimilarCase {
+    name: String,
+    query: String,
+    themes: Vec<SimilarFixture>,
+    expected: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SimilarFixture {
+    key: String,
+    name: String,
+    last_used: String,
+    hidden: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,12 +122,13 @@ fn load_vectors() -> Vectors {
 }
 
 #[test]
-fn shared_vectors_cover_components_hue_fold_and_rank() {
+fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
     let vectors = load_vectors();
     assert!(!vectors.components.is_empty());
     assert!(!vectors.hue.is_empty());
     assert!(!vectors.fold.is_empty());
     assert!(!vectors.rank.is_empty());
+    assert!(!vectors.similar.is_empty());
 
     for case in &vectors.components {
         let got: Vec<(String, String)> = split_components(&case.input)
@@ -220,6 +240,30 @@ fn shared_vectors_cover_components_hue_fold_and_rank() {
                 .collect();
         assert_eq!(names, case.expected, "rank: {}", case.name);
     }
+
+    for case in &vectors.similar {
+        let dates: Vec<NaiveDate> = case
+            .themes
+            .iter()
+            .map(|theme| {
+                NaiveDate::parse_from_str(&theme.last_used, "%Y-%m-%d")
+                    .expect(theme.last_used.as_str())
+            })
+            .collect();
+        let themes: Vec<SimilarTheme<'_>> = case
+            .themes
+            .iter()
+            .zip(dates.iter())
+            .map(|(theme, date)| SimilarTheme {
+                key: &theme.key,
+                name: &theme.name,
+                last_used: *date,
+                hidden: theme.hidden,
+            })
+            .collect();
+        let got = similar_to(&case.query, &themes);
+        assert_eq!(got, case.expected, "similar: {}", case.name);
+    }
 }
 
 #[test]
@@ -330,6 +374,44 @@ fn future_days_do_not_count_toward_recency() {
     let catalog = Catalog::load(vault, today, true).expect("load");
     assert!(catalog.get("bob").is_some());
     assert!(catalog.get("future").is_none());
+}
+
+#[test]
+fn collision_hints_move_the_less_used_unpinned_pair() {
+    let temp = tempfile::tempdir().expect("scratch vault");
+    let vault = temp.path();
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    for day in ["20261001", "20261002"] {
+        fs::write(
+            vault.join(format!("2026/{day}.md")),
+            "## Pomodoros\n\
+- [x] (0800-0830 30m) — SASE\n\
+- [x] (0900-0930 30m) — BLOG\n",
+        )
+        .unwrap();
+    }
+    fs::write(
+        vault.join("2026/20261003.md"),
+        "## Pomodoros\n- [x] (0800-0830 30m) — SASE\n",
+    )
+    .unwrap();
+    fs::write(
+        vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — SASE\n",
+    )
+    .unwrap();
+    let cache = tempfile::tempdir().expect("cache");
+    let _guard = isolate_catalog_env(cache.path());
+    let today = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+    let catalog = Catalog::load(vault, today, true).expect("load");
+    let hints = catalog.collision_hints();
+    assert_eq!(hints.len(), 1, "{hints:?}");
+    assert_eq!(hints[0].code, "theme_hue_collision");
+    assert_eq!(hints[0].themes, ["SASE", "BLOG"]);
+    assert_eq!(hints[0].hue, Hue::Orange);
+    assert_eq!(hints[0].days_together, 2);
+    assert_eq!(hints[0].suggest.name, "BLOG");
+    assert_ne!(hints[0].suggest.hue, Hue::Orange);
 }
 
 #[test]

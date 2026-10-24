@@ -1681,7 +1681,7 @@ fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
 }
 
-fn hostname_slug() -> String {
+pub(crate) fn hostname_slug() -> String {
     bob_env::var("HOSTNAME")
         .ok()
         .filter(|value| !value.is_empty())

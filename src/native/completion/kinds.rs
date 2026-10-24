@@ -460,7 +460,17 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "hue",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "name",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
+        arg: "via",
         kind: Kind::FreeText,
     },
     Entry {

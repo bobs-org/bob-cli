@@ -111,8 +111,17 @@ impl NativeCommand {
                 crate::native::stats::cli::show_command()
             }
             NativeCommand::TaskMove => crate::native::task_move::build_cli(),
+            NativeCommand::ThemesColor => {
+                crate::native::pomodoro_themes::write::build_cli_color()
+            }
+            NativeCommand::ThemesHide => {
+                crate::native::pomodoro_themes::write::build_cli_hide()
+            }
             NativeCommand::ThemesList => {
                 crate::native::pomodoro_themes::cli::build_cli()
+            }
+            NativeCommand::ThemesUnhide => {
+                crate::native::pomodoro_themes::write::build_cli_unhide()
             }
             NativeCommand::TaskStatusHooks => {
                 crate::native::task_status_hooks::build_cli()

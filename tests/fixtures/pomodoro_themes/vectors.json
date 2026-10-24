@@ -329,5 +329,115 @@
       ],
       "expected": ["BETA", "ALPHA", "GAMMA"]
     }
+  ],
+  "similar": [
+    {
+      "name": "punctuation-sase-v18",
+      "query": "SASE V18",
+      "themes": [
+        {
+          "key": "sase-v18",
+          "name": "SASE-V18",
+          "last_used": "2026-10-23",
+          "hidden": false
+        },
+        {
+          "key": "sase",
+          "name": "SASE",
+          "last_used": "2026-10-24",
+          "hidden": false
+        }
+      ],
+      "expected": ["SASE-V18"]
+    },
+    {
+      "name": "plural-fixes",
+      "query": "FIX",
+      "themes": [
+        {
+          "key": "fixes",
+          "name": "FIXES",
+          "last_used": "2026-10-20",
+          "hidden": false
+        },
+        {
+          "key": "fix",
+          "name": "FIX",
+          "last_used": "2026-10-24",
+          "hidden": false
+        }
+      ],
+      "expected": ["FIXES"]
+    },
+    {
+      "name": "query-too-short",
+      "query": "bo",
+      "themes": [
+        {
+          "key": "bob",
+          "name": "BOB",
+          "last_used": "2026-10-24",
+          "hidden": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "levenshtein-books",
+      "query": "BOOKS",
+      "themes": [
+        {
+          "key": "bookz",
+          "name": "BOOKZ",
+          "last_used": "2026-10-22",
+          "hidden": false
+        },
+        {
+          "key": "reads",
+          "name": "READS",
+          "last_used": "2026-10-21",
+          "hidden": false
+        }
+      ],
+      "expected": ["BOOKZ"]
+    },
+    {
+      "name": "hidden-excluded",
+      "query": "FIXES",
+      "themes": [
+        {
+          "key": "fix",
+          "name": "FIX",
+          "last_used": "2026-10-24",
+          "hidden": true
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "cap-two-most-recent",
+      "query": "THEME",
+      "themes": [
+        {
+          "key": "themes",
+          "name": "THEMES",
+          "last_used": "2026-10-20",
+          "hidden": false
+        },
+        {
+          "key": "thema",
+          "name": "THEMA",
+          "last_used": "2026-10-24",
+          "hidden": false
+        },
+        {
+          "key": "theme",
+          "name": "THEME",
+          "last_used": "2026-10-23",
+          "hidden": false
+        }
+      ],
+      "expected": ["THEMA", "THEMES"]
+    }
   ]
 }
