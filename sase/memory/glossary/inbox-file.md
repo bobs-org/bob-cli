@@ -17,7 +17,10 @@ an inbox file, every non-closing Ctrl+Shift+P answer and a Ctrl+Shift+Enter togg
 the task line ask where the task goes just before writing, apply the action in place,
 then move the task without following it; the route picker never offers another inbox
 file, and `⇧↵` applies the answer without moving. Ctrl+Shift+M also moves it, following
-it to the destination, and a closed task leaves through `bob task archive`. The current
+it to the destination. A non-closing capture that changes an existing inbox task's
+status asks the same question in Bob Mac Capture's route card, and bob moves the task
+in that capture's batch (`bob capture -i/--inbox-route`); otherwise a closed task
+leaves through `bob task archive`. The current
 inbox files set `ready_cap: off`. bob-plugins and `docs/projects.md` ("Inbox routing")
 say "inbox note" (`api.inboxRoute.isInboxNote`); that is not a Google Keep inbox note,
 the Keep item `bob gkeep` drains. bob-cli capture's `INBOX_FILE` constant and
