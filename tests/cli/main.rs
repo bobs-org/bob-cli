@@ -19,6 +19,7 @@ mod pomodoro;
 mod projects;
 mod ready;
 mod ref_library;
+mod relations;
 mod stats;
 mod support;
 mod task_move;

@@ -36,6 +36,10 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | Command | What it does |
 | --- | --- |
 | [`bob projects`](projects.md) | List and sync project notes via their ^prj tasks |
+| [`bob relations`](relations.md) | List, hide, and unhide relation labels |
+| [`bob relations hide`](relations.md#bob-relations-hide) | Hide relation labels from suggestions |
+| [`bob relations list`](relations.md#bob-relations-list) | List relation labels in the vault (default) |
+| [`bob relations unhide`](relations.md#bob-relations-unhide) | Show hidden relation labels in suggestions again |
 | [`bob task`](task.md) | Vault-wide task maintenance: archive, move, reconcile, reroll |
 | [`bob task archive`](task.md#bob-task-archive) | Move done and canceled tasks into done/ archives and repair links |
 | [`bob task move`](task.md#bob-task-move) | Move open tasks between notes and repair vault links |
@@ -109,6 +113,7 @@ Daily workflow:
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
+  relations   List, hide, and unhide relation labels
   task        Vault-wide task maintenance: archive, move, reconcile, reroll
 
 Vault:

@@ -316,6 +316,40 @@ git -C ~/bob check-attr merge -- .bob/themes/apollo.jsonl
 
 The expected output ends with `merge: union`.
 
+## Relation label journal
+
+`.bob/relations/<host>.jsonl` is the per-host relation label
+preference journal (hide, unhide, and rename). It follows the theme
+journal's rule: each host appends to its own file, readers union
+every `*.jsonl` in the directory, and bob is the only writer. The
+vault root `.gitignore` also carries:
+
+```gitignore
+!/.bob/relations/*.jsonl
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/relations/apollo.jsonl
+```
+
+A negated last match (`!/.bob/relations/*.jsonl`) means the file is
+trackable. The directory is created on the first hide, unhide, or
+rename write. The vault root `.gitattributes` unions concurrent
+relation-journal appends:
+
+```gitattributes
+.bob/relations/*.jsonl merge=union
+```
+
+```bash
+git -C ~/bob check-attr merge -- .bob/relations/apollo.jsonl
+```
+
+The journal contract lives in
+[task-relations.md](task-relations.md#16-label-vocabulary).
+
 ## Authored content coverage
 
 The vault allowlist ignores everything by default (`*`) and re-includes only

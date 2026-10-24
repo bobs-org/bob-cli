@@ -100,6 +100,15 @@ impl NativeCommand {
                 crate::native::pomodoro::completion_descriptor()
             }
             NativeCommand::Projects => crate::native::projects::build_cli(),
+            NativeCommand::RelationsHide => {
+                crate::native::relation_labels::write::build_cli_hide()
+            }
+            NativeCommand::RelationsList => {
+                crate::native::relation_labels::cli::build_cli_list()
+            }
+            NativeCommand::RelationsUnhide => {
+                crate::native::relation_labels::write::build_cli_unhide()
+            }
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
             NativeCommand::Stats => {
                 crate::native::stats::cli::overview_command()

@@ -474,6 +474,16 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["relations", "hide"],
+        arg: "label",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["relations", "unhide"],
+        arg: "label",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &[],
         arg: "published",
         kind: Kind::FreeText,

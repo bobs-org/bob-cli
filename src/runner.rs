@@ -271,6 +271,46 @@ Examples:
 See docs/stats.md for the catalog, JSON contract, and display rules.
 Run 'bob stats <command> --help' for more information on a command.";
 
+const RELATIONS_MEMBERS: &[Member] = &[
+    Member {
+        name: "hide",
+        about: "Hide relation labels from suggestions",
+        leaf: Leaf {
+            native_command: NativeCommand::RelationsHide,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List relation labels in the vault (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::RelationsList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "unhide",
+        about: "Show hidden relation labels in suggestions again",
+        leaf: Leaf {
+            native_command: NativeCommand::RelationsUnhide,
+            script_command: None,
+        },
+    },
+];
+
+const RELATIONS_AFTER_HELP: &str = "\
+Bare `bob relations` runs the read-only list.
+
+Examples:
+  bob relations                      Visible labels, most-used first
+  bob relations -q insp -f json      Rank inspiration matches as JSON
+  bob relations -a                   Include hidden labels
+  bob relations hide \"inspired by\"   Hide a label from suggestions
+  bob relations unhide \"inspired by\" Put a label back in suggestions
+
+See docs/task-relations.md for the label-vocabulary contract.
+Run 'bob relations <command> --help' for more information on a command.";
+
 const THEMES_MEMBERS: &[Member] = &[
     Member {
         name: "color",
@@ -509,6 +549,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Projects,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "relations",
+        about: "List, hide, and unhide relation labels",
+        section: Section::TasksAndProjects,
+        target: Target::Group(Group {
+            members: RELATIONS_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob relations` runs the read-only list. hide and unhide append to the vault journal.",
+            ),
+            after_help: RELATIONS_AFTER_HELP,
+            usage: "bob relations [COMMAND]",
         }),
     },
     Subcommand {
@@ -1675,6 +1729,9 @@ mod tests {
             NativeCommand::Pomodoro,
             NativeCommand::Projects,
             NativeCommand::Randomize,
+            NativeCommand::RelationsHide,
+            NativeCommand::RelationsList,
+            NativeCommand::RelationsUnhide,
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,

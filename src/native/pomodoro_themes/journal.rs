@@ -1,17 +1,19 @@
 use std::{
     collections::BTreeMap,
-    fs, io,
-    io::Write,
+    io,
     path::{Path, PathBuf},
 };
 
-use chrono::{DateTime, FixedOffset, Local, TimeZone};
+use chrono::{DateTime, FixedOffset};
 use serde_json::{json, Value};
 
-use crate::native::{env as bob_env, pomodoro_homes::Hue, vault_sync};
+use crate::native::{
+    plan_budget::normalize_component,
+    pomodoro_homes::Hue,
+    pref_journal::{self, StoredEvent},
+};
 
-const JOURNAL_DIR: &str = ".bob/themes";
-const MAX_MALFORMED_WARNINGS: usize = 8;
+const NAMESPACE: pref_journal::Namespace = pref_journal::THEMES;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EventPayload {
@@ -77,35 +79,15 @@ pub(crate) fn load_prefs(vault: &Path) -> io::Result<(Prefs, Vec<String>)> {
 }
 
 pub(crate) fn host_label() -> String {
-    vault_sync::hostname_slug()
-}
-
-pub(crate) fn journal_dir(vault: &Path) -> PathBuf {
-    vault.join(JOURNAL_DIR)
+    pref_journal::host_label()
 }
 
 pub(crate) fn host_journal_path(vault: &Path, host: &str) -> PathBuf {
-    journal_dir(vault).join(format!("{host}.jsonl"))
+    pref_journal::host_journal_path(vault, NAMESPACE, host)
 }
 
 pub(crate) fn event_timestamp() -> DateTime<FixedOffset> {
-    let naive = bob_env::current_datetime();
-    if let Some(timezone) = bob_env::configured_timezone()
-        && let Some(datetime) = timezone.from_local_datetime(&naive).single()
-    {
-        return datetime.fixed_offset();
-    }
-    Local
-        .from_local_datetime(&naive)
-        .single()
-        .or_else(|| Local.from_local_datetime(&naive).earliest())
-        .map(|datetime| datetime.fixed_offset())
-        .unwrap_or_else(|| {
-            DateTime::from_naive_utc_and_offset(
-                naive,
-                FixedOffset::east_opt(0).unwrap(),
-            )
-        })
+    pref_journal::event_timestamp()
 }
 
 pub(crate) fn serialize_event(
@@ -176,101 +158,46 @@ pub(crate) fn append_event_at(
     via: &str,
     ts: DateTime<FixedOffset>,
 ) -> io::Result<String> {
-    let directory = journal_dir(vault);
-    fs::create_dir_all(&directory)?;
-    let path = host_journal_path(vault, host);
     let line = serialize_event(ts, host, payload, via);
-    let mut options = fs::OpenOptions::new();
-    options.create(true).append(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o644);
-    }
-    let mut file = options.open(&path)?;
-    file.write_all(line.as_bytes())?;
+    pref_journal::append_line(vault, NAMESPACE, host, &line)?;
     Ok(line)
 }
 
 pub(crate) fn read_journal(
     vault: &Path,
 ) -> io::Result<(Vec<JournalEvent>, Vec<String>)> {
-    let directory = vault.join(JOURNAL_DIR);
-    if !directory.is_dir() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-
-    let mut paths = match fs::read_dir(&directory) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension().is_some_and(|ext| ext == "jsonl")
-                    && path.is_file()
-            })
-            .collect::<Vec<PathBuf>>(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        Err(error) => return Err(error),
-    };
-    paths.sort();
-
+    let (stored, warnings) = pref_journal::read_raw(vault, NAMESPACE)?;
     let mut events = Vec::new();
     let mut malformed = 0usize;
-    let mut warnings = Vec::new();
-    for path in paths {
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(_) => continue,
-        };
-        let relative = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
-            if line.is_empty()
-                || line.iter().all(|byte| byte.is_ascii_whitespace())
-            {
-                continue;
+    let mut warnings = warnings;
+    for event in &stored {
+        let Some(payload) = parse_payload(event) else {
+            malformed += 1;
+            if malformed <= pref_journal::MAX_MALFORMED_WARNINGS {
+                warnings.push(format!(
+                    "skipping malformed theme journal line {}:{}",
+                    event.path, event.line
+                ));
             }
-            let Ok(text) = std::str::from_utf8(line) else {
-                malformed += 1;
-                push_malformed(&mut warnings, &relative, index + 1, malformed);
-                continue;
-            };
-            let Some(event) = parse_event(
-                text,
-                &relative,
-                u32::try_from(index + 1).unwrap_or(u32::MAX),
-            ) else {
-                malformed += 1;
-                push_malformed(&mut warnings, &relative, index + 1, malformed);
-                continue;
-            };
-            events.push(event);
-        }
+            continue;
+        };
+        events.push(JournalEvent {
+            ts: event.ts,
+            host: event.host.clone(),
+            path: event.path.clone(),
+            line: event.line,
+            payload,
+        });
     }
-    if malformed > MAX_MALFORMED_WARNINGS {
+    if malformed > pref_journal::MAX_MALFORMED_WARNINGS {
         warnings
             .push(format!("skipped {malformed} malformed theme journal lines"));
     }
     Ok((events, warnings))
 }
 
-fn push_malformed(
-    warnings: &mut Vec<String>,
-    path: &str,
-    line: usize,
-    count: usize,
-) {
-    if count <= MAX_MALFORMED_WARNINGS {
-        warnings.push(format!(
-            "skipping malformed theme journal line {path}:{line}"
-        ));
-    }
-}
-
+/// Vector and fold tests decode journal lines directly.
+#[cfg(test)]
 pub(crate) fn parse_event(
     line: &str,
     path: &str,
@@ -289,75 +216,74 @@ pub(crate) fn parse_event(
     if host.is_empty() {
         return None;
     }
-    let kind = object.get("kind").and_then(Value::as_str)?;
-    let payload = match kind {
-        "theme.hide" => EventPayload::Hide {
+    let kind = object.get("kind").and_then(Value::as_str)?.to_string();
+    let stored = StoredEvent {
+        ts,
+        host,
+        path: path.to_string(),
+        line: line_number,
+        kind,
+        value,
+    };
+    let payload = parse_payload(&stored)?;
+    Some(JournalEvent {
+        ts: stored.ts,
+        host: stored.host.clone(),
+        path: stored.path.clone(),
+        line: stored.line,
+        payload,
+    })
+}
+
+fn parse_payload(event: &StoredEvent) -> Option<EventPayload> {
+    let object = event.value.as_object()?;
+    match event.kind.as_str() {
+        "theme.hide" => Some(EventPayload::Hide {
             key: required_key(object, "key")?,
-            name: optional_name(object, "name"),
-        },
-        "theme.unhide" => EventPayload::Unhide {
+            name: pref_journal::optional_name(object, "name"),
+        }),
+        "theme.unhide" => Some(EventPayload::Unhide {
             key: required_key(object, "key")?,
-            name: optional_name(object, "name"),
-        },
+            name: pref_journal::optional_name(object, "name"),
+        }),
         "theme.color" => {
             let hue = match object.get("hue") {
                 None => return None,
                 Some(Value::Null) => None,
                 Some(value) => Some(Hue::parse(value.as_str()?)?),
             };
-            EventPayload::Color {
+            Some(EventPayload::Color {
                 key: required_key(object, "key")?,
-                name: optional_name(object, "name"),
+                name: pref_journal::optional_name(object, "name"),
                 hue,
-            }
+            })
         }
-        "theme.rename" => EventPayload::Rename {
+        "theme.rename" => Some(EventPayload::Rename {
             from: required_key(object, "from")?,
             to: required_key(object, "to")?,
-            from_name: optional_name(object, "from_name"),
-            to_name: optional_name(object, "to_name"),
-        },
-        _ => return None,
-    };
-    Some(JournalEvent {
-        ts,
-        host,
-        path: path.to_string(),
-        line: line_number,
-        payload,
-    })
+            from_name: pref_journal::optional_name(object, "from_name"),
+            to_name: pref_journal::optional_name(object, "to_name"),
+        }),
+        _ => None,
+    }
 }
 
 fn required_key(
     object: &serde_json::Map<String, Value>,
     field: &str,
 ) -> Option<String> {
-    let key = object.get(field).and_then(Value::as_str)?.trim();
-    if key.is_empty() {
-        return None;
-    }
-    Some(crate::native::plan_budget::normalize_component(key))
-}
-
-fn optional_name(
-    object: &serde_json::Map<String, Value>,
-    field: &str,
-) -> String {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string()
+    pref_journal::required_key(object, field, normalize_component)
 }
 
 pub(crate) fn fold_events(events: &[JournalEvent]) -> Prefs {
     let mut ordered = events.iter().collect::<Vec<_>>();
-    ordered.sort_by(|left, right| {
-        left.ts
-            .cmp(&right.ts)
-            .then_with(|| left.host.cmp(&right.host))
-            .then_with(|| left.path.cmp(&right.path))
-            .then_with(|| left.line.cmp(&right.line))
+    pref_journal::sort_by_writer_order(&mut ordered, |event| {
+        (
+            event.ts,
+            event.host.as_str(),
+            event.path.as_str(),
+            event.line,
+        )
     });
 
     let mut prefs = Prefs::default();
@@ -373,17 +299,11 @@ pub(crate) fn fold_events(events: &[JournalEvent]) -> Prefs {
                 prefs.by_key.entry(key.clone()).or_default().pin = *hue;
             }
             EventPayload::Rename { from, to, .. } => {
-                if from == to {
-                    continue;
-                }
-                let source = prefs.by_key.get(from).cloned();
-                let target_has_state = prefs.by_key.contains_key(to);
-                if let Some(source) = source
-                    && !target_has_state
-                {
-                    prefs.by_key.insert(to.clone(), source);
-                    prefs.by_key.remove(from);
-                }
+                pref_journal::move_state_for_rename(
+                    &mut prefs.by_key,
+                    from,
+                    to,
+                );
             }
         }
     }

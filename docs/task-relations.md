@@ -623,3 +623,170 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LC12 | `toggle-dependency-chips` | toggles both relation rows with the dependency rows |
 | LC13 | malformed or not-a-line row | no chips |
 | LC14 | an entry typed in the editor before save | the target's chip row updates in the same session |
+
+## 16. Label vocabulary
+
+Rules RV1–RV4 and the `bob relations` list/hide side of RV7 are
+shipped. RV5, RV6, RV8, and RV9 are `planned (phase …)` until their
+phase lands.
+
+### RV1 Words
+
+- **Relation label** (contracts, CLI, JSON, code) is the optional text
+  on a LINKS entry. The UI mostly says **relation**. Never use
+  "description" in code or contracts: bob already uses it for task
+  text.
+- **Hide / Unhide / Show hidden.** Never "disable":
+  `disabled_reason` already means "cannot be inserted", and a hidden
+  label can still be inserted.
+- **One-off** `planned (phase double-pipe)`: a label created hidden
+  (`||`). Wording that is never suggested again, not an expiring
+  link. Relations are history.
+- **Naming in code:** `relation_labels` (Rust module),
+  `RelationLabel*` (Swift), `api.relationLabels` (JS).
+
+### RV2 Key, catalog, and display spelling
+
+- **Key.** `relation_label_key(label)` applies the writer
+  normalization (trim, collapse whitespace runs, strip one trailing
+  `:`) and then Unicode `to_lowercase`. This one function feeds the
+  catalog, the typed-row match, the journal, rename, and, through
+  vectors, the JS mirror. No NFC or other new equivalence.
+- **Catalog.** One row per key, counting every accepted LINKS entry
+  with that label: open, closed, `done/`, daily notes, nested
+  projects, and references. The walk visits every `.md` in sorted
+  path order (the dependency discover set, `done/` included),
+  byte-prefilters for `**LINKS`, then parses direct children of
+  `#task` lines with `task_relations::parse::links_children_of`.
+  Malformed lines are skipped with a bounded warning. Completion
+  tolerates them; rename refuses them. Never calls
+  `capture_dependency_tasks::discover`.
+- **Display spelling.** The most-used spelling of the key, with ties
+  going to the first seen. `spellings[]` lists every spelling with
+  its count, so case drift is visible.
+- **Inverse.** The §10 display-only table, matched case-insensitively
+  and never stored (`task_relations::label::inverse_phrase`).
+- **Journal-only keys.** A hidden key with zero uses stays listable
+  (count 0) from the journal's stored name, so it can always be found
+  and unhidden.
+
+### RV3 Preferences journal
+
+- **Location:** `.bob/relations/<host>.jsonl`, one append-only file
+  per host. The host label is the vault-sync host label.
+- **Events (`v: 1`):** `relation_label.hide` (`key`, `name`),
+  `relation_label.unhide` (`key`, `name`), and
+  `relation_label.rename` (`from`, `to`, `from_name`, `to_name`;
+  `planned (phase label-rename)`), each with `v`, `ts`, `host`, and
+  `via`.
+- **Fold:** exactly the theme rule, over the shared
+  `pref_journal` module: read every `*.jsonl`, skip malformed lines
+  with a bounded warning, sort by `(ts instant, host, path, line)`,
+  last writer wins per key, and a rename moves the source key's
+  explicit state unless the target already has state. Events after a
+  rename on the old key apply to the old key.
+- **Writers:** bob only. Appends happen under `bob_sync.lock` with a
+  3 s wait (busy gives `lock_busy`), one `O_APPEND` write per event,
+  and the directory is created on first use.
+- **Vault allowlist:** `!/.bob/relations/*.jsonl` in `.gitignore`,
+  and `.bob/relations/*.jsonl merge=union` in `.gitattributes`.
+
+### RV4 What hiding means
+
+- **Hiding removes a label from suggestions only.** Card rows, the
+  Obsidian stage, `relations list` defaults, and shell completion.
+  LINKS text, LINKED FROM mirrors, chips, counts, and typed use are
+  unchanged. The twin of `theme-hide-is-recent-only`.
+- **Using a hidden label never unhides it.** Typing its exact name
+  still works and is flagged `hidden`.
+- **No silent state.** Nothing auto-hides. A hide is always an
+  explicit Ctrl+D, `bob relations hide`, or `||`.
+
+### RV5 The relation card
+
+`planned (phase mac-chooser, phase mac-vocab, phase mac-rename)`.
+Ctrl+N/P navigate without touching the query, Tab accepts or
+completes the top match, selection is by key, Ctrl+D hides what
+Return would insert, Ctrl+H toggles the Hidden section, and Ctrl+R
+renames everywhere.
+
+### RV6 Capture grammar: `||`
+
+`planned (phase double-pipe)`. `~note:id||label` stores the plain
+label and, once the capture succeeds, hides it from suggestions with
+an amber warning when that hides an existing visible label.
+
+### RV7 Contracts
+
+Every `schema_version` stays 1; JSON grows additively.
+
+- **`bob relations`**: a group in **Tasks and projects**, between
+  `projects` and `task`. Its membership rule is "the
+  relation-label vocabulary" (the `bob themes` precedent: a catalog
+  noun whose `rename` also rewrites notes). A bare group runs the
+  read-only `list`. Hide and unhide do not rewrite task lines, so
+  they stay out of `bob task`, and nothing goes under `bob capture`.
+
+  ```text
+  bob relations [list] [-a/--all] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]
+  bob relations hide LABEL…   [-f/--format human|json] [--allow-unused]
+  bob relations rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]  (planned (phase label-rename))
+  bob relations unhide LABEL… [-f/--format human|json]
+  ```
+
+  Hidden internal arguments: `--via CLIENT` (default `bob-cli`) on
+  every writer, and `--allow-unused` on `hide`. Clients that hide a
+  label they just wrote, before bob can see it on disk, pass
+  `--allow-unused`.
+
+- **Human list** (mint relation accent on a TTY, dim counts; still
+  readable with `NO_COLOR`):
+
+  ```text
+  RELATIONS  3 labels · 6 links · 1 hidden
+    inspired by      3 links
+    implements       2 links
+    duplicate of     1 link     ⇄ duplicated by     ◌ hidden   (with -a)
+  ```
+
+- **JSON list:**
+  `{schema_version, ok, counts:{labels, links, hidden},
+  labels:[{key, name, count, hidden, inverse, spellings,
+  replacement, hide_replacement}], renamed_reappeared, warnings}`.
+  `renamed_reappeared` is always empty until `planned (phase
+  label-rename)`.
+- **Writers** emit `{schema_version, ok, …}`. Human hide output reads:
+  `🪢 Hid “implements” from relation suggestions · 2 links keep their
+  label · undo: bob relations unhide implements`.
+- **Refusal codes:** `unknown_label`, `invalid_label`, `unchanged`,
+  `label_exists` (planned (phase label-rename)),
+  `malformed_links_line` (planned (phase label-rename)),
+  `lock_busy`. `dirty_paths`, `not_a_worktree`, `sync_failed`,
+  `verify_failed`, and `stale_note` arrive with `planned (phase
+  label-rename)`.
+- **`capture-complete` `relation_label`** and **`capture` /
+  `--dry-run`**: `planned (phase label-complete, phase double-pipe)`.
+
+### RV8 The rename transaction
+
+`planned (phase rewrite-txn, phase label-rename)`. One previewed
+transaction and one revertable commit (`bob relations rename: OLD →
+NEW`), rewriting label spans in `done/` and the previous daily note:
+the recorded LR7 exception, limited to label spans only. Amend §13
+guarantee 6 and §6 when that phase lands.
+
+### RV9 Obsidian
+
+`planned (phase obsidian-vocab, phase obsidian-rename)`. One ranker
+and one key shared through byte-for-byte vectors, a read-only
+journal fold, `api.relationLabels` v1 with desktop-only
+hide/unhide/rename writes through bob, and the nav relation-label
+stage with the card's keys and copy.
+
+### Shared vectors
+
+`tests/fixtures/relation_labels/vectors.json` is the single source.
+Its `key`, `catalog`, `fold`, and `rank` sections are consumed by
+Rust tests; `grammar` (`rust_only`) and `rename` (`rust_only`)
+arrive with their phases. bob-plugins copies the file byte-for-byte
+when `planned (phase obsidian-vocab)` lands.

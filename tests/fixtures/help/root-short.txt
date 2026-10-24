@@ -13,6 +13,7 @@ Daily workflow:
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
+  relations   List, hide, and unhide relation labels
   task        Vault-wide task maintenance: archive, move, reconcile, reroll
 
 Vault:

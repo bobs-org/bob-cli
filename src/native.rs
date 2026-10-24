@@ -67,6 +67,7 @@ mod plugins;
 mod pomodoro;
 mod pomodoro_homes;
 mod pomodoro_themes;
+mod pref_journal;
 mod project_dependencies;
 mod projects;
 mod randomize;
@@ -74,6 +75,7 @@ mod randomize_plan;
 mod ref_jobs;
 pub(crate) mod ref_library;
 pub(crate) mod ref_tasks;
+mod relation_labels;
 mod stats;
 mod style;
 mod task_complete;
@@ -132,6 +134,9 @@ pub(crate) enum NativeCommand {
     ThemesList,
     ThemesRename,
     ThemesUnhide,
+    RelationsHide,
+    RelationsList,
+    RelationsUnhide,
     TmuxPomodoro,
     VaultSync,
 }
@@ -196,6 +201,9 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::StatsMetrics => stats::cli::run_metrics(args),
         NativeCommand::StatsShow => stats::cli::run_show(args),
         NativeCommand::TaskStatusHooks => task_status_hooks::run(args),
+        NativeCommand::RelationsHide => relation_labels::run_hide(args),
+        NativeCommand::RelationsList => relation_labels::run_list(args),
+        NativeCommand::RelationsUnhide => relation_labels::run_unhide(args),
         NativeCommand::ThemesColor => pomodoro_themes::run_color(args),
         NativeCommand::ThemesHide => pomodoro_themes::run_hide(args),
         NativeCommand::ThemesList => pomodoro_themes::run_list(args),

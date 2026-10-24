@@ -202,6 +202,7 @@ nav:
               - "bob themes": reference/cli/themes.md
           - "Tasks and projects":
               - "bob projects": reference/cli/projects.md
+              - "bob relations": reference/cli/relations.md
               - "bob task": reference/cli/task.md
           - "Vault":
               - "bob articles": reference/cli/articles.md

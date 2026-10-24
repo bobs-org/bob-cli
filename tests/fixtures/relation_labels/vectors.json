@@ -1,0 +1,305 @@
+{
+  "key": [
+    {
+      "name": "plain label lowercases",
+      "input": "Inspired By",
+      "expected": "inspired by"
+    },
+    {
+      "name": "whitespace collapses and trailing colon strips",
+      "input": "  Follow-up   of: ",
+      "expected": "follow-up of"
+    },
+    {
+      "name": "unicode lowercases without new equivalence",
+      "input": "Élan",
+      "expected": "élan"
+    },
+    {
+      "name": "inner colon survives",
+      "input": "see: also",
+      "expected": "see: also"
+    },
+    {
+      "name": "empty after collapse",
+      "input": "   :",
+      "expected": ""
+    },
+    {
+      "name": "already canonical",
+      "input": "duplicate of",
+      "expected": "duplicate of"
+    }
+  ],
+  "catalog": [
+    {
+      "name": "counts every scope including done",
+      "notes": [
+        {
+          "path": "work.md",
+          "body": "- [ ] Ship it #task ^a\n  - 🪢 **LINKS:** inspired by [[other#^x]] • implements [[other#^y]]\n"
+        },
+        {
+          "path": "more.md",
+          "body": "- [x] Done thing #task ^b\n  - 🪢 **LINKS:** Inspired By [[other#^x]] • duplicate of [[other#^z]]\n"
+        },
+        {
+          "path": "done/old_done.md",
+          "body": "- [x] Archived #task ^c\n  - 🪢 **LINKS:** implements [[other#^y]]\n"
+        }
+      ],
+      "expected": [
+        {
+          "key": "implements",
+          "name": "implements",
+          "count": 2,
+          "spellings": [{ "name": "implements", "count": 2 }],
+          "inverse": null
+        },
+        {
+          "key": "inspired by",
+          "name": "Inspired By",
+          "count": 2,
+          "spellings": [
+            { "name": "Inspired By", "count": 1 },
+            { "name": "inspired by", "count": 1 }
+          ],
+          "inverse": null
+        },
+        {
+          "key": "duplicate of",
+          "name": "duplicate of",
+          "count": 1,
+          "spellings": [{ "name": "duplicate of", "count": 1 }],
+          "inverse": "duplicated by"
+        }
+      ]
+    },
+    {
+      "name": "most-used spelling wins, first-seen breaks ties",
+      "notes": [
+        {
+          "path": "a.md",
+          "body": "- [ ] One #task ^a\n  - 🪢 **LINKS:** SEE [[o#^x]]\n- [ ] Two #task ^b\n  - 🪢 **LINKS:** see [[o#^y]]\n- [ ] Three #task ^c\n  - 🪢 **LINKS:** See [[o#^z]]\n"
+        },
+        {
+          "path": "b.md",
+          "body": "- [ ] Four #task ^d\n  - 🪢 **LINKS:** see [[o#^w]]\n"
+        }
+      ],
+      "expected": [
+        {
+          "key": "see",
+          "name": "see",
+          "count": 4,
+          "spellings": [
+            { "name": "see", "count": 2 },
+            { "name": "SEE", "count": 1 },
+            { "name": "See", "count": 1 }
+          ],
+          "inverse": null
+        }
+      ]
+    },
+    {
+      "name": "malformed, fenced, non-task, and template lines are skipped",
+      "warns": true,
+      "notes": [
+        {
+          "path": "ok.md",
+          "body": "- [ ] Real #task ^a\n  - 🪢 **LINKS:** see [[o#^x]]\n"
+        },
+        {
+          "path": "mess.md",
+          "body": "- [ ] Broken #task ^b\n  - 🪢 **LINKS:** [[o#^y]] trailing prose\n- [ ] Plain bullet\n  - 🪢 **LINKS:** see [[o#^z]]\n```\n- [ ] Fenced #task ^c\n  - 🪢 **LINKS:** see [[o#^w]]\n```\n"
+        },
+        {
+          "path": "_templates/daily.md",
+          "body": "- [ ] Template #task ^t\n  - 🪢 **LINKS:** see [[o#^v]]\n"
+        }
+      ],
+      "expected": [
+        {
+          "key": "see",
+          "name": "see",
+          "count": 1,
+          "spellings": [{ "name": "see", "count": 1 }],
+          "inverse": null
+        }
+      ]
+    },
+    {
+      "name": "inverse phrases resolve case-insensitively",
+      "notes": [
+        {
+          "path": "m.md",
+          "body": "- [ ] M #task ^a\n  - 🪢 **LINKS:** Merged Into [[o#^x]] • Split From [[o#^y]] • followed up by [[o#^z]]\n"
+        }
+      ],
+      "expected": [
+        {
+          "key": "followed up by",
+          "name": "followed up by",
+          "count": 1,
+          "spellings": [{ "name": "followed up by", "count": 1 }],
+          "inverse": null
+        },
+        {
+          "key": "merged into",
+          "name": "Merged Into",
+          "count": 1,
+          "spellings": [{ "name": "Merged Into", "count": 1 }],
+          "inverse": "merged from"
+        },
+        {
+          "key": "split from",
+          "name": "Split From",
+          "count": 1,
+          "spellings": [{ "name": "Split From", "count": 1 }],
+          "inverse": "split into"
+        }
+      ]
+    }
+  ],
+  "fold": [
+    {
+      "name": "hide then unhide across two hosts",
+      "events": [
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"implements\",\"name\":\"implements\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "mac.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:42:00-04:00\",\"host\":\"mac\",\"kind\":\"relation_label.unhide\",\"key\":\"implements\",\"name\":\"implements\",\"via\":\"bob-mac-capture\"}"
+        }
+      ],
+      "expected_hidden": [],
+      "expected_names": { "implements": "implements" }
+    },
+    {
+      "name": "last writer wins on equal timestamps by host",
+      "events": [
+        {
+          "path": "mac.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:42:00-04:00\",\"host\":\"mac\",\"kind\":\"relation_label.hide\",\"key\":\"see\",\"name\":\"see\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:42:00-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.unhide\",\"key\":\"see\",\"name\":\"see\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected_hidden": ["see"],
+      "expected_names": { "see": "see" }
+    },
+    {
+      "name": "rename moves explicit state",
+      "events": [
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"inspired by\",\"name\":\"inspired by\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 2,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T10:02:11-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.rename\",\"from\":\"inspired by\",\"to\":\"prompted by\",\"from_name\":\"inspired by\",\"to_name\":\"prompted by\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected_hidden": ["prompted by"],
+      "expected_names": { "prompted by": "inspired by" }
+    },
+    {
+      "name": "rename keeps target state",
+      "events": [
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"a\",\"name\":\"a\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 2,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:42:00-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.unhide\",\"key\":\"b\",\"name\":\"b\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 3,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T10:02:11-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.rename\",\"from\":\"a\",\"to\":\"b\",\"from_name\":\"a\",\"to_name\":\"b\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected_hidden": ["a"],
+      "expected_names": { "a": "a", "b": "b" }
+    },
+    {
+      "name": "malformed and foreign kinds are ignored",
+      "events": [
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "not json at all"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 2,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"theme.hide\",\"key\":\"x\",\"name\":\"x\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 3,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"see\",\"name\":\"see\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected_hidden": ["see"],
+      "expected_names": { "see": "see" }
+    }
+  ],
+  "rank": [
+    {
+      "name": "prefix before substring in catalog order",
+      "query": "imp",
+      "hidden": "exclude",
+      "labels": [
+        { "name": "see", "count": 5, "hidden": false },
+        { "name": "implements", "count": 2, "hidden": false },
+        { "name": "simple", "count": 7, "hidden": false }
+      ],
+      "expected": ["implements", "simple"]
+    },
+    {
+      "name": "empty query lists catalog order",
+      "query": "",
+      "hidden": "exclude",
+      "labels": [
+        { "name": "see", "count": 5, "hidden": false },
+        { "name": "implements", "count": 2, "hidden": false },
+        { "name": "duplicate of", "count": 5, "hidden": false }
+      ],
+      "expected": ["duplicate of", "see", "implements"]
+    },
+    {
+      "name": "hidden filter",
+      "query": "",
+      "hidden": "only",
+      "labels": [
+        { "name": "see", "count": 5, "hidden": true },
+        { "name": "implements", "count": 2, "hidden": false }
+      ],
+      "expected": ["see"]
+    },
+    {
+      "name": "query folds case and whitespace",
+      "query": "  INSPIRED   ",
+      "hidden": "exclude",
+      "labels": [
+        { "name": "uninspired", "count": 9, "hidden": false },
+        { "name": "inspired by", "count": 1, "hidden": false }
+      ],
+      "expected": ["inspired by", "uninspired"]
+    }
+  ]
+}

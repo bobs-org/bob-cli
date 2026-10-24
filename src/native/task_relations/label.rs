@@ -51,6 +51,34 @@ pub(crate) fn relation_label_quoted_form(label: &str) -> String {
     }
 }
 
+/// The `||` spelling of a canonical label: `||label` or `||"multi word"`.
+/// The stored Markdown is identical to the `|` form; `||` additionally
+/// hides the label from suggestions once the capture succeeds.
+pub(crate) fn relation_label_hide_form(label: &str) -> String {
+    if label.contains(' ') {
+        format!("||\"{label}\"")
+    } else {
+        format!("||{label}")
+    }
+}
+
+/// Display-only inverse phrase for a stored label
+/// (`docs/task-relations.md` §10), matched case-insensitively and
+/// never stored.
+pub(crate) fn inverse_phrase(label: &str) -> Option<&'static str> {
+    const INVERSES: &[(&str, &str)] = &[
+        ("merged into", "merged from"),
+        ("duplicate of", "duplicated by"),
+        ("follow-up of", "followed up by"),
+        ("superseded by", "supersedes"),
+        ("split from", "split into"),
+    ];
+    let collapsed = collapse_label_text(label);
+    INVERSES.iter().find_map(|(stored, inverse)| {
+        stored.eq_ignore_ascii_case(&collapsed).then_some(*inverse)
+    })
+}
+
 /// Reader-side label: the same collapse and character rules, any
 /// length. Empty after collapse is "no label".
 pub(crate) fn parse_relation_label(
