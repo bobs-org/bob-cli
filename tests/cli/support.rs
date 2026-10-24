@@ -53,6 +53,7 @@ pub(crate) fn bob_command() -> Command {
     let _ = fs::create_dir_all(&isolation);
     command.env("BOB_VAULT_SYNC_LOCK_FILE", isolation.join("bob_sync.lock"));
     command.env("XDG_STATE_HOME", isolation.join("state"));
+    command.env("XDG_CACHE_HOME", isolation.join("cache"));
     command
 }
 

@@ -133,6 +133,10 @@ fn run_bash_case(
         "export BOB_DIR={}\n",
         q(&vault.display().to_string())
     ));
+    script.push_str(&format!(
+        "export XDG_CACHE_HOME={}\n",
+        q(&temp.path().join("cache").display().to_string())
+    ));
     script.push_str(&format!("export BOB_NOW={}\n", q(BOB_NOW)));
     script.push_str(&format!(
         "export BOB_CONFIG_FILE={}\n",
@@ -426,6 +430,10 @@ fn bash_maps_dirs_directive() {
         q(&vault.display().to_string())
     ));
     script.push_str(&format!(
+        "export XDG_CACHE_HOME={}\n",
+        q(&temp.path().join("cache").display().to_string())
+    ));
+    script.push_str(&format!(
         "source {}\n",
         q(&adapter_path().display().to_string())
     ));
@@ -546,6 +554,7 @@ fn bash_readline_inserts_what_bob_returned() {
         .arg(adapter_path())
         .env("PATH", &path)
         .env("BOB_DIR", &vault)
+        .env("XDG_CACHE_HOME", dir.join("cache"))
         .env("BOB_NOW", BOB_NOW)
         .env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE)
         .env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER)
@@ -739,6 +748,7 @@ fn completion_command(temp: &TempDir, fake: &Path) -> Command {
     command
         .env("HOME", temp.path())
         .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .env("XDG_DATA_HOME", temp.path().join("data"))
         .env("SHELL", "/bin/bash")
         .env_remove("BASH_COMPLETION_USER_DIR")
@@ -919,6 +929,10 @@ fn bash_filters_create_target_by_extension() {
     script.push_str(&format!(
         "export BOB_DIR={}\n",
         q(&vault.display().to_string())
+    ));
+    script.push_str(&format!(
+        "export XDG_CACHE_HOME={}\n",
+        q(&temp.path().join("cache").display().to_string())
     ));
     script.push_str(&format!("export BOB_NOW={}\n", q(BOB_NOW)));
     script.push_str(&format!(

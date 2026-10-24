@@ -145,6 +145,7 @@ fn completion_command(temp: &TempDir, fake: &Path) -> Command {
     command
         .env("HOME", temp.path())
         .env("XDG_STATE_HOME", temp.path().join("state"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .env("XDG_DATA_HOME", temp.path().join("data"))
         .env("ZDOTDIR", temp.path().join("zdot"))
         .env("SHELL", "/bin/zsh")
@@ -1617,6 +1618,7 @@ fn probe_without_controlling_terminal_via_zpty() {
         .arg(&driver_path)
         .env("HOME", dir)
         .env("XDG_STATE_HOME", dir.join("state"))
+        .env("XDG_CACHE_HOME", dir.join("cache"))
         .env("XDG_DATA_HOME", dir.join("data"))
         .env("ZDOTDIR", dir.join("zdot"))
         .env("SHELL", "/bin/zsh")

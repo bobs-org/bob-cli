@@ -42,8 +42,9 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 ## PT3 — Cache
 
-- **Location:** `bob_cli_cache_dir()/themes/catalog-v1.json`, keyed by vault
-  root. Machine-local, never synced, disposable.
+- **Location:** `bob_cli_cache_dir()/themes/catalog-v1.json` and
+  `known-keys-v1.json`, each keyed by vault root. Machine-local, never synced,
+  disposable.
 - **Contents:** a per-file `(mtime_ns, size)` fingerprint and that file's
   theme summary.
 - Completion also keeps a disposable per-vault
@@ -58,6 +59,10 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 - Rebuild on a corrupt or missing cache, after a rename, and with `--fresh`.
   The rename preview always rescans from source.
 - Writes are atomic (temp file + rename).
+- Stores prune entries for vault roots that no longer exist. When the catalog
+  prunes a root, it also removes completion views not associated with a
+  remaining vault and atomic-write temp files older than ten minutes, keeping
+  the machine-local cache bounded by live vaults.
 - **Budget:** warm `capture-complete` and `capture-parse` stay within +5 ms
   p95 of today's baseline on apollo against the live vault. `bob themes list`
   uses the same source cache.

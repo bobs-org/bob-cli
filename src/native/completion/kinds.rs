@@ -481,6 +481,16 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["themes", "rename"],
+        arg: "old",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["themes", "rename"],
+        arg: "new",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["relations", "hide"],
         arg: "label",
         kind: Kind::FreeText,

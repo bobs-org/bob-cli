@@ -487,7 +487,7 @@ fn load_records(
         ..vault_cache.clone()
     };
     cache_file.version = 1;
-    cache::store(&cache_file);
+    cache::store(&cache_file, Some(&key));
     cache::store_completion(
         vault,
         today,

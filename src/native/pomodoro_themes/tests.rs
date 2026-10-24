@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs,
+    time::{Duration, SystemTime},
 };
 
 use chrono::NaiveDate;
@@ -27,6 +28,102 @@ fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
             Some(OsStr::new("/nonexistent/bob-cli-test-config.yml")),
         ),
     ])
+}
+
+#[test]
+fn catalog_store_prunes_vanished_vaults_and_sweeps_orphan_files() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let live = tempfile::tempdir().expect("live vault");
+    let vanished = tempfile::tempdir().expect("vanished vault");
+    let live_key = super::cache::vault_key(live.path());
+    let vanished_key = super::cache::vault_key(vanished.path());
+    let catalog = super::cache::CacheFile {
+        version: 1,
+        vaults: BTreeMap::from([
+            (live_key.clone(), super::cache::VaultCache::default()),
+            (vanished_key.clone(), super::cache::VaultCache::default()),
+        ]),
+    };
+    super::cache::store(&catalog, None);
+
+    let themes_dir = super::cache::cache_path()
+        .parent()
+        .expect("themes cache directory")
+        .to_path_buf();
+    let live_completion = super::cache::completion_path(live.path());
+    let orphan_completion =
+        themes_dir.join(format!("completion-v1-{}.json", "0".repeat(64)));
+    let stale_temp = themes_dir.join("catalog-v1.json.123.tmp");
+    let fresh_temp = themes_dir.join("catalog-v1.json.456.tmp");
+    fs::write(&live_completion, "live completion").unwrap();
+    fs::write(&orphan_completion, "orphan completion").unwrap();
+    fs::write(&stale_temp, "stale write").unwrap();
+    fs::write(&fresh_temp, "active write").unwrap();
+    let stale_file = fs::File::options().write(true).open(&stale_temp).unwrap();
+    stale_file
+        .set_times(
+            fs::FileTimes::new().set_modified(
+                SystemTime::now() - Duration::from_secs(10 * 60 + 1),
+            ),
+        )
+        .unwrap();
+
+    drop(vanished);
+    super::cache::store(&catalog, Some(&live_key));
+
+    let stored = super::cache::load();
+    assert!(stored.vaults.contains_key(&live_key));
+    assert!(!stored.vaults.contains_key(&vanished_key));
+    assert!(live_completion.exists(), "live completion view is kept");
+    assert!(!orphan_completion.exists(), "orphan view is removed");
+    assert!(!stale_temp.exists(), "stale atomic-write temp is removed");
+    assert!(fresh_temp.exists(), "fresh atomic-write temp is kept");
+}
+
+#[test]
+fn known_keys_store_prunes_vanished_vaults() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let vanished = tempfile::tempdir().expect("vanished vault");
+    let live = tempfile::tempdir().expect("live vault");
+    let vanished_key = super::cache::vault_key(vanished.path());
+    let live_key = super::cache::vault_key(live.path());
+    let today = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+    let years = BTreeMap::new();
+    super::cache::store_known_keys(
+        vanished.path(),
+        today,
+        super::cache::now_unix(),
+        &years,
+        BTreeSet::from(["vanished".to_string()]),
+    );
+    super::cache::store_known_keys(
+        live.path(),
+        today,
+        super::cache::now_unix(),
+        &years,
+        BTreeSet::from(["live".to_string()]),
+    );
+
+    drop(vanished);
+    super::cache::store_known_keys(
+        live.path(),
+        today,
+        super::cache::now_unix(),
+        &years,
+        BTreeSet::from(["live".to_string()]),
+    );
+
+    let known_keys = super::cache::cache_path()
+        .parent()
+        .expect("themes cache directory")
+        .join("known-keys-v1.json");
+    let stored: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(known_keys).unwrap()).unwrap();
+    let vaults = stored["vaults"].as_object().expect("vault map");
+    assert!(vaults.contains_key(&live_key));
+    assert!(!vaults.contains_key(&vanished_key));
 }
 
 #[derive(Debug, Deserialize)]

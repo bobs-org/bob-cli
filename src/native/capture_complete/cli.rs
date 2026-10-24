@@ -124,7 +124,9 @@ substring matches, then utility rows. Recent comes from canonical daily \
 notes, excludes hidden themes and components already represented by Today, \
 and is capped at five rows for an empty query or twelve otherwise. Hidden \
 themes still work when typed and still appear in Today. An exact Today or \
-Recent match suppresses a separate create row; a prefix match does not.\n\n\
+Recent match suppresses a separate create row; a prefix match does not. \
+A create row sets creates_pomodoro and replaces the query with the canonical selector; \
+accepting it edits only the draft, and `bob capture` creates the named placeholder later.\n\n\
 Recent rows set origin=history, last_used, days_used, and creates_pomodoro. \
 Named rows expose their component themes and hues. A create row may set \
 hidden or similar_to to explain an existing preference or nearby name. \
@@ -132,8 +134,7 @@ Recent, create, and again rows preview the plan budget with plan_themes_after \
 and plan_themes_cap (omitted when the daily note or plan config is unavailable). \
 Replacements preserve the displayed name, using an exact-name quoted literal \
 when a plain selector would change it or select another theme. Partial quoted \
-names match theme-key prefixes; plain names also match slug substrings. \
-Accepting a row edits the draft; `bob capture` performs the eventual write.\n\n\
+names match theme-key prefixes; plain names also match slug substrings.\n\n\
 Pomodoro-start-name completion covers the name part of a `=<X>#name` named \
 start and the `=<X>#` incomplete state. A planned placeholder that a bare \
 `=` would start carries next_up. Nameable utility rows set requires_name \

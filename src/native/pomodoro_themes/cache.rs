@@ -83,6 +83,10 @@ fn known_keys_path() -> PathBuf {
         .join("known-keys-v1.json")
 }
 
+fn themes_dir() -> PathBuf {
+    bob_env::bob_cli_cache_dir().join("themes")
+}
+
 fn load_known_keys_file() -> KnownKeysFile {
     let Ok(text) = fs::read_to_string(known_keys_path()) else {
         return KnownKeysFile {
@@ -99,9 +103,10 @@ fn load_known_keys_file() -> KnownKeysFile {
     }
 }
 
-fn store_known_keys_file(cache: &KnownKeysFile) {
+fn store_known_keys_file(mut cache: KnownKeysFile, keep_key: Option<&str>) {
+    prune_vaults(&mut cache.vaults, keep_key);
     let path = known_keys_path();
-    let Ok(text) = serde_json::to_string(cache) else {
+    let Ok(text) = serde_json::to_string(&cache) else {
         return;
     };
     let _ = collect_done::atomic_write(&path, &text);
@@ -156,7 +161,7 @@ pub(crate) fn store_known_keys(
     let mut cache = load_known_keys_file();
     cache.version = KNOWN_KEYS_VERSION;
     cache.vaults.insert(
-        key,
+        key.clone(),
         KnownKeysVault {
             today: today.to_string(),
             today_file,
@@ -165,7 +170,7 @@ pub(crate) fn store_known_keys(
             keys,
         },
     );
-    store_known_keys_file(&cache);
+    store_known_keys_file(cache, Some(&key));
 }
 
 pub(crate) fn vault_key(vault: &Path) -> String {
@@ -190,12 +195,14 @@ struct CompletionCache {
     warnings: Vec<String>,
 }
 
-fn completion_path(vault: &Path) -> PathBuf {
+pub(super) fn completion_path(vault: &Path) -> PathBuf {
+    completion_path_for_key(&vault_key(vault))
+}
+
+fn completion_path_for_key(key: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
-    let key = hex::encode(Sha256::digest(vault_key(vault).as_bytes()));
-    bob_env::bob_cli_cache_dir()
-        .join("themes")
-        .join(format!("completion-v1-{key}.json"))
+    let hash = hex::encode(Sha256::digest(key.as_bytes()));
+    themes_dir().join(format!("completion-v1-{hash}.json"))
 }
 
 fn source_fingerprint() -> Option<FileFingerprint> {
@@ -278,12 +285,72 @@ pub(crate) fn load() -> CacheFile {
     }
 }
 
-pub(crate) fn store(cache: &CacheFile) {
+pub(crate) fn store(cache: &CacheFile, keep_key: Option<&str>) {
+    let mut cache = cache.clone();
+    let pruned = prune_vaults(&mut cache.vaults, keep_key);
     let path = cache_path();
-    let Ok(text) = serde_json::to_string(cache) else {
+    let Ok(text) = serde_json::to_string(&cache) else {
         return;
     };
     let _ = collect_done::atomic_write(&path, &text);
+    if pruned {
+        sweep_orphaned_files(&cache.vaults);
+    }
+}
+
+fn prune_vaults<T>(
+    vaults: &mut BTreeMap<String, T>,
+    keep_key: Option<&str>,
+) -> bool {
+    let previous_len = vaults.len();
+    vaults.retain(|key, _| {
+        Some(key.as_str()) == keep_key || Path::new(key).is_dir()
+    });
+    vaults.len() != previous_len
+}
+
+fn sweep_orphaned_files(vaults: &BTreeMap<String, VaultCache>) {
+    let live_hashes: BTreeSet<String> =
+        vaults.keys().map(|key| completion_file_hash(key)).collect();
+    let directory = themes_dir();
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(hash) = name
+            .strip_prefix("completion-v1-")
+            .and_then(|name| name.strip_suffix(".json"))
+            .filter(|hash| {
+                hash.len() == 64
+                    && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+        {
+            if !live_hashes.contains(hash) {
+                let _ = fs::remove_file(path);
+            }
+            continue;
+        }
+        if path.extension().is_some_and(|extension| extension == "tmp") {
+            let stale = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age.as_secs() >= 10 * 60);
+            if stale {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn completion_file_hash(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(key.as_bytes()))
 }
 
 pub(crate) fn fingerprint(path: &Path) -> Option<(u64, u64)> {
@@ -337,7 +404,7 @@ pub(crate) fn invalidate_vault(vault: &Path) {
     let mut cache = load();
     cache.vaults.remove(&key);
     cache.version = CACHE_VERSION;
-    store(&cache);
+    store(&cache, None);
     let _ = fs::remove_file(known_keys_path());
     let _ = fs::remove_file(completion_path(vault));
 }
