@@ -106,6 +106,9 @@ impl NativeCommand {
             NativeCommand::RelationsList => {
                 crate::native::relation_labels::cli::build_cli_list()
             }
+            NativeCommand::RelationsRename => {
+                crate::native::relation_labels::rename::build_cli_rename()
+            }
             NativeCommand::RelationsUnhide => {
                 crate::native::relation_labels::write::build_cli_unhide()
             }

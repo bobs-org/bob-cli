@@ -289,6 +289,14 @@ const RELATIONS_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "rename",
+        about: "Rename a relation label everywhere in one commit",
+        leaf: Leaf {
+            native_command: NativeCommand::RelationsRename,
+            script_command: None,
+        },
+    },
+    Member {
         name: "unhide",
         about: "Show hidden relation labels in suggestions again",
         leaf: Leaf {
@@ -306,6 +314,7 @@ Examples:
   bob relations -q insp -f json      Rank inspiration matches as JSON
   bob relations -a                   Include hidden labels
   bob relations hide \"inspired by\"   Hide a label from suggestions
+  bob relations rename OLD NEW       Rename a label everywhere
   bob relations unhide \"inspired by\" Put a label back in suggestions
 
 See docs/task-relations.md for the label-vocabulary contract.
@@ -553,13 +562,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "relations",
-        about: "List, hide, and unhide relation labels",
+        about: "List, hide, unhide, and rename relation labels",
         section: Section::TasksAndProjects,
         target: Target::Group(Group {
             members: RELATIONS_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob relations` runs the read-only list. hide and unhide append to the vault journal.",
+                "Bare `bob relations` runs the read-only list. hide and unhide append to the vault journal; rename commits one verified vault rewrite.",
             ),
             after_help: RELATIONS_AFTER_HELP,
             usage: "bob relations [COMMAND]",
@@ -1731,6 +1740,7 @@ mod tests {
             NativeCommand::Randomize,
             NativeCommand::RelationsHide,
             NativeCommand::RelationsList,
+            NativeCommand::RelationsRename,
             NativeCommand::RelationsUnhide,
             NativeCommand::Stats,
             NativeCommand::StatsMetrics,

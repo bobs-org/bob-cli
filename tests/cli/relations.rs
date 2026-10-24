@@ -63,6 +63,7 @@ fn relations_help_is_in_tasks_and_projects_and_lists_options() {
         "default list:\n{help}"
     );
     assert!(help.contains("list"), "member list:\n{help}");
+    assert!(help.contains("rename"), "member rename:\n{help}");
     assert!(help.contains("hide"), "member hide:\n{help}");
     assert!(help.contains("unhide"), "member unhide:\n{help}");
     assert!(
@@ -101,6 +102,24 @@ fn relations_help_is_in_tasks_and_projects_and_lists_options() {
             &["-b, --bob-dir", "-f, --format", "-h, --help"],
         );
     }
+
+    let rename = bob_command()
+        .args(["relations", "rename", "--help"])
+        .output()
+        .expect("bob relations rename --help");
+    assert_success(&rename);
+    assert_text_order(
+        &stdout(&rename),
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-m, --merge",
+            "-o, --offline",
+        ],
+    );
+    assert!(stdout(&rename).contains("<OLD> <NEW>"));
 }
 
 #[test]

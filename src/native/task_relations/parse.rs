@@ -5,7 +5,7 @@
 //! gaps: before each LINKS link, and in `(…)` after each LINKED FROM
 //! link.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ops::Range};
 
 use super::super::task_dependencies::{
     block_link_spans, blocks::has_task_tag, BlockLinkSpan,
@@ -42,6 +42,15 @@ pub(crate) struct LinksChild {
 pub(crate) struct LinkedFromChild {
     pub(crate) line_index: usize,
     pub(crate) parsed: LinkedFromLine,
+}
+
+/// The source span and parsed value of one relation label on a managed
+/// relation line. Spans are byte ranges local to the line, so callers can
+/// replace only label text while preserving every other authored byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RelationLabelSpan {
+    pub(crate) range: Range<usize>,
+    pub(crate) label: String,
 }
 
 pub(crate) fn parse_links_line(line: &str) -> LinksLine {
@@ -125,6 +134,102 @@ pub(crate) fn linked_from_children_of(
     .into_iter()
     .map(|(line_index, parsed)| LinkedFromChild { line_index, parsed })
     .collect()
+}
+
+/// Relation-label spans on an accepted LINKS line. `None` means the line
+/// is not an accepted LINKS line; an empty vector means it is valid and has
+/// no labels.
+pub(crate) fn links_label_spans(line: &str) -> Option<Vec<RelationLabelSpan>> {
+    let Some(Ok(header)) = parse_header(line) else {
+        return None;
+    };
+    if header.kind != LineKind::Links {
+        return None;
+    }
+    parse_links_entries(line, &header)?;
+    let spans = relevant_spans(line, header.label_end);
+    let mut labels = Vec::new();
+    let mut previous_end = header.label_end;
+    for (index, span) in spans.iter().enumerate() {
+        let gap = &line[previous_end..span.full_start];
+        let (raw, base) = if index == 0 {
+            (gap, previous_end)
+        } else {
+            let raw = skip_one_separator(gap);
+            (raw, previous_end + gap.len() - raw.len())
+        };
+        if let Some(label) = parsed_label_span(raw, base) {
+            labels.push(label);
+        } else if let Some(label) = alias_label_span(line, span) {
+            labels.push(label);
+        }
+        previous_end = span.full_end;
+    }
+    Some(labels)
+}
+
+/// Relation-label spans on an accepted LINKED FROM line. `None` means the
+/// line is not an accepted LINKED FROM line; an empty vector means it is
+/// valid and has no labels.
+pub(crate) fn linked_from_label_spans(
+    line: &str,
+) -> Option<Vec<RelationLabelSpan>> {
+    let Some(Ok(header)) = parse_header(line) else {
+        return None;
+    };
+    if header.kind != LineKind::LinkedFrom {
+        return None;
+    }
+    parse_linked_from_entries(line, &header)?;
+    let spans = relevant_spans(line, header.label_end);
+    let mut labels = Vec::new();
+    for (index, span) in spans.iter().enumerate() {
+        let end = spans
+            .get(index + 1)
+            .map_or(line.len(), |next| next.full_start);
+        let gap = &line[span.end..end];
+        if let Some(label) = parenthesized_label_span(gap, span.end) {
+            labels.push(label);
+        } else if let Some(label) = alias_label_span(line, span) {
+            labels.push(label);
+        }
+    }
+    Some(labels)
+}
+
+fn parsed_label_span(raw: &str, base: usize) -> Option<RelationLabelSpan> {
+    let start = raw.len() - raw.trim_start().len();
+    let trimmed = raw.trim();
+    let label = parse_relation_label(trimmed).ok()??;
+    Some(RelationLabelSpan {
+        range: base + start..base + start + trimmed.len(),
+        label,
+    })
+}
+
+fn parenthesized_label_span(
+    gap: &str,
+    base: usize,
+) -> Option<RelationLabelSpan> {
+    let leading = gap.len() - gap.trim_start().len();
+    let trimmed = gap.trim_start();
+    let inner = trimmed.strip_prefix('(')?;
+    let close = inner.find(')')?;
+    let raw = &inner[..close];
+    parsed_label_span(raw, base + leading + 1)
+}
+
+fn alias_label_span(
+    line: &str,
+    span: &BlockLinkSpan,
+) -> Option<RelationLabelSpan> {
+    if !span.aliased {
+        return None;
+    }
+    let inside_start = span.open + 2;
+    let inside = &line[inside_start..span.end - 2];
+    let (target, alias) = inside.split_once('|')?;
+    parsed_label_span(alias, inside_start + target.len() + 1)
 }
 
 fn relation_children<T>(
@@ -295,9 +400,7 @@ fn parse_linked_from_gap(gap: &str, is_last: bool) -> Option<Option<String>> {
             return None;
         }
         label = parse_relation_label(inside).ok()?;
-        if label.is_none() {
-            return None;
-        }
+        label.as_ref()?;
         rest = inner[close + 1..].trim_start();
     }
     if is_last {

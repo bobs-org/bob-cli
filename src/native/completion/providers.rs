@@ -39,10 +39,39 @@ pub(crate) fn vault_lines(
         Kind::Plugin => Some(plugins(context)),
         Kind::Level => Some(levels()),
         Kind::Metric => Some(metrics()),
+        Kind::RelationLabel => Some(relation_labels(context)),
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
+}
+
+/// Relation labels, including hidden labels so rename can recover a label
+/// that is no longer suggested by the default list.
+fn relation_labels(context: &Context) -> Vec<String> {
+    let Ok(catalog) =
+        crate::native::relation_labels::Catalog::load(&context.bob_dir)
+    else {
+        return Vec::new();
+    };
+    catalog
+        .records()
+        .filter_map(|record| {
+            let hidden = catalog.is_hidden(&record.key);
+            let description = format!(
+                "{} link{}{}",
+                record.count,
+                if record.count == 1 { "" } else { "s" },
+                if hidden { " · hidden" } else { "" },
+            );
+            protocol::candidate_line(
+                OsStr::new(&record.name),
+                &description,
+                "relation labels",
+                false,
+            )
+        })
+        .collect()
 }
 
 /// Routes in capture-targets scan order: the default inbox, then

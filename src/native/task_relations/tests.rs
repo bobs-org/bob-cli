@@ -15,8 +15,8 @@ use super::format::{
 };
 use super::label::LabelError;
 use super::parse::{
-    linked_from_children_of, links_children_of, parse_linked_from_line,
-    parse_links_line,
+    linked_from_children_of, linked_from_label_spans, links_children_of,
+    links_label_spans, parse_linked_from_line, parse_links_line,
 };
 use super::plan::{
     linked_from_desired_after_delta, plan_linked_from_line, plan_links_edit,
@@ -49,6 +49,30 @@ fn accepted_from(line: &str) -> (usize, bool, Vec<Option<String>>) {
             panic!("expected accepted LINKED FROM line, got {other:?}: {line}")
         }
     }
+}
+
+#[test]
+fn relation_label_spans_cover_links_gaps_mirrors_and_aliases() {
+    let links = "- 🪢 **LINKS:** old [[#^a]] • [[#^b|old]]";
+    let spans = links_label_spans(links).expect("accepted LINKS spans");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| (&links[span.range.clone()], span.label.as_str()))
+            .collect::<Vec<_>>(),
+        [("old", "old"), ("old", "old")]
+    );
+
+    let mirrors = "- 🪢 **LINKED FROM:** [[#^a]] (old) • [[#^b|old]]";
+    let spans =
+        linked_from_label_spans(mirrors).expect("accepted mirror spans");
+    assert_eq!(
+        spans
+            .iter()
+            .map(|span| (&mirrors[span.range.clone()], span.label.as_str()))
+            .collect::<Vec<_>>(),
+        [("old", "old"), ("old", "old")]
+    );
 }
 
 // LK1–LK20: `docs/task-relations.md` parse vectors.

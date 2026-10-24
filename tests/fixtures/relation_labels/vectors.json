@@ -211,7 +211,7 @@
         }
       ],
       "expected_hidden": ["prompted by"],
-      "expected_names": { "prompted by": "inspired by" }
+      "expected_names": { "prompted by": "prompted by" }
     },
     {
       "name": "rename keeps target state",
@@ -234,6 +234,23 @@
       ],
       "expected_hidden": ["a"],
       "expected_names": { "a": "a", "b": "b" }
+    },
+    {
+      "name": "case-only rename updates journal display spelling",
+      "events": [
+        {
+          "path": "apollo.jsonl",
+          "line": 1,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T09:41:07-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"inspired by\",\"name\":\"inspired by\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "path": "apollo.jsonl",
+          "line": 2,
+          "body": "{\"v\":1,\"ts\":\"2026-10-24T10:02:11-04:00\",\"host\":\"apollo\",\"kind\":\"relation_label.rename\",\"from\":\"inspired by\",\"to\":\"inspired by\",\"from_name\":\"inspired by\",\"to_name\":\"Inspired By\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected_hidden": ["inspired by"],
+      "expected_names": { "inspired by": "Inspired By" }
     },
     {
       "name": "malformed and foreign kinds are ignored",

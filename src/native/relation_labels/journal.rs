@@ -17,9 +17,11 @@
 //! happen under `bob_sync.lock` with a 3 s wait, one `O_APPEND` write
 //! per event, and the directory is created on first use.
 
-#[cfg(test)]
-use std::path::PathBuf;
-use std::{collections::BTreeMap, io, path::Path};
+use std::{
+    collections::BTreeMap,
+    io,
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, FixedOffset};
 use serde_json::{json, Value};
@@ -77,6 +79,10 @@ impl Prefs {
     pub(crate) fn names(&self) -> impl Iterator<Item = (&String, &String)> {
         self.by_key.iter().map(|(key, pref)| (key, &pref.name))
     }
+
+    pub(crate) fn has_explicit_state(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
 }
 
 pub(crate) fn load_prefs(vault: &Path) -> io::Result<(Prefs, Vec<String>)> {
@@ -89,7 +95,6 @@ pub(crate) fn host_label() -> String {
 }
 
 /// Tests locate the host file a write just appended.
-#[cfg(test)]
 pub(crate) fn host_journal_path(vault: &Path, host: &str) -> PathBuf {
     pref_journal::host_journal_path(vault, NAMESPACE, host)
 }
@@ -290,20 +295,37 @@ pub(crate) fn fold_events(events: &[JournalEvent]) -> Prefs {
                 }
             }
             EventPayload::Rename {
-                from, to, to_name, ..
+                from,
+                to,
+                from_name: _,
+                to_name,
             } => {
-                pref_journal::move_state_for_rename(
-                    &mut prefs.by_key,
-                    from,
-                    to,
-                );
-                // The target keeps its stored name unless the rename
-                // supplies one and the target has no name yet.
-                if !to_name.is_empty()
-                    && let Some(slot) = prefs.by_key.get_mut(to)
-                    && slot.name.is_empty()
-                {
-                    slot.name = to_name.clone();
+                if from == to {
+                    // Case-only renames keep the same preference key but
+                    // still update the fallback display spelling for a
+                    // journal-only label.
+                    if let Some(slot) = prefs.by_key.get_mut(to)
+                        && !to_name.is_empty()
+                    {
+                        slot.name = to_name.clone();
+                    }
+                } else {
+                    let target_had_state = prefs.by_key.contains_key(to);
+                    let source_had_state = prefs.by_key.contains_key(from);
+                    pref_journal::move_state_for_rename(
+                        &mut prefs.by_key,
+                        from,
+                        to,
+                    );
+                    // The target keeps its stored name unless the rename
+                    // supplies one and the target has no name yet.
+                    if source_had_state
+                        && !target_had_state
+                        && !to_name.is_empty()
+                        && let Some(slot) = prefs.by_key.get_mut(to)
+                    {
+                        slot.name = to_name.clone();
+                    }
                 }
             }
         }

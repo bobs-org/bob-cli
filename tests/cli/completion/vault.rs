@@ -172,6 +172,46 @@ fn routes_are_grouped_in_scan_order() {
 }
 
 #[test]
+fn relation_rename_arguments_complete_catalog_labels_including_hidden() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("relations.md"),
+        "- [ ] Source #task ^source\n  - 🪢 **LINKS:** old label [[cash#^buy-milk]]\n",
+    );
+    write_file(
+        &fixture.vault.join(".bob/relations/apollo.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"hidden label\",\"name\":\"hidden label\",\"via\":\"test\"}\n",
+    );
+
+    let old = complete(&fixture, &["bob", "relations", "rename", ""]);
+    assert_success(&old);
+    assert!(
+        values(&old).contains(&"old label".to_string()),
+        "{}",
+        stdout(&old)
+    );
+    assert!(
+        values(&old).contains(&"hidden label".to_string()),
+        "{}",
+        stdout(&old)
+    );
+
+    let new =
+        complete(&fixture, &["bob", "relations", "rename", "old label", ""]);
+    assert_success(&new);
+    assert!(
+        values(&new).contains(&"old label".to_string()),
+        "{}",
+        stdout(&new)
+    );
+    assert!(
+        values(&new).contains(&"hidden label".to_string()),
+        "{}",
+        stdout(&new)
+    );
+}
+
+#[test]
 fn sections_follow_long_short_and_attached_route_forms() {
     let fixture = fixture();
     let expected = concat!(

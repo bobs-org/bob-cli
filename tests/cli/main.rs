@@ -20,6 +20,7 @@ mod projects;
 mod ready;
 mod ref_library;
 mod relations;
+mod relations_rename;
 mod stats;
 mod support;
 mod task_move;

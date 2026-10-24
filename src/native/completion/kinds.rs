@@ -45,6 +45,8 @@ pub(crate) enum Kind {
     Level,
     /// A Daily Stats metric id from the live config registry.
     Metric,
+    /// A relation label from the live relation catalog.
+    RelationLabel,
     /// A vault note, completed as a path relative to the vault root.
     VaultNote,
     /// An article note, completed with its current section count.
@@ -482,6 +484,16 @@ const TABLE: &[Entry] = &[
         path: &["relations", "hide"],
         arg: "label",
         kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["relations", "rename"],
+        arg: "new",
+        kind: Kind::RelationLabel,
+    },
+    Entry {
+        path: &["relations", "rename"],
+        arg: "old",
+        kind: Kind::RelationLabel,
     },
     Entry {
         path: &["relations", "unhide"],

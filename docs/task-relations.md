@@ -239,9 +239,15 @@ T owns a LINKED FROM line ⇔ mirror(T) ≠ ∅ ∧ T is writable (not done/, no
   S's note has duplicate block ids, existing LINKED FROM entries
   naming S are kept and S is never newly added.
 - **The `done/` read is narrow.** Byte-prefilter every `done/**/*.md`
-  for `LINKS`, parse only those files, and never write there.
+  for `LINKS`, parse only those files, and never write there during
+  reconcile. The explicit rename exception below changes label spans
+  only.
   Document it beside the exact-`done/`-target exception in
   `docs/task-status-hooks.md`.
+- **Rename exception (LR7).** `bob relations rename` rewrites matching
+  label spans in `LINKS` and `LINKED FROM`, including `done/` and the
+  previous daily note. It preserves each edge and every other byte;
+  no other relation writer can change those notes.
 
 ## 7. Reconciliation
 
@@ -443,8 +449,9 @@ group in the dependency style, and `--dry-run` previews all of it.
    the stored mirror.
 5. **Convergence (LR3).** Canonical sorting makes two machines produce
    the same bytes, and the next reconcile heals any textual conflict.
-6. **Read-only respect (LR7).** No relation write touches `done/` or
-   the previous daily note.
+6. **Read-only respect (LR7).** Relation writes leave `done/` and the
+   previous daily note alone, except `bob relations rename`, which
+   rewrites relation-label spans only and preserves every other byte.
 
 ## 14. Lifecycle
 
@@ -630,9 +637,8 @@ group in the dependency style, and `--dry-run` previews all of it.
 
 ## 16. Label vocabulary
 
-Rules RV1–RV4 and the `bob relations` list/hide side of RV7 are
-shipped. RV5, RV6, RV8, and RV9 are `planned (phase …)` until their
-phase lands.
+Rules RV1–RV4, the CLI and journal parts of RV7, and RV8 are shipped.
+RV5, RV6, and RV9 remain planned until their phases land.
 
 ### RV1 Words
 
@@ -684,8 +690,8 @@ phase lands.
   per host. The host label is the vault-sync host label.
 - **Events (`v: 1`):** `relation_label.hide` (`key`, `name`),
   `relation_label.unhide` (`key`, `name`), and
-  `relation_label.rename` (`from`, `to`, `from_name`, `to_name`;
-  `planned (phase label-rename)`), each with `v`, `ts`, `host`, and
+  `relation_label.rename` (`from`, `to`, `from_name`, `to_name`), each
+  with `v`, `ts`, `host`, and
   `via`.
 - **Fold:** exactly the theme rule, over the shared
   `pref_journal` module: read every `*.jsonl`, skip malformed lines
@@ -738,7 +744,7 @@ Every `schema_version` stays 1; JSON grows additively.
   ```text
   bob relations [list] [-a/--all] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]
   bob relations hide LABEL…   [-f/--format human|json] [--allow-unused]
-  bob relations rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]  (planned (phase label-rename))
+  bob relations rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]
   bob relations unhide LABEL… [-f/--format human|json]
   ```
 
@@ -761,17 +767,14 @@ Every `schema_version` stays 1; JSON grows additively.
   `{schema_version, ok, counts:{labels, links, hidden},
   labels:[{key, name, count, hidden, inverse, spellings,
   replacement, hide_replacement}], renamed_reappeared, warnings}`.
-  `renamed_reappeared` is always empty until `planned (phase
-  label-rename)`.
+  `renamed_reappeared` reports an OLD label used again after its rename;
+  it reports the row and never rewrites the new use.
 - **Writers** emit `{schema_version, ok, …}`. Human hide output reads:
   `🪢 Hid “implements” from relation suggestions · 2 links keep their
   label · undo: bob relations unhide implements`.
 - **Refusal codes:** `unknown_label`, `invalid_label`, `unchanged`,
-  `label_exists` (planned (phase label-rename)),
-  `malformed_links_line` (planned (phase label-rename)),
-  `lock_busy`. `dirty_paths`, `not_a_worktree`, `sync_failed`,
-  `verify_failed`, and `stale_note` arrive with `planned (phase
-  label-rename)`.
+  `label_exists`, `malformed_links_line`, `lock_busy`, `dirty_paths`,
+  `not_a_worktree`, `sync_failed`, `verify_failed`, and `stale_note`.
 - **`capture-complete` `relation_label`**: rows come from the fast relation-label
   catalog, use canonical keys and display spelling, include inverse phrases and
   counts, omit hidden rows, expose exact typed matches (including hidden state),
@@ -780,11 +783,35 @@ Every `schema_version` stays 1; JSON grows additively.
 
 ### RV8 The rename transaction
 
-`planned (phase rewrite-txn, phase label-rename)`. One previewed
-transaction and one revertable commit (`bob relations rename: OLD →
-NEW`), rewriting label spans in `done/` and the previous daily note:
-the recorded LR7 exception, limited to label spans only. Amend §13
-guarantee 6 and §6 when that phase lands.
+`bob relations rename OLD NEW` uses one previewed transaction and one
+revertable commit (`bob relations rename: OLD → NEW`). It scans every
+`.md` note in the RV2 scope, including `done/` and the previous daily
+note, and rewrites only matching label spans on accepted LINKS and
+LINKED FROM lines. A malformed matching line or unreadable note refuses
+the plan rather than under-covering it. Case-only renames unify spelling;
+an unchanged spelling refuses; an existing NEW key requires `--merge`.
+Merge keeps every edge and its order. The source hidden state moves to
+NEW unless NEW already has explicit state. The preview lists each file
+and changed line, link and mirror counts (including `done/`), state and
+inverse changes, and NEW's `replacement` and `hide_replacement` forms.
+
+| Refusal | Meaning | Recovery |
+| --- | --- | --- |
+| `unknown_label` | OLD is absent from the current catalog | Choose a listed label |
+| `invalid_label` | OLD or NEW fails the writer label rules | Use a valid 1–40 character label |
+| `unchanged` | The requested spelling makes no change | Choose a different NEW spelling |
+| `label_exists` | NEW already has a different key | Review the preview with `--merge` |
+| `malformed_links_line` | A matching relation line is malformed or a note cannot be read | Repair access or the line, then retry |
+| `dirty_paths` | An offline target note has uncommitted changes | Commit or restore those paths |
+| `stale_note` | A target changed after planning | Re-run to preview the latest contents |
+| `verify_failed` | Rescan found a mismatch; the transaction restores its before-images | Inspect the reported note, then retry |
+| `lock_busy` | Another vault maintenance run holds the lock | Wait for it to finish |
+| `not_a_worktree` | The vault is not a Git worktree | Open or initialize the vault worktree |
+| `sync_failed` | Pre-sync failed or conflicted | Resolve sync, or intentionally use `--offline` |
+
+Undo a successful rename with `git revert <rename-commit>`; the commit
+contains the note-span rewrites and the journal event. No live-vault
+rename is part of acceptance.
 
 ### RV9 Obsidian
 

@@ -302,6 +302,11 @@ lives in [pomodoro-themes.md](pomodoro-themes.md#pt4-preferences-journal).
 post-syncs; undo is `git revert` per the
 [pomodoro-themes rename runbook](pomodoro-themes.md#pt10-global-rename).
 
+`bob relations rename` also commits once (`bob relations rename: OLD → NEW`)
+and post-syncs. Its verified rewrite changes relation-label spans only,
+including `done/` and the previous daily note. Undo the whole operation,
+including its journal event, with `git revert <rename-commit>`.
+
 The vault root `.gitattributes` unions concurrent theme-journal appends:
 
 ```gitattributes

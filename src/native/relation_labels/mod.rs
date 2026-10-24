@@ -22,8 +22,10 @@ pub(crate) use journal::Prefs;
 pub(crate) use scan::{invalidate as invalidate_scan, load_scan};
 
 pub(crate) use cli::run_list;
+pub(crate) use rename::run_rename;
 pub(crate) use write::{run_hide, run_unhide};
 pub(crate) mod cli;
+pub(crate) mod rename;
 #[cfg(test)]
 mod tests;
 pub(crate) mod write;
@@ -136,6 +138,10 @@ impl Catalog {
 
     pub(crate) fn is_hidden(&self, key: &str) -> bool {
         self.prefs.hidden(key)
+    }
+
+    pub(crate) fn has_explicit_state(&self, key: &str) -> bool {
+        self.prefs.has_explicit_state(key)
     }
 
     pub(crate) fn warnings(&self) -> &[String] {

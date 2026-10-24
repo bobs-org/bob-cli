@@ -277,7 +277,10 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
             hidden: catalog.hidden_count(),
         },
         labels,
-        renamed_reappeared: Vec::new(),
+        renamed_reappeared: super::rename::renamed_reappeared(
+            &request.bob_dir,
+            catalog,
+        ),
         warnings: catalog.warnings().to_vec(),
     }
 }
