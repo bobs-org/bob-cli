@@ -2,6 +2,7 @@
 
 use crate::support::*;
 use std::fs;
+use std::path::Path;
 
 #[test]
 fn highlights_ref_sync_resolves_relative_library_pdf_paths_before_mapping() {
@@ -56,7 +57,6 @@ fn highlights_ref_sync_resolves_relative_library_pdf_paths_before_mapping() {
         format_output(&output)
     );
 }
-use std::path::Path;
 
 #[test]
 fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {

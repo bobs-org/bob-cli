@@ -732,3 +732,12 @@ fn annotation_task_section_stays_after_ref_child_lines() {
         "{childless_updated}"
     );
 }
+
+#[test]
+fn highlights_ref_capture_dates_follow_bob_clock() {
+    let _guard = crate::native::env::TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-23 21:30")),
+    )]);
+    assert_eq!(super::current_local_date(), "2026-10-23");
+}

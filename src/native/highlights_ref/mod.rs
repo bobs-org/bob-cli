@@ -10,7 +10,7 @@ use std::{
     thread,
 };
 
-use chrono::{Local, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,

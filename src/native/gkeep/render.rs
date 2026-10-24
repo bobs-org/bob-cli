@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::model::{AttachmentKind, KeepNote};
-use crate::native::capture;
+use crate::native::{capture, env as bob_env};
 
 /// One rendered Keep note as a vault task block.
 ///
@@ -30,7 +30,7 @@ pub(super) fn render_note(
     indent: &str,
     revision: bool,
 ) -> RenderedBlock {
-    render_note_in(note, indent, revision, None, &chrono::Local)
+    render_note_in_day_zone(note, indent, revision, None)
 }
 
 /// Render `note` with one extra visible child (already escaped): the
@@ -41,7 +41,28 @@ pub(super) fn render_note_with_fallback(
     revision: bool,
     fallback: &str,
 ) -> RenderedBlock {
-    render_note_in(note, indent, revision, Some(fallback), &chrono::Local)
+    render_note_in_day_zone(note, indent, revision, Some(fallback))
+}
+
+/// Date Keep notes in Bob's day: the config `timezone`, else the host zone.
+fn render_note_in_day_zone(
+    note: &KeepNote,
+    indent: &str,
+    revision: bool,
+    extra_last_child: Option<&str>,
+) -> RenderedBlock {
+    match bob_env::configured_timezone() {
+        Some(tz) => {
+            render_note_in(note, indent, revision, extra_last_child, &tz)
+        }
+        None => render_note_in(
+            note,
+            indent,
+            revision,
+            extra_last_child,
+            &chrono::Local,
+        ),
+    }
 }
 
 fn render_note_in<Tz: chrono::TimeZone>(
@@ -1000,5 +1021,29 @@ mod tests {
         // Mid-line hazards are untouched by the leading rule.
         assert_eq!(escape_child_text("a > b"), "a > b");
         assert_eq!(escape_child_text("use 1. sugar"), "use 1. sugar");
+    }
+
+    #[test]
+    fn created_date_follows_the_configured_day_timezone() {
+        let dir = tempfile::tempdir().expect("config dir");
+        let config = dir.path().join("config.yml");
+        std::fs::write(&config, "timezone: Pacific/Kiritimati\n")
+            .expect("config");
+        let _guard = bob_env::TestEnvGuard::set(&[(
+            "BOB_CONFIG_FILE",
+            Some(config.as_os_str()),
+        )]);
+        let mut note = test_note();
+        note.content.title = "Evening note".to_string();
+        // UTC+14 is ahead of every host zone, so only the config can
+        // date this 11:00 UTC note on the 25th.
+        note.created = "2026-10-24T11:00:00Z".to_string();
+
+        let block = render_note(&note, "\t", false);
+        assert!(
+            block.markdown.contains("[created::2026-10-25]"),
+            "{}",
+            block.markdown
+        );
     }
 }

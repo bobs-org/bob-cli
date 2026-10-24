@@ -666,8 +666,10 @@ pub(super) fn current_timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// Today's date in Bob's day: `BOB_NOW`/`DATE`, then the configured
+/// `timezone`, then the host zone, like every other Bob date stamp.
 pub(super) fn current_local_date() -> String {
-    Local::now().format("%Y-%m-%d").to_string()
+    bob_env::current_datetime().format("%Y-%m-%d").to_string()
 }
 
 pub(crate) fn configured_path(

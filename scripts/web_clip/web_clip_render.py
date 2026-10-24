@@ -15,6 +15,7 @@ linked contents, then a fresh page and bookmark per part.
 
 from __future__ import annotations
 
+import atexit
 import datetime
 import hashlib
 import html
@@ -106,6 +107,8 @@ def _ttf_cache_dir() -> str:
     global _TTF_DIR
     if _TTF_DIR is None:
         _TTF_DIR = tempfile.mkdtemp(prefix="bob-clip-ttf-")
+        # Converted faces are per-process scratch; never leave them in /tmp.
+        atexit.register(shutil.rmtree, _TTF_DIR, ignore_errors=True)
     return _TTF_DIR
 
 
