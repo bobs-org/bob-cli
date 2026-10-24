@@ -1005,4 +1005,22 @@ mod tests {
         assert_eq!(value.article_json.as_deref(), Some("/tmp/w/article.json"));
         assert_eq!(value.pdf_bytes, None);
     }
+
+    #[test]
+    fn capture_success_preserves_gist_metadata_and_provenance() {
+        let value: CaptureSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","final_url":"https://gist.github.com/karpathy/442a6bf","title":"LLM Wiki","author":"karpathy","metadata_sources":{"title":"gist-heading","author":"gist-owner"},"warnings":[],"images":{},"fidelity":{},"capture":{},"word_count":0}"#,
+        )
+        .expect("deserialize Gist capture response");
+        assert_eq!(value.title.as_deref(), Some("LLM Wiki"));
+        assert_eq!(value.author.as_deref(), Some("karpathy"));
+        assert_eq!(
+            value.metadata_sources.get("title").map(String::as_str),
+            Some("gist-heading")
+        );
+        assert_eq!(
+            value.metadata_sources.get("author").map(String::as_str),
+            Some("gist-owner")
+        );
+    }
 }

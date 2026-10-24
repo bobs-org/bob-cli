@@ -94,6 +94,32 @@
     return h1s.length > 0 ? h1s[0] : null;
   }
 
+  function gistFiles() {
+    var files = document.querySelectorAll(".gist-file");
+    var out = [];
+    for (var i = 0; i < files.length; i++) {
+      var file = files[i];
+      var nameNode = file.querySelector(
+        "[data-filename], .gist-blob-name, .file-header .file-info a, " +
+          ".file-header .link-gray-dark"
+      );
+      var name = nameNode
+        ? nameNode.getAttribute("data-filename") || nameNode.textContent || ""
+        : file.getAttribute("data-filename") || "";
+      var markdown = file.querySelector(".markdown-body");
+      var headings = [];
+      if (markdown) {
+        var h1s = markdown.querySelectorAll("h1");
+        for (var h = 0; h < h1s.length; h++) {
+          var heading = (h1s[h].innerText || h1s[h].textContent || "").trim();
+          if (heading) headings.push(heading);
+        }
+      }
+      out.push({ name: name.trim(), headings: headings });
+    }
+    return out;
+  }
+
   var DATE_RE = new RegExp(
     "(?:(?:January|February|March|April|May|June|July|August|September|" +
       "October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|" +
@@ -548,6 +574,7 @@
       byline: near.byline,
       embedAuthors: embeds.authors,
       embedDates: embeds.dates,
+      gistFiles: gistFiles(),
       counts: { largeMedia: largeMedia, codeBlocks: codeBlocks, words: words },
     };
     return { html: cloneRoot.outerHTML, facts: facts };

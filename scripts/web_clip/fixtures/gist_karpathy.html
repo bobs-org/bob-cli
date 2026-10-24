@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>karpathy/llm-wiki.md</title>
+<meta property="og:title" content="karpathy/llm-wiki.md">
+<meta name="author" content="262588213843476">
+<meta property="og:site_name" content="GitHub">
+</head>
+<body>
+<header><h1>karpathy/llm-wiki.md</h1></header>
+<main>
+<div class="gist">
+  <div class="gist-file" data-filename="llm-wiki.md">
+    <div class="file-header"><div class="file-info">
+      <a class="link-gray-dark">llm-wiki.md</a>
+    </div></div>
+    <div class="file-content"><div class="markdown-body">
+      <h1>LLM Wiki</h1>
+      <p>A pattern for building personal knowledge bases using LLMs.</p>
+      <p>Instead of retrieving fragments from raw documents for every question,
+      an agent can maintain a persistent wiki. When a new source arrives, the
+      agent reads it, extracts useful information, and integrates it with
+      existing topic pages. The wiki becomes a structured, interlinked layer
+      between original sources and future questions.</p>
+      <h2>Architecture</h2>
+      <p>The system has raw sources, the maintained wiki, and a schema that
+      describes its conventions. Sources remain immutable. The wiki is updated
+      as new material arrives, while the schema explains how the agent should
+      ingest, query, and maintain that material.</p>
+      <h2>Operations</h2>
+      <p>Ingest one source at a time, review the resulting synthesis, and keep
+      a chronological log of important changes. Queries can produce notes,
+      comparisons, charts, or other useful artifacts that are filed back into
+      the wiki. Periodic linting looks for contradictions, stale claims, and
+      missing cross references.</p>
+    </div></div>
+  </div>
+</div>
+</main>
+</body>
+</html>

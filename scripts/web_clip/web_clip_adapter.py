@@ -253,6 +253,48 @@ def layer_title(
     return None, None
 
 
+def gist_owner(url: str) -> str | None:
+    """Read the owner from a standard owner/id GitHub Gist URL only."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if (parts.hostname or "").casefold() != "gist.github.com":
+        return None
+    path = [part for part in parts.path.split("/") if part]
+    if len(path) < 2 or not re.fullmatch(r"[A-Za-z0-9-]+", path[0]):
+        return None
+    return path[0]
+
+
+def layer_gist_title(files: object) -> tuple[str | None, str | None]:
+    """Choose a Gist Markdown H1, or the first file's readable basename.
+
+    Gists can contain several files. A content heading in page order wins;
+    when none has an H1, the first file name is the stable fallback.
+    """
+    if not isinstance(files, list):
+        return None, None
+    valid_files = [item for item in files if isinstance(item, dict)]
+    for item in valid_files:
+        headings = item.get("headings")
+        if not isinstance(headings, list):
+            continue
+        for heading in headings:
+            if isinstance(heading, str) and heading.strip():
+                return heading.strip(), "gist-heading"
+    for item in valid_files:
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        filename = name.strip().rsplit("/", 1)[-1]
+        stem = re.sub(r"\.[^.]+$", "", filename)
+        readable = re.sub(r"[-_]+", " ", stem).strip()
+        if readable:
+            return readable, "gist-filename"
+    return None, None
+
+
 def _handle_key(name: str) -> str:
     return name.strip().casefold().lstrip("@").strip()
 
@@ -1549,14 +1591,24 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             content = extracted.get("content") or ""
 
             slug = url_slug(final_url)
-            title, title_source = layer_title(
-                facts.get("h1"), meta.get("ogTitle"),
-                extracted.get("title"), slug)
-            author, author_source = layer_author(
-                jsonld.get("author"),
-                meta.get("articleAuthor") or meta.get("author"),
-                facts.get("byline"), extracted.get("author"),
-                facts.get("embedAuthors") or [])
+            owner = gist_owner(final_url)
+            if owner:
+                title, title_source = layer_gist_title(
+                    facts.get("gistFiles"))
+                if title is None:
+                    title, title_source = layer_title(
+                        facts.get("h1"), meta.get("ogTitle"),
+                        extracted.get("title"), slug)
+                author, author_source = owner, "gist-owner"
+            else:
+                title, title_source = layer_title(
+                    facts.get("h1"), meta.get("ogTitle"),
+                    extracted.get("title"), slug)
+                author, author_source = layer_author(
+                    jsonld.get("author"),
+                    meta.get("articleAuthor") or meta.get("author"),
+                    facts.get("byline"), extracted.get("author"),
+                    facts.get("embedAuthors") or [])
             published, published_source = layer_published(
                 jsonld.get("datePublished"), meta.get("publishedTime"),
                 facts.get("visibleDates") or [],
@@ -2481,6 +2533,21 @@ def self_test() -> int:
           == "Some Post")
     check("title url-slug fallback",
           layer_title(None, None, None, "hello_world")[1] == "url-slug")
+    check("gist owner comes from owner/id URL",
+          gist_owner("https://gist.github.com/karpathy/442a6bf")
+          == "karpathy")
+    check("gist owner is host-specific",
+          gist_owner("https://example.com/karpathy/442a6bf") is None)
+    check("gist content heading wins across files",
+          layer_gist_title([
+              {"name": "first.md", "headings": []},
+              {"name": "second.md", "headings": ["Content title"]},
+          ]) == ("Content title", "gist-heading"))
+    check("gist missing-H1 fallback uses first readable filename",
+          layer_gist_title([
+              {"name": "research-notes.md", "headings": []},
+              {"name": "supporting_data.txt", "headings": []},
+          ]) == ("research notes", "gist-filename"))
     author, asource = layer_author(
         None, None, "Alex Kotliarskyi, Victor Zhu, and Zach Brock",
         "Someone Else", ["@symphonydev"])
@@ -2491,6 +2558,9 @@ def self_test() -> int:
     check("author by-prefix stripped",
           layer_author(None, None, "By Jane Reporter", None, [])[0]
           == "Jane Reporter")
+    check("generic numeric author remains eligible",
+          layer_author("262588213843476", None, None, None, [])
+          == ("262588213843476", "json-ld"))
     published, psource = layer_published(
         None, None, ["April 27, 2026"], "2026-03-08T03:45:54Z",
         ["2026-03-08T03:45:54Z"])
@@ -2969,9 +3039,10 @@ def self_test() -> int:
         hook = _fixture_hook_factory(fixtures_dir)
 
         def _capture(name: str, **kw) -> tuple[dict, dict, str]:
+            url = kw.pop("url", f"https://{FIXTURE_HOST}/{name}")
             workdir = tempfile.mkdtemp(prefix="bob-clip-test-")
             req = {"protocol": 1, "op": "capture",
-                   "url": f"https://{FIXTURE_HOST}/{name}",
+                   "url": url,
                    "html_path": None, "workdir": workdir,
                    "out_pdf": os.path.join(workdir, "render.pdf"),
                    "dry_run": False, "captured": "2026-10-01",
@@ -3016,6 +3087,49 @@ def self_test() -> int:
         check("zero-width spaces stripped", "\u200b" not in sanitized_out)
         check("extraction dropped nav junk",
               "Cookie preferences" not in sanitized_out)
+
+        gist_id = "442a6bf555914893e9891c11519de94f"
+        gist_fixture = os.path.join(fixtures_dir, "gist_karpathy.html")
+        gist_url = f"https://gist.github.com/karpathy/{gist_id}"
+        gist_response, _gist_debug, _gist_workdir = _capture(
+            "gist_karpathy.html", url=gist_url, html_path=gist_fixture)
+        check("gist owner replaces numeric author",
+              gist_response.get("author") == "karpathy")
+        check("gist owner provenance",
+              gist_response.get("metadata_sources", {}).get("author")
+              == "gist-owner")
+        check("gist Markdown H1 replaces owner filename title",
+              gist_response.get("title") == "LLM Wiki")
+        check("gist heading provenance",
+              gist_response.get("metadata_sources", {}).get("title")
+              == "gist-heading")
+
+        gist_multi_url = "https://gist.github.com/sample/abc123"
+        gist_multi_fixture = os.path.join(
+            fixtures_dir, "gist_multiple_no_h1.html")
+        gist_multi, _gist_multi_debug, _gist_multi_workdir = _capture(
+            "gist_multiple_no_h1.html", url=gist_multi_url,
+            html_path=gist_multi_fixture)
+        check("multi-file gist without H1 uses first filename",
+              gist_multi.get("title") == "research notes"
+              and gist_multi.get("metadata_sources", {}).get("title")
+              == "gist-filename")
+
+        gist_override, _gist_override_debug, _gist_override_workdir = (
+            _capture(
+                "gist_karpathy.html", url=gist_url, html_path=gist_fixture,
+                overrides={"title": "Chosen title", "author": "Chosen author",
+                           "published": None},
+            )
+        )
+        check("gist explicit metadata overrides",
+              gist_override.get("title") == "Chosen title"
+              and gist_override.get("author") == "Chosen author"
+              and gist_override.get("metadata_sources", {}).get("title")
+              == "override"
+              and gist_override.get("metadata_sources", {}).get("author")
+              == "override")
+
         pdf_bytes = response.get("pdf_bytes") or 0
         check("reader pdf written", pdf_bytes > 1000)
         reader_pdf = os.path.join(workdir, "render.pdf")
