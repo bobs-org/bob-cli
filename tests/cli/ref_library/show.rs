@@ -287,8 +287,16 @@ fn show_keeps_quotes_comments_images_and_tombstone_counts() {
             "removed": 1,
         })
     );
+    assert!(
+        row.get("sections").is_none(),
+        "unsectioned rows omit sections"
+    );
     let annotations = row["annotations"].as_array().expect("annotations");
     assert_eq!(annotations.len(), 4);
+    assert!(
+        annotations[0].get("section").is_none(),
+        "ungrouped annotations omit section"
+    );
     let kinds: Vec<&str> = annotations
         .iter()
         .map(|annotation| annotation["kind"].as_str().expect("kind"))
@@ -641,6 +649,201 @@ fn show_tasks_own_notes_and_multiline_comments() {
     assert!(markdown.contains("- [ ] Compare with the appendix."));
     assert!(markdown.contains("- [x] Done item"));
     assert!(markdown.contains("- [-] Partial item"));
+}
+
+const SECTIONED_NOTE: &str = "\
+---
+status: read
+title: Sectioned Blog
+---
+
+# Sectioned Blog
+
+- [x] #task #ref [[lib/blogs/sectioned.pdf]] #hide ^ref
+
+## Highlights
+
+<!-- highlights:begin -->
+
+### Memory
+
+> [!summary|section] @memory · 2 highlights · Pages 4–5
+> Everything that belongs in the blog's memory section.
+
+^s-memory
+
+#### Page 4
+
+> [!quote] Make a point about how if I were building AI from scratch right now, …
+
+^h-496b1ca10117
+
+#### Page 5
+
+> [!quote] Mention that you've implemented project memory every wrong way possible …
+>
+> > [!note] Comment Compare with the intro
+
+^h-6bbab22c999c
+
+### Related
+
+> [!summary|section] @related · nothing tagged yet
+
+^s-related
+
+### Other highlights
+
+#### Page 2
+
+> [!quote] POTENTIAL QUOTES: …
+
+^h-38a082b00de9
+
+<!-- highlights:end -->
+
+## Tasks
+
+- [ ] Draft the memory section. [[#^s-memory|🔖]] [created:: 2026-10-01]
+- [ ] Compare with the intro. [[#^h-6bbab22c999c|🔖]]
+";
+
+#[test]
+fn show_sections_json_human_markdown_and_flags() {
+    let (_temp, vault) = inline_vault(
+        "bob-cli-ref-show-sections",
+        &[("ref/notes/sectioned_blog.md", SECTIONED_NOTE)],
+    );
+
+    let document = run_show_json(&vault, &["sectioned_blog"]);
+    let row = &document["refs"][0];
+    assert_eq!(
+        row["sections"],
+        serde_json::json!([
+            {
+                "id": "memory",
+                "title": "Memory",
+                "tag": "@memory",
+                "description": "Everything that belongs in the blog's memory section.",
+                "block_id": "s-memory",
+                "link": "[[ref/notes/sectioned_blog#^s-memory]]",
+                "count": 2,
+                "pages": "Pages 4–5",
+            },
+            {
+                "id": "related",
+                "title": "Related",
+                "tag": "@related",
+                "block_id": "s-related",
+                "link": "[[ref/notes/sectioned_blog#^s-related]]",
+                "count": 0,
+            },
+        ])
+    );
+    let annotations = row["annotations"].as_array().expect("annotations");
+    assert_eq!(annotations.len(), 3);
+    assert_eq!(annotations[0]["section"], "memory");
+    assert_eq!(annotations[0]["page_label"], "Page 4");
+    assert_eq!(annotations[1]["section"], "memory");
+    assert_eq!(annotations[1]["page_label"], "Page 5");
+    assert!(
+        annotations[2].get("section").is_none(),
+        "ungrouped Other omits section"
+    );
+    assert_eq!(annotations[2]["page_label"], "Page 2");
+
+    let comments_only = run_show_json(&vault, &["sectioned_blog", "-c"]);
+    let comments_row = &comments_only["refs"][0];
+    assert_eq!(
+        comments_row["sections"], row["sections"],
+        "-c keeps the full sections list"
+    );
+    let kept = comments_row["annotations"].as_array().expect("annotations");
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["section"], "memory");
+    assert_eq!(kept[0]["page_label"], "Page 5");
+
+    let no_annotations = run_show_json(&vault, &["sectioned_blog", "-N"]);
+    assert!(
+        no_annotations["refs"][0].get("sections").is_none(),
+        "-N omits sections"
+    );
+    assert_eq!(
+        no_annotations["refs"][0]["annotations"],
+        serde_json::json!([])
+    );
+
+    let output = run_show(&vault, &["sectioned_blog"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("▍Memory  @memory · 2 highlights · Pages 4–5"),
+        "section header:\n{human}"
+    );
+    assert!(
+        human
+            .contains("▍Everything that belongs in the blog's memory section."),
+        "description:\n{human}"
+    );
+    assert!(
+        human.contains("▍Related  @related · nothing tagged yet"),
+        "empty scaffold:\n{human}"
+    );
+    assert!(
+        human.contains("Other highlights · 1"),
+        "ungrouped group:\n{human}"
+    );
+    assert!(
+        human.contains("☐ Draft the memory section.   § Memory"),
+        "section task suffix:\n{human}"
+    );
+
+    let output = run_show(&vault, &["sectioned_blog", "-c"]);
+    assert_success(&output);
+    let comments_human = stdout(&output);
+    assert!(
+        comments_human.contains("▍Memory  @memory · 2 highlights · Pages 4–5"),
+        "kept member still prints its section:\n{comments_human}"
+    );
+    assert!(
+        !comments_human.contains("Related"),
+        "empty scaffold drops under -c:\n{comments_human}"
+    );
+    assert!(
+        !comments_human.contains("Other highlights"),
+        "uncommented other drops under -c:\n{comments_human}"
+    );
+
+    let output = run_show(&vault, &["sectioned_blog", "-N"]);
+    assert_success(&output);
+    let no_ann_human = stdout(&output);
+    assert!(
+        !no_ann_human.contains("ANNOTATIONS")
+            && !no_ann_human.contains("▍Memory"),
+        "-N drops annotations and sections:\n{no_ann_human}"
+    );
+
+    let output = run_show(&vault, &["sectioned_blog", "-f", "markdown"]);
+    assert_success(&output);
+    let markdown = stdout(&output);
+    assert!(
+        markdown.contains("#### Memory")
+            && markdown.contains("*@memory · 2 highlights · Pages 4–5*")
+            && markdown.contains(
+                "> Everything that belongs in the blog's memory section."
+            ),
+        "section digest:\n{markdown}"
+    );
+    assert!(
+        markdown.contains("#### Related")
+            && markdown.contains("_Nothing tagged yet._"),
+        "empty scaffold digest:\n{markdown}"
+    );
+    assert!(
+        markdown.contains("#### Other highlights")
+            && markdown.contains("**Page 2**"),
+        "ungrouped digest:\n{markdown}"
+    );
 }
 
 #[test]

@@ -181,7 +181,7 @@ pub(super) fn assemble_group_quote(pieces: &[(&str, Seam)]) -> String {
     join_quote_runs(&runs)
 }
 
-pub(super) fn group_page_label(labels: &[Option<&str>]) -> Option<String> {
+pub(crate) fn group_page_label(labels: &[Option<&str>]) -> Option<String> {
     let head = *labels.first()?;
     let head = head?;
     let mut distinct = Vec::new();

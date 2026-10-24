@@ -37,7 +37,6 @@ pub(crate) struct RegionBlock {
     pub(crate) in_preamble: bool,
     /// Section `id` when this block sits under a parsed section card.
     /// Ungrouped and unsectioned blocks leave this `None`.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) section: Option<String>,
 }
 
@@ -58,7 +57,6 @@ pub(crate) struct RegionParse {
     pub(crate) unparsed: Vec<String>,
     /// Live section cards, in heading order. Empty when the region has no
     /// `[!summary|section]` signature.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) sections: Vec<RegionSection>,
     /// `^s-` IDs collected under `### Removed highlights`.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -67,7 +65,6 @@ pub(crate) struct RegionParse {
 
 /// One live section card parsed from a sectioned managed region.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct RegionSection {
     pub(crate) id: String,
     pub(crate) block_id: String,
@@ -75,7 +72,9 @@ pub(crate) struct RegionSection {
     pub(crate) tag: String,
     pub(crate) description: String,
     pub(crate) images: Vec<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) unresolved_images: Vec<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) unresolved_image_states: Vec<UnresolvedImageNoteState>,
 }
 

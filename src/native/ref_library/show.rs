@@ -21,8 +21,8 @@ use super::{
     RefRow,
 };
 use crate::native::highlights_ref::{
-    parse_managed_region, split_frontmatter, split_note_body, RegionBlockKind,
-    UnresolvedImageNoteState,
+    group_page_label, parse_managed_region, split_frontmatter, split_note_body,
+    RegionBlockKind, UnresolvedImageNoteState,
 };
 use crate::native::style::{
     display_width, pad_right, terminal_width, truncate, Styler,
@@ -47,6 +47,28 @@ pub(crate) struct ShowAnnotation {
     pub pieces: Vec<ShowPiece>,
     pub block_id: String,
     pub link: String,
+    /// Section `id` when this block lives under a parsed section card.
+    /// Ungrouped and unsectioned blocks omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+}
+
+/// One live annotation section on a shown row. `count` and `pages` come
+/// from the parsed member blocks, never from the card caption.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ShowSection {
+    pub id: String,
+    pub title: String,
+    pub tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub block_id: String,
+    pub link: String,
+    pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 /// One tucked `<` group piece: the highlight's own words, page, comment,
@@ -105,6 +127,8 @@ pub(crate) struct ShowRow {
     pub annotations_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_region: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ShowSection>,
     pub annotations: Vec<ShowAnnotation>,
     pub excluded: ShowExcluded,
     pub own_notes: String,
@@ -240,11 +264,13 @@ pub(crate) fn load_show_row(
     let parts = split_note_body(&body);
     let stem = row.path.strip_suffix(".md").unwrap_or(&row.path);
     let mut annotations = Vec::new();
+    let mut sections = Vec::new();
     let mut excluded = ShowExcluded::default();
     let (annotations_status, raw_region) = match parts.region.as_deref() {
         None => ("absent".to_string(), None),
         Some(region) => {
             let parsed = parse_managed_region(region);
+            let mut member_pages: Vec<(String, Option<String>)> = Vec::new();
             for block in &parsed.blocks {
                 if block.mirror {
                     excluded.marker_mirrors += 1;
@@ -253,6 +279,10 @@ pub(crate) fn load_show_row(
                 if block.in_preamble {
                     excluded.preamble += 1;
                     continue;
+                }
+                if let Some(section_id) = block.section.as_ref() {
+                    member_pages
+                        .push((section_id.clone(), block.page_label.clone()));
                 }
                 let (kind, quote, comment, asset) = match block.kind {
                     RegionBlockKind::Highlight => (
@@ -301,7 +331,30 @@ pub(crate) fn load_show_row(
                         .collect(),
                     block_id: block.block_id.clone(),
                     link: format!("[[{stem}#^{}]]", block.block_id),
+                    section: block.section.clone(),
                 });
+            }
+            if !no_annotations {
+                for section in &parsed.sections {
+                    let pages: Vec<Option<&str>> = member_pages
+                        .iter()
+                        .filter(|(id, _)| id == &section.id)
+                        .map(|(_, page)| page.as_deref())
+                        .collect();
+                    let description = (!section.description.is_empty())
+                        .then(|| section.description.clone());
+                    sections.push(ShowSection {
+                        id: section.id.clone(),
+                        title: section.title.clone(),
+                        tag: section.tag.clone(),
+                        description,
+                        block_id: section.block_id.clone(),
+                        link: format!("[[{stem}#^{}]]", section.block_id),
+                        count: pages.len(),
+                        pages: group_page_label(&pages),
+                        images: section.images.clone(),
+                    });
+                }
             }
             excluded.removed = parsed.removed.len();
             if parsed.unparsed.is_empty() {
@@ -313,6 +366,7 @@ pub(crate) fn load_show_row(
     };
     if no_annotations {
         annotations.clear();
+        sections.clear();
     } else if comments_only {
         annotations.retain(|annotation| {
             annotation.kind == ShowAnnotationKind::Note
@@ -349,6 +403,7 @@ pub(crate) fn load_show_row(
         row: row.clone(),
         annotations_status,
         raw_region,
+        sections,
         annotations,
         excluded,
         own_notes: parts.own_notes,
@@ -470,7 +525,10 @@ pub(crate) fn run_show(matches: &ArgMatches) -> i32 {
             print_show_json(&index.coverage, &index.counts, &rows);
         }
         Format::Markdown => {
-            print!("{}", render_show_markdown(&rows, no_annotations));
+            print!(
+                "{}",
+                render_show_markdown(&rows, comments_only, no_annotations,)
+            );
         }
         Format::Human => {
             print!(
@@ -1113,6 +1171,135 @@ fn reading_task_styled(
     Some(truncate(&plain, width))
 }
 
+/// Card-style caption: `@tag · N highlights · Pages 4–5`, or
+/// `@tag · nothing tagged yet` when the section has no members.
+fn section_caption(section: &ShowSection) -> String {
+    if section.count == 0 {
+        return format!("{} · nothing tagged yet", section.tag);
+    }
+    let mut caption = format!(
+        "{} · {}",
+        section.tag,
+        plural(section.count, "highlight", "highlights")
+    );
+    if let Some(pages) = section.pages.as_deref() {
+        caption.push_str(" · ");
+        caption.push_str(pages);
+    }
+    caption
+}
+
+fn section_header_human(
+    section: &ShowSection,
+    styler: Styler,
+    width: usize,
+) -> String {
+    let bar = styler.paint("35", "▍");
+    let title = styler.bold(&section.title);
+    let caption = styler.dim(&section_caption(section));
+    truncate(&format!("{bar}{title}  {caption}"), width)
+}
+
+fn section_description_human(
+    description: &str,
+    styler: Styler,
+    width: usize,
+) -> Vec<String> {
+    let bar = styler.paint("35", "▍");
+    let wrap_width = width.saturating_sub(1).max(1);
+    wrap_text(description, wrap_width)
+        .into_iter()
+        .map(|line| format!("{bar}{}", styler.dim(&line)))
+        .collect()
+}
+
+fn push_human_annotation_stream(
+    out: &mut String,
+    annotations: &[&ShowAnnotation],
+    styler: Styler,
+    width: usize,
+) {
+    let mut current_page: Option<String> = None;
+    let mut page_seen = false;
+    for annotation in annotations {
+        match annotation.page_label.as_deref() {
+            Some(page) if current_page.as_deref() != Some(page) => {
+                out.push_str(&truncate(&format!("  {page}"), width));
+                out.push('\n');
+                current_page = Some(page.to_string());
+                page_seen = true;
+            }
+            None if page_seen => {
+                current_page = None;
+            }
+            _ => {}
+        }
+        for line in annotation_lines(annotation, styler, width) {
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+    }
+}
+
+/// Unsectioned rows keep today's page stream. Sectioned rows group under
+/// magenta `▍` headers; `-c` prints a header only when a member is kept.
+fn push_human_annotations(
+    out: &mut String,
+    row: &ShowRow,
+    comments_only: bool,
+    styler: Styler,
+    width: usize,
+) {
+    if row.sections.is_empty() {
+        let annotations: Vec<&ShowAnnotation> =
+            row.annotations.iter().collect();
+        push_human_annotation_stream(out, &annotations, styler, width);
+        return;
+    }
+    let mut first_group = true;
+    for section in &row.sections {
+        let members: Vec<&ShowAnnotation> = row
+            .annotations
+            .iter()
+            .filter(|annotation| {
+                annotation.section.as_deref() == Some(section.id.as_str())
+            })
+            .collect();
+        if comments_only && members.is_empty() {
+            continue;
+        }
+        if !first_group {
+            out.push('\n');
+        }
+        first_group = false;
+        out.push_str(&section_header_human(section, styler, width));
+        out.push('\n');
+        if let Some(description) = section.description.as_deref() {
+            for line in section_description_human(description, styler, width) {
+                out.push_str(line.trim_end());
+                out.push('\n');
+            }
+        }
+        push_human_annotation_stream(out, &members, styler, width);
+    }
+    let others: Vec<&ShowAnnotation> = row
+        .annotations
+        .iter()
+        .filter(|annotation| annotation.section.is_none())
+        .collect();
+    if !others.is_empty() {
+        if !first_group {
+            out.push('\n');
+        }
+        out.push_str(&truncate(
+            &format!("Other highlights · {}", others.len()),
+            width,
+        ));
+        out.push('\n');
+        push_human_annotation_stream(out, &others, styler, width);
+    }
+}
+
 /// Render one shown row in human form.
 fn render_one_human(
     row: &ShowRow,
@@ -1146,7 +1333,9 @@ fn render_one_human(
     }
     if !no_annotations {
         let has_excluded = excluded_line(&row.excluded);
-        if row.annotations.is_empty() {
+        if row.annotations.is_empty()
+            && (comments_only || row.sections.is_empty())
+        {
             if comments_only {
                 out.push('\n');
                 out.push_str("No comments or standalone notes.\n");
@@ -1167,26 +1356,7 @@ fn render_one_human(
                 width,
             ));
             out.push('\n');
-            let mut current_page: Option<String> = None;
-            let mut page_seen = false;
-            for annotation in &row.annotations {
-                match annotation.page_label.as_deref() {
-                    Some(page) if current_page.as_deref() != Some(page) => {
-                        out.push_str(&truncate(&format!("  {page}"), width));
-                        out.push('\n');
-                        current_page = Some(page.to_string());
-                        page_seen = true;
-                    }
-                    None if page_seen => {
-                        current_page = None;
-                    }
-                    _ => {}
-                }
-                for line in annotation_lines(annotation, styler, width) {
-                    out.push_str(line.trim_end());
-                    out.push('\n');
-                }
-            }
+            push_human_annotations(&mut out, row, comments_only, styler, width);
             if let Some(excluded) = has_excluded {
                 out.push_str(
                     &styler.dim(&truncate(&format!("  {excluded}"), width)),
@@ -1220,8 +1390,16 @@ fn render_one_human(
                 .iter()
                 .find(|annotation| annotation.block_id == task.block_id)
                 .and_then(|annotation| annotation.page_label.as_deref());
-            let mut suffix =
-                page.map(|page| format!("   {page}")).unwrap_or_default();
+            let section_title = row
+                .sections
+                .iter()
+                .find(|section| section.block_id == task.block_id)
+                .map(|section| section.title.as_str());
+            let mut suffix = if let Some(title) = section_title {
+                format!("   § {title}")
+            } else {
+                page.map(|page| format!("   {page}")).unwrap_or_default()
+            };
             if let Some(path) = task.path.as_deref() {
                 suffix.push_str(&format!(" · {path}"));
             }
@@ -1290,8 +1468,13 @@ fn source_bullet(row: &ShowRow) -> Option<String> {
 
 /// Render one shown row as a Markdown digest for an agent's context.
 /// Content flags are already applied to `row.annotations` at load time;
-/// empty sections stay omitted.
-fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
+/// empty sections stay omitted. `-c` prints a section heading only when
+/// one of its members is kept.
+fn render_one_markdown(
+    row: &ShowRow,
+    comments_only: bool,
+    no_annotations: bool,
+) -> String {
     let mut out = format!("## {}\n", row.row.title);
     out.push_str(&format!("\n- Note: {}\n", row.row.link));
     out.push_str(&format!("- Reading state: {}\n", state_bullet(row)));
@@ -1323,90 +1506,12 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
     if !row.also.is_empty() {
         out.push_str(&format!("- Also: {}\n", row.also.join(", ")));
     }
-    if !no_annotations && !row.annotations.is_empty() {
+    if !no_annotations
+        && (!row.annotations.is_empty()
+            || (!comments_only && !row.sections.is_empty()))
+    {
         out.push_str("\n### Annotations\n");
-        let mut current_page: Option<String> = None;
-        for annotation in &row.annotations {
-            if annotation.page_label != current_page {
-                current_page = annotation.page_label.clone();
-                if let Some(page) = current_page.as_deref() {
-                    out.push_str(&format!("\n**{page}**\n"));
-                }
-            }
-            match annotation.kind {
-                ShowAnnotationKind::Highlight => {
-                    if !annotation.pieces.is_empty() {
-                        for (index, piece) in
-                            annotation.pieces.iter().enumerate()
-                        {
-                            if index > 0 {
-                                out.push('\n');
-                                out.push_str(&format!(
-                                    "{}\n",
-                                    piece_seam_markdown(
-                                        piece.page_label.as_deref()
-                                    )
-                                ));
-                            }
-                            push_markdown_piece_quote(&mut out, &piece.quote);
-                            push_markdown_piece_image_notes(&mut out, piece);
-                            push_markdown_piece_comment(
-                                &mut out,
-                                piece.comment.as_deref(),
-                            );
-                        }
-                    } else {
-                        if let Some(quote) = annotation.quote.as_deref()
-                            && !quote.is_empty()
-                        {
-                            out.push('\n');
-                            for line in quote.lines() {
-                                out.push_str(&format!("> {line}\n"));
-                            }
-                        }
-                        push_markdown_image_notes(&mut out, annotation);
-                        if let Some(comment) = annotation.comment.as_deref()
-                            && !comment.is_empty()
-                        {
-                            out.push('\n');
-                            let mut lines = comment.lines();
-                            if let Some(first) = lines.next() {
-                                out.push_str(&format!("Comment: {first}\n"));
-                            }
-                            for line in lines {
-                                out.push_str(&format!("{line}\n"));
-                            }
-                        }
-                    }
-                }
-                ShowAnnotationKind::Note => {
-                    if let Some(note) = annotation.comment.as_deref()
-                        && !note.is_empty()
-                    {
-                        out.push('\n');
-                        let mut lines = note.lines();
-                        if let Some(first) = lines.next() {
-                            out.push_str(&format!("Note: {first}\n"));
-                        }
-                        for line in lines {
-                            out.push_str(&format!("{line}\n"));
-                        }
-                    }
-                    push_markdown_image_notes(&mut out, annotation);
-                }
-                ShowAnnotationKind::Image => {
-                    if let Some(asset) = annotation.asset.as_deref() {
-                        out.push_str(&format!("\nImage: {asset}\n"));
-                    }
-                    push_markdown_image_notes(&mut out, annotation);
-                    if let Some(comment) = annotation.comment.as_deref()
-                        && !comment.is_empty()
-                    {
-                        out.push_str(&format!("\nComment: {comment}\n"));
-                    }
-                }
-            }
-        }
+        push_markdown_annotations(&mut out, row, comments_only);
     }
     if !row.own_notes.is_empty() {
         out.push_str(&format!("\n### Notes\n\n{}\n", row.own_notes));
@@ -1418,6 +1523,140 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
         }
     }
     out
+}
+
+fn push_markdown_annotations(
+    out: &mut String,
+    row: &ShowRow,
+    comments_only: bool,
+) {
+    if row.sections.is_empty() {
+        push_markdown_annotation_stream(out, &row.annotations);
+        return;
+    }
+    for section in &row.sections {
+        let members: Vec<&ShowAnnotation> = row
+            .annotations
+            .iter()
+            .filter(|annotation| {
+                annotation.section.as_deref() == Some(section.id.as_str())
+            })
+            .collect();
+        if comments_only && members.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n#### {}\n", section.title));
+        let caption = section_caption(section);
+        out.push_str(&format!("\n*{caption}*\n"));
+        if let Some(description) = section.description.as_deref() {
+            out.push('\n');
+            for line in description.lines() {
+                out.push_str(&format!("> {line}\n"));
+            }
+        }
+        if members.is_empty() {
+            out.push_str("\n_Nothing tagged yet._\n");
+        } else {
+            let owned: Vec<ShowAnnotation> =
+                members.into_iter().cloned().collect();
+            push_markdown_annotation_stream(out, &owned);
+        }
+    }
+    let others: Vec<ShowAnnotation> = row
+        .annotations
+        .iter()
+        .filter(|annotation| annotation.section.is_none())
+        .cloned()
+        .collect();
+    if !others.is_empty() {
+        out.push_str("\n#### Other highlights\n");
+        push_markdown_annotation_stream(out, &others);
+    }
+}
+
+fn push_markdown_annotation_stream(
+    out: &mut String,
+    annotations: &[ShowAnnotation],
+) {
+    let mut current_page: Option<String> = None;
+    for annotation in annotations {
+        if annotation.page_label != current_page {
+            current_page = annotation.page_label.clone();
+            if let Some(page) = current_page.as_deref() {
+                out.push_str(&format!("\n**{page}**\n"));
+            }
+        }
+        push_markdown_annotation(out, annotation);
+    }
+}
+
+fn push_markdown_annotation(out: &mut String, annotation: &ShowAnnotation) {
+    match annotation.kind {
+        ShowAnnotationKind::Highlight => {
+            if !annotation.pieces.is_empty() {
+                for (index, piece) in annotation.pieces.iter().enumerate() {
+                    if index > 0 {
+                        out.push('\n');
+                        out.push_str(&format!(
+                            "{}\n",
+                            piece_seam_markdown(piece.page_label.as_deref())
+                        ));
+                    }
+                    push_markdown_piece_quote(out, &piece.quote);
+                    push_markdown_piece_image_notes(out, piece);
+                    push_markdown_piece_comment(out, piece.comment.as_deref());
+                }
+            } else {
+                if let Some(quote) = annotation.quote.as_deref()
+                    && !quote.is_empty()
+                {
+                    out.push('\n');
+                    for line in quote.lines() {
+                        out.push_str(&format!("> {line}\n"));
+                    }
+                }
+                push_markdown_image_notes(out, annotation);
+                if let Some(comment) = annotation.comment.as_deref()
+                    && !comment.is_empty()
+                {
+                    out.push('\n');
+                    let mut lines = comment.lines();
+                    if let Some(first) = lines.next() {
+                        out.push_str(&format!("Comment: {first}\n"));
+                    }
+                    for line in lines {
+                        out.push_str(&format!("{line}\n"));
+                    }
+                }
+            }
+        }
+        ShowAnnotationKind::Note => {
+            if let Some(note) = annotation.comment.as_deref()
+                && !note.is_empty()
+            {
+                out.push('\n');
+                let mut lines = note.lines();
+                if let Some(first) = lines.next() {
+                    out.push_str(&format!("Note: {first}\n"));
+                }
+                for line in lines {
+                    out.push_str(&format!("{line}\n"));
+                }
+            }
+            push_markdown_image_notes(out, annotation);
+        }
+        ShowAnnotationKind::Image => {
+            if let Some(asset) = annotation.asset.as_deref() {
+                out.push_str(&format!("\nImage: {asset}\n"));
+            }
+            push_markdown_image_notes(out, annotation);
+            if let Some(comment) = annotation.comment.as_deref()
+                && !comment.is_empty()
+            {
+                out.push_str(&format!("\nComment: {comment}\n"));
+            }
+        }
+    }
 }
 
 fn push_markdown_image_notes(out: &mut String, annotation: &ShowAnnotation) {
@@ -1488,11 +1727,12 @@ fn push_markdown_piece_comment(out: &mut String, comment: Option<&str>) {
 /// Render shown rows as Markdown digests, separated by a rule.
 pub(crate) fn render_show_markdown(
     rows: &[ShowRow],
+    comments_only: bool,
     no_annotations: bool,
 ) -> String {
     rows.iter()
         .map(|row| {
-            render_one_markdown(row, no_annotations)
+            render_one_markdown(row, comments_only, no_annotations)
                 .trim_end()
                 .to_string()
         })
@@ -1564,6 +1804,7 @@ mod tests {
             },
             annotations_status: "parsed".to_string(),
             raw_region: None,
+            sections: Vec::new(),
             annotations: vec![
                 ShowAnnotation {
                     page_label: Some("Page 2".to_string()),
@@ -1578,6 +1819,7 @@ mod tests {
                     block_id: "h-aaaaaaaaaaaaaaaa".to_string(),
                     link: "[[ref/papers/ea_graph#^h-aaaaaaaaaaaaaaaa]]"
                         .to_string(),
+                    section: None,
                 },
                 ShowAnnotation {
                     page_label: Some("Page 2".to_string()),
@@ -1592,6 +1834,7 @@ mod tests {
                     block_id: "h-bbbbbbbbbbbbbbbb".to_string(),
                     link: "[[ref/papers/ea_graph#^h-bbbbbbbbbbbbbbbb]]"
                         .to_string(),
+                    section: None,
                 },
             ],
             excluded: ShowExcluded {
@@ -1876,7 +2119,7 @@ mod tests {
 
     #[test]
     fn markdown_digest_keeps_quote_comment_and_tasks() {
-        let markdown = render_show_markdown(&[show_test_row()], false);
+        let markdown = render_show_markdown(&[show_test_row()], false, false);
         assert!(
             markdown.contains("## EA-Graph: Verification Memory"),
             "title heading:\n{markdown}"
@@ -1903,5 +2146,245 @@ mod tests {
             markdown.contains("- [ ] Compare with the appendix."),
             "tasks:\n{markdown}"
         );
+    }
+
+    fn highlight(
+        page: &str,
+        quote: &str,
+        comment: Option<&str>,
+        block_id: &str,
+        section: Option<&str>,
+    ) -> ShowAnnotation {
+        ShowAnnotation {
+            page_label: Some(page.to_string()),
+            kind: ShowAnnotationKind::Highlight,
+            quote: Some(quote.to_string()),
+            comment: comment.map(str::to_string),
+            asset: None,
+            images: Vec::new(),
+            unresolved_images: Vec::new(),
+            unresolved_image_states: Vec::new(),
+            pieces: Vec::new(),
+            block_id: block_id.to_string(),
+            link: format!("[[ref/papers/ea_graph#^{block_id}]]"),
+            section: section.map(str::to_string),
+        }
+    }
+
+    fn sectioned_show_test_row() -> ShowRow {
+        let mut row = show_test_row();
+        row.sections = vec![
+            ShowSection {
+                id: "memory".to_string(),
+                title: "Memory".to_string(),
+                tag: "@memory".to_string(),
+                description: Some(
+                    "Everything that belongs in the blog's memory section."
+                        .to_string(),
+                ),
+                block_id: "s-memory".to_string(),
+                link: "[[ref/papers/ea_graph#^s-memory]]".to_string(),
+                count: 2,
+                pages: Some("Pages 4–5".to_string()),
+                images: vec!["ref/notes/pic.png".to_string()],
+            },
+            ShowSection {
+                id: "related".to_string(),
+                title: "Related".to_string(),
+                tag: "@related".to_string(),
+                description: None,
+                block_id: "s-related".to_string(),
+                link: "[[ref/papers/ea_graph#^s-related]]".to_string(),
+                count: 0,
+                pages: None,
+                images: Vec::new(),
+            },
+        ];
+        row.annotations = vec![
+            highlight(
+                "Page 4",
+                "Make a point about how …",
+                None,
+                "h-496b1ca10117",
+                Some("memory"),
+            ),
+            highlight(
+                "Page 5",
+                "Mention that you've implemented …",
+                Some("Compare with the intro"),
+                "h-6bbab22c999c",
+                Some("memory"),
+            ),
+            highlight(
+                "Page 2",
+                "POTENTIAL QUOTES: …",
+                None,
+                "h-38a082b00de9",
+                None,
+            ),
+        ];
+        row.tasks = vec![ShowTask {
+            checked: false,
+            mark: ' ',
+            text: "Draft the memory section.".to_string(),
+            block_id: "s-memory".to_string(),
+            path: None,
+        }];
+        row
+    }
+
+    #[test]
+    fn human_render_groups_sections_plain_and_color() {
+        let rows = vec![sectioned_show_test_row()];
+        let plain =
+            render_show_human(&rows, false, false, Styler::plain(), 120);
+        assert!(
+            plain.contains("▍Memory  @memory · 2 highlights · Pages 4–5"),
+            "section header:\n{plain}"
+        );
+        assert!(
+            plain.contains(
+                "▍Everything that belongs in the blog's memory section."
+            ),
+            "description bar:\n{plain}"
+        );
+        assert!(
+            plain.contains("▍Related  @related · nothing tagged yet"),
+            "empty scaffold:\n{plain}"
+        );
+        assert!(
+            plain.contains("Other highlights · 1"),
+            "ungrouped group:\n{plain}"
+        );
+        assert!(
+            plain.contains("  Page 4")
+                && plain.contains("  Page 5")
+                && plain.contains("  Page 2"),
+            "page runs reset per group:\n{plain}"
+        );
+        assert!(
+            plain.contains("   § Memory"),
+            "section task suffix:\n{plain}"
+        );
+        let colored =
+            render_show_human(&rows, false, false, Styler::colored(), 120);
+        assert!(
+            colored.contains("\u{1b}[35m▍\u{1b}[0m"),
+            "magenta bar:\n{colored}"
+        );
+        assert!(
+            colored.contains("\u{1b}[1mMemory\u{1b}[0m"),
+            "bold title:\n{colored}"
+        );
+        assert!(
+            colored.contains(
+                "\u{1b}[2m@memory · 2 highlights · Pages 4–5\u{1b}[0m"
+            ),
+            "dim caption:\n{colored}"
+        );
+    }
+
+    #[test]
+    fn comments_only_hides_section_headers_without_kept_members() {
+        let mut row = sectioned_show_test_row();
+        row.annotations.retain(|annotation| {
+            annotation
+                .comment
+                .as_deref()
+                .is_some_and(|comment| !comment.is_empty())
+        });
+        let plain =
+            render_show_human(&[row], true, false, Styler::plain(), 120);
+        assert!(
+            plain.contains("▍Memory  @memory · 2 highlights · Pages 4–5"),
+            "kept member still prints its section:\n{plain}"
+        );
+        assert!(
+            !plain.contains("Related"),
+            "empty scaffold drops under -c:\n{plain}"
+        );
+        assert!(
+            !plain.contains("Other highlights"),
+            "uncommented other drops under -c:\n{plain}"
+        );
+        assert!(
+            !plain.contains("POTENTIAL QUOTES"),
+            "uncommented quote drops:\n{plain}"
+        );
+    }
+
+    #[test]
+    fn markdown_digest_groups_sections() {
+        let markdown =
+            render_show_markdown(&[sectioned_show_test_row()], false, false);
+        assert!(
+            markdown.contains("#### Memory"),
+            "section heading:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("*@memory · 2 highlights · Pages 4–5*"),
+            "italic caption:\n{markdown}"
+        );
+        assert!(
+            markdown.contains(
+                "> Everything that belongs in the blog's memory section."
+            ),
+            "description quote:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("#### Related")
+                && markdown.contains("_Nothing tagged yet._"),
+            "empty scaffold:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("#### Other highlights"),
+            "ungrouped heading:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("**Page 4**")
+                && markdown.contains("**Page 5**")
+                && markdown.contains("**Page 2**"),
+            "page captions reset per group:\n{markdown}"
+        );
+    }
+
+    #[test]
+    fn unsectioned_markdown_stays_byte_identical() {
+        let unsectioned =
+            render_show_markdown(&[show_test_row()], false, false);
+        assert!(
+            !unsectioned.contains("#### "),
+            "no section headings:\n{unsectioned}"
+        );
+        assert!(
+            unsectioned.contains("### Annotations\n\n**Page 2**\n"),
+            "page stream unchanged:\n{unsectioned}"
+        );
+    }
+
+    #[test]
+    fn show_section_json_omits_empty_optional_fields() {
+        let row = sectioned_show_test_row();
+        let value = serde_json::to_value(&row).expect("serialize");
+        let sections = value["sections"].as_array().expect("sections");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0]["id"], "memory");
+        assert_eq!(sections[0]["count"], 2);
+        assert_eq!(sections[0]["pages"], "Pages 4–5");
+        assert_eq!(
+            sections[0]["images"],
+            serde_json::json!(["ref/notes/pic.png"])
+        );
+        assert!(sections[1].get("description").is_none());
+        assert!(sections[1].get("images").is_none());
+        assert!(sections[1].get("pages").is_none());
+        assert_eq!(sections[1]["count"], 0);
+        assert_eq!(value["annotations"][0]["section"], "memory");
+        assert!(value["annotations"][2].get("section").is_none());
+
+        let unsectioned =
+            serde_json::to_value(show_test_row()).expect("serialize");
+        assert!(unsectioned.get("sections").is_none());
+        assert!(unsectioned["annotations"][0].get("section").is_none());
     }
 }

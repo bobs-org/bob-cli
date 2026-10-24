@@ -167,6 +167,7 @@ pub(crate) use cli::{bob_dir_arg, ref_dir_arg, xlib_dir_arg};
 pub(crate) use clip_url::{
     dedupe_key_for, humanize_stem, percent_decode, validate_and_clean,
 };
+pub(crate) use continuation::group_page_label;
 pub(crate) use frontmatter::split_frontmatter;
 pub(crate) use marker::{
     is_known_ref_task_mark, normalize_deprecated_status_str,
