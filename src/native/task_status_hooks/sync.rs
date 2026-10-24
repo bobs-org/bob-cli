@@ -430,7 +430,7 @@ pub(super) fn sync_task_statuses(
         &settings.done_statuses,
         &settings.status_types,
         &deleted_lines,
-        false,
+        true,
     );
     let structurally_updated_daily = apply_structural_plan(
         &daily_contents,

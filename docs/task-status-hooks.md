@@ -809,9 +809,11 @@ With no timed open entry, the last completed entry is the fallback:
 ```
 
 With only untimed open entries, the link is struck in place because no
-relocation target exists. The scoped capture-side retirement reuses this
-same structural planner with its dedupe flag on, so a carried copy is
-dropped when the destination entry already links the task.
+relocation target exists. Both reconcile and the scoped capture-side
+retirement run this same structural planner with its dedupe flag on, so a
+carried copy is dropped when the destination entry already links the task.
+A live non-transcluded link moved to the completed fallback still gets the
+tomato marker when it is the first copy; a duplicate is never inserted.
 
 A task must have a trailing `^block-id` to be linked. The edit changes only
 the status character, preserving indentation, list markers, descriptions,

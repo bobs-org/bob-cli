@@ -172,7 +172,8 @@ pub(crate) fn plan_structural_changes(
     let target_entry = current.or(fallback);
     // With the opt-in dedupe flag, a bullet that would move is deleted
     // instead when the destination entry already links the same task
-    // (struck or not). Reconcile passes `false` and is unaffected.
+    // (struck or not). Both reconcile and capture-side retirement pass
+    // `true` so a carried copy is dropped instead of duplicated.
     let destination_identities: BTreeSet<(PathBuf, String)> =
         if dedupe_into_destination {
             target_entry.map_or(BTreeSet::new(), |target| {

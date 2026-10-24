@@ -245,6 +245,36 @@ fn reconcile_without_flag_moves_instead_of_deduping() {
 }
 
 #[test]
+fn dedupe_drops_carried_copy_when_completed_fallback_already_links_task() {
+    // bob-cli-2l: a completed entry already links the task (live, marked)
+    // and a later open untimed placeholder carries the same live link with
+    // no open timed entry. Reconcile and capture retirement agree: the
+    // carried copy is dropped instead of relocated as a duplicate, leaving
+    // a single struck marked link in the completed entry.
+    let day = concat!(
+        "## Pomodoros\n",
+        "\n",
+        "- [x] Morning (0800-0830)\n",
+        "  - 🍅 [[sase#^done]]\n",
+        "- [ ] SASE\n",
+        "  - [[sase#^done]]\n",
+    );
+    let retirement = retire_completed_links(
+        day,
+        &completed(&[("sase.md", "done")]),
+        &statuses(&[("sase", "done", done("sase.md"))]),
+        &test_settings(),
+    );
+    assert!(retirement.changed);
+    assert!(retirement.moved.is_empty());
+    assert_eq!(retirement.deduplicated.len(), 1);
+    assert_eq!(retirement.deduplicated[0].block_id, "done");
+    assert_eq!(retirement.text.matches("sase#^done").count(), 1);
+    assert!(retirement.text.contains("🍅 ~~[[sase#^done]]~~\n"));
+    assert!(!retirement.text.contains("- [ ] SASE"));
+}
+
+#[test]
 fn retirement_preserves_crlf() {
     let day = concat!(
         "## Pomodoros\r\n",
