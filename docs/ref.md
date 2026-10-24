@@ -54,7 +54,9 @@ an intake PDF under `xlib/` does not appear in `ref list` until a scan creates
 its note; successful `bob ref create` calls file the note inline by default.
 `bob ref scan -f json` reports the same scan as a versioned JSON
 envelope (see [JSON output](highlights-ref-sync.md#json-output)); its client
-is the Refs panel in Bob Mac Capture, which runs it when Bryan presses ⌘S.
+is the Refs panel in Bob Mac Capture, which runs it when Bryan presses ⌘S
+there or when Bob Mac Capture observes ⌘S in Highlights after a library PDF
+finishes saving.
 In Obsidian, `Cmd+Enter` on a reading task (or a Task Link or managed embed pointing at one) opens its `source_pdf` in Highlights through bob-navigation-hotkeys, without writing the vault.
 Lookup commands require the configured reference directory to exist;
 a missing directory is an error rather than an empty library. Directory

@@ -714,8 +714,9 @@ phrases and still exits 0 on a hold.
 
 `bob ref scan -a, --attended` means a person asked for this scan right now:
 never hold marker writes because Highlights is in use. It changes nothing else.
-Bob Refs ⌘S passes it. `bob ref sync` and create-time ingest never hold for
-reading. The scheduled cron scan does not pass `-a`.
+Bob Refs ⌘S and Bob Mac Capture's scan after ⌘S in Highlights pass it.
+`bob ref sync` and create-time ingest never hold for reading. The scheduled
+cron scan does not pass `-a`.
 
 ### Budgets and overrides
 
@@ -784,7 +785,8 @@ and is wired into `just check-scripts`.
 
 Every writing `bob ref scan` that holds the writer lock already drops the
 [scan receipt](#scan-receipt). Bob Mac Capture watches the matching
-Darwin notification and renders it: one quiet, threaded "Updated in
+Darwin notification, including scans started after ⌘S in Highlights, and
+renders it: one quiet, threaded "Updated in
 Highlights" notification when Bob Refs is hidden, a footer clause when
 it is visible, and a "Highlights needs you" banner only for
 `coordination_timeout` holds. The kit's last step confirms the
@@ -1000,8 +1002,9 @@ scan returns:
 The order is always `bob_sync.lock` then `scan.lock`. That serializes
 writing scans with vault-sync, nightly, and rename so vault-sync cannot
 push a library PDF without its ref note, and serializes two writing scans
-(for example ⌘S and the 15-minute cron) so they do not race on intake
-moves. A dry run takes neither lock. Writing scans never run vault-sync
+(for example Bob Refs ⌘S, Bob Mac Capture's scan after ⌘S in Highlights,
+and the 15-minute cron) so they do not race on intake moves. A dry run
+takes neither lock. Writing scans never run vault-sync
 themselves; vault-sync's next cycle after the scan releases the lock
 commits the PDF and note together.
 
