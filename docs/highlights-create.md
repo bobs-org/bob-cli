@@ -620,7 +620,9 @@ All or nothing, on every route:
 7. Collisions and the audio plan are re-checked (the vault may have
    changed during a long listen), the audio is installed, then the PDF.
    If the PDF install fails, only an audio file this run created is
-   deleted.
+   deleted. If this episode or an earlier one is still in the sase-listen
+   publish outbox, bob ends with a `warning: podcast feed: …` line and a
+   hint.
 
 Placeholder values: `{target}` is the cleaned URL for URL routes (the listen renderer
 does its own arXiv rewrite), the absolute source path for a local PDF, and
@@ -724,7 +726,8 @@ a direct `sase listen render ...` invocation (a direct `sase-listen render ...`
 migrates); it must contain `{audio}` plus `{target}` or `{pdf}`; unknown placeholders,
 quoted placeholders, wrappers, chains, pipelines, redirections, and shell expansions
 are errors. `bob ref doctor` reports the `listen_command` row (`none`, `ok`, or `warn`)
-and checks the fixed `sase` launcher. An unconfigured `--listen` fails with the config snippet above.
+and the `listen_feed` queue row, and checks the fixed `sase` launcher. An unconfigured
+`--listen` fails with the config snippet above.
 
 Troubleshooting:
 
@@ -752,8 +755,12 @@ Troubleshooting:
 - A credential prompt from `pass` (via sase-listen's `api_key_command`):
   it inherits bob's stdin, so answer it in the terminal and the run
   continues.
-- A queued publish (remote publish failure): the renderer warns and still
-  exits 0, so the episode binds normally; publish drains later.
+- A queued publish (remote publish failure): the episode still binds and the
+  vault is fine, but it will not reach AntennaPod until the feed host is fixed.
+  Check `sase listen doctor` on the feed host, then run
+  `sase listen publish --pending`; pull to refresh the feed in AntennaPod.
+  For example, a feed host whose `token_command` needs an unlocked gpg-agent
+  fails every non-interactive publish.
 - A rerun after failure reuses the renderer's source, writer, and chunk
   caches, then re-masters and re-publishes; a kept scratch episode rebinds
   with `--audio`.

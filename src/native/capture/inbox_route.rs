@@ -1314,8 +1314,8 @@ mod tests {
             fs::read_to_string(vault.join("dev.md")).expect("dev note")
         );
         write(&vault.join("dev.md"), &concurrent);
-        let error =
-            commit_capture_batch(&mut batch).expect_err("commit refuses");
+        let error = commit_capture_batch(&mut batch, &vault)
+            .expect_err("commit refuses");
         assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
         assert!(
             error

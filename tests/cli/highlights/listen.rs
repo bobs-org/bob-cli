@@ -60,15 +60,27 @@ fi
 echo "FAKE-LISTEN-STDOUT"
 echo "FAKE-LISTEN-STDERR" >&2
 if [ -n "$FAKE_LISTEN_TOUCH" ]; then mkdir -p "$(dirname "$FAKE_LISTEN_TOUCH")"; printf 'fake' > "$FAKE_LISTEN_TOUCH"; fi
+audio_path=""
 for arg in "$@"; do
   case "$arg" in
     *.mp3)
+      audio_path="$arg"
       if [ -z "$FAKE_LISTEN_NO_AUDIO" ]; then
         printf 'ID3 fake episode' > "$arg"
       fi
       ;;
   esac
 done
+if [ -n "$FAKE_LISTEN_QUEUE_EPISODE" ]; then
+  episode_dir="$BOB_HIGHLIGHTS_AUDIO_LIBRARY/$FAKE_LISTEN_QUEUE_EPISODE"
+  audio_file="${audio_path##*/}"
+  mkdir -p "$episode_dir"
+  cp "$audio_path" "$episode_dir/$audio_file"
+  printf '{"episode_id":"%s","audio":{"file":"%s"}}\n' "$FAKE_LISTEN_QUEUE_EPISODE" "$audio_file" > "$episode_dir/manifest.json"
+  outbox="$XDG_STATE_HOME/sase-listen/outbox"
+  mkdir -p "$outbox"
+  printf '{"episode_id":"%s","queued_at":"2026-10-24T12:00:00Z","attempts":1,"last_error":"fixed fake feed error"}\n' "$FAKE_LISTEN_QUEUE_EPISODE" > "$outbox/$FAKE_LISTEN_QUEUE_EPISODE.json"
+fi
 exit "${FAKE_LISTEN_EXIT:-0}"
 "#;
     write_executable(&sase, script);
@@ -231,12 +243,21 @@ fn listen_markdown_binds_episode_and_play_uri() {
             temp.path().join("render-fixture.pdf"),
         )
         .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env(
+            "BOB_HIGHLIGHTS_AUDIO_LIBRARY",
+            temp.path().join("audio-library"),
+        )
         .env("PATH", &fake_sase.path)
         .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create markdown --listen");
     assert_success(&output);
     let report = stdout(&output);
+    assert!(
+        !stderr(&output).contains("podcast feed"),
+        "an empty outbox prints no feed notice: {}",
+        format_output(&output)
+    );
     assert!(
         vault.join("xlib/chat/report.mp3").is_file(),
         "episode must be bound beside the PDF: {report}"
@@ -263,6 +284,64 @@ fn listen_markdown_binds_episode_and_play_uri() {
             && logged.contains("report.pdf")
             && !logged.contains("xlib"),
         "narration source is staged scratch outside xlib: {logged}"
+    );
+}
+
+#[test]
+fn listen_queued_publish_warns_after_create_summary() {
+    let temp = TempDir::new("bob-cli-highlights-listen-queued");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(&source, "# Report\n\nListen fixture.\n");
+    write_bare_pdf(&temp.path().join("render-fixture.pdf"));
+    let pandoc = write_fake_pandoc(temp.path());
+    let fake_sase = setup_fake_sase(&temp);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-L")
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env(
+            "FAKE_PANDOC_FIXTURE",
+            temp.path().join("render-fixture.pdf"),
+        )
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env(
+            "BOB_HIGHLIGHTS_AUDIO_LIBRARY",
+            temp.path().join("audio-library"),
+        )
+        .env("FAKE_LISTEN_QUEUE_EPISODE", "fake-queued-episode")
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .output()
+        .expect("run create with queued feed publish");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("podcast feed: this episode was not published")
+            && diagnostic.contains("fixed fake feed error")
+            && diagnostic.contains("sase listen publish --pending"),
+        "queued publish has a recovery warning: {}",
+        format_output(&output)
+    );
+    assert!(
+        diagnostic
+            .lines()
+            .rev()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("warning: "))
+            && diagnostic
+                .lines()
+                .last()
+                .is_some_and(|line| line.starts_with("hint: ")),
+        "the warning and hint are the final output lines: {diagnostic}"
     );
 }
 
@@ -1318,6 +1397,41 @@ fn doctor_listen_rows_cover_unset_ok_and_invalid() {
     assert!(
         stdout(&output).contains("listen_command: warn"),
         "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn doctor_warns_for_queued_listen_feed_publish() {
+    let temp = TempDir::new("bob-cli-highlights-doctor-listen-feed");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(vault.join("lib")).expect("create lib");
+    std::fs::create_dir_all(vault.join("ref")).expect("create ref");
+    std::fs::create_dir_all(vault.join("xlib")).expect("create xlib");
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    let state = temp.path().join("state");
+    let outbox = state.join("sase-listen/outbox");
+    std::fs::create_dir_all(&outbox).expect("create listen outbox");
+    write_file(
+        &outbox.join("older-episode.json"),
+        "{\"episode_id\":\"older-episode\",\"queued_at\":\"2026-10-20T12:00:00Z\",\"attempts\":2,\"last_error\":\"temporary auth failure\"}\n",
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .arg("-b")
+        .arg(&vault)
+        .env("XDG_STATE_HOME", &state)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .output()
+        .expect("run ref doctor with queued feed publish");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("listen_feed: warn (1 episode queued"),
+        "doctor reports the queued feed episode: {}",
         format_output(&output)
     );
 }

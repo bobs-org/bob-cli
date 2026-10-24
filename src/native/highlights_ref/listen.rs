@@ -836,6 +836,7 @@ pub(super) fn run_listen_with_output(
 
     if status.success() {
         if audio_is_mp3(&values.audio) {
+            super::listen_feed::after_listen_success(&values.audio, output);
             return Ok(values.audio.clone());
         }
         return Err(ListenError::NoAudio {
@@ -1337,11 +1338,18 @@ exit "${FAKE_LISTEN_EXIT:-0}"
         fs::create_dir_all(&bin).expect("create fake bin");
         let log = scratch.join("listen.log");
         let trap_marker = scratch.join("trap.hit");
+        let state_home = scratch.join("state");
+        let audio_library = scratch.join("library");
         write_fake_sase(&bin);
         write_sase_listen_trap(&bin, &trap_marker);
         let path = path_with_bin(&bin);
         let _guard = crate::native::env::TestEnvGuard::set(&[
             ("PATH", Some(path.as_os_str())),
+            ("XDG_STATE_HOME", Some(state_home.as_os_str())),
+            (
+                "BOB_HIGHLIGHTS_AUDIO_LIBRARY",
+                Some(audio_library.as_os_str()),
+            ),
             ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
             ("FAKE_LISTEN_EXIT", None),
             ("FAKE_LISTEN_NO_AUDIO", None),
@@ -1374,11 +1382,18 @@ exit "${FAKE_LISTEN_EXIT:-0}"
         fs::create_dir_all(&bin).expect("create fake bin");
         let log = scratch.join("listen.log");
         let trap_marker = scratch.join("trap.hit");
+        let state_home = scratch.join("state");
+        let audio_library = scratch.join("library");
         write_fake_sase(&bin);
         write_sase_listen_trap(&bin, &trap_marker);
         let path = path_with_bin(&bin);
         let _guard = crate::native::env::TestEnvGuard::set(&[
             ("PATH", Some(path.as_os_str())),
+            ("XDG_STATE_HOME", Some(state_home.as_os_str())),
+            (
+                "BOB_HIGHLIGHTS_AUDIO_LIBRARY",
+                Some(audio_library.as_os_str()),
+            ),
             ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
             ("FAKE_LISTEN_EXIT", None),
             ("FAKE_LISTEN_NO_AUDIO", None),
@@ -1723,6 +1738,8 @@ exit "${FAKE_LISTEN_EXIT:-0}"
         fs::create_dir_all(&bin).expect("create fake bin");
         let log = scratch.join("listen.log");
         let trap_marker = scratch.join("trap.hit");
+        let state_home = scratch.join("state");
+        let audio_library = scratch.join("library");
         write_fake_sase(&bin);
         write_sase_listen_trap(&bin, &trap_marker);
         let path = path_with_bin(&bin);
@@ -1732,6 +1749,11 @@ exit "${FAKE_LISTEN_EXIT:-0}"
         {
             let _guard = crate::native::env::TestEnvGuard::set(&[
                 ("PATH", Some(path.as_os_str())),
+                ("XDG_STATE_HOME", Some(state_home.as_os_str())),
+                (
+                    "BOB_HIGHLIGHTS_AUDIO_LIBRARY",
+                    Some(audio_library.as_os_str()),
+                ),
                 ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
                 ("FAKE_LISTEN_EXIT", None),
                 ("FAKE_LISTEN_NO_AUDIO", None),
