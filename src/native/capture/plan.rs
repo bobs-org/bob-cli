@@ -582,6 +582,7 @@ pub(super) fn plan_capture_item(
     if let CaptureKind::PomodoroStart {
         spec,
         pomodoro_name,
+        pomodoro_name_is_literal,
     } = parsed.kind.clone()
     {
         return plan_pomodoro_start_item(
@@ -589,6 +590,7 @@ pub(super) fn plan_capture_item(
             parsed,
             spec,
             pomodoro_name,
+            pomodoro_name_is_literal,
             now,
             today,
             planner,
@@ -672,6 +674,7 @@ pub(super) fn plan_capture_item(
     if let CaptureKind::TaskToggle {
         block_id,
         pomodoro_name,
+        pomodoro_name_is_literal,
         intent,
     } = &parsed.kind
     {
@@ -691,6 +694,7 @@ pub(super) fn plan_capture_item(
             route,
             block_id,
             pomodoro_name.as_deref(),
+            *pomodoro_name_is_literal,
             *intent,
             today,
             warnings,
@@ -790,6 +794,7 @@ pub(super) fn plan_capture_item(
     if let CaptureKind::PomodoroLink {
         block_id,
         pomodoro_name,
+        pomodoro_name_is_literal,
         start,
         close,
         ..
@@ -816,6 +821,9 @@ pub(super) fn plan_capture_item(
         })?;
         let target = request.bob_dir.join(relative_target(Some(route)));
         let ledger_target = match pomodoro_name.as_deref() {
+            Some(name) if *pomodoro_name_is_literal => {
+                capture_task_toggle::PomodoroLinkTarget::LiteralName(name)
+            }
             Some(name) => capture_task_toggle::PomodoroLinkTarget::Named(name),
             None => capture_task_toggle::PomodoroLinkTarget::Implicit,
         };
@@ -1220,6 +1228,7 @@ pub(super) fn plan_capture_item(
         CaptureKind::Pomodoro {
             block_id,
             pomodoro_name,
+            pomodoro_name_is_literal,
             start,
             close,
         } => {
@@ -1298,6 +1307,7 @@ pub(super) fn plan_capture_item(
                     route,
                     block_id,
                     pomodoro_name.as_deref(),
+                    *pomodoro_name_is_literal,
                     start.as_ref(),
                     &capture_block,
                     now,

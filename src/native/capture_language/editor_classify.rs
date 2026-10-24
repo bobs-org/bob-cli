@@ -399,7 +399,18 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
                 TASK_BLOCK_ID_ERROR,
             ));
         }
-        if !name.is_empty() && !is_pomodoro_selector_component(name) {
+        // A `#"…"` literal resolves below: a complete one reports its
+        // canonical name; an unterminated one is an editing state.
+        let literal_name: Option<&str> =
+            if super::pomodoro_literal::opens_exact_name(name) {
+                Some(name)
+            } else {
+                None
+            };
+        if !name.is_empty()
+            && !is_pomodoro_selector_component(name)
+            && literal_name.is_none()
+        {
             return TokenParse::Invalid(token_diagnostic(
                 token,
                 "invalid_pomodoro_name",
@@ -449,6 +460,39 @@ pub(super) fn classify_task_block_id_token(token: &Token<'_>) -> TokenParse {
                 end: plus_start + 2,
                 kind: SpanKind::InteractivePlaceholder,
             });
+        }
+        // Resolve a `#"…"` literal name like the `@route:id#` path: a
+        // complete one reports its canonical name; an invalid one is an
+        // error; an unterminated one is an editing state.
+        if let Some(raw) = literal_name {
+            match super::pomodoro_literal::lex_exact_name_after_hash(
+                raw,
+                raw.len(),
+            ) {
+                Some(lex) if lex.complete => {
+                    match super::pomodoro_literal::canonicalize_exact_name(
+                        &lex.decoded,
+                    ) {
+                        Some(canonical) => {
+                            marker_parse.section = Some(canonical);
+                        }
+                        None => {
+                            return TokenParse::Invalid(token_diagnostic(
+                                token,
+                                "invalid_pomodoro_name",
+                                POMODORO_NAME_ERROR,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    marker_parse.section = None;
+                    marker_parse.mode = EditorMode::Incomplete;
+                    if !marker_parse.needs.contains(&Need::PomodoroName) {
+                        marker_parse.needs.push(Need::PomodoroName);
+                    }
+                }
+            }
         }
         return TokenParse::Marker(marker_parse);
     }
@@ -534,13 +578,44 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         Some((route, rest)) => (route, rest, true),
         None => (marker, "", false),
     };
-    let (rest_before_start, start_part) = match rest.split_once('=') {
-        Some((before, suffix)) => (before, Some(suffix)),
+    // A `=` inside a `#"…"` literal never separates the session suffix.
+    let literal_span: Option<(usize, usize)> =
+        rest.find('#').and_then(|hash| {
+            let after_hash = &rest[hash + 1..];
+            if !super::pomodoro_literal::opens_exact_name(after_hash) {
+                return None;
+            }
+            super::pomodoro_literal::lex_exact_name_after_hash(
+                after_hash,
+                after_hash.len(),
+            )
+            .and_then(|lex| {
+                lex.complete.then(|| (hash + 1, hash + 1 + lex.literal_len))
+            })
+        });
+    let split_at = match literal_span {
+        Some((start, end)) => rest[..start]
+            .find('=')
+            .or_else(|| rest[end..].find('=').map(|offset| end + offset)),
+        None => rest.find('='),
+    };
+    let (rest_before_start, start_part) = match split_at {
+        Some(index) => (&rest[..index], Some(&rest[index + 1..])),
         None => (rest, None),
     };
     let (block_part, name_part) = match rest_before_start.split_once('#') {
         Some((block, name)) => (block, Some(name)),
         None => (rest_before_start, None),
+    };
+    // A `#"…"` literal is validated and resolved after the marker parse:
+    // a complete one reports its canonical name (the span still covers
+    // the quotes via `content_end`); an unterminated one is an editing
+    // state, never a mistake.
+    let literal_name_part: Option<&str> = match name_part {
+        Some(name) if super::pomodoro_literal::opens_exact_name(name) => {
+            Some(name)
+        }
+        _ => None,
     };
 
     if legacy && separator && route_part.is_empty() {
@@ -588,7 +663,9 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         ));
     }
     if name_part.is_some_and(|name| {
-        !name.is_empty() && !is_pomodoro_selector_component(name)
+        !name.is_empty()
+            && !is_pomodoro_selector_component(name)
+            && literal_name_part.is_none()
     }) {
         return TokenParse::Invalid(token_diagnostic(
             token,
@@ -744,6 +821,38 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
         },
     );
     marker_parse.pomodoro_start = start_spec;
+    // Resolve a `#"…"` literal name: a complete one reports its canonical
+    // name (the span already covers the quotes); an invalid one is an
+    // error; an unterminated one is an editing state with a Pomodoro-name
+    // need, never a mistake.
+    if let Some(raw) = literal_name_part {
+        match super::pomodoro_literal::lex_exact_name_after_hash(raw, raw.len())
+        {
+            Some(lex) if lex.complete => {
+                match super::pomodoro_literal::canonicalize_exact_name(
+                    &lex.decoded,
+                ) {
+                    Some(canonical) => {
+                        marker_parse.section = Some(canonical);
+                    }
+                    None => {
+                        return TokenParse::Invalid(token_diagnostic(
+                            token,
+                            "invalid_pomodoro_name",
+                            POMODORO_NAME_ERROR,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                marker_parse.section = None;
+                marker_parse.mode = EditorMode::Incomplete;
+                if !marker_parse.needs.contains(&Need::PomodoroName) {
+                    marker_parse.needs.push(Need::PomodoroName);
+                }
+            }
+        }
+    }
     match close_suffix {
         Some(EditorCloseSuffix::Valid {
             in_progress,

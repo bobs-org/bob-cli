@@ -8,6 +8,10 @@ use super::editor_parse::*;
 use super::item::*;
 use super::markers::*;
 use super::model::*;
+use super::pomodoro_literal::{
+    canonicalize_exact_name, expand_literal_token, lex_exact_name_after_hash,
+    opens_exact_name,
+};
 use crate::native::collect_done;
 
 /// Parse one whitespace-free token as an `@route` token, returning `None` when
@@ -97,6 +101,30 @@ pub(super) fn parse_sub_bullet_route_token(
     if !is_block_id(block_id) {
         return Err(SUB_BULLET_BLOCK_ID_ERROR.to_string());
     }
+    // A `#"NAME"` literal never names a task section: it names the
+    // Pomodoro directly, so resolve to a task toggle now. (A literal
+    // always errored here before, so nothing that parsed changes shape.)
+    if let Some(selector) = section
+        && opens_exact_name(selector)
+    {
+        let lex = lex_exact_name_after_hash(selector, selector.len())
+            .filter(|lex| lex.complete)
+            .ok_or_else(|| SUB_BULLET_SECTION_ERROR.to_string())?;
+        if selector.len() != lex.literal_len {
+            return Err(SUB_BULLET_SECTION_ERROR.to_string());
+        }
+        let canonical = canonicalize_exact_name(&lex.decoded)
+            .ok_or_else(|| SUB_BULLET_SECTION_ERROR.to_string())?;
+        return Ok(RouteToken {
+            route: Some(route.to_ascii_lowercase()),
+            kind: CaptureKind::TaskToggle {
+                block_id: block_id.to_string(),
+                pomodoro_name: Some(canonical),
+                pomodoro_name_is_literal: true,
+                intent: TaskToggleIntent::EnsureNext,
+            },
+        });
+    }
     let section = match section {
         None => None,
         Some("") => {
@@ -126,6 +154,7 @@ pub(super) fn parse_sub_bullet_route_token(
             kind: CaptureKind::TaskToggle {
                 block_id: block_id.to_string(),
                 pomodoro_name: None,
+                pomodoro_name_is_literal: false,
                 intent: TaskToggleIntent::Toggle,
             },
         });
@@ -540,6 +569,31 @@ pub(super) fn parse_task_block_id_route_token(
         if name.is_empty() {
             return Err(project_note_name_required_error(route, block_core));
         }
+        if opens_exact_name(name) {
+            // `#"NAME"` exact-name literal: runs through the closing
+            // quote; unterminated refuses like a missing name.
+            let Some(lex) = lex_exact_name_after_hash(name, name.len()) else {
+                return Err(POMODORO_NAME_ERROR.to_string());
+            };
+            if !lex.complete {
+                return Err(project_note_name_required_error(
+                    route, block_core,
+                ));
+            }
+            let canonical = canonicalize_exact_name(&lex.decoded)
+                .ok_or_else(|| POMODORO_NAME_ERROR.to_string())?;
+            if name.len() != lex.literal_len {
+                return Err(POMODORO_NAME_ERROR.to_string());
+            }
+            return Ok(RouteToken {
+                route: Some(route.to_ascii_lowercase()),
+                kind: CaptureKind::ProjectNote {
+                    block_id: block_core.to_string(),
+                    pomodoro_name: Some(canonical),
+                    pomodoro_name_is_literal: true,
+                },
+            });
+        }
         if !is_pomodoro_selector_component(name) {
             return Err(POMODORO_NAME_ERROR.to_string());
         }
@@ -548,6 +602,7 @@ pub(super) fn parse_task_block_id_route_token(
             kind: CaptureKind::ProjectNote {
                 block_id: block_core.to_string(),
                 pomodoro_name: Some(name.to_string()),
+                pomodoro_name_is_literal: false,
             },
         });
     }
@@ -584,6 +639,7 @@ pub(super) fn parse_task_block_id_route_token(
             CaptureKind::ProjectNote {
                 block_id: block_id.to_string(),
                 pomodoro_name: None,
+                pomodoro_name_is_literal: false,
             }
         } else {
             CaptureKind::TaskWithBlockId {
@@ -640,6 +696,7 @@ pub(super) fn is_retired_double_colon_marker_candidate(token: &str) -> bool {
 pub(super) struct ColonLinkParts {
     pub(super) block_id: String,
     pub(super) pomodoro_name: Option<String>,
+    pub(super) pomodoro_name_is_literal: bool,
     pub(super) start: Option<PomodoroStartSpec>,
     pub(super) close: Option<PomodoroCloseSpec>,
     /// Token-relative end of the route:block-id portion.
@@ -662,6 +719,7 @@ struct ParsedLinkStart {
     name: Option<String>,
     name_range: Option<(usize, usize)>,
     bare_name: bool,
+    name_is_literal: bool,
     start_ranges: Vec<(usize, usize)>,
 }
 
@@ -679,6 +737,7 @@ fn parse_link_start_suffix(
         len,
         name,
         name_spelling,
+        name_is_literal,
         drop,
         timing,
         doubled,
@@ -701,7 +760,16 @@ fn parse_link_start_suffix(
     if name.as_deref() == Some("") {
         return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
     }
-    if name
+    if name_is_literal {
+        // A literal's spaces are the point: validate the canonical name,
+        // never the slug charset.
+        if name
+            .as_deref()
+            .is_none_or(|name| canonicalize_exact_name(name).is_none())
+        {
+            return Err(POMODORO_NAME_ERROR.to_string());
+        }
+    } else if name
         .as_deref()
         .is_some_and(|name| !is_pomodoro_selector_component(name))
     {
@@ -753,11 +821,23 @@ fn parse_link_start_suffix(
             "Pomodoro link start `{typed_token}` takes a name and timing, not a `~` drop list; remove `~{list}`"
         ));
     }
+    // A literal's span covers its quotes: recompute the typed length
+    // rather than the canonical name's.
+    let literal_typed_len: Option<usize> = if name_is_literal {
+        raw.find('#').and_then(|hash| {
+            lex_exact_name_after_hash(&raw[hash + 1..], raw.len() - hash - 1)
+                .filter(|lex| lex.complete)
+                .map(|lex| lex.literal_len)
+        })
+    } else {
+        None
+    };
     let name_range =
         name.as_ref().zip(name_spelling).map(|(name, spelling)| {
             let start =
                 equals_offset + named_start_name_offset(suffix.len(), spelling);
-            (start, start + name.len())
+            let len = literal_typed_len.unwrap_or(name.len());
+            (start, start + len)
         });
     let mut start_ranges = Vec::new();
     if let Some((name_start, name_end)) = name_range {
@@ -783,6 +863,7 @@ fn parse_link_start_suffix(
         name,
         name_range,
         bare_name: name_spelling == Some(NameSpelling::Bare),
+        name_is_literal,
         start_ranges,
     })
 }
@@ -837,8 +918,28 @@ pub(super) fn parse_colon_link_tail(
     // Split the additive session suffix before `#` handling: the first `=`
     // separates the old marker from the suffix. `x`/`X` is a close; anything
     // else follows the `=<X>` start shape. Any extra `=` inside is malformed.
-    let (rest_before_start, suffix) = match rest.split_once('=') {
-        Some((before, suffix)) => (before, Some(suffix)),
+    // A `=` inside a `#"…"` literal never separates: find the literal span
+    // first and split outside it.
+    let literal_span: Option<(usize, usize)> =
+        rest.find('#').and_then(|hash| {
+            let after_hash = &rest[hash + 1..];
+            if !opens_exact_name(after_hash) {
+                return None;
+            }
+            lex_exact_name_after_hash(after_hash, after_hash.len()).and_then(
+                |lex| {
+                    lex.complete.then(|| (hash + 1, hash + 1 + lex.literal_len))
+                },
+            )
+        });
+    let split_at = match literal_span {
+        Some((start, end)) => rest[..start]
+            .find('=')
+            .or_else(|| rest[end..].find('=').map(|offset| end + offset)),
+        None => rest.find('='),
+    };
+    let (rest_before_start, suffix) = match split_at {
+        Some(index) => (&rest[..index], Some(&rest[index + 1..])),
         None => (rest, None),
     };
     let sigil_len = if typed_token.starts_with("@!") { 2 } else { 1 };
@@ -912,10 +1013,28 @@ pub(super) fn parse_colon_link_tail(
     if !is_block_id(block_id) {
         return Err(POMODORO_BLOCK_ID_ERROR.to_string());
     }
+    let mut prefix_is_literal = false;
+    let mut prefix_literal_len: Option<usize> = None;
     let prefix_name = match pomodoro_name {
         None => None,
         Some("") => {
             return Err(POMODORO_NAME_REQUIRED_ERROR.to_string());
+        }
+        Some(name) if opens_exact_name(name) => {
+            // `#"NAME"` exact-name literal: runs through the closing
+            // quote; unterminated refuses like a missing name.
+            prefix_is_literal = true;
+            let lex = lex_exact_name_after_hash(name, name.len())
+                .filter(|lex| lex.complete)
+                .ok_or_else(|| POMODORO_NAME_REQUIRED_ERROR.to_string())?;
+            if name.len() != lex.literal_len {
+                return Err(POMODORO_NAME_ERROR.to_string());
+            }
+            prefix_literal_len = Some(lex.literal_len);
+            Some(
+                canonicalize_exact_name(&lex.decoded)
+                    .ok_or_else(|| POMODORO_NAME_ERROR.to_string())?,
+            )
         }
         Some(name) if !is_pomodoro_selector_component(name) => {
             return Err(POMODORO_NAME_ERROR.to_string());
@@ -957,6 +1076,13 @@ pub(super) fn parse_colon_link_tail(
             "`=x` always closes the running Pomodoro; remove `#{name}` (drop `=x` to link under a named Pomodoro instead)"
         ));
     }
+    // A literal's span covers its quotes: use the typed length rather
+    // than the canonical name's.
+    let prefix_typed_len: Option<usize> = if prefix_is_literal {
+        prefix_literal_len
+    } else {
+        None
+    };
     let prefix_name_range = pomodoro_name
         .as_ref()
         .filter(|_| {
@@ -967,7 +1093,8 @@ pub(super) fn parse_colon_link_tail(
         })
         .map(|name| {
             let name_start = link_base + block_id.len() + 1;
-            (name_start, name_start + name.len())
+            let len = prefix_typed_len.unwrap_or(name.len());
+            (name_start, name_start + len)
         });
     let name_range = parsed_suffix
         .as_ref()
@@ -984,6 +1111,10 @@ pub(super) fn parse_colon_link_tail(
     Ok(ColonLinkParts {
         block_id: block_id.to_string(),
         pomodoro_name,
+        pomodoro_name_is_literal: prefix_is_literal
+            || parsed_suffix
+                .as_ref()
+                .is_some_and(|parsed| parsed.name_is_literal),
         start,
         close,
         link_end: link_base + block_id.len(),
@@ -1015,6 +1146,7 @@ pub(super) fn parse_pomodoro_route_token(
         kind: CaptureKind::Pomodoro {
             block_id: parts.block_id,
             pomodoro_name: parts.pomodoro_name,
+            pomodoro_name_is_literal: parts.pomodoro_name_is_literal,
             start: parts.start,
             close: parts.close,
         },
@@ -2006,12 +2138,15 @@ pub(super) fn parse_pomodoro_link_item<'a>(
         return Ok(None);
     }
     let tokens: Vec<&str> = parent_trimmed.split_whitespace().collect();
-    let Some(first) = tokens.first().copied() else {
+    let Some(first_token) = tokens.first().copied() else {
         return Ok(None);
     };
-    if !first.starts_with('^') {
+    if !first_token.starts_with('^') {
         return Ok(None);
     }
+    // A `#"…"` literal may hold spaces: extend the marker through its
+    // closing quote so the name lexes whole.
+    let (first, first_len) = expand_literal_token(parent_trimmed, first_token);
     if first == "^" {
         if tokens.len() == 1 && item.lines.len() == 1 {
             return Err(POMODORO_LINK_INCOMPLETE_ERROR.to_string());
@@ -2051,7 +2186,9 @@ pub(super) fn parse_pomodoro_link_item<'a>(
         }
         return Ok(None);
     }
-    let is_solo_parent = tokens.len() == 1;
+    // Tokens consumed by a spaced literal are part of the marker, not
+    // extra text.
+    let is_solo_parent = parent_trimmed.len() == first_len;
     let is_solo_item = is_solo_parent && item.lines.len() == 1;
     match parse_caret_link_token(first) {
         Ok((route, parts)) => {
@@ -2097,6 +2234,8 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     kind: CaptureKind::PomodoroLink {
                         block_id: parts.block_id,
                         pomodoro_name: parts.pomodoro_name,
+                        pomodoro_name_is_literal: parts
+                            .pomodoro_name_is_literal,
                         start: parts.start,
                         close: parts.close,
                         spelling: PomodoroLinkSpelling::Caret,

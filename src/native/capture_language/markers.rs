@@ -588,6 +588,16 @@ pub(super) fn pomodoro_glued_timing_error(
 
 /// Named-start E1: `=#` / `=3#` with an empty name part.
 pub(super) fn pomodoro_named_start_incomplete_error(token: &str) -> String {
+    if token.contains("#“") {
+        return format!(
+            "`{token}` is incomplete: close the exact-name literal with `”` (for example `{token}”`)"
+        );
+    }
+    if token.contains("#\"") {
+        return format!(
+            "`{token}` is incomplete: close the exact-name literal with `\"` (for example `{token}\"`)",
+        );
+    }
     format!(
         "`{token}` is incomplete: type a Pomodoro name after `#` (for example `{token}deep-work`)"
     )
@@ -598,6 +608,12 @@ pub(super) fn pomodoro_named_start_name_error(
     name: &str,
     token: &str,
 ) -> String {
+    // Inside a `#"…"` literal spaces are fine; only the charset applies.
+    if token.contains("#\"") || token.contains("#“") {
+        return format!(
+            "Pomodoro name `{name}` in `{token}` may contain only A-Z, 0-9 or `& ' ( ) + , . / -` and spaces, and must start with a letter or digit"
+        );
+    }
     format!(
         "Pomodoro name `{name}` in `{token}` may contain only A-Z, a-z, 0-9 or `& ' ( ) + , . / -`; write spaces as `-`"
     )

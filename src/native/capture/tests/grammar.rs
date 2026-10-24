@@ -607,6 +607,7 @@ fn parses_pomodoro_routes_in_terminal_positions_with_schedules() {
         assert_eq!(
             parsed.kind,
             CaptureKind::Pomodoro {
+                pomodoro_name_is_literal: false,
                 block_id: "Foo-Bar".to_string(),
                 pomodoro_name: None,
                 start: None,
@@ -653,6 +654,7 @@ fn parses_named_pomodoro_routes_in_terminal_positions() {
         assert_eq!(
             parsed.kind,
             CaptureKind::Pomodoro {
+                pomodoro_name_is_literal: false,
                 block_id: "Foo-Bar".to_string(),
                 pomodoro_name: Some(name.to_string()),
                 start: None,
@@ -854,6 +856,7 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     assert_eq!(
         parsed.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::EnsureNext,
@@ -865,6 +868,7 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     assert_eq!(
         named.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: Some("deep+work".to_string()),
             intent: TaskToggleIntent::EnsureNext,
@@ -886,6 +890,7 @@ fn bare_sub_bullet_markers_toggle_instead_of_erroring() {
     assert_eq!(
         explicit.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,

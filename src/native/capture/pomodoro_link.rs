@@ -9,6 +9,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
     start: Option<&PomodoroStartSpec>,
     capture_block: &str,
     now: chrono::NaiveDateTime,
@@ -52,6 +53,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 &original_day,
                 &block_link,
                 pomodoro_name,
+                pomodoro_name_is_literal,
                 spec,
                 now,
             )?;
@@ -95,8 +97,12 @@ pub(super) fn plan_capture_with_pomodoro_link(
             pomodoro_refs,
         });
     }
-    let insertion =
-        insert_pomodoro_block_link(&original_day, &block_link, pomodoro_name)?;
+    let insertion = insert_pomodoro_block_link(
+        &original_day,
+        &block_link,
+        pomodoro_name,
+        pomodoro_name_is_literal,
+    )?;
     planner.stage(target, updated_target)?;
     planner.stage(&day_file, insertion.updated)?;
     // The destination endpoint is post-state (scanned from the updated
@@ -442,6 +448,10 @@ pub(super) fn plan_pomodoro_link_capture(
     let block_link = format!("[[{route}#^{block_id}]]");
 
     let pomodoro_name = ledger_target.named_selector();
+    let pomodoro_name_is_literal = matches!(
+        ledger_target,
+        capture_task_toggle::PomodoroLinkTarget::LiteralName(_)
+    );
     if let Some(spec) = start {
         let (mut plan, guard) = plan_pomodoro_link_with_start(
             planner,
@@ -451,6 +461,7 @@ pub(super) fn plan_pomodoro_link_capture(
             route,
             block_id,
             pomodoro_name,
+            pomodoro_name_is_literal,
             spec,
             now,
             &day_contents,
@@ -702,6 +713,7 @@ pub(super) fn plan_pomodoro_link_with_start(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
     spec: &PomodoroStartSpec,
     now: chrono::NaiveDateTime,
     day_contents: &str,
@@ -799,6 +811,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 day_contents,
                 block_link,
                 pomodoro_name,
+                pomodoro_name_is_literal,
                 spec,
                 now,
             )?;
@@ -858,7 +871,11 @@ pub(super) fn plan_pomodoro_link_with_start(
     let (source_endpoint, q_entry_index, q_line_index, q_subtree_end) =
         queue.expect("queue exists");
     if let Some(selector) = pomodoro_name {
-        match capture_pomodoros::select_named(&scan, selector) {
+        match capture_pomodoros::select_capture_name(
+            &scan,
+            selector,
+            pomodoro_name_is_literal,
+        ) {
             capture_pomodoros::NamedSelection::Found(entry) => {
                 if !(entry.state == capture_pomodoros::PomodoroState::Open
                     && entry.placeholder
@@ -1088,6 +1105,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     capture_task_toggle::insert_named_placeholder(
                         day_contents,
                         selector,
+                        pomodoro_name_is_literal,
                     )
                     .map_err(|error| {
                         relocation_plan_error(

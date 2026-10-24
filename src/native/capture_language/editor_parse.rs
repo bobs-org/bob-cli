@@ -20,14 +20,17 @@ use crate::native::url_routing::{
 pub(crate) fn tokenize_line_with_spans<'a>(
     line: &RawLine<'a>,
 ) -> Vec<Token<'a>> {
-    tokenize_with_spans(line.text)
+    let tokens = tokenize_with_spans(line.text)
         .into_iter()
         .map(|token| Token {
             text: token.text,
             start: token.start + line.start,
             end: token.end + line.start,
         })
-        .collect()
+        .collect();
+    // A spaced `#"…"` literal merges into the leading marker token so the
+    // name lexes whole in execution, the editor, and completion alike.
+    super::pomodoro_literal::merge_leading_literal_token(line, tokens)
 }
 
 /// One physical line's marker resolution for the editor: its remaining body

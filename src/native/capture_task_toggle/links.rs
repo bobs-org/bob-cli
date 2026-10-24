@@ -76,24 +76,48 @@ pub(crate) fn plan_link_insertion(
     day_contents: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
+    is_literal: bool,
 ) -> Result<LinkInsertionOutcome, LinkPlanError> {
     let scan = capture_pomodoros::scan(day_contents);
 
     let (entry_line_index, resolved_name) = match pomodoro_name {
-        Some(name) => match capture_pomodoros::select_named(&scan, name) {
-            NamedSelection::Found(entry) => {
-                (entry.line - 1, entry.name.clone())
+        Some(name) => {
+            match capture_pomodoros::select_capture_name(
+                &scan, name, is_literal,
+            ) {
+                NamedSelection::Found(entry) => {
+                    (entry.line - 1, entry.name.clone())
+                }
+                NamedSelection::CompletedOnly(entry) => {
+                    // Key-equal literals reuse the identical spelling;
+                    // slug matches reuse the completed spelling.
+                    let canonical = if is_literal {
+                        entry
+                            .name
+                            .clone()
+                            .ok_or(LinkPlanError::InvalidPomodoroName)?
+                    } else {
+                        capture_pomodoros::named_creation_name(&scan, name)
+                            .ok_or(LinkPlanError::InvalidPomodoroName)?
+                    };
+                    return Ok(LinkInsertionOutcome::NeedsPomodoroCreation {
+                        canonical_name: canonical,
+                    });
+                }
+                NamedSelection::Missing { .. } => {
+                    let canonical = if is_literal {
+                        capture_pomodoros::canonicalize_exact_name(name)
+                            .ok_or(LinkPlanError::InvalidPomodoroName)?
+                    } else {
+                        capture_pomodoros::named_creation_name(&scan, name)
+                            .ok_or(LinkPlanError::InvalidPomodoroName)?
+                    };
+                    return Ok(LinkInsertionOutcome::NeedsPomodoroCreation {
+                        canonical_name: canonical,
+                    });
+                }
             }
-            NamedSelection::CompletedOnly(_)
-            | NamedSelection::Missing { .. } => {
-                let canonical =
-                    capture_pomodoros::named_creation_name(&scan, name)
-                        .ok_or(LinkPlanError::InvalidPomodoroName)?;
-                return Ok(LinkInsertionOutcome::NeedsPomodoroCreation {
-                    canonical_name: canonical,
-                });
-            }
-        },
+        }
         None => {
             let entry = select_implicit_open_entry(&scan)?;
             (entry.line - 1, entry.name.clone())

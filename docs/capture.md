@@ -154,6 +154,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@cash+id#requirements` | Child under that task's `REQUIREMENTS` section |
 | `@cash+id#coding` with no other text | Ensure that task is Next and move its Task Link to the `CODING` Pomodoro |
 | `@sase:deep-fix#bugs` | Pomodoro-linked task under open `BUGS`, creating future `BUGS` when needed |
+| `@sase:deep-fix#"SASE V18"`, `=#"DEEP WORK"` | Exact-name literal: the quoted spelling is the name, matched by key equality, never by slug or prefix; straight `"…"` and curly `“…”` both lex, `\"` and `\\` are the only escapes, and the token runs through the closing quote |
 | `@sase:deep-fix#bugs=-2` | Same, starting a 25-minute session with a 10-minute offset |
 | `^sase:deep-fix#bugs` | Link the existing `^deep-fix` task under open `BUGS`; the `#` names a Pomodoro, and `^` is the active-task spelling |
 | `+5` | Extend today's current timed Pomodoro by 25 minutes; the `+` is an adjustment, not a sub-bullet |
@@ -191,6 +192,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=bugs=3` | Existing order error, typed spelling: `=bugs@3` or `=3#bugs` |
 | `=3bugs`, `=-2bugs`, `=2fa` | New teaching error: the timing runs into a bare name; write `=bugs@3` or `=3#bugs`; a name that starts with a digit takes `#` (`=#2fa`) |
 | `@work:outline=bugs` | Link the existing `^outline` task under `BUGS` and start it, exactly like `@work:outline#bugs=` |
+| `@work:outline#"SASE V18"` | Same link start under the literally named Pomodoro; the bare `=name` suffix never takes quotes (`@work:outline="SASE V18"` stays prose), so quote only after `#` |
 | `@work:outline=bugs@3`, `@work:outline=3#bugs`, `@work:outline=#bugs` | Same link start with timing, under the shared suffix rule; a `~<K>` part in a link suffix (`@work:outline=~2`, `=bugs~2`) gets a teaching error: a link start takes a timing and a name, not a drop list |
 | `@work:outline#bugs=focus` | New error: name the Pomodoro once (`@work:outline=focus` or `@work:outline#focus=`) |
 | `==important== thing`, `==foo`, `== foo`, `===` | Ordinary task text; `==` is retired, and a bare `==` run followed by prose stays prose, which protects Obsidian highlights |
@@ -239,6 +241,9 @@ anything is written, and any failure rolls the whole batch back.
 | `=#~2` | Error: the existing empty-name error on `=#` |
 | `= ~2` | Ordinary task text; a bare `=` followed by separate text stays prose |
 | `=deep-work` | Start the open `DEEP WORK` Pomodoro now for 25 minutes; whole-slug match wins, else prefix (`=deep` matches too; `=#deep-work` is the same token) |
+| `=#"DEEP WORK"` | Start `DEEP WORK` exactly as spelled: key equality finds the open entry, a completed-only match creates a new session keeping that entry's spelling, otherwise a new session is created with the literal's canonical name; `SASE V18` and `SASE-V18` stay distinct |
+| `=#"BOB"` with `BOB BUILD` open | Creates `BOB` instead of selecting `BOB BUILD`: a literal never prefix-matches |
+| `=#"DEEP` | Incomplete: type through the closing quote (`capture-parse` needs `pomodoro_name`); an unterminated literal is never a mistake |
 | `=3#bugs` | Start the open `BUGS` Pomodoro now for 15 minutes |
 | `=bugs@3` | Start the open `BUGS` Pomodoro now for 15 minutes (`=3#bugs` typed last; `=#bugs@3` is the same token) |
 | `=bugs@3~2`, `=bugs~2@3` | Start `BUGS` for 15 minutes without task 2 (`=3#bugs~2`; `@` and `~` in either order) |
@@ -1063,7 +1068,12 @@ reach `BUGS`, and `#memory` still reaches `MEMORY` when `MEMORY WORK` appears
 first. Duplicate names resolve to the first open match; give the second a
 distinct name to target it. A typed `#` with an empty name is incomplete — it
 never falls back to "any Pomodoro". An existing open match is explicit, so it
-resolves even when the ledger has more than one open timed entry.
+resolves even when the ledger has more than one open timed entry. Quote the
+name after `#` (`@sase:deep-fix#"SASE V18"`, with straight or curly quotes) to
+spell it exactly: the literal matches by key equality, never by slug or
+prefix, so `SASE V18` and `SASE-V18` stay distinct and `#"BOB"` creates `BOB`
+even with `BOB BUILD` open. An unterminated literal (`@sase:deep-fix#"SASE V`)
+is incomplete, never a mistake.
 
 When the selector has no matching open entry, capture treats the authored
 component as the name of a new future Pomodoro. The visible name uses the same
@@ -1074,7 +1084,9 @@ ASCII letters are uppercased, and allowed punctuation is preserved, so
 inserted after the current Pomodoro's complete block when there is one,
 otherwise after the last completed Pomodoro's complete block, otherwise before
 the first Pomodoro in the section. Completed-only matches create a new future
-Pomodoro with the same canonical name; completed history is not modified.
+Pomodoro keeping the completed entry's spelling — reusing completed
+`deep-work` creates `DEEP WORK`, never `DEEP-WORK`; completed history is not
+modified.
 Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
 entries remain an invariant error when a new named entry would need the
 current-Pomodoro anchor.
@@ -2796,7 +2808,18 @@ bob capture 'x =bugs'
 
 A named start token is `=` plus an `se<X>` suffix (possibly empty) plus a name: either a bare name right after `=` (`=bugs`), or `#` plus a name part (`=#bugs`). A bare name starts with an ASCII letter, is not close-shaped, and does not start with `x#`/`X#`; it ends exactly where a `#name` part ends (whitespace, `~`, or `@`). The `#` spelling is still always valid: write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x`, `=#x2`). `=bugs` and `=#bugs` lex to one token and produce the same `CaptureKind`, vault writes, and `capture-parse` semantics; only `input`/`body` echoes and span offsets differ. The `<X>` goes before `#` or last after `@` (`=bugs@3` means `=3#bugs`). The name part is a Pomodoro
 selector with the usual charset (`A-Z`, `a-z`, `0-9`, `& ' ( ) + , . / -`);
-write spaces in names as `-`. A named start claims its item and is never
+write spaces in names as `-`. To spell the name exactly, quote it after `#`:
+`=#"DEEP WORK"` (or `=#“DEEP WORK”` with curly quotes) names `DEEP WORK`
+verbatim, matched by key equality instead of the whole-slug/else-prefix
+rule, so `SASE V18` and `SASE-V18` stay distinct and `=#"BOB"` creates `BOB`
+even with `BOB BUILD` open. Bob always emits straight quotes; `\"` and `\\`
+are the only escapes inside the quotes. The token runs through the closing
+quote, and a literal without its closing quote (`=#"DEEP`) is an incomplete
+editing state, never a mistake. The bare `=name` spelling never takes quotes:
+`="BOB"` is ordinary prose. Every `#name` position takes the literal —
+named starts, link suffixes (`@route:id#"…"`, `@route+id#"…"`,
+`^route:id#"…"`), project-note bullets, toggles, and close positions — so one
+rule holds everywhere. A named start claims its item and is never
 prose: an exact token (the item's only text, on exactly one physical line)
 starts the session, and anything else is a precise error. Unchanged: `=`
 without a name, every close form, `= #foo` and `= bugs` (a bare `=` with prose stays prose),
@@ -2852,6 +2875,8 @@ open `BUGS` (with `[[sase#^deep-fix]]`), open `DEEP WORK` (with
 | `=3#bugs` | `BUGS` becomes `(**0905-0920** [t:: 15m])` and stays in place |
 | `=bugs@3` | Identical to `=3#bugs` |
 | `=plan` | A new `PLAN` session is created and started (the old `PLAN` is completed history) |
+| `=#"DEEP WORK"` | `DEEP WORK` starts exactly as spelled, by key equality rather than slug or prefix |
+| `=#"BOB"` with `BOB BUILD` open | A new `BOB` session is created and started instead of selecting `BOB BUILD` |
 
 The bytes contract matches the unnamed start: checkbox, name, children,
 CRLF, and a missing final newline are preserved. Dry-run computes the same
@@ -2868,7 +2893,7 @@ empty. A `@@` declaration never applies to named starts, and forced
 `--route` /
 `--section` / `--task` / `--task-ref` / `--task-section` / `--clip` fail on
 them with the existing start error. Quote named starts in zsh like every
-other `=` item: zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted. Always single-quote (`bob capture '=bugs'`, `bob capture 'x =bugs'`).
+other `=` item: zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted. Always single-quote (`bob capture '=bugs'`, `bob capture 'x =bugs'`, `bob capture '=#"DEEP WORK"'`).
 
 ### Overriding the running Pomodoro
 
@@ -5285,7 +5310,7 @@ lines, a link-form order (`=#bugs=3`, ranged on the name), invalid name
 characters (ranged on the name), an oversized suffix (ranged on `=<X>`), or
 extra text, markers, or child lines on a well-formed token (ranged on the
 extra text or the child line, with the join-with-`-` hint when the extra
-text is all name characters; diagnostics that rewrite a token keep that token's spelling, e.g. `=deep work` → `=deep-work` vs `=#deep work` → `=#deep-work`). The glued-timing teaching error (`=3bugs`, `=2fa`) fires when the byte after a non-empty `<X>` is an ASCII letter, suggesting `=bugs@3` or `=3#bugs`. A `@@` declaration never applies to named
+text is all name characters; diagnostics that rewrite a token keep that token's spelling, e.g. `=deep work` → `=deep-work` vs `=#deep work` → `=#deep-work`). An exact-name literal (`=#"DEEP WORK"`) parses the same way with `section` carrying the decoded name: the `pomodoro_name` span covers the whole literal including its quotes (`[2,13)` on `=#"DEEP WORK"`), and the same holds for literal link suffixes (`[14,24)` on `Do work @r:id#"SASE V18"`). The glued-timing teaching error (`=3bugs`, `=2fa`) fires when the byte after a non-empty `<X>` is an ASCII letter, suggesting `=bugs@3` or `=3#bugs`. A `@@` declaration never applies to named
 starts either. A claimed `==` start form is retired: `capture-parse` reports
 `invalid_pomodoro_start` with the same teaching message as `bob capture`,
 including a rewrite that removes one leading `=`. For example, `==` reports
@@ -5734,7 +5759,8 @@ set; see [above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
 stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
 inside a UTF-8 character return exit 2. Other draft text succeeds, with
-`changed: false` when nothing needed to change.
+`changed: false` when nothing needed to change. Exact-name `#"…"` literals
+are never rewritten: they keep their quotes and spelling byte-for-byte.
 
 Template drafts are never rewritten: `capture-rewrite` returns
 `changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
@@ -6000,7 +6026,7 @@ unnamed running session with Task Links also carries the derived R9 `homes`
 object (forecast); a named one omits it. The whole `override` object is
 omitted unless exactly one timed session runs. This context is state-based
 and applies to ordinary `=name` as well as counted `=3#name` fields; a
-preceding close in `x =name` means there is no running session to preview. A cursor inside a link suffix name (`@work:outline=bu|`, `^work:outline=bu|`) yields `pomodoro_name` with the route and block ID, a query from the name start to the cursor, and a replacement over the name only; the same `#<slug>` fallback applies, so `@work:outline=#2fa` is valid.
+preceding close in `x =name` means there is no running session to preview. A cursor inside a link suffix name (`@work:outline=bu|`, `^work:outline=bu|`) yields `pomodoro_name` with the route and block ID, a query from the name start to the cursor, and a replacement over the name only; the same `#<slug>` fallback applies, so `@work:outline=#2fa` is valid. A partial literal (`=#"DEEP|`, `@r:id#"SASE V|`) is the same Pomodoro-name field with the query decoded (`DEEP`, `SASE V`) and the replacement covering the whole partial literal including its opening quote, so accepting a candidate keeps one shell-quotable token under the existing single-quote rule.
 For example, with `CAPTURE` running at line 5:
 
 ```json

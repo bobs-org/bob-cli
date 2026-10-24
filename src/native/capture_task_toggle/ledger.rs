@@ -26,12 +26,16 @@ pub(crate) enum PomodoroLinkLedgerAction {
 
 /// Where an existing-task Pomodoro link should land.
 ///
-/// Capture maps only to [`Self::Implicit`] and [`Self::Named`]. Exact-name
-/// and stale-safe entry refs are `bob ref today`-only.
+/// Capture maps only to [`Self::Implicit`], [`Self::Named`], and
+/// [`Self::LiteralName`]. Exact-name and stale-safe entry refs are
+/// `bob ref today`-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PomodoroLinkTarget<'a> {
     Implicit,
     Named(&'a str),
+    /// A `#"NAME"` literal's canonical name: resolve by key equality,
+    /// never by slug or prefix.
+    LiteralName(&'a str),
     ExactName(&'a str),
     Entry(&'a capture_pomodoros::PomodoroRef),
 }
@@ -39,7 +43,9 @@ pub(crate) enum PomodoroLinkTarget<'a> {
 impl PomodoroLinkTarget<'_> {
     pub(crate) fn named_selector(&self) -> Option<&str> {
         match self {
-            Self::Named(name) | Self::ExactName(name) => Some(name),
+            Self::Named(name)
+            | Self::LiteralName(name)
+            | Self::ExactName(name) => Some(name),
             Self::Implicit | Self::Entry(_) => None,
         }
     }
@@ -94,6 +100,7 @@ pub(crate) fn plan_pomodoro_link_ledger(
                         queue,
                         entry,
                         Some(selector),
+                        false,
                     )
                 }
                 capture_pomodoros::NamedSelection::CompletedOnly(_)
@@ -103,12 +110,13 @@ pub(crate) fn plan_pomodoro_link_ledger(
                         block_link,
                         queue,
                         selector,
+                        false,
                     )
                 }
             }
         }
-        PomodoroLinkTarget::ExactName(selector) => {
-            match capture_pomodoros::select_named_exact(&scan, selector) {
+        PomodoroLinkTarget::LiteralName(canonical) => {
+            match capture_pomodoros::select_named_literal(&scan, canonical) {
                 capture_pomodoros::NamedSelection::Found(entry) => {
                     plan_found_open_entry(
                         day_contents,
@@ -116,18 +124,45 @@ pub(crate) fn plan_pomodoro_link_ledger(
                         block_link,
                         queue,
                         entry,
-                        Some(selector),
+                        Some(canonical),
+                        true,
                     )
                 }
-                capture_pomodoros::NamedSelection::CompletedOnly(_)
-                | capture_pomodoros::NamedSelection::Missing { .. } => {
-                    plan_created_named_entry(
+                _ => plan_created_named_entry(
+                    day_contents,
+                    block_link,
+                    queue,
+                    canonical,
+                    true,
+                ),
+            }
+        }
+        PomodoroLinkTarget::ExactName(selector) => {
+            // Key equality, never slug or prefix: `SASE V18` and `SASE-V18`
+            // stay distinct.
+            let canonical =
+                capture_pomodoros::canonicalize_exact_name(selector);
+            match canonical.as_deref().map(|canonical| {
+                capture_pomodoros::select_named_literal(&scan, canonical)
+            }) {
+                Some(capture_pomodoros::NamedSelection::Found(entry)) => {
+                    plan_found_open_entry(
                         day_contents,
+                        &lines,
                         block_link,
                         queue,
-                        selector,
+                        entry,
+                        Some(selector),
+                        false,
                     )
                 }
+                _ => plan_created_named_entry(
+                    day_contents,
+                    block_link,
+                    queue,
+                    selector,
+                    false,
+                ),
             }
         }
         PomodoroLinkTarget::Entry(pomodoro_ref) => {
@@ -142,6 +177,7 @@ pub(crate) fn plan_pomodoro_link_ledger(
                         queue,
                         entry,
                         None,
+                        false,
                     )
                 }
                 capture_pomodoros::PomodoroRefLookup::Found(_) => {
@@ -224,6 +260,7 @@ fn plan_found_open_entry(
     queue: Option<&super::links::MovableLink<'_>>,
     entry: &capture_pomodoros::PomodoroEntry,
     selector: Option<&str>,
+    selector_is_literal: bool,
 ) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
     let dest_index = entry.line - 1;
     let destination = endpoint_from_entry(entry);
@@ -249,6 +286,7 @@ fn plan_found_open_entry(
         let destination = destination_after_found_move(
             &content,
             selector,
+            selector_is_literal,
             entry.line,
             q.line_index,
             q.subtree_end,
@@ -293,9 +331,10 @@ fn plan_created_named_entry(
     block_link: &str,
     queue: Option<&super::links::MovableLink<'_>>,
     selector: &str,
+    is_literal: bool,
 ) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
     let (with_placeholder, created_line, name) =
-        insert_named_placeholder(day_contents, selector)?;
+        insert_named_placeholder(day_contents, selector, is_literal)?;
     if let Some(q) = queue {
         let source_endpoint = endpoint_from_entry(q.owner);
         let working_scan = capture_pomodoros::scan(&with_placeholder);
@@ -377,6 +416,7 @@ fn created_destination(
 fn destination_after_found_move(
     content: &str,
     selector: Option<&str>,
+    selector_is_literal: bool,
     planned_line: usize,
     moved_source_line: usize,
     moved_subtree_end: usize,
@@ -386,6 +426,7 @@ fn destination_after_found_move(
         return destination_endpoint_after_move(
             content,
             Some(name),
+            selector_is_literal,
             planned,
             false,
         );

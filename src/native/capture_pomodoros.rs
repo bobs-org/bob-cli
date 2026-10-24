@@ -494,6 +494,66 @@ pub(crate) fn canonicalize_pomodoro_name(raw: &str) -> Option<String> {
     capture_task_sections::is_pomodoro_name(&name).then_some(name)
 }
 
+/// Canonical name for a decoded exact-name literal (`#"NAME"`): collapse
+/// whitespace, uppercase, and validate with [`is_pomodoro_name`]. `None`
+/// when the literal names nothing valid.
+pub(crate) fn canonicalize_exact_name(decoded: &str) -> Option<String> {
+    capture_language::canonicalize_exact_name(decoded)
+}
+
+/// Resolve a capture name: slug-then-prefix for plain selectors, key
+/// equality for `#"…"` literal canonicals (which the lexer already
+/// canonicalized).
+pub(crate) fn select_capture_name<'a>(
+    scan: &'a PomodoroScan,
+    name: &str,
+    is_literal: bool,
+) -> NamedSelection<'a> {
+    if is_literal {
+        match canonicalize_exact_name(name) {
+            Some(canonical) => select_named_literal(scan, &canonical),
+            // Unreachable through the lexer (it validates literals), but
+            // never refuse worse than the slug path does.
+            None => select_named(scan, name),
+        }
+    } else {
+        select_named(scan, name)
+    }
+}
+
+/// Resolve a decoded exact-name literal by **key equality**, never by slug
+/// or prefix: `SASE V18` and `SASE-V18` stay distinct, and `#"BOB"` never
+/// prefix-matches an open `BOB BUILD`. An open entry with an equal key is
+/// `Found`; else a completed entry with an equal key is `CompletedOnly`
+/// (create a new entry with that entry's spelling); else `Missing` (create
+/// with the literal's canonical name).
+pub(crate) fn select_named_literal<'a>(
+    scan: &'a PomodoroScan,
+    canonical: &str,
+) -> NamedSelection<'a> {
+    let found = scan.entries.iter().find(|entry| {
+        entry.state == PomodoroState::Open
+            && entry.selectable
+            && entry.name.as_deref().is_some_and(|name| {
+                canonicalize_pomodoro_name(name).as_deref() == Some(canonical)
+            })
+    });
+    if let Some(entry) = found {
+        return NamedSelection::Found(entry);
+    }
+    let completed = scan.entries.iter().find(|entry| {
+        entry.state == PomodoroState::Completed
+            && entry.selectable
+            && entry.name.as_deref().is_some_and(|name| {
+                canonicalize_pomodoro_name(name).as_deref() == Some(canonical)
+            })
+    });
+    if let Some(entry) = completed {
+        return NamedSelection::CompletedOnly(entry);
+    }
+    NamedSelection::Missing { suggestion: None }
+}
+
 pub(crate) fn format_named_placeholder_line(name: &str) -> String {
     format!("- [ ] () — {name}")
 }
@@ -741,46 +801,6 @@ pub(crate) fn select_named<'a>(
     NamedSelection::Missing { suggestion }
 }
 
-/// Whole-slug match among open selectable entries only. Never a prefix
-/// match and never a completed-only hit: callers create when this
-/// returns [`NamedSelection::Missing`].
-pub(crate) fn select_named_exact<'a>(
-    scan: &'a PomodoroScan,
-    selector: &str,
-) -> NamedSelection<'a> {
-    let needle = capture_language::selector_slug(selector);
-    if needle.is_empty() {
-        return NamedSelection::Missing { suggestion: None };
-    }
-    let found = scan.entries.iter().find(|entry| {
-        entry.state == PomodoroState::Open
-            && entry.selectable
-            && entry.slug == needle
-    });
-    match found {
-        Some(entry) => NamedSelection::Found(entry),
-        None => NamedSelection::Missing { suggestion: None },
-    }
-}
-
-/// Canonical name for a to-be-created entry when `selector` reuses a
-/// completed-only Pomodoro name: that completed entry's canonical name.
-/// Returns `None` when `selector` does not reuse a completed name, or when
-/// neither the completed spelling nor the selector is a valid Pomodoro name.
-pub(crate) fn completed_only_reuse_name(
-    scan: &PomodoroScan,
-    selector: &str,
-) -> Option<String> {
-    match select_named(scan, selector) {
-        NamedSelection::CompletedOnly(entry) => entry
-            .name
-            .as_deref()
-            .and_then(canonicalize_pomodoro_name)
-            .or_else(|| canonicalize_pomodoro_name(selector)),
-        NamedSelection::Found(_) | NamedSelection::Missing { .. } => None,
-    }
-}
-
 /// Canonical name for a future Pomodoro `bob capture` would create for
 /// `selector`, if that selector is valid and today's ledger can uniquely
 /// place the new entry. `None` when an open exact/prefix name would win,
@@ -809,8 +829,8 @@ pub(crate) fn named_creation_name(
     }
     match select_named(scan, selector) {
         NamedSelection::Found(_) => None,
-        NamedSelection::CompletedOnly(_) => {
-            Some(completed_only_reuse_name(scan, selector).unwrap_or(name))
+        NamedSelection::CompletedOnly(entry) => {
+            Some(entry.name.clone().unwrap_or(name))
         }
         NamedSelection::Missing { .. } => Some(name),
     }

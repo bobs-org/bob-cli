@@ -346,7 +346,7 @@ fn pomodoro_link_prefers_the_single_timed_open_entry() {
         "- [ ] Outside (1000-1030)\n",
     );
     let insertion =
-        insert_pomodoro_block_link(contents, "[[dev#^foobar]]", None)
+        insert_pomodoro_block_link(contents, "[[dev#^foobar]]", None, false)
             .expect("select timed Pomodoro");
     let updated = insertion.updated;
     let placement = insertion.placement;
@@ -376,7 +376,7 @@ fn pomodoro_link_falls_back_to_first_open_and_ignores_nested_tasks() {
         "- [ ] Second open\n",
     );
     let insertion =
-        insert_pomodoro_block_link(contents, "[[dev#^fallback]]", None)
+        insert_pomodoro_block_link(contents, "[[dev#^fallback]]", None, false)
             .expect("select first open Pomodoro");
     let updated = insertion.updated;
     let placement = insertion.placement;
@@ -405,7 +405,10 @@ fn named_pomodoro_link_selects_placeholder_and_timed_entries() {
     let (updated, placement, selected, text) = insert_pomodoro_child_block(
         contents,
         "- [[dev#^fix]]",
-        PomodoroSelection::NamedOrCreate("bugs"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "bugs",
+            is_literal: false,
+        },
     )
     .expect("select named placeholder");
     assert_eq!(placement, Placement::Appended);
@@ -425,7 +428,10 @@ fn named_pomodoro_link_selects_placeholder_and_timed_entries() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         contents,
         "- [[dev#^now]]",
-        PomodoroSelection::NamedOrCreate("current"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "current",
+            is_literal: false,
+        },
     )
     .expect("select named timed entry");
     assert_eq!(selected, 1);
@@ -444,7 +450,10 @@ fn named_pomodoro_link_first_duplicate_wins() {
     let (updated, _, selected, _) = insert_pomodoro_child_block(
         contents,
         "- [[dev#^dup]]",
-        PomodoroSelection::NamedOrCreate("memory"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "memory",
+            is_literal: false,
+        },
     )
     .expect("first duplicate wins");
     assert_eq!(selected, 1);
@@ -472,7 +481,10 @@ fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
     let (updated, placement, selected, text) = insert_pomodoro_child_block(
         completed,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("bugs"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "bugs",
+            is_literal: false,
+        },
     )
     .expect("completed-only match seeds a future Pomodoro");
     assert_eq!(placement, Placement::Inserted);
@@ -495,7 +507,10 @@ fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         completed,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("memry"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "memry",
+            is_literal: false,
+        },
     )
     .expect("nearby name creates rather than suggesting");
     assert_eq!(selected, 5);
@@ -506,7 +521,10 @@ fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         unnamed,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("bugs"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "bugs",
+            is_literal: false,
+        },
     )
     .expect("unnamed open Pomodoros still allow creation");
     assert_eq!(selected, 3);
@@ -526,7 +544,10 @@ fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         closed,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("bugs"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "bugs",
+            is_literal: false,
+        },
     )
     .expect("last completed anchors a new Pomodoro");
     assert_eq!(selected, 2);
@@ -545,7 +566,10 @@ fn named_pomodoro_link_creates_placeholder_on_no_open_match() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         listed,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("zzzz"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "zzzz",
+            is_literal: false,
+        },
     )
     .expect("novel name inserts before first future entry");
     assert_eq!(selected, 1);
@@ -569,7 +593,10 @@ fn named_pomodoro_link_creates_in_empty_and_crlf_sections() {
     let (updated, placement, selected, text) = insert_pomodoro_child_block(
         empty,
         "- [[dev#^deep]]",
-        PomodoroSelection::NamedOrCreate("deep-work"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "deep-work",
+            is_literal: false,
+        },
     )
     .expect("create in an empty Pomodoros section");
     assert_eq!(placement, Placement::Inserted);
@@ -594,7 +621,10 @@ fn named_pomodoro_link_creates_in_empty_and_crlf_sections() {
     let (updated, placement, selected, text) = insert_pomodoro_child_block(
         crlf,
         "- [[dev#^crlf]]",
-        PomodoroSelection::NamedOrCreate("crlf-name"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "crlf-name",
+            is_literal: false,
+        },
     )
     .expect("create after completed CRLF block");
     assert_eq!(placement, Placement::Inserted);
@@ -628,7 +658,10 @@ fn named_pomodoro_creation_ignores_cancelled_nested_and_fenced_entries() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         contents,
         "- [[dev#^real]]",
-        PomodoroSelection::NamedOrCreate("real"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "real",
+            is_literal: false,
+        },
     )
     .expect("ignored lookalikes do not anchor creation");
     assert_eq!(selected, 7);
@@ -663,7 +696,10 @@ fn named_pomodoro_link_bypasses_multiple_open_timed_guard() {
     let (updated, _, selected, text) = insert_pomodoro_child_block(
         contents,
         "- [[dev#^id]]",
-        PomodoroSelection::NamedOrCreate("two"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "two",
+            is_literal: false,
+        },
     )
     .expect("named selector is explicit");
     assert_eq!(selected, 2);
@@ -681,7 +717,10 @@ fn named_pomodoro_link_bypasses_multiple_open_timed_guard() {
     let error = insert_pomodoro_child_block(
         contents,
         "- [[dev#^new]]",
-        PomodoroSelection::NamedOrCreate("three"),
+        PomodoroSelection::NamedOrCreate {
+            selector: "three",
+            is_literal: false,
+        },
     )
     .expect_err("named creation needs an unambiguous current anchor");
     assert!(
@@ -700,8 +739,9 @@ fn pomodoro_link_rejects_missing_section_target_and_timed_ambiguity() {
             "multiple open timed",
         ),
     ] {
-        let error = insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
-            .expect_err("invalid ledger should fail");
+        let error =
+            insert_pomodoro_block_link(contents, "[[dev#^id]]", None, false)
+                .expect_err("invalid ledger should fail");
         assert!(error.message.contains(expected), "{error:?}");
     }
 }
@@ -714,8 +754,9 @@ fn pomodoro_link_preserves_crlf_and_reuses_nearby_child_indentation() {
         "\t- old child\r\n",
         "- [ ] Next\r\n",
     );
-    let insertion = insert_pomodoro_block_link(contents, "[[dev#^id]]", None)
-        .expect("insert CRLF link");
+    let insertion =
+        insert_pomodoro_block_link(contents, "[[dev#^id]]", None, false)
+            .expect("insert CRLF link");
     let updated = insertion.updated;
     let placement = insertion.placement;
     assert_eq!(placement, Placement::Appended);
@@ -741,9 +782,10 @@ fn pomodoro_section_scan_ignores_fenced_lookalikes() {
         "## Pomodoros\n",
         "- [ ] Real\n",
     );
-    let updated = insert_pomodoro_block_link(contents, "[[dev#^real]]", None)
-        .expect("find real section")
-        .updated;
+    let updated =
+        insert_pomodoro_block_link(contents, "[[dev#^real]]", None, false)
+            .expect("find real section")
+            .updated;
     assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
     assert!(!updated.contains("Example\n  - [[dev#^real]]"));
 }
@@ -968,6 +1010,81 @@ fn pomodoro_note_timed_ambiguity_wins_over_completed_fallback() {
         error.message.contains("multiple open timed Pomodoros"),
         "{error:?}"
     );
+}
+
+#[test]
+fn completed_multiword_reuse_keeps_spelling() {
+    // bob-cli-bb: reusing a completed multi-word name through the link
+    // form keeps its spelling (`deep-work` → `DEEP WORK`, never
+    // `DEEP-WORK`).
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0920-0950** [t:: 30m]) — DEEP WORK\n",
+        "- [ ] (**1000-1025** [t:: 25m]) — CURRENT\n",
+    );
+    let (updated, _, _, text) = insert_pomodoro_child_block(
+        contents,
+        "- [[dev#^fix]]",
+        PomodoroSelection::NamedOrCreate {
+            selector: "deep-work",
+            is_literal: false,
+        },
+    )
+    .expect("completed-only match seeds a future Pomodoro");
+    assert_eq!(text, "() — DEEP WORK");
+    assert!(updated.contains("- [ ] () — DEEP WORK\n  - [[dev#^fix]]\n"));
+    assert!(!updated.contains("DEEP-WORK"));
+}
+
+#[test]
+fn exact_name_literal_creates_exact_spelling() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0800-0830** [t:: 30m]) — SASE V18\n",
+        "- [ ] () — BOB BUILD\n",
+    );
+    // A spaced literal creates with its own spelling.
+    let (updated, _, _, text) = insert_pomodoro_child_block(
+        contents,
+        "- [[dev#^fix]]",
+        PomodoroSelection::NamedOrCreate {
+            selector: "DEEP WORK",
+            is_literal: true,
+        },
+    )
+    .expect("literal creates");
+    assert_eq!(text, "() — DEEP WORK");
+    assert!(updated.contains("- [ ] () — DEEP WORK\n"));
+
+    // A hyphenated literal stays distinct from its spaced twin.
+    let (updated, _, _, text) = insert_pomodoro_child_block(
+        contents,
+        "- [[dev#^fix]]",
+        PomodoroSelection::NamedOrCreate {
+            selector: "SASE-V18",
+            is_literal: true,
+        },
+    )
+    .expect("hyphenated literal creates");
+    assert_eq!(text, "() — SASE-V18");
+    assert!(updated.contains("- [ ] () — SASE-V18\n"));
+    assert!(!updated.contains("() — SASE V18\n  - [[dev#^fix]]"));
+}
+
+#[test]
+fn exact_name_literal_never_prefix_matches() {
+    // With `BOB BUILD` open, `#"BOB"` creates `BOB` instead of selecting
+    // `BOB BUILD`; the plain slug still prefix-matches.
+    let contents = "## Pomodoros\n- [ ] () — BOB BUILD\n";
+    let lines = line_spans(contents);
+    assert!(matches!(
+        select_named_pomodoro(contents, &lines, "BOB", true),
+        Ok(NamedPomodoroResolution::Create)
+    ));
+    assert!(matches!(
+        select_named_pomodoro(contents, &lines, "bob", false),
+        Ok(NamedPomodoroResolution::Found(_))
+    ));
 }
 
 #[test]

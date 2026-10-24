@@ -186,6 +186,7 @@ fn a_terminal_bang_on_a_marker_only_toggle_is_explicit_toggle() {
     assert_eq!(
         executed.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,
@@ -211,6 +212,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
     assert_eq!(
         plain.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::EnsureNext,
@@ -227,6 +229,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
     assert_eq!(
         named.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: Some("deep+work".to_string()),
             intent: TaskToggleIntent::EnsureNext,
@@ -250,6 +253,7 @@ fn marker_only_task_toggle_spellings_are_a_three_way_intent_matrix() {
     assert_eq!(
         bang.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "id".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,
@@ -426,6 +430,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
     assert_eq!(
         parsed.kind,
         CaptureKind::Pomodoro {
+            pomodoro_name_is_literal: false,
             block_id: "deep-fix".to_string(),
             pomodoro_name: Some("c++".to_string()),
             start: None,
@@ -443,6 +448,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
     assert_eq!(
         infix.kind,
         CaptureKind::Pomodoro {
+            pomodoro_name_is_literal: false,
             block_id: "deep-fix".to_string(),
             pomodoro_name: Some("bob+sase".to_string()),
             start: None,
@@ -1076,6 +1082,7 @@ fn execution_parses_equals_family_starts_alongside_close() {
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         match parsed.kind {
             CaptureKind::PomodoroStart {
+                pomodoro_name_is_literal: false,
                 ref spec,
                 ref pomodoro_name,
             } => {
@@ -1488,6 +1495,7 @@ fn execution_parses_project_note_markers() {
     assert_eq!(
         parsed.kind,
         CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: None,
         }
@@ -1501,6 +1509,7 @@ fn execution_parses_project_note_markers() {
     assert_eq!(
         token.kind,
         CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("bugs".to_string()),
         }
@@ -1512,6 +1521,7 @@ fn execution_parses_project_note_markers() {
     assert_eq!(
         token.kind,
         CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("c++".to_string()),
         }
@@ -1547,6 +1557,7 @@ fn execution_parses_project_note_markers() {
     assert_eq!(
         parsed.kind,
         CaptureKind::Pomodoro {
+            pomodoro_name_is_literal: false,
             block_id: "deep-fix".to_string(),
             pomodoro_name: Some("bugs+".to_string()),
             start: None,
@@ -1738,6 +1749,7 @@ fn execution_accepts_project_task_ids_and_strips_them_from_bodies() {
     assert_eq!(
         parsed.kind,
         CaptureKind::ProjectNote {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: Some("admin".to_string()),
         }
@@ -2334,6 +2346,7 @@ fn caret_alias_owns_relationships_in_leading_and_trailing_position() {
             matches!(
                 executed.kind,
                 CaptureKind::PomodoroLink {
+                    pomodoro_name_is_literal: false,
                     spelling: PomodoroLinkSpelling::Caret,
                     ..
                 }
@@ -2363,6 +2376,7 @@ fn colon_alias_owner_is_unchanged_beside_modifiers() {
     assert!(matches!(
         executed.kind,
         CaptureKind::PomodoroLink {
+            pomodoro_name_is_literal: false,
             spelling: PomodoroLinkSpelling::At,
             ..
         }

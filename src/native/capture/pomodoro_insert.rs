@@ -12,14 +12,15 @@ pub(super) enum PomodoroSelection<'a> {
     CurrentOrLastCompleted,
     /// Explicit named selector from `@<route>:<id>#<pomodoro>`. Resolves
     /// an open match first, otherwise creates a named future entry using the
-    /// current/last-completed/first insertion anchor.
-    NamedOrCreate(&'a str),
+    /// current/last-completed/first insertion anchor. A `#"…"` literal
+    /// resolves by key equality and its canonical name is final.
+    NamedOrCreate { selector: &'a str, is_literal: bool },
 }
 
 impl PomodoroSelection<'_> {
     pub(super) fn no_entry_message(self) -> &'static str {
         match self {
-            Self::CurrentOrFuture | Self::NamedOrCreate(_) => {
+            Self::CurrentOrFuture | Self::NamedOrCreate { .. } => {
                 "Bob daily note has no eligible open Pomodoro"
             }
             Self::CurrentOrLastCompleted => {
@@ -44,19 +45,23 @@ pub(super) fn insert_pomodoro_block_link(
     contents: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
+    is_literal: bool,
 ) -> Result<PomodoroBlockLinkInsertion, CaptureError> {
     let creates = match pomodoro_name {
         Some(name) => {
             let lines = line_spans(contents);
             matches!(
-                select_named_pomodoro(contents, &lines, name)?,
+                select_named_pomodoro(contents, &lines, name, is_literal)?,
                 NamedPomodoroResolution::Create
             )
         }
         None => false,
     };
     let selection = match pomodoro_name {
-        Some(name) => PomodoroSelection::NamedOrCreate(name),
+        Some(name) => PomodoroSelection::NamedOrCreate {
+            selector: name,
+            is_literal,
+        },
         None => PomodoroSelection::CurrentOrFuture,
     };
     let (updated, placement, selected, _) = insert_pomodoro_child_block(
@@ -144,13 +149,17 @@ pub(super) fn insert_pomodoro_child_block(
     }
 
     let (selected, selected_text) = match selection {
-        PomodoroSelection::NamedOrCreate(selector) => {
-            match select_named_pomodoro(contents, &lines, selector)? {
+        PomodoroSelection::NamedOrCreate {
+            selector,
+            is_literal,
+        } => {
+            match select_named_pomodoro(contents, &lines, selector, is_literal)?
+            {
                 NamedPomodoroResolution::Found(selected) => selected,
                 NamedPomodoroResolution::Create => {
                     return insert_named_pomodoro_child_block(
-                        contents, block, selector, &lines, &section, &timed,
-                        &completed, &open,
+                        contents, block, selector, is_literal, &lines,
+                        &section, &timed, &completed, &open,
                     );
                 }
             }
@@ -169,7 +178,7 @@ pub(super) fn insert_pomodoro_child_block(
                 PomodoroSelection::CurrentOrLastCompleted => {
                     timed.first().or(completed.last()).or(open.first())
                 }
-                PomodoroSelection::NamedOrCreate(_) => {
+                PomodoroSelection::NamedOrCreate { .. } => {
                     unreachable!("named handled")
                 }
             }
@@ -221,9 +230,10 @@ pub(super) fn select_named_pomodoro<'a>(
     contents: &str,
     lines: &'a [LineSpan<'a>],
     selector: &str,
+    is_literal: bool,
 ) -> Result<NamedPomodoroResolution<'a>, CaptureError> {
     let scan = capture_pomodoros::scan(contents);
-    match capture_pomodoros::select_named(&scan, selector) {
+    match capture_pomodoros::select_capture_name(&scan, selector, is_literal) {
         capture_pomodoros::NamedSelection::Found(entry) => {
             let index = entry.line.checked_sub(1).ok_or_else(|| {
                 CaptureError::io("Pomodoro capture invariant failed: named entry has no line")
@@ -246,6 +256,7 @@ pub(super) fn insert_named_pomodoro_child_block(
     contents: &str,
     block: &str,
     selector: &str,
+    is_literal: bool,
     lines: &[LineSpan<'_>],
     section: &std::ops::Range<usize>,
     timed: &[(usize, &str)],
@@ -258,14 +269,22 @@ pub(super) fn insert_named_pomodoro_child_block(
         ));
     }
 
-    // A completed-only selector reuses that entry's canonical name so a
-    // spaced name is not forked into its hyphenated slug.
-    let scan = capture_pomodoros::scan(contents);
-    let name = capture_pomodoros::completed_only_reuse_name(&scan, selector)
-        .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
-        .ok_or_else(|| {
-            CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
-        })?;
+    // A literal's canonical name is final; a plain selector matching a
+    // completed entry reuses that entry's spelling.
+    let name = if is_literal {
+        capture_pomodoros::canonicalize_exact_name(selector)
+    } else {
+        let scan = capture_pomodoros::scan(contents);
+        match capture_pomodoros::select_named(&scan, selector) {
+            capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+                entry.name.clone()
+            }
+            _ => capture_pomodoros::canonicalize_pomodoro_name(selector),
+        }
+    }
+    .ok_or_else(|| {
+        CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+    })?;
     let anchor = timed
         .first()
         .or_else(|| completed.last())

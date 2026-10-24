@@ -124,6 +124,8 @@ fn resolve_line_inner<'a>(
                     kind: CaptureKind::Pomodoro {
                         block_id: parts.block_id,
                         pomodoro_name: parts.pomodoro_name,
+                        pomodoro_name_is_literal: parts
+                            .pomodoro_name_is_literal,
                         start: parts.start,
                         close: parts.close,
                     },

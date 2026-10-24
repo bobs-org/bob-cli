@@ -9,6 +9,7 @@ pub(super) fn plan_ensure_next_capture(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
     contents: &str,
     _task_line_index: usize,
     previous_status_symbol: char,
@@ -192,6 +193,7 @@ pub(super) fn plan_ensure_next_capture(
         &day_contents,
         &block_link,
         pomodoro_name,
+        pomodoro_name_is_literal,
     )
     .map_err(|error| {
         relocation_plan_error(error, &block_link, route, block_id)

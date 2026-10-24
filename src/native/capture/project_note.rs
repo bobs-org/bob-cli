@@ -66,6 +66,7 @@ pub(super) fn plan_project_note_item(
     let CaptureKind::ProjectNote {
         block_id,
         pomodoro_name,
+        pomodoro_name_is_literal,
     } = parsed.kind.clone()
     else {
         return Err(CaptureError::io(
@@ -222,29 +223,38 @@ pub(super) fn plan_project_note_item(
             .as_deref()
         {
             Some(selector) => {
-                let canonical_fallback =
+                // A literal's canonical name is final; a plain selector
+                // reuses a completed entry's spelling.
+                let canonical_fallback = if pomodoro_name_is_literal {
+                    capture_pomodoros::canonicalize_exact_name(selector)
+                } else {
                     capture_pomodoros::canonicalize_pomodoro_name(selector)
-                        .ok_or_else(|| {
-                            CaptureError::usage(
-                                capture_pomodoros::POMODORO_NAME_USAGE,
-                            )
-                        })?;
-                match capture_pomodoros::select_named(&scan, selector) {
+                }
+                .ok_or_else(|| {
+                    CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+                })?;
+                match capture_pomodoros::select_capture_name(
+                    &scan,
+                    selector,
+                    pomodoro_name_is_literal,
+                ) {
                     capture_pomodoros::NamedSelection::Found(entry) => (
                         Some(entry.name.clone().unwrap_or(canonical_fallback)),
                         false,
                     ),
-                    capture_pomodoros::NamedSelection::CompletedOnly(_)
-                    | capture_pomodoros::NamedSelection::Missing { .. } => {
-                        // A completed-only selector reports that entry's
-                        // canonical name so the output matches the entry
-                        // the child-block insert creates.
-                        let reuse =
-                            capture_pomodoros::completed_only_reuse_name(
-                                &scan, selector,
-                            )
-                            .unwrap_or(canonical_fallback);
-                        (Some(reuse), true)
+                    capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+                        (
+                            Some(
+                                entry
+                                    .name
+                                    .clone()
+                                    .unwrap_or(canonical_fallback),
+                            ),
+                            true,
+                        )
+                    }
+                    capture_pomodoros::NamedSelection::Missing { .. } => {
+                        (Some(canonical_fallback), true)
                     }
                 }
             }
@@ -264,6 +274,7 @@ pub(super) fn plan_project_note_item(
                 &day,
                 &block_link,
                 pomodoro_name.as_deref(),
+                pomodoro_name_is_literal,
             )?;
             if first_placement.is_none() {
                 first_placement = Some(insertion.placement);

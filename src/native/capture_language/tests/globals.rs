@@ -101,6 +101,7 @@ fn execution_an_ensure_next_item_participates_normally_in_a_multi_item_draft() {
     assert_eq!(
         draft.items[1].parsed.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::EnsureNext,
@@ -124,6 +125,7 @@ fn execution_an_explicit_toggle_item_participates_in_a_multi_item_draft() {
     assert_eq!(
         draft.items[1].parsed.kind,
         CaptureKind::TaskToggle {
+            pomodoro_name_is_literal: false,
             block_id: "goog-exit".to_string(),
             pomodoro_name: None,
             intent: TaskToggleIntent::Toggle,

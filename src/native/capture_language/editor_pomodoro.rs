@@ -276,6 +276,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
     parent_trimmed: &str,
     suffix: String,
     name: String,
+    is_literal: bool,
     len: usize,
     drop: Option<(usize, String)>,
     timing: Option<(usize, String)>,
@@ -287,7 +288,23 @@ pub(super) fn parse_editor_named_start_item<'a>(
     let prefix_len = 1 + suffix.len();
     let name_start =
         token_start + named_start_name_offset(suffix.len(), spelling);
-    let name_end = name_start + name.len();
+    // A literal's span covers its quotes: use the typed length rather
+    // than the canonical name's.
+    let typed_name_len = if is_literal {
+        parent_trimmed
+            .get(name_start - token_start..)
+            .and_then(|after| {
+                super::pomodoro_literal::lex_exact_name_after_hash(
+                    after,
+                    after.len(),
+                )
+            })
+            .filter(|lex| lex.complete)
+            .map(|lex| lex.literal_len)
+    } else {
+        None
+    };
+    let name_end = name_start + typed_name_len.unwrap_or(name.len());
     let mut spans = vec![Span {
         start: token_start,
         end: token_start + prefix_len,
@@ -373,6 +390,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                         name_end,
                         spelling,
                     },
+                    is_literal,
                 )
                 .expect("empty name errors");
                 return Some(editor_named_invalid_outcome(
@@ -403,6 +421,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 name_end,
                 spelling,
             },
+            is_literal,
         ) {
             return Some(editor_named_invalid_outcome(
                 item,
@@ -563,6 +582,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             name_end,
             spelling,
         },
+        is_literal,
     ) {
         let range = if name.is_empty() && !has_extra {
             // `=<X>#` with child lines only: the child line is the range,
@@ -677,6 +697,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         len,
         drop_text,
         spelling,
+        is_literal,
     );
     let range = if has_extra {
         extra_text_range(token_start, parent_trimmed, len)
@@ -845,6 +866,7 @@ fn named_start_token_diagnostic(
     drop_text: Option<&str>,
     timing_text: Option<&str>,
     offsets: NamedStartOffsets,
+    is_literal: bool,
 ) -> Option<(String, (usize, usize))> {
     let NamedStartOffsets {
         token_start,
@@ -859,7 +881,16 @@ fn named_start_token_diagnostic(
             (token_start + prefix_len, token_start + prefix_len + 1),
         ));
     }
-    if let Some((before, after)) = name.split_once('=')
+    if is_literal {
+        // A literal's spaces are the point: validate the canonical name,
+        // never the slug charset.
+        if super::pomodoro_literal::canonicalize_exact_name(name).is_none() {
+            return Some((
+                pomodoro_named_start_name_error(name, token),
+                (name_start, name_end),
+            ));
+        }
+    } else if let Some((before, after)) = name.split_once('=')
         && suffix.is_empty()
         && timing_text.is_none()
         && parse_pomodoro_start_suffix(after).is_ok()
@@ -877,8 +908,7 @@ fn named_start_token_diagnostic(
             ),
             (name_start, name_end),
         ));
-    }
-    if !is_pomodoro_selector_component(name) {
+    } else if !is_pomodoro_selector_component(name) {
         return Some((
             pomodoro_named_start_name_error(name, token),
             (name_start, name_end),
@@ -1371,6 +1401,7 @@ pub(super) fn parse_editor_close_item<'a>(
             len,
             name,
             name_spelling,
+            name_is_literal,
             drop,
             timing,
             doubled,
@@ -1407,6 +1438,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     parent_trimmed,
                     suffix,
                     selector,
+                    name_is_literal,
                     len,
                     drop,
                     timing,
@@ -1479,7 +1511,6 @@ pub(super) fn parse_editor_close_item<'a>(
     // `x#…` is a claimed close near miss with a teaching error, whether or
     // not the item carries extra text or child lines. It used to be prose.
     if is_close_hash_token(first) {
-        let hash = first.find('#').expect("close hash");
         return Some(editor_close_outcome(
             item,
             parent_trimmed,
@@ -1490,7 +1521,12 @@ pub(super) fn parse_editor_close_item<'a>(
             vec![Diagnostic {
                 severity: Severity::Error,
                 code: "invalid_pomodoro_close",
-                message: pomodoro_close_hash_error(&first[hash + 1..]),
+                message: pomodoro_close_hash_error(
+                    &super::pomodoro_literal::decode_close_hash_name(
+                        first,
+                        parent_trimmed,
+                    ),
+                ),
                 range: Some((token_start + 1, token_start + first.len())),
             }],
         ));

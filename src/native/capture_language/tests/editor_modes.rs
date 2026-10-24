@@ -945,6 +945,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         if let CaptureKind::ProjectNote {
             block_id,
             pomodoro_name,
+            ..
         } = &executed.kind
         {
             assert_eq!(parse.block_id.as_deref(), Some(block_id.as_str()));
@@ -981,6 +982,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         if let CaptureKind::PomodoroStart {
             spec,
             pomodoro_name,
+            ..
         } = &executed.kind
         {
             let actual = parse.pomodoro_start.as_ref().expect("start spec");

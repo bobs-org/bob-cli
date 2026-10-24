@@ -63,6 +63,7 @@ pub(super) fn plan_pomodoro_start(
     original_day: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
     spec: &PomodoroStartSpec,
     now: chrono::NaiveDateTime,
 ) -> Result<
@@ -92,7 +93,11 @@ pub(super) fn plan_pomodoro_start(
         ));
     }
     if let Some(selector) = pomodoro_name {
-        match capture_pomodoros::select_named(&scan, selector) {
+        match capture_pomodoros::select_capture_name(
+            &scan,
+            selector,
+            pomodoro_name_is_literal,
+        ) {
             capture_pomodoros::NamedSelection::Found(entry) => {
                 if !(entry.state == capture_pomodoros::PomodoroState::Open
                     && entry.placeholder
@@ -153,17 +158,55 @@ pub(super) fn plan_pomodoro_start(
                     PomodoroBlockBefore::At(index),
                 ));
             }
-            capture_pomodoros::NamedSelection::CompletedOnly(_)
-            | capture_pomodoros::NamedSelection::Missing { .. } => {
-                // A completed-only selector reuses that entry's canonical
-                // name so a spaced name is not forked into its hyphenated
-                // slug.
-                let canonical = capture_pomodoros::completed_only_reuse_name(
-                    &scan, selector,
-                )
-                .or_else(|| {
+            capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+                // Lossless reuse: a plain selector matching a completed
+                // entry reuses its spelling; a literal's canonical name
+                // is final.
+                let canonical = if pomodoro_name_is_literal {
+                    capture_pomodoros::canonicalize_exact_name(selector)
+                } else {
+                    entry.name.clone().or_else(|| {
+                        capture_pomodoros::canonicalize_pomodoro_name(selector)
+                    })
+                }
+                .ok_or_else(|| {
+                    CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+                })?;
+                let (updated_day, placement, created_line) =
+                    create_started_pomodoro_entry(
+                        original_day,
+                        &lines,
+                        &section,
+                        Some(&canonical),
+                        &time_range,
+                        block_link,
+                    )?;
+                return Ok((
+                    updated_day,
+                    placement,
+                    PomodoroStartSummary {
+                        start,
+                        end,
+                        duration_minutes,
+                        offset_units: spec.offset_units,
+                        pomodoro_name: Some(canonical),
+                        pomodoro_line: created_line + 1,
+                        created_pomodoro: true,
+                        time_range,
+                        tasks: None,
+                        drop: Vec::new(),
+                        dropped: Vec::new(),
+                        r#override: None,
+                    },
+                    PomodoroBlockBefore::Created,
+                ));
+            }
+            capture_pomodoros::NamedSelection::Missing { .. } => {
+                let canonical = if pomodoro_name_is_literal {
+                    capture_pomodoros::canonicalize_exact_name(selector)
+                } else {
                     capture_pomodoros::canonicalize_pomodoro_name(selector)
-                })
+                }
                 .ok_or_else(|| {
                     CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
                 })?;
@@ -648,6 +691,7 @@ pub(super) fn plan_pomodoro_start_item(
     parsed: ParsedCaptureText,
     spec: PomodoroStartSpec,
     pomodoro_name: Option<String>,
+    pomodoro_name_is_literal: bool,
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
@@ -664,6 +708,7 @@ pub(super) fn plan_pomodoro_start_item(
             parsed,
             &spec,
             &selector,
+            pomodoro_name_is_literal,
             &start,
             &end,
             duration_minutes,
@@ -1083,6 +1128,7 @@ fn plan_override_swap_item(
     parsed: ParsedCaptureText,
     spec: &PomodoroStartSpec,
     selector: &str,
+    selector_is_literal: bool,
     running: &capture_pomodoros::PomodoroEntry,
     fresh_start: &str,
     fresh_end: &str,
@@ -1099,7 +1145,11 @@ fn plan_override_swap_item(
         .unwrap_or_else(|| format!("`#{selector}`"));
     let staged = planner.read_existing(day_file)?;
     let scan = capture_pomodoros::scan(&staged);
-    let selection = capture_pomodoros::select_named(&scan, selector);
+    let selection = capture_pomodoros::select_capture_name(
+        &scan,
+        selector,
+        selector_is_literal,
+    );
     let display_name = match &selection {
         capture_pomodoros::NamedSelection::Found(entry) => {
             entry.name.clone().unwrap_or_else(|| fallback_name.clone())
@@ -1355,8 +1405,12 @@ fn plan_override_swap_item(
                     ))
                 })?;
             let (with_placeholder, created_line, _) =
-                capture_task_toggle::insert_named_placeholder(&contents, &name)
-                    .map_err(named_relocation_error)?;
+                capture_task_toggle::insert_named_placeholder(
+                    &contents,
+                    &name,
+                    selector_is_literal,
+                )
+                .map_err(named_relocation_error)?;
             if created_line <= running_final {
                 running_final += 1;
             }
@@ -1395,8 +1449,12 @@ fn plan_override_swap_item(
                 )
             });
             let (with_placeholder, created_line, _) =
-                capture_task_toggle::insert_named_placeholder(&contents, &name)
-                    .map_err(named_relocation_error)?;
+                capture_task_toggle::insert_named_placeholder(
+                    &contents,
+                    &name,
+                    selector_is_literal,
+                )
+                .map_err(named_relocation_error)?;
             if created_line <= running_final {
                 running_final += 1;
             }
@@ -1994,6 +2052,7 @@ fn plan_named_pomodoro_start_item(
     parsed: ParsedCaptureText,
     spec: &PomodoroStartSpec,
     selector: &str,
+    selector_is_literal: bool,
     start: &str,
     end: &str,
     duration_minutes: u64,
@@ -2019,7 +2078,11 @@ fn plan_named_pomodoro_start_item(
             "Bob daily note has no Pomodoros section",
         ));
     }
-    let selection = capture_pomodoros::select_named(&scan, selector);
+    let selection = capture_pomodoros::select_capture_name(
+        &scan,
+        selector,
+        selector_is_literal,
+    );
     let display_name = match &selection {
         capture_pomodoros::NamedSelection::Found(entry) => {
             entry.name.clone().unwrap_or_else(|| fallback_name.clone())
@@ -2053,6 +2116,7 @@ fn plan_named_pomodoro_start_item(
             parsed,
             spec,
             selector,
+            selector_is_literal,
             running,
             start,
             end,
@@ -2148,7 +2212,9 @@ fn plan_named_pomodoro_start_item(
                     })?;
                 let (with_placeholder, created_line, _) =
                     capture_task_toggle::insert_named_placeholder(
-                        &staged, &name,
+                        &staged,
+                        &name,
+                        selector_is_literal,
                     )
                     .map_err(named_relocation_error)?;
                 let (updated, moved_index) = start_existing_pomodoro_entry(
@@ -2180,7 +2246,9 @@ fn plan_named_pomodoro_start_item(
                 });
                 let (with_placeholder, created_line, _) =
                     capture_task_toggle::insert_named_placeholder(
-                        &staged, &name,
+                        &staged,
+                        &name,
+                        selector_is_literal,
                     )
                     .map_err(named_relocation_error)?;
                 let (updated, moved_index) = start_existing_pomodoro_entry(

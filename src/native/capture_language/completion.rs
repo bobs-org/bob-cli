@@ -754,6 +754,27 @@ pub(super) fn caret_link_field(
     if cursor < name_start_abs || cursor > token.end {
         return None;
     }
+    // A partial literal completes on the literal's decoded text; the
+    // replacement still covers the whole partial literal.
+    if let Some(after_hash) = token.text.get(name_start..)
+        && super::pomodoro_literal::opens_exact_name(after_hash)
+    {
+        let typed_before =
+            after_hash.get(..cursor - token.start - name_start)?;
+        let inner = typed_before
+            .strip_prefix('"')
+            .or_else(|| typed_before.strip_prefix('“'))
+            .unwrap_or(typed_before);
+        let query = super::pomodoro_literal::decode_partial_literal_text(inner);
+        return Some(CompletionField {
+            context: CompletionContext::PomodoroName,
+            route: Some(route),
+            block_id: Some(block_id),
+            query,
+            replacement: (name_start_abs, name_end_abs),
+            bare_name,
+        });
+    }
     let query = token
         .text
         .get(name_start..cursor - token.start)?
@@ -788,6 +809,7 @@ fn named_start_name_at(
         suffix,
         name: Some(name),
         name_spelling: Some(spelling),
+        name_is_literal,
         doubled: false,
         ..
     } = super::item::session_equals_token(trimmed)?
@@ -798,13 +820,34 @@ fn named_start_name_at(
     let token_start = parent.raw.start + leading;
     let name_start = token_start
         + super::item::named_start_name_offset(suffix.len(), spelling);
+    // A partial literal completes on the literal's decoded text, and its
+    // replacement covers the whole partial literal including the quotes.
+    if name_is_literal {
+        let rel_start = name_start - token_start;
+        let after_hash = trimmed.get(rel_start..).unwrap_or("");
+        let lex = super::pomodoro_literal::lex_exact_name_after_hash(
+            after_hash,
+            after_hash.len(),
+        )?;
+        let name_end = name_start + lex.literal_len;
+        if cursor < name_start || cursor > name_end {
+            return None;
+        }
+        let typed_before = after_hash.get(..cursor - name_start)?;
+        let inner = typed_before
+            .strip_prefix('"')
+            .or_else(|| typed_before.strip_prefix('“'))
+            .unwrap_or(typed_before);
+        let query = super::pomodoro_literal::decode_partial_literal_text(inner);
+        return Some((suffix, query, (name_start, name_end), false));
+    }
     let name_end = name_start + name.len();
     if cursor < name_start || cursor > name_end {
         return None;
     }
     Some((
         suffix,
-        name,
+        name.get(..cursor - name_start)?.to_string(),
         (name_start, name_end),
         spelling == super::bare_name::NameSpelling::Bare,
     ))
@@ -821,9 +864,10 @@ fn pomodoro_start_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let (_, name, (name_start, name_end), bare_name) =
+    // `named_start_name_at` already truncates the query at the cursor
+    // (decoded for literals, raw otherwise).
+    let (_, query, (name_start, name_end), bare_name) =
         named_start_name_at(item, cursor)?;
-    let query = name.get(..cursor - name_start)?.to_string();
     Some(CompletionField {
         context: CompletionContext::PomodoroStartName,
         route: None,
@@ -1689,6 +1733,7 @@ fn pomodoro_link_suffix_name_field(
         suffix: timing_suffix,
         name: Some(name),
         name_spelling: Some(spelling),
+        name_is_literal,
         drop,
         doubled: false,
         ..
@@ -1702,6 +1747,35 @@ fn pomodoro_link_suffix_name_field(
     let equals = token.text.find('=')?;
     let name_start =
         equals + named_start_name_offset(timing_suffix.len(), spelling);
+    // A partial literal completes on the literal's decoded text, and its
+    // replacement covers the whole partial literal including the quotes.
+    if name_is_literal {
+        let after_hash = token.text.get(name_start..).unwrap_or("");
+        let lex = super::pomodoro_literal::lex_exact_name_after_hash(
+            after_hash,
+            after_hash.len(),
+        )?;
+        let name_end = name_start + lex.literal_len;
+        if cursor < token.start + name_start || cursor > token.start + name_end
+        {
+            return None;
+        }
+        let typed_before =
+            after_hash.get(..cursor - token.start - name_start)?;
+        let inner = typed_before
+            .strip_prefix('"')
+            .or_else(|| typed_before.strip_prefix('“'))
+            .unwrap_or(typed_before);
+        let query = super::pomodoro_literal::decode_partial_literal_text(inner);
+        return Some(CompletionField {
+            context: CompletionContext::PomodoroName,
+            route: Some(route_part.to_ascii_lowercase()),
+            block_id: Some(block_id.to_string()),
+            query,
+            replacement: (token.start + name_start, token.start + name_end),
+            bare_name: false,
+        });
+    }
     let name_end = name_start + name.len();
     if cursor < token.start + name_start || cursor > token.start + name_end {
         return None;
@@ -1895,11 +1969,25 @@ pub(super) fn completion_field_from_parts(
     } else {
         parts.right_part
     };
+    // A partial literal completes on the literal's decoded text; the
+    // replacement still covers the whole partial literal.
+    let raw_query = &third.part[..split];
+    let query = if third.context == CompletionContext::PomodoroName
+        && super::pomodoro_literal::opens_exact_name(third.part)
+    {
+        let inner = raw_query
+            .strip_prefix('"')
+            .or_else(|| raw_query.strip_prefix('“'))
+            .unwrap_or(raw_query);
+        super::pomodoro_literal::decode_partial_literal_text(inner)
+    } else {
+        raw_query.to_string()
+    };
     Some(CompletionField {
         context: third.context,
         route: Some(parts.route_part.to_ascii_lowercase()),
         block_id: (!third_block.is_empty()).then(|| third_block.to_string()),
-        query: third.part[..split].to_string(),
+        query,
         replacement: (third_start, third_end),
         bare_name: false,
     })

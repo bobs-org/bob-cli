@@ -1761,6 +1761,7 @@ pub(crate) fn resolve_execution_ownership(
             block_id,
             pomodoro_name,
             intent,
+            ..
         } => {
             let marker = local_marker_text.unwrap_or("@route+id");
             if pomodoro_name.is_some()
@@ -1782,6 +1783,7 @@ pub(crate) fn resolve_execution_ownership(
             start,
             close,
             spelling,
+            ..
         } => {
             // Bare `@route:id` and `^route:id` aliases select the same
             // existing dependent as `@route+id`; any other link shape

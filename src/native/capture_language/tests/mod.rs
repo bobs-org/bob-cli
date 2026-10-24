@@ -94,6 +94,7 @@ mod completion;
 mod draft;
 mod editor_modes;
 mod editor_spans;
+mod exact_name;
 mod globals;
 mod goto;
 mod grammar;

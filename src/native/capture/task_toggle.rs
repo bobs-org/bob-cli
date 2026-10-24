@@ -9,6 +9,7 @@ pub(super) fn plan_task_toggle_capture(
     route: &str,
     block_id: &str,
     pomodoro_name: Option<&str>,
+    pomodoro_name_is_literal: bool,
     intent: TaskToggleIntent,
     today: NaiveDate,
     warnings: &mut Vec<String>,
@@ -61,6 +62,7 @@ pub(super) fn plan_task_toggle_capture(
             route,
             block_id,
             pomodoro_name,
+            pomodoro_name_is_literal,
             &contents,
             task_line_index,
             previous_status_symbol,
@@ -316,6 +318,7 @@ pub(super) fn plan_task_toggle_capture(
         &day_contents,
         &block_link,
         pomodoro_name,
+        pomodoro_name_is_literal,
     )
     .map_err(link_plan_error)?
     {
@@ -340,12 +343,16 @@ pub(super) fn plan_task_toggle_capture(
             let (created_day, placement, _, _) = insert_pomodoro_child_block(
                 &day_contents,
                 &format!("- {block_link}"),
-                PomodoroSelection::NamedOrCreate(selector),
+                PomodoroSelection::NamedOrCreate {
+                    selector,
+                    is_literal: pomodoro_name_is_literal,
+                },
             )?;
             let cleanup = match capture_task_toggle::plan_link_insertion(
                         &created_day,
                         &block_link,
                         Some(selector),
+                        pomodoro_name_is_literal,
                     )
                     .map_err(link_plan_error)?
                     {

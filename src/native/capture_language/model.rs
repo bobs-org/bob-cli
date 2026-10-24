@@ -80,6 +80,9 @@ pub(crate) enum CaptureKind {
     Pomodoro {
         block_id: String,
         pomodoro_name: Option<String>,
+        /// True when `pomodoro_name` came from a `#"NAME"` literal: resolve
+        /// by key equality, never by slug or prefix.
+        pomodoro_name_is_literal: bool,
         start: Option<PomodoroStartSpec>,
         close: Option<PomodoroCloseSpec>,
     },
@@ -93,6 +96,8 @@ pub(crate) enum CaptureKind {
     ProjectNote {
         block_id: String,
         pomodoro_name: Option<String>,
+        /// True when `pomodoro_name` came from a `#"NAME"` literal.
+        pomodoro_name_is_literal: bool,
     },
     SubBullet {
         target: SubBulletTarget,
@@ -106,6 +111,8 @@ pub(crate) enum CaptureKind {
     TaskToggle {
         block_id: String,
         pomodoro_name: Option<String>,
+        /// True when `pomodoro_name` came from a `#"NAME"` literal.
+        pomodoro_name_is_literal: bool,
         intent: TaskToggleIntent,
     },
     /// A whole-item `+N`/`-N` Pomodoro duration adjustment (for example
@@ -131,6 +138,8 @@ pub(crate) enum CaptureKind {
     PomodoroLink {
         block_id: String,
         pomodoro_name: Option<String>,
+        /// True when `pomodoro_name` came from a `#"NAME"` literal.
+        pomodoro_name_is_literal: bool,
         start: Option<PomodoroStartSpec>,
         close: Option<PomodoroCloseSpec>,
         spelling: PomodoroLinkSpelling,
@@ -148,6 +157,8 @@ pub(crate) enum CaptureKind {
     PomodoroStart {
         spec: PomodoroStartSpec,
         pomodoro_name: Option<String>,
+        /// True when `pomodoro_name` came from a `#"NAME"` literal.
+        pomodoro_name_is_literal: bool,
     },
     /// A whole-item `!note:block-id` task completion: complete the existing
     /// open task the vault-wide note locator names. The token must be the

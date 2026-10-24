@@ -9,6 +9,10 @@ use super::editor_parse::*;
 use super::line::*;
 use super::markers::*;
 use super::model::*;
+use super::pomodoro_literal::{
+    canonicalize_exact_name, decode_close_hash_name, lex_exact_name_after_hash,
+    opens_exact_name,
+};
 use super::project_tasks::*;
 use super::start_selection::*;
 use super::tokens::*;
@@ -716,6 +720,7 @@ pub(super) fn parse_capture_item<'a>(
         let CaptureKind::Pomodoro {
             block_id,
             pomodoro_name,
+            pomodoro_name_is_literal,
             start,
             close,
         } = kind
@@ -733,6 +738,7 @@ pub(super) fn parse_capture_item<'a>(
         let link_kind = CaptureKind::PomodoroLink {
             block_id,
             pomodoro_name,
+            pomodoro_name_is_literal,
             start,
             close,
             spelling,
@@ -1107,6 +1113,9 @@ pub(super) fn resolve_sub_bullet_kind(
         return Ok(CaptureKind::TaskToggle {
             block_id,
             pomodoro_name: section.map(|selector| selector.text),
+            // Plain `#name` sections are slug-resolved; `#"…"` literals
+            // never reach here (they resolve in `parse_sub_bullet_route_token`).
+            pomodoro_name_is_literal: false,
             intent: TaskToggleIntent::EnsureNext,
         });
     }
@@ -1220,13 +1229,17 @@ pub(crate) enum EqualsToken {
     /// length including the sigil, the name, and both optional parts, and
     /// `doubled` is true when the token used the doubled `==` sigil, which
     /// is now retired. A name ends at the first ASCII whitespace, `~`, or
-    /// `@`.
+    /// `@`. A `#"NAME"` / `#“NAME”` exact-name literal instead runs through
+    /// its closing quote (spaces inside included); `name_is_literal` is
+    /// true then and `name` holds the canonical name (or the decoded text
+    /// when it names nothing valid).
     Start {
         suffix: String,
         counted: bool,
         len: usize,
         name: Option<String>,
         name_spelling: Option<NameSpelling>,
+        name_is_literal: bool,
         drop: Option<(usize, String)>,
         timing: Option<(usize, String)>,
         doubled: bool,
@@ -1304,12 +1317,35 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let mut token_len = len + sigil_len;
     let mut name: Option<String> = None;
     let mut name_spelling: Option<NameSpelling> = None;
+    let mut name_is_literal = false;
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
-        let name_len = start_name_extent(after_hash);
-        name = Some(after_hash[..name_len].to_string());
-        name_spelling = Some(NameSpelling::Hash);
-        token_len += 1 + name_len;
+        if opens_exact_name(after_hash)
+            && let Some(lex) =
+                lex_exact_name_after_hash(after_hash, after_hash.len())
+        {
+            // An exact-name literal: the token extent runs through the
+            // closing quote. Unterminated is an incomplete editing state:
+            // claim an empty name so the incomplete diagnostic wins, never
+            // a shape error.
+            name_is_literal = true;
+            name_spelling = Some(NameSpelling::Hash);
+            if lex.complete {
+                name = Some(
+                    canonicalize_exact_name(&lex.decoded)
+                        .unwrap_or(lex.decoded),
+                );
+                token_len += 1 + lex.literal_len;
+            } else {
+                name = Some(String::new());
+                token_len += 1 + lex.literal_len;
+            }
+        } else {
+            let name_len = start_name_extent(after_hash);
+            name = Some(after_hash[..name_len].to_string());
+            name_spelling = Some(NameSpelling::Hash);
+            token_len += 1 + name_len;
+        }
     } else if !doubled && suffix.is_empty() {
         if let Some(name_len) = bare_start_name_len(rest) {
             name = Some(rest[..name_len].to_string());
@@ -1388,6 +1424,7 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         len: token_len,
         name,
         name_spelling,
+        name_is_literal,
         drop,
         timing,
         doubled,
@@ -1614,11 +1651,18 @@ fn named_token_error(
     drop_text: Option<&str>,
     timing_text: Option<&str>,
     spelling: NameSpelling,
+    is_literal: bool,
 ) -> Option<String> {
     if name.is_empty() {
         return Some(pomodoro_named_start_incomplete_error(token));
     }
-    if let Some((before, after)) = name.split_once('=')
+    if is_literal {
+        // A literal's spaces are the point: validate the canonical name,
+        // never the slug charset.
+        if canonicalize_exact_name(name).is_none() {
+            return Some(pomodoro_named_start_name_error(name, token));
+        }
+    } else if let Some((before, after)) = name.split_once('=')
         && suffix.is_empty()
         && timing_text.is_none()
         && parse_pomodoro_start_suffix(after).is_ok()
@@ -1633,8 +1677,7 @@ fn named_token_error(
         return Some(format!(
             "write the duration after `@` or before the name: `{at_form}` or `{hash_form}` instead of `{token}`"
         ));
-    }
-    if !is_pomodoro_selector_component(name) {
+    } else if !is_pomodoro_selector_component(name) {
         return Some(pomodoro_named_start_name_error(name, token));
     }
     let effective = timing_text.unwrap_or(suffix);
@@ -1672,6 +1715,7 @@ pub(super) fn named_shape_error_with_drop(
     len: usize,
     drop_text: Option<&str>,
     spelling: NameSpelling,
+    is_literal: bool,
 ) -> String {
     if name.is_empty()
         && let Some(nospace) = named_nospace_error(suffix, parent_trimmed, len)
@@ -1679,7 +1723,9 @@ pub(super) fn named_shape_error_with_drop(
         return nospace;
     }
     let mut message = pomodoro_named_start_shape_error(token, suffix, name);
-    if !name.is_empty() && parent_trimmed.len() > len {
+    // A literal's spaces are inside the token: trailing words are extra
+    // text, never a join-with-`-` hint.
+    if !is_literal && !name.is_empty() && parent_trimmed.len() > len {
         let extra = parent_trimmed[len..].trim_start();
         let words: Vec<&str> = extra.split_whitespace().collect();
         if !words.is_empty()
@@ -1924,10 +1970,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 return Err(retired_whole_item_close_error(first, &rewrite));
             }
             if is_close_hash_token(first) {
-                let name = first
-                    .find('#')
-                    .map(|hash| first[hash + 1..].to_string())
-                    .unwrap_or_default();
+                let name = decode_close_hash_name(first, parent_trimmed);
                 return Err(pomodoro_close_hash_error(&name));
             }
             let selection_after_x = whole_item_close_after_x(first);
@@ -2219,6 +2262,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             len,
             name,
             name_spelling,
+            name_is_literal,
             drop,
             timing,
             doubled,
@@ -2263,6 +2307,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     drop_text,
                     timing_text,
                     spelling,
+                    name_is_literal,
                 ) {
                     let exact =
                         parent_trimmed.len() == len && item.lines.len() == 1;
@@ -2337,6 +2382,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             len,
                             drop_text,
                             spelling,
+                            name_is_literal,
                         ));
                     }
                     return Ok(None);
@@ -2364,6 +2410,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         kind: CaptureKind::PomodoroStart {
                             spec,
                             pomodoro_name: Some(selector),
+                            pomodoro_name_is_literal: name_is_literal,
                         },
                         scheduled_offset: None,
                         priority_level: None,
@@ -2497,6 +2544,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     kind: CaptureKind::PomodoroStart {
                         spec,
                         pomodoro_name: None,
+                        pomodoro_name_is_literal: false,
                     },
                     scheduled_offset: None,
                     priority_level: None,

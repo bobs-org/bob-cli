@@ -63,6 +63,7 @@ pub(crate) fn plan_link_relocation(
     day_contents: &str,
     block_link: &str,
     pomodoro_name: Option<&str>,
+    is_literal: bool,
 ) -> Result<LinkRelocationPlan, LinkRelocationError> {
     let scan = capture_pomodoros::scan(day_contents);
     let lines = line_spans(day_contents);
@@ -85,6 +86,7 @@ pub(crate) fn plan_link_relocation(
         day_contents,
         &scan,
         pomodoro_name,
+        is_literal,
         source_entry_line_index,
     )?;
     if resolved.already_current {
@@ -144,6 +146,7 @@ pub(crate) fn plan_link_relocation(
     let destination = destination_endpoint_after_move(
         &content,
         pomodoro_name,
+        is_literal,
         &resolved.destination,
         resolved.creates_pomodoro,
     )?;
@@ -170,6 +173,7 @@ fn resolve_relocation_destination(
     day_contents: &str,
     scan: &capture_pomodoros::PomodoroScan,
     pomodoro_name: Option<&str>,
+    is_literal: bool,
     source_entry_line_index: usize,
 ) -> Result<ResolvedRelocationDestination, LinkRelocationError> {
     match pomodoro_name {
@@ -185,8 +189,9 @@ fn resolve_relocation_destination(
                 creates_pomodoro: false,
             })
         }
-        Some(selector) => match capture_pomodoros::select_named(scan, selector)
-        {
+        Some(selector) => match capture_pomodoros::select_capture_name(
+            scan, selector, is_literal,
+        ) {
             capture_pomodoros::NamedSelection::Found(entry) => {
                 let dest_entry_index = entry.line - 1;
                 Ok(ResolvedRelocationDestination {
@@ -200,8 +205,11 @@ fn resolve_relocation_destination(
             }
             capture_pomodoros::NamedSelection::CompletedOnly(_)
             | capture_pomodoros::NamedSelection::Missing { .. } => {
-                let (content, created_line, name) =
-                    insert_named_placeholder(day_contents, selector)?;
+                let (content, created_line, name) = insert_named_placeholder(
+                    day_contents,
+                    selector,
+                    is_literal,
+                )?;
                 Ok(ResolvedRelocationDestination {
                     dest_entry_index: created_line,
                     destination: PomodoroEndpoint {
@@ -221,12 +229,15 @@ fn resolve_relocation_destination(
 pub(super) fn destination_endpoint_after_move(
     content: &str,
     pomodoro_name: Option<&str>,
+    is_literal: bool,
     planned: &PomodoroEndpoint,
     creates_pomodoro: bool,
 ) -> Result<PomodoroEndpoint, LinkRelocationError> {
     let scan = capture_pomodoros::scan(content);
     if let Some(selector) = pomodoro_name {
-        match capture_pomodoros::select_named(&scan, selector) {
+        match capture_pomodoros::select_capture_name(
+            &scan, selector, is_literal,
+        ) {
             capture_pomodoros::NamedSelection::Found(entry) => {
                 return Ok(endpoint_from_entry(entry));
             }
@@ -308,6 +319,7 @@ pub(crate) fn move_subtree_to_entry(
 pub(crate) fn insert_named_placeholder(
     contents: &str,
     selector: &str,
+    is_literal: bool,
 ) -> Result<(String, usize, String), LinkRelocationError> {
     let scan = capture_pomodoros::scan(contents);
     if !scan.has_section {
@@ -323,11 +335,25 @@ pub(crate) fn insert_named_placeholder(
     if timed_open > 1 {
         return Err(LinkRelocationError::MultipleOpenTimedEntries);
     }
-    // A completed-only selector reuses that entry's canonical name so a
-    // spaced name is not forked into its hyphenated slug.
-    let name = capture_pomodoros::completed_only_reuse_name(&scan, selector)
-        .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
-        .ok_or(LinkRelocationError::InvalidPomodoroName)?;
+    // A literal's canonical name is final: `#"SASE-V18"` never reuses a
+    // completed `SASE V18`. A plain selector matching a completed entry
+    // reuses that entry's canonical spelling (`deep-work` → `DEEP WORK`),
+    // instead of canonicalizing the slug (`DEEP-WORK`).
+    let name = if is_literal {
+        capture_pomodoros::canonicalize_exact_name(selector)
+            .ok_or(LinkRelocationError::InvalidPomodoroName)?
+    } else {
+        let completed_name =
+            match capture_pomodoros::select_named(&scan, selector) {
+                capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
+                    entry.name.clone()
+                }
+                _ => None,
+            };
+        completed_name
+            .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
+            .ok_or(LinkRelocationError::InvalidPomodoroName)?
+    };
     let lines = line_spans(contents);
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
     let section = pomodoro::pomodoros_section_range(&line_texts)
