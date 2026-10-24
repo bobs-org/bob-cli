@@ -364,6 +364,34 @@ pub(crate) fn clean_description(
     out.join(" ")
 }
 
+/// Stable candidate key shared by capture inbox routing and successor
+/// offers. ID-bearing tasks use their block identity; id-less tasks use the
+/// digest of the cleaned display text and a per-note duplicate ordinal.
+pub(crate) fn stable_task_key(
+    relative_path: &Path,
+    block_id: Option<&str>,
+    description: &str,
+    global_filter: &str,
+    digest_ordinal: usize,
+) -> String {
+    let path = relative_path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/");
+    if let Some(id) = block_id {
+        return format!("{path}#^{id}");
+    }
+    let description = clean_description(description, global_filter, None);
+    let digest = Sha256::digest(description.as_bytes());
+    let hex = hex::encode(digest);
+    if digest_ordinal >= 2 {
+        format!("{path}@{}~{digest_ordinal}", &hex[..8])
+    } else {
+        format!("{path}@{}", &hex[..8])
+    }
+}
+
 pub(crate) fn line_digest(line: &str) -> String {
     let digest = Sha256::digest(line.trim_end().as_bytes());
     hex::encode(digest)[..8].to_string()

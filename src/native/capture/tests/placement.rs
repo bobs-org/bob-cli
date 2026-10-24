@@ -373,6 +373,7 @@ fn json_success_shape_is_stable() {
         Vec::new(),
         Vec::new(),
         PullInJson::empty(),
+        InboxRouteReport::empty(),
     );
 
     let legacy_json = serde_json::to_string(&result)
@@ -387,6 +388,8 @@ fn json_success_shape_is_stable() {
     assert_eq!(value["route_label"], "groceries.md");
     assert_eq!(value["relative_target"], "groceries.md");
     assert_eq!(value["target"], "/tmp/bob/groceries.md");
+    assert_eq!(value["inbox_route"]["supported"], true);
+    assert_eq!(value["inbox_route"]["candidate_count"], 0);
     assert_eq!(value["text"], "buy milk");
     assert_eq!(
         value["task_line"],

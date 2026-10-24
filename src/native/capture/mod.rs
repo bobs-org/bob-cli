@@ -60,6 +60,7 @@ mod dependencies;
 mod dependency_drop;
 mod ensure_next;
 mod existing_task_link;
+mod inbox_route;
 mod link_guard;
 mod open_notes;
 mod output;
@@ -94,6 +95,7 @@ use commit::*;
 use dependencies::*;
 use dependency_drop::*;
 use ensure_next::*;
+use inbox_route::*;
 use link_guard::*;
 use open_notes::*;
 use output::*;
@@ -268,6 +270,13 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let routing = load_capture_routing(request.no_ref);
     let (mut batch, pull_in) =
         plan_with_pull_in(&mut request, routing.as_ref())?;
+    if request.require_inbox_route_choice
+        && batch.inbox_route.candidate_count > 0
+    {
+        return Err(CaptureError::inbox_route_choice_required(
+            &batch.inbox_route,
+        ));
+    }
     append_plan_budget(&request, &mut batch)?;
     let theme_refs = append_theme_refs(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
@@ -292,6 +301,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.task_blocks,
         open_notes,
         pull_in,
+        batch.inbox_route,
     );
     result.theme_refs = theme_refs;
     let has_template = result.template.is_some();

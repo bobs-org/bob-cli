@@ -75,6 +75,7 @@ pub(crate) fn capture_spec() -> GuardSpec {
         long("no-ref", false),
         long("pull-in", true),
         long("refuse-override", false),
+        long("require-inbox-route-choice", false),
         long("require-pull-in-choice", false),
         long("route", true),
         long("section", true),

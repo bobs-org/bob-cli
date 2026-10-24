@@ -9,6 +9,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    pub(super) inbox_route: InboxRouteReport,
     pub(super) template: Option<capture_language::template::TemplateSummary>,
     pub(super) template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
     /// Ref jobs staged by reference items, in batch order. The commit
@@ -103,7 +104,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         capture_pomodoros::relative_day_file(&day_file, &request.bob_dir);
     let mut block_tracker = PomodoroBlockTracker::new(day_relative);
     let task_settings = note_tasks::read_settings(&request.bob_dir);
-    let mut task_tracker = TaskBlockTracker::new(task_settings);
+    let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
     let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
     let mut staged_jobs = Vec::new();
@@ -183,6 +184,12 @@ pub(super) fn plan_capture_batch_with_config_path(
         &dependency_ctx,
         &request.bob_dir,
     );
+    let inbox_route = detect_inbox_routes(
+        &planner,
+        &request.bob_dir,
+        &task_settings,
+        &dependency_ctx,
+    )?;
     let final_day = planner.peek_text(&day_file);
     let successor_links = surviving_successor_links(&items);
     let pomodoro_blocks = block_tracker
@@ -209,6 +216,7 @@ pub(super) fn plan_capture_batch_with_config_path(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
+        inbox_route,
         template,
         template_rows,
         staged_jobs,

@@ -20,9 +20,9 @@ pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
 };
 pub(crate) use successors::{
-    live_link_keys, plan_successors, ClosingContext, ClosingContinuation,
-    CompletedTask, OfferGroup, OfferOrderKey, OfferReport, ProjectFold,
-    SuccessorInput, SuccessorPlan, SuccessorSelection,
+    is_inbox_note, live_link_keys, plan_successors, ClosingContext,
+    ClosingContinuation, CompletedTask, OfferGroup, OfferOrderKey, OfferReport,
+    ProjectFold, SuccessorInput, SuccessorPlan, SuccessorSelection,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

@@ -38,6 +38,7 @@ workflow guide.
   - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
   - [Linking tasks with '~' and '~~'](#linking-tasks)
   - [Completing tasks with '!'](#completing-tasks-with)
+  - [Routing inbox tasks out](#routing-inbox-tasks-out)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
@@ -2579,6 +2580,87 @@ exit 2 and I/O-class errors exit 1:
 | Duplicate ID | 1 | `block ID ^dup appears 2 times in sase.md; make it unique before capturing` |
 | Non-task line | 1 | `^nt1 in sase.md is not a task (line 6: plain line ^nt1)` |
 
+### Routing inbox tasks out
+
+When a capture changes the checkbox of an existing task in `inbox.md` or a
+direct area child of `inbox.md`, bob reports it so a client can ask where the
+task should go. This comparison runs after the whole batch and successor
+recovery have been planned. It includes completions and other status changes
+caused indirectly by the batch. Edits to fields or children alone do not
+count. A nested status change reports its column-zero `#task` ancestor, since
+that is the block a move carries. New tasks, `^prj` tasks, tasks in projects
+under an inbox area, and untyped notes under an inbox are not candidates.
+
+Detection vectors (`IR`) run against a sandbox vault:
+
+| ID | Transition | Expected report |
+| --- | --- | --- |
+| IR1 | Link a Ready task in `mac_inbox.md` | One Ready → Next candidate |
+| IR2 | Link an already-Next task and create a new inbox task in the same batch | Neither task is a candidate |
+| IR3 | Link a task in the direct `gkeep_inbox.md` child | One candidate classified from its live parent |
+| IR4 | Change a nested task, an id-less task, and a task to Done | Report the column-zero parent, stable id-less keys, and the completion |
+| IR5 | Change a task in a project under `mac_inbox.md` | No inbox candidate |
+| IR6 | Request a route choice with the hidden guard | Exit 1 with `inbox_route_choice_required`; notes stay byte-identical |
+| IR7 | Require both pull-in and inbox-route choices | The pull-in refusal wins |
+| IR8 | Build destinations with inboxes, nested notes, blocked `^prj`, projects, and excluded folders | Sorted task-move destinations with matching kind, status, parent, and blocked fields |
+
+Every successful capture JSON, including dry runs, carries `inbox_route`:
+
+```json
+"inbox_route": {
+  "supported": true,
+  "candidate_count": 1,
+  "routed_count": 0,
+  "kept_count": 0,
+  "candidates": [{
+    "key": "mac_inbox.md#^route-task",
+    "n": 1,
+    "note_path": "mac_inbox.md",
+    "inbox": "mac_inbox",
+    "block_id": "route-task",
+    "line": 8,
+    "text": "Prepare the handoff",
+    "previous_status_symbol": " ",
+    "previous_status_name": "Ready",
+    "status_symbol": "*",
+    "status_name": "Next",
+    "answer": null,
+    "outcome": "pending"
+  }],
+  "destinations": [{
+    "relative_path": "areas/health.md",
+    "route": "areas/health",
+    "label": "health",
+    "kind": "area",
+    "status": null,
+    "parent": null,
+    "blocked": false
+  }]
+}
+```
+
+Candidates are numbered by note path and original line. A task with a block ID
+uses `path#^id` as its key; an id-less task uses `path@<sha8>` and adds a
+`~N` suffix when the display-text digest repeats in that note. Treat keys as
+opaque. Candidate status symbols and names describe the task block that would
+move. `block_id` is an empty string when the candidate has no block ID.
+
+`destinations` is omitted when there are no candidates. It lists routable area
+notes and `wip` or `waiting` projects, sorted by vault-relative path. Inbox
+notes and notes under `done/`, `_templates/`, and `_conflicts/` are excluded.
+Each row includes the resolved parent label when available and whether the
+destination's `^prj` task is Blocked.
+
+`bob capture` never opens a picker. Bob Mac Capture uses this report to ask,
+then submits the selected route with the capture. Its hidden
+`--require-inbox-route-choice` guard returns exit 1 with
+`code: inbox_route_choice_required` and the same `inbox_route` payload when a
+candidate has no answer; it writes nothing. The pull-in choice refusal runs
+first, so clients resolve successor offers before inbox routes.
+
+The human output prints one `inbox` row per pending candidate and a route hint.
+In dry-run output the row says `would route`; ordinary previews never write.
+
 ### Plan budget and strict mode
 
 When a batch changes today's Pomodoros section, the result carries a
@@ -4550,7 +4632,8 @@ joined with single spaces, never newlines. Editor clients such as Bob Mac Captur
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
-`placement`, `open_notes`, and `pull_in` (`supported: true` on every success).
+`placement`, `open_notes`, `pull_in`, and `inbox_route` (`supported: true`
+on every success; see [Routing inbox tasks out](#routing-inbox-tasks-out)).
 `open_notes` is a batch-level array on every success (dry-run and real run
 alike); see [Open notes](#open-notes). The
 template path additionally returns `template: {line, field_count, row_count}`
@@ -4573,7 +4656,8 @@ the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
-`plan_theme_cap_exceeded` and `pull_in_choice_required` refusals.
+`plan_theme_cap_exceeded`, `pull_in_choice_required`, and
+`inbox_route_choice_required` refusals.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`

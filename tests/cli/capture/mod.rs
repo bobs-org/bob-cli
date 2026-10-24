@@ -20,6 +20,7 @@ mod complete_themes;
 mod ensure_next;
 mod flag_guard;
 mod freshness_stamps;
+mod inbox_route;
 mod link_guard;
 mod open_notes;
 mod parse;

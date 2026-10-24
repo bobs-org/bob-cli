@@ -24,8 +24,8 @@ use super::super::{
     capture_pomodoros,
     capture_task_toggle::set_task_line_status,
     collect_done::block_ids_in_markdown,
-    note_tasks::clean_description,
     note_tasks::NoteTaskSettings,
+    note_tasks::{clean_description, stable_task_key},
     pomodoro::pomodoros_section_range,
     project_dependencies::{blocking_open_dependency_ids, is_project_task_id},
     projects::edits::normalize_prj_is_blocked_tag,
@@ -1487,23 +1487,13 @@ fn offer_key_for(
     digest_ordinal: usize,
     note_settings: &NoteTaskSettings,
 ) -> String {
-    let path = normalized_relative(&file.relative_path);
-    if let Some(id) = task.block_id.as_deref() {
-        return format!("{path}#^{id}");
-    }
-    let description = clean_description(
+    stable_task_key(
+        &file.relative_path,
+        task.block_id.as_deref(),
         &task.description,
         note_settings.global_filter.as_str(),
-        None,
-    );
-    let digest = Sha256::digest(description.as_bytes());
-    let hex = hex::encode(digest);
-    let short = &hex[..8];
-    if digest_ordinal >= 2 {
-        format!("{path}@{short}~{digest_ordinal}")
-    } else {
-        format!("{path}@{short}")
-    }
+        digest_ordinal,
+    )
 }
 
 fn assign_offer_keys(

@@ -4,6 +4,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use serde::Serialize;
+
 #[cfg(test)]
 use std::{fs, io};
 
@@ -22,8 +24,9 @@ use super::super::{
     note_tasks::clean_description,
     projects::{
         frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-        parse_frontmatter, ProjectStatus,
+        parse_frontmatter, trim_yaml_scalar, ProjectStatus,
     },
+    task_complete::is_inbox_note,
     task_dependencies::{
         dependency_id, inline_code_spans, is_archive_path, parse,
         DependencyLine,
@@ -84,6 +87,102 @@ pub(crate) struct MovePlan {
     pub(crate) renamed_block_ids: Vec<RenameRecord>,
     pub(crate) repaired_files: Vec<RepairedFile>,
     pub(crate) needs_reconcile: bool,
+}
+
+/// A routable area or open project reported to capture clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TaskMoveDestination {
+    pub(crate) relative_path: String,
+    pub(crate) route: String,
+    pub(crate) label: String,
+    pub(crate) kind: &'static str,
+    pub(crate) status: Option<String>,
+    pub(crate) parent: Option<String>,
+    pub(crate) blocked: bool,
+}
+
+/// Enumerate the same destination kinds accepted by `plan_task_move`,
+/// excluding inbox notes which must never be offered as a route target.
+pub(crate) fn list_task_move_destinations(
+    snapshot: &VaultSnapshot,
+) -> Vec<TaskMoveDestination> {
+    let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+    snapshot
+        .notes
+        .iter()
+        .filter_map(|(path, contents)| {
+            if is_route_destination_excluded(path)
+                || is_inbox_note(path, contents, &note_index)
+            {
+                return None;
+            }
+            let kind = classify_dest(path, contents).ok()?;
+            let frontmatter = parse_frontmatter(contents)?;
+            let status = (kind == DestKind::Project).then(|| {
+                ProjectStatus::parse(frontmatter_value(&frontmatter, "status"))
+                    .label()
+                    .to_string()
+            });
+            let parent =
+                frontmatter_value(&frontmatter, "parent").and_then(|value| {
+                    resolve_parent_label(value, path, &note_index)
+                });
+            let route =
+                path.with_extension("").to_string_lossy().replace('\\', "/");
+            let label = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default()
+                .to_string();
+            Some(TaskMoveDestination {
+                relative_path: path.to_string_lossy().replace('\\', "/"),
+                route,
+                label,
+                kind: match kind {
+                    DestKind::Area => "area",
+                    DestKind::Project => "project",
+                },
+                status,
+                parent,
+                blocked: dest_prj_is_blocked(contents),
+            })
+        })
+        .collect()
+}
+
+fn is_route_destination_excluded(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::Normal(name)
+                if name == "done" || name == "_templates" || name == "_conflicts"
+        )
+    })
+}
+
+fn resolve_parent_label(
+    raw: &str,
+    path: &Path,
+    note_index: &NoteIndex,
+) -> Option<String> {
+    let value = trim_yaml_scalar(raw.trim());
+    let value = value
+        .trim_matches(['[', ']'])
+        .split(',')
+        .next()?
+        .trim()
+        .trim_matches(['"', '\'']);
+    let target = value
+        .strip_prefix("[[")
+        .and_then(|value| value.strip_suffix("]]"))
+        .unwrap_or(value)
+        .split('|')
+        .next()?
+        .split('#')
+        .next()?
+        .trim();
+    let resolved = note_index.resolve(Some(path), target)?;
+    resolved.file_stem()?.to_str().map(str::to_string)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

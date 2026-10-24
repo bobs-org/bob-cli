@@ -294,6 +294,8 @@ pub(super) struct CaptureResult {
     pub(super) open_notes: Vec<OpenNoteJson>,
     /// Draft-level successor-offer summary. Present on every success.
     pub(super) pull_in: PullInJson,
+    /// Inbox tasks whose checkbox status changed during this batch.
+    pub(super) inbox_route: InboxRouteReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -316,6 +318,7 @@ impl CaptureResult {
         task_blocks: Vec<TaskBlockJson>,
         open_notes: Vec<OpenNoteJson>,
         pull_in: PullInJson,
+        inbox_route: InboxRouteReport,
     ) -> Self {
         let item = items
             .first()
@@ -338,6 +341,7 @@ impl CaptureResult {
             task_blocks,
             open_notes,
             pull_in,
+            inbox_route,
         }
     }
 }
@@ -1227,6 +1231,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     if result.captures.is_empty() {
         print_human_item_success(result, None, &result.theme_refs);
         print_pull_in_hint(result);
+        print_inbox_route_hint(result);
         return;
     }
 
@@ -1242,6 +1247,36 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         );
     }
     print_pull_in_hint(result);
+    print_inbox_route_hint(result);
+}
+
+fn print_inbox_route_hint(result: &CaptureResult) {
+    if result.inbox_route.candidates.is_empty() {
+        return;
+    }
+    let styler = Styler::detect();
+    for candidate in &result.inbox_route.candidates {
+        let block = if candidate.block_id.is_empty() {
+            String::new()
+        } else {
+            format!(" ^{}", candidate.block_id)
+        };
+        let route_verb = if result.dry_run {
+            styler.yellow("would route")
+        } else {
+            styler.yellow("inbox")
+        };
+        println!(
+            "  {route_verb}  [{}] → [{}] {}  {}{} · still in {}",
+            candidate.previous_status_symbol,
+            candidate.status_symbol,
+            candidate.text,
+            candidate.note_path,
+            block,
+            candidate.inbox
+        );
+    }
+    println!("  route with -i 1=<note> · -i keep");
 }
 
 fn print_template_summary(
@@ -3433,8 +3468,8 @@ pub(super) fn print_capture_error(
 pub(crate) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
     pub(crate) message: String,
-    /// Machine-readable failure code for template errors and the strict
-    /// plan-budget and successor-offer choice refusals.
+    /// Machine-readable failure code for template errors, strict plan
+    /// budgets, and capture choice refusals.
     pub(super) code: Option<String>,
     /// Extra JSON object fields merged into the error value (offers and
     /// `pull_in` on `pull_in_choice_required`).
@@ -3522,6 +3557,28 @@ impl CaptureError {
             code: Some("pull_in_choice_required".to_string()),
             extra: Some(extra),
             human_unblocked,
+            typed: None,
+        }
+    }
+
+    pub(super) fn inbox_route_choice_required(
+        report: &InboxRouteReport,
+    ) -> Self {
+        let count = report.candidate_count;
+        let task_word = if count == 1 { "task" } else { "tasks" };
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "inbox_route".to_string(),
+            serde_json::to_value(report).expect("serialize inbox_route"),
+        );
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: format!(
+                "this capture changes {count} inbox {task_word}; pass --inbox-route"
+            ),
+            code: Some("inbox_route_choice_required".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
             typed: None,
         }
     }

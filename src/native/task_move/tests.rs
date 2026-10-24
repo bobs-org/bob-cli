@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    load_vault_snapshot, plan_task_move, MoveRequest, MoveSelector, PlanError,
-    VaultSnapshot,
+    list_task_move_destinations, load_vault_snapshot, plan_task_move,
+    MoveRequest, MoveSelector, PlanError, VaultSnapshot,
 };
 
 fn snap(notes: &[(&str, &str)]) -> VaultSnapshot {
@@ -75,6 +75,75 @@ fn block(id: &str) -> MoveSelector {
 
 fn contains(text: &str) -> MoveSelector {
     MoveSelector::Match(text.to_string())
+}
+
+#[test]
+fn destination_list_matches_move_rules_and_excludes_inboxes() {
+    // IR8: destination rows share task-move kind/status/blocked rules, resolve
+    // parents, and omit inboxes plus excluded folders.
+    let snapshot = snap(&[
+        ("inbox.md", "# Inbox\n"),
+        (
+            "areas/mac_inbox.md",
+            "---\ntype: [[area]]\nparent: [[inbox]]\n---\n",
+        ),
+        ("areas/parent.md", &area("")),
+        (
+            "areas/nested.md",
+            "---\ntype: [[area]]\nparent: [[areas/parent]]\n---\n",
+        ),
+        (
+            "projects/wip.md",
+            &project("wip", "## Tasks\n- [ ] #task work ^work\n"),
+        ),
+        (
+            "projects/waiting.md",
+            &project("waiting", "## Tasks\n- [ ] #task wait ^wait\n"),
+        ),
+        ("projects/done.md", &project("done", "## Tasks\n")),
+        ("projects/other.md", &project("blocked", "## Tasks\n")),
+        ("done/archive.md", &area("")),
+        ("_templates/template.md", &area("")),
+        ("_conflicts/conflict.md", &area("")),
+        (
+            "areas/blocked.md",
+            &area("- [?] #task Project root #prj_is_blocked ^prj\n"),
+        ),
+    ]);
+
+    let destinations = list_task_move_destinations(&snapshot);
+    let paths: Vec<_> = destinations
+        .iter()
+        .map(|destination| destination.relative_path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "areas/blocked.md",
+            "areas/nested.md",
+            "areas/parent.md",
+            "projects/waiting.md",
+            "projects/wip.md",
+        ]
+    );
+    let blocked = destinations
+        .iter()
+        .find(|destination| destination.relative_path == "areas/blocked.md")
+        .expect("blocked destination");
+    assert!(blocked.blocked);
+    assert_eq!(blocked.kind, "area");
+    assert_eq!(blocked.status, None);
+    let nested = destinations
+        .iter()
+        .find(|destination| destination.relative_path == "areas/nested.md")
+        .expect("nested destination");
+    assert_eq!(nested.parent.as_deref(), Some("parent"));
+    let waiting = destinations
+        .iter()
+        .find(|destination| destination.relative_path == "projects/waiting.md")
+        .expect("waiting project");
+    assert_eq!(waiting.status.as_deref(), Some("waiting"));
+    assert!(!waiting.blocked);
 }
 
 #[test]

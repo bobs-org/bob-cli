@@ -89,6 +89,7 @@ pub(crate) fn link_existing_task(
             plan_budget: None,
             pomodoro_blocks: Vec::new(),
             task_blocks: Vec::new(),
+            inbox_route: InboxRouteReport::empty(),
             template: None,
             template_rows: Vec::new(),
             staged_jobs: Vec::new(),
