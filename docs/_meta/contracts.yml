@@ -57,32 +57,36 @@ groups:
         summary: "Derived Pomodoro homes, rollup, labels, chips, hues, and JSON contract"
         order: 17
         reader: concepts/today-and-the-pomodoro-ledger.md
+      - stem: pomodoro-themes
+        summary: "Pomodoro theme catalog, hues, hide journal, `bob themes`, and JSON"
+        order: 18
+        reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: randomize
         summary: "`bob task reroll` bulk re-roll of due prioritized tasks"
-        order: 18
+        order: 19
       - stem: stats
         summary: "Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page"
-        order: 21
+        order: 22
       - stem: task-dependencies
         summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
-        order: 22
+        order: 23
         reader: guides/add-prerequisites.md
       - stem: task-relations
         summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, and `~` / `~~` capture"
-        order: 23
+        order: 24
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
-        order: 24
+        order: 25
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
-        order: 25
+        order: 26
         reader: concepts/tasks-and-lanes.md
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill"
-        order: 26
+        order: 27
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 27
+        order: 28
         reader: concepts/today-and-the-pomodoro-ledger.md
   - title: "References"
     entries:
@@ -91,11 +95,11 @@ groups:
         order: 4
       - stem: ref
         summary: "Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback"
-        order: 19
+        order: 20
         reader: guides/save-link-to-reading-queue.md
       - stem: ref-jobs
         summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
-        order: 20
+        order: 21
         reader: guides/recover-reference-job.md
   - title: "Vault"
     entries:
@@ -105,5 +109,5 @@ groups:
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 28
+        order: 29
         reader: guides/sync-vault-across-machines.md

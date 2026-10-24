@@ -271,6 +271,27 @@ Examples:
 See docs/stats.md for the catalog, JSON contract, and display rules.
 Run 'bob stats <command> --help' for more information on a command.";
 
+const THEMES_MEMBERS: &[Member] = &[Member {
+    name: "list",
+    about: "List remembered Pomodoro themes (default)",
+    leaf: Leaf {
+        native_command: NativeCommand::ThemesList,
+        script_command: None,
+    },
+}];
+
+const THEMES_AFTER_HELP: &str = "\
+Bare `bob themes` runs the read-only list.
+
+Examples:
+  bob themes                   Visible themes from the last 90 days
+  bob themes -q fix -f json    Rank FIX before FIXES as JSON
+  bob themes -a -F             Every theme, rebuilt from daily notes
+  bob themes -H                Hidden themes only
+
+See docs/pomodoro-themes.md for identity, cache, hue, and JSON.
+Run 'bob themes <command> --help' for more information on a command.";
+
 const GROUP_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -428,6 +449,20 @@ const SUBCOMMANDS: &[Subcommand] = &[
             ),
             after_help: STATS_AFTER_HELP,
             usage: "bob stats [COMMAND]",
+        }),
+    },
+    Subcommand {
+        name: "themes",
+        about: "List remembered Pomodoro themes and their stable hues",
+        section: Section::DailyWorkflow,
+        target: Target::Group(Group {
+            members: THEMES_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "The command is read-only. Bare `bob themes` runs list.",
+            ),
+            after_help: THEMES_AFTER_HELP,
+            usage: "bob themes [COMMAND]",
         }),
     },
     Subcommand {
@@ -1006,6 +1041,7 @@ Examples:
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
   bob stats                         Glance at derived daily metrics
+  bob themes                        List recently used Pomodoro themes
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status
@@ -1606,6 +1642,7 @@ mod tests {
             NativeCommand::StatsMetrics,
             NativeCommand::StatsShow,
             NativeCommand::TaskStatusHooks,
+            NativeCommand::ThemesList,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,
         ];

@@ -10,7 +10,7 @@ from bob_docs.gen_contracts import check_or_generate, generate_contracts
 from bob_docs.yaml_tools import dump_yaml, load_yaml
 
 ROOT = Path(__file__).resolve().parents[3]
-README_TABLE_SHA256 = "9b88cf620b6e3093fd003df7b57691cea94d91bb715d3401d679788800429676"
+README_TABLE_SHA256 = "f9f812711a40071e30bb11c1f7a10564926b00f45d430975ce9779ea2af8e149"
 
 
 def _generated_region(text: str, name: str) -> str:
@@ -33,7 +33,7 @@ def _nav_pages(nav: list[object]) -> list[str]:
 
 def test_current_registry_and_generated_nav_are_complete_and_unique() -> None:
     registry = load_contract_registry(ROOT)
-    assert len(registry.entries) == 28
+    assert len(registry.entries) == 29
     assert sum(entry.historical for entry in registry.entries) == 1
     assert next(
         entry for entry in registry.entries if entry.stem == "obsidian-sync-exclusions"

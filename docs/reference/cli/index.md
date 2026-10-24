@@ -24,6 +24,8 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob stats metrics`](stats.md#bob-stats-metrics) | List metric ids, kinds, and definitions |
 | [`bob stats overview`](stats.md#bob-stats-overview) | Show the weekly glance (default) |
 | [`bob stats show`](stats.md#bob-stats-show) | Show one or more metrics in detail |
+| [`bob themes`](themes.md) | List remembered Pomodoro themes and their stable hues |
+| [`bob themes list`](themes.md#bob-themes-list) | List remembered Pomodoro themes (default) |
 
 ## Tasks and projects
 
@@ -99,6 +101,7 @@ Daily workflow:
   pomodoro    Show Pomodoro status, print the tmux line, or notify on completion
   ready       Show each area/project note's Ready lane against the per-note cap
   stats       Show derived daily metrics as a glance, detail chart, or catalog
+  themes      List remembered Pomodoro themes and their stable hues
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
@@ -148,6 +151,7 @@ Examples:
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
   bob stats                         Glance at derived daily metrics
+  bob themes                        List recently used Pomodoro themes
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status

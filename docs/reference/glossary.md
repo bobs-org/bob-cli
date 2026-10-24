@@ -114,7 +114,7 @@ current Pomodoro at a glance. It is a read-only consumer of
 polls every 60 seconds (15 seconds without the file watcher), on wake and unlock, from
 its Refresh menu item, and once when the countdown crosses zero; it ticks the countdown
 locally in between and never writes the vault. A running session reads
-`THEME (50m) · 🍅 12:34`, where THEME is the Pomodoro's ` — NAME`. An unnamed
+`NAME (50m) · 🍅 12:34`, where NAME is the Pomodoro's ` — NAME`. An unnamed
 session with linked tasks shows its derived home label (`sase (50m) · 🍅 12:34`);
 `UNTITLED` only appears when there is nothing to derive. Once overdue, a `→ HH:MM` stop time joins the title and the `+MM:SS` count
 turns red; from ten minutes overdue the count becomes an `OVERDUE` badge flashing red
@@ -156,6 +156,18 @@ into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily 
 ### Pomodoro {#pomodoro}
 
 A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one work session. Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
+
+### Pomodoro Theme {#pomodoro-theme}
+
+*Aliases: theme.*
+
+One `+`-separated component of a [Pomodoro](#pomodoro)'s ` — NAME` suffix, keyed by collapsed
+lowercase spelling and displayed in the most recent authored form. `— BOB + DECKS` is
+one name with two themes. The catalog is derived from canonical daily notes plus
+`.bob/themes/<host>.jsonl`; `bob themes` lists it. Hiding removes a theme from history
+suggestions only. Each theme wears a stable hashed or area hue, drawn as a tint or
+rounded swatch, never an area's ● dot. Not a Pomodoro home, an Obsidian appearance
+theme, or `(unnamed)`. See `docs/pomodoro-themes.md`.
 
 ### Project Note {#project-note}
 

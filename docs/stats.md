@@ -279,8 +279,11 @@ Every metric yields one value per date: an integer `value` (or `null`), an
 optional ratio `num`/`den` in basis points, a quality, an optional non-ok
 reason, and dimension parts (`area`, `project`, `theme`, `kind`, `note`,
 `tier`, `outcome`, `met`/`missed`). Pomodoro and task metrics add `area` and
-`project` homes from the shared resolver in [pomodoro-homes.md](pomodoro-homes.md);
-minutes-mode days also carry `apportioned`, the share of each part that came
+`project` homes from the shared resolver in [pomodoro-homes.md](pomodoro-homes.md).
+The `theme` dimension splits a named session on the same `+` components as
+the plan budget; catalog identity and hues are in
+[pomodoro-themes.md](pomodoro-themes.md). Minutes-mode days also carry
+`apportioned`, the share of each part that came
 from sessions with two or more keys in that dimension. Consumers never
 recalculate a display string, summary, percentage, or delta — the report
 carries them all.

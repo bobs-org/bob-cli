@@ -551,6 +551,43 @@ default stays off until Bryan's acceptance run passes.
 annotations or a conflict dialog (then Plan B, an app-driven "Apply
 now"), or a macOS upgrade breaks file coordination.
 
+## A Pomodoro Theme Is One Name Component {#pomodoro-theme-is-one-component}
+
+**Status:** Accepted
+
+A theme is one + component of a Pomodoro's — NAME tail, keyed by normalize_component, with the catalog derived from canonical daily notes.
+
+**Applies to.** bob-cli, bob-plugins, Bob Mac Capture, the Bob vault.
+
+**Claim.** A Pomodoro **theme** is one `+`-separated component of a named ledger
+entry's ` — NAME` tail. Split with `split_components`. The key is
+`normalize_component` (whitespace collapsed, lowercased). The display name is the
+most recent authored spelling for that key. `— BOB + DECKS` is one Pomodoro name
+with two themes. An unnamed entry, the budget's `(unnamed)` placeholder, a
+Pomodoro home, and an Obsidian appearance theme are not themes. The catalog is
+derived from canonical daily notes `YYYY/YYYYMMDD.md` through
+`capture_pomodoros::scan`, plus the hide/color journal. `bob themes` lists it.
+
+**Why.** Treating the whole ` — NAME` as one theme would hide composites such as
+`BOB + DECKS` from per-component recency, color, and hide. Scanning task text or
+homes would invent history the ledger never recorded. Rejected alternatives:
+
+- **Whole-name identity** — `BOB + DECKS` would be a third theme beside BOB and
+  DECKS, and hide/color could not target one component.
+- **Slug-only keys** — `SASE V18` and `SASE-V18` would collide or split against
+  the plan budget's existing `normalize_component`.
+- **Inferring themes from tasks or homes** — the ledger would stop being the
+  source of truth.
+
+Evidence: `plan:202610/pomodoro_themes.md` PT1–PT2; `docs/pomodoro-themes.md`.
+
+**Cost.** Every consumer splits names the same way. A rename rewrites one
+component across tails, not a whole name. Clients must not scan the vault for
+identity.
+
+**Reopens when.** The plan budget and the catalog disagree on what a component
+is, or unnamed entries need a remembered identity.
+
 ## Projects Block Their Tasks From The ^prj Line {#projects-block-from-prj-line}
 
 **Status:** Superseded in part by [Sub-projects Inherit Project Blocking](#subprojects-inherit-project-blocking), [Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites](#capture-link-drops-blocking-deps)
@@ -1498,6 +1535,107 @@ Superseded in part: Next and In Progress are no longer derived — see
 removal rationale are retired by [Task Dependencies Are Links On One Depends-On Line](#task-deps-are-depends-on-links);
 the Blocked rule stands. The Blocked rule also inherits from the project —
 see [Projects Block Their Tasks From The ^prj Line](#projects-block-from-prj-line).
+
+## Hiding A Theme Removes It From Recent Only {#theme-hide-is-recent-only}
+
+**Status:** Accepted
+
+Hiding a theme removes it from Recent suggestion rows only; today, Stats, colors, and typing the name stay unchanged, and using it never unhides it.
+
+**Applies to.** bob-cli `bob themes`, capture-complete Recent rows, Obsidian
+and Mac Pomodoro-name menus.
+
+**Claim.** Hiding a theme removes it from **Recent** rows only. Today's ledger
+rows, typing the name, history, Stats, and colors are unaffected. Using a hidden
+name never unhides it. `bob themes list` omits hidden themes by default; `-H`
+lists only them; `-a` lists every known theme and flags hidden ones.
+
+**Why.** Deleting a theme from the catalog would rewrite history. Auto-unhiding
+on use would fight the hide gesture the next morning. Muting colors on hide
+would mix a suggestion preference with the hue rule. Rejected alternatives:
+
+- **Delete from the catalog** — Stats and old daily notes would lose the name.
+- **Unhide on next use** — a hidden name typed to start a Pomodoro would bounce
+  back into Recent.
+- **Hide also mutes color** — color would stop meaning identity.
+
+Evidence: `plan:202610/pomodoro_themes.md` PT9; `docs/pomodoro-themes.md`.
+
+**Cost.** Hidden themes still occupy Stats and still wear a hue. Menus must
+filter Recent after ranking, not drop the catalog row.
+
+**Reopens when.** Hide should also suppress Stats or color, or using a hidden
+name should be an unhide gesture.
+
+## Theme Hue Is Pin Then Exempt Then Area Then Hash {#theme-hue-is-pin-exempt-area-hash}
+
+**Status:** Accepted
+
+A theme's hue is journal pin, then plan.exempt mute, then top-level area stem, then name hash; clients render the hue Bob reports.
+
+**Applies to.** bob-cli catalog and JSON, Obsidian theme pills, Bob Mac Capture
+swatches, terminal `bob themes` output.
+
+**Claim.** Hue is resolved in order: a journal pin (`hue_source: pin`); else a
+normalized `plan.exempt` key is muted (`hue: null`, `hue_source: exempt`); else
+a key equal to a top-level area note's stem (parent `[[area]]`) wears that
+area's resolved hue (`hue_source: area`); else
+`Hue::ALL[fnv1a32(key) % 8]` (`hue_source: hash`). Rust computes the hue.
+Clients render the `hue` Bob reports and never hash or scan areas themselves.
+Colors are stable, not unique; pins fix recurring collisions.
+
+**Why.** Hash-only identity made JOB and BOB the same magenta, and GTD would
+wear an area orange it does not mean. Unique colors cannot fit an unbounded
+catalog in an eight-slot palette. Rejected alternatives:
+
+- **Hash only, even for area names** — JOB would not wear aqua.
+- **A unique color per theme** — the palette is eight slots.
+- **Clients hash independently** — JS, Swift, and Lua would drift.
+
+Evidence: `plan:202610/pomodoro_themes.md` PT5; epic decision `area_hues=area`;
+`docs/pomodoro-themes.md`.
+
+**Cost.** Recurring collisions need an explicit pin. Exempt keys such as GTD
+are muted even when an area note shares the stem. Every client must wait for
+Bob's `hue` field.
+
+**Reopens when.** The palette grows, area notes stop being the hue source for
+matching stems, or a client needs a hue before Bob can answer.
+
+## Theme Preferences Live In A Per-Host Journal {#theme-prefs-live-in-per-host-journal}
+
+**Status:** Accepted
+
+Hide, unhide, color, and rename events live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is the only writer.
+
+**Applies to.** bob-cli, Bob Mac Capture, Obsidian plugins that hide, pin, or
+rename themes.
+
+**Claim.** Preferences live in `.bob/themes/<host>.jsonl`, one append-only file
+per host inside the vault so Git syncs them. `host` is the same label
+vault-sync uses in commit subjects. Events are `v: 1` `theme.hide`,
+`theme.unhide`, `theme.color` (`hue` is a slot name or `null` to unpin), and
+`theme.rename`. Fold reads every `*.jsonl` file, skips malformed lines with a
+bounded warning, sorts by `(ts, host, path, line)`, and lets the last writer
+win per key. A rename moves the source key's explicit state unless the target
+already has state. bob is the only writer; other clients call bob.
+
+**Why.** Frontmatter on daily notes would mix derived history with preferences.
+A machine-local SQLite file would not sync hide/color across apollo and the
+Mac. A single shared JSON file would lose concurrent host appends. Rejected
+alternatives:
+
+- **Daily-note frontmatter** — every hide would dirty today's ledger.
+- **Machine-local SQLite** — hide on apollo would not reach the Mac.
+- **One shared JSON object** — two hosts writing at once would clobber.
+
+Evidence: `plan:202610/pomodoro_themes.md` PT4; `docs/pomodoro-themes.md`.
+
+**Cost.** Fold must skip malformed lines. Rename is a logged event plus a
+ledger rewrite, not a journal-only alias. Writers serialize through bob.
+
+**Reopens when.** Concurrent host folds mis-order clocks often enough to need
+a vector clock, or preferences must live outside the vault.
 
 ## Today Is Read From The Ledger, Never Written To Tasks {#today-is-read-from-the-ledger}
 

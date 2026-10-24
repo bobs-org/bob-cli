@@ -97,6 +97,7 @@ plugins:
           - plan.md
           - projects.md
           - pomodoro-homes.md
+          - pomodoro-themes.md
           - randomize.md
           - stats.md
           - task-dependencies.md
@@ -198,6 +199,7 @@ nav:
               - "bob pomodoro": reference/cli/pomodoro.md
               - "bob ready": reference/cli/ready.md
               - "bob stats": reference/cli/stats.md
+              - "bob themes": reference/cli/themes.md
           - "Tasks and projects":
               - "bob projects": reference/cli/projects.md
               - "bob task": reference/cli/task.md
@@ -279,6 +281,7 @@ nav:
               - "Plan budget, Today, and lanes": plan.md
               - "Project Task Sync": projects.md
               - "Pomodoro homes": pomodoro-homes.md
+              - "Pomodoro themes": pomodoro-themes.md
               - "Randomize": randomize.md
               - "Daily Stats": stats.md
               - "Task dependency links": task-dependencies.md

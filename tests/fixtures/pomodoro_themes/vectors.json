@@ -1,0 +1,333 @@
+{
+  "components": [
+    {
+      "name": "single",
+      "input": "BOB",
+      "expected": [{ "raw": "BOB", "key": "bob" }]
+    },
+    {
+      "name": "composite",
+      "input": "BOB + DECKS",
+      "expected": [
+        { "raw": "BOB", "key": "bob" },
+        { "raw": "DECKS", "key": "decks" }
+      ]
+    },
+    {
+      "name": "spaces-and-case",
+      "input": "Deep  Work",
+      "expected": [{ "raw": "Deep  Work", "key": "deep work" }]
+    },
+    {
+      "name": "hyphen-stays",
+      "input": "SASE-V18",
+      "expected": [{ "raw": "SASE-V18", "key": "sase-v18" }]
+    },
+    {
+      "name": "spaced-version",
+      "input": "SASE V18",
+      "expected": [{ "raw": "SASE V18", "key": "sase v18" }]
+    },
+    {
+      "name": "empty-plus-dropped",
+      "input": "GTD + + BOB",
+      "expected": [
+        { "raw": "GTD", "key": "gtd" },
+        { "raw": "BOB", "key": "bob" }
+      ]
+    }
+  ],
+  "hue": [
+    {
+      "name": "job-is-area-aqua",
+      "key": "job",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "job": "aqua", "dev": "blue", "love": "yellow", "gtd": "orange" },
+      "expected": { "hue": "aqua", "hue_source": "area" }
+    },
+    {
+      "name": "dev-is-area-blue",
+      "key": "dev",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "job": "aqua", "dev": "blue", "love": "yellow" },
+      "expected": { "hue": "blue", "hue_source": "area" }
+    },
+    {
+      "name": "love-is-area-yellow",
+      "key": "love",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "love": "yellow" },
+      "expected": { "hue": "yellow", "hue_source": "area" }
+    },
+    {
+      "name": "gtd-is-exempt-muted",
+      "key": "gtd",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "gtd": "orange" },
+      "expected": { "hue": null, "hue_source": "exempt" }
+    },
+    {
+      "name": "pin-wins-over-hash",
+      "key": "blog",
+      "pin": "red",
+      "exempt": ["gtd"],
+      "areas": {},
+      "expected": { "hue": "red", "hue_source": "pin" }
+    },
+    {
+      "name": "pin-wins-over-exempt",
+      "key": "gtd",
+      "pin": "green",
+      "exempt": ["gtd"],
+      "areas": { "gtd": "orange" },
+      "expected": { "hue": "green", "hue_source": "pin" }
+    },
+    {
+      "name": "pin-wins-over-area",
+      "key": "job",
+      "pin": "red",
+      "exempt": ["gtd"],
+      "areas": { "job": "aqua" },
+      "expected": { "hue": "red", "hue_source": "pin" }
+    },
+    {
+      "name": "bob-hash-magenta",
+      "key": "bob",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": {},
+      "expected": { "hue": "magenta", "hue_source": "hash" }
+    },
+    {
+      "name": "blog-hash-orange",
+      "key": "blog",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": {},
+      "expected": { "hue": "orange", "hue_source": "hash" }
+    }
+  ],
+  "fold": [
+    {
+      "name": "last-writer-wins-hide",
+      "events": [
+        {
+          "ts": "2026-10-24T09:00:00-04:00",
+          "host": "mac",
+          "path": "mac.jsonl",
+          "line": 1,
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.hide\",\"key\":\"books\",\"name\":\"BOOKS\",\"via\":\"bob-mac-capture\"}"
+        },
+        {
+          "ts": "2026-10-24T10:00:00-04:00",
+          "host": "apollo",
+          "path": "apollo.jsonl",
+          "line": 1,
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T10:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.unhide\",\"key\":\"books\",\"name\":\"BOOKS\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected": { "books": { "hidden": false, "pin": null } }
+    },
+    {
+      "name": "pin-last-writer-wins",
+      "events": [
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":\"red\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:01:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":\"blue\",\"via\":\"bob-mac-capture\"}"
+        }
+      ],
+      "expected": { "blog": { "hidden": false, "pin": "blue" } }
+    },
+    {
+      "name": "unpin-with-null-hue",
+      "events": [
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":\"red\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:02:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":null,\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected": { "blog": { "hidden": false, "pin": null } }
+    },
+    {
+      "name": "rename-moves-hidden-state",
+      "events": [
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.hide\",\"key\":\"fixes\",\"name\":\"FIXES\",\"via\":\"bob-mac-capture\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T10:02:11-04:00\",\"host\":\"apollo\",\"kind\":\"theme.rename\",\"from\":\"fixes\",\"to\":\"fix\",\"from_name\":\"FIXES\",\"to_name\":\"FIX\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected": { "fix": { "hidden": true, "pin": null } }
+    },
+    {
+      "name": "rename-does-not-clobber-target-state",
+      "events": [
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.hide\",\"key\":\"fixes\",\"name\":\"FIXES\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:30:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.color\",\"key\":\"fix\",\"name\":\"FIX\",\"hue\":\"green\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T10:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.rename\",\"from\":\"fixes\",\"to\":\"fix\",\"from_name\":\"FIXES\",\"to_name\":\"FIX\",\"via\":\"bob-cli\"}"
+        }
+      ],
+      "expected": {
+        "fix": { "hidden": false, "pin": "green" },
+        "fixes": { "hidden": true, "pin": null }
+      }
+    },
+    {
+      "name": "events-after-rename-stay-on-old-key",
+      "events": [
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.rename\",\"from\":\"fixes\",\"to\":\"fix\",\"from_name\":\"FIXES\",\"to_name\":\"FIX\",\"via\":\"bob-cli\"}"
+        },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T11:00:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.hide\",\"key\":\"fixes\",\"name\":\"FIXES\",\"via\":\"bob-mac-capture\"}"
+        }
+      ],
+      "expected": { "fixes": { "hidden": true, "pin": null } }
+    },
+    {
+      "name": "malformed-lines-are-skipped",
+      "events": [
+        { "raw": "not-json" },
+        {
+          "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.hide\",\"key\":\"books\",\"name\":\"BOOKS\",\"via\":\"bob-cli\"}"
+        },
+        { "raw": "{\"v\":2,\"kind\":\"theme.hide\",\"key\":\"nope\"}" }
+      ],
+      "expected": { "books": { "hidden": true, "pin": null } }
+    }
+  ],
+  "rank": [
+    {
+      "name": "fix-before-fixes",
+      "query": "fix",
+      "exclusions": [],
+      "themes": [
+        {
+          "key": "fixes",
+          "name": "FIXES",
+          "last_used": "2026-10-23",
+          "days_used": 8
+        },
+        {
+          "key": "fix",
+          "name": "FIX",
+          "last_used": "2026-10-20",
+          "days_used": 3
+        },
+        {
+          "key": "bob",
+          "name": "BOB",
+          "last_used": "2026-10-24",
+          "days_used": 26
+        }
+      ],
+      "expected": ["FIX", "FIXES"]
+    },
+    {
+      "name": "prefix-then-substring",
+      "query": "sa",
+      "exclusions": [],
+      "themes": [
+        {
+          "key": "sase v18",
+          "name": "SASE V18",
+          "last_used": "2026-10-21",
+          "days_used": 12
+        },
+        {
+          "key": "sase",
+          "name": "SASE",
+          "last_used": "2026-10-22",
+          "days_used": 21
+        },
+        {
+          "key": "misc",
+          "name": "MISC",
+          "last_used": "2026-10-24",
+          "days_used": 4
+        }
+      ],
+      "expected": ["SASE", "SASE V18"]
+    },
+    {
+      "name": "quoted-key-prefix",
+      "query": "SASE V",
+      "exclusions": [],
+      "themes": [
+        {
+          "key": "sase v18",
+          "name": "SASE V18",
+          "last_used": "2026-10-21",
+          "days_used": 12
+        },
+        {
+          "key": "sase",
+          "name": "SASE",
+          "last_used": "2026-10-24",
+          "days_used": 21
+        }
+      ],
+      "expected": ["SASE V18"]
+    },
+    {
+      "name": "exclusions-drop-today-components",
+      "query": "bo",
+      "exclusions": ["bob"],
+      "themes": [
+        {
+          "key": "bob",
+          "name": "BOB",
+          "last_used": "2026-10-24",
+          "days_used": 26
+        },
+        {
+          "key": "books",
+          "name": "BOOKS",
+          "last_used": "2026-10-21",
+          "days_used": 3
+        }
+      ],
+      "expected": ["BOOKS"]
+    },
+    {
+      "name": "recent-tie-breaks-on-days-then-name",
+      "query": "",
+      "exclusions": [],
+      "themes": [
+        {
+          "key": "alpha",
+          "name": "ALPHA",
+          "last_used": "2026-10-24",
+          "days_used": 2
+        },
+        {
+          "key": "beta",
+          "name": "BETA",
+          "last_used": "2026-10-24",
+          "days_used": 5
+        },
+        {
+          "key": "gamma",
+          "name": "GAMMA",
+          "last_used": "2026-10-20",
+          "days_used": 9
+        }
+      ],
+      "expected": ["BETA", "ALPHA", "GAMMA"]
+    }
+  ]
+}

@@ -23,4 +23,5 @@ mod stats;
 mod support;
 mod task_move;
 mod task_status_hooks;
+mod themes;
 mod vault_sync;

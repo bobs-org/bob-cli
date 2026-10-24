@@ -215,6 +215,7 @@ walk in PRE or POST in those places, even when recurring; resolve them by
 completion. Hidden, blocked, and future-scheduled tasks stay out.
 
 `bob stats` is a separate read-only glance at derived daily metrics.
+`bob themes` lists remembered Pomodoro names and their stable hues.
 
 Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.

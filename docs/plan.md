@@ -51,7 +51,8 @@ links too.
 The number of distinct non-exempt components across open entries. An
 **unnamed** open entry counts as one theme, shown as `(unnamed)`,
 but only when it holds at least one counted link. An empty `()`
-placeholder never counts.
+placeholder never counts. The remembered catalog, hues, hide state, and
+`bob themes` command live in [Pomodoro themes](pomodoro-themes.md).
 
 ## Links
 

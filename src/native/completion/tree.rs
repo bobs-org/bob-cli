@@ -111,6 +111,9 @@ impl NativeCommand {
                 crate::native::stats::cli::show_command()
             }
             NativeCommand::TaskMove => crate::native::task_move::build_cli(),
+            NativeCommand::ThemesList => {
+                crate::native::pomodoro_themes::cli::build_cli()
+            }
             NativeCommand::TaskStatusHooks => {
                 crate::native::task_status_hooks::build_cli()
             }
