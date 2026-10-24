@@ -144,13 +144,15 @@ fn pomodoro_name_completion_works_without_a_block_id() {
     assert_eq!(candidates[0].name.as_deref(), Some("BUGS"));
     assert!(!candidates[0].requires_name);
     assert!(!candidates[0].creates_pomodoro);
-    assert!(candidates[1].requires_name);
-    assert!(!candidates[1].creates_pomodoro);
+    assert_eq!(candidates[1].name.as_deref(), Some("BU"));
+    assert!(candidates[1].creates_pomodoro);
+    assert_eq!(candidates[1].replacement, "\"BU\"");
+    assert!(candidates[2].requires_name);
+    assert!(!candidates[2].creates_pomodoro);
 }
 
 #[test]
-fn pomodoro_name_completion_offers_creation_before_substring_and_nameable_rows()
-{
+fn pomodoro_name_completion_keeps_today_before_creation_and_utilities() {
     let scan = capture_pomodoros::scan(concat!(
         "## Pomodoros\n",
         "- [ ] (0900-0930) — MEMORY\n",
@@ -178,16 +180,16 @@ fn pomodoro_name_completion_offers_creation_before_substring_and_nameable_rows()
     assert!(completed_only[0].pomodoro_ref.is_none());
 
     let substring_only = pomodoro_name_candidates_from_scan(&scan, "work");
-    assert_eq!(substring_only[0].replacement, "work");
-    assert_eq!(substring_only[0].name.as_deref(), Some("WORK"));
-    assert!(substring_only[0].creates_pomodoro);
-    assert_eq!(substring_only[1].replacement, "network");
-    assert!(!substring_only[1].creates_pomodoro);
+    assert_eq!(substring_only[0].replacement, "network");
+    assert!(!substring_only[0].creates_pomodoro);
+    assert_eq!(substring_only[1].replacement, "work");
+    assert_eq!(substring_only[1].name.as_deref(), Some("WORK"));
+    assert!(substring_only[1].creates_pomodoro);
     assert!(substring_only[2].requires_name);
 }
 
 #[test]
-fn pomodoro_name_completion_suppresses_creation_for_open_name_matches() {
+fn pomodoro_name_completion_suppresses_creation_only_for_exact_open_names() {
     let scan = capture_pomodoros::scan(concat!(
         "## Pomodoros\n",
         "- [ ] (0900-0930) — MEMORY\n",
@@ -195,7 +197,7 @@ fn pomodoro_name_completion_suppresses_creation_for_open_name_matches() {
         "- [ ] ()\n",
     ));
 
-    for query in ["memory", "mem", "MEMORY"] {
+    for query in ["memory", "MEMORY"] {
         let candidates = pomodoro_name_candidates_from_scan(&scan, query);
         assert!(
             candidates.iter().all(|row| !row.creates_pomodoro),
@@ -383,14 +385,14 @@ fn pomodoro_start_name_filters_and_creates_by_query() {
         .iter()
         .map(|candidate| candidate.replacement.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(prefix_rows, vec!["deep-work", ""]);
+    assert_eq!(prefix_rows, vec!["deep-work", "\"DE\"", ""]);
 
     let completed = pomodoro_start_name_candidates_from_scan(&scan, "pl");
     let completed_rows = completed
         .iter()
         .map(|candidate| candidate.replacement.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(completed_rows, vec!["plan", ""]);
+    assert_eq!(completed_rows, vec!["plan", "\"PL\"", ""]);
     assert!(completed[0].creates_pomodoro);
     assert_eq!(completed[0].state, PomodoroState::Completed);
 

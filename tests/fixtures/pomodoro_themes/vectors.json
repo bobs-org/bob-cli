@@ -439,5 +439,488 @@
       ],
       "expected": ["THEMA", "THEMES"]
     }
+  ],
+  "menu": [
+    {
+      "name": "today-prefix-create-substring",
+      "draft": "=#bo",
+      "today": [
+        "- [ ] () — ROBOT"
+      ],
+      "history": {
+        "2026-10-23": [
+          "BOB",
+          "BOOKS",
+          "ROBOTICS"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "ROBOT",
+          "replacement": "robot"
+        },
+        {
+          "name": "BOB",
+          "replacement": "bob",
+          "origin": "history"
+        },
+        {
+          "name": "BOOKS",
+          "replacement": "books",
+          "origin": "history"
+        },
+        {
+          "name": "BO",
+          "replacement": "bo",
+          "creates_pomodoro": true
+        },
+        {
+          "name": "ROBOTICS",
+          "replacement": "robotics",
+          "origin": "history"
+        }
+      ]
+    },
+    {
+      "name": "prefix-shadowing",
+      "draft": "=#sase",
+      "today": [
+        "- [ ] () — SASE V18"
+      ],
+      "history": {
+        "2026-10-23": [
+          "SASE"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "SASE V18",
+          "replacement": "sase-v18"
+        },
+        {
+          "name": "SASE",
+          "replacement": "\"SASE\"",
+          "origin": "history"
+        }
+      ]
+    },
+    {
+      "name": "again-prefix-shadowing",
+      "draft": "=#sase",
+      "today": [
+        "- [x] () — SASE",
+        "- [ ] () — SASE V18"
+      ],
+      "history": {},
+      "hidden": [],
+      "expected": [
+        {
+          "name": "SASE V18",
+          "replacement": "sase-v18"
+        },
+        {
+          "name": "SASE",
+          "replacement": "\"SASE\"",
+          "creates_pomodoro": true,
+          "state": "completed"
+        }
+      ]
+    },
+    {
+      "name": "hidden-exact",
+      "draft": "=#fixes",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "FIXES",
+          "FIX"
+        ]
+      },
+      "hidden": [
+        "fixes"
+      ],
+      "expected": [
+        {
+          "name": "FIXES",
+          "replacement": "fixes",
+          "hidden": true,
+          "similar_to": [
+            "FIX"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "completed-link-context",
+      "draft": "@inbox_t:foo1#bob",
+      "today": [
+        "- [x] () — BOB"
+      ],
+      "history": {},
+      "hidden": [],
+      "expected": [
+        {
+          "name": "BOB",
+          "replacement": "bob",
+          "origin": "history",
+          "last_used": "2026-10-24"
+        }
+      ]
+    },
+    {
+      "name": "completed-start-context",
+      "draft": "=#bob",
+      "today": [
+        "- [x] () — BOB"
+      ],
+      "history": {},
+      "hidden": [],
+      "expected": [
+        {
+          "name": "BOB",
+          "replacement": "bob",
+          "creates_pomodoro": true,
+          "state": "completed"
+        }
+      ]
+    },
+    {
+      "name": "empty-query-cap",
+      "draft": "=#",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E",
+          "F",
+          "G"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "A",
+          "replacement": "a",
+          "origin": "history"
+        },
+        {
+          "name": "B",
+          "replacement": "b",
+          "origin": "history"
+        },
+        {
+          "name": "C",
+          "replacement": "c",
+          "origin": "history"
+        },
+        {
+          "name": "D",
+          "replacement": "d",
+          "origin": "history"
+        },
+        {
+          "name": "E",
+          "replacement": "e",
+          "origin": "history"
+        }
+      ]
+    },
+    {
+      "name": "nonempty-query-cap",
+      "draft": "=#theme",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "THEME0",
+          "THEME1",
+          "THEME2",
+          "THEME3",
+          "THEME4",
+          "THEME5",
+          "THEME6",
+          "THEME7",
+          "THEME8",
+          "THEME9",
+          "THEME10",
+          "THEME11",
+          "THEME12",
+          "THEME13",
+          "THEME14"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "THEME0",
+          "replacement": "theme0",
+          "origin": "history"
+        },
+        {
+          "name": "THEME1",
+          "replacement": "theme1",
+          "origin": "history"
+        },
+        {
+          "name": "THEME10",
+          "replacement": "theme10",
+          "origin": "history"
+        },
+        {
+          "name": "THEME11",
+          "replacement": "theme11",
+          "origin": "history"
+        },
+        {
+          "name": "THEME12",
+          "replacement": "theme12",
+          "origin": "history"
+        },
+        {
+          "name": "THEME13",
+          "replacement": "theme13",
+          "origin": "history"
+        },
+        {
+          "name": "THEME14",
+          "replacement": "theme14",
+          "origin": "history"
+        },
+        {
+          "name": "THEME2",
+          "replacement": "theme2",
+          "origin": "history"
+        },
+        {
+          "name": "THEME3",
+          "replacement": "theme3",
+          "origin": "history"
+        },
+        {
+          "name": "THEME4",
+          "replacement": "theme4",
+          "origin": "history"
+        },
+        {
+          "name": "THEME5",
+          "replacement": "theme5",
+          "origin": "history"
+        },
+        {
+          "name": "THEME6",
+          "replacement": "theme6",
+          "origin": "history"
+        },
+        {
+          "name": "THEME",
+          "replacement": "theme",
+          "creates_pomodoro": true
+        }
+      ]
+    },
+    {
+      "name": "create-before-utilities",
+      "draft": "=#zzz",
+      "today": [
+        "- [ ] (0900-0930) — RUN",
+        "- [ ] ()"
+      ],
+      "history": {
+        "2026-10-23": [
+          "BOB"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "ZZZ",
+          "replacement": "zzz",
+          "creates_pomodoro": true
+        },
+        {
+          "name": null,
+          "replacement": "",
+          "requires_name": true
+        },
+        {
+          "name": "RUN",
+          "replacement": "run"
+        }
+      ]
+    },
+    {
+      "name": "today-component-exclusion-before-query",
+      "draft": "=#decks",
+      "today": [
+        "- [ ] () — BOB + DECKS"
+      ],
+      "history": {
+        "2026-10-23": [
+          "DECKS",
+          "BOB"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "BOB + DECKS",
+          "replacement": "bob-+-decks"
+        },
+        {
+          "name": "DECKS",
+          "replacement": "decks"
+        }
+      ]
+    },
+    {
+      "name": "partial-literal-key-prefix",
+      "draft": "=#\"SASE V",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "SASE V18",
+          "SASE-V18"
+        ]
+      },
+      "hidden": [],
+      "expected": [
+        {
+          "name": "SASE V18",
+          "replacement": "\"SASE V18\"",
+          "origin": "history"
+        },
+        {
+          "name": "SASE V",
+          "replacement": "\"SASE V\""
+        }
+      ]
+    },
+    {
+      "name": "hidden-today-stays",
+      "draft": "=#bob",
+      "today": [
+        "- [ ] () — BOB"
+      ],
+      "history": {
+        "2026-10-23": [
+          "BOB"
+        ]
+      },
+      "hidden": [
+        "bob"
+      ],
+      "expected": [
+        {
+          "name": "BOB",
+          "replacement": "bob"
+        }
+      ]
+    },
+    {
+      "name": "literal-distinguishes-today-slug-collision",
+      "draft": "=#\"SASE-V18",
+      "today": [
+        "- [ ] () — SASE V18",
+        "- [ ] () — SASE-V18"
+      ],
+      "history": {},
+      "hidden": [],
+      "expected": [
+        {
+          "name": "SASE-V18",
+          "replacement": "\"SASE-V18\""
+        }
+      ]
+    }
+  ],
+  "literal": [
+    {
+      "name": "deep-work-0",
+      "theme": "DEEP WORK",
+      "today": [],
+      "draft": "=#deep",
+      "replacement": "\"DEEP WORK\""
+    },
+    {
+      "name": "sase-v18-1",
+      "theme": "SASE V18",
+      "today": [],
+      "draft": "=#sase",
+      "replacement": "\"SASE V18\""
+    },
+    {
+      "name": "bob-2",
+      "theme": "BOB",
+      "today": [
+        "- [ ] () — BOB BUILD"
+      ],
+      "draft": "=#bo",
+      "replacement": "\"BOB\""
+    },
+    {
+      "name": "bob-3",
+      "theme": "BOB",
+      "today": [
+        "- [ ] () — BOB BUILD"
+      ],
+      "draft": "=bo",
+      "replacement": "#\"BOB\""
+    },
+    {
+      "name": "bob-4",
+      "theme": "BOB",
+      "today": [],
+      "draft": "=bo",
+      "replacement": "bob"
+    },
+    {
+      "name": "2fa-5",
+      "theme": "2FA",
+      "today": [],
+      "draft": "=fa",
+      "replacement": "#2fa"
+    },
+    {
+      "name": "sase.md-6",
+      "theme": "SASE.MD",
+      "today": [],
+      "draft": "=#sase",
+      "replacement": "sase.md"
+    },
+    {
+      "name": "fix-apollo-7",
+      "theme": "FIX-APOLLO",
+      "today": [],
+      "draft": "=#fix",
+      "replacement": "fix-apollo"
+    },
+    {
+      "name": "sase-v18-8",
+      "theme": "SASE V18",
+      "today": [],
+      "draft": "@inbox_t:foo1#sase",
+      "replacement": "\"SASE V18\""
+    },
+    {
+      "name": "deep-work-9",
+      "theme": "DEEP WORK",
+      "today": [],
+      "draft": "=#“DEEP",
+      "replacement": "\"DEEP WORK\""
+    },
+    {
+      "name": "again-prefix-shadowing",
+      "theme": "SASE",
+      "today": [
+        "- [x] () — SASE",
+        "- [ ] () — SASE V18"
+      ],
+      "draft": "=#sase",
+      "replacement": "\"SASE\""
+    }
   ]
 }

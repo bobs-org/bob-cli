@@ -355,6 +355,29 @@ fn catalog_loads_scratch_vault_and_applies_area_hue() {
         cached.get("bob").map(|theme| theme.entries),
         catalog.get("bob").map(|theme| theme.entries)
     );
+
+    fs::write(
+        vault.join("new.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: red\n---\n",
+    )
+    .unwrap();
+    let completion = Catalog::load_for_completion(
+        vault,
+        today,
+        BTreeSet::from(["new".to_string()]),
+        None,
+    )
+    .unwrap();
+    for theme in catalog.records() {
+        assert_eq!(
+            completion.theme_ref(&theme.key, &theme.name),
+            catalog.theme_ref(&theme.key, &theme.name)
+        );
+    }
+    let new = completion.theme_ref("new", "NEW");
+    assert_eq!(new.hue, Some(Hue::Red));
+    assert_eq!(new.hue_source, HueSource::Area);
+    assert!(!new.known);
 }
 
 #[test]
@@ -430,6 +453,48 @@ fn theme_refs_for_unknown_name_are_marked_unknown() {
     assert!(!refs[0].known);
     assert_eq!(refs[0].key, "brand new");
     assert_eq!(refs[0].hue_source, HueSource::Hash);
+}
+
+#[test]
+fn completion_cache_keeps_today_live_and_obeys_catalog_invalidation() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path();
+    let cache = tempfile::tempdir().unwrap();
+    let _guard = isolate_catalog_env(cache.path());
+    let today = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    let past = vault.join("2026/20261023.md");
+    let live = vault.join("2026/20261024.md");
+    fs::write(&past, "## Pomodoros\n- [x] () — BOB\n").unwrap();
+    fs::write(&live, "## Pomodoros\n").unwrap();
+    let load = || {
+        Catalog::load_for_completion(vault, today, BTreeSet::new(), None)
+            .unwrap()
+    };
+    assert!(load().get("bob").is_some());
+    fs::write(&live, "## Pomodoros\n- [ ] () — NEW\n").unwrap();
+    let warm = load();
+    assert!(warm.get("new").is_some());
+    assert!(warm.get("bob").is_some());
+    fs::write(&past, "## Pomodoros\n- [x] () — RENAMED\n").unwrap();
+    assert!(load().get("bob").is_some(), "past edit waits for sweep");
+    Catalog::load(vault, today, true).unwrap();
+    assert!(
+        load().get("renamed").is_some(),
+        "fresh refresh invalidates warm view"
+    );
+    assert!(load().get("bob").is_none());
+    fs::write(&past, "## Pomodoros\n- [x] () — REBUILT\n").unwrap();
+    fs::write(super::cache::cache_path(), "corrupt").unwrap();
+    assert!(
+        load().get("rebuilt").is_some(),
+        "corrupt source cache rebuilds"
+    );
+    super::cache::invalidate_vault(vault);
+    assert!(
+        load().get("rebuilt").is_some(),
+        "rename invalidation rebuilds"
+    );
 }
 
 #[test]

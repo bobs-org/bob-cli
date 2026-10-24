@@ -520,11 +520,25 @@ fn completion_is_read_only() {
         "completion modified the vault"
     );
     assert!(!git_log.exists(), "completion spawned git");
-    for directory in [&xdg_data, &xdg_cache, &xdg_config, &home] {
+    for directory in [&xdg_data, &xdg_config, &home] {
         assert!(
             is_empty_dir(directory),
             "completion wrote to {}",
             directory.display()
+        );
+    }
+    // PT3 permits disposable theme indexes, while completion must still leave
+    // the vault, preferences, and unrelated cache namespaces untouched.
+    for path in tree_hashes(&xdg_cache).keys() {
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            path.parent() == Some(Path::new("bob-cli/themes"))
+                && (name == "catalog-v1.json"
+                    || name == "known-keys-v1.json"
+                    || (name.starts_with("completion-v1-")
+                        && name.ends_with(".json"))),
+            "completion wrote unexpected cache file: {}",
+            path.display()
         );
     }
 }

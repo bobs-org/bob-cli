@@ -16,8 +16,8 @@ use super::{
         SCHEMA_VERSION,
     },
     pomodoros::{
-        apply_bare_start_name_replacements, pomodoro_name_candidates,
-        pomodoro_start_name_candidates, running_pomodoro_session,
+        apply_bare_start_name_replacements, pomodoro_candidates,
+        running_pomodoro_session,
     },
 };
 use crate::native::{
@@ -239,12 +239,18 @@ fn build_result_inner(
                 &field.query,
             )?
         }
-        CompletionContext::PomodoroName => {
-            pomodoro_name_candidates(bob_dir, &field.query)?
-        }
-        CompletionContext::PomodoroStartName => {
-            pomodoro_start_name_candidates(bob_dir, &field.query)?
-        }
+        CompletionContext::PomodoroName => pomodoro_candidates(
+            bob_dir,
+            &field.query,
+            false,
+            raw_text[field.replacement.0..].starts_with(['"', '“']),
+        )?,
+        CompletionContext::PomodoroStartName => pomodoro_candidates(
+            bob_dir,
+            &field.query,
+            true,
+            raw_text[field.replacement.0..].starts_with(['"', '“']),
+        )?,
         CompletionContext::ActiveTask => {
             active_task_candidates(bob_dir, &field.query)
         }

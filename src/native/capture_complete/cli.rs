@@ -115,31 +115,32 @@ covers '@route+id#prefix' and a bare '@route+id#', backed by the same \
 scanner as `bob capture-task-sections`; replacement text is the section \
 slug. Pomodoro-name completion covers '@route:id#prefix', a bare \
 '@route:id#', '@route:#prefix', '@route^id+#prefix', and a bare '@route^id+#'; \
-it is backed by `bob \
-capture-pomodoros`, offers only open entries, collapses duplicate named \
-slugs, and keeps nameable rows after named rows even when the query is \
-nonempty. Nameable rows set requires_name and use an empty replacement that \
-updated clients must not insert. When the query is a nonempty valid \
-Pomodoro name that would not select an open exact or prefix match, and \
-today's ledger can uniquely place a new future entry, the first candidate \
-is a create action: creates_pomodoro is true, replacement is the canonical \
-selector, name is the canonical visible name, and ref is omitted. Create \
-rows also preview the plan budget with plan_themes_after and \
-plan_themes_cap (omitted when the daily note or the plan config is \
-unavailable). Accepting \
-that row only canonicalizes the marker; `bob capture` creates the named \
-placeholder later. Exact or prefix open-name matches stay first and do not \
-receive a create row. Empty queries stay the existing discovery list. \
+Today rows come from `bob capture-pomodoros`: link-name completion offers \
+open entries, while start-name completion also offers completed names as \
+`again` rows. Duplicate theme keys collapse without merging distinct names \
+that happen to share a selector slug. Both contexts compose their menu as \
+Today matches, Recent exact/prefix matches, an optional create row, Recent \
+substring matches, then utility rows. Recent comes from canonical daily \
+notes, excludes hidden themes and components already represented by Today, \
+and is capped at five rows for an empty query or twelve otherwise. Hidden \
+themes still work when typed and still appear in Today. An exact Today or \
+Recent match suppresses a separate create row; a prefix match does not.\n\n\
+Recent rows set origin=history, last_used, days_used, and creates_pomodoro. \
+Named rows expose their component themes and hues. A create row may set \
+hidden or similar_to to explain an existing preference or nearby name. \
+Recent, create, and again rows preview the plan budget with plan_themes_after \
+and plan_themes_cap (omitted when the daily note or plan config is unavailable). \
+Replacements preserve the displayed name, using an exact-name quoted literal \
+when a plain selector would change it or select another theme. Partial quoted \
+names match theme-key prefixes; plain names also match slug substrings. \
+Accepting a row edits the draft; `bob capture` performs the eventual write.\n\n\
 Pomodoro-start-name completion covers the name part of a `=<X>#name` named \
-start and the `=<X>#` incomplete state, backed by today's ledger: start \
-rows for planned placeholders (the entry a bare `=` would start carries \
-`next_up`), a create row for a missing name, `again` rows that start a \
-new session named like a completed one, `name it` rows for placeholders \
-that still need a name, and the running entry last. Its new and again rows \
-preview the plan budget with the same `plan_themes_after`/`plan_themes_cap` \
-fields. The `pomodoro_name` context is unchanged. A \
-missing daily note, a missing Pomodoros section, and multiple open timed \
-Pomodoros stay write-free warnings without a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
+start and the `=<X>#` incomplete state. A planned placeholder that a bare \
+`=` would start carries next_up. Nameable utility rows set requires_name \
+and use an empty replacement that clients must not insert; the running entry \
+is last in start-name completion. A missing daily note, a missing Pomodoros \
+section, and multiple open timed Pomodoros stay write-free warnings without \
+a create row. On a `@<route>:<block-id>[#<name>]=<X>` marker the `=<X>` start suffix is \
 never completable: block and Pomodoro-name replacement ranges end before \
 the `=`, a cursor inside the suffix returns an empty success, and accepting \
 a candidate preserves the typed suffix. The `=x[<N>][*<P>][!<M>][~<K>]` close suffix behaves the \

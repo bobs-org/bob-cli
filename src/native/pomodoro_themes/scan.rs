@@ -37,7 +37,12 @@ pub(crate) fn canonical_relative(date: NaiveDate) -> String {
 }
 
 pub(crate) fn scan_contents(contents: &str) -> Vec<FileTheme> {
-    let scan = capture_pomodoros::scan(contents);
+    themes_from_scan(&capture_pomodoros::scan(contents))
+}
+
+pub(crate) fn themes_from_scan(
+    scan: &capture_pomodoros::PomodoroScan,
+) -> Vec<FileTheme> {
     let mut by_key: BTreeMap<String, FileTheme> = BTreeMap::new();
     for entry in &scan.entries {
         let Some(name) = entry.name.as_deref() else {

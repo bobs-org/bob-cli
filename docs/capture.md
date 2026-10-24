@@ -6014,16 +6014,21 @@ whole-item `=name` named start instead completes the name as
 `pomodoro_start_name`, per token inside chains: `=bu|`, `x =bu|`, and `x wired it =bu|` report `pomodoro_start_name` with query `bu` and replacement over the name only, just like `=#bu`; a cursor inside the name part
 completes it, while a cursor on `=<X>` or at the `#` byte itself returns an
 empty success. The name is located through the lexer's recorded offset and marked bare-spelled (e.g. a `bare_name` bool); any candidate whose slug fails `can_spell_bare` gets the replacement `#<slug>`, so accepting it yields a valid `=#2fa` (substring matches matter). A cursor anywhere inside a drop part, including a dangling `~`/`,`, returns an empty success. Near misses complete the same way valid tokens do. The name `replacement` covers only the name part (it ends before `~`), so accepting
-a candidate preserves the typed `=<X>#` and any typed `~<K>` list. Candidates are start-aware, backed
-by today's ledger scan: open untimed placeholders first (with `next_up` on
-today's next future entry), then a create row for a missing name, then
-`again` rows for completed sessions (which start a new session with that
-name), then nameable rows for entries that still need a name
-(`requires_name: true`, never filtered out), and the running timed entry
-last. A completed-only match never also offers a duplicate create row, and
-`again` rows resurface the most recent session first on an empty query. The
-new and again rows carry the plan-budget preview with `plan_themes_after`
-and `plan_themes_cap`. A named-start name field keeps context `pomodoro_start_name` and its
+a candidate preserves the typed `=<X>#` and any typed `~<K>` list. Candidates
+follow [PT7 menu composition](pomodoro-themes.md#pt7-menu-composition):
+matching Today rows first, Recent exact/prefix matches, a create row when no
+Today or Recent name matches exactly, Recent substring matches, then utility
+rows. Today rows keep their existing order: planned placeholders (with
+`next_up` on today's next future entry), then `again` rows for completed
+sessions, most recent first. Utility rows are the unnamed “Name it” entries
+(`requires_name: true`) followed by the running session. They are never
+filtered out, so `=#zzz` still offers creation before those utilities.
+Recent rows exclude hidden themes and components of any Today row before
+query filtering. Empty queries show at most 5 Recent rows; other queries show
+at most 12. New, Recent, and again rows carry `plan_themes_after` and
+`plan_themes_cap`. Recent and again replacements preserve the displayed name:
+a slug that loses spaces or selects another name is replaced with an exact
+quoted literal, including `#` when the input uses a bare start. A named-start name field keeps context `pomodoro_start_name` and its
 candidates when exactly one timed session runs. The object is reported as soon
 as the name field exists, including an empty `=#` or `=3#`, so a picker can
 describe the swap before a name is typed. The additive top-level
@@ -6046,25 +6051,26 @@ For example, with `CAPTURE` running at line 5:
                          "time_range": "0920-0945"}}
 ```
 
-The
-`pomodoro_name` context below is backed by the same scan as `bob capture-pomodoros`, offers only open
-entries, and returns Pomodoros in picker order: named rows first, then
-nameable rows. Named rows rank by slug prefix, then slug substring, and open
-entries with the same slug collapse to the first row with `match_count`
-reporting how many open Pomodoros share it. Nameable rows represent unnamed or
-named-but-untypeable entries, set `requires_name: true`, use an empty
-`replacement`, and are never filtered out by the query. Updated clients must
-prompt for a name rather than inserting that empty replacement. When the query
-is a nonempty valid name that would not select an open exact or prefix match,
-and today's ledger can uniquely place a new future entry, a create action is
-inserted before substring-only named suggestions and before nameable rows:
-`creates_pomodoro: true`, canonical selector `replacement`, canonical visible
-`name`, and no `ref`. Accepting that row only canonicalizes the marker; the
-later `bob capture` transaction creates the named placeholder. Exact or prefix
-open-name matches stay first and do not receive a create row. Empty queries
-stay the existing discovery list. A missing daily note, a missing Pomodoros
-section, and multiple open timed Pomodoros stay write-free warnings without a
-create row. Pomodoro block-ID
+The `pomodoro_name` context uses the same groups, with open named ledger
+entries as Today rows and unnamed entries as utilities. Matching Today rows
+keep their prefix-then-substring order. Entries with the same normalized name key collapse
+to the first row with `match_count` reporting the number of matching entries.
+Nameable rows use an empty `replacement`; clients prompt for a name rather
+than inserting it. A theme completed today is Recent in this link context
+and an “again” row in the start context.
+
+Accepting a creation or Recent row edits the draft only; the later
+`bob capture` transaction performs the write with its normal placement,
+missing-section, multiple-running, and strict-budget checks. A new create row
+requires a valid name and a ledger that can place it. Recent rows carry
+`origin: "history"`, `last_used`, and `days_used`, with no `ref` or `line`.
+An exact Recent match serves as the create row. A hidden exact name remains
+typable and is marked `hidden: true` on the create row. A new create row can
+also carry up to two `similar_to` names as a quiet near-duplicate heads-up;
+this never changes order or Return. Completion and acceptance never write
+theme preferences. Shell descriptions include `recent · Oct 21 · 3 days`.
+
+Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
 `@route+prefix`; both are backed by the same open-task scan as
 `bob capture-tasks`. By default both contexts only offer tasks that already
@@ -6343,10 +6349,14 @@ is the slug. A Pomodoro-name candidate has nullable `ref`, nullable `name`,
 `requires_name`, optional `creates_pomodoro` (absent or false on existing
 rows), nullable `line`, `state`, `status_symbol`, nullable `time_range`,
 `placeholder`, `is_current`, `child_count`, and `match_count`; selectable named
-rows use the slug as `replacement`, while nameable rows use an empty
+rows use a slug or lossless quoted literal as `replacement`, while nameable rows use an empty
 replacement that clients must not insert. A create row omits `ref` and `line`,
 sets `creates_pomodoro: true`, and uses the canonical selector as
-`replacement`. Older clients may treat that row as an ordinary replacement. A task candidate
+`replacement`. Every named row adds `themes` (the component ThemeRefs).
+Recent rows also add `origin: "history"`, `last_used`, and `days_used`.
+`hidden: true` and `similar_to` are optional create-row metadata. These
+additions keep `schema_version: 1`; older clients can treat Recent rows as
+ordinary create replacements. A task candidate
 (`pomodoro_block_id` or `task` context) has `ref`, nullable `block_id`,
 `route`, `requires_block_id`, `status_symbol`, `status_name`, `status_type`,
 `text`, nullable `section`, `depth`, `child_count`, additive 1-based `line`,

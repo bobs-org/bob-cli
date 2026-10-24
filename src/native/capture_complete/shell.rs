@@ -9,10 +9,7 @@ use super::{
         TaskSearch,
     },
     model::{Candidates, RouteCandidateKind},
-    pomodoros::{
-        apply_bare_start_name_replacements, pomodoro_name_candidates,
-        pomodoro_start_name_candidates,
-    },
+    pomodoros::{apply_bare_start_name_replacements, pomodoro_candidates},
 };
 use crate::native::{
     capture, capture_block_ids, capture_completable_tasks,
@@ -108,8 +105,8 @@ pub(crate) fn shell_completion(
         return Ok(None);
     };
     let marker_prefix = marker_prefix.to_string();
-    // The shell filters, not bob: always serve the slot's full set with an
-    // empty query, so `matcher-list` keeps working (`@ca` lists every route).
+    // Most slots serve the full set so shell matcher-list keeps working.
+    // Pomodoro names use PT7 query-aware caps and lossless replacements.
     let route_for_group = field.route.clone().unwrap_or_default();
     let mut rows = Vec::new();
     match field.context {
@@ -248,14 +245,13 @@ pub(crate) fn shell_completion(
         }
         CompletionContext::PomodoroName
         | CompletionContext::PomodoroStartName => {
-            let (mut candidates, _) =
-                if field.context == CompletionContext::PomodoroName {
-                    pomodoro_name_candidates(bob_dir, "")
-                        .map_err(|error| error.message.clone())?
-                } else {
-                    pomodoro_start_name_candidates(bob_dir, "")
-                        .map_err(|error| error.message.clone())?
-                };
+            let (mut candidates, _) = pomodoro_candidates(
+                bob_dir,
+                &field.query,
+                field.context == CompletionContext::PomodoroStartName,
+                raw_text[field.replacement.0..].starts_with(['"', '“']),
+            )
+            .map_err(|error| error.message.clone())?;
             if field.bare_name {
                 apply_bare_start_name_replacements(&mut candidates);
             }
@@ -270,7 +266,22 @@ pub(crate) fn shell_completion(
                 if full.is_empty() {
                     continue;
                 }
-                let description = if item.creates_pomodoro {
+                let description = if item.origin == Some("history") {
+                    let date = item
+                        .last_used
+                        .as_deref()
+                        .and_then(|date| {
+                            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                                .ok()
+                        })
+                        .map(|date| date.format("%b %-d").to_string())
+                        .unwrap_or_default();
+                    let days = item.days_used.unwrap_or_default();
+                    format!(
+                        "recent · {date} · {days} {}",
+                        if days == 1 { "day" } else { "days" }
+                    )
+                } else if item.creates_pomodoro {
                     "new Pomodoro".to_string()
                 } else {
                     pomodoro_description(&item.time_range, &item.name)
@@ -279,7 +290,12 @@ pub(crate) fn shell_completion(
                     nospace: ends_in_continuation(&full),
                     full,
                     description,
-                    group: "open Pomodoros".to_string(),
+                    group: if item.origin == Some("history") {
+                        "Recent"
+                    } else {
+                        "open Pomodoros"
+                    }
+                    .to_string(),
                 });
             }
         }

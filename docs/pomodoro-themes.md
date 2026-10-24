@@ -52,16 +52,21 @@ and `renamed_reappeared` detection.
   root. Machine-local, never synced, disposable.
 - **Contents:** a per-file `(mtime_ns, size)` fingerprint and that file's
   theme summary.
-- Today's note is always read live.
+- Completion also keeps a disposable per-vault
+  `themes/completion-v1-<vault-hash>.json` view containing precomputed past-theme totals and the days on which
+  those themes occurred. It checks the source cache fingerprint, date, year-directory
+  fingerprints, and sweep age before reuse; corruption, rename, and a fresh
+  catalog rebuild invalidate it.
+- Today's note is always read live. Completion reuses its current ledger scan
+  when it is the canonical daily note.
 - A full sweep of past days runs at most once per 60 s, or when a year
   directory's mtime changes.
 - Rebuild on a corrupt or missing cache, after a rename, and with `--fresh`.
   The rename preview always rescans from source.
 - Writes are atomic (temp file + rename).
 - **Budget:** warm `capture-complete` and `capture-parse` stay within +5 ms
-  p95 of today's baseline on apollo against the live vault. **planned
-  (phase suggest / theme-json)** for those hot paths; `bob themes list`
-  uses the same cache.
+  p95 of today's baseline on apollo against the live vault. `bob themes list`
+  uses the same source cache.
 
 ## PT4 — Preferences journal
 
@@ -131,7 +136,8 @@ Names wear a tint; places wear a dot.
 
 ## PT7 — Menu composition
 
-**planned (phase suggest)** for capture-complete and Obsidian pickers.
+Implemented in both capture-complete Pomodoro-name contexts. Obsidian
+pickers follow the same contract (**planned (phase obsidian-pickers)**).
 
 Filter first, then group:
 
@@ -149,21 +155,32 @@ rows; a non-empty query shows at most 12. Matching is ASCII
 case-insensitive on slugs. A partial quoted literal matches on the
 normalized key prefix.
 
-`bob themes list -q` already ranks B then D over the catalog. Menu caps,
-today-row composition, and wiring `similar_to` into capture-complete are
-**planned (phase suggest)**. The `similar` vector section is in
-`tests/fixtures/pomodoro_themes/vectors.json`.
+`bob themes list -q` ranks B then D over the catalog. Capture completion
+adds Today rows, applies the caps, and folds an exact Recent match into the
+create action. Recent rows carry `origin: "history"`, `last_used`, and
+`days_used`; they create a Pomodoro, report the plan-theme preview, and omit
+`ref` and `line`. Every named row carries component `themes`.
+
+A create row carries `hidden: true` when its exact key is hidden, and
+`similar_to` for at most two visible known names, most recent first. A query
+needs at least three characters. Similarity means equality ignoring spaces
+and punctuation, a singular/plural pair (`s` or `es`), or edit distance one
+when both keys have at least five characters. This badge never changes
+ranking or Return. Zsh descriptions show `recent · Oct 21 · 3 days`.
 
 Fetching, filtering, and accepting suggestions never touch the journal.
 
 ## PT8 — Lossless acceptance
 
-**planned (phase lossless)**
-
-A history row emits its plain slug only when the slug round-trips to the
+A history or “again” row emits its plain slug only when the slug round-trips to the
 displayed name and does not prefix-select a different today entry.
 Otherwise it emits the exact-name literal `#"NAME"`. Compare by key
-equality, never by slug or prefix.
+equality, never by slug or prefix. In a bare start (`=name`), a literal
+replacement includes the leading `#`; in a `#` field it replaces just the
+name. Partial straight or curly quotes match normalized key prefixes, and
+acceptance replaces the whole partial literal. Bob emits straight quotes.
+A prefix-shadowed “again” name also uses a literal: with SASE V18 open,
+accepting completed SASE creates SASE instead of starting SASE V18.
 
 ## PT9 — Hide
 
@@ -315,7 +332,8 @@ THEMES  81 known · 4 today · 2 hidden · last 90 days
 
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` input), `fold`, `rank`, and
-`similar`. `menu` and `literal` are **planned (phase suggest)**. bob-plugins
+`similar`, `menu`, and `literal`. CLI tests consume the menu and literal
+sections, including capture dry-run round trips. bob-plugins
 copies the file byte-for-byte **planned (phase obsidian-colors)**.
 
 ## Related

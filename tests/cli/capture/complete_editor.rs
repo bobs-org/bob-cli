@@ -54,7 +54,7 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
         })
     );
     let candidates = json["candidates"].as_array().expect("candidates");
-    assert_eq!(candidates.len(), 3, "{json}");
+    assert_eq!(candidates.len(), 4, "{json}");
 
     assert_eq!(candidates[0]["replacement"], "memory");
     assert_eq!(candidates[0]["name"], "MEMORY");
@@ -74,12 +74,15 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
     assert_eq!(candidates[1]["name"], "BUGS");
     assert_eq!(candidates[1]["match_count"], 1);
 
-    assert_eq!(candidates[2]["replacement"], "");
-    assert!(candidates[2]["name"].is_null());
-    assert_eq!(candidates[2]["requires_name"], true);
-    assert_eq!(candidates[2]["placeholder"], true);
-    assert_eq!(candidates[2]["match_count"], 1);
-    assert!(candidates[2].get("creates_pomodoro").is_none());
+    assert_eq!(candidates[2]["name"], "DONE");
+    assert_eq!(candidates[2]["origin"], "history");
+    assert_eq!(candidates[2]["creates_pomodoro"], true);
+    assert_eq!(candidates[3]["replacement"], "");
+    assert!(candidates[3]["name"].is_null());
+    assert_eq!(candidates[3]["requires_name"], true);
+    assert_eq!(candidates[3]["placeholder"], true);
+    assert_eq!(candidates[3]["match_count"], 1);
+    assert!(candidates[3].get("creates_pomodoro").is_none());
     assert!(json.get("warnings").is_none(), "{json}");
 }
 
@@ -147,15 +150,15 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
     assert_success(&substring);
     let substring_json: serde_json::Value =
         serde_json::from_str(stdout(&substring).trim()).expect("json");
-    assert_eq!(substring_json["candidates"][0]["creates_pomodoro"], true);
-    assert_eq!(substring_json["candidates"][0]["replacement"], "work");
-    assert_eq!(substring_json["candidates"][1]["replacement"], "network");
-    assert!(substring_json["candidates"][1]
+    assert_eq!(substring_json["candidates"][1]["creates_pomodoro"], true);
+    assert_eq!(substring_json["candidates"][1]["replacement"], "work");
+    assert_eq!(substring_json["candidates"][0]["replacement"], "network");
+    assert!(substring_json["candidates"][0]
         .get("creates_pomodoro")
         .is_none());
     assert_eq!(substring_json["candidates"][2]["requires_name"], true);
 
-    for query in ["memory", "mem"] {
+    for query in ["memory", "MEMORY"] {
         let draft = format!("a @dev:some-id#{query}");
         let matched = complete(&draft);
         assert_success(&matched);
@@ -181,7 +184,8 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
             .as_array()
             .expect("candidates")
             .iter()
-            .all(|row| row.get("creates_pomodoro").is_none()),
+            .all(|row| row.get("creates_pomodoro").is_none()
+                || row["origin"] == "history"),
         "{empty_json}"
     );
 

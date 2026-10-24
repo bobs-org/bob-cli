@@ -10,6 +10,7 @@ mod shell;
 mod support;
 #[cfg(test)]
 mod tests;
+mod theme_menu;
 
 pub(super) const COMMAND_NAME: &str = "bob capture-complete";
 

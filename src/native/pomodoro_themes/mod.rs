@@ -23,7 +23,6 @@ mod journal;
 mod rank;
 pub(crate) mod rename;
 mod scan;
-#[allow(dead_code)]
 mod similar;
 #[cfg(test)]
 mod tests;
@@ -46,7 +45,7 @@ pub(crate) enum HueSource {
     Hash,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TodayPresence {
     Open,
@@ -101,11 +100,13 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub(crate) struct ThemeRecord {
     pub(crate) key: String,
     pub(crate) name: String,
+    #[serde(with = "cache::date")]
     pub(crate) first_used: NaiveDate,
+    #[serde(with = "cache::date")]
     pub(crate) last_used: NaiveDate,
     pub(crate) days_used: u32,
     pub(crate) entries: u32,
@@ -129,18 +130,46 @@ impl Catalog {
         today: NaiveDate,
         fresh: bool,
     ) -> std::io::Result<Self> {
-        Self::load_inner(vault, today, fresh)
+        Self::load_inner(vault, today, fresh, None, None)
+    }
+
+    /// Completion only needs area hues for remembered themes and names in
+    /// this draft/ledger. Avoid reading every unrelated root note per keypress.
+    pub(crate) fn load_for_completion(
+        vault: &Path,
+        today: NaiveDate,
+        extra_keys: BTreeSet<String>,
+        live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
+    ) -> std::io::Result<Self> {
+        Self::load_inner(vault, today, false, Some(extra_keys), live)
     }
 
     fn load_inner(
         vault: &Path,
         today: NaiveDate,
         fresh: bool,
+        area_keys: Option<BTreeSet<String>>,
+        live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
     ) -> std::io::Result<Self> {
         let exempt = load_exempt();
-        let areas = scan::scan_root_areas(vault);
         let (prefs, mut warnings) = journal::load_prefs(vault)?;
-        let (records, days) = load_records(vault, today, fresh, &mut warnings);
+        let mut scan_warnings = Vec::new();
+        let (records, days) = load_records(
+            vault,
+            today,
+            fresh,
+            area_keys.is_some(),
+            live,
+            &mut scan_warnings,
+        );
+        warnings.extend(scan_warnings);
+        let areas = match area_keys {
+            Some(mut keys) => {
+                keys.extend(records.keys().cloned());
+                scan::scan_root_areas_for_keys(vault, &keys)
+            }
+            None => scan::scan_root_areas(vault),
+        };
         Ok(Self {
             today,
             records,
@@ -243,6 +272,21 @@ impl Catalog {
         )
     }
 
+    pub(crate) fn similar_to(&self, query: &str) -> Vec<String> {
+        similar::similar_to(
+            query,
+            &self
+                .records()
+                .map(|record| similar::SimilarTheme {
+                    key: &record.key,
+                    name: &record.name,
+                    last_used: record.last_used,
+                    hidden: self.is_hidden(&record.key),
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
     pub(crate) fn rank_for_query(
         &self,
         query: &str,
@@ -332,14 +376,26 @@ fn load_records(
     vault: &Path,
     today: NaiveDate,
     fresh: bool,
+    completion: bool,
+    live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
     warnings: &mut Vec<String>,
 ) -> (
     BTreeMap<String, ThemeRecord>,
     BTreeMap<NaiveDate, BTreeSet<String>>,
 ) {
+    let years = scan::year_dir_fingerprints(vault);
+    if completion {
+        if let Some((mut records, mut days, cached_warnings)) =
+            cache::load_completion(vault, today, &years)
+        {
+            warnings.extend(cached_warnings);
+            let live = read_today_summary(vault, today, live, warnings);
+            merge_today(&mut records, &mut days, today, live.as_ref());
+            return (records, days);
+        }
+    }
     let key = cache::vault_key(vault);
     let mut cache_file = cache::load();
-    let years = scan::year_dir_fingerprints(vault);
     let sweep = cache::needs_sweep(cache_file.vaults.get(&key), &years, fresh);
     let vault_cache = cache_file.vaults.entry(key.clone()).or_default();
 
@@ -401,31 +457,20 @@ fn load_records(
 
     let today_relative = scan::canonical_relative(today);
     let today_path = vault.join(&today_relative);
-    let today_summary = match std::fs::read_to_string(&today_path) {
-        Ok(contents) => {
-            let summary = scan::FileSummary {
-                date: today.to_string(),
-                themes: scan::scan_contents(&contents),
-            };
-            if let Some((mtime_ns, size)) = cache::fingerprint(&today_path) {
-                vault_cache.files.insert(
-                    today_relative,
-                    cache::CachedFile {
-                        mtime_ns,
-                        size,
-                        summary: summary.clone(),
-                    },
-                );
-            }
-            Some(summary)
+    let history_warnings = warnings.clone();
+    let today_summary = read_today_summary(vault, today, live, warnings);
+    if let Some(summary) = today_summary.as_ref() {
+        if let Some((mtime_ns, size)) = cache::fingerprint(&today_path) {
+            vault_cache.files.insert(
+                today_relative,
+                cache::CachedFile {
+                    mtime_ns,
+                    size,
+                    summary: summary.clone(),
+                },
+            );
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            warnings
-                .push(format!("could not read {}: {error}", today_relative));
-            None
-        }
-    };
+    }
 
     let (records, days) =
         aggregate_records(vault_cache, today, today_summary.as_ref());
@@ -436,9 +481,48 @@ fn load_records(
         &vault_cache.years,
         records.keys().cloned().collect(),
     );
+    let (past_records, past_days) = aggregate_records(vault_cache, today, None);
+    let history = cache::VaultCache {
+        files: BTreeMap::new(),
+        ..vault_cache.clone()
+    };
     cache_file.version = 1;
     cache::store(&cache_file);
+    cache::store_completion(
+        vault,
+        today,
+        history,
+        past_records,
+        past_days,
+        &history_warnings,
+    );
     (records, days)
+}
+
+fn read_today_summary(
+    vault: &Path,
+    today: NaiveDate,
+    live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
+    warnings: &mut Vec<String>,
+) -> Option<scan::FileSummary> {
+    if let Some(live) = live {
+        return Some(scan::FileSummary {
+            date: today.to_string(),
+            themes: scan::themes_from_scan(live),
+        });
+    }
+    let relative = scan::canonical_relative(today);
+    match std::fs::read_to_string(vault.join(&relative)) {
+        Ok(contents) => Some(scan::FileSummary {
+            date: today.to_string(),
+            themes: scan::scan_contents(&contents),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            warnings.push(format!("could not read {relative}: {error}"));
+            None
+        }
+    }
 }
 
 fn aggregate_records(
@@ -452,6 +536,9 @@ fn aggregate_records(
     let mut records: BTreeMap<String, ThemeRecord> = BTreeMap::new();
     let mut days: BTreeMap<NaiveDate, BTreeSet<String>> = BTreeMap::new();
     for cached in vault_cache.files.values() {
+        if cached.summary.themes.is_empty() {
+            continue;
+        }
         let Some(date) = scan::parse_summary_date(&cached.summary.date) else {
             continue;
         };
@@ -460,8 +547,18 @@ fn aggregate_records(
         }
         merge_file(&mut records, &mut days, date, &cached.summary.themes);
     }
+    merge_today(&mut records, &mut days, today, today_live);
+    (records, days)
+}
+
+fn merge_today(
+    records: &mut BTreeMap<String, ThemeRecord>,
+    days: &mut BTreeMap<NaiveDate, BTreeSet<String>>,
+    today: NaiveDate,
+    today_live: Option<&scan::FileSummary>,
+) {
     if let Some(today_live) = today_live {
-        merge_file(&mut records, &mut days, today, &today_live.themes);
+        merge_file(records, days, today, &today_live.themes);
         for theme in &today_live.themes {
             if let Some(record) = records.get_mut(&theme.key) {
                 record.today = Some(if theme.open {
@@ -472,7 +569,6 @@ fn aggregate_records(
             }
         }
     }
-    (records, days)
 }
 
 fn merge_file(

@@ -481,6 +481,18 @@ pub(super) struct PomodoroNameCandidate {
     #[serde(rename = "ref", skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_ref: Option<capture_pomodoros::PomodoroRef>,
     pub(super) name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) themes: Vec<crate::native::pomodoro_themes::ThemeRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) origin: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) last_used: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) days_used: Option<u32>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) hidden: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) similar_to: Vec<String>,
     pub(super) requires_name: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) creates_pomodoro: bool,

@@ -1,5 +1,7 @@
 use std::{fs, io, path::Path};
 
+use super::theme_menu;
+
 use super::{
     model::{
         Candidates, CompleteError, OverrideRunningSession,
@@ -15,23 +17,75 @@ use crate::native::{
     pomodoro,
 };
 
-pub(super) fn pomodoro_name_candidates(
+pub(super) fn pomodoro_candidates(
     bob_dir: &Path,
     query: &str,
+    start: bool,
+    literal: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let day_file = pomodoro::day_file_for(bob_dir);
-    pomodoro_name_candidates_at(&day_file, query)
+    // Resolve Bob's date once: DATE may be a subprocess and timezone
+    // configuration is read on each call.
+    let today = crate::native::env::current_datetime().date();
+    let canonical = bob_dir.join(format!(
+        "{}/{}.md",
+        today.format("%Y"),
+        today.format("%Y%m%d")
+    ));
+    let day_file = crate::native::env::var_os("BOB_DAY_FILE")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| canonical.clone());
+    let (scan, contents, mut warnings) = read_daily(&day_file)?;
+    let daily_key = plan_budget::daily_key_from_path(&day_file);
+    let hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
+    let keys = scan
+        .entries
+        .iter()
+        .filter_map(|entry| entry.name.as_deref())
+        .chain(std::iter::once(query))
+        .flat_map(plan_budget::split_components)
+        .map(|name| plan_budget::normalize_component(&name))
+        .collect();
+    let catalog = crate::native::pomodoro_themes::Catalog::load_for_completion(
+        bob_dir,
+        today,
+        keys,
+        (day_file == canonical).then_some(&scan),
+    );
+    let catalog = match catalog {
+        Ok(catalog) => {
+            warnings.extend(
+                catalog.warnings().iter().cloned().map(bounded_warning),
+            );
+            Some(catalog)
+        }
+        Err(error) => {
+            warnings
+                .push(bounded_warning(format!("read theme catalog: {error}")));
+            None
+        }
+    };
+    let candidates = theme_menu::compose(
+        &scan,
+        query,
+        hint.as_ref(),
+        catalog.as_ref(),
+        start,
+        literal,
+    );
+    Ok((Candidates::PomodoroName(candidates), warnings))
 }
 
-pub(super) fn pomodoro_name_candidates_at(
+fn read_daily(
     day_file: &Path,
-    query: &str,
-) -> Result<(Candidates, Vec<String>), CompleteError> {
+) -> Result<(capture_pomodoros::PomodoroScan, String, Vec<String>), CompleteError>
+{
     let contents = match fs::read_to_string(day_file) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Ok((
-                Candidates::PomodoroName(Vec::new()),
+                capture_pomodoros::scan(""),
+                String::new(),
                 vec![bounded_warning(format!(
                     "Bob daily note does not exist: {}",
                     day_file.display()
@@ -42,25 +96,48 @@ pub(super) fn pomodoro_name_candidates_at(
             return Err(CompleteError::io(format!(
                 "read daily note {}: {error}",
                 day_file.display()
-            )));
+            )))
         }
     };
-
     let scan = capture_pomodoros::scan(&contents);
-    let mut warnings = Vec::new();
+    let mut warnings = scan.warnings.clone();
     if !scan.has_section {
         warnings.push(bounded_warning(format!(
             "Bob daily note has no Pomodoros section: {}",
             day_file.display()
         )));
     }
-    warnings.extend(scan.warnings.iter().cloned());
-    let daily_key = plan_budget::daily_key_from_path(day_file);
-    let plan_hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
-    let candidates =
-        pomodoro_name_candidates_from_scan_with_hint(&scan, query, plan_hint);
+    Ok((scan, contents, warnings))
+}
 
-    Ok((Candidates::PomodoroName(candidates), warnings))
+#[cfg(test)]
+pub(super) fn pomodoro_name_candidates_at(
+    day_file: &Path,
+    query: &str,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    candidates_at(day_file, query, false)
+}
+
+#[cfg(test)]
+fn candidates_at(
+    day_file: &Path,
+    query: &str,
+    start: bool,
+) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let (scan, contents, warnings) = read_daily(day_file)?;
+    let daily_key = plan_budget::daily_key_from_path(day_file);
+    let hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
+    Ok((
+        Candidates::PomodoroName(theme_menu::compose(
+            &scan,
+            query,
+            hint.as_ref(),
+            None,
+            start,
+            false,
+        )),
+        warnings,
+    ))
 }
 
 /// The single running Pomodoro session, for the `running` half of the
@@ -118,53 +195,12 @@ pub(super) fn running_pomodoro_session(
     })
 }
 
-pub(super) fn pomodoro_start_name_candidates(
-    bob_dir: &Path,
-    query: &str,
-) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let day_file = pomodoro::day_file_for(bob_dir);
-    pomodoro_start_name_candidates_at(&day_file, query)
-}
-
+#[cfg(test)]
 pub(super) fn pomodoro_start_name_candidates_at(
     day_file: &Path,
     query: &str,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
-    let contents = match fs::read_to_string(day_file) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok((
-                Candidates::PomodoroName(Vec::new()),
-                vec![bounded_warning(format!(
-                    "Bob daily note does not exist: {}",
-                    day_file.display()
-                ))],
-            ));
-        }
-        Err(error) => {
-            return Err(CompleteError::io(format!(
-                "read daily note {}: {error}",
-                day_file.display()
-            )));
-        }
-    };
-
-    let scan = capture_pomodoros::scan(&contents);
-    let mut warnings = Vec::new();
-    if !scan.has_section {
-        warnings.push(bounded_warning(format!(
-            "Bob daily note has no Pomodoros section: {}",
-            day_file.display()
-        )));
-    }
-    warnings.extend(scan.warnings.iter().cloned());
-    let daily_key = plan_budget::daily_key_from_path(day_file);
-    let plan_hint = plan_creation_hint(&contents, &scan, daily_key.as_deref());
-    let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
-        &scan, query, plan_hint,
-    );
-
-    Ok((Candidates::PomodoroName(candidates), warnings))
+    candidates_at(day_file, query, true)
 }
 
 #[cfg(test)]
@@ -175,22 +211,35 @@ pub(super) fn pomodoro_start_name_candidates_from_scan(
     pomodoro_start_name_candidates_from_scan_with_hint(scan, query, None)
 }
 
+#[cfg(test)]
 pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
     plan_hint: Option<PlanCreationHint>,
 ) -> Vec<PomodoroNameCandidate> {
+    theme_menu::compose(scan, query, plan_hint.as_ref(), None, true, false)
+}
+
+fn entry_key(entry: &PomodoroEntry) -> String {
+    plan_budget::normalize_component(entry.name.as_deref().unwrap_or_default())
+}
+
+pub(super) fn today_start_rows(
+    scan: &capture_pomodoros::PomodoroScan,
+    query: &str,
+    plan_hint: Option<&PlanCreationHint>,
+) -> Vec<PomodoroNameCandidate> {
     let next_up_line =
         capture_pomodoros::next_future_pomodoro(scan).map(|entry| entry.line);
 
-    let mut seen_slugs = Vec::<&str>::new();
+    let mut seen_keys = Vec::<String>::new();
     let mut start = Vec::new();
     for entry in &scan.entries {
         if entry.state != PomodoroState::Open
             || entry.time_range.is_some()
             || !entry.placeholder
             || !entry.selectable
-            || seen_slugs.contains(&entry.slug.as_str())
+            || seen_keys.contains(&entry_key(entry))
         {
             continue;
         }
@@ -200,10 +249,10 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
             .filter(|candidate| {
                 candidate.state == PomodoroState::Open
                     && candidate.selectable
-                    && candidate.slug == entry.slug
+                    && entry_key(candidate) == entry_key(entry)
             })
             .count();
-        seen_slugs.push(&entry.slug);
+        seen_keys.push(entry_key(entry));
         start.push(pomodoro_name_candidate_with_next_up(
             entry,
             false,
@@ -213,26 +262,26 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
     }
     let start = rank(start, query, |candidate| candidate.replacement.as_str());
 
-    let open_slugs = scan
+    let open_keys = scan
         .entries
         .iter()
         .filter(|entry| entry.state == PomodoroState::Open)
-        .map(|entry| entry.slug.as_str())
+        .map(entry_key)
         .collect::<Vec<_>>();
-    // Deduplicate completed slugs keeping the latest in document order,
+    // Deduplicate completed keys keeping the latest in document order,
     // then list the most recent first so an empty query resurfaces the
     // last session first.
     let mut again_entries = Vec::<&PomodoroEntry>::new();
     for entry in &scan.entries {
         if entry.state != PomodoroState::Completed
             || !entry.selectable
-            || open_slugs.contains(&entry.slug.as_str())
+            || open_keys.contains(&entry_key(entry))
         {
             continue;
         }
         if let Some(position) = again_entries
             .iter()
-            .position(|existing| existing.slug == entry.slug)
+            .position(|existing| entry_key(existing) == entry_key(entry))
         {
             again_entries[position] = entry;
         } else {
@@ -248,7 +297,7 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
             .filter(|candidate| {
                 candidate.state == PomodoroState::Completed
                     && candidate.selectable
-                    && candidate.slug == entry.slug
+                    && entry_key(candidate) == entry_key(entry)
             })
             .count();
         let mut candidate = pomodoro_name_candidate_with_next_up(
@@ -259,7 +308,10 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
         );
         // An "again" row starts a new session named like the completed
         // one, so it creates and reports that entry's history.
-        candidate.replacement = entry.slug.clone();
+        candidate.replacement = theme_menu::lossless_replacement(
+            scan,
+            entry.name.as_deref().unwrap_or(&entry.slug),
+        );
         candidate.name = capture_pomodoros::canonicalize_pomodoro_name(
             entry.name.as_deref().unwrap_or(&entry.slug),
         )
@@ -268,17 +320,14 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
         let display =
             candidate.name.clone().unwrap_or_else(|| entry.slug.clone());
         (candidate.plan_themes_after, candidate.plan_themes_cap) =
-            plan_themes_after_for(plan_hint.as_ref(), &display);
+            plan_themes_after_for(plan_hint, &display);
         again.push(candidate);
     }
-    let again = rank(again, query, |candidate| candidate.replacement.as_str());
+    let again = rank(again, query, |candidate| {
+        candidate.name.as_deref().unwrap_or_default()
+    });
 
     let mut combined = start;
-    if let Some(creation) =
-        pomodoro_start_creation_candidate(scan, query, plan_hint.as_ref())
-    {
-        insert_pomodoro_creation_candidate(&mut combined, creation, query);
-    }
     combined.extend(again);
 
     combined.extend(scan.entries.iter().filter_map(|entry| {
@@ -310,7 +359,7 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
             .filter(|candidate| {
                 candidate.state == PomodoroState::Open
                     && candidate.selectable
-                    && candidate.slug == entry.slug
+                    && entry_key(candidate) == entry_key(entry)
             })
             .count();
         Some(pomodoro_name_candidate_with_next_up(
@@ -322,27 +371,6 @@ pub(super) fn pomodoro_start_name_candidates_from_scan_with_hint(
     }));
 
     combined
-}
-
-/// The start-specific create row: only a `Missing` query may create, so a
-/// completed-only match ("again") never also offers a duplicate create
-/// row. Placement, naming, and plan-budget preview reuse the shared link
-/// helper; `named_creation_name` stays untouched for link-form callers.
-pub(super) fn pomodoro_start_creation_candidate(
-    scan: &capture_pomodoros::PomodoroScan,
-    query: &str,
-    plan_hint: Option<&PlanCreationHint>,
-) -> Option<PomodoroNameCandidate> {
-    if query.is_empty() {
-        return None;
-    }
-    if !matches!(
-        capture_pomodoros::select_named(scan, query),
-        capture_pomodoros::NamedSelection::Missing { .. }
-    ) {
-        return None;
-    }
-    pomodoro_creation_candidate(scan, query, plan_hint)
 }
 
 /// Theme count preview for a `creates_pomodoro` row: today's theme
@@ -409,33 +437,32 @@ pub(super) fn pomodoro_name_candidates_from_scan(
     pomodoro_name_candidates_from_scan_with_hint(scan, query, None)
 }
 
+#[cfg(test)]
 pub(super) fn pomodoro_name_candidates_from_scan_with_hint(
     scan: &capture_pomodoros::PomodoroScan,
     query: &str,
     plan_hint: Option<PlanCreationHint>,
 ) -> Vec<PomodoroNameCandidate> {
-    let mut candidates =
-        pomodoro_name_candidates_from_entries(&scan.entries, query);
-    if let Some(creation) =
-        pomodoro_creation_candidate(scan, query, plan_hint.as_ref())
-    {
-        insert_pomodoro_creation_candidate(&mut candidates, creation, query);
-    }
-    candidates
+    theme_menu::compose(scan, query, plan_hint.as_ref(), None, false, false)
 }
 
-pub(super) fn pomodoro_creation_candidate(
+pub(super) fn creation_candidate(
     scan: &capture_pomodoros::PomodoroScan,
-    query: &str,
-    plan_hint: Option<&PlanCreationHint>,
-) -> Option<PomodoroNameCandidate> {
-    let name = capture_pomodoros::named_creation_name(scan, query)?;
+    name: String,
+    hint: Option<&PlanCreationHint>,
+) -> PomodoroNameCandidate {
     let (plan_themes_after, plan_themes_cap) =
-        plan_themes_after_for(plan_hint, &name);
-    Some(PomodoroNameCandidate {
-        replacement: capture_language::selector_slug(&name),
+        plan_themes_after_for(hint, &name);
+    PomodoroNameCandidate {
+        replacement: theme_menu::lossless_replacement(scan, &name),
         pomodoro_ref: None,
         name: Some(name),
+        themes: Vec::new(),
+        origin: None,
+        last_used: None,
+        days_used: None,
+        hidden: false,
+        similar_to: Vec::new(),
         requires_name: false,
         creates_pomodoro: true,
         next_up: false,
@@ -449,23 +476,7 @@ pub(super) fn pomodoro_creation_candidate(
         is_current: false,
         child_count: 0,
         match_count: 1,
-    })
-}
-
-pub(super) fn insert_pomodoro_creation_candidate(
-    candidates: &mut Vec<PomodoroNameCandidate>,
-    creation: PomodoroNameCandidate,
-    query: &str,
-) {
-    let query = query.to_lowercase();
-    let index = candidates
-        .iter()
-        .position(|candidate| {
-            candidate.requires_name
-                || !candidate.replacement.to_lowercase().starts_with(&query)
-        })
-        .unwrap_or(candidates.len());
-    candidates.insert(index, creation);
+    }
 }
 
 pub(super) fn pomodoro_name_candidates_from_entries(
@@ -476,19 +487,19 @@ pub(super) fn pomodoro_name_candidates_from_entries(
         .iter()
         .filter(|entry| entry.state == PomodoroState::Open)
         .collect::<Vec<_>>();
-    let mut seen_slugs = Vec::<&str>::new();
+    let mut seen_keys = Vec::<String>::new();
     let mut named = Vec::new();
     for entry in &open_entries {
-        if !entry.selectable || seen_slugs.contains(&entry.slug.as_str()) {
+        if !entry.selectable || seen_keys.contains(&entry_key(entry)) {
             continue;
         }
         let match_count = open_entries
             .iter()
             .filter(|candidate| {
-                candidate.selectable && candidate.slug == entry.slug
+                candidate.selectable && entry_key(candidate) == entry_key(entry)
             })
             .count();
-        seen_slugs.push(&entry.slug);
+        seen_keys.push(entry_key(entry));
         named.push(pomodoro_name_candidate(entry, false, match_count));
     }
 
@@ -549,6 +560,12 @@ pub(super) fn pomodoro_name_candidate_with_next_up(
         },
         pomodoro_ref: Some(entry.pomodoro_ref.clone()),
         name: entry.name.clone(),
+        themes: Vec::new(),
+        origin: None,
+        last_used: None,
+        days_used: None,
+        hidden: false,
+        similar_to: Vec::new(),
         requires_name,
         creates_pomodoro: false,
         next_up,

@@ -5,12 +5,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::native::{collect_done, env as bob_env};
 
-use super::scan::FileSummary;
+use super::{scan::FileSummary, ThemeRecord};
 
 pub(crate) const SWEEP_INTERVAL_SECS: u64 = 60;
 const CACHE_VERSION: u32 = 1;
@@ -175,6 +175,92 @@ pub(crate) fn vault_key(vault: &Path) -> String {
         .to_string()
 }
 
+// The completion hot path needs only nonempty past-day summaries. Keep a
+// disposable per-vault view so every keystroke need not decode/rewrite years
+// of empty notes (or other vaults). The full cache remains authoritative.
+#[derive(Serialize, Deserialize)]
+struct CompletionCache {
+    version: u32,
+    vault: String,
+    today: String,
+    source: FileFingerprint,
+    history: VaultCache,
+    records: BTreeMap<String, ThemeRecord>,
+    days: BTreeMap<i32, BTreeSet<String>>,
+    warnings: Vec<String>,
+}
+
+fn completion_path(vault: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = hex::encode(Sha256::digest(vault_key(vault).as_bytes()));
+    bob_env::bob_cli_cache_dir()
+        .join("themes")
+        .join(format!("completion-v1-{key}.json"))
+}
+
+fn source_fingerprint() -> Option<FileFingerprint> {
+    fingerprint(&cache_path())
+        .map(|(mtime_ns, size)| FileFingerprint { mtime_ns, size })
+}
+
+pub(crate) fn load_completion(
+    vault: &Path,
+    today: NaiveDate,
+    years: &BTreeMap<String, (u64, u64)>,
+) -> Option<(
+    BTreeMap<String, ThemeRecord>,
+    BTreeMap<NaiveDate, BTreeSet<String>>,
+    Vec<String>,
+)> {
+    let text = fs::read_to_string(completion_path(vault)).ok()?;
+    let cached: CompletionCache = serde_json::from_str(&text).ok()?;
+    if cached.version != 1
+        || cached.vault != vault_key(vault)
+        || cached.today != today.to_string()
+        || source_fingerprint()? != cached.source
+        || needs_sweep(Some(&cached.history), years, false)
+    {
+        return None;
+    }
+    let days = cached
+        .days
+        .into_iter()
+        .map(|(day, keys)| {
+            Some((NaiveDate::from_num_days_from_ce_opt(day)?, keys))
+        })
+        .collect::<Option<BTreeMap<_, _>>>()?;
+    Some((cached.records, days, cached.warnings))
+}
+
+pub(crate) fn store_completion(
+    vault: &Path,
+    today: NaiveDate,
+    history: VaultCache,
+    records: BTreeMap<String, ThemeRecord>,
+    days: BTreeMap<NaiveDate, BTreeSet<String>>,
+    warnings: &[String],
+) {
+    let Some(source) = source_fingerprint() else {
+        return;
+    };
+    let cached = CompletionCache {
+        version: 1,
+        vault: vault_key(vault),
+        today: today.to_string(),
+        source,
+        history,
+        records,
+        days: days
+            .into_iter()
+            .map(|(day, keys)| (day.num_days_from_ce(), keys))
+            .collect(),
+        warnings: warnings.to_vec(),
+    };
+    if let Ok(text) = serde_json::to_string(&cached) {
+        let _ = collect_done::atomic_write(&completion_path(vault), &text);
+    }
+}
+
 pub(crate) fn load() -> CacheFile {
     let path = cache_path();
     let Ok(text) = fs::read_to_string(&path) else {
@@ -253,4 +339,23 @@ pub(crate) fn invalidate_vault(vault: &Path) {
     cache.version = CACHE_VERSION;
     store(&cache);
     let _ = fs::remove_file(known_keys_path());
+    let _ = fs::remove_file(completion_path(vault));
+}
+
+/// Cache dates as integers to avoid reparsing calendar strings on each keypress.
+pub(super) mod date {
+    use chrono::{Datelike, NaiveDate};
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(
+        date: &NaiveDate,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(date.num_days_from_ce())
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<NaiveDate, D::Error> {
+        NaiveDate::from_num_days_from_ce_opt(i32::deserialize(deserializer)?)
+            .ok_or_else(|| serde::de::Error::custom("invalid cached date"))
+    }
 }
