@@ -247,6 +247,54 @@ fn is_zero(value: &usize) -> bool {
     *value == 0
 }
 
+/// One capture warning. Plain strings keep every older draft's JSON
+/// byte-identical; structured variants let machines discriminate by
+/// `code` while clients render the bob-authored `message`
+/// (`docs/task-relations.md` §12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(super) enum CaptureWarning {
+    Text(String),
+    Structured(StructuredCaptureWarning),
+}
+
+impl From<String> for CaptureWarning {
+    fn from(message: String) -> Self {
+        Self::Text(message)
+    }
+}
+
+impl CaptureWarning {
+    /// The human rendering of this warning, for stderr and dedup.
+    pub(super) fn message(&self) -> &str {
+        match self {
+            Self::Text(message) => message,
+            Self::Structured(warning) => &warning.message,
+        }
+    }
+
+    /// The plain-text rendering, when this warning is one.
+    pub(super) fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(message) => Some(message),
+            Self::Structured(_) => None,
+        }
+    }
+}
+
+/// A machine-readable capture warning: `code` selects the handling,
+/// `message` is the bob-authored rendering, and `label`/`count` carry
+/// the pre-capture catalog facts for `hides_existing_relation_label`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct StructuredCaptureWarning {
+    pub(super) code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) count: Option<u64>,
+    pub(super) message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TemplateSavedJson {
     pub(super) id: String,
@@ -276,7 +324,7 @@ pub(super) struct CaptureResult {
     pub(super) theme_refs:
         BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(super) warnings: Vec<String>,
+    pub(super) warnings: Vec<CaptureWarning>,
     /// Before/after plan budget, present only when the batch changed
     /// today's Pomodoros section. Never per item.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -312,7 +360,7 @@ impl CaptureResult {
         global_destination: Option<GlobalDestinationSummary>,
         template: Option<capture_language::template::TemplateSummary>,
         template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
-        warnings: Vec<String>,
+        warnings: Vec<CaptureWarning>,
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
         task_blocks: Vec<TaskBlockJson>,
@@ -505,6 +553,12 @@ pub(super) struct CaptureItemResult {
     /// omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) relation_updates: Vec<RelationUpdateJson>,
+    /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
+    /// entry per distinct hidden label key this item typed, in typed
+    /// order. Present on dry runs too; the journal append happens only
+    /// on commit. Additive: omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_label_hides: Vec<RelationLabelHideJson>,
     /// Courtesy LINKED FROM rows staged by this item. Same shape as
     /// `blocks_line_updates`. Additive: omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -989,6 +1043,28 @@ pub(super) enum RelationAction {
     Unchanged,
 }
 
+/// One `||` one-off label hide this item requested
+/// (`docs/task-relations.md` RV6): the label as typed (display spelling
+/// when the key already exists), its catalog key, the pre-capture link
+/// count, whether it was already hidden, and what the commit does.
+/// Counts come from the pre-capture catalog, whatever later items in
+/// the batch also hide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationLabelHideJson {
+    pub(super) label: String,
+    pub(super) key: String,
+    pub(super) existing_count: u64,
+    pub(super) was_hidden: bool,
+    pub(super) action: RelationLabelHideAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationLabelHideAction {
+    Hide,
+    AlreadyHidden,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum MintedRelationRole {
@@ -1052,13 +1128,20 @@ pub(super) fn print_capture_warnings(result: &CaptureResult) {
     };
     for warning in &result.warnings {
         if has_structured_consumption
-            && warning.starts_with("removed ")
             && warning
+                .as_text()
+                .is_some_and(|text| text.starts_with("removed "))
+            && warning
+                .message()
                 .ends_with(" live Pomodoro link(s) to newly Blocked task(s)")
         {
             continue;
         }
-        eprintln!("{COMMAND_NAME}: {}: {warning}", styler.warning_prefix());
+        eprintln!(
+            "{COMMAND_NAME}: {}: {}",
+            styler.warning_prefix(),
+            warning.message()
+        );
     }
 }
 
@@ -2501,6 +2584,20 @@ fn parent_previous_status(
 fn print_human_relation_updates(result: &CaptureItemResult) {
     for update in &result.relation_updates {
         println!("  {}", human_relation_line(result.dry_run, update));
+    }
+    for hide in &result.relation_label_hides {
+        if hide.action != RelationLabelHideAction::Hide {
+            continue;
+        }
+        let links = if hide.existing_count == 1 {
+            "link"
+        } else {
+            "links"
+        };
+        println!(
+            "  🪢 hides \"{}\" from suggestions ({} {links})",
+            hide.label, hide.existing_count
+        );
     }
 }
 

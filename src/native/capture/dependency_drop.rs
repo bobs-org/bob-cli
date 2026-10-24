@@ -38,7 +38,7 @@ pub(super) fn resolve_link_guard(
     target_rel: &Path,
     block_id: &str,
     verdict: LinkGuardVerdict,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<ResolvedLinkGuard, CaptureError> {
     match verdict {
         LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => {
@@ -75,7 +75,7 @@ fn plan_dependency_drop(
     target_rel: &Path,
     block_id: &str,
     mut plan: DropPlan,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<DropAttempt, CaptureError> {
     let absolute = absolute_note(bob_dir, target_rel);
     let contents = current_note_text(planner, &absolute)?;

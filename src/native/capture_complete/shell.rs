@@ -477,8 +477,15 @@ pub(crate) fn shell_completion(
             }
         }
         CompletionContext::RelationLabel => {
+            // A `||` probe keeps its pipe count in every row, so the
+            // shell inserts the one-off spelling the draft typed.
+            let one_off = capture_language::relation_label_token_at(
+                raw_text,
+                field.replacement.0,
+            )
+            .is_some_and(|(_, _, hidden)| hidden);
             let (candidates, _, _) =
-                relation_label_suggestions(bob_dir, &field.query);
+                relation_label_suggestions(bob_dir, &field.query, one_off);
             let Candidates::RelationLabel(items) = candidates else {
                 return Ok(None);
             };

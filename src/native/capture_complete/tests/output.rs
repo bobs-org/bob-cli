@@ -208,6 +208,7 @@ fn json_shape_is_stable() {
         relation: None,
         picker: None,
         hidden_count: None,
+        one_off: None,
     })
     .expect("pomodoro json");
 
@@ -253,6 +254,7 @@ fn json_shape_is_stable() {
         relation: None,
         picker: None,
         hidden_count: None,
+        one_off: None,
     })
     .expect("json");
 
@@ -557,6 +559,7 @@ fn human_output_is_plain_without_color() {
             relation: None,
             picker: None,
             hidden_count: None,
+            one_off: None,
         },
         &styler,
     );

@@ -409,30 +409,41 @@ group in the dependency style, and `--dry-run` previews all of it.
 **Capture JSON** (every `schema_version` stays 1; additive only):
 
 - `capture-parse`: span kinds `relation_sigil`, `relation_note`,
-  `relation_block_id`, `relation_label_separator`, and
-  `relation_label`; top-level and per-item `relations[]` (`{raw,
-  direction: "to"|"from", note, block_id, quoted, label, label_range,
-  range}`), omitted when empty; needs `relation_target` and
-  `relation_label`; top-level `relation_grammar: 1` whenever the draft
-  contains a `~` byte. Drafts without `~` are byte-identical to today.
-  Relations never appear in `dependencies[]` or `blocked_tasks[]`.
+  `relation_block_id`, `relation_label_separator` (covering both pipes
+  for `||`), and `relation_label`; top-level and per-item `relations[]`
+  (`{raw, direction: "to"|"from", note, block_id, quoted, hidden, label,
+  label_range, range}`, with `hidden` only for the `||` spelling),
+  omitted when empty; needs `relation_target` and `relation_label`
+  (an empty `||` probe is the `relation_label` need); top-level
+  `relation_grammar: 1` whenever the draft contains a `~` byte.
+  Drafts without `~` are byte-identical to today, as is every `|`
+  spelling. Relations never appear in `dependencies[]` or
+  `blocked_tasks[]`. `~note:id|||label` is an `invalid_relation`
+  teaching `use || to hide a label, | to name one`.
 - `capture-complete`: contexts `relation_to` and `relation_from`
   (the `DependencyCandidate` shape, plus `already_linked`,
   `existing_label`, `also_prerequisite`, and `disabled_reason`);
   context `relation_label` with catalog-backed `suggestions[]` (visible rows
-  `{label, key, count, replacement, inverse?}` and a leading typed row
-  `{label, key, replacement, typed: true, existing?, count?, hidden?,
-  disabled_reason?}`); hidden rows are omitted except for an exact typed match.
-  The response includes `hidden_count` in this context. Typed key matches use
-  the catalog display spelling. Shell
+  `{label, key, count, replacement, hide_replacement, inverse?}` and a leading
+  typed row `{label, key, replacement, hide_replacement, typed: true,
+  existing?, count?, hidden?, disabled_reason?}`); hidden rows are omitted
+  except for an exact typed match. A `||` probe keeps its pipe count in
+  `replacement` and gains `one_off: true`, with `hide_replacement` always
+  the `||` form. The response includes `hidden_count` in this context.
+  Typed key matches use the catalog display spelling. Shell
   completion gains `links to` / `linked from` groups.
 - `capture-task-id`: `relation_to_replacement` (`~note:id`) and
   `relation_from_replacement` (`~~note:id`).
 - `capture` / `--dry-run`, per item: `relation_updates[]`
   (`{direction, source, target, label, previous_label, action:
   added|relabeled|unchanged}`), `linked_from_line_updates[]`,
-  `minted_relation_block_ids[]`, and `mirror_skipped[]`
-  (`{reason: archived_target|previous_daily_target|malformed_line|disabled}`).
+  `minted_relation_block_ids[]`, `mirror_skipped[]`
+  (`{reason: archived_target|previous_daily_target|malformed_line|disabled}`),
+  and `relation_label_hides[]` (`{label, key, existing_count, was_hidden,
+  action: hide|already_hidden}`), plus a `hides_existing_relation_label`
+  warning object (`{code, label, count, message}`) when a one-off hides a
+  visible existing label and a `relation_label_hide_failed` object
+  (`{code, message}`) when the journal append fails.
 
 ## 13. Guarantees
 
@@ -596,6 +607,27 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LP17 | `@bob+fix ~sase:retry` | mode `task_dependency`; no task text needed |
 | LP18 | any draft without `~` | byte-identical JSON (no `relation_grammar`) |
 
+### LD — double-pipe one-off labels
+
+The executable cases live in `tests/fixtures/relation_labels/vectors.json`
+(`grammar`, `rust_only`).
+
+| # | Draft | Reading |
+| --- | --- | --- |
+| LD1 | `Fix trip ~tasks:target\|see` | complete, `hidden: false`, separator `[22, 23)` |
+| LD2 | `Fix trip ~tasks:target\|\|see` | complete, `hidden: true`, separator `[22, 24)` |
+| LD3 | `Fix trip ~~tasks:source\|\|see` | complete `from`, `hidden: true` |
+| LD4 | `Fix trip ~tasks:target\|\|"follow-up of"` | quoted label, `hidden: true` |
+| LD5 | `Fix trip ~tasks:target\|"follow-up of"` | quoted label, `hidden: false` |
+| LD6 | `Fix trip ~tasks:target\|\|` | need `relation_label`, partial hides |
+| LD7 | `Fix trip ~tasks:target\|` | need `relation_label` |
+| LD8 | `Fix trip ~tasks:target\|\|\|see` | invalid: `use \|\| to hide a label, \| to name one` |
+| LD9 | `Fix trip ~tasks:target\|\|\|` | invalid: same teaching error |
+| LD10 | `Fix 🪢 trip ~work:foo\|\|see` | byte offsets past multibyte text |
+| LD11 | `a \|\| b` | never scanned |
+| LD12 | `Fix ~tasks:target \|\|` | complete unlabelled until the rewrite glues ` \|\|` |
+| LD13 | `Fix trip ~tasks:target\|\|"open` | open quote, partial hides |
+
 ### LG — Obsidian gestures
 
 | # | Gesture | Outcome |
@@ -649,9 +681,8 @@ RV5, RV6, and RV9 remain planned until their phases land.
 - **Hide / Unhide / Show hidden.** Never "disable":
   `disabled_reason` already means "cannot be inserted", and a hidden
   label can still be inserted.
-- **One-off** `planned (phase double-pipe)`: a label created hidden
-  (`||`). Wording that is never suggested again, not an expiring
-  link. Relations are history.
+- **One-off**: a label created hidden (`||`). Wording that is never
+  suggested again, not an expiring link. Relations are history.
 - **Naming in code:** `relation_labels` (Rust module),
   `RelationLabel*` (Swift), `api.relationLabels` (JS).
 
@@ -726,9 +757,18 @@ renames everywhere.
 
 ### RV6 Capture grammar: `||`
 
-`planned (phase double-pipe)`. `~note:id||label` stores the plain
-label and, once the capture succeeds, hides it from suggestions with
-an amber warning when that hides an existing visible label.
+`~note:id||label` stores the plain label and, once the capture
+succeeds, hides it from suggestions. The `||` spelling covers `~~`
+targets and `"multi word"` labels; an empty `||` is an incomplete
+`relation_label` need; `|||` is a teaching error. The stored Markdown
+is identical to the `|` form, and ` ||` glues the way ` |` glues.
+Warn, never block: the hide lands only after the notes commit succeeds
+(a dry run or a failed capture leaves no trace), one event per key in
+a multi-item draft, counts from the pre-capture catalog, and a failed
+append warns with the retry command while the capture succeeds.
+Hiding a visible existing label carries an amber warning with the link
+count; an already-hidden label writes no event. Shell examples quote
+the draft, so the shell never sees `||`.
 
 ### RV7 Contracts
 
@@ -778,8 +818,21 @@ Every `schema_version` stays 1; JSON grows additively.
 - **`capture-complete` `relation_label`**: rows come from the fast relation-label
   catalog, use canonical keys and display spelling, include inverse phrases and
   counts, omit hidden rows, expose exact typed matches (including hidden state),
-  and return `hidden_count`. zsh describes each row as `N links`.
-- **`capture` / `--dry-run`**: `planned (phase double-pipe)`.
+  and return `hidden_count`. zsh describes each row as `N links`. Every row
+  and the typed row carry `hide_replacement` (always the `||` form);
+  a `||` probe keeps its pipe count in `replacement` and gains
+  `one_off: true`; the response carries `hidden_count` (present, possibly 0)
+  in this context.
+- **`capture` / `--dry-run`**, per item: `relation_label_hides[]`
+  (`{label, key, existing_count, was_hidden, action: hide|already_hidden}`;
+  pre-capture counts; one entry per distinct hidden label key, omitted when
+  empty). Hiding a visible existing label also adds a `warnings[]` object
+  (`{code: "hides_existing_relation_label", label, count, message}`) with a
+  bob-authored message that clients render without computing the count, and
+  a human `🪢 hides "label" from suggestions (N links)` line. A failed
+  journal append adds `{code: "relation_label_hide_failed", message}` with
+  the exact retry command; the capture still succeeds. A dry run previews
+  all of this and writes nothing.
 
 ### RV8 The rename transaction
 
@@ -824,7 +877,7 @@ stage with the card's keys and copy.
 ### Shared vectors
 
 `tests/fixtures/relation_labels/vectors.json` is the single source.
-Its `key`, `catalog`, `fold`, and `rank` sections are consumed by
-Rust tests; `grammar` (`rust_only`) and `rename` (`rust_only`)
-arrive with their phases. bob-plugins copies the file byte-for-byte
+Its `key`, `catalog`, `fold`, `rank`, and `grammar` (`rust_only`, LD
+vectors) sections are consumed by Rust tests; `rename` (`rust_only`)
+arrives with its phase. bob-plugins copies the file byte-for-byte
 when `planned (phase obsidian-vocab)` lands.

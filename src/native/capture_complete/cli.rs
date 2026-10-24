@@ -184,7 +184,9 @@ task catalog. Rows report `already_linked`, an existing label when present, \
 and `also_prerequisite`; read-only sources and malformed source LINKS lines \
 are disabled in `relation_from`. A `|label` field opens `relation_label`, whose \
 suggestions count labels across all LINKS lines and return canonical `|label` \
-or `|\"multi word\"` replacements. A typed invalid label stays first with a \
+or `|\"multi word\"` replacements. A `||label` probe keeps the `||` spelling \
+in `replacement`, gains `one_off: true`, and every row also carries \
+`hide_replacement` (always the `||` form). A typed invalid label stays first with a \
 `disabled_reason` and an empty replacement. \
 A solo leading '^' token completes active tasks instead: the \
 `route:block-id` part offers In Progress and Next tasks with block IDs, \

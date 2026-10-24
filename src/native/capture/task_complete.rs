@@ -599,6 +599,7 @@ pub(super) fn plan_task_complete_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -744,6 +745,7 @@ fn already_done_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
             task_complete: Some(TaskCompleteSummaryJson {
                 raw: raw.to_string(),
                 note: note.to_string(),

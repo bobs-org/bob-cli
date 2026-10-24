@@ -17,7 +17,7 @@ pub(super) fn plan_ensure_next_capture(
     task_description: String,
     previous_task_line: String,
     today: NaiveDate,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     settings: &note_tasks::NoteTaskSettings,
     ctx: &mut DependencyContext,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {

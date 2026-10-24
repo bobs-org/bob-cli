@@ -233,7 +233,7 @@ pub(super) fn plan_pomodoro_link_capture(
     start: Option<&PomodoroStartSpec>,
     now: chrono::NaiveDateTime,
     today: NaiveDate,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
@@ -582,7 +582,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
     start: Option<&PomodoroStartSpec>,
     now: chrono::NaiveDateTime,
     today: NaiveDate,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let (note_plan, link_guard) = plan_pomodoro_link_capture(
@@ -697,6 +697,7 @@ fn planned_item_from_pomodoro_link_plan(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

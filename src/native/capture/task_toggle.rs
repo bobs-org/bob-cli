@@ -12,7 +12,7 @@ pub(super) fn plan_task_toggle_capture(
     pomodoro_name_is_literal: bool,
     intent: TaskToggleIntent,
     today: NaiveDate,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;

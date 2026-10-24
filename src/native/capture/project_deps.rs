@@ -262,7 +262,7 @@ pub(super) struct LiveLinkConsumption {
 }
 
 pub(super) fn append_consumption_warning(
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     removed_links: usize,
 ) {
     if removed_links == 0 {
@@ -271,8 +271,11 @@ pub(super) fn append_consumption_warning(
     let warning = format!(
         "removed {removed_links} live Pomodoro link(s) to newly Blocked task(s)"
     );
-    if !warnings.contains(&warning) {
-        warnings.push(warning);
+    if !warnings
+        .iter()
+        .any(|known| known.as_text() == Some(warning.as_str()))
+    {
+        warnings.push(warning.into());
     }
 }
 

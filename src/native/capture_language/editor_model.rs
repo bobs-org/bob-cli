@@ -336,6 +336,10 @@ pub(crate) struct RelationEntry {
     pub(crate) block_id: String,
     /// Whether the note was a `"quoted component"`.
     pub(crate) quoted: bool,
+    /// True when the label separator was `||`. Omitted when false, so
+    /// every older input keeps its exact JSON shape.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(crate) hidden: bool,
     /// Normalised label, when `|label` was typed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) label: Option<String>,

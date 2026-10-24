@@ -472,6 +472,8 @@ pub(crate) struct ParsedRelation {
     pub(crate) block_id: String,
     /// Whether the note was a `"quoted component"`.
     pub(crate) quoted: bool,
+    /// True when the label separator was `||`.
+    pub(crate) hidden: bool,
     /// Normalised label, when `|label` was typed.
     pub(crate) label: Option<String>,
 }

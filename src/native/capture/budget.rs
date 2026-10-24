@@ -128,7 +128,7 @@ pub(super) fn append_plan_budget(
             };
             batch
                 .warnings
-                .push(format!("plan budget unavailable: {message}"));
+                .push(format!("plan budget unavailable: {message}").into());
             return Ok(());
         }
     };

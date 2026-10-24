@@ -695,7 +695,7 @@ pub(super) fn plan_pomodoro_start_item(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_start_conflicts(&parsed, request)?;
     let (start, end, duration_minutes, time_range) =
@@ -800,7 +800,7 @@ pub(super) fn plan_pomodoro_start_item(
             )
         })?;
     planner.stage(&day_file, updated)?;
-    warnings.extend(drop_plan.warnings);
+    warnings.extend(drop_plan.warnings.into_iter().map(CaptureWarning::from));
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
@@ -902,6 +902,7 @@ pub(super) fn plan_pomodoro_start_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -932,7 +933,7 @@ fn plan_override_restart_item(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     day_file: &Path,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let staged = planner.read_existing(day_file)?;
@@ -998,7 +999,7 @@ fn plan_override_restart_item(
             )
         })?;
     planner.stage(day_file, moved_contents)?;
-    warnings.extend(drop_plan.warnings);
+    warnings.extend(drop_plan.warnings.into_iter().map(CaptureWarning::from));
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
@@ -1102,6 +1103,7 @@ fn plan_override_restart_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1137,7 +1139,7 @@ fn plan_override_swap_item(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     day_file: &Path,
     _rel: &str,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -1476,7 +1478,7 @@ fn plan_override_swap_item(
     };
     planner.stage(day_file, contents.clone())?;
     if let Some(warning) = suggestion_warning {
-        warnings.push(warning);
+        warnings.push(warning.into());
     }
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
@@ -1498,7 +1500,9 @@ fn plan_override_swap_item(
             &dropped_links,
         );
         if let Some(plan) = drop_plan.as_ref() {
-            warnings.extend(plan.warnings.clone());
+            warnings.extend(
+                plan.warnings.iter().cloned().map(CaptureWarning::from),
+            );
         }
         (tasks, dropped)
     } else {
@@ -1649,6 +1653,7 @@ fn plan_override_swap_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![
@@ -2060,7 +2065,7 @@ fn plan_named_pomodoro_start_item(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     day_file: &Path,
     rel: &str,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -2261,7 +2266,7 @@ fn plan_named_pomodoro_start_item(
         };
     planner.stage(day_file, updated)?;
     if let Some(warning) = suggestion_warning {
-        warnings.push(warning);
+        warnings.push(warning.into());
     }
     let relative_target = day_file
         .strip_prefix(&request.bob_dir)
@@ -2285,7 +2290,9 @@ fn plan_named_pomodoro_start_item(
             &dropped_links,
         );
         if let Some(plan) = drop_plan.as_ref() {
-            warnings.extend(plan.warnings.clone());
+            warnings.extend(
+                plan.warnings.iter().cloned().map(CaptureWarning::from),
+            );
         }
         (tasks, dropped)
     } else {
@@ -2391,6 +2398,7 @@ fn plan_named_pomodoro_start_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef {

@@ -1589,9 +1589,13 @@ struct TaskLinks {
     malformed: bool,
 }
 
+/// Relation label rows for one `relation_label` probe. `one_off` is true
+/// when the probe sits in a `||` label: `replacement` then keeps the
+/// `||` spelling while `hide_replacement` is always the `||` form.
 pub(super) fn relation_label_suggestions(
     bob_dir: &Path,
     query: &str,
+    one_off: bool,
 ) -> (Candidates, Vec<String>, usize) {
     let catalog = match crate::native::relation_labels::Catalog::load(bob_dir) {
         Ok(catalog) => catalog,
@@ -1615,7 +1619,12 @@ pub(super) fn relation_label_suggestions(
         )
         .into_iter()
         .map(|record| RelationLabelSuggestion {
-            replacement: record.replacement(),
+            replacement: if one_off {
+                record.hide_replacement()
+            } else {
+                record.replacement()
+            },
+            hide_replacement: record.hide_replacement(),
             label: record.name.clone(),
             key: record.key.clone(),
             inverse: record.inverse.clone(),
@@ -1656,16 +1665,25 @@ pub(super) fn relation_label_suggestions(
             existing.is_some_and(|record| catalog.is_hidden(&record.key));
         let replacement = if disabled_reason.is_some() {
             String::new()
+        } else if one_off {
+            crate::native::task_relations::label::relation_label_hide_form(
+                &canonical_label,
+            )
         } else {
             crate::native::task_relations::label::relation_label_quoted_form(
                 &canonical_label,
             )
         };
+        let hide_replacement =
+            crate::native::task_relations::label::relation_label_hide_form(
+                &canonical_label,
+            );
         suggestions.retain(|item| item.key != key);
         suggestions.insert(
             0,
             RelationLabelSuggestion {
                 replacement,
+                hide_replacement,
                 label: canonical_label,
                 key,
                 inverse: existing.and_then(|record| record.inverse.clone()),

@@ -1971,7 +1971,7 @@ fn merge_existing_members(
     legacy: &[(usize, task_dependencies::legacy::LegacyChildLink)],
     field_ids: &[String],
     prereqs: &[ResolvedPrerequisite],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     touches: &mut Vec<TargetTouch>,
 ) -> Result<
     (
@@ -2264,10 +2264,10 @@ fn merge_existing_members(
         }
     }
     if !dropped.is_empty() {
-        warnings.push(format!(
-            "dropped unaccounted field ids {}",
-            dropped.join(", ")
-        ));
+        warnings.push(
+            format!("dropped unaccounted field ids {}", dropped.join(", "))
+                .into(),
+        );
     }
     Ok((merged, pre_existing, kept_unresolved, remove_lines))
 }
@@ -2288,7 +2288,7 @@ pub(super) fn plan_existing_task_dependencies(
     bob_dir: &Path,
     dependent_ref: &DependentRef,
     deps: &[ParsedDependency],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     options: ExistingDependencyOptions,
 ) -> Result<PlannedDependencyUpdate, CaptureError> {
     let dep_rel = dependent_ref.relative.clone();
@@ -2441,7 +2441,7 @@ pub(super) fn plan_existing_task_dependencies(
                     internal.descendants.join(", ")
                 ));
             }
-            warnings.push(warning);
+            warnings.push(warning.into());
         }
     }
     // New edges refuse self-dependencies and fresh cycles; no-op
@@ -2819,7 +2819,7 @@ pub(super) fn plan_new_task_dependencies(
     capture_status: char,
     child_indent: Option<&str>,
     deps: &[ParsedDependency],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<(AugmentedNewTask, PlannedDependencyUpdateParts), CaptureError> {
     let dep_rel = relative_target(dependent_route);
     let dep_desc = match new_block_id {
@@ -3139,7 +3139,7 @@ pub(super) fn plan_dependency_only_item(
     parsed: &ParsedCaptureText,
     target: &ParsedDependencyTarget,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let (route, block_id) = match target {
@@ -3330,6 +3330,7 @@ pub(super) fn plan_dependency_only_item(
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

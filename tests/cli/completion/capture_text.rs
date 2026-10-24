@@ -448,3 +448,29 @@ fn named_start_after_inline_close_keeps_prefix() {
     assert!(values(&output).contains(&"=#deep-work".to_string()));
     assert!(groups(&output).contains(&"open Pomodoros".to_string()));
 }
+
+#[test]
+fn relation_labels_complete_after_double_pipe() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("tasks.md"),
+        "- [ ] #task Target ^target\n  - 🪢 **LINKS:** see [[cash#^buy-milk]]\n",
+    );
+    // A `||` probe completes label rows with the one-off spelling.
+    let output = complete(
+        &fixture,
+        &["bob", "capture", "Fix", "it", "~tasks:target||s"],
+    );
+    assert_success(&output);
+    let vals = values(&output);
+    assert!(vals.contains(&"~tasks:target||see".to_string()), "{vals:?}");
+    assert!(groups(&output).contains(&"relation labels".to_string()));
+    // A `|` probe keeps the single-pipe spelling on the same rows.
+    let output = complete(
+        &fixture,
+        &["bob", "capture", "Fix", "it", "~tasks:target|s"],
+    );
+    assert_success(&output);
+    let vals = values(&output);
+    assert!(vals.contains(&"~tasks:target|see".to_string()), "{vals:?}");
+}

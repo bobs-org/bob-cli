@@ -289,10 +289,11 @@ fn switch_block_id_separator(
     })
 }
 
-/// Typing `|` after whitespace that follows a relation token glues the
-/// pipe to the token, so `~note:id |` becomes `~note:id|`. Only the
-/// whitespace-delimited `|` token ending at `cursor` is examined. The run
-/// before it must be non-empty horizontal whitespace (spaces or tabs, never
+/// Typing `|` (or `||`) after whitespace that follows a relation token
+/// glues the pipe(s) to the token, so `~note:id |` becomes `~note:id|`
+/// and `~note:id ||` becomes `~note:id||`. Only the whitespace-delimited
+/// `|` / `||` token ending at `cursor` is examined. The run before it
+/// must be non-empty horizontal whitespace (spaces or tabs, never
 /// a newline) with a non-whitespace byte on the same physical line before
 /// it. Eligibility is delegated to the completion grammar: the run is
 /// deleted only when the glued draft offers a `relation_label` field whose
@@ -305,7 +306,7 @@ fn attach_relation_label(
     let token = tokenize_with_spans(raw_text)
         .into_iter()
         .find(|token| token.end == cursor)?;
-    if token.text != "|" {
+    if token.text != "|" && token.text != "||" {
         return None;
     }
     let pipe = token.start;
@@ -336,7 +337,7 @@ fn attach_relation_label(
     {
         return None;
     }
-    let (token_start, _) =
+    let (token_start, ..) =
         super::completion::relation_label_token_at(&candidate, run_start)?;
     let token_text = candidate.get(token_start..run_start)?;
     let edits = vec![TextEdit {
@@ -351,7 +352,7 @@ fn attach_relation_label(
         edits,
         text,
         cursor: Some(candidate_cursor),
-        summary: Some(format!("Attached | to {token_text}")),
+        summary: Some(format!("Attached {} to {token_text}", token.text)),
         notices: Vec::new(),
     })
 }

@@ -16,6 +16,127 @@ use crate::native::{
     task_status_hooks,
 };
 
+/// One `||` one-off hide per distinct hidden label key, in typed order,
+/// plus the `hides_existing_relation_label` warnings for visible existing
+/// labels. Counts come from the pre-capture catalog. A catalog that will
+/// not load hides nothing: the capture's own verdict stands on its own.
+pub(super) fn plan_relation_label_hides(
+    vault: &std::path::Path,
+    relations: &[ParsedRelation],
+) -> (Vec<RelationLabelHideJson>, Vec<CaptureWarning>) {
+    use crate::native::relation_labels::{relation_label_key, Catalog};
+
+    let mut keys = Vec::new();
+    let mut seen = BTreeSet::new();
+    for relation in relations {
+        if !relation.hidden {
+            continue;
+        }
+        let Some(label) = relation.label.as_deref() else {
+            continue;
+        };
+        let key = relation_label_key(label);
+        if seen.insert(key.clone()) {
+            keys.push((label.to_string(), key));
+        }
+    }
+    if keys.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let Ok(catalog) = Catalog::load(vault) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut hides = Vec::with_capacity(keys.len());
+    let mut warnings = Vec::new();
+    for (_, key) in keys {
+        // A known label hides under its display spelling; a new label is
+        // already normalised by the parse.
+        let (label, existing_count, was_hidden, known) = match catalog.get(&key)
+        {
+            Some(record) => (
+                record.name.clone(),
+                record.count,
+                catalog.is_hidden(&record.key),
+                true,
+            ),
+            None => (key.clone(), 0, false, false),
+        };
+        let action = if was_hidden {
+            RelationLabelHideAction::AlreadyHidden
+        } else {
+            RelationLabelHideAction::Hide
+        };
+        if action == RelationLabelHideAction::Hide && known {
+            let links = if existing_count == 1 { "link" } else { "links" };
+            warnings.push(CaptureWarning::Structured(
+                StructuredCaptureWarning {
+                    code: "hides_existing_relation_label",
+                    label: Some(label.clone()),
+                    count: Some(existing_count),
+                    message: format!(
+                        "hides \"{label}\" from relation suggestions \
+                         ({existing_count} {links})"
+                    ),
+                },
+            ));
+        }
+        hides.push(RelationLabelHideJson {
+            label,
+            key,
+            existing_count,
+            was_hidden,
+            action,
+        });
+    }
+    (hides, warnings)
+}
+
+/// Append one `relation_label.hide` per distinct key the batch hid
+/// (`via: bob-cli`), after the notes commit succeeded. In a multi-item
+/// draft, repeated hides of one key collapse to one event. Failures
+/// never fail the capture: each one becomes a
+/// `relation_label_hide_failed` warning with its exact retry command.
+pub(super) fn append_committed_relation_label_hides(
+    batch: &PlannedCaptureBatch,
+    vault: &std::path::Path,
+) -> Vec<CaptureWarning> {
+    use crate::native::relation_labels::write::{
+        append_hide_events, shell_word,
+    };
+
+    let mut labels = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in &batch.items {
+        for hide in &item.result.relation_label_hides {
+            if hide.action != RelationLabelHideAction::Hide {
+                continue;
+            }
+            if seen.insert(hide.key.clone()) {
+                labels.push((hide.key.clone(), hide.label.clone()));
+            }
+        }
+    }
+    append_hide_events(vault, &labels, "bob-cli")
+        .into_iter()
+        .map(|failure| {
+            let retry = format!(
+                "bob relations hide -b {} --allow-unused -- {}",
+                shell_word(&vault.to_string_lossy()),
+                shell_word(&failure.name),
+            );
+            CaptureWarning::Structured(StructuredCaptureWarning {
+                code: "relation_label_hide_failed",
+                label: None,
+                count: None,
+                message: format!(
+                    "could not hide relation label \"{}\": {}; retry with: {retry}",
+                    failure.name, failure.error,
+                ),
+            })
+        })
+        .collect()
+}
+
 /// Reports from one item's `~` / `~~` writes.
 #[derive(Debug, Clone, Default)]
 pub(super) struct PlannedRelationReports {
@@ -38,7 +159,7 @@ pub(super) fn plan_relation_writes(
     bob_dir: &Path,
     owner: &RelationOwner,
     relations: &[ParsedRelation],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     existing_owner: bool,
 ) -> Result<PlannedRelationReports, CaptureError> {
     if relations.is_empty() {
@@ -334,7 +455,7 @@ fn apply_one_relation(
     target: &ResolvedRelation,
     duplicate: bool,
     existing_owner: bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     reports: &mut PlannedRelationReports,
 ) -> Result<(), CaptureError> {
     let index = super::dependencies::staged_note_index(ctx, planner, bob_dir);
@@ -368,7 +489,7 @@ fn apply_links_to(
     target: &ResolvedRelation,
     duplicate: bool,
     existing_owner: bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     reports: &mut PlannedRelationReports,
 ) -> Result<(), CaptureError> {
     let (action, previous_label, source_text, source_line) = stage_links_add(
@@ -443,7 +564,7 @@ fn apply_linked_from(
     owner: &mut RelationOwner,
     target: &ResolvedRelation,
     duplicate: bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     reports: &mut PlannedRelationReports,
 ) -> Result<(), CaptureError> {
     ensure_owner_block_id(
@@ -582,7 +703,7 @@ fn maybe_stage_mirror(
     mirror_block: &str,
     label: Option<&str>,
     archived_target: bool,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     reports: &mut PlannedRelationReports,
     mint_source: bool,
     source_override: Option<(PathBuf, String)>,
@@ -622,7 +743,7 @@ fn maybe_stage_mirror(
     )? {
         warnings.push(format!(
             "🪢 LINKED FROM not updated for ^{mirror_block} in {skip_path}: malformed LINKED FROM line left alone"
-        ));
+        ).into());
         reports.skipped.push(MirrorSkippedJson {
             path: skip_path,
             block_id: mirror_block.to_string(),

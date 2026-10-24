@@ -99,7 +99,10 @@ fn validate_relation_block_id(block_id: &str) -> Option<String> {
     None
 }
 
-/// One complete `~note:block-id[|label]` modifier.
+/// One complete `~note:block-id[|label]` modifier. A `||label`
+/// spelling sets `hidden`: the stored Markdown is identical to the
+/// `|` form, but the label hides from suggestions once the capture
+/// succeeds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationRef {
     /// Exact typed text, sigil included (`~work:foo|"follow up"`).
@@ -109,6 +112,8 @@ pub(crate) struct RelationRef {
     pub(crate) note: String,
     pub(crate) block_id: String,
     pub(crate) quoted: bool,
+    /// True when the label separator was `||`.
+    pub(crate) hidden: bool,
     /// Normalised label, when `|label` was typed.
     pub(crate) label: Option<String>,
     /// Whether the label was `"quoted"`.
@@ -153,10 +158,13 @@ pub(crate) enum ScannedRelation {
         end: usize,
     },
     /// A complete target with a partial label: `~note:id|` or an open quote.
+    /// `hidden` is true when the separator was `||` (including the
+    /// empty `~note:id||` probe).
     PartialLabel {
         raw: String,
         start: usize,
         end: usize,
+        hidden: bool,
     },
     Invalid(InvalidRelation),
     Escaped {
@@ -463,24 +471,39 @@ fn scan_relation_block_id(
     if cursor >= line.len() || is_space_at(line, cursor) {
         return complete_relation(
             line, base, tilde, start, sigil_len, direction, note, quoted,
-            note_start, colon, block_id, cursor, None, None, None, raw_end,
+            false, note_start, colon, block_id, cursor, None, None, None,
+            raw_end,
         );
     }
-    // `|` separator present.
+    // `|` separator present. A second `|` hides the label from
+    // suggestions once the capture succeeds; the stored Markdown is
+    // identical either way.
     debug_assert_eq!(line.as_bytes()[cursor], b'|');
-    let separator = (base + cursor, base + cursor + 1);
-    let label_begin = cursor + 1;
+    let hidden = line.as_bytes().get(cursor + 1) == Some(&b'|');
+    if hidden && line.as_bytes().get(cursor + 2) == Some(&b'|') {
+        // `~note:id|||label`: three pipes never scan as a relation.
+        let end = token_end_at(line, tilde);
+        return ScannedRelation::Invalid(InvalidRelation {
+            raw: line[tilde..end].to_string(),
+            message: "use || to hide a label, | to name one".to_string(),
+            start,
+            end: base + end,
+        });
+    }
+    let separator = (base + cursor, base + cursor + if hidden { 2 } else { 1 });
+    let label_begin = cursor + if hidden { 2 } else { 1 };
     if label_begin >= line.len() || is_space_at(line, label_begin) {
         return ScannedRelation::PartialLabel {
             raw: line[tilde..label_begin].to_string(),
             start,
             end: base + label_begin,
+            hidden,
         };
     }
     if line.as_bytes()[label_begin] == b'"' {
         return scan_relation_quoted_label(
             line, base, tilde, start, sigil_len, direction, note, quoted,
-            note_start, colon, block_id, cursor, separator,
+            note_start, colon, block_id, cursor, separator, hidden,
         );
     }
     let mut label_end = label_begin;
@@ -516,6 +539,7 @@ fn scan_relation_block_id(
         direction,
         note,
         quoted,
+        hidden,
         note_start,
         colon,
         block_id,
@@ -527,6 +551,7 @@ fn scan_relation_block_id(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_relation_quoted_label(
     line: &str,
     base: usize,
@@ -541,8 +566,9 @@ fn scan_relation_quoted_label(
     block_id: String,
     pipe: usize,
     separator: (usize, usize),
+    hidden: bool,
 ) -> ScannedRelation {
-    let label_begin = pipe + 1;
+    let label_begin = separator.1 - base;
     debug_assert_eq!(line.as_bytes()[label_begin], b'"');
     let mut cursor = label_begin + 1;
     let mut closed = None;
@@ -559,6 +585,7 @@ fn scan_relation_quoted_label(
             raw: line[tilde..].to_string(),
             start,
             end: base + line.len(),
+            hidden,
         };
     };
     let label_raw = line[label_begin + 1..close].to_string();
@@ -604,6 +631,7 @@ fn scan_relation_quoted_label(
         direction,
         note,
         quoted,
+        hidden,
         note_start,
         colon,
         block_id,
@@ -625,6 +653,7 @@ fn complete_relation(
     direction: RelationDirection,
     note: String,
     quoted: bool,
+    hidden: bool,
     note_start: usize,
     colon: usize,
     block_id: String,
@@ -647,6 +676,7 @@ fn complete_relation(
         note,
         block_id: block_id.clone(),
         quoted,
+        hidden,
         label: label.clone(),
         label_quoted,
         start,

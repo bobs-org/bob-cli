@@ -307,3 +307,85 @@ fn relation_grammar_absent_without_tilde() {
     assert!(json.get("relations").is_none());
     assert!(json.get("relation_grammar").is_none());
 }
+
+// LD1: `||` marks the label hidden, keeps the plain spelling, and spans
+// both pipes.
+#[test]
+fn relation_double_pipe_marks_label_hidden() {
+    let json = parse_json("Fix bug ~work:foo||see");
+    assert_eq!(
+        json["relations"],
+        serde_json::json!([{
+            "raw": "~work:foo||see",
+            "direction": "to",
+            "note": "work",
+            "block_id": "foo",
+            "quoted": false,
+            "hidden": true,
+            "label": "see",
+            "label_range": { "start": 19, "end": 22 },
+            "range": { "start": 8, "end": 22 },
+        }])
+    );
+    assert_eq!(
+        json["spans"],
+        serde_json::json!([
+            { "start": 8, "end": 9, "kind": "relation_sigil" },
+            { "start": 9, "end": 13, "kind": "relation_note" },
+            { "start": 14, "end": 17, "kind": "relation_block_id" },
+            { "start": 17, "end": 19, "kind": "relation_label_separator" },
+            { "start": 19, "end": 22, "kind": "relation_label" },
+        ])
+    );
+
+    let from = parse_json("Fix bug ~~work:foo||see");
+    assert_eq!(from["relations"][0]["direction"], "from");
+    assert_eq!(from["relations"][0]["hidden"], true);
+
+    let quoted = parse_json("Fix bug ~work:foo||\"follow up of\"");
+    assert_eq!(quoted["relations"][0]["hidden"], true);
+    assert_eq!(quoted["relations"][0]["label"], "follow up of");
+}
+
+// LD2: an empty `||` still needs `relation_label`.
+#[test]
+fn relation_empty_double_pipe_needs_relation_label() {
+    for draft in ["Fix it ~work:foo||", "Fix it ~~work:foo||"] {
+        let json = parse_json(draft);
+        assert_eq!(
+            json["needs"],
+            serde_json::json!(["relation_label"]),
+            "{draft}"
+        );
+        assert!(json.get("relations").is_none(), "{draft}");
+    }
+}
+
+// LD3: a third pipe is a teaching error, not a label.
+#[test]
+fn relation_triple_pipe_is_teaching_error() {
+    for draft in ["Fix it ~work:foo|||see", "Fix it ~work:foo|||"] {
+        let json = parse_json(draft);
+        assert!(json.get("relations").is_none(), "{draft}");
+        let diagnostics = json["diagnostics"].as_array().unwrap();
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic["code"] == "invalid_relation"
+                    && diagnostic["message"]
+                        == "use || to hide a label, | to name one"
+            }),
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap()
+        );
+    }
+}
+
+// LD4: a single `|` never reports `hidden`, so older JSON stays
+// byte-identical.
+#[test]
+fn relation_single_pipe_omits_hidden() {
+    let json = parse_json("Fix bug ~work:foo|see");
+    assert!(json["relations"][0].get("hidden").is_none());
+    let partial = parse_json("Fix bug ~work:foo|");
+    assert_eq!(partial["needs"], serde_json::json!(["relation_label"]));
+}

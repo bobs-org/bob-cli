@@ -454,12 +454,78 @@ fn write_payloads(
     Ok(())
 }
 
-fn shell_word(name: &str) -> String {
+pub(crate) fn shell_word(name: &str) -> String {
     if name.contains([' ', '\t', '"', '\'']) {
         format!("\"{}\"", name.replace('"', "\\\""))
     } else {
         name.to_string()
     }
+}
+
+/// One `relation_label.hide` journal append the capture commit could not
+/// write. Failures never fail the capture: the caller reports each one
+/// with its retry command.
+pub(crate) struct FailedHide {
+    pub(crate) name: String,
+    pub(crate) error: String,
+}
+
+/// Append one `relation_label.hide` event per label after a successful
+/// capture commit, under the same lock discipline as `bob relations
+/// hide`. When the lock itself is busy, every label fails with the lock
+/// error and no event is written.
+pub(crate) fn append_hide_events(
+    vault: &std::path::Path,
+    labels: &[(String, String)],
+    via: &str,
+) -> Vec<FailedHide> {
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    let failed = |error: String| {
+        labels
+            .iter()
+            .map(|(_, name)| FailedHide {
+                name: name.clone(),
+                error: error.clone(),
+            })
+            .collect()
+    };
+    let _lock = match ob::acquire_lock_waiting(LOCK_WAIT, || {}) {
+        Ok(lock) => lock,
+        Err(error) => {
+            let message = match error {
+                LockWaitError::Timeout { path } => format!(
+                    "another Bob vault maintenance run is already active \
+                     (waited on {})",
+                    path.display()
+                ),
+                other => other.to_string(),
+            };
+            return failed(message);
+        }
+    };
+    let host = journal::host_label();
+    let ts = journal::event_timestamp();
+    let mut failures = Vec::new();
+    for (key, name) in labels {
+        let payload = EventPayload::Hide {
+            key: key.clone(),
+            name: name.clone(),
+        };
+        if let Err(error) =
+            journal::append_event_at(vault, &host, &payload, via, ts)
+        {
+            failures.push(FailedHide {
+                name: name.clone(),
+                error: format!(
+                    "append relation journal in {}: {error}",
+                    vault.display()
+                ),
+            });
+        }
+    }
+    failures
 }
 
 fn print_success(kind: WriteKind, report: &WriteReport, format: OutputFormat) {

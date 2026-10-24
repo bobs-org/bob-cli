@@ -1435,6 +1435,7 @@ impl ItemDependencySet {
                 note: entry.note.clone(),
                 block_id: entry.block_id.clone(),
                 quoted: entry.quoted,
+                hidden: entry.hidden,
                 label: entry.label.clone(),
                 start: entry.start,
                 end: entry.end,
@@ -1536,6 +1537,7 @@ pub(crate) fn execution_relations(
             note: entry.note.clone(),
             block_id: entry.block_id.clone(),
             quoted: entry.quoted,
+            hidden: entry.hidden,
             label: entry.label.clone(),
         })
         .collect()

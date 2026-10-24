@@ -108,8 +108,8 @@ anything is written, and any failure rolls the whole batch back.
 | `*note:block-id` with no owner | Incomplete: a blocked task is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
 | `*note:block-id +query` | Incomplete: choose the existing owner with the `task_parent` picker; execution refuses until the selection is complete |
 | `+query *note:block-id` | Incomplete: choose the blocking owner with the `task_parent` picker |
-| `~note:block-id[\|"label"]` | Relation link: the captured (or explicitly selected) task links to `note.md`'s `^block-id` task, with an optional label; nested notes use `~projects/foo:bar`, notes with spaces use `~"Shopping List":bar`, labels use `~note:id\|see` or `~note:id\|"follow-up of"`. Quote `~` on shells that expand it |
-| `~`, `~query`, `~note:`, `~~note:block-id` | Incomplete: the relation picker is still open (`capture-parse` needs `relation_target`); a label position needs `relation_label`; execution refuses with a teaching error |
+| `~note:block-id[\|"label"]` | Relation link: the captured (or explicitly selected) task links to `note.md`'s `^block-id` task, with an optional label; nested notes use `~projects/foo:bar`, notes with spaces use `~"Shopping List":bar`, labels use `~note:id\|see` or `~note:id\|"follow-up of"`. A `~note:id\|\|see` spelling stores the identical label and hides it from suggestions once the capture succeeds (a one-off). Quote `~` on shells that expand it |
+| `~`, `~query`, `~note:`, `~~note:block-id`, `~note:id\|`, `~note:id\|\|` | Incomplete: the relation picker is still open (`capture-parse` needs `relation_target`); a label position needs `relation_label`; execution refuses with a teaching error |
 | `~~note:block-id[\|"label"]` | Reverse relation: the named task links to the captured (or explicitly selected) task; the captured task is the target, so it is always minted; the named task's LINKS line must be editable |
 | `^route:block-id ~note:id`, `~note:id ^route:block-id`, `^route:block-id ~~note:id` | Relate an existing owner; `^route:id` is a bare owner alias here and does not create a Pomodoro link |
 | `~note:block-id` with no owner | Incomplete: a relation target is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
@@ -2311,6 +2311,7 @@ uses mode `task_dependency` and reports `relationship_needs_text`, as
 Fix flaky capture retries ~bob_done:capture-star|"follow-up of"
 Write the outline ~~sase_blog:prj|"next step"
 @bob+fix-retries ~sase:retry-design|see
+Fix trip ~work:foo||prompted-by
 ```
 
 **Meaning.** `~note:block-id` means this item's task relates to that
@@ -2318,6 +2319,12 @@ task. `~~note:block-id` means that task relates to this item's task.
 A label after `|` is phrased from the source's side
 (`S — ‹label› → T`); write `|"follow-up of"` for multi-word labels.
 Labels obey the [relation label rules](task-relations.md#32-labels).
+A label after `||` is a one-off: the stored Markdown is identical to
+the `|` form, but the label hides from suggestions once the capture
+succeeds. Hiding a visible existing label warns with its link count;
+hiding an already-hidden label is a silent no-op. A failed journal
+append never fails the capture — it warns with the exact
+`bob relations hide` retry command instead.
 
 **Guards.** A `~` / `~~` token is a directive only when it sits in the
 same leading or trailing run as `&` / `*`, whitespace-delimited. A
@@ -2325,11 +2332,12 @@ mid-line `~foo:bar` stays body text. The byte after the sigil is not
 whitespace or `/` (so `~/Downloads` stays literal), and not a digit
 when the token has no `:` (so `~5m`, `~2h`, `~5pm` stay literal).
 `~~old~~` is strikethrough, `x~~1` / `=~~2` teach "use one `~` list",
-and `=~2` / `x~1` keep their drop-list meaning. `\~` escapes the
-sigil where it would otherwise be a directive; `[[…]]` and backtick
-spans are never scanned. An unresolved bare or partial sigil refuses
-on submit with `` `~` needs a task; choose one, or write `\~` for a
-literal tilde ``.
+and `=~2` / `x~1` keep their drop-list meaning. A third pipe is a
+teaching error (`use || to hide a label, | to name one`). `\~`
+escapes the sigil where it would otherwise be a directive; `[[…]]`
+and backtick spans are never scanned. An unresolved bare or partial
+sigil refuses on submit with `` `~` needs a task; choose one, or write
+`\~` for a literal tilde ``.
 
 **Targets.** A `~` target is any task with a block id: open, closed,
 any active note, a daily note, or `done/`. A mirror is skipped for
@@ -2363,8 +2371,9 @@ dependency style, for example:
 ```
 
 An existing-owner rerun of the same edge reports `🪢 unchanged`; a
-new label reports `🪢 relabeled`. Dry runs say `would link to` /
-`would now link here` / `would relabel`.
+new label reports `🪢 relabeled`. A one-off hide prints
+`🪢 hides "see" from suggestions (2 links)`. Dry runs say
+`would link to` / `would now link here` / `would relabel`.
 
 **JSON.** Every `schema_version` stays 1 and every field is
 additive. `capture-parse` adds `relations[]` (top-level and per
@@ -2377,8 +2386,12 @@ the draft contains a `~` byte. `capture-complete` adds the
 `capture-task-id` adds `relation_to_replacement` and
 `relation_from_replacement`. `capture` adds, per item,
 `relation_updates[]`, `linked_from_line_updates[]`,
-`minted_relation_block_ids[]`, and `mirror_skipped[]` (all omitted
-when empty). See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
+`minted_relation_block_ids[]`, `mirror_skipped[]`, and
+`relation_label_hides[]` (`{label, key, existing_count, was_hidden,
+action: hide|already_hidden}`, pre-capture counts, omitted when
+empty), plus a `hides_existing_relation_label` warning object
+(`{code, label, count, message}`) when a one-off hides a visible
+existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
 
 ### Completing tasks with '!'
 

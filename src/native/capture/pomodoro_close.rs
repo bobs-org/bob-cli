@@ -969,7 +969,7 @@ fn plan_reset_link_item(
     parsed: ParsedCaptureText,
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    _warnings: &mut Vec<String>,
+    _warnings: &mut Vec<CaptureWarning>,
     day_file: &Path,
     rel: &str,
     reset: &capture_pomodoro_close::ResetPlan,
@@ -1109,6 +1109,7 @@ fn plan_reset_link_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1254,6 +1255,7 @@ fn plan_reset_task_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1365,6 +1367,7 @@ fn plan_reset_whole_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1425,7 +1428,7 @@ pub(super) fn plan_pomodoro_close_item(
     now: chrono::NaiveDateTime,
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_close_conflicts(&parsed, request)?;
@@ -1464,14 +1467,17 @@ pub(super) fn plan_pomodoro_close_item(
     };
     let (mut summary, extra_warnings) =
         build_close_summary_json(&spec, &rel, &plan, now);
-    warnings.extend(plan.warnings.clone());
-    warnings.extend(extra_warnings.clone());
+    warnings.extend(plan.warnings.iter().cloned().map(CaptureWarning::from));
+    warnings.extend(extra_warnings.iter().cloned().map(CaptureWarning::from));
     // Surface close warnings at the top level as well.
     let mut all_warnings = plan.warnings.clone();
     all_warnings.extend(extra_warnings);
     for warning in &all_warnings {
-        if !warnings.contains(warning) {
-            warnings.push(warning.clone());
+        if !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
+        {
+            warnings.push(warning.clone().into());
         }
     }
     stage_close_plan(planner, &plan)?;
@@ -1582,6 +1588,7 @@ pub(super) fn plan_pomodoro_close_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1746,7 +1753,7 @@ pub(super) fn link_existing_task_into_running(
     _route: &str,
     _block_id: &str,
     _today: chrono::NaiveDate,
-    _warnings: &mut Vec<String>,
+    _warnings: &mut Vec<CaptureWarning>,
     _day_file: &Path,
     day_contents: &str,
     block_link: &str,
@@ -1850,7 +1857,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     now: chrono::NaiveDateTime,
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     block_id: &str,
     close_spec: PomodoroCloseSpec,
     dependency_ctx: &mut DependencyContext,
@@ -2182,8 +2189,11 @@ pub(super) fn plan_pomodoro_close_link_item(
     let (mut summary, extra_warnings) =
         build_close_summary_json(&close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
-        if !warnings.contains(warning) {
-            warnings.push(warning.clone());
+        if !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
+        {
+            warnings.push(warning.clone().into());
         }
     }
     stage_close_plan(planner, &plan)?;
@@ -2328,6 +2338,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2342,7 +2353,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     now: chrono::NaiveDateTime,
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     route: &str,
     block_id: &str,
     close_spec: &PomodoroCloseSpec,
@@ -2469,8 +2480,11 @@ pub(super) fn plan_pomodoro_close_task_item(
     let (mut summary, extra_warnings) =
         build_close_summary_json(close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
-        if !warnings.contains(warning) {
-            warnings.push(warning.clone());
+        if !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
+        {
+            warnings.push(warning.clone().into());
         }
     }
     stage_close_plan(planner, &plan)?;
@@ -2641,6 +2655,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

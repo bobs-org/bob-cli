@@ -330,7 +330,7 @@ fn relation_label_completion_field_at(
         true,
     );
     for scanned in scan_line_relations(line.text, line.start) {
-        let (start, end, separator) = match &scanned {
+        let (start, end, separator, hidden) = match &scanned {
             ScannedRelation::Complete(entry) => {
                 let Some((separator, _)) = entry.separator else {
                     continue;
@@ -338,20 +338,28 @@ fn relation_label_completion_field_at(
                 if cursor <= separator || cursor > entry.end {
                     continue;
                 }
-                (entry.start, entry.end, separator)
+                (entry.start, entry.end, separator, entry.hidden)
             }
-            ScannedRelation::PartialLabel { raw, start, end } => {
+            ScannedRelation::PartialLabel {
+                raw,
+                start,
+                end,
+                hidden,
+            } => {
                 if cursor < *start || cursor > *end {
                     continue;
                 }
-                let Some(pipe) = raw.rfind('|') else {
+                // The first pipe opens the separator: a `||` probe keeps
+                // both pipes in the replacement so an accept preserves
+                // the one-off spelling.
+                let Some(pipe) = raw.find('|') else {
                     continue;
                 };
                 let separator = *start + pipe;
                 if cursor <= separator {
                     continue;
                 }
-                (*start, *end, separator)
+                (*start, *end, separator, *hidden)
             }
             _ => continue,
         };
@@ -374,6 +382,12 @@ fn relation_label_completion_field_at(
         let raw_query = line
             .text
             .get(separator + 1 - line.start..query_end - line.start)?;
+        // A `||` probe reads past the first pipe: drop the second one
+        // from the query so ranking sees the typed label text.
+        let raw_query = hidden
+            .then(|| raw_query.strip_prefix('|'))
+            .flatten()
+            .unwrap_or(raw_query);
         let raw_query = raw_query.strip_prefix('"').unwrap_or(raw_query);
         let query =
             raw_query.strip_suffix('"').unwrap_or(raw_query).to_string();
@@ -390,14 +404,15 @@ fn relation_label_completion_field_at(
 }
 
 /// Locate the relation token whose label separator sits at `separator`:
-/// the token's start plus its direction, so editors never re-lex the
-/// draft. The separator is the `|` byte the `relation_label` replacement
-/// starts at. Quoted note components are covered because the scan that
-/// produced the field already classified them.
+/// the token's start, its direction, and whether the separator was `||`,
+/// so editors never re-lex the draft. The separator is the first `|`
+/// byte the `relation_label` replacement starts at. Quoted note
+/// components are covered because the scan that produced the field
+/// already classified them.
 pub(crate) fn relation_label_token_at(
     raw_text: &str,
     separator: usize,
-) -> Option<(usize, RelationDirection)> {
+) -> Option<(usize, RelationDirection, bool)> {
     let line = split_physical_lines(raw_text)
         .into_iter()
         .find(|line| separator >= line.start && separator <= line.end)?;
@@ -405,18 +420,22 @@ pub(crate) fn relation_label_token_at(
         match &scanned {
             ScannedRelation::Complete(entry) => {
                 if entry.separator.map(|(start, _)| start) == Some(separator) {
-                    return Some((entry.start, entry.direction));
+                    return Some((entry.start, entry.direction, entry.hidden));
                 }
             }
-            ScannedRelation::PartialLabel { raw, start, .. } => {
-                let pipe = raw.rfind('|')?;
+            ScannedRelation::PartialLabel {
+                raw, start, hidden, ..
+            } => {
+                // The first pipe opens the separator; a `||`
+                // replacement starts at the first pipe too.
+                let pipe = raw.find('|')?;
                 if *start + pipe == separator {
                     let direction = if raw.starts_with("~~") {
                         RelationDirection::From
                     } else {
                         RelationDirection::To
                     };
-                    return Some((*start, direction));
+                    return Some((*start, direction, *hidden));
                 }
             }
             _ => {}

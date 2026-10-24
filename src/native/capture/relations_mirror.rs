@@ -72,7 +72,7 @@ pub(super) fn stage_linked_from_add(
     mirror_owner_block: &str,
     source: &(PathBuf, String),
     label: Option<&str>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Option<BlocksLineUpdateJson>, CaptureError> {
     let owner_display = display_relative(mirror_owner_relative);
     let owner_absolute = absolute_note(bob_dir, mirror_owner_relative);
@@ -83,7 +83,7 @@ pub(super) fn stage_linked_from_add(
                 "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: {error}",
                 owner = source.1,
                 error = error.message,
-            ));
+            ).into());
             return Ok(None);
         }
     };
@@ -95,7 +95,7 @@ pub(super) fn stage_linked_from_add(
                 "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: task ^{target} is missing or ambiguous there",
                 owner = source.1,
                 target = mirror_owner_block,
-            ));
+            ).into());
             return Ok(None);
         }
     };
@@ -114,7 +114,7 @@ pub(super) fn stage_linked_from_add(
         warnings.push(format!(
             "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: malformed LINKED FROM line left alone",
             owner = source.1,
-        ));
+        ).into());
         return Ok(None);
     }
     let existing: Vec<RelationEntry> = children
@@ -150,7 +150,7 @@ pub(super) fn stage_linked_from_add(
             warnings.push(format!(
                 "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: malformed LINKED FROM line left alone",
                 owner = source.1,
-            ));
+            ).into());
             Ok(None)
         }
         BlocksLinePlan::Edits { edits, report } => {

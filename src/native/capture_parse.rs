@@ -613,7 +613,9 @@ struct CaptureParseResult {
 }
 
 /// One complete `~note:block-id[|label]` modifier with its sigil-inclusive
-/// range and optional label range.
+/// range and optional label range. `hidden` is true for the `||label`
+/// spelling; it is omitted otherwise so drafts without `||` stay
+/// byte-identical.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ParseRelation {
     raw: String,
@@ -621,6 +623,8 @@ struct ParseRelation {
     note: String,
     block_id: String,
     quoted: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    hidden: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1320,6 +1324,7 @@ fn parse_relations(entries: &[RelationEntry]) -> Vec<ParseRelation> {
                 note: entry.note.clone(),
                 block_id: entry.block_id.clone(),
                 quoted: entry.quoted,
+                hidden: entry.hidden,
                 label: entry.label.clone(),
                 label_range,
                 range: SourceRange {

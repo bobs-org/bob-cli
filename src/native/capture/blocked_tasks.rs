@@ -247,7 +247,7 @@ pub(super) fn plan_blocked_task_writes(
     bob_dir: &Path,
     owner: &DependentRef,
     blocked_tasks: &[ParsedDependency],
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     options: ExistingDependencyOptions,
 ) -> Result<Vec<PlannedDependencyUpdate>, CaptureError> {
     refuse_closed_star_owner(ctx, planner, bob_dir, owner)?;

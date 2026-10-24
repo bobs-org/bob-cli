@@ -127,6 +127,7 @@ fn build_result_inner(
             relation: None,
             picker: None,
             hidden_count: None,
+            one_off: None,
         });
     }
 
@@ -199,11 +200,21 @@ fn build_result_inner(
             relation: None,
             picker: None,
             hidden_count: None,
+            one_off: None,
         });
     }
 
     let editor_item = capture_language::editor_item_at(raw_text, cursor);
     let mut hidden_count = None;
+    // A `||` probe is the `relation_label` context with `one_off`: the
+    // scan behind the field already classified the separator, so this
+    // never re-lexes the draft.
+    let one_off = field.context == CompletionContext::RelationLabel
+        && capture_language::relation_label_token_at(
+            raw_text,
+            field.replacement.0,
+        )
+        .is_some_and(|(_, _, hidden)| hidden);
     let (mut candidates, warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
@@ -370,7 +381,7 @@ fn build_result_inner(
         }
         CompletionContext::RelationLabel => {
             let (candidates, warnings, count) =
-                relation_label_suggestions(bob_dir, &field.query);
+                relation_label_suggestions(bob_dir, &field.query, one_off);
             hidden_count = Some(count);
             (candidates, warnings)
         }
@@ -424,7 +435,7 @@ fn build_result_inner(
     // field, never by re-lexing bytes here.
     let relation = if field.context == CompletionContext::RelationLabel {
         capture_language::relation_label_token_at(raw_text, field.replacement.0)
-            .map(|(start, direction)| CompletionRelation {
+            .map(|(start, direction, _)| CompletionRelation {
                 direction,
                 range: Replacement {
                     start,
@@ -479,6 +490,7 @@ fn build_result_inner(
         relation,
         picker,
         hidden_count,
+        one_off: one_off.then_some(true),
     })
 }
 

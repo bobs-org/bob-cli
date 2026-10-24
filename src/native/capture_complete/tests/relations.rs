@@ -336,6 +336,58 @@ fn relation_label_completions_carry_relation_and_owner() {
 }
 
 #[test]
+fn relation_label_double_pipe_keeps_pipes_and_reports_one_off() {
+    let temp = relation_fixture();
+    // A `||` probe reads the label text past both pipes: the query drops
+    // the second pipe, the typed replacement keeps `||`, every row gains
+    // the `||` hide form, and the response reports `one_off`.
+    let raw = "Use this @mac_inbox+owner ~tasks:target||follow";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    assert_eq!(value.query.as_deref(), Some("follow"));
+    assert_eq!(
+        &raw[value.replacement.start..value.replacement.end],
+        "||follow"
+    );
+    let json = serde_json::to_value(&value).expect("serialize one-off");
+    assert_eq!(json["one_off"], true);
+    let rows = json["candidates"].as_array().expect("rows");
+    let typed = &rows[0];
+    assert_eq!(typed["typed"], true);
+    assert_eq!(typed["replacement"], "||follow");
+    assert_eq!(typed["hide_replacement"], "||follow");
+    let catalog = rows
+        .iter()
+        .find(|row| row["key"] == "follow-up of")
+        .expect("catalog row");
+    assert_eq!(catalog["replacement"], "||\"follow-up of\"");
+    assert_eq!(catalog["hide_replacement"], "||\"follow-up of\"");
+
+    // The empty `||` probe is the same context with an empty query.
+    let raw = "Use this @mac_inbox+owner ~tasks:target||";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    assert_eq!(value.query.as_deref(), Some(""));
+    assert_eq!(&raw[value.replacement.start..value.replacement.end], "||");
+    let json = serde_json::to_value(&value).expect("serialize empty probe");
+    assert_eq!(json["one_off"], true);
+
+    // A `|` probe omits `one_off` but still carries `hide_replacement`
+    // on every row.
+    let raw = "Use this @mac_inbox+owner ~tasks:target|follow";
+    let value = result(temp.path(), raw, raw.len());
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    let json = serde_json::to_value(&value).expect("serialize pipe probe");
+    assert!(json.get("one_off").is_none(), "{json}");
+    for row in json["candidates"].as_array().expect("rows") {
+        let hide = row["hide_replacement"].as_str().expect("hide form");
+        assert!(hide.starts_with("||"), "{row}");
+    }
+    let typed = &json["candidates"][0];
+    assert_eq!(typed["replacement"], "|follow");
+}
+
+#[test]
 fn relation_label_leading_and_dependency_tail_keep_narrow_ranges() {
     let temp = relation_fixture();
     for (raw, token_start, separator, owner) in [

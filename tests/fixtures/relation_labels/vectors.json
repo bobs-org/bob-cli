@@ -318,5 +318,105 @@
       ],
       "expected": ["inspired by", "uninspired"]
     }
+  ],
+  "grammar": [
+    {
+      "name": "LD1 single pipe stays visible",
+      "draft": "Fix trip ~tasks:target|see",
+      "status": "complete",
+      "direction": "to",
+      "hidden": false,
+      "label": "see",
+      "separator": [22, 23]
+    },
+    {
+      "name": "LD2 double pipe hides the label",
+      "draft": "Fix trip ~tasks:target||see",
+      "status": "complete",
+      "direction": "to",
+      "hidden": true,
+      "label": "see",
+      "separator": [22, 24]
+    },
+    {
+      "name": "LD3 reverse double pipe hides the label",
+      "draft": "Fix trip ~~tasks:source||see",
+      "status": "complete",
+      "direction": "from",
+      "hidden": true,
+      "label": "see",
+      "separator": [23, 25]
+    },
+    {
+      "name": "LD4 double pipe with a quoted label",
+      "draft": "Fix trip ~tasks:target||\"follow-up of\"",
+      "status": "complete",
+      "direction": "to",
+      "hidden": true,
+      "label": "follow-up of",
+      "separator": [22, 24]
+    },
+    {
+      "name": "LD5 single pipe with a quoted label",
+      "draft": "Fix trip ~tasks:target|\"follow-up of\"",
+      "status": "complete",
+      "direction": "to",
+      "hidden": false,
+      "label": "follow-up of",
+      "separator": [22, 23]
+    },
+    {
+      "name": "LD6 empty double pipe needs a label and hides",
+      "draft": "Fix trip ~tasks:target||",
+      "status": "label_need",
+      "hidden": true
+    },
+    {
+      "name": "LD7 empty single pipe needs a label",
+      "draft": "Fix trip ~tasks:target|",
+      "status": "label_need",
+      "hidden": false
+    },
+    {
+      "name": "LD8 triple pipe is a teaching error",
+      "draft": "Fix trip ~tasks:target|||see",
+      "status": "invalid",
+      "message": "use || to hide a label, | to name one"
+    },
+    {
+      "name": "LD9 trailing triple pipe is a teaching error",
+      "draft": "Fix trip ~tasks:target|||",
+      "status": "invalid",
+      "message": "use || to hide a label, | to name one"
+    },
+    {
+      "name": "LD10 separator spans are byte offsets past multibyte text",
+      "draft": "Fix 🪢 trip ~work:foo||see",
+      "status": "complete",
+      "direction": "to",
+      "hidden": true,
+      "label": "see",
+      "separator": [23, 25]
+    },
+    {
+      "name": "LD11 bare double pipes are never scanned",
+      "draft": "a || b",
+      "status": "none"
+    },
+    {
+      "name": "LD12 spaced pipes stay unglued until the rewrite glues them",
+      "draft": "Fix ~tasks:target ||",
+      "status": "complete",
+      "direction": "to",
+      "hidden": false,
+      "label": null,
+      "separator": null
+    },
+    {
+      "name": "LD13 open quote after a double pipe hides",
+      "draft": "Fix trip ~tasks:target||\"open",
+      "status": "label_need",
+      "hidden": true
+    }
   ]
 }

@@ -53,6 +53,7 @@ Incomplete picker input is labeled **picker** and is refused if you submit it.
 | `*query` | **Picker:** choose a blocked task | [`*query`](#star-picker) |
 | `^route:block-id *note:id` | Existing owner blocks an existing task | [Block from an existing owner](#star-existing) |
 | `~note:block-id` | This task links to that task, with an optional label | [`~note:block-id`](#tilde-link) |
+| `~note:block-id\|\|label` | Same link; the label hides from suggestions once the capture succeeds (a one-off) | [`~note:block-id`](#tilde-link) |
 | `~~note:block-id` | That task links to this task, with an optional label | [`~~note:block-id`](#tilde-tilde-link) |
 | `^route:block-id ~note:id` | Relate an existing owner | [Relate an existing owner](#tilde-existing) |
 | `!` / `!query` | **Picker:** choose a task to complete | [`!`](#bang-picker) |
@@ -107,7 +108,7 @@ what they attach to, not as one global operator.
 | `*` | `*note:block-id` | Blocked-task (star) link |
 | `*` | `x*` | Park Task Links on close |
 | `*` | line-initial bare `*` | Never a blocked-task marker |
-| `~` | `~note:block-id[\|"label"]` | Relation link ([`~`](#tilde-link)) |
+| `~` | `~note:block-id[\|"label"]`, `~note:block-id\|\|"label"` | Relation link ([`~`](#tilde-link)); `||` hides the label from suggestions once the capture succeeds |
 | `~` | `x~` / `=~` | Drop Task Links on close / drop on start |
 | `~` | `~/path`, `~5m`, mid-line `~x:y` | Never a relation marker |
 | `~~` | `~~note:block-id[\|"label"]` | Reverse relation link ([`~~`](#tilde-tilde-link)) |
@@ -662,16 +663,20 @@ labels use `~note:id|see` or `~note:id|"follow-up of"`. Quote `~` on
 the shell. The target may be open, closed, in any active note, a daily
 note, or `done/` (a mirror is skipped for archived and previous-daily
 targets). Relations are inert: no status, lane, Pomodoro, or field
-changes.
+changes. A `||` spelling (`~note:id||see`,
+`~note:id||"follow-up of"`) stores the identical label and hides it
+from suggestions once the capture succeeds; a third pipe is a teaching
+error (`use || to hide a label, | to name one`).
 
 The label pipe attaches directly to the target. Editors using
 [`capture-rewrite`](../capture.md#bob-capture-rewrite) with `--cursor` just
 after a newly typed pipe can attach it across spaces or tabs
-(`~note:id |` → `~note:id|`); direct
+(`~note:id |` → `~note:id|`, `~note:id ||` → `~note:id||`); direct
 `bob capture` input does not apply that rewrite.
 
 ```bash
 bob capture 'Fix flaky capture retries ~sase:retry-design|see'
+bob capture 'Fix trip ~work:foo||prompted-by'
 ```
 
 ```text { .no-copy title="Output" }
@@ -682,7 +687,7 @@ bob capture 'Fix flaky capture retries ~sase:retry-design|see'
 A selected `~note:block-id` with no owner is incomplete
 (`dependency_target`): type task text or `+` to choose an existing
 owner. A bare `~` / `~query` / `~note:` needs `relation_target`; a
-label position needs `relation_label`.
+label position (`~note:id|`, `~note:id||`) needs `relation_label`.
 
 Contract: [Linking tasks with '~' and '~~'](../capture.md#linking-tasks).
 

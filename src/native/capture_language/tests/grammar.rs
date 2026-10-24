@@ -2637,3 +2637,107 @@ fn bang_claim_covers_the_contract_table() {
         "{forced}"
     );
 }
+
+#[test]
+fn double_pipe_grammar_vectors() {
+    use crate::native::capture_language::editor_model::RelationDirection;
+    use crate::native::capture_language::relations::{
+        scan_line_relations, ScannedRelation,
+    };
+
+    #[derive(Debug, serde::Deserialize)]
+    struct GrammarFile {
+        grammar: Vec<GrammarCase>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct GrammarCase {
+        name: String,
+        draft: String,
+        status: String,
+        #[serde(default)]
+        direction: Option<String>,
+        #[serde(default)]
+        hidden: Option<bool>,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        separator: Option<(usize, usize)>,
+        #[serde(default)]
+        message: Option<String>,
+    }
+
+    let file: GrammarFile = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/relation_labels/vectors.json"
+    ))
+    .expect("relation label vectors parse");
+    assert!(!file.grammar.is_empty(), "LD vectors are present");
+    for case in &file.grammar {
+        let scans = scan_line_relations(&case.draft, 0);
+        match case.status.as_str() {
+            "complete" => {
+                assert_eq!(scans.len(), 1, "LD {}: {}", case.name, case.draft);
+                let ScannedRelation::Complete(entry) = &scans[0] else {
+                    panic!("LD {} is not complete: {:?}", case.name, scans);
+                };
+                let direction = match case.direction.as_deref() {
+                    Some("from") => RelationDirection::From,
+                    _ => RelationDirection::To,
+                };
+                assert_eq!(entry.direction, direction, "LD {}", case.name);
+                assert_eq!(
+                    entry.hidden,
+                    case.hidden.unwrap_or(false),
+                    "LD {}",
+                    case.name
+                );
+                assert_eq!(entry.label, case.label, "LD {}", case.name);
+                assert_eq!(entry.separator, case.separator, "LD {}", case.name);
+            }
+            "label_need" => {
+                assert_eq!(scans.len(), 1, "LD {}: {}", case.name, case.draft);
+                let ScannedRelation::PartialLabel { hidden, .. } = &scans[0]
+                else {
+                    panic!("LD {} is not a label need: {:?}", case.name, scans);
+                };
+                assert_eq!(
+                    *hidden,
+                    case.hidden.unwrap_or(false),
+                    "LD {}",
+                    case.name
+                );
+            }
+            "target_need" => {
+                assert!(
+                    matches!(
+                        scans.as_slice(),
+                        [ScannedRelation::PartialTarget { .. }]
+                    ),
+                    "LD {}: {scans:?}",
+                    case.name
+                );
+            }
+            "invalid" => {
+                assert_eq!(scans.len(), 1, "LD {}: {}", case.name, case.draft);
+                let ScannedRelation::Invalid(invalid) = &scans[0] else {
+                    panic!("LD {} is not invalid: {:?}", case.name, scans);
+                };
+                let message = case.message.as_deref().unwrap_or_default();
+                assert!(
+                    invalid.message.contains(message),
+                    "LD {}: {:?}",
+                    case.name,
+                    invalid.message
+                );
+            }
+            "none" => {
+                assert!(
+                    scans.is_empty(),
+                    "LD {} scans nothing: {scans:?}",
+                    case.name
+                );
+            }
+            status => panic!("LD {} has unknown status {status}", case.name),
+        }
+    }
+}

@@ -796,6 +796,272 @@ fn previous_daily_target_skips_mirror() {
     );
 }
 
+// LD: a `||` one-off on a new label writes the plain label and one
+// `relation_label.hide` event, and dry-run JSON matches real-run JSON.
+#[test]
+fn ld_new_one_off_label_writes_plain_label_and_hides() {
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-new");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+
+    let json = capture_json(&vault, &day, "Fix trip ~work:foo||oneoff");
+    assert_eq!(
+        json["relation_label_hides"],
+        serde_json::json!([{
+            "label": "oneoff",
+            "key": "oneoff",
+            "existing_count": 0,
+            "was_hidden": false,
+            "action": "hide",
+        }]),
+        "{json}"
+    );
+    assert!(json.get("warnings").is_none(), "{json}");
+
+    // The stored Markdown is identical to the `|` form: no pipes survive
+    // in the LINKS entry.
+    let inbox = read(&vault, "mac_inbox.md");
+    assert!(
+        inbox.contains("- 🪢 **LINKS:** oneoff [[work#^foo]]"),
+        "{inbox}"
+    );
+    assert!(!inbox.contains("||"), "{inbox}");
+
+    // Exactly one hide event, from the real run only.
+    let events = journal_lines(&vault);
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event: serde_json::Value =
+        serde_json::from_str(&events[0]).expect("journal JSON");
+    assert_eq!(event["kind"], "relation_label.hide");
+    assert_eq!(event["key"], "oneoff");
+    assert_eq!(event["name"], "oneoff");
+    assert_eq!(event["via"], "bob-cli");
+}
+
+// LD: an existing visible label warns in JSON and human output, with the
+// pre-capture count, and hides on commit.
+#[test]
+fn ld_visible_existing_label_warns_and_hides() {
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-visible");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Target ^target\n  - 🪢 **LINKS:** see [[work#^foo]]\n  - 🪢 **LINKS:** look [[work#^foo]]\n",
+    );
+
+    let json = capture_json(&vault, &day, "Fix thing ~tasks:target||see");
+    assert_eq!(
+        json["relation_label_hides"],
+        serde_json::json!([{
+            "label": "see",
+            "key": "see",
+            "existing_count": 1,
+            "was_hidden": false,
+            "action": "hide",
+        }]),
+        "{json}"
+    );
+    let warnings = json["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| {
+            warning["code"] == "hides_existing_relation_label"
+                && warning["label"] == "see"
+                && warning["count"] == 1
+                && warning["message"].as_str().is_some_and(|message| {
+                    message.contains(
+                        "hides \"see\" from relation suggestions (1 link)",
+                    )
+                })
+        }),
+        "{json}"
+    );
+
+    // The human run hides a still-visible label, so the count is the
+    // pre-capture one.
+    let output = capture_human(&vault, &day, "Fix that ~tasks:target||look");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(
+        text.contains("🪢 hides \"look\" from suggestions (1 link)"),
+        "{text}"
+    );
+    let errors = stderr(&output);
+    assert!(
+        errors.contains("hides \"look\" from relation suggestions"),
+        "{errors}"
+    );
+
+    let events = journal_lines(&vault);
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(events[0].contains("\"key\":\"see\""), "{}", events[0]);
+    assert!(events[1].contains("\"key\":\"look\""), "{}", events[1]);
+}
+
+// LD: an already-hidden label writes no event and no warning.
+#[test]
+fn ld_hidden_label_writes_no_event() {
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-hidden");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Target ^target\n  - 🪢 **LINKS:** see [[work#^foo]]\n",
+    );
+    let _ = capture_json(&vault, &day, "First ~tasks:target||see");
+    assert_eq!(journal_lines(&vault).len(), 1);
+
+    let json = capture_json(&vault, &day, "Second ~tasks:target||see");
+    assert_eq!(
+        json["relation_label_hides"],
+        serde_json::json!([{
+            "label": "see",
+            "key": "see",
+            "existing_count": 2,
+            "was_hidden": true,
+            "action": "already_hidden",
+        }]),
+        "{json}"
+    );
+    assert!(json.get("warnings").is_none(), "{json}");
+    assert_eq!(journal_lines(&vault).len(), 1);
+
+    let output = capture_human(&vault, &day, "Third ~tasks:target||see");
+    assert_success(&output);
+    assert!(
+        !stdout(&output).contains("hides \"see\""),
+        "{}",
+        format_output(&output)
+    );
+}
+
+// LD: mixing `|x` and `||x` hides `x` either way, and repeated hides of
+// one key across items collapse to one journal event.
+#[test]
+fn ld_mixed_pipes_and_repeated_keys_collapse_to_one_event() {
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-mix");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+    write_file(
+        &vault.join("tasks.md"),
+        "- [ ] #task Target ^target\n  - 🪢 **LINKS:** see [[work#^foo]]\n",
+    );
+
+    let json = capture_json_env(
+        &vault,
+        &day,
+        "Mix ~tasks:target|see\n\nSecond ~tasks:target||see",
+        &[],
+    );
+    assert!(json["relation_label_hides"].is_null(), "{json}");
+    assert_eq!(
+        json["captures"][1]["relation_label_hides"],
+        serde_json::json!([{
+            "label": "see",
+            "key": "see",
+            "existing_count": 1,
+            "was_hidden": false,
+            "action": "hide",
+        }]),
+        "{json}"
+    );
+    let events = journal_lines(&vault);
+    assert_eq!(events.len(), 1, "{events:?}");
+}
+
+// LD: `-d` previews hides and warnings but writes nothing.
+#[test]
+fn ld_dry_run_previews_hides_without_writing() {
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-dry");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+    let output = bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", &day)
+        .arg("capture")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix trip ~work:foo||oneoff")
+        .output()
+        .expect("dry-run json");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(json["relation_label_hides"][0]["action"], "hide");
+    assert!(!vault.join("mac_inbox.md").exists());
+    assert!(!vault.join(".bob/relations").exists());
+}
+
+// LD: a read-only journal directory still captures; the failure shows
+// up as a `relation_label_hide_failed` warning with the retry command.
+#[test]
+#[cfg(unix)]
+fn ld_read_only_journal_still_captures_with_retry_warning() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_temp, vault, day) = setup("bob-cli-rel-ld-readonly");
+    write_file(&vault.join("work.md"), "- [ ] #task Design ^foo\n");
+    let journal_dir = vault.join(".bob/relations");
+    fs::create_dir_all(&journal_dir).expect("journal dir");
+    fs::set_permissions(&journal_dir, fs::Permissions::from_mode(0o555))
+        .expect("read-only journal dir");
+
+    let output = bob_command()
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", &day)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix trip ~work:foo||oneoff")
+        .output()
+        .expect("capture with read-only journal");
+    fs::set_permissions(&journal_dir, fs::Permissions::from_mode(0o755))
+        .expect("restore journal dir");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["dry_run"], false);
+    assert_eq!(json["relation_label_hides"][0]["action"], "hide");
+    let warnings = json["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| {
+            warning["code"] == "relation_label_hide_failed"
+                && warning["message"].as_str().is_some_and(|message| {
+                    message.contains("bob relations hide")
+                        && message.contains("--allow-unused")
+                        && message.contains("oneoff")
+                })
+        }),
+        "{json}"
+    );
+    assert!(
+        read(&vault, "mac_inbox.md").contains("Fix trip"),
+        "the capture itself still succeeds"
+    );
+}
+
+/// Every `relation_label.hide` journal line in the scratch vault.
+fn journal_lines(vault: &Path) -> Vec<String> {
+    let dir = vault.join(".bob/relations");
+    let mut lines = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return lines;
+    };
+    let mut paths: Vec<_> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let body = fs::read_to_string(&path).expect("journal file");
+        lines.extend(body.lines().map(str::to_string));
+    }
+    lines
+}
+
 // Dry-run human output says `would`.
 #[test]
 fn dry_run_human_says_would() {

@@ -443,37 +443,71 @@ fn rewrite_draft_attaches_a_pipe_after_a_relation_token() {
             "Fix trip ~tasks:target |",
             "Fix trip ~tasks:target|",
             "~tasks:target",
+            "|",
+            1usize,
         ),
         (
             "Fix trip ~~tasks:source |",
             "Fix trip ~~tasks:source|",
             "~~tasks:source",
+            "|",
+            1usize,
         ),
         (
             "Fix ~tasks:target \t |",
             "Fix ~tasks:target|",
             "~tasks:target",
+            "|",
+            1usize,
         ),
         (
             "Fix ~\"My Note\":target |",
             "Fix ~\"My Note\":target|",
             "~\"My Note\":target",
+            "|",
+            1usize,
         ),
         (
             "~tasks:target | Fix it",
             "~tasks:target| Fix it",
             "~tasks:target",
+            "|",
+            1usize,
         ),
         (
             "Fix ~tasks:target | @work",
             "Fix ~tasks:target| @work",
             "~tasks:target",
+            "|",
+            1usize,
+        ),
+        // A double pipe glues both pipes: the one-off spelling survives.
+        (
+            "Fix trip ~tasks:target ||",
+            "Fix trip ~tasks:target||",
+            "~tasks:target",
+            "||",
+            2usize,
+        ),
+        (
+            "Fix trip ~~tasks:source ||",
+            "Fix trip ~~tasks:source||",
+            "~~tasks:source",
+            "||",
+            2usize,
+        ),
+        (
+            "Fix ~tasks:target || @work",
+            "Fix ~tasks:target|| @work",
+            "~tasks:target",
+            "||",
+            2usize,
         ),
     ];
-    for (raw, expected, token) in cases {
-        // The cursor sits right after the typed `|`.
-        let pipe = raw.rfind('|').expect("pipe");
-        let cursor = pipe + 1;
+    for (raw, expected, token, pipes, pipe_len) in cases {
+        // The cursor sits right after the typed pipe(s).
+        let pipe = raw.rfind('|').expect("pipe") + 1 - pipe_len;
+        let cursor = pipe + pipe_len;
         let rewrite = rewrite_draft(raw, Some(cursor));
         assert_eq!(
             rewrite.rule,
@@ -482,10 +516,10 @@ fn rewrite_draft_attaches_a_pipe_after_a_relation_token() {
         );
         assert_eq!(rewrite.text, expected, "{raw}");
         let run_start = expected.find('|').expect("glued pipe");
-        assert_eq!(rewrite.cursor, Some(run_start + 1), "{raw}");
+        assert_eq!(rewrite.cursor, Some(run_start + pipe_len), "{raw}");
         assert_eq!(
             rewrite.summary.as_deref(),
-            Some(format!("Attached | to {token}").as_str()),
+            Some(format!("Attached {pipes} to {token}").as_str()),
             "{raw}"
         );
         assert_eq!(
@@ -520,7 +554,7 @@ fn rewrite_draft_attach_relation_label_exclusions() {
         ("Fix ~tasks:target\n|", "Fix ~tasks:target\n|".len()),
         ("Fix ~tasks: |", "Fix ~tasks: |".len()),
         ("Fix \\~tasks:target |", "Fix \\~tasks:target |".len()),
-        ("Fix ~tasks:target ||", "Fix ~tasks:target ||".len()),
+        ("Fix ~tasks:target |||", "Fix ~tasks:target |||".len()),
         ("Fix ~tasks:target |x", "Fix ~tasks:target |x".len()),
     ];
     for (raw, cursor) in cases {

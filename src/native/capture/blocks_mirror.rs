@@ -48,7 +48,7 @@ pub(super) fn stage_blocks_delta(
     owner_block: &str,
     dependent: &(String, String),
     delta: BlocksDelta,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<Option<(BlocksLineUpdateJson, TaskBlockRef)>, CaptureError> {
     if !ctx.blocks_lines_enabled() {
         return Ok(None);
@@ -68,7 +68,7 @@ pub(super) fn stage_blocks_delta(
                 "🧱 BLOCKS not updated for ^{owner} in {owner_display}: {error}",
                 owner = dependent.1,
                 error = error.message,
-            ));
+            ).into());
             return Ok(None);
         }
     };
@@ -80,7 +80,7 @@ pub(super) fn stage_blocks_delta(
                 "🧱 BLOCKS not updated for ^{owner} in {owner_display}: prerequisite task ^{target} is missing or ambiguous there",
                 owner = dependent.1,
                 target = owner_block,
-            ));
+            ).into());
             return Ok(None);
         }
     };
@@ -99,7 +99,7 @@ pub(super) fn stage_blocks_delta(
         warnings.push(format!(
             "🧱 BLOCKS not updated for ^{owner} in {owner_display}: malformed BLOCKS line left alone",
             owner = dependent.1,
-        ));
+        ).into());
         return Ok(None);
     }
     let desired = desired_after_delta(
@@ -121,7 +121,7 @@ pub(super) fn stage_blocks_delta(
             warnings.push(format!(
                 "🧱 BLOCKS not updated for ^{owner} in {owner_display}: malformed BLOCKS line left alone",
                 owner = dependent.1,
-            ));
+            ).into());
             Ok(None)
         }
         blocks_mod::BlocksLinePlan::Edits { edits, report } => {

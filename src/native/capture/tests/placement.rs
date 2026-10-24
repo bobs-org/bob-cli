@@ -363,6 +363,7 @@ fn json_success_shape_is_stable() {
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         }],
         None,
         None,

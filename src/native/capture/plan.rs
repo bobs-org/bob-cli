@@ -5,7 +5,7 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) items: Vec<PlannedCaptureItem>,
     pub(super) text_files: Vec<StagedTextFile>,
     pub(super) global_destination: Option<GlobalDestinationSummary>,
-    pub(super) warnings: Vec<String>,
+    pub(super) warnings: Vec<CaptureWarning>,
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
@@ -89,7 +89,11 @@ pub(super) fn plan_capture_batch_with_config_path(
         .map(|item| item.template_row.clone())
         .collect();
     let parsed_items = parsed_draft.items;
-    let mut warnings = parsed_draft.warnings;
+    let mut warnings: Vec<CaptureWarning> = parsed_draft
+        .warnings
+        .into_iter()
+        .map(CaptureWarning::Text)
+        .collect();
     let global_destination =
         parsed_draft.global.map(|global| GlobalDestinationSummary {
             mode: global.mode_label(),
@@ -214,14 +218,18 @@ pub(super) fn plan_capture_batch_with_config_path(
     // when a dependency write consulted the switch (§14.10). Plain
     // captures never touch the config and never warn.
     if let Some(warning) = dependency_ctx.blocks_lines_warning()
-        && !warnings.contains(&warning)
+        && !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
     {
-        warnings.push(warning);
+        warnings.push(warning.into());
     }
     if let Some(warning) = dependency_ctx.linked_from_lines_warning()
-        && !warnings.contains(&warning)
+        && !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
     {
-        warnings.push(warning);
+        warnings.push(warning.into());
     }
     Ok(PlannedCaptureBatch {
         items,
@@ -530,6 +538,7 @@ fn plan_ref_item(
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -546,7 +555,7 @@ pub(super) fn plan_capture_item(
     roll_seed: u64,
     planner: &mut CaptureBatchPlanner,
     clip_reservations: &mut capture_clip::ClipReservations,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
@@ -805,6 +814,7 @@ pub(super) fn plan_capture_item(
                 linked_from_line_updates: Vec::new(),
                 minted_relation_block_ids: Vec::new(),
                 mirror_skipped: Vec::new(),
+                relation_label_hides: Vec::new(),
             },
             clip_plan: None,
             pomodoro_refs,
@@ -1615,6 +1625,13 @@ pub(super) fn plan_capture_item(
         &request.bob_dir,
         dependency_block_refs,
     )?;
+    // One-off `||` labels hide after the notes commit succeeds. The
+    // hides ride the plan so dry runs preview them; the commit appends
+    // one `relation_label.hide` per distinct key that is not already
+    // hidden. Counts come from the pre-capture catalog.
+    let (relation_label_hides, relation_hide_warnings) =
+        plan_relation_label_hides(&request.bob_dir, &parsed.relations);
+    warnings.extend(relation_hide_warnings);
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
@@ -1753,6 +1770,7 @@ pub(super) fn plan_capture_item(
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
+            relation_label_hides,
         },
         clip_plan,
         pomodoro_refs,

@@ -222,6 +222,9 @@ pub(super) struct RelationCandidate {
 
 /// One canonical relation label suggestion. Corpus rows carry an occurrence
 /// count; a typed row is first and has `typed: true` instead.
+/// `replacement` keeps the probe's pipe count (`|` or `||`);
+/// `hide_replacement` is always the `||` form, so the app never builds
+/// either token itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RelationLabelSuggestion {
     pub(super) label: String,
@@ -231,6 +234,7 @@ pub(super) struct RelationLabelSuggestion {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) count: Option<usize>,
     pub(super) replacement: String,
+    pub(super) hide_replacement: String,
     #[serde(skip_serializing_if = "is_false")]
     pub(super) typed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -636,6 +640,11 @@ pub(super) struct CaptureCompleteResult {
     /// from every other context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation: Option<CompletionRelation>,
+    /// True when the `relation_label` probe sits in a `||` label.
+    /// Omitted from every other context and from `|` probes, so older
+    /// responses stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) one_off: Option<bool>,
     /// Parent-task picker scope and editing ranges; omitted from every
     /// other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,6 +673,7 @@ impl CaptureCompleteResult {
             relation: None,
             picker: None,
             hidden_count: None,
+            one_off: None,
         }
     }
 }

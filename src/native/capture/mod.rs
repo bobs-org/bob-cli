@@ -294,6 +294,11 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             );
         }
     }
+    let mut hide_failures = Vec::new();
+    if !request.dry_run {
+        hide_failures =
+            append_committed_relation_label_hides(&batch, &request.bob_dir);
+    }
     let mut result = CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
         batch.global_destination,
@@ -307,6 +312,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         pull_in,
         batch.inbox_route,
     );
+    result.warnings.extend(hide_failures);
     result.theme_refs = theme_refs;
     let has_template = result.template.is_some();
     save_template_shelf(&request, has_template, &mut result);
