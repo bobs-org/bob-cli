@@ -200,6 +200,11 @@ pub(crate) struct MoveRecord {
     pub(crate) source_path: PathBuf,
     pub(crate) dest_path: PathBuf,
     pub(crate) source_line: usize,
+    /// Exact 1-based landing line in the destination postimage. Carries
+    /// identity for id-less moves when the destination already holds
+    /// the same title/status or several identical roots move together,
+    /// so callers never search by unique title/status text.
+    pub(crate) dest_line: usize,
     pub(crate) title: String,
     pub(crate) old_block_id: Option<String>,
     pub(crate) new_block_id: Option<String>,
@@ -674,7 +679,7 @@ pub(crate) fn plan_task_move(
         true,
     );
 
-    let dest_with_insert = insert_into_dest(
+    let (dest_with_insert, insertion_line) = insert_into_dest(
         &dest_existing_repair.contents,
         &repaired_fragments,
         dest_kind,
@@ -726,6 +731,7 @@ pub(crate) fn plan_task_move(
 
     let mut moves = Vec::new();
     let mut carried_block_tag = false;
+    let mut dest_offset = 0;
     for (task, fragment) in selected.iter().zip(fragments.iter()) {
         if has_prj_is_blocked_tag(&task.line) {
             carried_block_tag = true;
@@ -740,11 +746,13 @@ pub(crate) fn plan_task_move(
         let new_dependency_id = new_block_id
             .as_ref()
             .and_then(|id| dependency_id(&dest_path, id).ok());
-        let _ = fragment;
+        let dest_line = insertion_line + dest_offset + 1;
+        dest_offset += fragment.lines().count().max(1);
         moves.push(MoveRecord {
             source_path: source_path.clone(),
             dest_path: dest_path.clone(),
             source_line: task.line_index + 1,
+            dest_line,
             title: task.title.clone(),
             old_block_id,
             new_block_id,
@@ -1728,14 +1736,21 @@ fn insert_into_dest(
     dest_contents: &str,
     fragments: &[String],
     dest_kind: DestKind,
-) -> Result<String, PlanError> {
+) -> Result<(String, usize), PlanError> {
     let insertion =
         join_fragments(fragments, document_line_ending(dest_contents));
     if let Some(insert_at) = tasks_intake_insert_byte(dest_contents) {
-        return Ok(insert_at_byte(dest_contents, insert_at, &insertion));
+        return Ok(insert_at_byte_with_line(
+            dest_contents,
+            insert_at,
+            &insertion,
+        ));
     }
     if dest_kind == DestKind::Area {
-        return Ok(append_tasks_section(dest_contents, &insertion));
+        let result = append_tasks_section(dest_contents, &insertion);
+        let prefix_len = result.len().saturating_sub(insertion.len());
+        let insertion_line = result[..prefix_len].matches('\n').count();
+        return Ok((result, insertion_line));
     }
     Err(PlanError::ProjectWithoutTasks {
         path: PathBuf::from("destination"),
@@ -1825,7 +1840,15 @@ fn tasks_intake_insert_byte(contents: &str) -> Option<usize> {
     Some(lines.iter().take(intake_end).map(|line| line.len()).sum())
 }
 
-fn insert_at_byte(contents: &str, index: usize, insertion: &str) -> String {
+/// Insert fragments at a byte offset, plus the 0-based line index of
+/// the first inserted line in the result. The index counts `'\n'` in
+/// the prefix plus any leading endings added before the insertion, so
+/// identical titles already at the destination never confuse it.
+fn insert_at_byte_with_line(
+    contents: &str,
+    index: usize,
+    insertion: &str,
+) -> (String, usize) {
     let ending = document_line_ending(contents);
     let mut addition = insertion.to_string();
     let needs_leading = index > 0 && !contents[..index].ends_with('\n');
@@ -1837,11 +1860,14 @@ fn insert_at_byte(contents: &str, index: usize, insertion: &str) -> String {
     } else if last_line_is_heading(&contents[..index]) {
         addition = format!("{ending}{addition}");
     }
+    let leading_len = addition.len().saturating_sub(insertion.len());
+    let insertion_line = (contents[..index].matches('\n').count())
+        + (addition[..leading_len].matches('\n').count());
     let mut result = String::with_capacity(contents.len() + addition.len());
     result.push_str(&contents[..index]);
     result.push_str(&addition);
     result.push_str(&contents[index..]);
-    result
+    (result, insertion_line)
 }
 
 fn last_line_is_heading(prefix: &str) -> bool {

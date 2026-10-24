@@ -86,11 +86,6 @@ pub(super) struct InboxRouteCandidate {
     pub(super) outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) moved: Option<serde_json::Value>,
-    /// The candidate root line's exact pre-move text. Never serialized:
-    /// relocation identity for id-less candidates when an earlier route
-    /// group already rewrote the source note.
-    #[serde(skip_serializing)]
-    pub(super) root_line: String,
     /// This candidate's move-group repair totals, for the human row.
     /// Never serialized: the JSON `moved` object keeps its contract
     /// shape and batch totals live in `repaired_files`.
@@ -146,7 +141,6 @@ pub(super) fn detect_inbox_routes(
 ) -> Result<InboxRouteReport, CaptureError> {
     let mut drafts = Vec::new();
     let mut original_contents = BTreeMap::new();
-    let mut current_contents = BTreeMap::new();
 
     for file in &planner.files {
         if !file.existed || !file.present || file.original == file.current {
@@ -222,9 +216,6 @@ pub(super) fn detect_inbox_routes(
             original_contents
                 .entry(relative_path.to_path_buf())
                 .or_insert_with(|| file.original.clone());
-            current_contents
-                .entry(relative_path.to_path_buf())
-                .or_insert_with(|| file.current.clone());
             drafts.push(CandidateDraft {
                 relative_path: relative_path.to_path_buf(),
                 original_line,
@@ -288,14 +279,6 @@ pub(super) fn detect_inbox_routes(
             .and_then(|stem| stem.to_str())
             .unwrap_or_default()
             .to_string();
-        // The exact pre-move root line: relocation identity for id-less
-        // candidates when an earlier route group rewrote the source.
-        // `line` above is 1-based in the same pre-move staged text.
-        let root_line = current_contents
-            .get(&draft.relative_path)
-            .and_then(|contents| contents.lines().nth(draft.current.line_index))
-            .unwrap_or_default()
-            .to_string();
         candidates.push(InboxRouteCandidate {
             key,
             n: index + 1,
@@ -311,7 +294,6 @@ pub(super) fn detect_inbox_routes(
             answer: None,
             outcome: "pending",
             moved: None,
-            root_line,
             repaired: None,
         });
     }
@@ -344,6 +326,7 @@ pub(super) fn detect_inbox_routes(
 /// edit), stamps each moved root line, and records landings for the block
 /// trackers and `open_notes`. Keeps only mark the report. Unanswered
 /// candidates stay pending. Nothing is written here; the caller commits.
+#[derive(Debug)]
 pub(super) struct AppliedInboxRoutes {
     pub(super) report: InboxRouteReport,
     pub(super) moves: Vec<RoutedTaskMove>,
@@ -447,22 +430,24 @@ pub(super) fn apply_inbox_routes(
     let mut renamed = Vec::new();
     let mut needs_reconcile = false;
     let mut moves = Vec::new();
+    // Exact 0-based source lines in the current staged texts, keyed by
+    // candidate index. Initialized from the pre-route report lines and
+    // remapped as earlier groups remove source blocks, so id-less
+    // selections stay exact when duplicate titles move together and
+    // never fall back to title/status text search.
+    let mut current_lines: BTreeMap<usize, usize> = report
+        .candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| (index, candidate.line.saturating_sub(1)))
+        .collect();
     for (source, dest, members) in &groups {
         let snapshot = destination_snapshot(bob_dir, planner)?;
-        let source_text = snapshot.notes.get(source).cloned();
         let mut selectors = Vec::with_capacity(members.len());
         for index in members {
             let candidate = &report.candidates[*index];
             if candidate.block_id.is_empty() {
-                let Some(source_text) = source_text.as_deref() else {
-                    return Err(CaptureError::io(format!(
-                        "routing lost its source note {}",
-                        source.display()
-                    )));
-                };
-                let Some(line) =
-                    relocate_source_line(source_text, settings, candidate)
-                else {
+                let Some(current) = current_lines.get(index).copied() else {
                     return Err(CaptureError::io(format!(
                         "routing lost candidate {} ({}) in {}",
                         candidate.n,
@@ -470,7 +455,7 @@ pub(super) fn apply_inbox_routes(
                         source.display()
                     )));
                 };
-                selectors.push(MoveSelector::Line(line));
+                selectors.push(MoveSelector::Line(current));
             } else {
                 selectors.push(MoveSelector::Block(candidate.block_id.clone()));
             }
@@ -478,14 +463,14 @@ pub(super) fn apply_inbox_routes(
         let request = MoveRequest {
             source: display_relative(source),
             dest: display_relative(dest),
-            selectors,
+            selectors: selectors.clone(),
             allow_closed: true,
         };
         let plan = match plan_task_move(&snapshot, &request) {
             Ok(plan) => plan,
             Err(error) => {
                 return Err(route_engine_refusal(
-                    &report, members, &request, error,
+                    &report, members, &selectors, &request, error,
                 ));
             }
         };
@@ -517,14 +502,36 @@ pub(super) fn apply_inbox_routes(
             .iter()
             .map(|file| file.dependency_token_count)
             .sum();
-        for (path, postimage) in &plan.postimages {
-            let absolute = bob_dir.join(path);
-            planner.ensure_loaded(&absolute)?;
-            planner.stage(&absolute, postimage.clone())?;
-        }
+        // Removed source spans in pre-group coordinates, for remapping
+        // remaining candidates in the same source. Block sizes come from
+        // the exact pre-group text, so duplicate titles never confuse
+        // the mapping.
+        let removed_spans: Vec<(usize, usize)> = snapshot
+            .notes
+            .get(source)
+            .map(|source_text| {
+                let inclusive: Vec<&str> =
+                    source_text.split_inclusive('\n').collect();
+                plan.moves
+                    .iter()
+                    .map(|movement| {
+                        let start = movement.source_line.saturating_sub(1);
+                        let end = crate::native::collect_done::task_block_end(
+                            &inclusive, start, 0,
+                        );
+                        (start, end.max(start + 1))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        stage_move_postimages(planner, bob_dir, &snapshot, &plan.postimages)?;
         // Stamp each moved root line in the staged destination text and
-        // record its final landing. The stamp is an in-place line edit,
-        // so later groups appending to the same note never shift it.
+        // record its final landing. The destination line comes straight
+        // from the move planner, never from a unique title/status
+        // search, so identical titles at the destination and identical
+        // roots moving together stay exact. The stamp is an in-place
+        // line edit, so later groups appending to the same note never
+        // shift it.
         for (index, movement) in members.iter().zip(plan.moves.iter()) {
             let candidate = &report.candidates[*index];
             let absolute = bob_dir.join(dest);
@@ -535,22 +542,36 @@ pub(super) fn apply_inbox_routes(
                 ))
             })?;
             let new_id = movement.new_block_id.clone();
-            let Some(root) = locate_dest_line(
-                &dest_text,
-                settings,
-                new_id.as_deref(),
-                &movement.title,
-                candidate.status_symbol,
-            ) else {
+            let root = movement.dest_line.saturating_sub(1);
+            let root_line =
+                dest_text.lines().nth(root).unwrap_or_default().to_string();
+            // Verify the planner's exact landing still holds the moved
+            // task: block-ID tasks must show their new ID; id-less tasks
+            // are trusted by exact line, never re-searched by text.
+            if let Some(id) = new_id.as_deref().filter(|id| !id.is_empty()) {
+                let scan = note_tasks::scan(&dest_text, settings);
+                let holds = match scan.by_block_id(id) {
+                    note_tasks::BlockIdLookup::Found(task) => {
+                        task.line_index == root
+                    }
+                    _ => false,
+                };
+                if !holds {
+                    return Err(CaptureError::io(format!(
+                        "routing lost candidate {} ({}) in {}",
+                        candidate.n,
+                        candidate.key,
+                        dest.display()
+                    )));
+                }
+            } else if dest_text.lines().nth(root).is_none() {
                 return Err(CaptureError::io(format!(
                     "routing lost candidate {} ({}) in {}",
                     candidate.n,
                     candidate.key,
                     dest.display()
                 )));
-            };
-            let root_line =
-                dest_text.lines().nth(root).unwrap_or_default().to_string();
+            }
             let stamped = stamp_fresh(&root_line, today);
             if stamped.line != root_line {
                 let mut rebuilt = dest_text
@@ -576,7 +597,7 @@ pub(super) fn apply_inbox_routes(
                 source: bob_dir.join(source),
                 source_relative: display_relative(source),
                 old_block_id: movement.old_block_id.clone(),
-                old_line: movement.source_line,
+                old_line: candidate.line,
                 dest: absolute,
                 dest_relative: dest_relative.clone(),
                 dest_route: dest_relative
@@ -584,10 +605,29 @@ pub(super) fn apply_inbox_routes(
                     .unwrap_or(&dest_relative)
                     .to_string(),
                 new_block_id: new_id,
-                new_line: root + 1,
+                new_line: movement.dest_line,
                 repaired_links: group_links,
                 repaired_dep_tokens: group_deps,
             });
+        }
+        // Remap remaining candidates in the same source past this
+        // group's removals, preserving original keys and numbering.
+        for (remaining, current) in current_lines.iter_mut() {
+            if members.contains(remaining) {
+                continue;
+            }
+            if report.candidates[*remaining].note_path
+                != display_relative(source)
+            {
+                continue;
+            }
+            let mut shifted = *current;
+            for (start, end) in &removed_spans {
+                if *end <= *current {
+                    shifted = shifted.saturating_sub(end - start);
+                }
+            }
+            *current = shifted;
         }
     }
     // Mark the report: moved candidates carry their answer, landing, and
@@ -811,18 +851,25 @@ fn excluded_route_dir(path: &Path) -> Option<&'static str> {
     None
 }
 
-/// Attribute a move-engine refusal to the group's first candidate, so
-/// the card can reopen on it with the engine's message.
+/// Attribute a move-engine refusal to the failing candidate, so the
+/// card can reopen on it with the engine's message. Task-specific
+/// errors map to the named candidate; genuinely destination-wide
+/// errors use the first member.
 fn route_engine_refusal(
     report: &InboxRouteReport,
     members: &[usize],
+    selectors: &[MoveSelector],
     request: &MoveRequest,
     error: PlanError,
 ) -> CaptureError {
-    let first = members
-        .first()
-        .and_then(|index| report.candidates.get(*index));
-    match first {
+    let blamed = blame_route_member(report, members, selectors, &error)
+        .and_then(|index| report.candidates.get(index))
+        .or_else(|| {
+            members
+                .first()
+                .and_then(|index| report.candidates.get(*index))
+        });
+    match blamed {
         Some(candidate) => CaptureError::inbox_route_refused(
             report,
             candidate,
@@ -833,78 +880,76 @@ fn route_engine_refusal(
     }
 }
 
-/// Relocate an id-less candidate's 0-based source line in the current
-/// snapshot text. The recorded line wins when it still holds the
-/// candidate; otherwise the exact pre-move text wins when unique;
-/// otherwise a column-zero description-and-status scan wins when
-/// unique. Block selections never relocate: block IDs are line-proof.
-fn relocate_source_line(
-    source_text: &str,
-    settings: &note_tasks::NoteTaskSettings,
-    candidate: &InboxRouteCandidate,
+/// Find the group member a task-specific `PlanError` names. Selector
+/// errors carry their own selector; other task errors carry a
+/// candidate line or block ID. Destination-wide errors return `None`
+/// so the caller falls back to the first member.
+fn blame_route_member(
+    report: &InboxRouteReport,
+    members: &[usize],
+    selectors: &[MoveSelector],
+    error: &PlanError,
 ) -> Option<usize> {
-    let scan = note_tasks::scan(source_text, settings);
-    let expected = candidate.line.saturating_sub(1);
-    if scan.task_at(expected).is_some_and(|task| {
-        task.indentation.is_empty()
-            && task.description == candidate.text
-            && task.status_symbol == candidate.status_symbol
-    }) {
-        return Some(expected);
-    }
-    let lines: Vec<&str> = source_text.lines().collect();
-    let mut exact = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if *line == candidate.root_line {
-            exact.push(index);
+    match error {
+        PlanError::SelectorZero { selector, .. }
+        | PlanError::SelectorAmbiguous { selector, .. } => selectors
+            .iter()
+            .position(|owned| owned == selector)
+            .and_then(|position| members.get(position).copied()),
+        PlanError::NotATask { block_id, line, .. } => {
+            if !block_id.is_empty() {
+                members.iter().copied().find(|index| {
+                    report.candidates.get(*index).is_some_and(|candidate| {
+                        candidate.block_id == *block_id
+                    })
+                })
+            } else {
+                members.iter().copied().find(|index| {
+                    report
+                        .candidates
+                        .get(*index)
+                        .is_some_and(|candidate| candidate.line == *line)
+                })
+            }
         }
+        PlanError::ClosedTask { candidate }
+        | PlanError::NestedTask { candidate }
+        | PlanError::ProjectTask { candidate }
+        | PlanError::UnsupportedCheckbox { candidate }
+        | PlanError::DependsOnDestPrj { candidate, .. }
+        | PlanError::DestBlocked { candidate, .. }
+        | PlanError::NonCanonicalId { candidate, .. } => {
+            blame_by_task_candidate(report, members, selectors, candidate)
+        }
+        _ => None,
     }
-    if exact.len() == 1 {
-        return Some(exact[0]);
-    }
-    let scanned: Vec<usize> = scan
-        .tasks()
-        .iter()
-        .filter(|task| {
-            task.indentation.is_empty()
-                && task.description == candidate.text
-                && task.status_symbol == candidate.status_symbol
-        })
-        .map(|task| task.line_index)
-        .collect();
-    if scanned.len() == 1 {
-        return Some(scanned[0]);
-    }
-    None
 }
 
-/// Locate a moved task's 0-based line in destination text: by its new
-/// block ID when it has one, else by a unique column-zero
-/// description-and-status match.
-fn locate_dest_line(
-    dest_text: &str,
-    settings: &note_tasks::NoteTaskSettings,
-    new_block_id: Option<&str>,
-    title: &str,
-    status: char,
+fn blame_by_task_candidate(
+    report: &InboxRouteReport,
+    members: &[usize],
+    selectors: &[MoveSelector],
+    failed: &crate::native::task_move::TaskCandidate,
 ) -> Option<usize> {
-    let scan = note_tasks::scan(dest_text, settings);
-    if let Some(id) = new_block_id.filter(|id| !id.is_empty())
-        && let note_tasks::BlockIdLookup::Found(task) = scan.by_block_id(id)
-    {
-        return Some(task.line_index);
-    }
-    let matched: Vec<usize> = scan
-        .tasks()
-        .iter()
-        .filter(|task| {
-            task.indentation.is_empty()
-                && task.description == title
-                && task.status_symbol == status
+    // Block-ID tasks match by identity; id-less tasks match by the
+    // exact group-relative source line in this group's selectors,
+    // never by title/status text.
+    if let Some(id) = failed.block_id.as_deref().filter(|id| !id.is_empty()) {
+        members.iter().copied().find(|index| {
+            report
+                .candidates
+                .get(*index)
+                .is_some_and(|candidate| candidate.block_id == id)
         })
-        .map(|task| task.line_index)
-        .collect();
-    (matched.len() == 1).then(|| matched[0])
+    } else {
+        let wanted = failed.line.saturating_sub(1);
+        selectors
+            .iter()
+            .position(|selector| {
+                matches!(selector, MoveSelector::Line(line) if *line == wanted)
+            })
+            .and_then(|position| members.get(position).copied())
+    }
 }
 
 fn pair_task_lines(
@@ -1114,6 +1159,28 @@ fn destination_snapshot(
         }
     }
     Ok(VaultSnapshot::from_notes(notes))
+}
+
+/// Stage a move plan's postimages bound to the snapshot the plan
+/// consumed. Previously unstaged destinations and link-repair files
+/// adopt the snapshot's content as their preimage; any intervening
+/// disk edit is the typed `NoteChanged` refusal with no writes.
+fn stage_move_postimages(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    snapshot: &VaultSnapshot,
+    postimages: &BTreeMap<PathBuf, String>,
+) -> Result<(), CaptureError> {
+    for (path, postimage) in postimages {
+        let absolute = bob_dir.join(path);
+        let expected = snapshot.notes.get(path).cloned();
+        planner.stage_snapshot_postimage(
+            &absolute,
+            expected,
+            postimage.clone(),
+        )?;
+    }
+    Ok(())
 }
 
 fn display_relative(path: &Path) -> String {
@@ -1337,6 +1404,253 @@ mod tests {
         assert_eq!(
             fs::read_to_string(vault.join("dev.md")).expect("dev note"),
             concurrent
+        );
+    }
+
+    #[test]
+    fn ir_snapshot_binding_refuses_when_unstaged_dest_or_repair_changes() {
+        // Finish tale §1: newly staged postimages bind to the exact
+        // snapshot the move planner consumed. An intervening edit to a
+        // previously unstaged destination and to a repaired inbound-link
+        // file is the typed `NoteChanged` refusal with no writes.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path().join("vault");
+        write(&vault.join("inbox.md"), "# Inbox\n");
+        write(
+            &vault.join("mac_inbox.md"),
+            "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n- [ ] #task Route me ^route-task\n",
+        );
+        let health_before = "---\ntype: [[area]]\n---\n## Tasks\n";
+        write(&vault.join("health.md"), health_before);
+        let dev_before = "---\ntype: [[area]]\n---\n## Tasks\n- [ ] #task Other [[mac_inbox#^route-task]]\n";
+        write(&vault.join("dev.md"), dev_before);
+        let mut planner = CaptureBatchPlanner::default();
+        let snapshot = destination_snapshot(&vault, &planner)
+            .expect("snapshot binds unstaged notes");
+        // Intervening edits land after the snapshot but before staging.
+        let health_concurrent =
+            format!("{health_before}- [ ] #task Concurrent ^concurrent\n");
+        write(&vault.join("health.md"), &health_concurrent);
+        let dev_concurrent =
+            format!("{dev_before}- [ ] #task Concurrent ^concurrent\n");
+        write(&vault.join("dev.md"), &dev_concurrent);
+        let mut postimages = BTreeMap::new();
+        postimages.insert(
+            PathBuf::from("health.md"),
+            format!("{health_before}- [ ] #task Route me ^route-task\n"),
+        );
+        let error =
+            stage_move_postimages(&mut planner, &vault, &snapshot, &postimages)
+                .expect_err("dest drift refuses");
+        assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+        assert!(
+            error
+                .message
+                .contains("note changed on disk after planning"),
+            "{}",
+            error.message
+        );
+        let mut repair_postimages = BTreeMap::new();
+        repair_postimages.insert(
+            PathBuf::from("dev.md"),
+            format!("{dev_before}- [ ] #task Touched\n"),
+        );
+        let error = stage_move_postimages(
+            &mut planner,
+            &vault,
+            &snapshot,
+            &repair_postimages,
+        )
+        .expect_err("repair drift refuses");
+        assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+        // No writes: both files keep only the concurrent edits.
+        assert_eq!(
+            fs::read_to_string(vault.join("health.md")).expect("health"),
+            health_concurrent
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("dev.md")).expect("dev"),
+            dev_concurrent
+        );
+    }
+
+    #[test]
+    fn ir_identical_idless_roots_route_together_with_exact_landings() {
+        // Finish tale §2: two identical id-less recovered roots with
+        // different carried children route together to different
+        // destinations, even though the first destination already holds
+        // the same title/status. Exact planner lines carry identity;
+        // no unique title/status search runs.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path().join("vault");
+        write(&vault.join("inbox.md"), "# Inbox\n");
+        let original = concat!(
+            "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n",
+            "- [ ] #task Same\n",
+            "  - child A\n",
+            "- [ ] #task Same\n",
+            "  - child B\n",
+        );
+        let current = concat!(
+            "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n",
+            "- [*] #task Same\n",
+            "  - child A\n",
+            "- [*] #task Same\n",
+            "  - child B\n",
+        );
+        write(&vault.join("mac_inbox.md"), original);
+        // The first destination already holds the same title/status.
+        write(
+            &vault.join("health.md"),
+            "---\ntype: [[area]]\n---\n## Tasks\n- [*] #task Same\n",
+        );
+        write(
+            &vault.join("work.md"),
+            "---\ntype: [[area]]\n---\n## Tasks\n",
+        );
+        let settings = note_tasks::read_settings(&vault);
+        let today = chrono::NaiveDate::parse_from_str(TODAY, "%Y-%m-%d")
+            .expect("today");
+        let dependency_ctx = DependencyContext::new(&vault, today);
+        let mut planner = CaptureBatchPlanner::default();
+        let inbox_path = vault.join("mac_inbox.md");
+        planner.ensure_loaded(&inbox_path).expect("load inbox");
+        planner
+            .stage(&inbox_path, current.to_string())
+            .expect("stage");
+        let report =
+            detect_inbox_routes(&planner, &vault, &settings, &dependency_ctx)
+                .expect("detect");
+        assert_eq!(report.candidate_count, 2, "{report:#?}");
+        assert!(report.candidates[0].block_id.is_empty());
+        assert!(report.candidates[1].block_id.is_empty());
+        let picks = vec![
+            InboxRoutePick::Answer {
+                selector: "1".to_string(),
+                destination: Some("health".to_string()),
+            },
+            InboxRoutePick::Answer {
+                selector: "2".to_string(),
+                destination: Some("work".to_string()),
+            },
+        ];
+        let applied = apply_inbox_routes(
+            &mut planner,
+            &vault,
+            &settings,
+            today,
+            report,
+            &picks,
+        )
+        .expect("both identical roots route");
+        assert_eq!(applied.report.routed_count, 2);
+        assert_eq!(applied.moves.len(), 2);
+        // Exact landings in different destinations, keys and numbering
+        // preserved. Line numbers may coincide across notes; the
+        // (destination, line) pairs and carried children prove identity.
+        assert_eq!(applied.moves[0].dest_relative, "health.md");
+        assert_eq!(applied.moves[1].dest_relative, "work.md");
+        assert!(
+            (
+                applied.moves[0].dest_relative.clone(),
+                applied.moves[0].new_line
+            ) != (
+                applied.moves[1].dest_relative.clone(),
+                applied.moves[1].new_line
+            )
+        );
+        let health = planner
+            .peek_text(&vault.join("health.md"))
+            .expect("health staged");
+        let work = planner
+            .peek_text(&vault.join("work.md"))
+            .expect("work staged");
+        // Carried children prove which root moved where.
+        assert!(health.contains("child A"), "{health}");
+        assert!(health.contains("- [*] #task Same"), "{health}");
+        assert!(work.contains("child B"), "{work}");
+        assert!(!work.contains("child A"), "{work}");
+        // Moved JSON carries final lines with freshness on the open root.
+        for candidate in &applied.report.candidates {
+            assert_eq!(candidate.outcome, "moved");
+            let moved = candidate.moved.as_ref().expect("moved JSON");
+            assert!(moved
+                .get("line")
+                .is_some_and(|line| line.as_u64().unwrap_or(0) > 0));
+        }
+    }
+
+    #[test]
+    fn ir_route_refusal_blames_the_failing_second_member() {
+        // Finish tale §2: one valid member followed by a member that
+        // depends on the destination project task. The refusal names
+        // the second candidate with no writes.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path().join("vault");
+        write(&vault.join("inbox.md"), "# Inbox\n");
+        let original = concat!(
+            "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n",
+            "- [ ] #task First ^first\n",
+            "- [ ] #task Second ^second\n",
+            "  - \u{26d3}\u{fe0f} **DEPENDS ON:** [[proj#^prj]]\n",
+        );
+        let current = original
+            .replace("- [ ] #task First", "- [*] #task First")
+            .replace("- [ ] #task Second", "- [*] #task Second");
+        write(&vault.join("mac_inbox.md"), original);
+        write(
+            &vault.join("proj.md"),
+            concat!(
+                "---\ntype: [[project]]\nstatus: wip\n---\n## Tasks\n",
+                "- [ ] #task Project ^prj\n",
+            ),
+        );
+        let settings = note_tasks::read_settings(&vault);
+        let today = chrono::NaiveDate::parse_from_str(TODAY, "%Y-%m-%d")
+            .expect("today");
+        let dependency_ctx = DependencyContext::new(&vault, today);
+        let mut planner = CaptureBatchPlanner::default();
+        let inbox_path = vault.join("mac_inbox.md");
+        planner.ensure_loaded(&inbox_path).expect("load inbox");
+        planner.stage(&inbox_path, current.clone()).expect("stage");
+        let report =
+            detect_inbox_routes(&planner, &vault, &settings, &dependency_ctx)
+                .expect("detect");
+        assert_eq!(report.candidate_count, 2, "{report:#?}");
+        let picks = vec![
+            InboxRoutePick::Answer {
+                selector: "1".to_string(),
+                destination: Some("proj".to_string()),
+            },
+            InboxRoutePick::Answer {
+                selector: "2".to_string(),
+                destination: Some("proj".to_string()),
+            },
+        ];
+        let error = apply_inbox_routes(
+            &mut planner,
+            &vault,
+            &settings,
+            today,
+            report,
+            &picks,
+        )
+        .expect_err("second member refuses");
+        assert_eq!(error.code.as_deref(), Some("inbox_route_refused"));
+        let extra = error.extra.expect("refused payload");
+        let refused = extra.get("refused").expect("refused detail");
+        assert_eq!(refused.get("n").and_then(|n| n.as_u64()), Some(2));
+        assert!(
+            refused
+                .get("key")
+                .and_then(|key| key.as_str())
+                .is_some_and(|key| key.contains("^second")),
+            "{refused}"
+        );
+        // No writes: source and destination stay byte-identical on disk.
+        assert_eq!(
+            fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox"),
+            original
         );
     }
 }

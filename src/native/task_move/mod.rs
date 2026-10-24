@@ -14,5 +14,5 @@ pub(crate) use command::{build_cli, run};
 pub(crate) use plan::load_vault_snapshot;
 pub(crate) use plan::{
     list_task_move_destinations, plan_task_move, MovePlan, MoveRequest,
-    MoveSelector, PlanError, TaskMoveDestination, VaultSnapshot,
+    MoveSelector, PlanError, TaskCandidate, TaskMoveDestination, VaultSnapshot,
 };

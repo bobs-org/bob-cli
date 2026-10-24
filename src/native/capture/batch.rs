@@ -124,6 +124,99 @@ impl CaptureBatchPlanner {
         Ok(())
     }
 
+    /// Stage a move-engine postimage bound to the exact snapshot the
+    /// planner consumed. Already-staged files keep their original disk
+    /// preimage and current overlay; newly staged files adopt the
+    /// snapshot's existence/content as their preimage. Any disk drift
+    /// from the consumed snapshot is the existing typed `NoteChanged`
+    /// refusal, so the commit's preimage guard can never be bypassed
+    /// by a second disk read adopting an intervening edit.
+    pub(super) fn stage_snapshot_postimage(
+        &mut self,
+        path: &Path,
+        snapshot_contents: Option<String>,
+        postimage: String,
+    ) -> Result<(), CaptureError> {
+        if self.by_path.contains_key(path) {
+            let index = self.by_path[path];
+            self.files[index].present = true;
+            self.files[index].current = postimage;
+            return Ok(());
+        }
+        match snapshot_contents {
+            Some(expected) => {
+                let on_disk = match fs::read(path) {
+                    Ok(bytes) => match String::from_utf8(bytes) {
+                        Ok(text) => Some(text),
+                        Err(_) => {
+                            return Err(CaptureError::io(format!(
+                                "refusing to overwrite {}: note changed on disk after planning",
+                                path.display()
+                            ))
+                            .with_typed(CaptureFailureKind::NoteChanged));
+                        }
+                    },
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        None
+                    }
+                    Err(error) => {
+                        return Err(CaptureError::io(format!(
+                            "failed to read {}: {error}",
+                            path.display()
+                        )));
+                    }
+                };
+                if on_disk.as_deref() != Some(expected.as_str()) {
+                    return Err(CaptureError::io(format!(
+                        "refusing to overwrite {}: note changed on disk after planning",
+                        path.display()
+                    ))
+                    .with_typed(CaptureFailureKind::NoteChanged));
+                }
+                let index = self.files.len();
+                self.by_path.insert(path.to_path_buf(), index);
+                self.files.push(BatchTextFile {
+                    path: path.to_path_buf(),
+                    existed: true,
+                    present: true,
+                    current: postimage,
+                    original: expected,
+                });
+                Ok(())
+            }
+            None => {
+                // No snapshot entry: the file did not exist when the
+                // snapshot was built. If it exists now, that is a
+                // concurrent creation; otherwise stage it as new.
+                match fs::symlink_metadata(path) {
+                    Ok(_) => Err(CaptureError::io(format!(
+                        "refusing to overwrite {}: note was created on disk after planning",
+                        path.display()
+                    ))
+                    .with_typed(CaptureFailureKind::NoteChanged)),
+                    Err(error)
+                        if error.kind() == io::ErrorKind::NotFound =>
+                    {
+                        let index = self.files.len();
+                        self.by_path.insert(path.to_path_buf(), index);
+                        self.files.push(BatchTextFile {
+                            path: path.to_path_buf(),
+                            existed: false,
+                            present: true,
+                            current: postimage.clone(),
+                            original: String::new(),
+                        });
+                        Ok(())
+                    }
+                    Err(error) => Err(CaptureError::io(format!(
+                        "failed to read {}: {error}",
+                        path.display()
+                    ))),
+                }
+            }
+        }
+    }
+
     pub(super) fn ensure_loaded(
         &mut self,
         path: &Path,

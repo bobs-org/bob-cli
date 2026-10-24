@@ -963,3 +963,133 @@ fn ir_dependency_touch_follows_its_routed_task() {
     assert!(dev.contains("[[health#^route-task]]"), "{dev}");
     assert!(!dev.contains("mac_inbox#^route-task"), "{dev}");
 }
+
+fn journal_lines(vault: &Path) -> Vec<String> {
+    let dir = vault.join(".bob/relations");
+    let mut lines = Vec::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return lines;
+    };
+    let mut paths: Vec<_> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "jsonl"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let body = fs::read_to_string(&path).expect("journal file");
+        lines.extend(body.lines().map(str::to_string));
+    }
+    lines
+}
+
+#[test]
+fn ir_routed_bulk_with_one_off_relation_repairs_once_and_guards_write_nothing()
+{
+    // Finish tale §3: a status-changing inbox item plus a one-off
+    // relation item. A route guard/refusal writes neither notes nor
+    // hide events; a routed success repairs the relation links and
+    // appends the intended hide event once.
+    let (_temp, vault, day_file) = route_vault("bob-cli-inbox-route-rel");
+    write_inbox_task(&vault, "- [ ] #task Route me ^route-task");
+    write_area(&vault, "health.md");
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\n---\n## Tasks\n- [ ] #task Design ^foo\n",
+    );
+    write_file(
+        &vault.join("20261024.md"),
+        "## Pomodoros\n- [ ] (**0900-0930**) — WORK\n",
+    );
+    let draft = "@mac_inbox:route-task\n\nFix trip ~work:foo||oneoff";
+    let inbox_before =
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox");
+    let health_before =
+        fs::read_to_string(vault.join("health.md")).expect("health");
+
+    // Guard writes nothing: notes and hide journal stay identical.
+    let guard = capture_with_routes(&vault, &day_file, false, true, &[], draft);
+    assert!(!guard.status.success());
+    let guard_json: serde_json::Value =
+        serde_json::from_str(stdout(&guard).trim()).expect("guard JSON");
+    assert_eq!(
+        guard_json["code"], "inbox_route_choice_required",
+        "{guard_json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox"),
+        inbox_before
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("health.md")).expect("health"),
+        health_before
+    );
+    assert!(journal_lines(&vault).is_empty());
+
+    // Refusal writes nothing either.
+    let refused = capture_with_routes(
+        &vault,
+        &day_file,
+        false,
+        false,
+        &["1=mac_inbox"],
+        draft,
+    );
+    assert!(!refused.status.success());
+    let refused_json: serde_json::Value =
+        serde_json::from_str(stdout(&refused).trim()).expect("refused JSON");
+    assert_eq!(
+        refused_json["code"], "inbox_route_refused",
+        "{refused_json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox"),
+        inbox_before
+    );
+    assert!(journal_lines(&vault).is_empty());
+
+    // Dry-run and real-run agree except for `dry_run`.
+    let preview = capture_with_routes(
+        &vault,
+        &day_file,
+        true,
+        false,
+        &["1=health"],
+        draft,
+    );
+    assert_success(&preview);
+    let mut preview_json: serde_json::Value =
+        serde_json::from_str(stdout(&preview).trim()).expect("preview JSON");
+    remove_dry_run(&mut preview_json);
+    let real = capture_with_routes(
+        &vault,
+        &day_file,
+        false,
+        false,
+        &["1=health"],
+        draft,
+    );
+    assert_success(&real);
+    let mut real_json: serde_json::Value =
+        serde_json::from_str(stdout(&real).trim()).expect("real JSON");
+    remove_dry_run(&mut real_json);
+    assert_eq!(preview_json, real_json, "dry-run matches real-run");
+    assert_eq!(
+        real_json["inbox_route"]["candidates"][0]["outcome"],
+        "moved"
+    );
+    // The relation hide ran once on commit, and the moved task's fresh
+    // stamp and repaired links are in the destination.
+    let hides = real_json["captures"][1]["relation_label_hides"]
+        .as_array()
+        .expect("hides");
+    assert!(
+        hides
+            .iter()
+            .any(|hide| hide["key"] == "oneoff" && hide["action"] == "hide"),
+        "{real_json}"
+    );
+    assert_eq!(journal_lines(&vault).len(), 1);
+    let health = fs::read_to_string(vault.join("health.md")).expect("health");
+    assert!(health.contains("- [*] #task Route me"), "{health}");
+    assert!(health.contains("[fresh:: 2026-10-24]"), "{health}");
+}
