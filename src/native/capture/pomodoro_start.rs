@@ -155,13 +155,18 @@ pub(super) fn plan_pomodoro_start(
             }
             capture_pomodoros::NamedSelection::CompletedOnly(_)
             | capture_pomodoros::NamedSelection::Missing { .. } => {
-                let canonical =
+                // A completed-only selector reuses that entry's canonical
+                // name so a spaced name is not forked into its hyphenated
+                // slug.
+                let canonical = capture_pomodoros::completed_only_reuse_name(
+                    &scan, selector,
+                )
+                .or_else(|| {
                     capture_pomodoros::canonicalize_pomodoro_name(selector)
-                        .ok_or_else(|| {
-                            CaptureError::usage(
-                                capture_pomodoros::POMODORO_NAME_USAGE,
-                            )
-                        })?;
+                })
+                .ok_or_else(|| {
+                    CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+                })?;
                 let (updated_day, placement, created_line) =
                     create_started_pomodoro_entry(
                         original_day,

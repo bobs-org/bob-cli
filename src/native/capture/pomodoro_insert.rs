@@ -258,7 +258,11 @@ pub(super) fn insert_named_pomodoro_child_block(
         ));
     }
 
-    let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
+    // A completed-only selector reuses that entry's canonical name so a
+    // spaced name is not forked into its hyphenated slug.
+    let scan = capture_pomodoros::scan(contents);
+    let name = capture_pomodoros::completed_only_reuse_name(&scan, selector)
+        .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
         .ok_or_else(|| {
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
         })?;

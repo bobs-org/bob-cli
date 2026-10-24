@@ -763,6 +763,24 @@ pub(crate) fn select_named_exact<'a>(
     }
 }
 
+/// Canonical name for a to-be-created entry when `selector` reuses a
+/// completed-only Pomodoro name: that completed entry's canonical name.
+/// Returns `None` when `selector` does not reuse a completed name, or when
+/// neither the completed spelling nor the selector is a valid Pomodoro name.
+pub(crate) fn completed_only_reuse_name(
+    scan: &PomodoroScan,
+    selector: &str,
+) -> Option<String> {
+    match select_named(scan, selector) {
+        NamedSelection::CompletedOnly(entry) => entry
+            .name
+            .as_deref()
+            .and_then(canonicalize_pomodoro_name)
+            .or_else(|| canonicalize_pomodoro_name(selector)),
+        NamedSelection::Found(_) | NamedSelection::Missing { .. } => None,
+    }
+}
+
 /// Canonical name for a future Pomodoro `bob capture` would create for
 /// `selector`, if that selector is valid and today's ledger can uniquely
 /// place the new entry. `None` when an open exact/prefix name would win,
@@ -791,9 +809,10 @@ pub(crate) fn named_creation_name(
     }
     match select_named(scan, selector) {
         NamedSelection::Found(_) => None,
-        NamedSelection::CompletedOnly(_) | NamedSelection::Missing { .. } => {
-            Some(name)
+        NamedSelection::CompletedOnly(_) => {
+            Some(completed_only_reuse_name(scan, selector).unwrap_or(name))
         }
+        NamedSelection::Missing { .. } => Some(name),
     }
 }
 

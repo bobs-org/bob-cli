@@ -1617,3 +1617,123 @@ fn capture_pomodoro_task_with_open_dependency_is_created_unlinked() {
         "- [*] #task Seed work [id:: cash__seed] ^seed\n\t- 🧱 **BLOCKS:** [[dev#^fern]]\n"
     );
 }
+
+// bob-cli-bb: linking a new task under a completed-only multi-word name
+// must reuse the completed spelling, not the hyphenated slug.
+#[test]
+fn link_form_reuses_completed_multiword_pomodoro_name() {
+    let temp = TempDir::new("bob-cli-pomodoro-link-reuse-completed-name");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_file(
+        &vault.join("dev.md"),
+        "# Dev\n## Tasks\n- [ ] #task Existing\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] (**0920-0950** [t:: 30m]) — DEEP WORK\n",
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-24 10:00:00",
+        &["@dev:brand#deep-work New task body."],
+    );
+    assert_eq!(json["kind"], "pomodoro_task", "{json}");
+    assert_eq!(json["pomodoro_name"], "DEEP WORK", "{json}");
+    assert_eq!(json["creates_pomodoro"], true, "{json}");
+    let day_after = fs::read_to_string(&day_file).expect("read created day");
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0920-0950** [t:: 30m]) — DEEP WORK\n",
+            "- [ ] () — DEEP WORK\n",
+            "  - [[dev#^brand]]\n",
+        ),
+        "{day_after}"
+    );
+    assert!(!day_after.contains("DEEP-WORK"), "{day_after}");
+}
+
+// bob-cli-bb: moving a queued link into a created-and-started entry must
+// reuse the completed spelling on the relocation path.
+#[test]
+fn link_with_start_moves_queued_link_into_reused_completed_name() {
+    let temp = TempDir::new("bob-cli-pomodoro-link-start-reuse-name");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Foo ^foo1\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0920-0950** [t:: 30m]) — DEEP WORK\n",
+            "- [ ] () — QUEUE\n",
+            "  - [[cash#^foo1]]\n",
+        ),
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-24 10:00:00",
+        &["@cash:foo1#deep-work=5"],
+    );
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["pomodoro_name"], "DEEP WORK", "{json}");
+    assert_eq!(
+        json["pomodoro_start"]["pomodoro_name"], "DEEP WORK",
+        "{json}"
+    );
+    assert_eq!(
+        json["pomodoro_link_destination"]["name"], "DEEP WORK",
+        "{json}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read moved day");
+    assert!(
+        day_after.contains(
+            "- [ ] (**1000-1025** [t:: 25m]) — DEEP WORK\n  - [[cash#^foo1]]"
+        ),
+        "{day_after}"
+    );
+    assert!(!day_after.contains("DEEP-WORK"), "{day_after}");
+}
+
+// bob-cli-bb: starting a named session with no queued link must reuse
+// the completed spelling on the start path.
+#[test]
+fn link_with_start_creates_started_entry_from_completed_name() {
+    let temp = TempDir::new("bob-cli-pomodoro-link-start-create-reuse");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Foo ^foo1\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [x] (**0920-0950** [t:: 30m]) — DEEP WORK\n",
+    );
+
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-24 10:00:00",
+        &["@cash:foo1#deep-work=5"],
+    );
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["pomodoro_name"], "DEEP WORK", "{json}");
+    assert_eq!(
+        json["pomodoro_start"]["pomodoro_name"], "DEEP WORK",
+        "{json}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read started day");
+    assert!(
+        day_after.contains(
+            "- [ ] (**1000-1025** [t:: 25m]) — DEEP WORK\n  - [[cash#^foo1]]"
+        ),
+        "{day_after}"
+    );
+    assert!(!day_after.contains("DEEP-WORK"), "{day_after}");
+}

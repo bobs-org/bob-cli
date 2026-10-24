@@ -323,7 +323,10 @@ pub(crate) fn insert_named_placeholder(
     if timed_open > 1 {
         return Err(LinkRelocationError::MultipleOpenTimedEntries);
     }
-    let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
+    // A completed-only selector reuses that entry's canonical name so a
+    // spaced name is not forked into its hyphenated slug.
+    let name = capture_pomodoros::completed_only_reuse_name(&scan, selector)
+        .or_else(|| capture_pomodoros::canonicalize_pomodoro_name(selector))
         .ok_or(LinkRelocationError::InvalidPomodoroName)?;
     let lines = line_spans(contents);
     let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();

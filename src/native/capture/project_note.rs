@@ -236,7 +236,15 @@ pub(super) fn plan_project_note_item(
                     ),
                     capture_pomodoros::NamedSelection::CompletedOnly(_)
                     | capture_pomodoros::NamedSelection::Missing { .. } => {
-                        (Some(canonical_fallback), true)
+                        // A completed-only selector reports that entry's
+                        // canonical name so the output matches the entry
+                        // the child-block insert creates.
+                        let reuse =
+                            capture_pomodoros::completed_only_reuse_name(
+                                &scan, selector,
+                            )
+                            .unwrap_or(canonical_fallback);
+                        (Some(reuse), true)
                     }
                 }
             }
