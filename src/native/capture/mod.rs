@@ -269,6 +269,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let (mut batch, pull_in) =
         plan_with_pull_in(&mut request, routing.as_ref())?;
     append_plan_budget(&request, &mut batch)?;
+    let theme_refs = append_theme_refs(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
     if !request.dry_run {
         commit_capture_batch(&mut batch)?;
@@ -292,6 +293,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         open_notes,
         pull_in,
     );
+    result.theme_refs = theme_refs;
     let has_template = result.template.is_some();
     save_template_shelf(&request, has_template, &mut result);
     Ok(result)

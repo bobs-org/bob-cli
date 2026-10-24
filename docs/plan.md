@@ -662,6 +662,8 @@ shows all report fields for one open theme and one exempt entry:
     }
   ],
   "theme_names": ["GOALS"],
+  "theme_refs": [{"key": "goals", "name": "GOALS", "hue": "red",
+    "hue_source": "hash"}],
   "entries": [
     {
       "line": 24,
@@ -672,6 +674,8 @@ shows all report fields for one open theme and one exempt entry:
       "highlight": true,
       "time_range": "0945-1015",
       "links": 3,
+      "themes": [{"key": "goals", "name": "GOALS", "hue": "red",
+        "hue_source": "hash"}],
       "homes": {
         "state": "forecast",
         "kind": "work",
@@ -727,7 +731,9 @@ shows all report fields for one open theme and one exempt entry:
 }
 ```
 
-`theme_names` lists the ordered theme names alongside `entries`.
+`theme_names` lists the ordered theme names alongside `theme_refs`; the refs
+use the same order. Each named `entries[]` row carries its component refs in
+`themes`. The arrays are additive and keep `schema_version: 2`.
 Lint objects omit `line` when none applies; entries omit
 `time_range` when untimed. Each `entries[]` object also carries the
 additive `homes` object from [Pomodoro homes](pomodoro-homes.md)
@@ -741,7 +747,7 @@ bob plan · Thu 2026-10-01 · 2026/20261001.md
 
   PLAN  3/3 themes · 7/10 links      TODAY 7 · PENDING 8/10 · NEXT 12/15
 
-  ★ GOALS    ▶ 0945-1015   3 links
+  ★ ■GOALS   ▶ 0945-1015   3 links
     …
 
   TODAY
@@ -849,7 +855,7 @@ non-Dataview task format, or an unresolvable note, and 3 with
 | `crowded.md` | The Crowded Notes page (`parent: "[[gtd]]"`, aliases Crowded Notes and Crowded): a `bob-ready-notes` block with the ranked CROWDED/FULL bar rows plus a `### CROWDED Tasks` query grouped by the noteReady group label. |
 | `bob-ready-notes` code block | The same model as the `bob ready` overview: a CROWDED summary line, CROWDED and FULL ranked-bar rows, compressed ROOM pills, dimmed exempt notes, and a remedies footer; `–` when unavailable. |
 | Note `## Tasks` heading chip | A live per-note chip on the first `## Tasks` heading of eligible and exempt notes (Live Preview widget plus Reading-view post-processor): `ready n/cap`, `· full`, `· +k`, `· no cap`, or `–`. It opens crowded and never edits the note. |
-| `bob pomodoro tmux` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
+| `bob pomodoro tmux` | Adds a tmux-colored `■` before each known, non-exempt theme component, then appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; `NO_COLOR` leaves the status text unchanged, and an over-cap meter uses tmux reverse video. |
 | `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
 | Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |

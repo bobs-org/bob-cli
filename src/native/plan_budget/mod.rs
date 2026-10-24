@@ -18,6 +18,7 @@ use std::{
 use chrono::NaiveDate;
 use serde::Serialize;
 
+use super::pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef};
 use super::{
     capture_block_ids, capture_pomodoros, config::PlanConfig, dataview,
     markdown, pomodoro, pomodoro_homes, task_dependencies,
@@ -87,6 +88,8 @@ pub(crate) struct PlanEntry {
     pub(crate) line: usize,
     pub(crate) name: String,
     pub(crate) components: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) themes: Vec<ThemeRef>,
     pub(crate) exempt: bool,
     pub(crate) running: bool,
     pub(crate) highlight: bool,
@@ -132,6 +135,7 @@ pub(crate) struct PlanReport {
     pub(crate) pending: LaneBudget,
     pub(crate) today_tasks: Vec<TodayTask>,
     pub(crate) theme_names: Vec<String>,
+    pub(crate) theme_refs: Vec<ThemeRef>,
     pub(crate) entries: Vec<PlanEntry>,
     pub(crate) warnings: Vec<PlanLint>,
 }
@@ -201,9 +205,24 @@ pub(crate) fn assemble_report(
         pending: lanes.pending.clone(),
         today_tasks: today_result.tasks.clone(),
         theme_names: ledger.theme_names.clone(),
+        theme_refs: Vec::new(),
         entries: ledger.entries.clone(),
         warnings,
     }
+}
+
+/// Add the catalog-backed ThemeRefs next to each reported name. Kept out of
+/// the pure ledger calculation so callers that only need budgets remain I/O
+/// free.
+pub(crate) fn with_theme_refs(
+    mut report: PlanReport,
+    catalog: &ThemeCatalog,
+) -> PlanReport {
+    report.theme_refs = catalog.theme_refs_for_names(&report.theme_names);
+    for entry in &mut report.entries {
+        entry.themes = catalog.theme_refs_for_names(&entry.components);
+    }
+    report
 }
 
 /// Fill the additive R9 `homes` object on each open ledger entry. The
@@ -439,6 +458,7 @@ pub(crate) fn compute_for_daily(
                 .clone()
                 .unwrap_or_else(|| UNNAMED_THEME.to_string()),
             components,
+            themes: Vec::new(),
             exempt: exempt_entry,
             running: entry.is_current,
             highlight: false,

@@ -14,17 +14,19 @@ use clap::{
 };
 use serde_json::json;
 
+use super::super::pomodoro_themes::swatch_name;
 use super::{
     super::{
         capture_pomodoros::homes_chip_suffix,
         config::{self, ConfigError, PlanConfig},
         env as bob_env, pomodoro,
+        pomodoro_themes::Catalog as ThemeCatalog,
         style::Styler,
     },
     assemble_report, compute_for_daily, count_lanes,
     today::{today_tasks, TodayResult},
-    with_entry_homes, Lanes, LedgerBudget, PlanReport, PlanStatus,
-    UNNAMED_THEME,
+    with_entry_homes, with_theme_refs, Lanes, LedgerBudget, PlanReport,
+    PlanStatus, UNNAMED_THEME,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -233,6 +235,10 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
     } else {
         report
     };
+    let report = match ThemeCatalog::load(&request.bob_dir, today, false) {
+        Ok(catalog) => with_theme_refs(report, &catalog),
+        Err(_) => report,
+    };
     Ok(PlanSuccess {
         report,
         no_daily_note: false,
@@ -373,7 +379,7 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
         let name_width = report
             .entries
             .iter()
-            .map(|entry| entry.name.chars().count())
+            .map(|entry| plan_entry_name(entry, styler).1)
             .max()
             .unwrap_or(0)
             .max(5);
@@ -402,7 +408,12 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
                 None if entry.exempt => styler.dim(&pad("exempt", time_width)),
                 None => " ".repeat(time_width),
             };
-            let name = pad(&entry.name, name_width);
+            let (rendered_name, visible_name_width) =
+                plan_entry_name(entry, styler);
+            let name = format!(
+                "{rendered_name}{}",
+                " ".repeat(name_width.saturating_sub(visible_name_width))
+            );
             // An unnamed entry still shows its derived homes: the same
             // dim chip with its dot that `capture-pomodoros --tasks`
             // uses. Named entries print exactly as before.
@@ -470,6 +481,23 @@ fn pad(text: &str, width: usize) -> String {
     format!("{text}{}", " ".repeat(missing))
 }
 
+fn plan_entry_name(
+    entry: &super::PlanEntry,
+    styler: &Styler,
+) -> (String, usize) {
+    if let Some(rendered) = swatch_name(&entry.themes, " + ", styler) {
+        let visible_width = entry
+            .themes
+            .iter()
+            .map(|theme| theme.name.chars().count() + usize::from(theme.known))
+            .sum::<usize>()
+            + entry.themes.len().saturating_sub(1) * " + ".chars().count();
+        (rendered, visible_width)
+    } else {
+        (entry.name.clone(), entry.name.chars().count())
+    }
+}
+
 fn print_error(error: PlanError, output_format: OutputFormat) -> i32 {
     match error {
         PlanError::Io(message) => {
@@ -502,5 +530,54 @@ fn print_error(error: PlanError, output_format: OutputFormat) -> i32 {
             }
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::{
+        pomodoro_homes::Hue,
+        pomodoro_themes::{HueSource, ThemeRef},
+    };
+
+    fn reference(name: &str, key: &str, hue: Hue) -> ThemeRef {
+        ThemeRef {
+            key: key.to_string(),
+            name: name.to_string(),
+            hue: Some(hue),
+            hue_source: HueSource::Hash,
+            known: true,
+            start: None,
+            end: None,
+        }
+    }
+
+    #[test]
+    fn plan_name_swatches_leave_no_color_text_unchanged() {
+        let entry = super::super::PlanEntry {
+            line: 1,
+            name: "BOB + DECKS".to_string(),
+            components: vec!["BOB".to_string(), "DECKS".to_string()],
+            themes: vec![
+                reference("BOB", "bob", Hue::Magenta),
+                reference("DECKS", "decks", Hue::Blue),
+            ],
+            exempt: false,
+            running: false,
+            highlight: false,
+            time_range: None,
+            links: 0,
+            homes: None,
+        };
+        assert_eq!(
+            plan_entry_name(&entry, &Styler::plain()),
+            ("BOB + DECKS".to_string(), "BOB + DECKS".len())
+        );
+        let (colored, width) = plan_entry_name(&entry, &Styler::colored());
+        assert!(colored.contains("38;5;211m■"));
+        assert!(colored.contains(" + "));
+        assert!(colored.contains("38;5;33m■"));
+        assert_eq!(width, "■BOB + ■DECKS".chars().count());
     }
 }

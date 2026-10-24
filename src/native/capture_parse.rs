@@ -21,6 +21,7 @@ use super::{
         RelationEntry, Severity, Span,
     },
     capture_links,
+    pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
     style::Styler,
     url_routing::UrlRoutingPolicy,
 };
@@ -59,6 +60,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             end: span.end - text_start,
             kind: span.kind,
             field: span.field,
+            themes: span.themes,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -106,7 +108,18 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         url_routing: policy.as_ref(),
         has_global_destination: false,
     };
-    let result = CaptureParseResult::new(raw_text, &options);
+    let mut result = CaptureParseResult::new(raw_text, &options);
+    let theme_keys = theme_component_keys(&result);
+    if !theme_keys.is_empty() {
+        let bob_dir = super::env::bob_dir();
+        let day_file = super::pomodoro::day_file_for(&bob_dir);
+        let today = super::capture_pomodoros_agenda::agenda_date(&day_file);
+        if let Ok(catalog) =
+            ThemeCatalog::load_for_theme_keys(&bob_dir, today, &theme_keys)
+        {
+            attach_theme_refs(&mut result, &catalog);
+        }
+    }
     print_success(&result, output_format);
     0
 }
@@ -137,10 +150,11 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Explain what in-progress capture text currently means")
         .long_about(
             "Report the authoritative capture grammar's view of TEXT.\n\n\
-The command is purely lexical and completely read-only: it never opens the \
-vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. Running it with a nonexistent BOB_DIR and a '%' clipboard marker \
-still succeeds.\n\n\
+The grammar parse is lexical and read-only. For Pomodoro-name spans, the \
+command also best-effort reads the configured vault's theme catalog and adds \
+theme refs; if the catalog is unavailable, parsing still succeeds without \
+those refs. It never writes to the vault or reads the clipboard, and takes no \
+--bob-dir. A '%' clipboard marker still succeeds.\n\n\
 It reports the normalized body, the overall capture mode, the resolved route, \
 section, and block ID, which parts a picker still has to supply, an optional \
 global_destination object for a @@<route> or @@<route>+<block-id> \
@@ -706,6 +720,82 @@ pub(crate) struct CaptureParseSpan {
     pub(crate) kind: super::capture_language::SpanKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) field: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) themes: Vec<ThemeRef>,
+}
+
+fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
+    matches!(
+        span.kind,
+        capture_language::SpanKind::PomodoroName
+            | capture_language::SpanKind::TaskTogglePomodoroName
+    )
+}
+
+fn theme_component_keys(
+    result: &CaptureParseResult,
+) -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    for span in &result.spans {
+        if !is_theme_name_span(span) {
+            continue;
+        }
+        let Some(raw) = result.input.get(span.start..span.end) else {
+            continue;
+        };
+        let (name, _) = theme_name_content(raw, span.start);
+        keys.extend(name.split('+').filter_map(|part| {
+            let component = part.trim();
+            (!component.is_empty())
+                .then(|| super::plan_budget::normalize_component(component))
+        }));
+    }
+    keys
+}
+
+fn attach_theme_refs(result: &mut CaptureParseResult, catalog: &ThemeCatalog) {
+    for span in &mut result.spans {
+        if !is_theme_name_span(span) {
+            continue;
+        }
+        let Some(raw) = result.input.get(span.start..span.end) else {
+            continue;
+        };
+        let (name, base) = theme_name_content(raw, span.start);
+        let mut refs = Vec::new();
+        let mut offset = 0;
+        for part in name.split('+') {
+            let component = part.trim();
+            let leading = part.len().saturating_sub(part.trim_start().len());
+            if !component.is_empty() {
+                let start = base + offset + leading;
+                let end = start + component.len();
+                let key = super::plan_budget::normalize_component(component);
+                let mut reference = catalog.theme_ref(&key, component);
+                reference.start = Some(start);
+                reference.end = Some(end);
+                refs.push(reference);
+            }
+            offset += part.len() + 1;
+        }
+        span.themes = refs;
+    }
+}
+
+/// Exact-name spans include their quotes. Theme component offsets point at
+/// the visible component text, excluding the literal quotes and `+` signs.
+fn theme_name_content(raw: &str, span_start: usize) -> (&str, usize) {
+    let (open, close) = if raw.starts_with('“') && raw.ends_with('”') {
+        ("“".len(), "”".len())
+    } else if raw.starts_with('"') && raw.ends_with('"') {
+        (1, 1)
+    } else {
+        return (raw, span_start);
+    };
+    if raw.len() < open + close {
+        return (raw, span_start);
+    }
+    (&raw[open..raw.len() - close], span_start + open)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1253,6 +1343,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             end: span.end,
             kind: span.kind,
             field: None,
+            themes: Vec::new(),
         })
         .collect()
 }
@@ -1341,6 +1432,7 @@ fn template_spans(
                     end: placeholder.range.start,
                     kind: span.kind,
                     field: None,
+                    themes: Vec::new(),
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -1351,6 +1443,7 @@ fn template_spans(
                 end: span.end,
                 kind: span.kind,
                 field: None,
+                themes: Vec::new(),
             });
         }
     }
@@ -1361,6 +1454,7 @@ fn template_spans(
             end: range.end,
             kind: SpanKind::TemplateHeader,
             field: None,
+            themes: Vec::new(),
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -1369,6 +1463,7 @@ fn template_spans(
             end: placeholder.range.end,
             kind: SpanKind::TemplatePlaceholder,
             field: Some(placeholder.field),
+            themes: Vec::new(),
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -1377,6 +1472,7 @@ fn template_spans(
             end: field.range.end,
             kind: SpanKind::TemplateField,
             field: Some(field.field),
+            themes: Vec::new(),
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
@@ -2228,6 +2324,53 @@ mod tests {
 
     fn json(input: &str) -> serde_json::Value {
         serde_json::from_str(&success_json(&parse(input))).expect("json")
+    }
+
+    #[test]
+    fn theme_name_spans_report_components_with_source_offsets() {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        std::fs::create_dir_all(vault.path().join("2026")).unwrap();
+        std::fs::write(
+            vault.path().join("2026/20261023.md"),
+            "## Pomodoros\n- [x] (0800-0830 30m) — BOB + DECKS\n",
+        )
+        .unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let keys = std::collections::BTreeSet::from([
+            "new".to_string(),
+            "bob".to_string(),
+        ]);
+        let catalog =
+            ThemeCatalog::load_for_theme_keys(vault.path(), today, &keys)
+                .expect("theme catalog");
+        let input = r###"=#"NEW + BOB""###;
+        let options = EditorParseOptions::routing_off();
+        let mut result = CaptureParseResult::new(input.to_string(), &options);
+        attach_theme_refs(&mut result, &catalog);
+        let value = serde_json::to_value(&result).unwrap();
+        let span = value["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "pomodoro_name")
+            .expect("name span");
+        let themes = span["themes"].as_array().expect("theme refs");
+        assert_eq!(themes.len(), 2);
+        assert_eq!(themes[0]["name"], "NEW");
+        assert_eq!(themes[0]["known"], false);
+        assert_eq!(themes[1]["name"], "BOB");
+        // Known refs omit `known`; only unknown refs serialize `known: false`.
+        assert!(themes[1].get("known").is_none());
+        assert_eq!(
+            &input[themes[0]["start"].as_u64().unwrap() as usize
+                ..themes[0]["end"].as_u64().unwrap() as usize],
+            "NEW"
+        );
+        assert_eq!(
+            &input[themes[1]["start"].as_u64().unwrap() as usize
+                ..themes[1]["end"].as_u64().unwrap() as usize],
+            "BOB"
+        );
     }
 
     #[test]

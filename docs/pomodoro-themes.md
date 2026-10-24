@@ -121,7 +121,9 @@ Names wear a tint; places wear a dot.
 - **Composites:** each component gets its own pill; the `+` stays neutral.
 - **CLI:** an xterm-256 `■` before a default-color name when color is
   enabled (TTY and no `NO_COLOR`). An exempt theme gets `□`. `bob themes
-  list` already draws these swatches.
+  list` already draws these swatches; `bob plan`, capture destinations, and
+  the Stats theme dimension use the same squares, and tmux uses its native
+  format color before each named component.
 - **Typing:** a name the catalog does not know stays neutral while you type
   it. **planned (phase theme-json / mac-colors)**
 - Color is never the only signal. The name text, Today/Recent labels, and
@@ -216,9 +218,17 @@ Additive; `schema_version` stays 1.
 
 **`ThemeRef`:** `{key, name, hue, hue_source}`, plus `known: false` only for
 names the catalog does not know. Where offsets matter, it also carries
-`start` / `end` byte offsets into the draft. **planned (phase theme-json)**
-for capture-parse and agenda attachments; `theme_refs_for_name` already
-builds this shape.
+`start` / `end` byte offsets into the draft. `capture-parse` attaches `themes`
+to each Pomodoro-name span; offsets identify component text and exclude quotes
+and `+`. `capture-pomodoros` attaches `themes` to every entry. `bob plan`
+returns `theme_refs` beside `theme_names` and `themes` on each entry; `bob
+capture` returns `added_theme_refs` beside `added_themes`; task reconcile uses
+the same plan-budget fields. These arrays preserve source order.
+
+Stats reports include `theme_hues` beside `homes`, keyed by normalized theme
+key, for theme-dimension values present in the report. Exempt themes have
+`hue: null` and `hue_source: "exempt"`. Unknown names carry `known: false`;
+while typing, clients keep them neutral.
 
 **`bob themes list -f json`:**
 

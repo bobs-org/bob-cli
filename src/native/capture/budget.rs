@@ -7,6 +7,7 @@
 //! cap. With `plan.strict: true` the whole batch is refused, atomically,
 //! when a non-start item creates a new named Pomodoro past the theme cap.
 use super::*;
+use std::collections::BTreeSet;
 
 fn pomodoros_section_text(contents: &str) -> Option<String> {
     let lines: Vec<&str> = contents.lines().collect();
@@ -41,7 +42,62 @@ pub(super) struct CapturePlanBudget {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) added_themes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) added_theme_refs: Vec<super::super::pomodoro_themes::ThemeRef>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<PlanBudgetWarning>,
+}
+
+/// Attach catalog-backed refs to capture destinations and the changed plan
+/// budget. Kept best-effort so a damaged theme journal cannot block a capture.
+pub(super) fn append_theme_refs(
+    request: &CaptureRequest,
+    batch: &mut PlannedCaptureBatch,
+) -> BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>> {
+    let mut names = BTreeSet::new();
+    for item in &batch.items {
+        for endpoint in [
+            item.result.pomodoro_link_source.as_ref(),
+            item.result.pomodoro_link_destination.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(name) = endpoint.name.as_deref() {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    if let Some(budget) = batch.plan_budget.as_ref() {
+        names.extend(budget.added_themes.iter().cloned());
+    }
+    if names.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let today = super::super::capture_pomodoros_agenda::agenda_date(&day_file);
+    let Ok(catalog) = super::super::pomodoro_themes::Catalog::load(
+        &request.bob_dir,
+        today,
+        false,
+    ) else {
+        return BTreeMap::new();
+    };
+    let refs_by_name: BTreeMap<_, _> = names
+        .into_iter()
+        .map(|name| {
+            let key = plan_budget::normalize_component(&name);
+            (key, catalog.theme_refs_for_name(&name))
+        })
+        .collect();
+    if let Some(budget) = batch.plan_budget.as_mut() {
+        budget.added_theme_refs = budget
+            .added_themes
+            .iter()
+            .flat_map(|name| catalog.theme_refs_for_name(name))
+            .collect();
+    }
+    refs_by_name
 }
 
 /// Compare today's daily note before and after planning, attach
@@ -156,6 +212,7 @@ pub(super) fn append_plan_budget(
             before: before.links.count,
         },
         added_themes,
+        added_theme_refs: Vec::new(),
         warnings,
     });
     Ok(())

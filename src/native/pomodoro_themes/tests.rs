@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, ffi::OsStr, fs};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
+    fs,
+};
 
 use chrono::NaiveDate;
 use serde::Deserialize;
@@ -12,7 +16,7 @@ use crate::native::{
 use super::{
     journal, rank_history, resolve_hue, scan,
     similar::{similar_to, SimilarTheme},
-    Catalog, HueSource, RankTheme,
+    Catalog, HueSource, RankTheme, ThemeLookup,
 };
 
 fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
@@ -426,4 +430,37 @@ fn theme_refs_for_unknown_name_are_marked_unknown() {
     assert!(!refs[0].known);
     assert_eq!(refs[0].key, "brand new");
     assert_eq!(refs[0].hue_source, HueSource::Hash);
+}
+
+#[test]
+fn theme_lookup_uses_cached_history_and_refreshes_changed_today() {
+    let temp = tempfile::tempdir().expect("scratch vault");
+    let vault = temp.path();
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    fs::write(
+        vault.join("2026/20261023.md"),
+        "## Pomodoros\n- [x] (0800-0830 30m) — BOB\n",
+    )
+    .unwrap();
+    let today_path = vault.join("2026/20261024.md");
+    fs::write(&today_path, "## Pomodoros\n- [ ] () — BOB\n").unwrap();
+    let cache = tempfile::tempdir().expect("cache");
+    let _guard = isolate_catalog_env(cache.path());
+    let today = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+    Catalog::load(vault, today, true).expect("prime theme cache");
+
+    let keys = BTreeSet::from(["bob".to_string(), "new".to_string()]);
+    let lookup = ThemeLookup::load_for_theme_keys(vault, today, &keys)
+        .expect("cached lookup");
+    assert!(lookup.theme_ref("bob", "BOB").known);
+    assert!(!lookup.theme_ref("new", "NEW").known);
+
+    fs::write(
+        &today_path,
+        "## Pomodoros\n- [ ] () — BOB\n- [ ] () — NEW\n",
+    )
+    .unwrap();
+    let refreshed = ThemeLookup::load_for_theme_keys(vault, today, &keys)
+        .expect("lookup after today's note changed");
+    assert!(refreshed.theme_ref("new", "NEW").known);
 }

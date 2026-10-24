@@ -29,6 +29,10 @@ use super::{
     },
 };
 use crate::native::config::{load_plan_config, load_stats_config};
+use crate::native::{
+    plan_budget::normalize_component,
+    pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
+};
 
 /// Compute a schema-1 stats report for one request.
 ///
@@ -173,6 +177,7 @@ pub(crate) fn compute(
     }
 
     prune_home_catalog(&mut catalog, &metrics, &sessions);
+    let theme_hues = report_theme_hues(&request.vault, today, &metrics);
 
     let mut health = index_health(&index);
     health.homes = homes_health;
@@ -195,8 +200,53 @@ pub(crate) fn compute(
         ),
         metrics,
         homes: catalog,
+        theme_hues,
         sessions,
     })
+}
+
+fn report_theme_hues(
+    vault: &std::path::Path,
+    today: NaiveDate,
+    metrics: &[MetricReport],
+) -> BTreeMap<String, ThemeRef> {
+    let mut names = BTreeSet::new();
+    for metric in metrics {
+        if let Some(parts) = metric.parts_summary.get("theme") {
+            names.extend(parts.iter().map(|part| part.key.clone()));
+        }
+        for point in metric
+            .points
+            .iter()
+            .chain(&metric.prior_points)
+            .chain(&metric.daily_points)
+        {
+            if let Some(parts) = point.parts.get("theme") {
+                names.extend(parts.keys().cloned());
+            }
+            if let Some(parts) = point.apportioned.get("theme") {
+                names.extend(parts.keys().cloned());
+            }
+        }
+    }
+    names.remove("(unnamed)");
+    if names.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(catalog) = ThemeCatalog::load(vault, today, false) else {
+        return BTreeMap::new();
+    };
+    names
+        .into_iter()
+        .map(|name| {
+            let key = normalize_component(&name);
+            let display = catalog
+                .get(&key)
+                .map(|record| record.name.as_str())
+                .unwrap_or(name.as_str());
+            (key.clone(), catalog.theme_ref(&key, display))
+        })
+        .collect()
 }
 
 fn prune_home_catalog(
@@ -544,6 +594,12 @@ mod tests {
         assert!(report.ok);
         assert_eq!(report.schema_version, 1);
         assert_eq!(report.today, day(11));
+        assert_eq!(report.theme_hues["gtd"].hue, None);
+        assert_eq!(
+            report.theme_hues["gtd"].hue_source,
+            crate::native::pomodoro_themes::HueSource::Exempt
+        );
+        assert!(report.theme_hues["sase"].known);
         assert_eq!(report.warnings.len(), 3);
         assert!(report
             .warnings

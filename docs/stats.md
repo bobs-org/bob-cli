@@ -288,6 +288,12 @@ from sessions with two or more keys in that dimension. Consumers never
 recalculate a display string, summary, percentage, or delta — the report
 carries them all.
 
+The JSON report includes `theme_hues` beside `homes`, keyed by normalized
+theme key, for the theme dimensions present in the report. Values use the
+shared `ThemeRef` fields (`key`, `name`, `hue`, `hue_source`). Human output
+adds a colored `■` before known theme parts and a muted `□` for exempt themes;
+`NO_COLOR` keeps the existing text unchanged.
+
 - `ok`: a real observed value (including a real zero, e.g. an empty
   Pomodoros section).
 - `partial`: usable but estimated or incomplete (range-estimated minutes, a

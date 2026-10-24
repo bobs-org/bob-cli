@@ -89,6 +89,7 @@ mod tests {
             health: report::HealthReport::default(),
             warnings: Vec::new(),
             homes: Default::default(),
+            theme_hues: Default::default(),
             sessions: Vec::new(),
         };
         let _value = DailyValue {

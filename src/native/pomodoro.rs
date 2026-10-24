@@ -122,7 +122,8 @@ pub(crate) fn run_tmux(args: Vec<OsString>) -> i32 {
     let status = status_from_env()
         .ok()
         .flatten()
-        .filter(|output| !output.is_empty());
+        .filter(|output| !output.is_empty())
+        .map(|output| tmux_theme_swatches(&output));
     let meter = budget_meter();
     match (status, meter) {
         (Some(status), Some(meter)) => print!("{status} · {meter} | "),
@@ -166,6 +167,72 @@ fn budget_meter() -> Option<String> {
     } else {
         Some(meter)
     }
+}
+
+/// Add tmux-native theme swatches only to the tmux surface. The regular
+/// `bob pomodoro status` string remains byte-for-byte unchanged.
+fn tmux_theme_swatches(status: &str) -> String {
+    let color_enabled = bob_env::var_os("NO_COLOR").is_none();
+    if !color_enabled {
+        return status.to_string();
+    }
+    let day_file = day_file();
+    let Ok(contents) = fs::read_to_string(&day_file) else {
+        return status.to_string();
+    };
+    let Some(ledger) = latest_ledger_pomodoro(&contents) else {
+        return status.to_string();
+    };
+    let scan = capture_pomodoros::scan(&contents);
+    let Some(name) = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == ledger.line)
+        .and_then(|entry| entry.name.as_deref())
+    else {
+        return status.to_string();
+    };
+    let bob_dir = bob_env::bob_dir();
+    let today = day_date(&day_file);
+    let Ok(catalog) =
+        super::pomodoro_themes::Catalog::load(&bob_dir, today, false)
+    else {
+        return status.to_string();
+    };
+    let refs = catalog.theme_refs_for_name(name);
+    render_tmux_theme_name(status, name, &refs, color_enabled)
+}
+
+fn render_tmux_theme_name(
+    status: &str,
+    name: &str,
+    refs: &[super::pomodoro_themes::ThemeRef],
+    color_enabled: bool,
+) -> String {
+    if !color_enabled
+        || !refs.iter().any(|theme| theme.known && theme.hue.is_some())
+    {
+        return status.to_string();
+    }
+    let rendered = refs
+        .iter()
+        .map(|theme| match (theme.known, theme.hue) {
+            (true, Some(hue)) => {
+                format!("#[fg=colour{}]■#[default]{}", hue.xterm(), theme.name)
+            }
+            _ => theme.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let Some(index) = status.rfind(name) else {
+        return status.to_string();
+    };
+    format!(
+        "{}{}{}",
+        &status[..index],
+        rendered,
+        &status[index + name.len()..]
+    )
 }
 
 pub(crate) fn status_from_env() -> Result<Option<String>, Error> {
@@ -739,12 +806,15 @@ status. When today's daily note has a Pomodoros section, the plan-budget
 meter `plan T/Tc · L/Lc` is appended after the status (or alone when there
 is no status), wrapped in `#[reverse]...#[noreverse]` when over the cap.
 With `BOB_CLI_USE_SCRIPT=1` the script fallback stays budget-less.
+Each known, non-exempt name component gets a tmux `■` swatch; `NO_COLOR`
+leaves the status text unchanged.
 
 environment:
   BOB_CONFIG_FILE  exact Bob config file; defaults to ~/.config/bob/config.yml
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
   BOB_NOW       override the current timestamp for status calculations
+  NO_COLOR      disable theme swatches
 
 options:
   -h, --help     show this help message and exit"
@@ -790,5 +860,27 @@ mod tests {
     fn unclosed_frontmatter_delimiter_is_content() {
         let lines = ["---", "## Pomodoros", "- [ ] Open"];
         assert_eq!(pomodoros_section_range(&lines), Some(2..3));
+    }
+
+    #[test]
+    fn tmux_theme_swatches_are_additive_and_no_color_is_byte_identical() {
+        let theme = super::super::pomodoro_themes::ThemeRef {
+            key: "bob".to_string(),
+            name: "BOB".to_string(),
+            hue: Some(super::super::pomodoro_homes::Hue::Aqua),
+            hue_source: super::super::pomodoro_themes::HueSource::Area,
+            known: true,
+            start: None,
+            end: None,
+        };
+        let status = "[<5m] 0900-0925 Build BOB — BOB";
+        assert_eq!(
+            render_tmux_theme_name(status, "BOB", &[theme.clone()], true),
+            "[<5m] 0900-0925 Build BOB — #[fg=colour36]■#[default]BOB"
+        );
+        assert_eq!(
+            render_tmux_theme_name(status, "BOB", &[theme], false),
+            status
+        );
     }
 }

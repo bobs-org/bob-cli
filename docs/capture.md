@@ -2591,6 +2591,8 @@ omitted when the ledger is unchanged:
   "themes": {"count": 4, "cap": 3, "over": true, "before": 3},
   "links": {"count": 8, "cap": 10, "over": false, "before": 7},
   "added_themes": ["BOB"],
+  "added_theme_refs": [{"key": "bob", "name": "BOB", "hue": "magenta",
+    "hue_source": "hash"}],
   "warnings": [{"code": "plan_theme_cap_exceeded",
     "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^ or defer with $<N>"}]}
 ```
@@ -2603,6 +2605,11 @@ after the result (`plan 4/3 themes · 8/10 links  (+1 theme: BOB)`) and
 one `bob capture: warning: …` stderr line per fired warning; the
 warnings never join the item `warnings` array. An invalid plan config
 skips the budget and pushes one plain string into `warnings` instead.
+
+`added_theme_refs` is ordered with `added_themes`. Human Task Link
+destinations add a colored square before each known, non-exempt component
+when stdout is a color terminal; `NO_COLOR` keeps the existing destination
+text unchanged.
 
 With `plan.strict: true`, the whole batch is refused, atomically, when
 a non-start item creates a new named Pomodoro entry past the theme cap
@@ -5191,9 +5198,9 @@ or execute the draft, so a successful parse does not guarantee a capture
 will succeed. Wikilink highlighting is syntax-only and additive; it does
 not change capture routing or diagnostics.
 
-The command does not open the vault, read the clipboard, or contact the
-network, and it takes no `--bob-dir`. Unless `--no-ref` is set, it reads
-the URL routing policy from the config file (`BOB_CONFIG_FILE`, otherwise
+The command is read-only and does not read the clipboard or contact the
+network; it takes no `--bob-dir`. Unless `--no-ref` is set, it reads the URL
+routing policy from the config file (`BOB_CONFIG_FILE`, otherwise
 `$XDG_CONFIG_HOME/bob/config.yml`, otherwise `~/.config/bob/config.yml`) so a
 bare link's `ref`/`task` classification matches capture. `-R, --no-ref`,
 `highlights.url_routing.capture: false`, and an invalid config all keep
@@ -5201,8 +5208,11 @@ links as tasks. An invalid config is silent here. `bob capture`,
 `bob gkeep list`, and `bob gkeep pull` print `URL routing is off: …` for
 the same invalid file; `capture: false` and `gkeep: false` stay silent on
 those commands too. A missing config file uses the defaults. Running
-`capture-parse` with a nonexistent `BOB_DIR` and a `%...` clipboard marker
-still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
+`capture-parse` with a Pomodoro-name span best-effort reads the configured
+vault's theme catalog and adds a `themes` array to that span. If the catalog
+is missing or unavailable, parsing still succeeds and omits those refs. The
+catalog read never writes to the vault. A nonexistent `BOB_DIR` and a `%...`
+clipboard marker still succeed. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 

@@ -411,7 +411,8 @@ fn capture_parse_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("purely lexical and completely read-only")
+        help.contains("lexical and read-only")
+            && help.contains("theme catalog")
             && help.contains("@route+id#")
             && help.contains("task_section")
             && help.contains("pomodoro_name")

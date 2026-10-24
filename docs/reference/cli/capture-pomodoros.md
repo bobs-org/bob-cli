@@ -13,7 +13,7 @@ List Pomodoro entries from today's Bob daily note.
 
 The command is read-only and reports Pomodoros in document order with stable refs, names, selector slugs, time ranges, current-session status, child link counts, and the current entry's numbered Task Link count for picker callers. Open entries are listed by default; use --all to include completed entries. A missing daily note or missing Pomodoros section returns a successful empty list with a warning.
 
-With --tasks, each listed entry also carries its agenda payload: the entry role, naive start/end datetimes, the retired-link count, session notes, the resolved Task Link lineup with operator numbers, clean titles, statuses, task-block lines, and ledger notes, and a derived homes object from those Task Links. Human output appends a dim home chip with its forecast or attributed dot after each entry name. Its optional plan_budget is computed from the saved daily note and the configured plan limits.
+With --tasks, each listed entry also carries its agenda payload: the entry role, naive start/end datetimes, the retired-link count, session notes, the resolved Task Link lineup with operator numbers, clean titles, statuses, task-block lines, and ledger notes, and a derived homes object from those Task Links. Every named entry carries its component ThemeRefs in `themes`. Human output appends a dim home chip with its forecast or attributed dot after each entry name. Its optional plan_budget is computed from the saved daily note and the configured plan limits.
 
 Usage: bob capture-pomodoros [OPTIONS]
 

@@ -180,14 +180,22 @@ pub(super) fn plan_budget_for_sync(
     let lanes = plan_budget::count_lanes(bob_dir, anchor, &config);
     let today_result =
         plan_budget::today::today_tasks(bob_dir, &daily_file, daily_contents);
-    Some(plan_budget::assemble_report(
+    let report = plan_budget::assemble_report(
         anchor,
         &daily_file,
         &config,
         &ledger,
         &lanes,
         &today_result,
-    ))
+    );
+    Some(
+        match super::super::pomodoro_themes::Catalog::load(
+            bob_dir, anchor, false,
+        ) {
+            Ok(catalog) => plan_budget::with_theme_refs(report, &catalog),
+            Err(_) => report,
+        },
+    )
 }
 
 pub(super) fn note_kind(contents: &str) -> NoteKind {

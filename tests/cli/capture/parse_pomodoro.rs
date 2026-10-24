@@ -746,6 +746,9 @@ fn capture_parse_pomodoro_start_protocol() {
 
 #[test]
 fn capture_parse_named_pomodoro_start_protocol() {
+    let vault_temp = TempDir::new("bob-cli-capture-parse-themes");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
     let parse = |text: &str| {
         let output = bob_command()
             .arg("capture-parse")
@@ -753,6 +756,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
             .arg("json")
             .arg("--")
             .arg(text)
+            .env("BOB_DIR", &vault)
             .output()
             .expect("run capture-parse");
         assert_success(&output);
@@ -771,11 +775,31 @@ fn capture_parse_named_pomodoro_start_protocol() {
 
     // Exact named starts: `section` carries the typed selector, the spec
     // mirrors `se<X>` timing, and `#` sits in no span.
-    for (text, section, raw, duration, offset, prefix_end, name_end) in [
-        ("=#bugs", "bugs", "", 5, 0, 1, 6),
-        ("=3#bugs", "bugs", "3", 3, 0, 2, 7),
-        ("=-2#bugs", "bugs", "-2", 5, 2, 3, 8),
-        ("=#deep-work", "deep-work", "", 5, 0, 1, 11),
+    for (
+        text,
+        section,
+        key,
+        hue,
+        raw,
+        duration,
+        offset,
+        prefix_end,
+        name_end,
+    ) in [
+        ("=#bugs", "bugs", "bugs", "aqua", "", 5, 0, 1, 6),
+        ("=3#bugs", "bugs", "bugs", "aqua", "3", 3, 0, 2, 7),
+        ("=-2#bugs", "bugs", "bugs", "aqua", "-2", 5, 2, 3, 8),
+        (
+            "=#deep-work",
+            "deep-work",
+            "deep-work",
+            "yellow",
+            "",
+            5,
+            0,
+            1,
+            11,
+        ),
     ] {
         let value = parse(text);
         assert_eq!(value["schema_version"], 1, "{text}");
@@ -790,7 +814,18 @@ fn capture_parse_named_pomodoro_start_protocol() {
                 {
                     "start": prefix_end + 1,
                     "end": name_end,
-                    "kind": "pomodoro_name"
+                    "kind": "pomodoro_name",
+                    "themes": [
+                        {
+                            "key": key,
+                            "name": section,
+                            "hue": hue,
+                            "hue_source": "hash",
+                            "known": false,
+                            "start": prefix_end + 1,
+                            "end": name_end,
+                        },
+                    ],
                 },
             ]),
             "{text}: {value}"
@@ -809,9 +844,11 @@ fn capture_parse_named_pomodoro_start_protocol() {
     }
 
     // Bare names skip the `#` gap: `=` then the name bytes.
-    for (text, section, name_end) in
-        [("=bugs", "bugs", 5), ("=xx", "xx", 3), ("=xmas", "xmas", 5)]
-    {
+    for (text, section, hue, name_end) in [
+        ("=bugs", "bugs", "aqua", 5),
+        ("=xx", "xx", "green", 3),
+        ("=xmas", "xmas", "aqua", 5),
+    ] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_start", "{text}");
         assert_eq!(value["section"], section, "{text}: {value}");
@@ -819,7 +856,22 @@ fn capture_parse_named_pomodoro_start_protocol() {
             value["spans"],
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_start" },
-                { "start": 1, "end": name_end, "kind": "pomodoro_name" },
+                {
+                    "start": 1,
+                    "end": name_end,
+                    "kind": "pomodoro_name",
+                    "themes": [
+                        {
+                            "key": section,
+                            "name": section,
+                            "hue": hue,
+                            "hue_source": "hash",
+                            "known": false,
+                            "start": 1,
+                            "end": name_end,
+                        },
+                    ],
+                },
             ]),
             "{text}: {value}"
         );

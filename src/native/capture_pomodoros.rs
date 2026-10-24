@@ -22,6 +22,7 @@ use super::{
     capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
     capture_task_sections, config, env as bob_env, markdown, note_tasks,
     plan_budget, pomodoro, pomodoro_homes,
+    pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
     style::{display_width, pad_right, Styler},
 };
 
@@ -79,9 +80,10 @@ With --tasks, each listed entry also carries its agenda payload: the entry \
 role, naive start/end datetimes, the retired-link count, session notes, the \
 resolved Task Link lineup with operator numbers, clean titles, statuses, \
 task-block lines, and ledger notes, and a derived homes object from those \
-Task Links. Human output appends a dim home chip with its forecast or \
-attributed dot after each entry name. Its optional plan_budget is computed \
-from the saved daily note and the configured plan limits.",
+Task Links. Every named entry carries its component ThemeRefs in `themes`. \
+Human output appends a dim home chip with its forecast or attributed dot \
+after each entry name. Its optional plan_budget is computed from the saved \
+daily note and the configured plan limits.",
         )
         .after_help(
             "Examples:\n  bob capture-pomodoros --format json\n  bob capture-pomodoros\n  bob capture-pomodoros --all\n  bob capture-pomodoros -f json\n  bob capture-pomodoros -b ~/bob -a -f json\n  bob capture-pomodoros -t -f json\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
@@ -215,6 +217,7 @@ struct CapturePomodorosPlanBudget {
 struct CapturePomodorosOutputEntry {
     #[serde(flatten)]
     entry: PomodoroEntry,
+    themes: Vec<ThemeRef>,
     task_link_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<capture_pomodoros_agenda::AgendaRole>,
@@ -276,6 +279,12 @@ fn list_capture_pomodoros(
     };
 
     let scan = scan(&contents);
+    let theme_catalog = if scan.entries.iter().any(|entry| entry.name.is_some())
+    {
+        ThemeCatalog::load(&request.bob_dir, agenda_date, false).ok()
+    } else {
+        None
+    };
     if !scan.has_section {
         warnings.push(bounded_warning(format!(
             "Bob daily note has no Pomodoros section: {}",
@@ -383,8 +392,18 @@ fn list_capture_pomodoros(
             )
             .homes
         });
+        let themes = entry
+            .name
+            .as_deref()
+            .and_then(|name| {
+                theme_catalog
+                    .as_ref()
+                    .map(|catalog| catalog.theme_refs_for_name(name))
+            })
+            .unwrap_or_default();
         pomodoros.push(CapturePomodorosOutputEntry {
             entry,
+            themes,
             task_link_count,
             role: agenda_entry.map(|agenda| agenda.role),
             starts_at: agenda_entry.map(|agenda| agenda.starts_at.clone()),
@@ -1708,6 +1727,7 @@ mod tests {
                     is_current: true,
                     child_count: 5,
                 },
+                themes: Vec::new(),
                 task_link_count: Some(3),
                 role: None,
                 starts_at: None,
@@ -1735,6 +1755,7 @@ mod tests {
         assert_eq!(value["pomodoros"][0]["state"], "open");
         assert_eq!(value["pomodoros"][0]["status_symbol"], " ");
         assert_eq!(value["pomodoros"][0]["name"], "MEMORY");
+        assert_eq!(value["pomodoros"][0]["themes"], serde_json::json!([]));
         assert_eq!(value["pomodoros"][0]["slug"], "memory");
         assert_eq!(value["pomodoros"][0]["selectable"], true);
         assert_eq!(value["pomodoros"][0]["time_range"], "1205-1230");
@@ -1817,6 +1838,7 @@ mod tests {
                         is_current: true,
                         child_count: 1,
                     },
+                    themes: Vec::new(),
                     task_link_count: Some(1),
                     role: None,
                     starts_at: None,
@@ -1843,6 +1865,7 @@ mod tests {
                         is_current: false,
                         child_count: 0,
                     },
+                    themes: Vec::new(),
                     task_link_count: None,
                     role: None,
                     starts_at: None,

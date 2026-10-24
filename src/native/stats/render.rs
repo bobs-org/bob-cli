@@ -7,6 +7,7 @@ use super::report::{
     PartSummary, SeriesPoint, StatsReport, StatsWarning,
 };
 use super::value::DataQuality;
+use crate::native::plan_budget::normalize_component;
 use crate::native::pomodoro_homes::{HomeKind, Hue};
 use crate::native::style::{pad_right, terminal_width, Styler, SPARK_BLOCKS};
 
@@ -858,7 +859,15 @@ fn parts_lines(
         }
         let cells: Vec<String> = displayed
             .iter()
-            .map(|part| format_part_cell(part, *name, &report.homes, styler))
+            .map(|part| {
+                format_part_cell(
+                    part,
+                    name,
+                    &report.homes,
+                    &report.theme_hues,
+                    styler,
+                )
+            })
             .collect();
         out.push_str(&format!(
             " {:<8} {}\n",
@@ -988,10 +997,31 @@ fn format_part_cell(
     part: &PartSummary,
     dimension: &str,
     catalog: &std::collections::BTreeMap<String, HomeCatalogEntry>,
+    theme_hues: &std::collections::BTreeMap<
+        String,
+        crate::native::pomodoro_themes::ThemeRef,
+    >,
     styler: &Styler,
 ) -> String {
     let label = part.label.as_deref().unwrap_or(&part.key);
     let body = format!("{label} {} {}", part.display, part.share);
+    if dimension == "theme" {
+        if !styler.is_color() {
+            return body;
+        }
+        let key = normalize_component(&part.key);
+        let Some(theme) = theme_hues.get(&key).filter(|theme| theme.known)
+        else {
+            return body;
+        };
+        return match theme.hue {
+            Some(hue) => format!(
+                "{} {body}",
+                styler.paint(&format!("38;5;{}", hue.xterm()), "■")
+            ),
+            None => format!("{} {body}", styler.dim("□")),
+        };
+    }
     if dimension != "area" && dimension != "project" {
         return body;
     }
@@ -1123,8 +1153,47 @@ mod tests {
             },
             warnings: Vec::new(),
             homes: BTreeMap::new(),
+            theme_hues: BTreeMap::new(),
             sessions: Vec::new(),
         }
+    }
+
+    #[test]
+    fn theme_dimension_uses_theme_squares_and_respects_no_color() {
+        let part = PartSummary {
+            key: "GTD".to_string(),
+            value: 25,
+            display: "25m".to_string(),
+            share: "100%".to_string(),
+            label: None,
+            apportioned: None,
+            apportioned_display: None,
+        };
+        let refs = BTreeMap::from([(
+            "gtd".to_string(),
+            crate::native::pomodoro_themes::ThemeRef {
+                key: "gtd".to_string(),
+                name: "GTD".to_string(),
+                hue: None,
+                hue_source: crate::native::pomodoro_themes::HueSource::Exempt,
+                known: true,
+                start: None,
+                end: None,
+            },
+        )]);
+        let homes = BTreeMap::new();
+        assert_eq!(
+            format_part_cell(&part, "theme", &homes, &refs, &Styler::plain(),),
+            "GTD 25m 100%"
+        );
+        assert!(format_part_cell(
+            &part,
+            "theme",
+            &homes,
+            &refs,
+            &Styler::colored(),
+        )
+        .contains("□"));
     }
 
     #[test]

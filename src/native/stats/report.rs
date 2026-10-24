@@ -4,7 +4,10 @@ use chrono::NaiveDate;
 use serde::Serialize;
 
 use super::value::{ChecklistState, DataQuality};
-use crate::native::pomodoro_homes::{HomeKind, Homes, Hue};
+use crate::native::{
+    pomodoro_homes::{HomeKind, Homes, Hue},
+    pomodoro_themes::ThemeRef,
+};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 
@@ -22,6 +25,9 @@ pub(crate) struct StatsReport {
     /// Catalog of every home key used in the report. Omitted when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) homes: BTreeMap<String, HomeCatalogEntry>,
+    /// Theme hue metadata for the theme dimensions present in the report.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) theme_hues: BTreeMap<String, ThemeRef>,
     /// Closed sessions in the display window. Omitted when empty; present
     /// when the report includes at least one pomodoro metric.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -572,6 +578,7 @@ mod tests {
                     .to_string(),
             }],
             homes: BTreeMap::new(),
+            theme_hues: BTreeMap::new(),
             sessions: Vec::new(),
         };
 

@@ -12,6 +12,7 @@ use crate::native::{
     config,
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
+    style::Styler,
 };
 
 mod cache;
@@ -66,6 +67,36 @@ pub(crate) struct ThemeRef {
     pub(crate) end: Option<usize>,
 }
 
+/// Render a terminal-only swatch before each known component. Callers keep
+/// their existing text when color is disabled, so `NO_COLOR` stays byte-safe.
+pub(crate) fn swatch_name(
+    themes: &[ThemeRef],
+    separator: &str,
+    styler: &Styler,
+) -> Option<String> {
+    if !styler.is_color() || themes.is_empty() {
+        return None;
+    }
+    Some(
+        themes
+            .iter()
+            .map(|theme| {
+                if !theme.known {
+                    return theme.name.clone();
+                }
+                let swatch = match theme.hue {
+                    Some(hue) => {
+                        styler.paint(&format!("38;5;{}", hue.xterm()), "■")
+                    }
+                    None => styler.dim("□"),
+                };
+                format!("{swatch}{}", theme.name)
+            })
+            .collect::<Vec<_>>()
+            .join(separator),
+    )
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
@@ -94,6 +125,14 @@ pub(crate) struct Catalog {
 
 impl Catalog {
     pub(crate) fn load(
+        vault: &Path,
+        today: NaiveDate,
+        fresh: bool,
+    ) -> std::io::Result<Self> {
+        Self::load_inner(vault, today, fresh)
+    }
+
+    fn load_inner(
         vault: &Path,
         today: NaiveDate,
         fresh: bool,
@@ -170,7 +209,6 @@ impl Catalog {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn theme_refs_for_name(&self, name: &str) -> Vec<ThemeRef> {
         split_components(name)
             .into_iter()
@@ -178,6 +216,19 @@ impl Catalog {
                 let key = normalize_component(&component);
                 self.theme_ref(&key, &component)
             })
+            .collect()
+    }
+
+    /// Build refs for an already-split list of theme names. The plan budget
+    /// uses `(unnamed)` as a placeholder, which is deliberately not a theme.
+    pub(crate) fn theme_refs_for_names(
+        &self,
+        names: &[String],
+    ) -> Vec<ThemeRef> {
+        names
+            .iter()
+            .filter(|name| name.as_str() != "(unnamed)")
+            .flat_map(|name| self.theme_refs_for_name(name))
             .collect()
     }
 
@@ -215,6 +266,56 @@ impl Catalog {
                     .expect("ranked key is in catalog")
             })
             .collect()
+    }
+}
+
+/// Small read-only view for capture-parse, which only needs hue and known
+/// membership for the components present in one draft.
+pub(crate) struct ThemeLookup {
+    known_keys: BTreeSet<String>,
+    prefs: Prefs,
+    areas: BTreeMap<String, Hue>,
+    exempt: BTreeSet<String>,
+}
+
+impl ThemeLookup {
+    pub(crate) fn load_for_theme_keys(
+        vault: &Path,
+        today: NaiveDate,
+        keys: &BTreeSet<String>,
+    ) -> std::io::Result<Self> {
+        let years = scan::year_dir_fingerprints(vault);
+        if let Some(known_keys) = cache::load_known_keys(vault, today, &years) {
+            let (prefs, _) = journal::load_prefs(vault)?;
+            return Ok(Self {
+                known_keys,
+                prefs,
+                areas: scan::scan_root_areas_for_keys(vault, keys),
+                exempt: load_exempt(),
+            });
+        }
+
+        let catalog = Catalog::load(vault, today, false)?;
+        Ok(Self {
+            known_keys: catalog.records.into_keys().collect(),
+            prefs: catalog.prefs,
+            areas: catalog.areas,
+            exempt: catalog.exempt,
+        })
+    }
+
+    pub(crate) fn theme_ref(&self, key: &str, name: &str) -> ThemeRef {
+        let (hue, hue_source) =
+            resolve_hue(key, self.prefs.pin(key), &self.exempt, &self.areas);
+        ThemeRef {
+            key: key.to_string(),
+            name: name.to_string(),
+            hue,
+            hue_source,
+            known: self.known_keys.contains(key),
+            start: None,
+            end: None,
+        }
     }
 }
 
@@ -328,6 +429,13 @@ fn load_records(
 
     let (records, days) =
         aggregate_records(vault_cache, today, today_summary.as_ref());
+    cache::store_known_keys(
+        vault,
+        today,
+        vault_cache.last_sweep_unix,
+        &vault_cache.years,
+        records.keys().cloned().collect(),
+    );
     cache_file.version = 1;
     cache::store(&cache_file);
     (records, days)

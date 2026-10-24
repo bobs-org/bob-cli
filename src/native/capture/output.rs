@@ -266,6 +266,10 @@ pub(super) struct CaptureResult {
     pub(super) template_not_saved: Option<String>,
     #[serde(skip)]
     pub(super) template_origin: Option<String>,
+    /// Internal terminal-rendering lookup; it never crosses the JSON API.
+    #[serde(skip)]
+    pub(super) theme_refs:
+        BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Before/after plan budget, present only when the batch changed
@@ -322,6 +326,7 @@ impl CaptureResult {
             template_saved: None,
             template_not_saved: None,
             template_origin: None,
+            theme_refs: BTreeMap::new(),
             warnings,
             plan_budget,
             pomodoro_blocks,
@@ -1183,6 +1188,24 @@ pub(super) fn format_pomodoro_task_destination(
     }
 }
 
+fn format_styled_pomodoro_task_destination(
+    destination: &PomodoroLinkEndpoint,
+    theme_refs: &BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>>,
+    styler: &Styler,
+) -> String {
+    let plain = format_pomodoro_task_destination(destination);
+    let Some(name) = destination.name.as_deref() else {
+        return plain;
+    };
+    let key = plan_budget::normalize_component(name);
+    let Some(rendered) = theme_refs.get(&key).and_then(|refs| {
+        super::super::pomodoro_themes::swatch_name(refs, " + ", styler)
+    }) else {
+        return plain;
+    };
+    plain.replacen(name, &rendered, 1)
+}
+
 pub(super) fn print_human_success(result: &CaptureResult) {
     if let Some(global) = &result.global_destination {
         print_global_destination_summary(global);
@@ -1197,7 +1220,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         );
     }
     if result.captures.is_empty() {
-        print_human_item_success(result, None);
+        print_human_item_success(result, None, &result.theme_refs);
         print_pull_in_hint(result);
         return;
     }
@@ -1207,7 +1230,11 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         if index > 0 {
             println!();
         }
-        print_human_item_success(item, Some((index + 1, total)));
+        print_human_item_success(
+            item,
+            Some((index + 1, total)),
+            &result.theme_refs,
+        );
     }
     print_pull_in_hint(result);
 }
@@ -1458,6 +1485,7 @@ pub(super) fn print_human_ref_item_success(
 pub(super) fn print_human_item_success(
     result: &CaptureItemResult,
     ordinal: Option<(usize, usize)>,
+    theme_refs: &BTreeMap<String, Vec<super::super::pomodoro_themes::ThemeRef>>,
 ) {
     let styler = Styler::detect();
     let target_label = if result.route_label.is_empty() {
@@ -1644,7 +1672,11 @@ pub(super) fn print_human_item_success(
     {
         println!(
             "  {}",
-            styler.dim(&format_pomodoro_task_destination(destination))
+            styler.dim(&format_styled_pomodoro_task_destination(
+                destination,
+                theme_refs,
+                &styler,
+            ))
         );
     }
     if let Some(note) = result.project_note.as_ref() {
@@ -3527,6 +3559,43 @@ impl CaptureErrorKind {
 mod tests {
     use super::*;
     use serde_json::{json, to_value};
+
+    #[test]
+    fn capture_destination_swatches_respect_no_color() {
+        let destination = PomodoroLinkEndpoint {
+            line: 3,
+            name: Some("BOB".to_string()),
+            time_range: None,
+            role: Some("created"),
+        };
+        let refs = BTreeMap::from([(
+            "bob".to_string(),
+            vec![crate::native::pomodoro_themes::ThemeRef {
+                key: "bob".to_string(),
+                name: "BOB".to_string(),
+                hue: Some(crate::native::pomodoro_homes::Hue::Magenta),
+                hue_source: crate::native::pomodoro_themes::HueSource::Hash,
+                known: true,
+                start: None,
+                end: None,
+            }],
+        )]);
+        let plain = format_pomodoro_task_destination(&destination);
+        assert_eq!(
+            format_styled_pomodoro_task_destination(
+                &destination,
+                &refs,
+                &Styler::plain(),
+            ),
+            plain
+        );
+        assert!(format_styled_pomodoro_task_destination(
+            &destination,
+            &refs,
+            &Styler::colored(),
+        )
+        .contains("38;5;211m■"));
+    }
 
     fn task_row(
         typed_work_log: Vec<String>,

@@ -140,6 +140,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": 3,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "first",
+          "name": "FIRST"
+        }
+      ],
       "time_range": "0800-0830"
     },
     {
@@ -261,6 +269,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "yellow",
+          "hue_source": "hash",
+          "key": "e1",
+          "name": "E1"
+        }
+      ],
       "time_range": null
     },
     {
@@ -382,6 +398,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "violet",
+          "hue_source": "hash",
+          "key": "e2",
+          "name": "E2"
+        }
+      ],
       "time_range": null
     },
     {
@@ -503,6 +527,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "e3",
+          "name": "E3"
+        }
+      ],
       "time_range": null
     },
     {
@@ -624,6 +656,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "magenta",
+          "hue_source": "hash",
+          "key": "e4",
+          "name": "E4"
+        }
+      ],
       "time_range": null
     },
     {
@@ -745,6 +785,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "red",
+          "hue_source": "hash",
+          "key": "e5",
+          "name": "E5"
+        }
+      ],
       "time_range": null
     },
     {
@@ -866,6 +914,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "aqua",
+          "hue_source": "hash",
+          "key": "e6",
+          "name": "E6"
+        }
+      ],
       "time_range": null
     },
     {
@@ -987,6 +1043,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "green",
+          "hue_source": "hash",
+          "key": "e7",
+          "name": "E7"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1108,6 +1172,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "blue",
+          "hue_source": "hash",
+          "key": "e8",
+          "name": "E8"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1229,6 +1301,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "yellow",
+          "hue_source": "hash",
+          "key": "e9",
+          "name": "E9"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1350,6 +1430,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "e10",
+          "name": "E10"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1471,6 +1559,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "violet",
+          "hue_source": "hash",
+          "key": "e11",
+          "name": "E11"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1592,6 +1688,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "yellow",
+          "hue_source": "hash",
+          "key": "e12",
+          "name": "E12"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1713,6 +1817,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "blue",
+          "hue_source": "hash",
+          "key": "e13",
+          "name": "E13"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1834,6 +1946,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "green",
+          "hue_source": "hash",
+          "key": "e14",
+          "name": "E14"
+        }
+      ],
       "time_range": null
     },
     {
@@ -1955,6 +2075,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "aqua",
+          "hue_source": "hash",
+          "key": "e15",
+          "name": "E15"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2076,6 +2204,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "red",
+          "hue_source": "hash",
+          "key": "e16",
+          "name": "E16"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2197,6 +2333,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "magenta",
+          "hue_source": "hash",
+          "key": "e17",
+          "name": "E17"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2318,6 +2462,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "e18",
+          "name": "E18"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2439,6 +2591,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "violet",
+          "hue_source": "hash",
+          "key": "e19",
+          "name": "E19"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2560,6 +2720,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "aqua",
+          "hue_source": "hash",
+          "key": "e20",
+          "name": "E20"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2681,6 +2849,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "green",
+          "hue_source": "hash",
+          "key": "e21",
+          "name": "E21"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2802,6 +2978,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "magenta",
+          "hue_source": "hash",
+          "key": "e22",
+          "name": "E22"
+        }
+      ],
       "time_range": null
     },
     {
@@ -2923,6 +3107,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "red",
+          "hue_source": "hash",
+          "key": "e23",
+          "name": "E23"
+        }
+      ],
       "time_range": null
     },
     {
@@ -3125,6 +3317,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "extra",
+          "name": "EXTRA"
+        }
+      ],
       "time_range": null
     }
   ],

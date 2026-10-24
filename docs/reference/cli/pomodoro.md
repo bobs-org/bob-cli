@@ -111,12 +111,15 @@ status. When today's daily note has a Pomodoros section, the plan-budget
 meter `plan T/Tc · L/Lc` is appended after the status (or alone when there
 is no status), wrapped in `#[reverse]...#[noreverse]` when over the cap.
 With `BOB_CLI_USE_SCRIPT=1` the script fallback stays budget-less.
+Each known, non-exempt name component gets a tmux `■` swatch; `NO_COLOR`
+leaves the status text unchanged.
 
 environment:
   BOB_CONFIG_FILE  exact Bob config file; defaults to ~/.config/bob/config.yml
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
   BOB_NOW       override the current timestamp for status calculations
+  NO_COLOR      disable theme swatches
 
 options:
   -h, --help     show this help message and exit

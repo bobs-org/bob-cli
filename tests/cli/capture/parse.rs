@@ -174,12 +174,16 @@ fn capture_parse_json_reports_task_block_id_marker_spans_and_needs() {
 
 #[test]
 fn capture_parse_json_reports_project_note_markers() {
+    let vault_temp = TempDir::new("bob-cli-capture-parse-themes");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
     let output = bob_command()
         .arg("capture-parse")
         .arg("-f")
         .arg("json")
         .arg("--")
         .arg("Do work @cash^goog-exit+")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse project-note caret marker");
 
@@ -208,6 +212,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("json")
         .arg("--")
         .arg("Do work @cash^goog-exit+#bugs")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse project-note pomodoro marker");
 
@@ -226,7 +231,22 @@ fn capture_parse_json_reports_project_note_markers() {
             { "start": 8, "end": 13, "kind": "task_block_id_route" },
             { "start": 14, "end": 23, "kind": "task_block_id" },
             { "start": 23, "end": 24, "kind": "project_note_marker" },
-            { "start": 25, "end": 29, "kind": "pomodoro_name" },
+            {
+                "start": 25,
+                "end": 29,
+                "kind": "pomodoro_name",
+                "themes": [
+                    {
+                        "key": "bugs",
+                        "name": "bugs",
+                        "hue": "aqua",
+                        "hue_source": "hash",
+                        "known": false,
+                        "start": 25,
+                        "end": 29,
+                    },
+                ],
+            },
         ])
     );
     assert_eq!(
@@ -247,6 +267,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("json")
         .arg("--")
         .arg("Do work @^focus-123+")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run bob capture-parse routeless project-note marker");
 
@@ -264,6 +285,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("json")
         .arg("--")
         .arg("Do work @cash:goog-exit+#bugs")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run retired colon project-note marker");
     assert_success(&invalid);
@@ -290,6 +312,7 @@ fn capture_parse_json_reports_project_note_markers() {
         .arg("json")
         .arg("--")
         .arg("@@cash^goog-exit+")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run project-note global declaration parse");
     assert_success(&global);
@@ -790,12 +813,16 @@ fn capture_parse_never_touches_the_vault_or_clipboard() {
 
 #[test]
 fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
+    let vault_temp = TempDir::new("bob-cli-capture-parse-themes");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
     let output = bob_command()
         .arg("capture-parse")
         .arg("-f")
         .arg("json")
         .arg("--")
         .arg("@cash+goog-exit!")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run explicit-toggle parse");
     assert_success(&output);
@@ -824,6 +851,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .arg("json")
         .arg("--")
         .arg("@cash+goog-exit")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run plain ensure-Next parse");
     assert_success(&output);
@@ -844,6 +872,7 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         .arg("json")
         .arg("--")
         .arg("@cash+goog-exit#deep+work")
+        .env("BOB_DIR", &vault)
         .output()
         .expect("run named ensure-Next parse");
     assert_success(&output);
@@ -856,7 +885,31 @@ fn capture_parse_json_reports_explicit_toggle_span_and_plain_ensure_next() {
         serde_json::json!([
             { "start": 0, "end": 5, "kind": "task_toggle_route" },
             { "start": 6, "end": 15, "kind": "task_toggle_block_id" },
-            { "start": 16, "end": 25, "kind": "task_toggle_pomodoro_name" },
+            {
+                "start": 16,
+                "end": 25,
+                "kind": "task_toggle_pomodoro_name",
+                "themes": [
+                    {
+                        "key": "deep",
+                        "name": "deep",
+                        "hue": "red",
+                        "hue_source": "hash",
+                        "known": false,
+                        "start": 16,
+                        "end": 20,
+                    },
+                    {
+                        "key": "work",
+                        "name": "work",
+                        "hue": "blue",
+                        "hue_source": "hash",
+                        "known": false,
+                        "start": 21,
+                        "end": 25,
+                    },
+                ],
+            },
         ])
     );
 }
@@ -1069,6 +1122,9 @@ fn capture_parse_reports_orphaned_nested_bullet_diagnostic() {
 
 #[test]
 fn capture_parse_reports_start_suffix_spans_and_batch_offsets() {
+    let vault_temp = TempDir::new("bob-cli-capture-parse-themes");
+    let vault = vault_temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create scratch vault");
     let parse = |text: &str| {
         let output = bob_command()
             .arg("capture-parse")
@@ -1076,6 +1132,7 @@ fn capture_parse_reports_start_suffix_spans_and_batch_offsets() {
             .arg("json")
             .arg("--")
             .arg(text)
+            .env("BOB_DIR", &vault)
             .output()
             .expect("run capture-parse");
         assert_success(&output);
@@ -1100,7 +1157,22 @@ fn capture_parse_reports_start_suffix_spans_and_batch_offsets() {
         serde_json::json!([
             { "start": 8, "end": 13, "kind": "pomodoro_route" },
             { "start": 14, "end": 21, "kind": "pomodoro_block_id" },
-            { "start": 22, "end": 26, "kind": "pomodoro_name" },
+            {
+                "start": 22,
+                "end": 26,
+                "kind": "pomodoro_name",
+                "themes": [
+                    {
+                        "key": "deep",
+                        "name": "deep",
+                        "hue": "red",
+                        "hue_source": "hash",
+                        "known": false,
+                        "start": 22,
+                        "end": 26,
+                    },
+                ],
+            },
             { "start": 26, "end": 29, "kind": "pomodoro_start" },
         ])
     );

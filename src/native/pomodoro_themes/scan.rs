@@ -145,7 +145,24 @@ pub(crate) fn year_dir_fingerprints(
 }
 
 pub(crate) fn scan_root_areas(vault: &Path) -> BTreeMap<String, Hue> {
+    scan_root_areas_matching(vault, None)
+}
+
+pub(crate) fn scan_root_areas_for_keys(
+    vault: &Path,
+    keys: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, Hue> {
+    scan_root_areas_matching(vault, Some(keys))
+}
+
+fn scan_root_areas_matching(
+    vault: &Path,
+    keys: Option<&std::collections::BTreeSet<String>>,
+) -> BTreeMap<String, Hue> {
     let mut areas = BTreeMap::new();
+    if keys.is_some_and(|keys| keys.is_empty()) {
+        return areas;
+    }
     let entries = match fs::read_dir(vault) {
         Ok(entries) => entries,
         Err(_) => return areas,
@@ -165,6 +182,10 @@ pub(crate) fn scan_root_areas(vault: &Path) -> BTreeMap<String, Hue> {
             continue;
         }
         let stem = name.trim_end_matches(".md");
+        let key = normalize_component(stem);
+        if keys.is_some_and(|keys| !keys.contains(&key)) {
+            continue;
+        }
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
@@ -183,7 +204,6 @@ pub(crate) fn scan_root_areas(vault: &Path) -> BTreeMap<String, Hue> {
         if !parent_stem.eq_ignore_ascii_case("area") {
             continue;
         }
-        let key = normalize_component(stem);
         let hue = frontmatter_value(&frontmatter, "color")
             .and_then(|value| Hue::parse(trim_yaml_scalar(value)))
             .unwrap_or_else(|| fallback_hue(stem));

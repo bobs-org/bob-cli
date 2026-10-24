@@ -100,6 +100,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "red",
+          "hue_source": "hash",
+          "key": "one",
+          "name": "ONE"
+        }
+      ],
       "time_range": "0800-0830"
     },
     {
@@ -159,6 +167,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "orange",
+          "hue_source": "hash",
+          "key": "two",
+          "name": "TWO"
+        }
+      ],
       "time_range": "0835-0905"
     },
     {
@@ -187,6 +203,14 @@
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
+      "themes": [
+        {
+          "hue": "green",
+          "hue_source": "hash",
+          "key": "next up",
+          "name": "NEXT UP"
+        }
+      ],
       "time_range": null
     }
   ],
