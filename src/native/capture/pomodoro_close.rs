@@ -337,12 +337,6 @@ pub(super) fn build_close_summary_json(
                 (timing.clone(), timing, remaining, 0)
             }
         };
-    let entry_line = ledger
-        .contents
-        .lines()
-        .nth(running.line.saturating_sub(1))
-        .unwrap_or("")
-        .to_string();
     let tasks = plan
         .summary
         .tasks
@@ -451,7 +445,7 @@ pub(super) fn build_close_summary_json(
     } else {
         spec.complete.clone()
     };
-    let summary = PomodoroCloseSummaryJson {
+    let mut summary = PomodoroCloseSummaryJson {
         raw: spec.raw.clone(),
         in_progress: spec.in_progress.clone(),
         park: resolved_park,
@@ -475,9 +469,10 @@ pub(super) fn build_close_summary_json(
             .collect(),
         task_links,
         pomodoro_line: running.line,
+        pomodoro_section_offset: plan.summary.pomodoro_section_offset,
         pomodoro_name: running.name.clone(),
         day_relative: day_relative.to_string(),
-        entry_line,
+        entry_line: String::new(),
         planned,
         closed,
         closed_at,
@@ -492,6 +487,7 @@ pub(super) fn build_close_summary_json(
         unblocked_check: "checked",
         project_folds: Vec::new(),
     };
+    refresh_close_headline(&ledger.contents, &mut summary);
     (summary, extra_warnings)
 }
 
@@ -1499,10 +1495,11 @@ pub(super) fn plan_pomodoro_close_item(
     summary.unblocked_check = successors.unblocked_check;
     summary.project_folds = successors.project_folds;
     let post_day = planner.read_existing(&day_file)?;
+    let closed_line = refresh_close_headline(&post_day, &mut summary);
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
         PomodoroBlockRole::Closed,
         plan.summary.running.line.saturating_sub(1),
-        locate_close_headline(&post_day, &summary),
+        closed_line,
     )];
     // The next entry is named by the close card, so the preview shows it
     // even when the close left it byte-identical.
@@ -1592,27 +1589,28 @@ pub(super) fn plan_pomodoro_close_item(
     })
 }
 
-/// Post-state headline index for the closed entry. `summary.pomodoro_line`
-/// is pre-image; when the close inserts Work Log lines above
-/// `## Pomodoros` (a linked task living in the day file), every section
-/// line drifts — and `summary.entry_line` reads the same stale line, so it
-/// cannot locate the rewrite. Prefer the candidate when its text still
-/// matches, else find the newly completed entry with this name and time
-/// range, nearest to the candidate.
+/// Post-state headline index for the closed entry. Map its original
+/// section-relative position first: Work Log insertion can shift the whole
+/// Pomodoros section, and names/time ranges alone do not identify repeated
+/// sessions. Fall back to the closed name, range, and nearest source line if
+/// another close edit changes the section's internal lineup.
 fn locate_close_headline(
     post_day: &str,
     summary: &PomodoroCloseSummaryJson,
 ) -> usize {
-    let lines: Vec<&str> = post_day.lines().collect();
-    let candidate = summary.pomodoro_line.saturating_sub(1);
-    if !summary.entry_line.is_empty()
-        && lines
-            .get(candidate)
-            .is_some_and(|line| *line == summary.entry_line)
-    {
+    let line_spans = crate::native::capture::line_spans(post_day);
+    let line_text = line_spans.iter().map(|line| line.text).collect::<Vec<_>>();
+    let candidate = pomodoro::pomodoros_section_range(&line_text)
+        .map(|section| section.start + summary.pomodoro_section_offset)
+        .unwrap_or_else(|| summary.pomodoro_line.saturating_sub(1));
+    let scan = capture_pomodoros::scan(post_day);
+    if scan.entries.iter().any(|entry| {
+        entry.line.saturating_sub(1) == candidate
+            && entry.state == capture_pomodoros::PomodoroState::Completed
+            && entry.name == summary.pomodoro_name
+    }) {
         return candidate;
     }
-    let scan = capture_pomodoros::scan(post_day);
     let closed_range =
         format!("{}-{}", summary.closed.start, summary.closed.end);
     let mut named = scan
@@ -1632,6 +1630,17 @@ fn locate_close_headline(
         return entry.line.saturating_sub(1);
     }
     candidate
+}
+
+/// Keep the JSON headline and its preview reference on the same resolved
+/// post-edit ledger row.
+fn refresh_close_headline(
+    post_day: &str,
+    summary: &mut PomodoroCloseSummaryJson,
+) -> usize {
+    let index = locate_close_headline(post_day, summary);
+    summary.entry_line = post_day.lines().nth(index).unwrap_or("").to_string();
+    index
 }
 
 /// Post-state headline index for the next entry, matched by name and time
@@ -2203,10 +2212,11 @@ pub(super) fn plan_pomodoro_close_link_item(
     // resolves through the item's line map; the next entry is named by
     // the close card, so it shows even when byte-identical.
     let post_day = planner.read_existing(&day_file)?;
+    let closed_line = refresh_close_headline(&post_day, &mut summary);
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
         PomodoroBlockRole::Closed,
         destination.line.saturating_sub(1),
-        locate_close_headline(&post_day, &summary),
+        closed_line,
     )];
     if let Some(moved) = source.as_ref() {
         pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
@@ -2487,10 +2497,11 @@ pub(super) fn plan_pomodoro_close_task_item(
     // moved source resolves through the item's line map; the next entry
     // is named by the close card, so it shows even when byte-identical.
     let post_day = planner.read_existing(&day_file)?;
+    let closed_line = refresh_close_headline(&post_day, &mut summary);
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
         PomodoroBlockRole::Closed,
         running_dest.line.saturating_sub(1),
-        locate_close_headline(&post_day, &summary),
+        closed_line,
     )];
     if let Some(moved) = link_source.as_ref() {
         pomodoro_refs.push(PomodoroBlockRef::unlinked_before(

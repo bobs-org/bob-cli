@@ -128,6 +128,7 @@ fn capture_pomodoro_close_worked_example() {
         json["task_line"],
         "- [x] (**0920-0940** [t:: 20m]) — CAPTURE"
     );
+    assert_eq!(json["pomodoro_close"]["entry_line"], json["task_line"]);
     assert_eq!(json["pomodoro_name"], "CAPTURE");
     assert_eq!(json["created"], "2026-09-28");
     assert!(json["scheduled"].is_null());
@@ -1520,6 +1521,103 @@ fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
     assert_eq!(blocks[1]["line"], 11);
     assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
     assert_eq!(blocks[1]["created"], true);
+}
+
+#[test]
+fn capture_pomodoro_close_maps_repeated_name_after_multiple_work_log_lines() {
+    let temp = TempDir::new("bob-cli-close-repeated-name-work-log");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "\n",
+            "- [*] #task Build thing [created::2026-09-28] ^build\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
+            "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
+            "\t- [[#^build]]\n",
+            "\t\t- did stuff\n",
+        ),
+    );
+
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x\n- 1 wrote the first part\n  - added a detail\n- 1 wrote the second part"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+
+    let expected = "- [x] (**0920-0940** [t:: 20m]) — CAPTURE";
+    assert_eq!(json["pomodoro_close"]["entry_line"], expected);
+    assert_eq!(json["task_line"], expected);
+    let matching_lines = day_after
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| (line == expected).then_some(index + 1))
+        .collect::<Vec<_>>();
+    assert_eq!(matching_lines.len(), 2, "{day_after}");
+    assert_eq!(json["pomodoro_blocks"][0]["line"], matching_lines[1]);
+    assert_eq!(
+        json["pomodoro_blocks"][0]["roles"],
+        serde_json::json!(["closed"])
+    );
+    assert_eq!(json["pomodoro_blocks"][0]["lines"][0]["text"], expected);
+    assert_eq!(
+        json["pomodoro_close"]["log"],
+        serde_json::json!([
+            {
+                "index": 1,
+                "text": "wrote the first part",
+                "details": ["added a detail"]
+            },
+            {"index": 1, "text": "wrote the second part"}
+        ])
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_maps_unnamed_session_after_day_file_work_log() {
+    let temp = TempDir::new("bob-cli-close-unnamed-work-log");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20260928.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "\n",
+            "- [*] #task Build thing [created::2026-09-28] ^build\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] (**0920-0950** [t:: 30m])\n",
+            "\t- [[#^build]]\n",
+            "\t\t- did stuff\n",
+        ),
+    );
+
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+
+    let expected = "- [x] (**0920-0940** [t:: 20m])";
+    assert_eq!(
+        json["pomodoro_close"]["pomodoro_name"],
+        serde_json::Value::Null
+    );
+    assert_eq!(json["pomodoro_close"]["entry_line"], expected);
+    assert_eq!(json["task_line"], expected);
+    assert_eq!(json["pomodoro_blocks"][0]["lines"][0]["text"], expected);
 }
 
 #[test]

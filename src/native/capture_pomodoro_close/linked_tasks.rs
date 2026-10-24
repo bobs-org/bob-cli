@@ -101,6 +101,10 @@ pub(crate) struct PomodoroCloseTask {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PomodoroCloseSummary {
     pub running: RunningPomodoro,
+    /// Zero-based position of the running entry within the Pomodoros section.
+    /// Work Log insertion can move the section while keeping this entry's
+    /// section-relative identity stable.
+    pub pomodoro_section_offset: usize,
     pub ledger: LedgerClosePlan,
     pub tasks: Vec<PomodoroCloseTask>,
     pub task_links: Vec<NumberedTaskLink>,
@@ -1020,10 +1024,23 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         })
         .map(|(path, contents)| (path.clone(), contents.clone()))
         .collect();
+    let original_lines = line_spans(day_contents);
+    let original_line_text = original_lines
+        .iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>();
+    let original_section =
+        pomodoro::pomodoros_section_range(&original_line_text)
+            .expect("running Pomodoro has a Pomodoros section");
+    let pomodoro_section_offset = running
+        .line
+        .saturating_sub(1)
+        .saturating_sub(original_section.start);
     Ok(PomodoroClosePlan {
         changed_files,
         summary: PomodoroCloseSummary {
             running,
+            pomodoro_section_offset,
             ledger,
             tasks: planner.tasks,
             task_links,

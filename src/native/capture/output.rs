@@ -182,6 +182,11 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) log: Vec<PomodoroCloseLogEntryJson>,
     pub(super) task_links: Vec<PomodoroCloseTaskLinkJson>,
     pub(super) pomodoro_line: usize,
+    /// Original entry position relative to the Pomodoros section. This is
+    /// planner-only identity used to recover the same row after Work Log
+    /// insertion shifts the section.
+    #[serde(skip)]
+    pub(super) pomodoro_section_offset: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_name: Option<String>,
     // Vault-relative day file, so human output and clients name the day
