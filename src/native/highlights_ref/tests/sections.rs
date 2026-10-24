@@ -807,3 +807,248 @@ fn no_declarations_produce_no_section_plan_or_tag_diagnostics() {
     assert!(plan.rewritten.is_empty());
     assert!(plan.diagnostics.is_empty());
 }
+
+#[test]
+fn hash_tag_scanner_handles_positions_and_rejections() {
+    let positional = |text: &str| {
+        scan_section_tags(text)
+            .into_iter()
+            .filter(|hit| hit.kind == SectionTagHitKind::Positional)
+            .collect::<Vec<_>>()
+    };
+    // Positional `#name` shapes.
+    for text in [
+        "Comment: #Memory.",
+        "- #open_questions",
+        "#memory",
+        "Notes #memory",
+    ] {
+        let hits = positional(text);
+        assert_eq!(hits.len(), 1, "{text}");
+        assert_eq!(hits[0].sigil, '#');
+    }
+    // Mid-sentence is prose.
+    assert!(positional("Compare #memory mid-sentence").is_empty());
+    // Never tokens.
+    for text in [
+        "C#",
+        "page#anchor",
+        "[[n#H]]",
+        "#area/memory",
+        "#git:home",
+        "#2024",
+        "#1",
+        "#task",
+        "#Task",
+        "# Memory",
+        "## Memory",
+    ] {
+        assert!(
+            scan_section_tags(text).is_empty(),
+            "{text}: {:?}",
+            scan_section_tags(text)
+        );
+    }
+    // Code and fences are ignored.
+    assert!(scan_section_tags("`#memory` stays code").is_empty());
+    assert!(
+        scan_section_tags("```md\n#memory\n```").is_empty(),
+        "fenced"
+    );
+    // A `#task` line never yields a positional section tag.
+    assert!(positional("- #task Draft #memory").is_empty(), "task line");
+    // Escaped.
+    let escaped = scan_section_tags("\\#memory");
+    assert_eq!(escaped.len(), 1);
+    assert_eq!(escaped[0].kind, SectionTagHitKind::Escaped);
+    assert_eq!(escaped[0].sigil, '#');
+    // Mixed runs work on both ends.
+    let mixed = positional("@memory #visuals");
+    assert_eq!(mixed.len(), 2);
+    assert_eq!(mixed[0].sigil, '@');
+    assert_eq!(mixed[1].sigil, '#');
+    let ends = positional("#a Text #memory");
+    assert_eq!(ends.len(), 2);
+}
+
+#[test]
+fn hash_display_source_consumes_and_keeps_escapes_visible() {
+    let home = BTreeSet::from(["memory".to_string()]);
+    assert_eq!(display_source("#memory", &home), "");
+    assert_eq!(display_source("- #memory", &home), "");
+    assert_eq!(display_source("A note #memory!", &home), "A note");
+    assert_eq!(display_source("#memory @memory", &home), "");
+    assert_eq!(display_source("#other", &home), "#other");
+    assert_eq!(display_source("\\#memory", &home), "\\#memory");
+    assert_eq!(display_source("\\@memory", &home), "@memory");
+}
+
+#[test]
+fn hash_planner_joins_conflicts_and_reports_near_miss_only() {
+    // `#memory` joins.
+    let joined = plan(&[
+        declaration(1, "Memory", ""),
+        annotation(
+            2,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("#memory"),
+            None,
+        ),
+    ]);
+    assert_eq!(joined.home_of.get(&2), Some(&0));
+    // A `#` forward reference joins.
+    let forward = plan(&[
+        annotation(
+            1,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("#memory"),
+            None,
+        ),
+        declaration(2, "Memory", ""),
+    ]);
+    assert_eq!(forward.home_of.get(&1), Some(&0));
+    // `#memory @visuals` conflicts and keeps Memory.
+    let conflict = plan(&[
+        declaration(1, "Memory", ""),
+        declaration(2, "Visuals", ""),
+        annotation(
+            3,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("#memory @visuals"),
+            None,
+        ),
+    ]);
+    assert_eq!(conflict.home_of.get(&3), Some(&0));
+    assert!(
+        diagnostic_kinds(&conflict).contains(&SectionDiagnosticKind::Conflict)
+    );
+    // `#memry` reports with a `#memory` hint.
+    let typo = plan(&[
+        declaration(1, "Memory", ""),
+        annotation(
+            2,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("#memry"),
+            None,
+        ),
+    ]);
+    assert!(
+        typo.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == SectionDiagnosticKind::TagUnknown
+                && diagnostic.detail.contains("#memry")
+                && diagnostic.detail.contains("did you mean #memory?")
+        }),
+        "{:?}",
+        typo.diagnostics
+    );
+    // A far unknown `#a` stays silent under `near_miss`.
+    let far = plan(&[
+        declaration(1, "Memory", ""),
+        annotation(
+            2,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("#a"),
+            None,
+        ),
+    ]);
+    assert!(
+        !diagnostic_kinds(&far).contains(&SectionDiagnosticKind::TagUnknown),
+        "{:?}",
+        far.diagnostics
+    );
+    // A `#memory`-only sticky reports and does not join.
+    let sticky = plan(&[
+        declaration(1, "Memory", ""),
+        annotation(
+            2,
+            SidecarAnnotationKind::StandaloneNote,
+            "#memory",
+            None,
+            None,
+        ),
+    ]);
+    assert!(!sticky.home_of.contains_key(&2));
+    assert!(
+        diagnostic_kinds(&sticky).contains(&SectionDiagnosticKind::TagOnlyNote)
+    );
+    // A comment declaration beats a `#name` tag for another section.
+    let sticky_memory = annotation(
+        0,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Memory"),
+    );
+    let sticky_visuals = annotation(
+        3,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Visuals"),
+    );
+    let mut declaring = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        "\\# Memory\n#visuals",
+        "Memory",
+    );
+    declaring.comment = Some("\\# Memory\n#visuals".to_string());
+    declaring.task_source = Some("\\# Memory\n#visuals".to_string());
+    let beaten = plan(&[sticky_memory, declaring, sticky_visuals]);
+    assert_eq!(beaten.sections.len(), 2);
+    assert_eq!(beaten.home_of.get(&1), Some(&0));
+    // With no declarations, `#memory` yields an empty plan and no diagnostics.
+    let none = plan(&[annotation(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        Some("#memory"),
+        None,
+    )]);
+    assert!(none.sections.is_empty());
+    assert!(none.diagnostics.is_empty());
+}
+
+#[test]
+fn hash_declarations_accept_hash_aliases() {
+    let parsed =
+        scan_section_declaration("Open questions #q").expect("hash alias");
+    assert_eq!(parsed.title, "Open questions");
+    assert_eq!(parsed.aliases, vec!["q"]);
+    assert_eq!(parsed.tag, "@q");
+    assert_eq!(
+        parsed.keys,
+        BTreeSet::from(["openquestions".into(), "q".into()])
+    );
+    let chapter =
+        scan_section_declaration("Chapter #1").expect("digit alias rejected");
+    assert_eq!(chapter.title, "Chapter 1");
+    assert!(chapter.aliases.is_empty());
+    let notes =
+        scan_section_declaration("Notes #task").expect("task alias rejected");
+    assert!(notes.title.contains("task"), "{}", notes.title);
+    assert!(notes.aliases.is_empty());
+}
+
+#[test]
+fn hash_identity_key_strips_hash_but_keeps_non_tags() {
+    assert_eq!(
+        section_match_key("Compare #Memory, then `x`"),
+        "Compare then `x`"
+    );
+    assert_eq!(
+        section_match_key("Compare #Memory, then `x`"),
+        section_match_key("Compare @Memory, then `x`")
+    );
+    assert!(section_match_key("Review #task now").contains("#task"));
+    assert!(section_match_key("C# code").contains("C#"));
+    assert!(section_match_key("see page#x now").contains("page#x"));
+    assert!(section_match_key("tag #area/memory here").contains("#area/memory"));
+    assert_eq!(section_match_key("\\#memory"), "\\#memory");
+}

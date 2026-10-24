@@ -957,3 +957,204 @@ Remaining comment text.
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].source_block_id, block_id);
 }
+
+#[test]
+fn hash_tag_toggles_keep_ids_and_match_at_spelling() {
+    let bob_dir = temp_bob_dir("sections-hash-identity");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let base = vec![
+        declaration(1, "Page 1", "Memory", ""),
+        highlight(2, "Page 4", "stable quote", Some("plain comment")),
+        sticky(3, "Page 2", "sticky keeps id"),
+    ];
+    let first = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        base.clone(),
+        &ParsedNote::empty(),
+    );
+    let first_ids = live_ids(&first.content);
+    assert_eq!(first_ids.len(), 2);
+    // Add a `#` tag: same IDs, no tombstones.
+    let tagged = vec![
+        declaration(1, "Page 1", "Memory", ""),
+        highlight(2, "Page 4", "stable quote", Some("plain comment #memory")),
+        sticky(3, "Page 2", "sticky keeps id #memory"),
+    ];
+    let second = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        tagged,
+        &region_note(&first.content),
+    );
+    assert_eq!(live_ids(&second.content), first_ids);
+    assert!(!second.content.contains("Removed highlights"));
+    // The `#` spelling renders identical region bytes to the `@` spelling.
+    let at_tagged = vec![
+        declaration(1, "Page 1", "Memory", ""),
+        highlight(2, "Page 4", "stable quote", Some("plain comment @memory")),
+        sticky(3, "Page 2", "sticky keeps id @memory"),
+    ];
+    let at_rendered =
+        render(&bob_dir, &pdf, &ref_note, at_tagged, &ParsedNote::empty());
+    assert_eq!(second.content, at_rendered.content);
+    // Swap `@memory` to `#memory` keeps IDs.
+    let third = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        vec![
+            declaration(1, "Page 1", "Memory", ""),
+            highlight(
+                2,
+                "Page 4",
+                "stable quote",
+                Some("plain comment #memory"),
+            ),
+            sticky(3, "Page 2", "sticky keeps id #memory"),
+        ],
+        &region_note(&at_rendered.content),
+    );
+    assert_eq!(live_ids(&third.content), first_ids);
+    // Remove the declaration: members fall back with tags visible, same IDs.
+    let no_decl = vec![
+        highlight(2, "Page 4", "stable quote", Some("plain comment #memory")),
+        sticky(3, "Page 2", "sticky keeps id #memory"),
+    ];
+    let fourth = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        no_decl,
+        &region_note(&third.content),
+    );
+    assert_eq!(live_ids(&fourth.content), first_ids);
+    assert!(fourth.content.contains("#memory"));
+    assert!(!fourth.content.contains("[!summary|section]"));
+}
+
+#[test]
+fn hash_playbook_shape_matches_at_spelling() {
+    let bob_dir = temp_bob_dir("sections-hash-playbook");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let sidecar = "\
+#### [Page 2](highlights://example#page=2)
+
+##### 2026-10-24:
+
+> Unrelated quote on page two.
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> First quote on page four.
+
+# what is it
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> Second quote on page four.
+
+#what-is-it
+
+---
+
+#### [Page 5](highlights://example#page=5)
+
+##### 2026-10-24:
+
+> Quote on page five.
+
+This is an interesting foobar… #what-is-it
+";
+    let annotations = parse_sidecar_markdown(sidecar);
+    assert_eq!(annotations.len(), 4, "{annotations:?}");
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations.clone(),
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.sections.len(), 1);
+    assert_eq!(rendered.sections[0].title, "what is it");
+    assert_eq!(rendered.sections[0].tag, "@what-is-it");
+    assert_eq!(rendered.sections[0].count, 3);
+    assert!(rendered.content.contains("### what is it"));
+    assert!(
+        rendered.content.contains(
+            "> [!summary|section] @what-is-it · 3 highlights · Pages 4–5"
+        ),
+        "{}",
+        rendered.content
+    );
+    // The `@` spelling renders identical output.
+    let at_sidecar = sidecar
+        .replace("#what-is-it", "@what-is-it")
+        .replace("# what is it", "# what is it");
+    let at_annotations = parse_sidecar_markdown(&at_sidecar);
+    let at_rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        at_annotations,
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.content, at_rendered.content);
+    assert_eq!(
+        rendered
+            .block_ids_by_annotation_order
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        at_rendered
+            .block_ids_by_annotation_order
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        "hash spelling keeps ^h- IDs"
+    );
+}
+
+#[test]
+fn hash_tags_without_declarations_render_unchanged() {
+    let bob_dir = temp_bob_dir("sections-hash-no-decl");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let annotations = vec![
+        highlight(1, "Page 4", "quote one", Some("#memory")),
+        highlight(2, "Page 5", "quote two", Some("\\#memory")),
+        highlight(3, "Page 6", "quote three", Some("#a Text")),
+    ];
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations.clone(),
+        &ParsedNote::empty(),
+    );
+    assert!(rendered.sections.is_empty());
+    assert!(rendered.section_diagnostics.is_empty());
+    assert!(rendered.content.contains("#memory"));
+    assert!(rendered.content.contains("\\#memory"));
+    assert!(rendered.content.contains("#a Text"));
+    let second = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations,
+        &region_note(&rendered.content),
+    );
+    assert_eq!(second.content, rendered.content);
+}

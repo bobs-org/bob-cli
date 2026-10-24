@@ -1655,16 +1655,17 @@ passage never changes the host ID or later blocks on that page.
 - **A sticky note or a comment whose first line is `# Name` starts a section.**
   For a sticky, the rest is the description. For a comment, the annotation
   joins the section, and the rest stays its comment.
-- **Tag a note with `@name` at the start or end of a line to file it there.** If
-  you can still see the matching `@name` in the rendered annotation, it did not
-  group.
+- **Tag a note with `@name` or `#name` at the start or end of a line to file it there.**
+  If you can still see the tag, it did not group.
+- **The space matters:** `# Memory` declares, and `#memory` joins.
 
 In Highlights, write the declaration in a standalone sticky note or as the
 first line of a highlight, underline, or image comment. Its first non-empty
 line must be one `#`, a space, and a title, after an optional `Comment:` or
 `Note:` label. Exported date headings and an optional `Note:` label before a
 sticky line are ignored. Add optional aliases at the end, such as
-`# Open questions @q`; the first alias becomes the card's tag, while both the
+`# Open questions @q` or `# Open questions #q`; the first alias becomes the card's tag
+(which always shows the `@` spelling), while both the
 title and aliases can match annotations. For a sticky, the remaining lines are
 its description. For a comment, the declaration line (and one blank line after
 it) is removed and any remaining text stays that annotation's own comment; an
@@ -1673,25 +1674,39 @@ description. Only the first comment line declares; later `# ` lines stay
 literal, and `\#` escapes. Rejected declarations remain visible as sticky notes
 (or literal escaped lines for comments).
 
-A positional tag is a whole `@name` token at the beginning or end of a line,
-after an optional `Note:` or `Comment:` label and one list marker. Matching
-ignores case and punctuation between letters and digits. Tags can be on
+A positional tag is a whole `@name` or `#name` token at the beginning or end of a line,
+after an optional `Note:` or `Comment:` label and one list marker; one line may mix
+both sigils. Matching
+ignores case and punctuation between letters and digits. A `#name` must end at whitespace
+or the end of the line, and must contain more than digits. `#task` is never a section tag,
+and nested Obsidian tags never group.
+Tags can be on
 highlight comments, underline comments, image comments, or ordinary sticky
 notes. Quoted PDF text and image paths are not scanned. Tags in the middle of
 prose, code, or a `#task` line do not group. A backslash escapes a tag.
+A matched `#name` is consumed, so it never becomes an Obsidian tag on the ref note.
+An unmatched one stays an ordinary Obsidian tag.
+`\#name` renders exactly as typed, which Obsidian shows as plain `#name` text.
 
 | Highlights text | Result |
 | --- | --- |
 | `@memory` | Joins Memory; the tag is consumed. |
 | `@Memory Compare with table 2` | Joins Memory; the rendered comment is `Compare with table 2`. |
 | `Use these as placeholders @visuals` | Joins Visuals; the trailing tag is consumed. |
+| `#memory` | Joins Memory; the tag is consumed. |
+| `Compare with the intro #memory` | Joins Memory; the trailing tag is consumed. |
+| `#memory` versus `# Memory` | A tag versus a declaration. |
 | `# Memory` as a comment's first line | Declares Memory; the annotation joins, the line is removed. |
 | `Keep @chat and @agent!` | Only the final `@agent!` is positional; `@chat` stays in the prose. |
 | `- #task Draft the intro @sase` | Routes the task to `sase.md`; the tag does not group this task line. |
 | `@memory` followed by `- #task Draft the intro @sase` | The first line joins Memory and the second still routes its task. |
 | `@memry` | Stays visible and reports `section_tag_unknown` when no section matches. |
+| `#memry` | Stays visible, and reports `section_tag_unknown` with a `#memory` hint; a far-off hashtag like `#a` stays silent. |
+| `#area/memory` | A nested Obsidian tag, never grouped. |
 | `@memory @visuals` | Memory is the one home; Visuals stays visible and reports a conflict. |
 | `\@memory` | Renders as `@memory` and never groups. |
+| `\#memory` | Shown as plain `#memory` text, never grouped. |
+| `- #task Draft #memory` | A task, not a section tag. |
 
 Sections are real headings in the generated note, so they appear in Obsidian's
 Outline and can be folded, linked, or embedded. Each section card shows its tag,

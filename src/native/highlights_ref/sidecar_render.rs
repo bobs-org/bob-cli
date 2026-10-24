@@ -12,7 +12,7 @@ struct DisplayBlock {
 }
 
 /// Stable note/comment identity shared by current and existing sides.
-/// It layers the `@`-insensitive normalizer over the existing
+/// It layers the `@`/`#`-insensitive normalizer over the existing
 /// return-link/beautify/emphasis/whitespace normalization.
 fn note_identity_key(text: &str) -> String {
     section_match_key(&identity_quote_key(text))
@@ -1464,7 +1464,7 @@ pub(super) fn annotation_block_id(
     let normalized = match annotation.kind {
         SidecarAnnotationKind::StandaloneNote => {
             // Rejected declarations use their literal display; ordinary notes
-            // use the shared @-insensitive key.
+            // use the shared @/#-insensitive key.
             if annotation.section_heading.is_some() {
                 note_identity_key(&rejected_declaration_display(annotation))
             } else {

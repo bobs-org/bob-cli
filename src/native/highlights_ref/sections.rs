@@ -106,10 +106,11 @@ pub(super) enum SectionTagHitKind {
 pub(super) struct SectionTagHit {
     /// One-based source line number.
     pub(super) line: usize,
-    /// Byte span of the `@token`, including tolerated punctuation.
+    /// Byte span of the `@token` or `#token`, including tolerated punctuation.
     pub(super) span: Range<usize>,
     pub(super) key: String,
     pub(super) raw: String,
+    pub(super) sigil: char,
     pub(super) kind: SectionTagHitKind,
 }
 
@@ -163,10 +164,17 @@ fn trailing_aliases(heading: &str) -> (&str, Vec<String>) {
             })
             .unwrap_or(0);
         let token = &heading[start..end];
-        let Some(alias) = token.strip_prefix('@') else {
+        let (alias, is_hash) = if let Some(alias) = token.strip_prefix('@') {
+            (alias, false)
+        } else if let Some(alias) = token.strip_prefix('#') {
+            (alias, true)
+        } else {
             break;
         };
         if !valid_alias(alias) {
+            break;
+        }
+        if is_hash && !valid_hash_alias(alias) {
             break;
         }
         aliases_reversed.push(alias.to_string());
@@ -196,6 +204,29 @@ fn valid_alias(alias: &str) -> bool {
         && characters.all(|character| {
             character.is_alphanumeric() || matches!(character, '_' | '-')
         })
+}
+
+/// Extra `#alias` rules shared with the scanner: more than digits (Obsidian's
+/// own tag rule) and never keyed `task`.
+fn valid_hash_alias(alias: &str) -> bool {
+    if alias.chars().all(|character| character.is_numeric()) {
+        return false;
+    }
+    section_key(alias) != "task"
+}
+
+/// Shared `#name` validity beyond the sigil shape: more than digits and never
+/// keyed `task`. The end-boundary check lives with the caller, which sees the
+/// character after the token.
+fn hash_tag_key(tag_name: &str) -> Option<String> {
+    if tag_name.chars().all(|character| character.is_numeric()) {
+        return None;
+    }
+    let key = section_key(tag_name);
+    if key == "task" {
+        return None;
+    }
+    Some(key)
 }
 
 fn sanitize_section_title(title: &str) -> String {
@@ -302,7 +333,10 @@ fn unique_slug(base: &str, used: &mut BTreeSet<String>) -> String {
 }
 
 /// Find positional tags, escaped positional tags, and trailing `#task` route
-/// tags. Spans are UTF-8 byte ranges into the original text.
+/// tags. Both `@name` and `#name` spellings are scanned; `#name` tokens must
+/// additionally end at whitespace or the end of the line, contain more than
+/// digits, and never key `task`. Spans are UTF-8 byte ranges into the
+/// original text.
 pub(super) fn scan_section_tags(text: &str) -> Vec<SectionTagHit> {
     let mut hits = Vec::new();
     let mut fenced: Option<(char, usize)> = None;
@@ -325,15 +359,28 @@ pub(super) fn scan_section_tags(text: &str) -> Vec<SectionTagHit> {
         let mut line_hits = Vec::new();
         let mut cursor = 0;
         while cursor < line.len() {
-            let Some(relative) = line[cursor..].find('@') else {
-                break;
+            let rest = &line[cursor..];
+            let next_at = rest.find('@');
+            let next_hash = rest.find('#');
+            let (relative, sigil) = match (next_at, next_hash) {
+                (None, None) => break,
+                (Some(at), None) => (at, '@'),
+                (None, Some(hash)) => (hash, '#'),
+                (Some(at), Some(hash)) => {
+                    if at < hash {
+                        (at, '@')
+                    } else {
+                        (hash, '#')
+                    }
+                }
             };
             let at = cursor + relative;
+            // `@` and `#` are one byte, so stepping one byte forward is safe.
             cursor = at + 1;
             if code_ranges.iter().any(|range| range.contains(&at)) {
                 continue;
             }
-            let Some(hit) = token_at(line, at) else {
+            let Some(hit) = token_at(line, at, sigil) else {
                 continue;
             };
             line_hits.push(hit);
@@ -367,11 +414,20 @@ pub(super) fn scan_section_tags(text: &str) -> Vec<SectionTagHit> {
             };
             let tag_name =
                 hit.raw[1..].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+            let key = if hit.sigil == '#' {
+                match hash_tag_key(tag_name) {
+                    Some(key) => key,
+                    None => continue,
+                }
+            } else {
+                section_key(tag_name)
+            };
             hits.push(SectionTagHit {
                 line: line_index + 1,
                 span: hit.span,
-                key: section_key(tag_name),
+                key,
                 raw: hit.raw,
+                sigil: hit.sigil,
                 kind,
             });
         }
@@ -383,10 +439,12 @@ pub(super) fn scan_section_tags(text: &str) -> Vec<SectionTagHit> {
 struct RawTagHit {
     span: Range<usize>,
     raw: String,
+    sigil: char,
     escaped: bool,
 }
 
-fn token_at(line: &str, at: usize) -> Option<RawTagHit> {
+fn token_at(line: &str, at: usize, sigil: char) -> Option<RawTagHit> {
+    debug_assert!(line[at..].starts_with(sigil));
     let prefix = &line[..at];
     let escaped = prefix.ends_with('\\');
     if escaped {
@@ -429,9 +487,27 @@ fn token_at(line: &str, at: usize) -> Option<RawTagHit> {
             .expect("checked punctuation")
             .len_utf8();
     }
+    if sigil == '#' {
+        // `#name` must end at whitespace or the end of the line, so nested
+        // Obsidian tags (`#area/memory`), `#git:home`, and `#memory)` never
+        // group. `@name` keeps today's looser end rule (out of scope).
+        if line[end..]
+            .chars()
+            .next()
+            .is_some_and(|character| !character.is_whitespace())
+        {
+            return None;
+        }
+        let tag_name =
+            line[at + 1..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        if hash_tag_key(tag_name).is_none() {
+            return None;
+        }
+    }
     Some(RawTagHit {
         span: at..end,
         raw: line[at..end].to_string(),
+        sigil,
         escaped,
     })
 }
@@ -587,8 +663,10 @@ fn closes_fence(line: &str, character: char, width: usize) -> bool {
     run >= width && trimmed[run..].trim().is_empty()
 }
 
-/// Rewrite consumed positional tags for a selected section. Escaped
-/// positional tags are displayed without their escape slash and never match.
+/// Rewrite consumed positional tags for a selected section. Escaped `@`
+/// positional tags are displayed without their escape slash and never match;
+/// escaped `#` tags render exactly as typed (backslash included), which
+/// Obsidian shows as plain `#name` text without creating a tag.
 pub(super) fn display_source(
     text: &str,
     home_keys: &BTreeSet<String>,
@@ -613,12 +691,17 @@ pub(super) fn display_source(
                 {
                     edits.push((hit.span.clone(), ""));
                 }
-                SectionTagHitKind::Escaped => {
+                SectionTagHitKind::Escaped if hit.sigil == '@' => {
                     if hit.span.start > 0
                         && line.as_bytes()[hit.span.start - 1] == b'\\'
                     {
                         edits.push((hit.span.start - 1..hit.span.start, ""));
                     }
+                }
+                SectionTagHitKind::Escaped => {
+                    // `\#name` stays verbatim: stripping the slash would turn
+                    // it into a real Obsidian tag and change notes with no
+                    // sections.
                 }
                 _ => {}
             }
@@ -687,7 +770,8 @@ fn collapse_display_whitespace(line: &str) -> String {
 
 /// Stable identity normalizer shared by current and existing sidecar blocks.
 /// It removes every `@name`-shaped token (escaped or not, including prose
-/// occurrences), together with the whitespace immediately before it.
+/// occurrences) and every scanner-shaped `#name` token (escaped or not),
+/// together with the whitespace immediately before it.
 pub(super) fn section_match_key(text: &str) -> String {
     let normalized = normalized_identity_text(&strip_identity_tags(text));
     if normalized.is_empty() {
@@ -702,8 +786,20 @@ fn strip_identity_tags(text: &str) -> String {
     let mut cursor = 0;
     let mut search = 0;
     while search < text.len() {
-        let Some(relative) = text[search..].find('@') else {
-            break;
+        let rest = &text[search..];
+        let next_at = rest.find('@');
+        let next_hash = rest.find('#');
+        let (relative, sigil) = match (next_at, next_hash) {
+            (None, None) => break,
+            (Some(at), None) => (at, '@'),
+            (None, Some(hash)) => (hash, '#'),
+            (Some(at), Some(hash)) => {
+                if at < hash {
+                    (at, '@')
+                } else {
+                    (hash, '#')
+                }
+            }
         };
         let at = search + relative;
         let Some(first) = text[at + 1..].chars().next() else {
@@ -726,6 +822,12 @@ fn strip_identity_tags(text: &str) -> String {
         }) {
             end += text[end..].chars().next().unwrap().len_utf8();
         }
+        if sigil == '#' && !hash_identity_token(text, cursor, at, end) {
+            // `C#`, URL fragments, wikilink headings, nested tags, `#task`,
+            // and digit-only tags stay part of every key.
+            search = at + 1;
+            continue;
+        }
         let mut start = if at > cursor && text.as_bytes()[at - 1] == b'\\' {
             at - 1
         } else {
@@ -744,6 +846,38 @@ fn strip_identity_tags(text: &str) -> String {
     }
     output.push_str(&text[cursor..]);
     output
+}
+
+/// Shared `#name` identity predicate mirroring the scanner: the sigil (or its
+/// escape slash) must start the text or follow whitespace, the token must end
+/// at whitespace or the end of the text, and the name must be more than digits
+/// and never key `task`.
+fn hash_identity_token(
+    text: &str,
+    cursor: usize,
+    at: usize,
+    end: usize,
+) -> bool {
+    let escaped = at > cursor && text.as_bytes()[at - 1] == b'\\';
+    let anchor = if escaped { at - 1 } else { at };
+    if anchor > cursor
+        && !text[..anchor]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+    {
+        return false;
+    }
+    if text[end..]
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return false;
+    }
+    let tag_name =
+        text[at + 1..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    hash_tag_key(tag_name).is_some()
 }
 
 fn is_empty_list_item(line: &str) -> bool {
@@ -1082,7 +1216,7 @@ pub(super) fn plan_sections(
             }
         }
         // Tag scanning sees the source after declaration removal, so a
-        // declaration's own `@alias` tokens never count as tags.
+        // declaration's own `@alias`/`#alias` tokens never count as tags.
         let stripped_sources = member_sources
             .iter()
             .map(|(order, annotation, source)| {
@@ -1144,17 +1278,40 @@ pub(super) fn plan_sections(
                     } else {
                         let hint =
                             closest_section_tag(&hit.key, &plan.sections);
-                        let detail = match hint {
-                            Some(tag) => {
-                                format!("{} (did you mean {tag}?)", hit.raw)
-                            }
-                            None => hit.raw.clone(),
-                        };
-                        plan.diagnostics.push(SectionDiagnostic {
-                            kind: SectionDiagnosticKind::TagUnknown,
-                            page_label: annotation.page_label.clone(),
-                            detail,
-                        });
+                        // `near_miss`: an unknown `#name` reports only as a
+                        // likely typo with a did-you-mean hint; far-off
+                        // hashtags stay quiet (and keep the scan's
+                        // `section_tags_unknown` count quiet). `@name`
+                        // behavior is unchanged.
+                        if hit.sigil == '#' {
+                            let Some(tag) = hint else {
+                                continue;
+                            };
+                            let hint_text = match tag.strip_prefix('@') {
+                                Some(rest) => format!("#{rest}"),
+                                None => tag,
+                            };
+                            plan.diagnostics.push(SectionDiagnostic {
+                                kind: SectionDiagnosticKind::TagUnknown,
+                                page_label: annotation.page_label.clone(),
+                                detail: format!(
+                                    "{} (did you mean {hint_text}?)",
+                                    hit.raw
+                                ),
+                            });
+                        } else {
+                            let detail = match hint {
+                                Some(tag) => {
+                                    format!("{} (did you mean {tag}?)", hit.raw)
+                                }
+                                None => hit.raw.clone(),
+                            };
+                            plan.diagnostics.push(SectionDiagnostic {
+                                kind: SectionDiagnosticKind::TagUnknown,
+                                page_label: annotation.page_label.clone(),
+                                detail,
+                            });
+                        }
                     }
                 }
                 SectionTagHitKind::Escaped => {}
