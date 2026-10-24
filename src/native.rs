@@ -22,6 +22,7 @@ mod capture_clip;
 mod capture_completable_tasks;
 mod capture_complete;
 mod capture_dependency_tasks;
+mod capture_flag_guard;
 mod capture_language;
 mod capture_link_tasks;
 mod capture_links;

@@ -16,10 +16,27 @@ use super::{
     model::{CompleteError, OutputFormat},
     render::{print_error, print_success},
 };
+use crate::native::capture_flag_guard;
 use crate::native::env as bob_env;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
+    if let Some(hit) = capture_flag_guard::find_unknown_long_flag(
+        &args,
+        &capture_flag_guard::capture_complete_spec(),
+    ) {
+        let message =
+            capture_flag_guard::unexpected_argument_message(&hit.flag);
+        if hit.format_json {
+            return print_error(
+                &CompleteError::usage(message),
+                OutputFormat::Json,
+            );
+        }
+        return print_clap_error(
+            command.error(clap::error::ErrorKind::UnknownArgument, message),
+        );
+    }
     let matches = match command.try_get_matches_from_mut(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
@@ -270,7 +287,10 @@ pub(super) fn text_arg() -> Arg {
         .trailing_var_arg(true)
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
-        .help("Capture text; multiple args are joined with spaces")
+        .help(
+            "Capture text; multiple args are joined with spaces; \
+             unknown `--flag` before `--` is rejected",
+        )
 }
 
 impl super::model::OutputFormat {

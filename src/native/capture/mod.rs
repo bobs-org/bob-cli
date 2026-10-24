@@ -10,7 +10,7 @@ use std::{
 
 use chrono::{Datelike, Days, NaiveDate};
 use clap::{
-    builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
+    builder::OsStringValueParser, error::ErrorKind, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
 };
 use serde::Serialize;
@@ -144,6 +144,12 @@ pub(crate) use sub_bullet::{
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
+    if let Some(hit) = super::capture_flag_guard::find_unknown_long_flag(
+        &args,
+        &super::capture_flag_guard::capture_spec(),
+    ) {
+        return reject_unknown_long_flag(hit, &mut command);
+    }
     let matches = match command.try_get_matches_from_mut(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
@@ -167,6 +173,24 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Err(error) => print_capture_error(error, output_format),
     }
+}
+
+/// Reject an unknown alphabetic long option found where TEXT would begin:
+/// exit 2 with clap's unexpected-argument wording, or the JSON error
+/// envelope when `--format json` preceded the flag. Nothing is written.
+fn reject_unknown_long_flag(
+    hit: super::capture_flag_guard::GuardHit,
+    command: &mut ClapCommand,
+) -> i32 {
+    let message =
+        super::capture_flag_guard::unexpected_argument_message(&hit.flag);
+    if hit.format_json {
+        return print_capture_error(
+            CaptureError::usage(message),
+            OutputFormat::Json,
+        );
+    }
+    print_clap_error(command.error(ErrorKind::UnknownArgument, message))
 }
 
 #[derive(Serialize)]

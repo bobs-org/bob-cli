@@ -71,7 +71,7 @@ Usage: bob capture [OPTIONS] [TEXT]...
 
 Arguments:
   [TEXT]...
-          Task text; multiple args are joined with spaces
+          Task text; multiple args are joined with spaces; unknown `--flag` before `--` is rejected
 
 Options:
   -b, --bob-dir <DIR>
@@ -141,6 +141,7 @@ Examples:
   bob capture ++3
   bob capture -- --2
   bob capture --1
+  bob capture -- --anything
   printf '+5\n\nCall bank @Cash+\n' | bob capture
   printf -- '--2\n\n+\n' | bob capture
   bob capture 'x'

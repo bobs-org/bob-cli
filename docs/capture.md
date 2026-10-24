@@ -4507,7 +4507,12 @@ piped stdin stream, so a multi-line authored-bullet draft survives a pipe:
 `printf 'parent\n- child\n' | bob capture`. Put options before text, or use
 `--` when the task itself starts with a hyphen; a multi-line draft passed as
 an argument needs its own shell quoting, for example
-`bob capture -- "$(printf 'parent\n- child\n')"`. Embedded newlines inside a
+`bob capture -- "$(printf 'parent\n- child\n')"`. An unknown `--flag`
+before `--` is rejected with exit 2 (`unexpected argument '--flag' found`,
+JSON `ok: false` under `-f json`) and writes nothing, so text starting with
+`--` plus a letter must follow `--` (`bob capture -- --anything` still files
+`--anything`); `--` plus a non-letter (such as `--2`) and single-hyphen
+starts still capture as text. Embedded newlines inside a
 single `TEXT` argument stay intact; multiple `TEXT` arguments are still
 joined with single spaces, never newlines. Editor clients such as Bob Mac Capture should
 call `bob capture --format json -- <text>` and parse the JSON object, whose
@@ -6579,7 +6584,8 @@ or `replaced`. A new explicit save starts with `use_count: 0`. Delete returns
 the deleted ids and any unresolved selector strings in `missing`; clear
 returns the number of entries removed. Error JSON includes `ok: false`,
 `error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
-`saved_templates_disabled`, and existing `template_*` definition errors exit
+`saved_templates_disabled`, existing `template_*` definition errors, and an
+unknown `--flag` before `--` (`saved_templates_unknown_flag`) exit
 2; `saved_templates_newer_schema`, `saved_templates_busy`, and
 `saved_templates_io` exit 1.
 

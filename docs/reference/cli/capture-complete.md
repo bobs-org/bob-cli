@@ -21,7 +21,7 @@ Usage: bob capture-complete [OPTIONS] --cursor <BYTE> [TEXT]...
 
 Arguments:
   [TEXT]...
-          Capture text; multiple args are joined with spaces
+          Capture text; multiple args are joined with spaces; unknown `--flag` before `--` is rejected
 
 Options:
   -a, --all-tasks

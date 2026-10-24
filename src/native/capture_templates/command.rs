@@ -15,7 +15,7 @@ use serde_json::json;
 use super::store::{self, TemplateShelfEntry, TemplateShelfSnapshot};
 use crate::native::{
     capture::cli::template_origin_arg,
-    capture_language,
+    capture_flag_guard, capture_language,
     capture_parse::{self, CaptureParseSpan},
     config,
     style::Styler,
@@ -94,6 +94,28 @@ pub(crate) fn build_cli_clear() -> ClapCommand {
 
 fn run(command_kind: Command, args: Vec<OsString>) -> i32 {
     let mut command = build_cli(command_kind);
+    // Only `save` takes a capture-style TEXT positional; the other
+    // commands' template positionals already reject hyphen values in clap.
+    if matches!(command_kind, Command::Save)
+        && let Some(hit) = capture_flag_guard::find_unknown_long_flag(
+            &args,
+            &capture_flag_guard::capture_templates_save_spec(),
+        )
+    {
+        let message =
+            capture_flag_guard::unexpected_argument_message(&hit.flag);
+        if hit.format_json {
+            return report_error(
+                OutputFormat::Json,
+                "saved_templates_unknown_flag",
+                &message,
+                2,
+            );
+        }
+        return print_clap_error(
+            command.error(clap::error::ErrorKind::UnknownArgument, message),
+        );
+    }
     let matches = match command.try_get_matches_from_mut(
         iter::once(OsString::from(command_name(command_kind))).chain(args),
     ) {
@@ -228,7 +250,10 @@ fn text_arg() -> Arg {
         .trailing_var_arg(true)
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
-        .help("Template draft; multiple args are joined with spaces")
+        .help(
+            "Template draft; multiple args are joined with spaces; \
+             unknown `--flag` before `--` is rejected",
+        )
 }
 
 fn print_clap_error(error: clap::Error) -> i32 {

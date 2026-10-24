@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
+    capture_flag_guard,
     capture_language::{
         self, AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
@@ -65,6 +66,19 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
+    if let Some(hit) = capture_flag_guard::find_unknown_long_flag(
+        &args,
+        &capture_flag_guard::capture_parse_spec(),
+    ) {
+        let message =
+            capture_flag_guard::unexpected_argument_message(&hit.flag);
+        if hit.format_json {
+            return print_parse_error(&message, OutputFormat::Json);
+        }
+        return print_clap_error(
+            command.error(clap::error::ErrorKind::UnknownArgument, message),
+        );
+    }
     let matches = match command.try_get_matches_from_mut(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
@@ -430,7 +444,10 @@ fn text_arg() -> Arg {
         .trailing_var_arg(true)
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
-        .help("Capture text; multiple args are joined with spaces")
+        .help(
+            "Capture text; multiple args are joined with spaces; \
+             unknown `--flag` before `--` is rejected",
+        )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
