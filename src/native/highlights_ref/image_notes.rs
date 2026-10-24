@@ -260,7 +260,7 @@ pub(super) fn image_note_embed_markdown(
     }
 }
 
-fn parse_image_note_refs(line: &str) -> Vec<ImageNoteRef> {
+pub(super) fn parse_image_note_refs(line: &str) -> Vec<ImageNoteRef> {
     let prepared = prepare_image_note_line(line);
     if prepared.is_empty() {
         return Vec::new();

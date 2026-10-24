@@ -124,6 +124,7 @@ mod reading_execute;
 mod reading_plan;
 mod region;
 mod seams;
+mod sections;
 mod sidecar;
 mod status;
 mod tasks;

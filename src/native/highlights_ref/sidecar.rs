@@ -315,9 +315,11 @@ pub(super) fn parse_sidecar_chunk(
     linked_page_style: bool,
 ) -> Vec<SidecarAnnotation> {
     let lines = trim_blank_lines(chunk);
-    if lines.is_empty() || lines.iter().all(|line| is_markdown_heading(line)) {
+    if lines.is_empty() {
         return Vec::new();
     }
+
+    let section_declaration = standalone_section_declaration(&lines);
 
     if let Some(blockquote_index) = lines
         .iter()
@@ -360,8 +362,15 @@ pub(super) fn parse_sidecar_chunk(
         }
         let comment_lines = lines[index..]
             .iter()
-            .filter(|line| !is_markdown_heading(line))
-            .cloned()
+            .filter_map(|line| {
+                if is_section_comment_heading(line) {
+                    Some(escape_markdown_heading(line))
+                } else if is_markdown_heading(line) {
+                    None
+                } else {
+                    Some(line.clone())
+                }
+            })
             .collect::<Vec<_>>();
         let comment_source = normalize_annotation_text(&comment_lines);
         let comment = strip_comment_label(&comment_source);
@@ -372,6 +381,7 @@ pub(super) fn parse_sidecar_chunk(
             page_index,
             linked_page_style,
             text,
+            section_heading: None,
             comment: (!comment.is_empty()).then_some(comment),
             task_source: (!comment_source.is_empty())
                 .then(|| strip_comment_label_only(&comment_source)),
@@ -381,13 +391,20 @@ pub(super) fn parse_sidecar_chunk(
         }];
     }
 
-    let non_heading_lines = lines
+    let image_lines = lines
         .iter()
-        .filter(|line| !is_markdown_heading(line))
-        .cloned()
+        .filter_map(|line| {
+            if is_section_comment_heading(line) {
+                Some(escape_markdown_heading(line))
+            } else if is_markdown_heading(line) {
+                None
+            } else {
+                Some(line.clone())
+            }
+        })
         .collect::<Vec<_>>();
     let image_annotations = parse_image_sidecar_annotations(
-        &non_heading_lines,
+        &image_lines,
         page_label,
         page_index,
         linked_page_style,
@@ -396,12 +413,29 @@ pub(super) fn parse_sidecar_chunk(
         return image_annotations;
     }
 
-    let note_lines = non_heading_lines
-        .iter()
-        .map(|line| strip_standalone_note_marker(line))
-        .collect::<Vec<_>>();
+    let (section_heading, note_lines) =
+        if let Some((index, heading)) = section_declaration {
+            let description = lines[index + 1..]
+                .iter()
+                .map(|line| {
+                    if is_markdown_heading(line) {
+                        escape_markdown_heading(line)
+                    } else {
+                        strip_standalone_note_marker(line)
+                    }
+                })
+                .collect::<Vec<_>>();
+            (Some(heading), description)
+        } else {
+            let note_lines = lines
+                .iter()
+                .filter(|line| !is_markdown_heading(line))
+                .map(|line| strip_standalone_note_marker(line))
+                .collect::<Vec<_>>();
+            (None, note_lines)
+        };
     let text = normalize_annotation_text(&note_lines);
-    if text.is_empty() {
+    if text.is_empty() && section_heading.is_none() {
         Vec::new()
     } else {
         vec![SidecarAnnotation {
@@ -410,6 +444,7 @@ pub(super) fn parse_sidecar_chunk(
             page_index,
             linked_page_style,
             text,
+            section_heading,
             comment: None,
             task_source: None,
             image: None,
@@ -417,6 +452,47 @@ pub(super) fn parse_sidecar_chunk(
             ordinal_on_page: 0,
         }]
     }
+}
+
+/// Return the first syntactic section declaration after Highlights' dated or
+/// page-heading lines. The returned heading is the raw text after `#`.
+fn standalone_section_declaration(lines: &[String]) -> Option<(usize, String)> {
+    for (index, line) in lines.iter().enumerate() {
+        if let Some(level) = markdown_heading_level(line)
+            && (2..=6).contains(&level)
+        {
+            continue;
+        }
+        let candidate = strip_standalone_note_marker(line);
+        let Some(heading) = section_heading_text(&candidate) else {
+            return None;
+        };
+        return Some((index, heading));
+    }
+    None
+}
+
+fn section_heading_text(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix('#')?;
+    if rest.starts_with('#') {
+        return None;
+    }
+    let first = rest.chars().next()?;
+    if !first.is_whitespace() {
+        return None;
+    }
+    let heading = rest.trim_start();
+    (!heading.trim().is_empty()).then(|| heading.trim_end().to_string())
+}
+
+fn is_section_comment_heading(line: &str) -> bool {
+    section_heading_text(line).is_some()
+}
+
+fn escape_markdown_heading(line: &str) -> String {
+    let leading = line.len() - line.trim_start().len();
+    format!("{}\\{}", &line[..leading], &line[leading..])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -505,6 +581,7 @@ pub(super) fn parse_image_sidecar_annotations(
                 page_index,
                 linked_page_style,
                 text,
+                section_heading: None,
                 comment: (!comment.is_empty()).then_some(comment),
                 task_source: (!comment_source.is_empty())
                     .then(|| strip_comment_label_only(&comment_source)),

@@ -54,6 +54,7 @@ fn highlight(
         page_index,
         linked_page_style: false,
         text: text.to_string(),
+        section_heading: None,
         comment,
         task_source: task_source.map(str::to_string),
         image: None,
@@ -69,6 +70,7 @@ fn sticky(order: usize, page_label: &str, text: &str) -> SidecarAnnotation {
         page_index: None,
         linked_page_style: false,
         text: text.to_string(),
+        section_heading: None,
         comment: None,
         task_source: None,
         image: None,
@@ -252,6 +254,7 @@ fn continuation_dangling_and_literal_notes() {
         page_index: Some(1),
         linked_page_style: false,
         text: "Figure".to_string(),
+        section_heading: None,
         comment: None,
         task_source: Some("< not a marker".to_string()),
         image: Some(SidecarImage {
@@ -272,6 +275,7 @@ fn continuation_dangling_and_literal_notes() {
         page_index: Some(1),
         linked_page_style: false,
         text: "Figure".to_string(),
+        section_heading: None,
         comment: Some("< caption".to_string()),
         task_source: Some("< caption".to_string()),
         image: Some(SidecarImage {

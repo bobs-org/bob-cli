@@ -407,6 +407,7 @@ fn annotation_block_id_is_stable_across_space_wrapping() {
         linked_page_style: true,
         text: "Stable quoted text continues across\nphysical lines."
             .to_string(),
+        section_heading: None,
         comment: None,
         task_source: None,
         image: None,

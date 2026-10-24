@@ -12,6 +12,7 @@ fn highlight(
         page_index: None,
         linked_page_style: false,
         text: text.to_string(),
+        section_heading: None,
         comment: comment.map(str::to_string),
         task_source: comment.map(str::to_string),
         image: None,
@@ -308,6 +309,7 @@ fn render_standalone_note_image() {
             page_index: None,
             linked_page_style: false,
             text: source.to_str().expect("utf8").to_string(),
+            section_heading: None,
             comment: None,
             task_source: None,
             image: None,
@@ -343,6 +345,7 @@ fn render_image_selection_plus_image_note() {
             page_index: None,
             linked_page_style: false,
             text: "Figure".to_string(),
+            section_heading: None,
             comment: Some(shot.to_str().expect("utf8").to_string()),
             task_source: Some(shot.to_str().expect("utf8").to_string()),
             image: Some(SidecarImage {

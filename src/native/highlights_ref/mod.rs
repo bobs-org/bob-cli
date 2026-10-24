@@ -73,9 +73,12 @@ mod region;
 pub(crate) mod rename;
 mod render_tex;
 mod report;
+// This phase defines the planner seam consumed by the later render phase.
 pub(crate) mod return_links;
 mod scan_json;
 mod scan_receipt;
+#[allow(dead_code)]
+mod sections;
 mod sidecar;
 mod sidecar_render;
 mod sources;

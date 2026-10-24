@@ -344,6 +344,9 @@ pub(super) struct SidecarAnnotation {
     pub(super) page_index: Option<u32>,
     pub(super) linked_page_style: bool,
     pub(super) text: String,
+    /// Raw heading text for a syntactic `# Name` sticky declaration.
+    /// `text` contains only the declaration's description.
+    pub(super) section_heading: Option<String>,
     pub(super) comment: Option<String>,
     pub(super) task_source: Option<String>,
     pub(super) image: Option<SidecarImage>,
