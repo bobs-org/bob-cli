@@ -1255,28 +1255,95 @@ fn print_inbox_route_hint(result: &CaptureResult) {
         return;
     }
     let styler = Styler::detect();
+    let mut pending = false;
     for candidate in &result.inbox_route.candidates {
-        let block = if candidate.block_id.is_empty() {
-            String::new()
-        } else {
-            format!(" ^{}", candidate.block_id)
-        };
-        let route_verb = if result.dry_run {
-            styler.yellow("would route")
-        } else {
-            styler.yellow("inbox")
-        };
+        match candidate.outcome {
+            "moved" => print_routed_row(&styler, candidate, result.dry_run),
+            "kept" => println!(
+                "  {}  {} · still in {}",
+                styler.yellow("kept"),
+                candidate.text,
+                candidate.inbox
+            ),
+            _ => {
+                pending = true;
+                let block = if candidate.block_id.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ^{}", candidate.block_id)
+                };
+                let route_verb = if result.dry_run {
+                    styler.yellow("would route")
+                } else {
+                    styler.yellow("inbox")
+                };
+                println!(
+                    "  {route_verb}  [{}] → [{}] {}  {}{} · still in {}",
+                    candidate.previous_status_symbol,
+                    candidate.status_symbol,
+                    candidate.text,
+                    candidate.note_path,
+                    block,
+                    candidate.inbox
+                );
+            }
+        }
+    }
+    if pending {
+        println!("  route with -i 1=<note> · -i keep");
+    }
+    if result.inbox_route.needs_reconcile == Some(true) {
         println!(
-            "  {route_verb}  [{}] → [{}] {}  {}{} · still in {}",
-            candidate.previous_status_symbol,
-            candidate.status_symbol,
-            candidate.text,
-            candidate.note_path,
-            block,
-            candidate.inbox
+            "  {}",
+            styler.dim("run 'bob task reconcile' to reconcile Blocked state")
         );
     }
-    println!("  route with -i 1=<note> · -i keep");
+}
+
+fn print_routed_row(
+    styler: &Styler,
+    candidate: &InboxRouteCandidate,
+    dry_run: bool,
+) {
+    let moved = candidate.moved.as_ref();
+    let destination = moved
+        .and_then(|moved| moved.get("destination"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let route = destination
+        .strip_suffix(".md")
+        .unwrap_or(destination)
+        .to_string();
+    let verb = if dry_run {
+        styler.yellow("would route")
+    } else {
+        styler.green("routed")
+    };
+    let mut row = format!(
+        "  {verb}  {}  {} → {route}",
+        candidate.text, candidate.inbox
+    );
+    let previous = moved
+        .and_then(|moved| moved.get("previous_block_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let current = moved
+        .and_then(|moved| moved.get("block_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !previous.is_empty() && previous != current {
+        row.push_str(&format!(" · ^{previous} renamed ^{current}"));
+    }
+    if let Some((links, deps)) = candidate.repaired {
+        if links > 0 {
+            let noun = if links == 1 { "link" } else { "links" };
+            row.push_str(&format!(" · {links} {noun} repaired"));
+        } else if deps > 0 {
+            let noun = if deps == 1 { "token" } else { "tokens" };
+            row.push_str(&format!(" · {deps} dependency {noun} repaired"));
+        }
+    }
+    println!("{row}");
 }
 
 fn print_template_summary(
@@ -3577,6 +3644,71 @@ impl CaptureError {
                 "this capture changes {count} inbox {task_word}; pass --inbox-route"
             ),
             code: Some("inbox_route_choice_required".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            typed: None,
+        }
+    }
+
+    /// Stale route answers: a usage error (exit 2) listing the unknown
+    /// picks and the current candidates, exactly as `--pull-in` does
+    /// for stale picks. Writes nothing.
+    pub(super) fn inbox_route_stale(
+        report: &InboxRouteReport,
+        bad: &[String],
+    ) -> Self {
+        let mut lines = vec![format!(
+            "stale, unknown, or out-of-range --inbox-route pick: {}",
+            bad.join(", ")
+        )];
+        for candidate in &report.candidates {
+            lines.push(format!(
+                "{} {} {}",
+                candidate.n, candidate.key, candidate.text
+            ));
+        }
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "inbox_route".to_string(),
+            serde_json::to_value(report).expect("serialize inbox_route"),
+        );
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: lines.join("\n"),
+            code: Some("inbox_route_stale".to_string()),
+            extra: Some(extra),
+            human_unblocked: Vec::new(),
+            typed: None,
+        }
+    }
+
+    /// Refused route answer: an I/O-class error (exit 1) naming the
+    /// refused candidate, the requested destination, and the move
+    /// engine's reason. Writes nothing.
+    pub(super) fn inbox_route_refused(
+        report: &InboxRouteReport,
+        candidate: &InboxRouteCandidate,
+        destination: String,
+        message: String,
+    ) -> Self {
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "inbox_route".to_string(),
+            serde_json::to_value(report).expect("serialize inbox_route"),
+        );
+        extra.insert(
+            "refused".to_string(),
+            serde_json::json!({
+                "key": candidate.key,
+                "n": candidate.n,
+                "destination": destination,
+                "message": message,
+            }),
+        );
+        Self {
+            kind: CaptureErrorKind::Io,
+            message,
+            code: Some("inbox_route_refused".to_string()),
             extra: Some(extra),
             human_unblocked: Vec::new(),
             typed: None,

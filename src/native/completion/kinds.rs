@@ -445,6 +445,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "inbox-route",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "jobs",
         kind: Kind::FreeText,
     },

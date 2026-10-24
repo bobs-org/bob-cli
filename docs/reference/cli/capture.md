@@ -95,6 +95,9 @@ Options:
   -h, --help
           Show help
 
+  -i, --inbox-route <ANSWER>
+          Route an inbox task this capture changes: <N|KEY>=<NOTE> moves it, <N|KEY>= keeps it in its inbox, keep keeps every otherwise unanswered candidate; repeatable
+
   -n, --no-clip
           Keep trailing %... clipboard markers literal
 
@@ -169,6 +172,7 @@ Examples:
   bob capture '^bob:capture-stop=x!1'
   bob capture -p 1 -- '!sase:fix'
   bob capture -p all -- '!sase:fix'
+  bob capture -i 1=health -- '@mac_inbox:route-task'
   printf -- '-2\n\nx\n' | bob capture
   bob capture 'Postgres 17 minimum @foo+bar#requirements'
   bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'

@@ -43,7 +43,15 @@ pub(super) fn plan_with_pull_in(
         }
         Some(PullInPicks::Tokens { numbers, keys }) => {
             request.selection = SuccessorSelection::None;
-            let mut probe = plan_capture_batch(request, routing)?;
+            // The probe exists only to map numeric picks to keys. Park
+            // the inbox-route answers while it plans: they resolve
+            // against the final selection's candidates, and the probe's
+            // unselected batch could refuse answers the final plan
+            // accepts.
+            let parked_routes = std::mem::take(&mut request.inbox_routes);
+            let probe_result = plan_capture_batch(request, routing);
+            request.inbox_routes = parked_routes;
+            let mut probe = probe_result?;
             number_draft_offers(&mut probe.items, None);
             let probe_map = offer_n_map(&probe.items);
             let mut mapped = keys.clone();

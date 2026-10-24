@@ -90,6 +90,7 @@ pub(crate) fn link_existing_task(
             pomodoro_blocks: Vec::new(),
             task_blocks: Vec::new(),
             inbox_route: InboxRouteReport::empty(),
+            routed_landings: Vec::new(),
             template: None,
             template_rows: Vec::new(),
             staged_jobs: Vec::new(),

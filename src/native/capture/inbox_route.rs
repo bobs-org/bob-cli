@@ -1,12 +1,20 @@
-//! Batch-level detection of inbox tasks whose status changed in a capture.
+//! Batch-level detection of inbox tasks whose status changed in a capture,
+//! plus the route-apply stage that moves answered candidates through the
+//! task-move engine inside the same batch.
 use super::*;
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Component,
+};
 
 use crate::native::{
+    freshness::placement::stamp_fresh,
     task_complete::is_inbox_note,
     task_move::{
-        list_task_move_destinations, TaskMoveDestination, VaultSnapshot,
+        list_task_move_destinations, plan_task_move, MoveRequest, MoveSelector,
+        PlanError, TaskMoveDestination, VaultSnapshot,
     },
+    vault_links::{target_to_markdown_path, NoteIndex},
 };
 use sha2::{Digest, Sha256};
 
@@ -19,6 +27,16 @@ pub(super) struct InboxRouteReport {
     pub(super) candidates: Vec<InboxRouteCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) destinations: Option<Vec<TaskMoveDestination>>,
+    /// Vault-wide link repair once a move is applied; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) repaired_files: Option<Vec<InboxRouteRepairedFile>>,
+    /// Block-ID renames from collision repair; absent unless a move ran.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) renamed_block_ids: Option<Vec<InboxRouteRename>>,
+    /// Whether the batch must prompt `bob task reconcile`; present only
+    /// once a move is applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) needs_reconcile: Option<bool>,
 }
 
 impl InboxRouteReport {
@@ -30,8 +48,25 @@ impl InboxRouteReport {
             kept_count: 0,
             candidates: Vec::new(),
             destinations: None,
+            repaired_files: None,
+            renamed_block_ids: None,
+            needs_reconcile: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct InboxRouteRepairedFile {
+    pub(super) path: String,
+    pub(super) link_count: usize,
+    pub(super) dependency_token_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct InboxRouteRename {
+    pub(super) path: String,
+    pub(super) old_block_id: String,
+    pub(super) new_block_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,11 +86,45 @@ pub(super) struct InboxRouteCandidate {
     pub(super) outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) moved: Option<serde_json::Value>,
+    /// The candidate root line's exact pre-move text. Never serialized:
+    /// relocation identity for id-less candidates when an earlier route
+    /// group already rewrote the source note.
+    #[serde(skip_serializing)]
+    pub(super) root_line: String,
+    /// This candidate's move-group repair totals, for the human row.
+    /// Never serialized: the JSON `moved` object keeps its contract
+    /// shape and batch totals live in `repaired_files`.
+    #[serde(skip_serializing)]
+    pub(super) repaired: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct InboxRouteAnswer {
     pub(super) action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) destination: Option<String>,
+}
+
+/// One routed task's landing, used to forward block trackers and
+/// `open_notes` entries from the source note to the moved line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RoutedTaskMove {
+    /// The candidate's index in the report. Coordinates shift when an
+    /// earlier group rewrites the source note, so the report marks
+    /// moved candidates by index, never by line.
+    pub(super) candidate: usize,
+    pub(super) source: PathBuf,
+    pub(super) source_relative: String,
+    pub(super) old_block_id: Option<String>,
+    pub(super) old_line: usize,
+    pub(super) dest: PathBuf,
+    pub(super) dest_relative: String,
+    pub(super) dest_route: String,
+    pub(super) new_block_id: Option<String>,
+    pub(super) new_line: usize,
+    /// The move group's vault-wide repair totals, for the human row.
+    pub(super) repaired_links: usize,
+    pub(super) repaired_dep_tokens: usize,
 }
 
 #[derive(Debug)]
@@ -77,6 +146,7 @@ pub(super) fn detect_inbox_routes(
 ) -> Result<InboxRouteReport, CaptureError> {
     let mut drafts = Vec::new();
     let mut original_contents = BTreeMap::new();
+    let mut current_contents = BTreeMap::new();
 
     for file in &planner.files {
         if !file.existed || !file.present || file.original == file.current {
@@ -152,6 +222,9 @@ pub(super) fn detect_inbox_routes(
             original_contents
                 .entry(relative_path.to_path_buf())
                 .or_insert_with(|| file.original.clone());
+            current_contents
+                .entry(relative_path.to_path_buf())
+                .or_insert_with(|| file.current.clone());
             drafts.push(CandidateDraft {
                 relative_path: relative_path.to_path_buf(),
                 original_line,
@@ -215,6 +288,14 @@ pub(super) fn detect_inbox_routes(
             .and_then(|stem| stem.to_str())
             .unwrap_or_default()
             .to_string();
+        // The exact pre-move root line: relocation identity for id-less
+        // candidates when an earlier route group rewrote the source.
+        // `line` above is 1-based in the same pre-move staged text.
+        let root_line = current_contents
+            .get(&draft.relative_path)
+            .and_then(|contents| contents.lines().nth(draft.current.line_index))
+            .unwrap_or_default()
+            .to_string();
         candidates.push(InboxRouteCandidate {
             key,
             n: index + 1,
@@ -230,6 +311,8 @@ pub(super) fn detect_inbox_routes(
             answer: None,
             outcome: "pending",
             moved: None,
+            root_line,
+            repaired: None,
         });
     }
 
@@ -246,7 +329,582 @@ pub(super) fn detect_inbox_routes(
         kept_count: 0,
         candidates,
         destinations,
+        repaired_files: None,
+        renamed_block_ids: None,
+        needs_reconcile: None,
     })
+}
+
+/// Answered route moves after candidate detection.
+///
+/// Groups move answers by (source, destination), plans one task-move per
+/// group against a snapshot overlaid with the batch's staged texts, stages
+/// every postimage through the planner (so the commit's preimage guard
+/// covers the extra files and the whole batch rolls back on a concurrent
+/// edit), stamps each moved root line, and records landings for the block
+/// trackers and `open_notes`. Keeps only mark the report. Unanswered
+/// candidates stay pending. Nothing is written here; the caller commits.
+pub(super) struct AppliedInboxRoutes {
+    pub(super) report: InboxRouteReport,
+    pub(super) moves: Vec<RoutedTaskMove>,
+}
+
+pub(super) fn apply_inbox_routes(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+    today: NaiveDate,
+    mut report: InboxRouteReport,
+    picks: &[InboxRoutePick],
+) -> Result<AppliedInboxRoutes, CaptureError> {
+    if picks.is_empty() {
+        return Ok(AppliedInboxRoutes {
+            report,
+            moves: Vec::new(),
+        });
+    }
+    // Resolve every answer against the planned candidates. Numbers are
+    // 1-based positions in this plan; keys are opaque client strings.
+    let mut answered: BTreeMap<usize, Option<String>> = BTreeMap::new();
+    let mut bad = Vec::new();
+    let mut keep_all = false;
+    for pick in picks {
+        match pick {
+            InboxRoutePick::KeepAll => keep_all = true,
+            InboxRoutePick::Answer {
+                selector,
+                destination,
+            } => {
+                let Some(index) =
+                    resolve_route_selector(&report.candidates, selector)
+                else {
+                    bad.push(selector.clone());
+                    continue;
+                };
+                match answered.get(&index) {
+                    Some(existing) if *existing != *destination => {
+                        let candidate = &report.candidates[index];
+                        return Err(CaptureError::usage(format!(
+                            "conflicting --inbox-route answers for candidate {} ({}); pass one answer per candidate",
+                            candidate.n, candidate.key
+                        )));
+                    }
+                    _ => {
+                        answered.insert(index, destination.clone());
+                    }
+                }
+            }
+        }
+    }
+    if !bad.is_empty() {
+        return Err(CaptureError::inbox_route_stale(&report, &bad));
+    }
+    // Resolve every move destination before planning anything, so a
+    // refused answer fails before the planner changes.
+    let mut move_dest: BTreeMap<usize, PathBuf> = BTreeMap::new();
+    for (index, destination) in &answered {
+        let Some(query) = destination.as_deref() else {
+            continue;
+        };
+        let snapshot = destination_snapshot(bob_dir, planner)?;
+        let note_index = NoteIndex::from_paths(snapshot.notes.keys().cloned());
+        match resolve_route_destination(
+            &snapshot,
+            &note_index,
+            report.destinations.as_deref().unwrap_or_default(),
+            query,
+        ) {
+            Ok(path) => {
+                move_dest.insert(*index, path);
+            }
+            Err(message) => {
+                let candidate = &report.candidates[*index];
+                // Echo the destination in its canonical note form so the
+                // card can match it against the destination list.
+                let shown = target_to_markdown_path(query)
+                    .map(|path| display_relative(&path))
+                    .unwrap_or_else(|| (*query).to_string());
+                return Err(CaptureError::inbox_route_refused(
+                    &report, candidate, shown, message,
+                ));
+            }
+        }
+    }
+    // Group moves by (source, destination) in candidate order. Each
+    // group plans against a snapshot rebuilt from the current staged
+    // texts, so an earlier group that rewrote the source is visible.
+    let mut groups: Vec<(PathBuf, PathBuf, Vec<usize>)> = Vec::new();
+    for (index, dest) in &move_dest {
+        let source = PathBuf::from(&report.candidates[*index].note_path);
+        match groups.iter_mut().find(|(group_source, group_dest, _)| {
+            *group_source == source && *group_dest == *dest
+        }) {
+            Some((_, _, members)) => members.push(*index),
+            None => groups.push((source, dest.clone(), vec![*index])),
+        }
+    }
+    let mut repaired: BTreeMap<PathBuf, (usize, usize)> = BTreeMap::new();
+    let mut renamed = Vec::new();
+    let mut needs_reconcile = false;
+    let mut moves = Vec::new();
+    for (source, dest, members) in &groups {
+        let snapshot = destination_snapshot(bob_dir, planner)?;
+        let source_text = snapshot.notes.get(source).cloned();
+        let mut selectors = Vec::with_capacity(members.len());
+        for index in members {
+            let candidate = &report.candidates[*index];
+            if candidate.block_id.is_empty() {
+                let Some(source_text) = source_text.as_deref() else {
+                    return Err(CaptureError::io(format!(
+                        "routing lost its source note {}",
+                        source.display()
+                    )));
+                };
+                let Some(line) =
+                    relocate_source_line(source_text, settings, candidate)
+                else {
+                    return Err(CaptureError::io(format!(
+                        "routing lost candidate {} ({}) in {}",
+                        candidate.n,
+                        candidate.key,
+                        source.display()
+                    )));
+                };
+                selectors.push(MoveSelector::Line(line));
+            } else {
+                selectors.push(MoveSelector::Block(candidate.block_id.clone()));
+            }
+        }
+        let request = MoveRequest {
+            source: display_relative(source),
+            dest: display_relative(dest),
+            selectors,
+            allow_closed: true,
+        };
+        let plan = match plan_task_move(&snapshot, &request) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return Err(route_engine_refusal(
+                    &report, members, &request, error,
+                ));
+            }
+        };
+        for (path, link_count, dependency_token_count) in
+            plan.repaired_files.iter().map(|repaired| {
+                (
+                    repaired.path.clone(),
+                    repaired.link_count,
+                    repaired.dependency_token_count,
+                )
+            })
+        {
+            let entry = repaired.entry(path).or_insert((0, 0));
+            entry.0 += link_count;
+            entry.1 += dependency_token_count;
+        }
+        for rename in &plan.renamed_block_ids {
+            renamed.push(InboxRouteRename {
+                path: display_relative(&rename.path),
+                old_block_id: rename.old_block_id.clone(),
+                new_block_id: rename.new_block_id.clone(),
+            });
+        }
+        needs_reconcile |= plan.needs_reconcile;
+        let group_links: usize =
+            plan.repaired_files.iter().map(|file| file.link_count).sum();
+        let group_deps: usize = plan
+            .repaired_files
+            .iter()
+            .map(|file| file.dependency_token_count)
+            .sum();
+        for (path, postimage) in &plan.postimages {
+            let absolute = bob_dir.join(path);
+            planner.ensure_loaded(&absolute)?;
+            planner.stage(&absolute, postimage.clone())?;
+        }
+        // Stamp each moved root line in the staged destination text and
+        // record its final landing. The stamp is an in-place line edit,
+        // so later groups appending to the same note never shift it.
+        for (index, movement) in members.iter().zip(plan.moves.iter()) {
+            let candidate = &report.candidates[*index];
+            let absolute = bob_dir.join(dest);
+            let dest_text = planner.peek_text(&absolute).ok_or_else(|| {
+                CaptureError::io(format!(
+                    "routing lost its destination note {}",
+                    dest.display()
+                ))
+            })?;
+            let new_id = movement.new_block_id.clone();
+            let Some(root) = locate_dest_line(
+                &dest_text,
+                settings,
+                new_id.as_deref(),
+                &movement.title,
+                candidate.status_symbol,
+            ) else {
+                return Err(CaptureError::io(format!(
+                    "routing lost candidate {} ({}) in {}",
+                    candidate.n,
+                    candidate.key,
+                    dest.display()
+                )));
+            };
+            let root_line =
+                dest_text.lines().nth(root).unwrap_or_default().to_string();
+            let stamped = stamp_fresh(&root_line, today);
+            if stamped.line != root_line {
+                let mut rebuilt = dest_text
+                    .lines()
+                    .enumerate()
+                    .map(|(number, line)| {
+                        if number == root {
+                            stamped.line.clone()
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if dest_text.ends_with('\n') {
+                    rebuilt.push('\n');
+                }
+                planner.stage(&absolute, rebuilt)?;
+            }
+            let dest_relative = display_relative(dest);
+            moves.push(RoutedTaskMove {
+                candidate: *index,
+                source: bob_dir.join(source),
+                source_relative: display_relative(source),
+                old_block_id: movement.old_block_id.clone(),
+                old_line: movement.source_line,
+                dest: absolute,
+                dest_relative: dest_relative.clone(),
+                dest_route: dest_relative
+                    .strip_suffix(".md")
+                    .unwrap_or(&dest_relative)
+                    .to_string(),
+                new_block_id: new_id,
+                new_line: root + 1,
+                repaired_links: group_links,
+                repaired_dep_tokens: group_deps,
+            });
+        }
+    }
+    // Mark the report: moved candidates carry their answer, landing, and
+    // outcome; keeps carry theirs; the rest stay pending.
+    let mut routed_count = 0;
+    let mut kept_count = 0;
+    for (index, candidate) in report.candidates.iter_mut().enumerate() {
+        match answered.get(&index) {
+            Some(Some(_)) => {
+                let movement = moves
+                    .iter()
+                    .find(|movement| movement.candidate == index)
+                    .expect("routed candidate has a landing");
+                let fresh = movement_fresh(planner, movement);
+                candidate.answer = Some(InboxRouteAnswer {
+                    action: "move",
+                    destination: Some(movement.dest_relative.clone()),
+                });
+                candidate.outcome = "moved";
+                candidate.moved = Some(serde_json::json!({
+                    "destination": movement.dest_relative,
+                    "line": movement.new_line,
+                    "block_id": movement.new_block_id.clone().unwrap_or_default(),
+                    "previous_block_id": movement.old_block_id.clone().unwrap_or_default(),
+                    "fresh": fresh,
+                }));
+                candidate.repaired = Some((
+                    movement.repaired_links,
+                    movement.repaired_dep_tokens,
+                ));
+                routed_count += 1;
+            }
+            Some(None) | None if keep_all || answered.contains_key(&index) => {
+                candidate.answer = Some(InboxRouteAnswer {
+                    action: "keep",
+                    destination: None,
+                });
+                candidate.outcome = "kept";
+                kept_count += 1;
+            }
+            _ => {}
+        }
+    }
+    if routed_count > 0 {
+        report.repaired_files = Some(
+            repaired
+                .into_iter()
+                .map(|(path, (link_count, dependency_token_count))| {
+                    InboxRouteRepairedFile {
+                        path: display_relative(&path),
+                        link_count,
+                        dependency_token_count,
+                    }
+                })
+                .collect(),
+        );
+        report.renamed_block_ids = Some(renamed);
+        report.needs_reconcile = Some(needs_reconcile);
+    }
+    report.routed_count = routed_count;
+    report.kept_count = kept_count;
+    Ok(AppliedInboxRoutes { report, moves })
+}
+
+/// The stamped date on a moved task's final line, or `None` when the
+/// task is closed and was never stamped.
+fn movement_fresh(
+    planner: &CaptureBatchPlanner,
+    movement: &RoutedTaskMove,
+) -> Option<String> {
+    let text = planner.peek_text(&movement.dest)?;
+    let line = text.lines().nth(movement.new_line.saturating_sub(1))?;
+    crate::native::task_fields::inline_fields(line, "fresh")
+        .into_iter()
+        .next()
+        .map(|field| field.value)
+}
+
+/// Match one answer selector against the planned candidates: a
+/// 1-based number or an opaque key.
+fn resolve_route_selector(
+    candidates: &[InboxRouteCandidate],
+    selector: &str,
+) -> Option<usize> {
+    if selector.bytes().all(|byte| byte.is_ascii_digit())
+        && let Ok(number) = selector.parse::<usize>()
+        && (1..=candidates.len()).contains(&number)
+    {
+        return Some(number - 1);
+    }
+    candidates
+        .iter()
+        .position(|candidate| candidate.key == selector)
+}
+
+/// Resolve a route destination query like `bob task move`'s DEST (stem
+/// or vault-relative path, with or without `.md`) and require it to be
+/// a routable destination. Inbox notes and excluded folders refuse with
+/// their own message; every other semantic refusal comes from the move
+/// engine at plan time, so the list and the move can never disagree.
+fn resolve_route_destination(
+    snapshot: &VaultSnapshot,
+    note_index: &NoteIndex,
+    destinations: &[TaskMoveDestination],
+    query: &str,
+) -> Result<PathBuf, String> {
+    if query.trim().is_empty()
+        || target_to_markdown_path(query).is_none()
+        || Path::new(query)
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(format!(
+            "note {query:?} is absolute, escaping, or otherwise not vault-relative"
+        ));
+    }
+    let resolved = if query_is_explicit_route_path(query) {
+        let Some(candidate) = target_to_markdown_path(query) else {
+            return Err(format!(
+                "note {query:?} is absolute, escaping, or otherwise not vault-relative"
+            ));
+        };
+        let mut exact: Vec<PathBuf> = note_index
+            .relative_paths()
+            .filter(|path| paths_eq_route_ascii(path, &candidate))
+            .map(Path::to_path_buf)
+            .collect();
+        exact.sort();
+        exact.dedup();
+        match exact.as_slice() {
+            [path] => path.clone(),
+            [] => {
+                return Err(format!(
+                    "note {query:?} was not found in the vault"
+                ));
+            }
+            _ => {
+                let mut listed = exact
+                    .iter()
+                    .map(|path| display_relative(path))
+                    .collect::<Vec<_>>();
+                listed.sort();
+                return Err(format!(
+                    "note {query:?} is ambiguous: {}",
+                    listed.join(" ")
+                ));
+            }
+        }
+    } else {
+        let mut found = note_index.basename_candidates(query);
+        found.sort();
+        found.dedup();
+        match found.as_slice() {
+            [path] => path.clone(),
+            [] => {
+                return Err(format!(
+                    "note {query:?} was not found in the vault"
+                ));
+            }
+            _ => {
+                let mut listed = found
+                    .iter()
+                    .map(|path| display_relative(path))
+                    .collect::<Vec<_>>();
+                listed.sort();
+                return Err(format!(
+                    "note {query:?} is ambiguous: {}",
+                    listed.join(" ")
+                ));
+            }
+        }
+    };
+    let relative = display_relative(&resolved);
+    if destinations.iter().any(|row| row.relative_path == relative) {
+        return Ok(resolved);
+    }
+    let contents = snapshot.notes.get(&resolved);
+    if contents.is_some_and(|text| is_inbox_note(&resolved, text, note_index)) {
+        return Err(format!(
+            "{relative} is an inbox note; routes go to areas and open projects"
+        ));
+    }
+    if let Some(excluded) = excluded_route_dir(&resolved) {
+        return Err(format!(
+            "{relative} is under {excluded}/ and cannot receive routed tasks"
+        ));
+    }
+    // Reachable only for notes the destination list excluded for engine
+    // reasons (terminal projects, untyped notes, projects without Tasks):
+    // hand them to the move so the refusal names the engine rule.
+    Ok(resolved)
+}
+
+fn query_is_explicit_route_path(query: &str) -> bool {
+    query.contains('/')
+        || Path::new(query)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+fn paths_eq_route_ascii(left: &Path, right: &Path) -> bool {
+    left.as_os_str()
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+}
+
+fn excluded_route_dir(path: &Path) -> Option<&'static str> {
+    for component in path.components() {
+        if let Component::Normal(name) = component
+            && let Some(dir) = name.to_str()
+            && matches!(dir, "done" | "_templates" | "_conflicts")
+        {
+            return Some(match dir {
+                "done" => "done",
+                "_templates" => "_templates",
+                _ => "_conflicts",
+            });
+        }
+    }
+    None
+}
+
+/// Attribute a move-engine refusal to the group's first candidate, so
+/// the card can reopen on it with the engine's message.
+fn route_engine_refusal(
+    report: &InboxRouteReport,
+    members: &[usize],
+    request: &MoveRequest,
+    error: PlanError,
+) -> CaptureError {
+    let first = members
+        .first()
+        .and_then(|index| report.candidates.get(*index));
+    match first {
+        Some(candidate) => CaptureError::inbox_route_refused(
+            report,
+            candidate,
+            request.dest.clone(),
+            error.to_string(),
+        ),
+        None => CaptureError::io(error.to_string()),
+    }
+}
+
+/// Relocate an id-less candidate's 0-based source line in the current
+/// snapshot text. The recorded line wins when it still holds the
+/// candidate; otherwise the exact pre-move text wins when unique;
+/// otherwise a column-zero description-and-status scan wins when
+/// unique. Block selections never relocate: block IDs are line-proof.
+fn relocate_source_line(
+    source_text: &str,
+    settings: &note_tasks::NoteTaskSettings,
+    candidate: &InboxRouteCandidate,
+) -> Option<usize> {
+    let scan = note_tasks::scan(source_text, settings);
+    let expected = candidate.line.saturating_sub(1);
+    if scan.task_at(expected).is_some_and(|task| {
+        task.indentation.is_empty()
+            && task.description == candidate.text
+            && task.status_symbol == candidate.status_symbol
+    }) {
+        return Some(expected);
+    }
+    let lines: Vec<&str> = source_text.lines().collect();
+    let mut exact = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if *line == candidate.root_line {
+            exact.push(index);
+        }
+    }
+    if exact.len() == 1 {
+        return Some(exact[0]);
+    }
+    let scanned: Vec<usize> = scan
+        .tasks()
+        .iter()
+        .filter(|task| {
+            task.indentation.is_empty()
+                && task.description == candidate.text
+                && task.status_symbol == candidate.status_symbol
+        })
+        .map(|task| task.line_index)
+        .collect();
+    if scanned.len() == 1 {
+        return Some(scanned[0]);
+    }
+    None
+}
+
+/// Locate a moved task's 0-based line in destination text: by its new
+/// block ID when it has one, else by a unique column-zero
+/// description-and-status match.
+fn locate_dest_line(
+    dest_text: &str,
+    settings: &note_tasks::NoteTaskSettings,
+    new_block_id: Option<&str>,
+    title: &str,
+    status: char,
+) -> Option<usize> {
+    let scan = note_tasks::scan(dest_text, settings);
+    if let Some(id) = new_block_id.filter(|id| !id.is_empty())
+        && let note_tasks::BlockIdLookup::Found(task) = scan.by_block_id(id)
+    {
+        return Some(task.line_index);
+    }
+    let matched: Vec<usize> = scan
+        .tasks()
+        .iter()
+        .filter(|task| {
+            task.indentation.is_empty()
+                && task.description == title
+                && task.status_symbol == status
+        })
+        .map(|task| task.line_index)
+        .collect();
+    (matched.len() == 1).then(|| matched[0])
 }
 
 fn pair_task_lines(
@@ -578,5 +1236,107 @@ mod tests {
         assert!(paths.contains(&"projects/under-inbox.md"));
         assert!(!paths.contains(&"mac_inbox.md"));
         assert!(!paths.contains(&"inbox.md"));
+    }
+
+    #[test]
+    fn ir_routed_batch_rolls_back_when_a_repaired_file_changes() {
+        // IRA15: route postimages stage through the planner, so the
+        // commit's disk-preimage guard covers the link-repaired files: a
+        // concurrent edit aborts the whole batch with the standard
+        // NoteChanged failure and no file is written.
+        let temp = tempfile::tempdir().expect("temporary vault");
+        let vault = temp.path().join("vault");
+        write(
+            &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            concat!(
+                "{\"globalFilter\": \"#task\",",
+                "\"statusSettings\": {\"coreStatuses\": [",
+                "{\"symbol\":\" \",\"name\":\"Todo\",\"type\":\"TODO\"},",
+                "{\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}],",
+                "\"customStatuses\": [",
+                "{\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},",
+                "{\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},",
+                "{\"symbol\":\"?\",\"name\":\"Blocked\",\"nextStatusSymbol\":\" \",\"availableAsCommand\":true,\"type\":\"ON_HOLD\"},",
+                "{\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}]}}",
+            ),
+        );
+        write(&vault.join("inbox.md"), "# Inbox\n");
+        let inbox_before = "---\ntype: [[area]]\nparent: [[inbox]]\n---\n## Tasks\n- [ ] #task Route me ^route-task\n";
+        write(&vault.join("mac_inbox.md"), inbox_before);
+        let health_before = "---\ntype: [[area]]\n---\n## Tasks\n";
+        write(&vault.join("health.md"), health_before);
+        write(
+            &vault.join("dev.md"),
+            "---\ntype: [[area]]\n---\n## Tasks\n- [ ] #task Prereq ^prereq\n",
+        );
+        let day_path = crate::native::pomodoro::day_file_for(&vault);
+        write(&day_path, "## Pomodoros\n- [ ] (**0900-0930**) — WORK\n");
+        let request = CaptureRequest {
+            bob_dir: vault.clone(),
+            dry_run: true,
+            forced_clip: None,
+            forced_destination_flags: Vec::new(),
+            forced_route: None,
+            forced_section: None,
+            forced_sub_bullet_target: None,
+            forced_task_section: None,
+            inbox_routes: vec![InboxRoutePick::Answer {
+                selector: "1".to_string(),
+                destination: Some("health".to_string()),
+            }],
+            no_clip: true,
+            no_ref: false,
+            pull_in: None,
+            refuse_override: false,
+            require_inbox_route_choice: false,
+            require_pull_in_choice: false,
+            template_origin: None,
+            raw_text: "^mac_inbox:route-task &dev:prereq".to_string(),
+            selection: crate::native::task_complete::SuccessorSelection::None,
+        };
+        let mut batch =
+            plan_capture_batch(&request, None).expect("plan routes");
+        assert_eq!(batch.inbox_route.routed_count, 1);
+        assert!(
+            batch
+                .inbox_route
+                .repaired_files
+                .as_ref()
+                .is_some_and(|files| files
+                    .iter()
+                    .any(|file| file.path == "dev.md" && file.link_count > 0)),
+            "{:#?}",
+            batch.inbox_route.repaired_files
+        );
+        // A concurrent edit lands in a repaired file after planning.
+        let concurrent = format!(
+            "{}- [ ] #task Concurrent ^concurrent\n",
+            fs::read_to_string(vault.join("dev.md")).expect("dev note")
+        );
+        write(&vault.join("dev.md"), &concurrent);
+        let error =
+            commit_capture_batch(&mut batch).expect_err("commit refuses");
+        assert_eq!(error.typed, Some(CaptureFailureKind::NoteChanged));
+        assert!(
+            error
+                .message
+                .contains("note changed on disk after planning"),
+            "{}",
+            error.message
+        );
+        // Nothing was written: source and destination are byte-identical,
+        // and the repaired file keeps only the concurrent edit.
+        assert_eq!(
+            fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox note"),
+            inbox_before
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("health.md")).expect("health note"),
+            health_before
+        );
+        assert_eq!(
+            fs::read_to_string(vault.join("dev.md")).expect("dev note"),
+            concurrent
+        );
     }
 }

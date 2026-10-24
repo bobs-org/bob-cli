@@ -172,6 +172,38 @@ impl TaskBlockTracker {
         self.merge_or_start(refs);
     }
 
+    /// Forward tracked parents through answered inbox-route moves: an
+    /// entry pointing at a routed task follows it to the destination
+    /// note, landing on its final line with its new block ID. Entries
+    /// for untouched tasks are left alone. Runs after the route stage
+    /// stages its postimages and before [`finish`](Self::finish), so the
+    /// final re-extraction reports the destination path and lines.
+    pub(super) fn remap_routed_tasks(&mut self, moves: &[RoutedTaskMove]) {
+        if moves.is_empty() {
+            return;
+        }
+        for tracked in &mut self.tracked {
+            let Some(movement) = moves.iter().find(|movement| {
+                tracked.target == movement.source
+                    && match movement.old_block_id.as_deref() {
+                        Some(id) => tracked.block_id.as_deref() == Some(id),
+                        None => {
+                            tracked.block_id.is_none()
+                                && tracked.current
+                                    == movement.old_line.saturating_sub(1)
+                        }
+                    }
+            }) else {
+                continue;
+            };
+            tracked.target = movement.dest.clone();
+            tracked.relative_target = movement.dest_relative.clone();
+            tracked.route = movement.dest_route.clone();
+            tracked.current = movement.new_line.saturating_sub(1);
+            tracked.block_id = movement.new_block_id.clone();
+        }
+    }
+
     /// Fold refs into tracked blocks by post-state target+line, or start
     /// a new tracked parent.
     fn merge_or_start(&mut self, refs: Vec<TaskBlockRef>) {
@@ -552,6 +584,7 @@ mod tests {
             forced_section: None,
             forced_sub_bullet_target: forced_target,
             forced_task_section: None,
+            inbox_routes: Vec::new(),
             no_clip: true,
             no_ref: false,
             pull_in: None,

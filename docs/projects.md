@@ -1236,10 +1236,13 @@ one toast, the existing link/unlink text with `· moved to <dest>` appended
 a cancelling `Ctrl+Enter` recommendation, decision-card Drop — a closed
 task leaves the inbox through `bob task archive`); closed tasks, non-task
 bullets, non-inbox notes; Task Link sessions; the Alt+F decision card and
-its Less often stage; `Ctrl+Shift+M`, `^^` linking, `bob capture`, and the
-Mac Capture task-toggle mirror. A routed answer on a landing advances the
-walk exactly like any other answer (`route` outcome); if the move did not
-commit, the walk settles exactly as today for that action.
+its Less often stage; `Ctrl+Shift+M`, `^^` linking, and the
+Mac Capture task-toggle mirror. A capture that changes an existing inbox
+task's status routes through `--inbox-route` and Bob Mac Capture's route
+card (see [capture.md](capture.md#routing-inbox-tasks-out)). A routed answer
+on a landing advances the walk exactly like any other answer (`route`
+outcome); if the move did not commit, the walk settles exactly as today for
+that action.
 
 ## Warnings
 

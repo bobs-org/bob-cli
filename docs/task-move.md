@@ -2,7 +2,10 @@
 
 `bob task move` moves selected open `#task` blocks into an area or eligible
 project note. It keeps task content and review metadata intact while repairing
-references and dependency identities across the Markdown vault.
+references and dependency identities across the Markdown vault. Capture inbox
+routing reuses this engine inside the capture batch: an `--inbox-route`
+answer moves the candidate exactly as a move would (see
+[capture.md](capture.md#routing-inbox-tasks-out)).
 
 ## Command
 

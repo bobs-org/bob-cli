@@ -50,6 +50,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             .cloned()
             .unwrap_or_default(),
         selectors: selectors_from_matches(&matches),
+        allow_closed: false,
     };
     let dry_run = matches.get_flag("dry-run");
     let offline = matches.get_flag("offline");
@@ -981,6 +982,7 @@ mod tests {
             source: "source".to_string(),
             dest: "dest".to_string(),
             selectors: vec![MoveSelector::Block("move-me".to_string())],
+            allow_closed: false,
         }
     }
 

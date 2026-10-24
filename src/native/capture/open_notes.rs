@@ -23,7 +23,8 @@ pub(super) struct OpenNoteJson {
 
 /// Notes this capture should open: each item's `target` in source order,
 /// then the day file when the batch changed it. Deduped by path; the
-/// first touch decides the landing.
+/// first touch decides the landing. An entry that would land on a routed
+/// task opens the destination at the moved line instead.
 pub(super) fn build_open_notes(
     bob_dir: &Path,
     batch: &PlannedCaptureBatch,
@@ -37,6 +38,18 @@ pub(super) fn build_open_notes(
     let mut seen = Vec::new();
 
     for item in batch.items.iter().map(|item| &item.result) {
+        if let Some(movement) = routed_landing(&batch.routed_landings, item) {
+            if seen.iter().any(|seen| seen == &movement.dest) {
+                continue;
+            }
+            seen.push(movement.dest.clone());
+            notes.push(open_note_for_routed_task(
+                bob_dir,
+                movement,
+                &batch.text_files,
+            ));
+            continue;
+        }
         let Some(path) = resolve_path(bob_dir, &item.target) else {
             continue;
         };
@@ -77,6 +90,49 @@ pub(super) fn build_open_notes(
         ));
     }
     notes
+}
+
+/// An item whose target task moved to another note in this batch: the
+/// entry opens the destination at the moved line. Only tasks with block
+/// IDs reroute; id-less landings keep today's source-note behavior.
+fn routed_landing<'a>(
+    landings: &'a [RoutedTaskMove],
+    item: &CaptureItemResult,
+) -> Option<&'a RoutedTaskMove> {
+    let block_id = item.block_id.as_deref().filter(|id| !id.is_empty())?;
+    landings.iter().find(|movement| {
+        movement.source_relative == item.relative_target
+            && movement.old_block_id.as_deref() == Some(block_id)
+    })
+}
+
+fn open_note_for_routed_task(
+    bob_dir: &Path,
+    movement: &RoutedTaskMove,
+    text_files: &[StagedTextFile],
+) -> OpenNoteJson {
+    let label = movement
+        .dest_relative
+        .strip_suffix(".md")
+        .unwrap_or(&movement.dest_relative)
+        .rsplit('/')
+        .next()
+        .unwrap_or(&movement.dest_relative)
+        .to_string();
+    let text = file_text(bob_dir, text_files, &movement.dest);
+    landed_note(
+        OpenNoteJson {
+            path: movement.dest.display().to_string(),
+            relative_path: movement.dest_relative.clone(),
+            role: "note",
+            label,
+            line: None,
+            r#ref: None,
+            block_id: None,
+        },
+        text.as_deref(),
+        Some(movement.new_line),
+    )
 }
 
 fn open_note_for_item(

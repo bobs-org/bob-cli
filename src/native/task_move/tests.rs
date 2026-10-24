@@ -39,6 +39,7 @@ fn request(
         source: source.to_string(),
         dest: dest.to_string(),
         selectors,
+        allow_closed: false,
     }
 }
 
@@ -1324,6 +1325,53 @@ fn no_selectors_is_an_error() {
             vec![],
         ),
         PlanError::NoSelectors
+    ));
+}
+
+#[test]
+fn closed_selection_refused_without_option_and_moves_with_it() {
+    let source = area("\n## Tasks\n\n- [x] #task Done ^done\n");
+    let dest = area("\n## Tasks\n");
+    let notes = [("src.md", source.as_str()), ("dest.md", dest.as_str())];
+    // The `bob task move` CLI builds requests with `allow_closed: false`,
+    // so closed tasks keep refusing exactly as before.
+    assert!(matches!(
+        plan_err(&notes, "src", "dest", vec![block("done")]),
+        PlanError::ClosedTask { .. }
+    ));
+    let mut routed = request("src", "dest", vec![block("done")]);
+    routed.allow_closed = true;
+    let result = plan_task_move(&snap(&notes), &routed)
+        .unwrap_or_else(|error| panic!("closed plan failed: {error}"));
+    assert!(post(&result, "dest.md").contains("- [x] #task Done ^done"));
+    assert!(!post(&result, "src.md").contains("^done"));
+}
+
+#[test]
+fn line_selector_moves_only_the_exact_line() {
+    let source =
+        area("\n## Tasks\n\n- [ ] #task Duplicate\n- [ ] #task Duplicate\n");
+    let dest = area("\n## Tasks\n");
+    let notes = [("src.md", source.as_str()), ("dest.md", dest.as_str())];
+    // A fuzzy text match would be ambiguous; the exact line is not.
+    assert!(matches!(
+        plan_err(&notes, "src", "dest", vec![contains("Duplicate")]),
+        PlanError::SelectorAmbiguous { .. }
+    ));
+    let result = plan(&notes, "src", "dest", vec![MoveSelector::Line(7)]);
+    assert!(post(&result, "dest.md").contains("- [ ] #task Duplicate\n"));
+    assert_eq!(
+        post(&result, "src.md")
+            .matches("- [ ] #task Duplicate")
+            .count(),
+        1
+    );
+    // A line selector naming a non-task row reports the 1-based line.
+    let error = plan_err(&notes, "src", "dest", vec![MoveSelector::Line(0)]);
+    assert!(matches!(
+        error,
+        PlanError::SelectorZero { ref selector, .. }
+        if selector.to_string() == "line 1"
     ));
 }
 

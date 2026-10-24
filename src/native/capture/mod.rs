@@ -271,7 +271,11 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let (mut batch, pull_in) =
         plan_with_pull_in(&mut request, routing.as_ref())?;
     if request.require_inbox_route_choice
-        && batch.inbox_route.candidate_count > 0
+        && batch
+            .inbox_route
+            .candidates
+            .iter()
+            .any(|candidate| candidate.answer.is_none())
     {
         return Err(CaptureError::inbox_route_choice_required(
             &batch.inbox_route,

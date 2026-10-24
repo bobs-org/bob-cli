@@ -73,6 +73,7 @@ pub(crate) fn capture_spec() -> GuardSpec {
         HELP,
         long("no-clip", false),
         long("no-ref", false),
+        long("inbox-route", true),
         long("pull-in", true),
         long("refuse-override", false),
         long("require-inbox-route-choice", false),
@@ -86,7 +87,7 @@ pub(crate) fn capture_spec() -> GuardSpec {
     ];
     GuardSpec {
         longs: LONGS,
-        short_values: "bfprstS",
+        short_values: "bfiprstS",
         short_flags: "dEhnR",
         equals_only_shorts: "c",
     }

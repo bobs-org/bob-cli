@@ -10,6 +10,9 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
     pub(super) inbox_route: InboxRouteReport,
+    /// Routed tasks' source→destination landings, in move order. The
+    /// block trackers and `open_notes` forward entries through these.
+    pub(super) routed_landings: Vec<RoutedTaskMove>,
     pub(super) template: Option<capture_language::template::TemplateSummary>,
     pub(super) template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
     /// Ref jobs staged by reference items, in batch order. The commit
@@ -190,6 +193,18 @@ pub(super) fn plan_capture_batch_with_config_path(
         &task_settings,
         &dependency_ctx,
     )?;
+    // Answered route moves run here: after every item, the successor
+    // net post-pass, and candidate detection, but before the block
+    // trackers finish and the staged files freeze.
+    let applied = apply_inbox_routes(
+        &mut planner,
+        &request.bob_dir,
+        &task_settings,
+        today,
+        inbox_route,
+        &request.inbox_routes,
+    )?;
+    task_tracker.remap_routed_tasks(&applied.moves);
     let final_day = planner.peek_text(&day_file);
     let successor_links = surviving_successor_links(&items);
     let pomodoro_blocks = block_tracker
@@ -216,7 +231,8 @@ pub(super) fn plan_capture_batch_with_config_path(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
-        inbox_route,
+        inbox_route: applied.report,
+        routed_landings: applied.moves,
         template,
         template_rows,
         staged_jobs,

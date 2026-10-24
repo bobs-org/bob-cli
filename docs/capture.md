@@ -2604,6 +2604,26 @@ Detection vectors (`IR`) run against a sandbox vault:
 | IR7 | Require both pull-in and inbox-route choices | The pull-in refusal wins |
 | IR8 | Build destinations with inboxes, nested notes, blocked `^prj`, projects, and excluded folders | Sorted task-move destinations with matching kind, status, parent, and blocked fields |
 
+Apply vectors (`IRA`) answer the candidates with `-i/--inbox-route`:
+
+| ID | Transition | Expected report |
+| --- | --- | --- |
+| IRA1 | Answer `1=health` for a linked Ready task | The task moves to the area with its Task Link repaired, `fresh` stamped, and `task_blocks`/`open_notes` following it |
+| IRA2 | Dry-run and real-run the same answered capture | Identical JSON except for `dry_run` |
+| IRA3 | Answer `1=health` for a completed task | The Done task moves home with no stamp |
+| IRA4 | Answer an id-less recovered dependent by key | The task moves by exact line with `fresh` stamped and no `unblocked` marker |
+| IRA5 | Answer a move whose block ID collides in the destination | The block is renamed and the rename is reported |
+| IRA6 | Answer two candidates with two destinations in one bulk draft | Each task moves to its own destination |
+| IRA7 | Answer `keep` and `N=` | Both keep the task; kept candidates satisfy the guard |
+| IRA8 | Answer one candidate with two destinations | Exit 2; nothing is written |
+| IRA9 | Answer an unknown candidate | Exit 2 with `inbox_route_stale` listing the current candidates; nothing is written |
+| IRA10 | Answer an inbox destination | Exit 1 with `inbox_route_refused`; nothing is written |
+| IRA11 | Answer a project without `## Tasks` | Exit 1 with the engine rule; nothing is written |
+| IRA12 | Answer a Blocked `^prj` destination for a Next task | Exit 1 with the engine rule; nothing is written |
+| IRA13 | Answer `--pull-in` picks and a route together | Both apply in one batch |
+| IRA14 | Route a task a dependency touch tracks | Its `task_blocks` entry follows it and the engine mirror is repaired |
+| IRA15 | Change a link-repaired file between planning and commit | The whole batch aborts with the `NoteChanged` failure; nothing is written |
+
 Every successful capture JSON, including dry runs, carries `inbox_route`:
 
 ```json
@@ -2658,8 +2678,55 @@ then submits the selected route with the capture. Its hidden
 candidate has no answer; it writes nothing. The pull-in choice refusal runs
 first, so clients resolve successor offers before inbox routes.
 
-The human output prints one `inbox` row per pending candidate and a route hint.
-In dry-run output the row says `would route`; ordinary previews never write.
+Answer candidates with repeatable `-i, --inbox-route ANSWER`:
+
+- `<N|KEY>=<NOTE>` moves the candidate to `NOTE` (a stem or vault-relative
+  path, resolved like `bob task move`'s `DEST`, and required to be in the
+  destination set).
+- `<N|KEY>=` keeps the candidate in its inbox.
+- `keep` keeps every candidate not otherwise answered.
+
+Two different destinations for one candidate are a usage error (exit 2).
+An answer naming an `N` or `KEY` that is not a current candidate fails with
+exit 2 and `code: inbox_route_stale`, listing the current candidates exactly
+as `-p` does for stale picks; it writes nothing. An answer whose destination
+does not resolve or is refused fails with exit 1 and
+`code: inbox_route_refused`, adding `refused` (`key`, `n`, `destination`,
+`message`) beside `inbox_route`; it writes nothing. Conflicting answers,
+stale answers, and refusals never write. Without the guard flag, unanswered
+candidates stay where they are and the real run still succeeds with
+`outcome: pending`.
+
+Answered moves run as a new stage inside capture planning: after every item,
+the successor net post-pass, and candidate detection, and before the task
+and Pomodoro block trackers finish. The capture acts first, then moves each
+answered candidate through the `bob task move` engine (`--inbox-route` is
+the only caller that moves closed selections or selects by exact line) in
+one atomic batch: a full vault snapshot overlaid with the staged texts,
+per-group move plans, the freshness stamp on each moved root line, and the
+same link repair, collision renames, and preimage guard as any other batch
+write. A moved open task is stamped `[fresh:: today]` like a Ctrl+Shift+M
+move; a moved Done task is never stamped.
+
+The move updates the batch outputs to their final, post-route text.
+`answer` becomes `{"action": "move", "destination": "<relative_path>"}` or
+`{"action": "keep"}`; `outcome` becomes `moved` or `kept`. A moved
+candidate gains `moved` (`destination`, `line`, `block_id`,
+`previous_block_id`, `fresh`, which is the stamped date or `null`). Once a
+move is applied, `inbox_route` also carries `repaired_files` (`path`,
+`link_count`, `dependency_token_count`), `renamed_block_ids` (`path`,
+`old_block_id`, `new_block_id`), and `needs_reconcile`. A routed task's
+`task_blocks` entry follows it to the destination path and its final lines
+and block ID, and an `open_notes` entry that would land on a routed task
+opens the destination at the moved line instead.
+
+The human output prints one `inbox` row per pending candidate and a route
+hint, one `kept  <text> · still in <inbox>` row per kept candidate, and one
+`routed  <text>  <inbox> → <route>` row per moved candidate, with
+`· ^old renamed ^new` and `· N links repaired` suffixes when they apply. In
+dry-run output the rows say `would route`; ordinary previews never write.
+The `run 'bob task reconcile' to reconcile Blocked state` hint prints when
+`needs_reconcile` is true.
 
 ### Plan budget and strict mode
 
@@ -4588,6 +4655,10 @@ Useful options:
 - `-E, --expand`: print a template draft's expansion and exit before vault
   access or planning
 - `-f, --format human|json`: human confirmation or stable JSON for callers
+- `-i, --inbox-route ANSWER`: route an inbox task this capture changes:
+  `<N|KEY>=<NOTE>` moves it, `<N|KEY>=` keeps it in its inbox, `keep` keeps
+  every otherwise unanswered candidate; repeatable. See
+  [Routing inbox tasks out](#routing-inbox-tasks-out)
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
 - `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
   background reference job
@@ -4656,8 +4727,9 @@ the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string. Template framing and
 refusal errors include their stable `template_*` code. `code` also appears on
-`plan_theme_cap_exceeded`, `pull_in_choice_required`, and
-`inbox_route_choice_required` refusals.
+`plan_theme_cap_exceeded`, `pull_in_choice_required`,
+`inbox_route_choice_required`, `inbox_route_stale`, and `inbox_route_refused`
+refusals.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`

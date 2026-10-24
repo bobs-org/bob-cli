@@ -63,12 +63,21 @@ pub(crate) struct MoveRequest {
     pub(crate) source: String,
     pub(crate) dest: String,
     pub(crate) selectors: Vec<MoveSelector>,
+    /// Accept closed selections. Only capture inbox routing sets this:
+    /// completions route home before archiving, so the engine must move
+    /// `[x]`/`[-]` tasks it otherwise refuses. The `bob task move` CLI
+    /// never sets it and keeps refusing closed tasks.
+    pub(crate) allow_closed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MoveSelector {
     Block(String),
     Match(String),
+    /// Exact 0-based line index in the source snapshot. Only capture
+    /// inbox routing uses this, for candidates without a block ID where
+    /// fuzzy text matching would be wrong. The CLI never constructs it.
+    Line(usize),
 }
 
 impl fmt::Display for MoveSelector {
@@ -76,6 +85,7 @@ impl fmt::Display for MoveSelector {
         match self {
             Self::Block(id) => write!(formatter, "block id {id}"),
             Self::Match(text) => write!(formatter, "match {text:?}"),
+            Self::Line(index) => write!(formatter, "line {}", index + 1),
         }
     }
 }
@@ -553,7 +563,7 @@ pub(crate) fn plan_task_move(
         markdown::fenced_lines(&source_logical, 0..source_logical.len());
 
     for task in &selected {
-        validate_movable_task(task)?;
+        validate_movable_task(task, request.allow_closed)?;
         if task_depends_on_dest_prj(
             &source_logical,
             &source_fenced,
@@ -1012,6 +1022,11 @@ fn select_tasks(
                 .copied()
                 .filter(|task| task.line.contains(text))
                 .collect::<Vec<_>>(),
+            MoveSelector::Line(index) => visible
+                .iter()
+                .copied()
+                .filter(|task| task.line_index == *index)
+                .collect::<Vec<_>>(),
         };
 
         if let MoveSelector::Block(id) = selector
@@ -1071,7 +1086,10 @@ fn resolve_selector_matches(
     Ok(matched[0].clone())
 }
 
-fn validate_movable_task(task: &ScannedTask) -> Result<(), PlanError> {
+fn validate_movable_task(
+    task: &ScannedTask,
+    allow_closed: bool,
+) -> Result<(), PlanError> {
     if !task.is_column0() {
         return Err(PlanError::NestedTask {
             candidate: task.candidate(),
@@ -1083,9 +1101,14 @@ fn validate_movable_task(task: &ScannedTask) -> Result<(), PlanError> {
         });
     }
     if task.is_closed() {
-        return Err(PlanError::ClosedTask {
-            candidate: task.candidate(),
-        });
+        if !allow_closed {
+            return Err(PlanError::ClosedTask {
+                candidate: task.candidate(),
+            });
+        }
+        // Capture routing moves completions home; closed symbols are
+        // movable under the closed-selection option.
+        return Ok(());
     }
     if !task.is_open_checkbox() {
         return Err(PlanError::UnsupportedCheckbox {
