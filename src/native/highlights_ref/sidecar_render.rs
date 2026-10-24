@@ -2054,6 +2054,10 @@ pub(super) fn sidecar_page_heading_details(
     if !trimmed.starts_with('#') {
         return None;
     }
+    let level = trimmed
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
     let heading = trimmed.trim_start_matches('#').trim();
     let (label, linked_page_style) = match markdown_link_label(heading) {
         Some(label) => (label, true),
@@ -2067,6 +2071,7 @@ pub(super) fn sidecar_page_heading_details(
             label: label.to_string(),
             linked_page_style,
             page_index,
+            level,
         })
     } else {
         None
@@ -2226,17 +2231,26 @@ pub(super) fn trim_blank_lines(lines: &[String]) -> Vec<String> {
     lines[start..end].to_vec()
 }
 
-pub(super) fn is_markdown_heading(line: &str) -> bool {
+pub(super) fn markdown_heading_level(line: &str) -> Option<usize> {
     let trimmed = line.trim_start();
     let hash_count = trimmed
         .chars()
         .take_while(|character| *character == '#')
         .count();
-    (1..=6).contains(&hash_count)
+    if (1..=6).contains(&hash_count)
         && trimmed
             .as_bytes()
             .get(hash_count)
             .is_some_and(u8::is_ascii_whitespace)
+    {
+        Some(hash_count)
+    } else {
+        None
+    }
+}
+
+pub(super) fn is_markdown_heading(line: &str) -> bool {
+    markdown_heading_level(line).is_some()
 }
 
 /// Dated metadata heading Highlights inserts above each annotation,

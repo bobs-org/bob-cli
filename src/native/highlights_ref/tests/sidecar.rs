@@ -1101,6 +1101,176 @@ fn color_grouped_title_prefixed_marker_is_excluded() {
 }
 
 #[test]
+fn linked_quote_hard_wrap_starting_with_hash_stays_quote_text() {
+    // bob-cli-ba (gates): the bare `# Set default agent` wrap line is quote
+    // text, not a heading to filter, and the rest of the quote is not a
+    // Comment. Fixture mirrors
+    // ~/bob/lib/docs/gastown_readme.textbundle/text.markdown page 8.
+    let annotations = parse_sidecar_markdown(
+        "\
+#### [Page 8](highlights://gastown_readme#page=8)
+
+##### 2026-06-15:
+
+> # Set custom agent command
+gt config agent set claude-glm
+> \"claude-glm --model glm-4\"
+gt config agent set codex-low \"codex
+> --thinking low\"
+# Set default agent
+gt config default-agent
+> claude-glm
+",
+    );
+
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].kind, SidecarAnnotationKind::Highlight);
+    assert_eq!(annotations[0].page_label.as_deref(), Some("Page 8"));
+    assert!(
+        annotations[0].text.contains("# Set default agent"),
+        "hard-wrapped `# ` line must stay quote text: {:?}",
+        annotations[0].text
+    );
+    assert!(
+        annotations[0].text.contains("gt config default-agent"),
+        "quote remainder must stay quote text: {:?}",
+        annotations[0].text
+    );
+    assert_eq!(annotations[0].comment, None);
+}
+
+#[test]
+fn linked_quote_hard_wrap_with_xml_lead_stays_quote_text() {
+    // bob-cli-ba (gates): the bare `# should start with <?xml` wrap line is
+    // quote text. Fixture mirrors
+    // ~/bob/lib/chat/sase_listen_antennapod_setup.md page 4.
+    let annotations = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://sase_listen_antennapod_setup#page=4)
+
+##### 2026-10-03:
+
+> tailscale serve statuscurl -fsS \"$FEED_URL\" | head -c 200# :443
+> → sase_gateway:8443/<token> → feed dir
+# should start with <?xml
+> … <rss
+",
+    );
+
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].kind, SidecarAnnotationKind::Highlight);
+    assert!(
+        annotations[0].text.contains("# should start with <?xml"),
+        "hard-wrapped `# ` line must stay quote text: {:?}",
+        annotations[0].text
+    );
+    assert_eq!(annotations[0].comment, None);
+}
+
+#[test]
+fn linked_quote_continuation_stops_at_annotation_date_header() {
+    // A Highlights annotation-date header directly after a quote line never
+    // continues the quote; it is filtered as a heading and starts no comment.
+    let annotations = parse_sidecar_markdown(
+        "\
+#### [Page 2](highlights://example#page=2)
+
+> Quoted text.
+##### 2026-10-03:
+",
+    );
+
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].text, "Quoted text.");
+    assert_eq!(annotations[0].comment, None);
+}
+
+#[test]
+fn linked_sidecar_level_one_sticky_is_not_a_page_break() {
+    // Gates: in a `####`-paged sidecar the level-1 `# P values` sticky stays
+    // in its chunk instead of splitting the page stream.
+    let annotations = parse_sidecar_markdown(
+        "\
+#### [Page 1](highlights://example#page=1)
+
+##### 2026-06-03:
+
+> A highlight on page one.
+
+---
+
+# P values
+
+The sticky text.
+
+---
+
+#### [Page 2](highlights://example#page=2)
+
+##### 2026-06-03:
+
+> A highlight on page two.
+",
+    );
+
+    assert_eq!(annotations.len(), 3);
+    assert_eq!(annotations[0].page_label.as_deref(), Some("Page 1"));
+    assert_eq!(annotations[1].kind, SidecarAnnotationKind::StandaloneNote);
+    assert_eq!(
+        annotations[1].page_label.as_deref(),
+        Some("Page 1"),
+        "level-1 page-shaped sticky must not split the page stream: {annotations:?}"
+    );
+    assert!(annotations[1].text.contains("The sticky text."));
+    assert_eq!(annotations[2].page_label.as_deref(), Some("Page 2"));
+}
+
+#[test]
+fn simple_sidecar_level_one_stickies_are_not_page_breaks() {
+    // Gates: in a `##`-paged sidecar the level-1 `# Page turners` and
+    // `# Page layout` stickies stay in their chunks.
+    let annotations = parse_sidecar_markdown(
+        "\
+## Page 1
+
+> A highlight on page one.
+
+---
+
+# Page turners
+
+Sticky about page turners.
+
+---
+
+# Page layout
+
+Sticky about page layout.
+
+---
+
+## Page 2
+
+> A highlight on page two.
+",
+    );
+
+    assert_eq!(annotations.len(), 4);
+    assert_eq!(annotations[0].page_label.as_deref(), Some("Page 1"));
+    for sticky in &annotations[1..3] {
+        assert_eq!(sticky.kind, SidecarAnnotationKind::StandaloneNote);
+        assert_eq!(
+            sticky.page_label.as_deref(),
+            Some("Page 1"),
+            "level-1 page-shaped sticky must not split the page stream: {annotations:?}"
+        );
+    }
+    assert!(annotations[1].text.contains("page turners"));
+    assert!(annotations[2].text.contains("page layout"));
+    assert_eq!(annotations[3].page_label.as_deref(), Some("Page 2"));
+}
+
+#[test]
 fn return_link_strip_keeps_block_ids_stable() {
     let contents = "\
 ## Page 2

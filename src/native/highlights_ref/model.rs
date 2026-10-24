@@ -362,6 +362,11 @@ pub(super) struct SidecarPageHeading {
     pub(super) label: String,
     pub(super) linked_page_style: bool,
     pub(super) page_index: Option<u32>,
+    /// The heading level (`#` run length) of the page-shaped line. Only
+    /// headings at the sidecar's own page-heading level split the page
+    /// stream (gates); page-shaped lines at any other level stay in their
+    /// chunk.
+    pub(super) level: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

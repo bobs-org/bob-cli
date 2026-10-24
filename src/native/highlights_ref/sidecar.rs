@@ -211,12 +211,28 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
     // Document preamble (a setext title, an author line, blank lines) before
     // the first page heading is never an annotation (bob-cli-4r). Sidecars
     // without any page heading have no preamble, so every chunk still parses.
-    let mut seen_page_heading = !contents
+    // The sidecar's page-heading level is the level of its first page-shaped
+    // heading: page-shaped lines at any other level (a `# P values` sticky in
+    // a `####`-paged sidecar) never split the page stream and stay in their
+    // chunk, where the heading filter still applies.
+    let page_heading_level = contents
         .lines()
-        .any(|line| sidecar_page_heading_details(line).is_some());
+        .filter_map(sidecar_page_heading_details)
+        .next()
+        .map(|heading| heading.level);
+    let mut seen_page_heading = page_heading_level.is_none();
 
     for line in contents.lines() {
-        if let Some(next_page_heading) = sidecar_page_heading_details(line) {
+        let next_page_heading =
+            match (&page_heading_level, sidecar_page_heading_details(line)) {
+                (Some(expected), Some(heading))
+                    if heading.level == *expected =>
+                {
+                    Some(heading)
+                }
+                _ => None,
+            };
+        if let Some(next_page_heading) = next_page_heading {
             if seen_page_heading {
                 flush_sidecar_chunk(
                     &mut annotations,
