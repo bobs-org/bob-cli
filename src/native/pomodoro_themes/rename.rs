@@ -9,8 +9,7 @@ use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
+    rc::Rc,
 };
 
 use clap::{
@@ -21,8 +20,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::native::{
-    capture_pomodoros, collect_done, config, env as bob_env,
-    ob::{self, LockWaitError},
+    capture_pomodoros, config, env as bob_env,
+    ob::{self},
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
 };
@@ -35,8 +34,6 @@ use super::{
 
 const COMMAND_NAME: &str = "bob themes rename";
 const SCHEMA_VERSION: u32 = 1;
-const LOCK_WAIT: Duration = Duration::from_secs(3);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
     Human,
@@ -310,7 +307,6 @@ struct PreparedRename {
     files: Vec<FilePlan>,
     total_before_entries: usize,
     warnings: Vec<String>,
-    touched_relative: BTreeSet<PathBuf>,
     sync_pre: &'static str,
     hidden_before: bool,
 }
@@ -666,8 +662,13 @@ fn plan_rename(
     // Dirty-path and worktree checks only matter for a live write; the
     // dry run reports the plan without touching Git.
     if !dry_run {
-        let dirty = dirty_touched_paths(vault, &touched_relative)
-            .map_err(|failure| failure)?;
+        let dirty = crate::native::vault_rewrite::dirty_touched_paths(
+            vault,
+            &touched_relative,
+        )
+        .map_err(|failure| {
+            RenameFailure::new(failure.code, failure.message, failure.hint)
+        })?;
         if offline && !dirty.is_empty() {
             return Err(RenameFailure::new(
                 "dirty_paths",
@@ -706,7 +707,6 @@ fn plan_rename(
             files,
             total_before_entries: total_before,
             warnings,
-            touched_relative,
             sync_pre: "skipped",
             hidden_before,
         },
@@ -931,421 +931,99 @@ fn config_reference(
 
 fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
     let child_env = ob::child_env();
-    // Take bob_sync.lock first (wait at most 3s like the other writers).
-    let _lock = {
-        let json_mode = format == OutputFormat::Json;
-        let on_first_wait = move || {
-            if json_mode {
-                eprintln!("waiting for another vault maintenance run…");
-            } else {
-                eprintln!(
-                    "  {}",
-                    crate::native::style::Styler::detect()
-                        .dim("waiting for another vault maintenance run…")
-                );
-            }
-        };
-        match ob::acquire_lock_waiting(LOCK_WAIT, on_first_wait) {
-            Ok(lock) => lock,
-            Err(error) => {
-                return print_failure(
-                    format,
-                    match error {
-                        LockWaitError::Timeout { path } => {
-                            RenameFailure::new(
-                                "lock_busy",
-                                format!(
-                                    "another Bob vault maintenance run is already active (waited on {})",
-                                    path.display()
-                                ),
-                                Some("wait for the other maintenance run to finish, then retry"),
-                            )
-                        }
-                        other => RenameFailure::new(
-                            "lock_busy",
-                            format!("could not acquire the vault maintenance lock: {other}"),
-                            Some("wait for the other maintenance run to finish, then retry"),
-                        ),
-                    },
-                );
-            }
-        }
-    };
-
     let vault = matches
         .get_one::<OsString>("bob-dir")
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
         .unwrap_or_else(bob_env::bob_dir);
     let offline = matches.get_flag("offline");
+    let json_mode = format == OutputFormat::Json;
 
-    match ob::detect_git_worktree(&vault, &child_env) {
-        Ok(true) => {}
-        Ok(false) | Err(_) => {
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "not_a_worktree",
-                    format!(
-                        "theme renames require a Git worktree: {}",
-                        vault.display()
-                    ),
-                    Some("initialize or open the Bob vault as a Git worktree"),
-                ),
-            );
-        }
-    }
-
-    if !offline {
-        let cycle =
-            crate::native::vault_sync::run_cycle_with_existing_lock_report(
-                &child_env, true,
-            );
-        if !cycle.ok || !cycle.conflicts.is_empty() {
-            let detail = if cycle.conflicts.is_empty() {
-                cycle.error.unwrap_or_else(|| {
-                    "vault sync reported failure".to_string()
-                })
-            } else {
-                format!("vault sync conflict in {}", cycle.conflicts.join(", "))
-            };
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "sync_failed",
-                    format!("pre-sync failed: {detail}"),
-                    Some("re-run with --offline to commit locally without syncing"),
-                ),
-            );
-        }
-    }
-
-    let mut prepared = match prepare_from_matches(matches, false) {
-        Ok(prepared) => prepared,
-        Err(failure) => return print_failure(format, failure),
-    };
-    prepared.inner.sync_pre = if offline { "skipped" } else { "ok" };
-
-    // Snapshot each target and compare again right before writing.
-    let before_images = snapshot_before_images(
-        &vault,
-        &prepared
-            .inner
-            .files
-            .iter()
-            .map(|file| file.path.clone())
-            .collect::<Vec<_>>(),
-    );
-    // Re-read to detect a change since planning.
-    for file in &prepared.inner.files {
-        let absolute = vault.join(&file.path);
-        let current = fs::read_to_string(&absolute).unwrap_or_default();
-        if current != file.before_contents {
-            let _ =
-                restore_before_images(&vault, &before_images, &BTreeMap::new());
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "stale_note",
-                    format!(
-                        "{} changed since planning; retry the rename",
-                        file.path
-                    ),
-                    Some("re-run bob themes rename to replan from the latest files"),
-                ),
-            );
-        }
-    }
-
-    // Dirty paths abort an offline rename; online they ride the pre-sync.
-    let dirty =
-        match dirty_touched_paths(&vault, &prepared.inner.touched_relative) {
-            Ok(dirty) => dirty,
-            Err(failure) => return print_failure(format, failure),
-        };
-    if offline && !dirty.is_empty() {
-        return print_failure(
-            format,
-            RenameFailure::new(
-                "dirty_paths",
-                format!("rename paths are dirty: {}", dirty.join(", ")),
-                Some("commit or restore those paths before an offline rename"),
-            ),
-        );
-    }
-    let mut warnings = prepared.inner.warnings.clone();
-    if !dirty.is_empty() {
-        warnings.push(format!(
-            "dirty paths will be included by the pre-sync: {}",
-            dirty.join(", ")
-        ));
-    }
-
-    let old_head = git_head(&vault, &child_env).ok();
-    // Write each file atomically, then append theme.rename.
-    for file in &prepared.inner.files {
-        let absolute = vault.join(&file.path);
-        if let Err(error) =
-            collect_done::atomic_write(&absolute, &file.after_contents)
-        {
-            let _ =
-                restore_before_images(&vault, &before_images, &BTreeMap::new());
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "verify_failed",
-                    format!("could not write {}: {error}", file.path),
-                    Some("the rename was rolled back; inspect the listed paths and retry"),
-                ),
-            );
-        }
-    }
-    let journal_relative = append_rename_event(
-        &vault,
-        &prepared.inner.old_key,
-        &prepared.inner.new_key,
-        &prepared.inner.old_name,
-        &prepared.inner.new_name,
-        &prepared.inner.via,
-    );
-    let journal_relative = match journal_relative {
-        Ok(relative) => relative,
-        Err(message) => {
-            let _ = restore_before_images(
-                &vault,
-                &before_images,
-                &after_images(&vault, &prepared.inner.files),
-            );
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "verify_failed",
-                    format!("could not append theme.rename: {message}"),
-                    Some("the rename was rolled back; inspect the listed paths and retry"),
-                ),
-            );
-        }
-    };
-
-    // Verify by rescanning: OLD absent, entry counts unchanged, and only
-    // name tails differ.
-    if let Err(message) = verify_renamed(&vault, &prepared.inner) {
-        let _ = restore_before_images(
-            &vault,
-            &before_images,
-            &after_images(&vault, &prepared.inner.files),
-        );
-        return print_failure(
-            format,
-            RenameFailure::new(
-                "verify_failed",
-                format!("could not apply and verify the rename: {message}"),
-                Some("the rename was rolled back; inspect the listed paths and retry"),
-            ),
-        );
-    }
-
-    let subject = format!(
-        "bob themes rename: {} → {}",
-        prepared.inner.old_name, prepared.inner.new_name
-    );
-    let mut commit_paths = prepared
-        .inner
-        .files
-        .iter()
-        .map(|file| PathBuf::from(&file.path))
-        .collect::<Vec<_>>();
-    commit_paths.push(PathBuf::from(journal_relative.clone()));
-    commit_paths.sort();
-    commit_paths.dedup();
-    let sha = match ob::commit_paths(
+    let outcome = crate::native::vault_rewrite::run(
         &vault,
         &child_env,
-        &subject,
-        &commit_paths,
-    ) {
-        Ok(Some(sha)) => sha,
-        Ok(None) => {
-            let unstage = unstage_paths(&vault, &child_env, &commit_paths);
-            let _ = restore_before_images(
-                &vault,
-                &before_images,
-                &after_images(&vault, &prepared.inner.files),
-            );
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "verify_failed",
-                    format!("rename verified but produced no scoped Git commit{unstage}"),
-                    Some("check the vault Git state and retry"),
-                ),
-            );
-        }
-        Err(error) => {
-            if let Some((sha, committed_subject)) = committed_despite_error(
-                &vault,
-                &child_env,
-                old_head.as_deref(),
-                &subject,
-            ) {
-                if committed_subject == subject {
-                    let _ = error;
-                    sha
-                } else {
-                    let unstage =
-                        unstage_paths(&vault, &child_env, &commit_paths);
-                    let _ = restore_before_images(
-                        &vault,
-                        &before_images,
-                        &after_images(&vault, &prepared.inner.files),
-                    );
-                    return print_failure(
-                        format,
-                        RenameFailure::new(
-                            "verify_failed",
-                            format!("Git commit failed: {error}{unstage}"),
-                            Some("check the vault Git state and retry"),
-                        ),
-                    );
-                }
-            } else {
-                let unstage = unstage_paths(&vault, &child_env, &commit_paths);
-                let _ = restore_before_images(
-                    &vault,
-                    &before_images,
-                    &after_images(&vault, &prepared.inner.files),
-                );
-                return print_failure(
-                    format,
-                    RenameFailure::new(
-                        "verify_failed",
-                        format!("Git commit failed: {error}{unstage}"),
-                        Some("check the vault Git state and retry"),
-                    ),
-                );
-            }
-        }
-    };
-
-    // Invalidate the machine-local catalog cache after a rename.
-    cache::invalidate_vault(&vault);
-
-    let mut report = prepared.inner.report();
-    report.mode = "write".to_string();
-    report.sync.pre = if offline {
-        "skipped".to_string()
-    } else {
-        "ok".to_string()
-    };
-    report.commit = Some(json!({ "sha": sha, "subject": subject }));
-    report.warnings = warnings;
-    if offline {
-        report.sync.post = "skipped".to_string();
-    } else {
-        let cycle =
-            crate::native::vault_sync::run_cycle_with_existing_lock_report(
-                &child_env, true,
-            );
-        if !cycle.ok || !cycle.conflicts.is_empty() {
-            let detail = if cycle.conflicts.is_empty() {
-                cycle.error.unwrap_or_else(|| {
-                    "vault sync reported failure".to_string()
+        COMMAND_NAME,
+        "theme renames",
+        offline,
+        json_mode,
+        || {
+            let prepared =
+                prepare_from_matches(matches, false).map_err(|failure| {
+                    crate::native::vault_rewrite::TxnFailure::new(
+                        failure.code,
+                        failure.message,
+                        failure.hint,
+                    )
+                })?;
+            let inner = Rc::new(prepared.inner);
+            let files = inner
+                .files
+                .iter()
+                .map(|file| crate::native::vault_rewrite::FileRewrite {
+                    path: file.path.clone(),
+                    before_contents: file.before_contents.clone(),
+                    after_contents: file.after_contents.clone(),
                 })
-            } else {
-                format!("vault sync conflict in {}", cycle.conflicts.join(", "))
-            };
-            report.sync.post = "failed".to_string();
-            report.warnings.push(format!(
-                "the rename is committed locally; post-sync failed ({detail}); run bob vault-sync"
-            ));
-        } else {
-            report.sync.post = "ok".to_string();
-        }
-    }
-    print_success(&report, format);
-    0
-}
-
-fn snapshot_before_images(
-    vault: &Path,
-    relatives: &[String],
-) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
-    let mut map = BTreeMap::new();
-    for relative in relatives {
-        let absolute = vault.join(relative);
-        let bytes = fs::read(&absolute).ok();
-        map.insert(absolute, bytes);
-    }
-    map
-}
-
-fn after_images(
-    vault: &Path,
-    files: &[FilePlan],
-) -> BTreeMap<PathBuf, Vec<u8>> {
-    let mut map = BTreeMap::new();
-    for file in files {
-        map.insert(
-            vault.join(&file.path),
-            file.after_contents.as_bytes().to_vec(),
-        );
-    }
-    map
-}
-
-fn restore_before_images(
-    vault: &Path,
-    before: &BTreeMap<PathBuf, Option<Vec<u8>>>,
-    after: &BTreeMap<PathBuf, Vec<u8>>,
-) -> String {
-    let rels = before
-        .keys()
-        .filter_map(|absolute| {
-            absolute
-                .strip_prefix(vault)
-                .ok()
-                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-        })
-        .collect::<Vec<_>>();
-    let before_map =
-        crate::native::ref_library::migrate_tasks::snapshot_before_images(
-            vault, &rels,
-        );
-    // Reuse the shared restore helper for file contents; it reports
-    // diverged paths that were left in place.
-    let diverged =
-        crate::native::ref_library::migrate_tasks::restore_before_images(
-            &before_map,
-            after,
-        );
-    // The helper above snapshots current files, so restore the captured
-    // before bytes directly for determinism.
-    let mut failures: Vec<String> = diverged
-        .into_iter()
-        .map(|path| path.display().to_string())
-        .collect();
-    for (absolute, bytes) in before {
-        let Ok(current) = fs::read(absolute) else {
-            continue;
-        };
-        let wrote = after.get(absolute);
-        if wrote.is_some_and(|wrote| &current == wrote) {
-            let result = match bytes {
-                Some(previous) => fs::write(absolute, previous),
-                None => fs::remove_file(absolute),
-            };
-            if let Err(error) = result {
-                failures.push(format!(
-                    "could not restore {}: {error}",
-                    absolute.display()
-                ));
+                .collect::<Vec<_>>();
+            let subject = format!(
+                "bob themes rename: {} → {}",
+                inner.old_name, inner.new_name
+            );
+            let post_inner = Rc::clone(&inner);
+            let post_vault = vault.clone();
+            let verify_inner = Rc::clone(&inner);
+            let verify_vault = vault.clone();
+            let invalidate_vault = vault.clone();
+            Ok(crate::native::vault_rewrite::ReadyPlan {
+                files,
+                subject,
+                post_write: Box::new(move || {
+                    append_rename_event(
+                        &post_vault,
+                        &post_inner.old_key,
+                        &post_inner.new_key,
+                        &post_inner.old_name,
+                        &post_inner.new_name,
+                        &post_inner.via,
+                    )
+                    .map(|relative| vec![PathBuf::from(relative)])
+                    .map_err(|message| {
+                        format!("could not append theme.rename: {message}")
+                    })
+                }),
+                verify: Box::new(move || {
+                    verify_renamed(&verify_vault, &verify_inner)
+                }),
+                on_committed: Box::new(move || {
+                    cache::invalidate_vault(&invalidate_vault);
+                }),
+                context: Rc::clone(&inner),
+            })
+        },
+    );
+    match outcome {
+        Ok(outcome) => {
+            let mut report = outcome.context.report();
+            report.mode = "write".to_string();
+            report.sync.pre = outcome.sync_pre.to_string();
+            report.commit =
+                Some(json!({ "sha": outcome.sha, "subject": outcome.subject }));
+            let mut warnings = outcome.context.warnings.clone();
+            if let Some(dirty) = outcome.dirty_warning {
+                warnings.push(dirty);
             }
+            report.warnings = warnings;
+            report.sync.post = outcome.sync_post.to_string();
+            if let Some(post) = outcome.post_sync_warning {
+                report.warnings.push(post);
+            }
+            print_success(&report, format);
+            0
         }
-    }
-    if failures.is_empty() {
-        String::new()
-    } else {
-        format!("; rollback issues: {}", failures.join("; "))
+        Err(failure) => print_failure(
+            format,
+            RenameFailure::new(failure.code, failure.message, failure.hint),
+        ),
     }
 }
 
@@ -1437,133 +1115,6 @@ fn verify_renamed(
         ));
     }
     Ok(())
-}
-
-fn dirty_touched_paths(
-    vault: &Path,
-    touched: &BTreeSet<PathBuf>,
-) -> Result<Vec<String>, RenameFailure> {
-    if !vault.join(".git").exists() {
-        return Ok(Vec::new());
-    }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(vault)
-        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
-        .output()
-        .map_err(|error| {
-            RenameFailure::new(
-                "io",
-                format!("could not inspect Git status: {error}"),
-                Some("check Git availability and retry"),
-            )
-        })?;
-    if !output.status.success() {
-        return Err(RenameFailure::new(
-            "io",
-            "could not inspect Git status for the rename plan",
-            Some("check that the Bob vault is a Git worktree and retry"),
-        ));
-    }
-    let mut records = output.stdout.split(|byte| *byte == 0);
-    let mut dirty = BTreeSet::new();
-    while let Some(record) = records.next() {
-        if record.len() < 4 {
-            continue;
-        }
-        let status = String::from_utf8_lossy(&record[..2]);
-        let path =
-            PathBuf::from(String::from_utf8_lossy(&record[3..]).as_ref());
-        dirty.insert(path);
-        if (status.contains('R') || status.contains('C'))
-            && let Some(previous) = records.next()
-        {
-            dirty.insert(PathBuf::from(
-                String::from_utf8_lossy(previous).as_ref(),
-            ));
-        }
-    }
-    let touched = touched
-        .iter()
-        .map(|path| normalized_path(&vault_path(path)))
-        .collect::<BTreeSet<_>>();
-    let mut matches = dirty
-        .into_iter()
-        .filter(|path| touched.contains(&normalized_path(&vault_path(path))))
-        .map(|path| vault_path(&path))
-        .collect::<Vec<_>>();
-    matches.sort();
-    Ok(matches)
-}
-
-fn vault_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn normalized_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
-        .to_ascii_lowercase()
-}
-
-fn git_head(vault: &Path, child_env: &ob::ChildEnv) -> Result<String, String> {
-    let output = ob::git_command(vault, child_env)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map_err(|error| format!("git rev-parse HEAD: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git rev-parse HEAD failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn unstage_paths(
-    vault: &Path,
-    child_env: &ob::ChildEnv,
-    paths: &[PathBuf],
-) -> String {
-    let output = ob::git_command(vault, child_env)
-        .arg("reset")
-        .arg("--quiet")
-        .arg("HEAD")
-        .arg("--")
-        .args(paths)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => String::new(),
-        Ok(output) => format!(
-            "; could not unstage rename paths: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(error) => format!("; could not unstage rename paths: {error}"),
-    }
-}
-
-fn committed_despite_error(
-    vault: &Path,
-    child_env: &ob::ChildEnv,
-    old_head: Option<&str>,
-    expected_subject: &str,
-) -> Option<(String, String)> {
-    let output = ob::git_command(vault, child_env)
-        .args(["log", "-1", "--format=%H%n%s"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
-    let mut lines = text.lines();
-    let sha = lines.next()?.to_string();
-    let subject = lines.next().unwrap_or("").to_string();
-    (old_head != Some(sha.as_str()) && subject == expected_subject)
-        .then_some((sha, subject))
 }
 
 fn print_success(report: &RenameReport, format: OutputFormat) {

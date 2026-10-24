@@ -88,6 +88,7 @@ mod task_status_hooks;
 mod task_status_hooks_write;
 pub(crate) mod url_routing;
 mod vault_links;
+mod vault_rewrite;
 mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
