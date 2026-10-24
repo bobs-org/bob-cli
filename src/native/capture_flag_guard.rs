@@ -144,6 +144,59 @@ pub(crate) fn capture_templates_save_spec() -> GuardSpec {
     }
 }
 
+/// Walk one short cluster the way clap does: switches keep going, a
+/// value-taking flag consumes the rest of the cluster as an attached
+/// value (or the next argv token when it is last), and an equals-only
+/// flag (`-c`, `-c=HDR`) never takes a separate argv token. Remaining
+/// characters after an equals-only flag that are not an attached `=value`
+/// stay clustered flags (`-cn`, `-cf json`). An unknown short is TEXT.
+///
+/// Returns `Some(true)` when a trailing value-taking flag consumed the
+/// next argv token, `Some(false)` when the cluster itself was options,
+/// and `None` when an unknown short starts TEXT.
+fn consume_short_cluster(
+    body: &str,
+    spec: &GuardSpec,
+    next_argv: Option<&OsString>,
+    format_json: &mut bool,
+) -> Option<bool> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        let flag = chars[index];
+        let rest: String = chars[index + 1..].iter().collect();
+        if spec.short_flags.contains(flag) {
+            index += 1;
+            continue;
+        }
+        if spec.short_values.contains(flag) {
+            if rest.is_empty() {
+                if let Some(value) = next_argv {
+                    if flag == 'f' && value.to_string_lossy() == "json" {
+                        *format_json = true;
+                    }
+                    return Some(true);
+                }
+                return Some(false);
+            }
+            let value = rest.strip_prefix('=').unwrap_or(rest.as_str());
+            if flag == 'f' && value == "json" {
+                *format_json = true;
+            }
+            return Some(false);
+        }
+        if spec.equals_only_shorts.contains(flag) {
+            if rest.is_empty() || rest.starts_with('=') {
+                return Some(false);
+            }
+            index += 1;
+            continue;
+        }
+        return None;
+    }
+    Some(false)
+}
+
 /// Scan `args` (argv after the subcommand name) for an unknown alphabetic
 /// long option where TEXT would begin. Returns the first hit, if any.
 ///
@@ -206,41 +259,22 @@ pub(crate) fn find_unknown_long_flag(
                 // A bare `-` is TEXT.
                 return None;
             }
-            if body.chars().all(|flag| spec.short_flags.contains(flag)) {
-                index += 1;
-                continue;
-            }
-            let first = body.chars().next().expect("nonempty short body");
-            if spec.short_values.contains(first) {
-                if body.len() == 1 {
-                    // `-f json`: the value may itself select JSON output.
-                    if first == 'f'
-                        && let Some(value) = args.get(index + 1)
-                    {
-                        if value.to_string_lossy() == "json" {
-                            format_json = true;
-                        }
-                        index += 1;
-                    } else if index + 1 < args.len() {
-                        index += 1;
-                    }
-                } else if first == 'f' {
-                    let attached = &body[1..];
-                    let value = attached.strip_prefix('=').unwrap_or(attached);
-                    if value == "json" {
-                        format_json = true;
-                    }
+            match consume_short_cluster(
+                body,
+                spec,
+                args.get(index + 1),
+                &mut format_json,
+            ) {
+                Some(true) => {
+                    index += 2;
+                    continue;
                 }
-                index += 1;
-                continue;
+                Some(false) => {
+                    index += 1;
+                    continue;
+                }
+                None => return None,
             }
-            if spec.equals_only_shorts.contains(first) {
-                index += 1;
-                continue;
-            }
-            // Unknown shorts and markdown bullets (`-2`, `- foo`) are TEXT:
-            // clap keeps parsing them exactly as before.
-            return None;
         }
         // A non-option token starts TEXT; the rest of the line is literal.
         return None;
@@ -251,6 +285,10 @@ pub(crate) fn find_unknown_long_flag(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::{
+        capture, capture_complete, capture_parse, capture_rewrite,
+        capture_templates,
+    };
 
     fn args(words: &[&str]) -> Vec<OsString> {
         words.iter().map(OsString::from).collect()
@@ -312,5 +350,183 @@ mod tests {
             .expect("unknown flag");
         assert_eq!(hit.flag, "--bogus");
         assert!(hit.format_json);
+    }
+
+    #[test]
+    fn mixed_short_cluster_then_unknown_long_is_rejected() {
+        let spec = capture_spec();
+        for argv in [
+            ["-nf", "json", "--bogus"].as_slice(),
+            ["-nfjson", "--bogus"].as_slice(),
+            ["-nf=json", "--bogus"].as_slice(),
+            ["-n", "-f", "json", "--bogus"].as_slice(),
+            ["-dnf", "json", "--bogus"].as_slice(),
+        ] {
+            let hit = find_unknown_long_flag(&args(argv), &spec)
+                .unwrap_or_else(|| panic!("should reject: {argv:?}"));
+            assert_eq!(hit.flag, "--bogus", "{argv:?}");
+            assert!(hit.format_json, "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn equals_only_short_combined_with_declared_option_then_unknown_is_rejected(
+    ) {
+        let spec = capture_spec();
+        for argv in [
+            ["-cn", "--bogus"].as_slice(),
+            ["-nc=HDR", "--bogus"].as_slice(),
+            ["-c=HDR", "-f", "json", "--bogus"].as_slice(),
+            ["-cf", "json", "--bogus"].as_slice(),
+        ] {
+            let hit = find_unknown_long_flag(&args(argv), &spec)
+                .unwrap_or_else(|| panic!("should reject: {argv:?}"));
+            assert_eq!(hit.flag, "--bogus", "{argv:?}");
+        }
+        let json_hit =
+            find_unknown_long_flag(&args(&["-cf", "json", "--bogus"]), &spec)
+                .expect("equals-only plus format");
+        assert!(json_hit.format_json);
+    }
+
+    #[test]
+    fn value_taking_short_with_attached_cluster_rest_is_the_value() {
+        let spec = capture_spec();
+        assert!(
+            find_unknown_long_flag(&args(&["-fn", "json", "--bogus"]), &spec)
+                .is_none(),
+            "-fn consumes n as format, so json --bogus is TEXT"
+        );
+    }
+
+    #[test]
+    fn undeclared_short_cluster_is_text() {
+        let spec = capture_parse_spec();
+        assert!(
+            find_unknown_long_flag(&args(&["-nf", "json", "--bogus"]), &spec)
+                .is_none(),
+            "capture-parse does not declare -n, so the cluster is TEXT"
+        );
+    }
+
+    #[test]
+    fn guard_specs_match_clap_declarations() {
+        assert_spec_matches(
+            "capture",
+            &capture::cli::build_cli(),
+            &capture_spec(),
+        );
+        assert_spec_matches(
+            "capture-complete",
+            &capture_complete::build_cli(),
+            &capture_complete_spec(),
+        );
+        assert_spec_matches(
+            "capture-parse",
+            &capture_parse::build_cli(),
+            &capture_parse_spec(),
+        );
+        assert_spec_matches(
+            "capture-rewrite",
+            &capture_rewrite::build_cli(),
+            &capture_rewrite_spec(),
+        );
+        assert_spec_matches(
+            "capture-templates save",
+            &capture_templates::command::build_cli_save(),
+            &capture_templates_save_spec(),
+        );
+    }
+
+    fn assert_spec_matches(
+        name: &str,
+        command: &clap::Command,
+        spec: &GuardSpec,
+    ) {
+        let derived = derived_from_clap(command);
+        assert_eq!(derived.longs, spec_longs(spec), "{name} longs");
+        assert_eq!(
+            derived.short_values,
+            sorted_chars(spec.short_values),
+            "{name} short_values"
+        );
+        assert_eq!(
+            derived.short_flags,
+            sorted_chars(spec.short_flags),
+            "{name} short_flags"
+        );
+        assert_eq!(
+            derived.equals_only_shorts,
+            sorted_chars(spec.equals_only_shorts),
+            "{name} equals_only_shorts"
+        );
+    }
+
+    struct DerivedSpec {
+        longs: Vec<(String, bool)>,
+        short_values: String,
+        short_flags: String,
+        equals_only_shorts: String,
+    }
+
+    fn derived_from_clap(command: &clap::Command) -> DerivedSpec {
+        use clap::ArgAction;
+
+        let mut longs = Vec::new();
+        let mut short_values = String::new();
+        let mut short_flags = String::new();
+        let mut equals_only_shorts = String::new();
+        for arg in command.get_arguments() {
+            if arg.is_positional() {
+                continue;
+            }
+            let is_switch = matches!(
+                arg.get_action(),
+                ArgAction::SetTrue
+                    | ArgAction::SetFalse
+                    | ArgAction::Help
+                    | ArgAction::HelpShort
+                    | ArgAction::HelpLong
+                    | ArgAction::Version
+                    | ArgAction::Count
+            );
+            let require_equals = arg.is_require_equals_set();
+            let takes_separate_value = !require_equals && !is_switch;
+            if let Some(long) = arg.get_long() {
+                longs.push((long.to_string(), takes_separate_value));
+            }
+            if let Some(short) = arg.get_short() {
+                if require_equals {
+                    equals_only_shorts.push(short);
+                } else if is_switch {
+                    short_flags.push(short);
+                } else {
+                    short_values.push(short);
+                }
+            }
+        }
+        longs.sort_unstable();
+        DerivedSpec {
+            longs,
+            short_values: sorted_chars(&short_values),
+            short_flags: sorted_chars(&short_flags),
+            equals_only_shorts: sorted_chars(&equals_only_shorts),
+        }
+    }
+
+    fn spec_longs(spec: &GuardSpec) -> Vec<(String, bool)> {
+        let mut longs: Vec<(String, bool)> = spec
+            .longs
+            .iter()
+            .map(|flag| (flag.name.to_string(), flag.takes_separate_value))
+            .collect();
+        longs.sort_unstable();
+        longs
+    }
+
+    fn sorted_chars(value: &str) -> String {
+        let mut chars: Vec<char> = value.chars().collect();
+        chars.sort_unstable();
+        chars.into_iter().collect()
     }
 }

@@ -167,3 +167,87 @@ fn capture_templates_save_guard_json_carries_a_stable_code() {
     assert_eq!(json["error"], "unexpected argument '--bogus' found");
     assert_eq!(json["code"], "saved_templates_unknown_flag");
 }
+
+#[test]
+fn capture_mixed_short_cluster_unknown_long_is_rejected_with_json() {
+    let (_temp, vault) = inbox_vault("bob-cli-capture-flag-guard-cluster");
+    let inbox = vault.join("mac_inbox.md");
+
+    for argv in [
+        vec!["-nf", "json", "--bogus", "--", "hi"],
+        vec!["-nfjson", "--bogus", "--", "hi"],
+    ] {
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .args(&argv)
+            .env("BOB_NOW", "2026-10-24")
+            .output()
+            .expect("run capture with mixed short cluster and unknown flag");
+
+        assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim())
+                .expect("guard rejection should be JSON");
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["error"], "unexpected argument '--bogus' found");
+        assert_eq!(
+            fs::read_to_string(&inbox).expect("read inbox"),
+            "# Tasks\n",
+            "rejected capture must not write"
+        );
+    }
+}
+
+#[test]
+fn capture_complete_unknown_long_flag_is_rejected_with_json() {
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("--cursor")
+        .arg("0")
+        .arg("--format")
+        .arg("json")
+        .arg("--bogus")
+        .arg("--")
+        .arg("hi")
+        .output()
+        .expect("run capture-complete with unknown flag");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("guard rejection should be JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"], "unexpected argument '--bogus' found");
+}
+
+#[test]
+fn capture_templates_save_unknown_flag_leaves_the_shelf_unchanged() {
+    let temp = TempDir::new("bob-cli-capture-flag-guard-templates");
+    let shelf = temp.path().join("templates.json");
+    let original = "{\"schema_version\":1,\"templates\":[]}\n";
+    fs::write(&shelf, original).expect("write shelf");
+
+    let output = bob_command()
+        .arg("capture-templates")
+        .arg("save")
+        .arg("-f")
+        .arg("json")
+        .arg("--bogus")
+        .arg("--")
+        .arg("@@template:\nApply to {0}\n\n")
+        .env("BOB_CAPTURE_TEMPLATES_FILE", &shelf)
+        .output()
+        .expect("run capture-templates save with unknown flag");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("guard rejection should be JSON");
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["error"], "unexpected argument '--bogus' found");
+    assert_eq!(
+        fs::read_to_string(&shelf).expect("read shelf"),
+        original,
+        "rejected save must not rewrite the shelf"
+    );
+}
