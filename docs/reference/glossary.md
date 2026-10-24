@@ -114,8 +114,11 @@ current Pomodoro at a glance. It is a read-only consumer of
 polls every 60 seconds (15 seconds without the file watcher), on wake and unlock, from
 its Refresh menu item, and once when the countdown crosses zero; it ticks the countdown
 locally in between and never writes the vault. A running session reads
-`NAME (50m) · 🍅 12:34`, where NAME is the Pomodoro's ` — NAME`. An unnamed
-session with linked tasks shows its derived home label (`sase (50m) · 🍅 12:34`);
+`NAME (50m) · 🍅 12:34`, where NAME is the Pomodoro's ` — NAME`. Each known,
+non-exempt theme component prefixes NAME with a colored `■` using the hue
+reported by `bob themes list -a -f json`; unknown or exempt themes and a failed
+catalog call have no swatch. An unnamed session with linked tasks shows its
+derived home label (`sase (50m) · 🍅 12:34`);
 `UNTITLED` only appears when there is nothing to derive. Once overdue, a `→ HH:MM` stop time joins the title and the `+MM:SS` count
 turns red; from ten minutes overdue the count becomes an `OVERDUE` badge flashing red
 at 1 Hz, and `--show-stale` holds it there rather than letting it read as idle. Without
@@ -161,13 +164,19 @@ A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily
 
 *Aliases: theme.*
 
-One `+`-separated component of a [Pomodoro](#pomodoro)'s ` — NAME` suffix, keyed by collapsed
-lowercase spelling and displayed in the most recent authored form. `— BOB + DECKS` is
-one name with two themes. The catalog is derived from canonical daily notes plus
-`.bob/themes/<host>.jsonl`; `bob themes` lists it. Hiding removes a theme from history
-suggestions only. Each theme wears a stable hashed or area hue, drawn as a tint or
-rounded swatch, never an area's ● dot. Not a Pomodoro home, an Obsidian appearance
-theme, or `(unnamed)`. See `docs/pomodoro-themes.md`.
+One `+`-separated component of a [Pomodoro](#pomodoro)'s ` — NAME` suffix, keyed by the plan
+budget's component normalization and displayed in the most recently authored spelling.
+Pomodoro names are written in ALL CAPS: `— BOB + DECKS` is one name with two themes.
+`plan.max_themes` counts distinct non-exempt components across today's open entries;
+components in `plan.exempt` (default `[GTD]`) do not count. The Stats `theme`
+dimension splits a named session into the same components. The catalog is derived
+from canonical daily notes plus `.bob/themes/<host>.jsonl`; `bob themes` lists,
+hides/unhides from Recent suggestions, pins/unpins colors, and renames components
+through one previewed Bob transaction. Hiding removes a theme from history
+suggestions only. Hue priority is pin, exempt mute, matching top-level area, then
+stable hash. Each theme wears a tint or rounded swatch, never an area's ● dot. Not a
+Pomodoro home, an Obsidian appearance theme, or `(unnamed)`. See
+`docs/pomodoro-themes.md`.
 
 ### Project Note {#project-note}
 

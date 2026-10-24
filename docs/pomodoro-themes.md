@@ -8,14 +8,8 @@ compute a hue of their own.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, Bob Mac
 Capture, and the CLI. Rust owns the meaning. JSON grows additively at
-`schema_version` 1.
-
-Rules marked **planned (phase …)** are part of this contract and are not
-built yet. The `catalog` phase ships PT1–PT5, the journal *reader*, ranking
-for `bob themes list -q`, and the read-only list command. The `prefs` phase
-ships the hide, unhide, and color writers, collision hints, and the vault
-journal allowlist. The `rename` phase ships PT10, the `theme.rename` writer,
-and `renamed_reappeared` detection.
+`schema_version` 1. PT1–PT10 describe shipped behavior across the catalog,
+capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 ## PT1 — Vocabulary and identity
 
@@ -112,8 +106,6 @@ Bob reports.
 
 ## PT6 — Visual language
 
-**planned (phase theme-json / mac-colors / obsidian-colors)**
-
 Names wear a tint; places wear a dot.
 
 - **Pill** (Obsidian, Mac): a soft tint of the hue behind normal-colored
@@ -130,14 +122,14 @@ Names wear a tint; places wear a dot.
   the Stats theme dimension use the same squares, and tmux uses its native
   format color before each named component.
 - **Typing:** a name the catalog does not know stays neutral while you type
-  it. **planned (phase theme-json / mac-colors)**
+  it; it takes its hue once it is committed or the cursor leaves the line.
 - Color is never the only signal. The name text, Today/Recent labels, and
   `hidden`, `pinned`, and `exempt` badges carry the meaning under `NO_COLOR`.
 
 ## PT7 — Menu composition
 
-Implemented in both capture-complete Pomodoro-name contexts. Obsidian
-pickers follow the same contract (**planned (phase obsidian-pickers)**).
+Implemented in both capture-complete Pomodoro-name contexts and the Obsidian
+Pomodoro-name pickers through `api.themes`.
 
 Filter first, then group:
 
@@ -188,8 +180,9 @@ Hiding removes a theme from **Recent** rows only. Today's rows, typing the
 name, history, Stats, and colors are unaffected. Using a hidden name never
 unhides it. `bob themes hide NAME…` and `bob themes unhide NAME…` append
 journal events; `bob themes list -H` lists hidden themes. Ctrl+D in a
-Pomodoro-name menu (ghost row, undo) is **planned (phase mac-menus /
-obsidian-pickers)**.
+Pomodoro-name menu hides a Recent row in place; the ghost remains selectable
+and Ctrl+D again restores it. Exact hidden create rows can be unhidden, while
+Today and ordinary create rows consume Ctrl+D without writing.
 
 ## PT10 — Global rename
 
@@ -333,8 +326,8 @@ THEMES  81 known · 4 today · 2 hidden · last 90 days
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` input), `fold`, `rank`, and
 `similar`, `menu`, and `literal`. CLI tests consume the menu and literal
-sections, including capture dry-run round trips. bob-plugins
-copies the file byte-for-byte **planned (phase obsidian-colors)**.
+sections, including capture dry-run round trips. bob-plugins copies the file
+byte-for-byte and runs the same hue, fold, and ranking vectors in JavaScript.
 
 ## Related
 
