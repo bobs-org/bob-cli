@@ -1,0 +1,342 @@
+//! `bob themes rename`: previewed, verified, single-commit global rename.
+
+use crate::support::*;
+use serde_json::Value;
+use std::fs;
+
+const NOW: &str = "2026-10-24 12:00:00";
+
+fn rename_vault(
+    root: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let vault = root.join("vault");
+    let cache = root.join("cache");
+    fs::create_dir_all(cache.clone()).unwrap();
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n",
+    );
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n\
+- [x] (0800-0830 30m) — BOB\n\
+- [x] (0900-0930 30m) — FIXES\n\
+- [x] (1000-1030 30m) — FIX + FIXES\n\
+- [ ] () — GTD\n",
+    );
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — FIXES\n- [x] (0800-0830 30m) — GTD\n",
+    );
+    write_file(
+        &vault.join("2026/20261101.md"),
+        "## Pomodoros\n- [ ] () — FIXES\n",
+    );
+    write_file(
+        &vault.join("_templates/daily.md"),
+        "## Pomodoros\n- [ ] () — FIXES\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+    (vault, cache)
+}
+
+fn rename_command(
+    vault: &std::path::Path,
+    cache: &std::path::Path,
+) -> std::process::Command {
+    let mut command = bob_command();
+    command
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", NOW)
+        .env("NO_COLOR", "1")
+        .env("XDG_CACHE_HOME", cache)
+        .env("HOSTNAME", "apollo")
+        .env("BOB_CONFIG_FILE", cache.join("missing-bob-config.yml"));
+    command
+}
+
+fn rename_json(
+    vault: &std::path::Path,
+    cache: &std::path::Path,
+    args: &[&str],
+) -> (std::process::Output, Value) {
+    let mut command = rename_command(vault, cache);
+    command
+        .args(["themes", "rename"])
+        .args(args)
+        .arg("-f")
+        .arg("json");
+    let output = command.output().expect("bob themes rename");
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("rename JSON");
+    (output, value)
+}
+
+#[test]
+fn themes_rename_dry_run_previews_collapse_and_leaves_vault_untouched() {
+    let temp = TempDir::new("bob-cli-themes-rename-dry");
+    let (vault, cache) = rename_vault(temp.path());
+
+    let output = rename_command(&vault, &cache)
+        .args(["themes", "rename", "FIXES", "FIX", "-d", "--merge"])
+        .output()
+        .expect("dry run");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("FIXES → FIX"), "preview:\n{text}");
+    assert!(text.contains("2026/20261020.md"), "file:\n{text}");
+    assert!(text.contains("_templates/daily.md"), "template:\n{text}");
+
+    // Dry run writes nothing: no journal, no git commit.
+    assert!(!vault.join(".bob/themes/apollo.jsonl").exists());
+    let log = git_in(&vault, ["log", "--oneline"]);
+    assert_eq!(stdout(&log).lines().count(), 1);
+
+    // JSON preview carries files, tails, state, and color.
+    let (_, value) =
+        rename_json(&vault, &cache, &["FIXES", "FIX", "-d", "--merge"]);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["mode"], "dry_run");
+    assert_eq!(value["from"]["key"], "fixes");
+    assert_eq!(value["to"]["key"], "fix");
+    let files = value["files"].as_array().expect("files");
+    assert_eq!(files.len(), 4);
+    let collapsed = files
+        .iter()
+        .find(|file| file["path"] == "2026/20261020.md")
+        .expect("20261020");
+    let tails = collapsed["tails"].as_array().expect("tails");
+    assert!(tails.iter().any(|tail| {
+        tail["before"] == "FIX + FIXES" && tail["after"] == "FIX"
+    }));
+}
+
+#[test]
+fn themes_rename_apply_verifies_commits_and_reappears() {
+    let temp = TempDir::new("bob-cli-themes-rename-apply");
+    let (vault, cache) = rename_vault(temp.path());
+
+    let output = rename_command(&vault, &cache)
+        .args(["themes", "rename", "FIXES", "FIX", "--merge", "-o"])
+        .output()
+        .expect("apply");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("committed"), "commit:\n{text}");
+    assert!(text.contains("sync: pre skipped, post skipped"), "{text}");
+
+    // Files rewritten, template included.
+    let day20 = fs::read_to_string(vault.join("2026/20261020.md")).unwrap();
+    assert!(day20.contains("— FIX\n"), "{day20}");
+    assert!(!day20.contains("FIXES"), "{day20}");
+    let template =
+        fs::read_to_string(vault.join("_templates/daily.md")).unwrap();
+    assert!(template.contains("— FIX"), "{template}");
+
+    // Future note rewritten.
+    let future = fs::read_to_string(vault.join("2026/20261101.md")).unwrap();
+    assert!(future.contains("— FIX"), "{future}");
+
+    // Journal appended.
+    let journal =
+        fs::read_to_string(vault.join(".bob/themes/apollo.jsonl")).unwrap();
+    assert!(journal.contains("\"kind\":\"theme.rename\""), "{journal}");
+    assert!(journal.contains("\"from\":\"fixes\""), "{journal}");
+    assert!(journal.contains("\"to\":\"fix\""), "{journal}");
+
+    // One commit for files plus journal.
+    let log = git_in(&vault, ["log", "--oneline"]);
+    assert_eq!(stdout(&log).lines().count(), 2);
+    let show = git_in(&vault, ["show", "--stat", "--oneline", "HEAD"]);
+    let stat = stdout(&show);
+    assert!(stat.contains("2026/20261020.md"), "{stat}");
+    assert!(stat.contains("_templates/daily.md"), "{stat}");
+    assert!(stat.contains(".bob/themes/apollo.jsonl"), "{stat}");
+
+    // Verify: OLD absent from a rescan, entry counts unchanged.
+    let listed = rename_command(&vault, &cache)
+        .args(["themes", "-a", "-f", "json"])
+        .output()
+        .expect("list");
+    assert_success(&listed);
+    let value: Value = serde_json::from_str(stdout(&listed).trim()).unwrap();
+    let keys: Vec<&str> = value["themes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|theme| theme["key"].as_str().unwrap())
+        .collect();
+    assert!(keys.contains(&"fix"), "{keys:?}");
+    assert!(!keys.contains(&"fixes"), "{keys:?}");
+
+    // Reappearance: FIXES returns, list flags it without rewriting.
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — FIX\n- [x] (0800-0830 30m) — GTD\n- [ ] () — FIXES\n",
+    );
+    let reappeared = rename_command(&vault, &cache)
+        .args(["themes", "-a", "-f", "json"])
+        .output()
+        .expect("reappeared");
+    assert_success(&reappeared);
+    let value: Value =
+        serde_json::from_str(stdout(&reappeared).trim()).unwrap();
+    let flagged = value["renamed_reappeared"].as_array().unwrap();
+    assert_eq!(flagged.len(), 1, "{flagged:?}");
+    assert_eq!(flagged[0]["key"], "fixes");
+    assert_eq!(flagged[0]["renamed_to"], "fix");
+
+    // git revert restores every byte (discard the reappearance probe first).
+    git_in(&vault, ["checkout", "--", "2026/20261024.md"]);
+    let before = git_in(&vault, ["rev-parse", "HEAD"]);
+    let sha = stdout(&before).trim().to_string();
+    git_in(&vault, ["revert", "--no-edit", &sha]);
+    let restored = fs::read_to_string(vault.join("2026/20261020.md")).unwrap();
+    assert!(restored.contains("FIXES"), "{restored}");
+    assert!(restored.contains("FIX + FIXES"), "{restored}");
+}
+
+#[test]
+fn themes_rename_leaves_fenced_prose_and_tasks_untouched() {
+    let temp = TempDir::new("bob-cli-themes-rename-fenced");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(cache.clone()).unwrap();
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n\
+- [x] (0800-0830 30m) — FOO\n\
+```md\n\
+- [ ] () — FOO\n\
+```\n\
+Prose FOO should stay.\n\
+- [ ] plain checklist — FOO stays\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let output = rename_command(&vault, &cache)
+        .args(["themes", "rename", "FOO", "BAR", "-o"])
+        .output()
+        .expect("rename");
+    assert_success(&output);
+    let contents = fs::read_to_string(vault.join("2026/20261020.md")).unwrap();
+    assert!(
+        contents.contains("- [x] (0800-0830 30m) — BAR"),
+        "{contents}"
+    );
+    assert!(contents.contains("- [ ] () — FOO\n```"), "{contents}");
+    assert!(contents.contains("Prose FOO should stay."), "{contents}");
+    assert!(
+        contents.contains("- [ ] plain checklist — FOO stays"),
+        "{contents}"
+    );
+}
+
+#[test]
+fn themes_rename_refusals_are_json_on_nonzero_exit() {
+    let temp = TempDir::new("bob-cli-themes-rename-refusals");
+    let (vault, cache) = rename_vault(temp.path());
+
+    // unknown_theme
+    let (output, value) = rename_json(&vault, &cache, &["NOPE", "NEW", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "unknown_theme");
+
+    // invalid_name: NEW contains +
+    let (output, value) = rename_json(&vault, &cache, &["FIXES", "A+B", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "invalid_name");
+
+    // unchanged
+    let (output, value) =
+        rename_json(&vault, &cache, &["FIXES", "fixes", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "unchanged");
+
+    // theme_exists without --merge (FIX already used in FIX + FIXES)
+    let (output, value) = rename_json(&vault, &cache, &["FIXES", "FIX", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "theme_exists");
+
+    // config_reference: GTD is exempt by default
+    let (output, value) = rename_json(&vault, &cache, &["GTD", "NEWGTD", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "config_reference");
+
+    // dirty_paths offline
+    let dirty_path = vault.join("2026/20261020.md");
+    let dirty = fs::read_to_string(&dirty_path).unwrap() + "\ndirty\n";
+    write_file(&dirty_path, &dirty);
+    let (output, value) =
+        rename_json(&vault, &cache, &["FIXES", "FIX", "--merge", "-o"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "dirty_paths");
+    git_in(&vault, ["checkout", "--", "2026/20261020.md"]);
+
+    // not_a_worktree
+    let plain = temp.path().join("plain");
+    let plain_vault = plain.join("vault");
+    let plain_cache = plain.join("cache");
+    fs::create_dir_all(plain_vault.join("2026")).unwrap();
+    fs::create_dir_all(&plain_cache).unwrap();
+    write_file(
+        &plain_vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [ ] () — FOO\n",
+    );
+    let (output, value) =
+        rename_json(&plain_vault, &plain_cache, &["FOO", "BAR", "-o"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "not_a_worktree");
+}
+
+#[test]
+fn themes_rename_lock_busy_when_maintenance_lock_held() {
+    let temp = TempDir::new("bob-cli-themes-rename-lock");
+    let (vault, cache) = rename_vault(temp.path());
+    let lock = temp.path().join("bob_sync.lock");
+    let held = hold_vault_lock(&lock);
+
+    let output = rename_command(&vault, &cache)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .args([
+            "themes", "rename", "FIXES", "FIX", "--merge", "-o", "-f", "json",
+        ])
+        .output()
+        .expect("lock busy");
+    assert_eq!(output.status.code(), Some(1));
+    let value: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "lock_busy");
+    assert!(!vault.join(".bob/themes/apollo.jsonl").exists());
+    drop(held);
+}
+
+fn hold_vault_lock(path: &std::path::Path) -> fs::File {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("lock dir");
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open lock");
+    fs2::FileExt::try_lock_exclusive(&file).expect("take lock");
+    file
+}

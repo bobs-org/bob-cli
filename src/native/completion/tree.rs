@@ -120,6 +120,9 @@ impl NativeCommand {
             NativeCommand::ThemesList => {
                 crate::native::pomodoro_themes::cli::build_cli()
             }
+            NativeCommand::ThemesRename => {
+                crate::native::pomodoro_themes::build_cli_rename()
+            }
             NativeCommand::ThemesUnhide => {
                 crate::native::pomodoro_themes::write::build_cli_unhide()
             }

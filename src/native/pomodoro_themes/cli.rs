@@ -321,7 +321,10 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
         },
         themes,
         hints: catalog.collision_hints(),
-        renamed_reappeared: Vec::new(),
+        renamed_reappeared: super::renamed_reappeared(
+            &request.bob_dir,
+            catalog,
+        ),
         warnings: catalog.warnings().to_vec(),
     }
 }

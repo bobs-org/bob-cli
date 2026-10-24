@@ -277,7 +277,7 @@ make a metric look complete. The journal contract lives in
 ## Pomodoro theme journal
 
 `.bob/themes/<host>.jsonl` is the per-host Pomodoro theme preference
-journal (hide, unhide, color pin, and later rename). Each host appends
+journal (hide, unhide, color pin, and rename). Each host appends
 to its own file; readers union every `*.jsonl` in the directory and
 never rewrite them. Bob is the only writer. JSON is otherwise allowed
 only under `.obsidian`, so the vault root `.gitignore` also carries:
@@ -293,10 +293,14 @@ git -C ~/bob check-ignore -v .bob/themes/apollo.jsonl
 ```
 
 A negated last match (`!/.bob/themes/*.jsonl`) means the file is
-trackable. The directory is created on the first hide, unhide, or color
-write; its absence is expected until then. A host that has not synced
+trackable. The directory is created on the first hide, unhide, color, or
+rename write; its absence is expected until then. A host that has not synced
 this allowlist keeps its hides local until it does. The journal contract
 lives in [pomodoro-themes.md](pomodoro-themes.md#pt4-preferences-journal).
+
+`bob themes rename` commits once (`bob themes rename: OLD → NEW`) and
+post-syncs; undo is `git revert` per the
+[pomodoro-themes rename runbook](pomodoro-themes.md#pt10-global-rename).
 
 The vault root `.gitattributes` unions concurrent theme-journal appends:
 

@@ -20,6 +20,7 @@ mod hints;
 mod hue;
 mod journal;
 mod rank;
+pub(crate) mod rename;
 mod scan;
 #[allow(dead_code)]
 mod similar;
@@ -32,6 +33,7 @@ pub(crate) use hints::CollisionHint;
 pub(crate) use hue::resolve_hue;
 pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
+pub(crate) use rename::{build_cli_rename, renamed_reappeared, run_rename};
 pub(crate) use write::{run_color, run_hide, run_unhide};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

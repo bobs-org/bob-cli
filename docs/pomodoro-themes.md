@@ -14,7 +14,8 @@ Rules marked **planned (phase …)** are part of this contract and are not
 built yet. The `catalog` phase ships PT1–PT5, the journal *reader*, ranking
 for `bob themes list -q`, and the read-only list command. The `prefs` phase
 ships the hide, unhide, and color writers, collision hints, and the vault
-journal allowlist.
+journal allowlist. The `rename` phase ships PT10, the `theme.rename` writer,
+and `renamed_reappeared` detection.
 
 ## PT1 — Vocabulary and identity
 
@@ -55,7 +56,7 @@ journal allowlist.
 - A full sweep of past days runs at most once per 60 s, or when a year
   directory's mtime changes.
 - Rebuild on a corrupt or missing cache, after a rename, and with `--fresh`.
-  The rename preview always rescans from source. **planned (phase rename)**
+  The rename preview always rescans from source.
 - Writes are atomic (temp file + rename).
 - **Budget:** warm `capture-complete` and `capture-parse` stay within +5 ms
   p95 of today's baseline on apollo against the live vault. **planned
@@ -75,10 +76,10 @@ journal allowlist.
   for the hidden state and for the pin. A rename moves the source key's
   explicit state to the target unless the target already has explicit state.
   Events after the rename on the old key apply to the old key.
-- **Writers:** bob is the only writer. `bob themes hide`, `unhide`, and
-  `color` append under `bob_sync.lock` (wait at most 3 s; a busy lock is
-  `lock_busy`). Each event is one `O_APPEND` write. The directory is created
-  on first use. Rename remains **planned (phase rename)**.
+- **Writers:** bob is the only writer. `bob themes hide`, `unhide`,
+  `color`, and `rename` append under `bob_sync.lock` (wait at most 3 s; a busy
+  lock is `lock_busy`). Each event is one `O_APPEND` write. The directory is
+  created on first use.
 - **Allowlist:** the vault tracks `.bob/themes/*.jsonl` (`!/.bob/themes/*.jsonl`
   in `.gitignore`) and unions concurrent appends
   (`.bob/themes/*.jsonl merge=union`). A host that has not synced the
@@ -173,15 +174,41 @@ obsidian-pickers)**.
 
 ## PT10 — Global rename
 
-**planned (phase rename)**
-
 ```text
 bob themes rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]
 ```
 
 One previewed, verified, single-commit rewrite of the theme component in
-` — NAME` tails of canonical daily notes plus `_templates/daily.md`, modeled
-on `bob ref rename`. Undo is `git revert`.
+` — NAME` tails of canonical daily notes (past, today, and future, open and
+closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
+
+- **Scope:** only the theme component in Pomodoro tails. Prose, task text,
+  and fenced examples are never touched.
+- **Byte preservation:** separators keep their `+` spelling. A resulting
+  duplicate collapses (`FIX + FIXES` → `FIX`). Every other byte is preserved.
+- **NEW** must be a valid single theme. A NEW containing `+` is `invalid_name`.
+- **Flow:** take `bob_sync.lock`, then pre-sync unless `--offline`, then
+  replan from the synced files. Snapshot each target and compare again right
+  before writing (a change aborts with `stale_note`). Write each file
+  atomically, then append `theme.rename`. Verify by rescanning: OLD is absent,
+  entry counts are unchanged, and only name tails differ. On failure, restore
+  the before-images. Make one commit, `bob themes rename: FIXES → FIX`, then
+  post-sync. Undo is `git revert`.
+- **Refusals:** `unknown_theme` (OLD never used), `invalid_name` (NEW
+  contains `+` or is blank), `unchanged` (OLD and NEW share a key),
+  `theme_exists` (NEW already used without `--merge`), `config_reference`
+  (OLD is in `plan.exempt`, `plan.inventory_labels`, or a Stats metric filter
+  and NEW is not — edit the chezmoi config to add NEW first), plus
+  `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
+  `sync_failed`, `verify_failed`, and `stale_note`.
+- **Color and state:** the color follows the new name, and the preview says
+  so. Hidden state and pins move with the rename per PT4.
+- **Reappearance:** if OLD's spelling reappears after a rename event (an
+  offline host, muscle memory), `bob themes list` reports it in
+  `renamed_reappeared`. It only reports; it never rewrites on its own.
+
+Runbook: `git log --oneline -3`, confirm the `bob themes rename: OLD → NEW`
+commit, then `git revert <sha>` and `bob vault-sync` to restore every byte.
 
 ## JSON contract
 
@@ -235,13 +262,18 @@ builds this shape.
 and met on at least 2 of the last 30 days. The theme with fewer `days_used`
 is the one to move. The suggested slot is the least used by the last 30
 days' themes, excluding hues of themes that met the moved theme in that
-window; ties follow palette order. `renamed_reappeared` is empty until
-**planned (phase rename)**.
+window; ties follow palette order. `renamed_reappeared` lists every rename
+source key that still has occurrences after its rename event, as
+`{key, name, renamed_to, renamed_to_name}`.
 
-**Writers** (`hide`, `unhide`, `color`) emit `{schema_version, ok, ...}` on
-success and `{ok:false, code, message}` on refusal, even on a nonzero exit.
-Refusal codes: `unknown_theme`, `invalid_hue`, `unchanged` (no journal
-write), `lock_busy`. Rename is **planned (phase rename)**.
+**Writers** (`hide`, `unhide`, `color`, `rename`) emit
+`{schema_version, ok, ...}` on success and `{ok:false, code, message}` on
+refusal, even on a nonzero exit. Refusal codes: `unknown_theme`,
+`invalid_hue`, `invalid_name`, `unchanged` (no journal write), `theme_exists`,
+`config_reference`, `lock_busy`, `dirty_paths`, `not_a_worktree`,
+`sync_failed`, `verify_failed`, `stale_note`. The Obsidian manager previews
+with `rename -d -f json` (files, entries, before/after tails, state and color
+change) and confirms with `--merge` when needed.
 
 ## `bob themes` CLI
 
@@ -251,7 +283,7 @@ The group is `bob themes`, a top-level catalog noun in Daily workflow after
 - `color NAME HUE|auto`
 - `hide NAME…`
 - `list [-a/--all] [-F/--fresh] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]`
-- `rename OLD NEW …` **planned (phase rename)**
+- `rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]`
 - `unhide NAME…`
 
 List defaults: visible themes used in the last 90 days or today, newest

@@ -297,6 +297,14 @@ const THEMES_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "rename",
+        about: "Rename a Pomodoro theme everywhere in one commit",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesRename,
+            script_command: None,
+        },
+    },
+    Member {
         name: "unhide",
         about: "Show hidden themes in Recent suggestion rows again",
         leaf: Leaf {
@@ -316,6 +324,7 @@ Examples:
   bob themes unhide BOOKS      Put BOOKS back in Recent rows
   bob themes color BLOG red    Pin BLOG to red
   bob themes color BLOG auto   Drop the BLOG pin
+  bob themes rename FIXES FIX -d   Preview a global rename
 
 See docs/pomodoro-themes.md for identity, cache, hue, journal, and JSON.
 Run 'bob themes <command> --help' for more information on a command.";
@@ -481,13 +490,13 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "themes",
-        about: "List, hide, unhide, and color Pomodoro themes",
+        about: "List, hide, unhide, color, and rename Pomodoro themes",
         section: Section::DailyWorkflow,
         target: Target::Group(Group {
             members: THEMES_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob themes` runs the read-only list. hide, unhide, and color append to the vault journal.",
+                "Bare `bob themes` runs the read-only list. hide, unhide, color, and rename append to the vault journal.",
             ),
             after_help: THEMES_AFTER_HELP,
             usage: "bob themes [COMMAND]",
@@ -1673,6 +1682,7 @@ mod tests {
             NativeCommand::ThemesColor,
             NativeCommand::ThemesHide,
             NativeCommand::ThemesList,
+            NativeCommand::ThemesRename,
             NativeCommand::ThemesUnhide,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,

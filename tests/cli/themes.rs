@@ -84,6 +84,7 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
     assert!(help.contains("list"), "member list:\n{help}");
     assert!(help.contains("color"), "member color:\n{help}");
     assert!(help.contains("hide"), "member hide:\n{help}");
+    assert!(help.contains("rename"), "member rename:\n{help}");
     assert!(help.contains("unhide"), "member unhide:\n{help}");
     assert!(
         help.contains("docs/pomodoro-themes.md"),
@@ -119,6 +120,17 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
         (
             "color",
             &["-b, --bob-dir", "-f, --format", "-h, --help"][..],
+        ),
+        (
+            "rename",
+            &[
+                "-b, --bob-dir",
+                "-d, --dry-run",
+                "-f, --format",
+                "-h, --help",
+                "-m, --merge",
+                "-o, --offline",
+            ][..],
         ),
     ] {
         let output = bob_command()
