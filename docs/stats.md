@@ -248,11 +248,11 @@ stats:
 ```
 
 **Defaults.** Missing config file, absent `stats:` block, and unknown keys
-(including plugin-only `bob_path`) all fall back to defaults: range `4w`,
-the six-metric overview, no hides, no global since. A custom entry whose ID
-matches a built-in replaces the whole definition and is marked `redefined`;
-an invalid replacement removes that metric with a warning instead of
-silently falling back.
+(including plugin-only `bob_path` and `day_strip`) all fall back to
+defaults: range `4w`, the six-metric overview, no hides, no global since.
+A custom entry whose ID matches a built-in replaces the whole definition
+and is marked `redefined`; an invalid replacement removes that metric with
+a warning instead of silently falling back.
 
 **Validation.** A malformed/non-mapping `stats` block or an invalid
 top-level `range`, `overview`, `hide`, `since`, or `metrics` container is a

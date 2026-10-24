@@ -1668,6 +1668,22 @@ mod tests {
     }
 
     #[test]
+    fn unmet_provisional_bool_point_displays_not_yet() {
+        let mut today = daily(date(2026, 10, 24), Some(0));
+        today.provisional = true;
+        assert_eq!(daily_point(&today, MetricUnit::Bool).display, "not yet");
+        let complete = daily(date(2026, 10, 23), Some(0));
+        assert_eq!(daily_point(&complete, MetricUnit::Bool).display, "missed");
+        let mut met = daily(date(2026, 10, 24), Some(1));
+        met.provisional = true;
+        assert_eq!(daily_point(&met, MetricUnit::Bool).display, "met");
+        let mut null = daily(date(2026, 10, 24), None);
+        null.provisional = true;
+        assert_eq!(daily_point(&null, MetricUnit::Bool).display, "–");
+        assert_eq!(daily_point(&today, MetricUnit::Count).display, "0");
+    }
+
+    #[test]
     fn boolean_and_ratio_summaries_use_days_and_pooled_parts() {
         let values = vec![
             DailyValue {
