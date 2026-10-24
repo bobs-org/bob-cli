@@ -417,14 +417,27 @@ local function convert_task_list(items)
   out[#out + 1] = raw_block("\\end{BobTasks}")
   return out
 end
+-- A fitted Mermaid diagram: Para with exactly \BobFitBegin{}, Image,
+-- \BobFitEnd{} (see diagrams.tex). Match these exact strings only.
+local function is_fit_wrapped_image(content)
+  if #content ~= 3 then return false end
+  local first = content[1]
+  local middle = content[2]
+  local last = content[3]
+  return first.t == "RawInline" and first.format == "latex"
+    and first.text == "\\BobFitBegin{}"
+    and middle.t == "Image"
+    and last.t == "RawInline" and last.format == "latex"
+    and last.text == "\\BobFitEnd{}"
+end
 -- Recursively process blocks bottom-up (children before parents).
 function process_blocks(blocks)
   local out = {}
   for _, blk in ipairs(blocks) do
     if blk.t == "Para" or blk.t == "Plain" then
       local standalone_image = blk.t == "Para"
-        and #blk.content == 1
-        and blk.content[1].t == "Image"
+        and (#blk.content == 1 and blk.content[1].t == "Image"
+          or is_fit_wrapped_image(blk.content))
       blk.content = process_inlines(blk.content)
       -- Center standalone images (a Para with a single Image) with
       -- environment delimiters; the Image itself stays AST.

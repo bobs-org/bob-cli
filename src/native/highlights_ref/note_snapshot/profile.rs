@@ -30,7 +30,7 @@ pub(crate) const NOTE_FILTER: &str = include_str!("note.lua");
 /// so those two invocations cannot drift.
 pub(crate) const SNAPSHOT_PANDOC_READER: &str =
     "commonmark_x-tex_math_dollars-emoji";
-/// Text box for A8 scale warnings. Matches
+/// Text box for budgeted scale warnings. Matches
 /// `-V geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper`
 /// in [`render_note_pdf`]: `612 - 2×1.1×72` by `792 - (0.9+1)×72`.
 const SNAPSHOT_LETTER_WIDTH_PT: f64 = 612.0;
@@ -205,9 +205,10 @@ pub(crate) fn render_note_pdf(
         .arg("geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper")
         .arg("-V")
         .arg(format!(
-            "header-includes={}\n{}",
+            "header-includes={}\n{}\n{}",
             super::super::create::PANDOC_HEADER_INCLUDES,
-            super::super::return_links::HEADER_INCLUDES
+            super::super::return_links::HEADER_INCLUDES,
+            super::super::diagrams::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", meta.identity_title))
@@ -1709,5 +1710,146 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
     fn snapshot_diagram_text_box_matches_note_geometry() {
         assert!((SNAPSHOT_DIAGRAM_TEXT_WIDTH_PT - 453.6).abs() < 1e-9);
         assert!((SNAPSHOT_DIAGRAM_TEXT_HEIGHT_PT - 655.2).abs() < 1e-9);
+    }
+
+    const TALL_SNAPSHOT_FLOW: &str = "flowchart TB\n  A --> B\n  B --> C\n";
+
+    fn tall_snapshot_projected() -> String {
+        format!(
+            "---\n\
+             bob-snapshot: true\n\
+             bob-kicker: NOTE\n\
+             bob-display-title: Tall diagram\n\
+             bob-snapshot-line: Snapshot\n\
+             bob-footer: Tall diagram\n\
+             bob-glyph-table: glyphs.lua\n\
+             ---\n\n\
+             # Tall exercise\n\n\
+             A [model](#data-model-and-ownership) opens the exercise.\n\n\
+             ### Data model and ownership\n\n\
+             ``` {{#fig-tall .mermaid}}\n{TALL_SNAPSHOT_FLOW}```\n\n\
+             Caption paragraph that follows the diagram.\n"
+        )
+    }
+
+    fn snapshot_page_text(pdf: &Path, page: u32) -> String {
+        let output = std::process::Command::new("pdftotext")
+            .arg("-layout")
+            .arg("-f")
+            .arg(page.to_string())
+            .arg("-l")
+            .arg(page.to_string())
+            .arg(pdf)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn snapshot_body_empty(text: &str) -> bool {
+        let footer_words = ["Tall", "diagram"];
+        let kept: Vec<&str> = text
+            .split_whitespace()
+            .filter(|token| {
+                if token.chars().all(|c| c.is_ascii_digit()) {
+                    return false;
+                }
+                if *token == "/" || *token == "·" {
+                    return false;
+                }
+                if footer_words.contains(token) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+        kept.join(" ").trim().is_empty()
+    }
+
+    #[test]
+    fn tall_snapshot_diagram_shares_page_with_heading_without_vbox_overflow() {
+        if skip_real_diagram_render("tall snapshot fit") {
+            return;
+        }
+        if std::process::Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping tall snapshot fit: pdftotext is required");
+            return;
+        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let projected = tall_snapshot_projected();
+        let source = temp.path().join("doc.md");
+        fs::write(&source, &projected).expect("write source");
+        let id = collected_snapshot_id(&source, &temp.path().join("collect"));
+        let pdf = scratch.join("fig.pdf");
+        super::super::super::diagrams::write_sized_pdf(&pdf, 514.5, 714.75);
+        let results_path = scratch.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::super::diagrams::write_results(
+            &results_path,
+            &super::super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let filters = filters_with_diagrams(&scratch, &results_path);
+        let outcome =
+            render_note_pdf(&projected, &scratch, &filters, &test_meta())
+                .expect("tall snapshot render");
+        let tex = fs::read_to_string(scratch.join("note.tex"))
+            .expect("read note.tex");
+        assert!(tex.contains("\\BobFitBegin{}"), "fit wrapper: {tex}");
+        assert!(tex.contains("\\BobImageBegin{}"), "frame wrapper: {tex}");
+        assert!(tex.contains("\\begin{center}"), "centered: {tex}");
+        let log = fs::read_to_string(scratch.join("note.log"))
+            .expect("read note.log");
+        assert!(
+            !log.contains("Overfull \\vbox"),
+            "no vertical overflow: {}",
+            log.lines()
+                .filter(|l| l.contains("Overfull"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let document =
+            lopdf::Document::load(&outcome.pdf).expect("load snapshot PDF");
+        let pages = document.get_pages().len() as u32;
+        for page in 1..=pages {
+            let text = snapshot_page_text(&outcome.pdf, page);
+            assert!(
+                !snapshot_body_empty(&text),
+                "page {page} must not be body-empty: {text:?}"
+            );
+        }
+        let mut heading_page = 0;
+        let mut top_page = 0;
+        for page in 1..=pages {
+            let text = snapshot_page_text(&outcome.pdf, page);
+            if text.contains("Data model") {
+                heading_page = page;
+            }
+            if text.contains("diagramtop") {
+                top_page = page;
+            }
+        }
+        assert_ne!(heading_page, 0, "heading must render");
+        assert_ne!(top_page, 0, "diagramtop must render");
+        assert_eq!(
+            heading_page, top_page,
+            "heading and diagramtop share a page"
+        );
     }
 }

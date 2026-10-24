@@ -1,0 +1,14 @@
+% bob ref create: diagram height budget (see docs/highlights-create.md).
+\makeatletter
+\newcommand{\BobFitHeightBudget}{0.8}
+\newsavebox{\BobFitBox}
+\newlength{\BobFitMaxHeight}
+\newlength{\BobFitHeight}
+\newcommand{\BobFitBegin}{\begingroup\begin{lrbox}{\BobFitBox}}
+\newcommand{\BobFitEnd}{\end{lrbox}%
+  \setlength{\BobFitMaxHeight}{\BobFitHeightBudget\textheight}%
+  \setlength{\BobFitHeight}{\dimexpr\ht\BobFitBox+\dp\BobFitBox\relax}%
+  \ifdim\BobFitHeight>\BobFitMaxHeight
+    \resizebox*{!}{\BobFitMaxHeight}{\usebox{\BobFitBox}}%
+  \else\usebox{\BobFitBox}\fi\endgroup}
+\makeatother

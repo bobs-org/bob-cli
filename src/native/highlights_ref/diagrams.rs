@@ -44,6 +44,14 @@ pub(crate) const COLLECT_FILTER: &str = include_str!("diagrams_collect.lua");
 /// First-position swap filter for both Markdown PDF routes.
 pub(crate) const SWAP_FILTER: &str = include_str!("diagrams.lua");
 
+/// TeX height-budget macros for fitted Mermaid diagrams.
+pub(crate) const HEADER_INCLUDES: &str = include_str!("diagrams.tex");
+
+/// Fraction of the text height one rendered diagram may fill.
+///
+/// Must equal `\BobFitHeightBudget` in `diagrams.tex`.
+pub(crate) const FIT_HEIGHT_BUDGET: f64 = 0.8;
+
 /// Paths the swap filter needs when [`super::create::RenderFilters::diagrams`]
 /// is `Some`. Both Markdown PDF routes pass this after [`prepare`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +117,10 @@ pub(crate) enum DiagramSource<'a> {
     Text(&'a str),
 }
 
-/// Reader flags plus the route's text box for the A8 scale check.
+/// Reader flags plus the route's text box for the budgeted scale check.
+///
+/// The height limit is `text_height_pt * FIT_HEIGHT_BUDGET`, matching the
+/// TeX `\BobFitHeightBudget` budget in `diagrams.tex`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DiagramRoute {
     pub(crate) reader: DiagramReader,
@@ -818,7 +829,7 @@ fn effective_scale(
     Some(
         1.0_f64
             .min(text_width_pt / width_pt)
-            .min(text_height_pt / height_pt),
+            .min((text_height_pt * FIT_HEIGHT_BUDGET) / height_pt),
     )
 }
 
@@ -831,6 +842,74 @@ pub(crate) fn write_one_page_pdf(path: &Path) {
     }
     fs::write(path, include_bytes!("diagrams_blank.pdf"))
         .expect("write one-page diagram PDF");
+}
+
+/// Sized one-page PDF with the same object layout as `diagrams_blank.pdf`.
+///
+/// Hand-built 7-bit ASCII with a computed `xref` table and
+/// `/MediaBox [0 0 w h]`. The content stream draws two Helvetica 10pt words:
+/// `diagramtop` near the top edge and `diagrambottom` about 6pt above the
+/// bottom edge, so `pdftotext` can locate both edges and measure the scale
+/// on the rendered page.
+#[cfg(test)]
+pub(crate) fn write_sized_pdf(path: &Path, width_pt: f64, height_pt: f64) {
+    fn fmt_pt(value: f64) -> String {
+        if value.fract() == 0.0 {
+            format!("{}", value as i64)
+        } else {
+            let mut text = format!("{value}");
+            while text.ends_with('0') {
+                text.pop();
+            }
+            if text.ends_with('.') {
+                text.pop();
+            }
+            text
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create sized diagram PDF parent");
+    }
+    let width = fmt_pt(width_pt);
+    let height = fmt_pt(height_pt);
+    let top_y = fmt_pt(height_pt - 15.0);
+    let stream = format!(
+        "BT /F1 10 Tf 10 {top_y} Td (diagramtop) Tj ET\nBT /F1 10 Tf 10 10 Td (diagrambottom) Tj ET\n"
+    );
+    let objects: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>"
+        ),
+        format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(b"%PDF-1.4\n");
+    let mut offsets: Vec<usize> = Vec::new();
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(
+            format!("{} 0 obj\n{body}\nendobj\n", index + 1).as_bytes(),
+        );
+    }
+    let xref_at = out.len();
+    out.extend_from_slice(
+        format!("xref\n0 {}\n", objects.len() + 1).as_bytes(),
+    );
+    out.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in &offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    fs::write(path, out).expect("write sized diagram PDF");
 }
 
 #[cfg(test)]
@@ -1159,12 +1238,28 @@ plain flowchart LR in a paragraph\n\
     }
 
     #[test]
+    fn header_and_rust_height_budgets_agree() {
+        assert!(
+            HEADER_INCLUDES.contains(&format!(
+                "\\newcommand{{\\BobFitHeightBudget}}{{{FIT_HEIGHT_BUDGET}}}"
+            )),
+            "diagrams.tex budget must match FIT_HEIGHT_BUDGET: {HEADER_INCLUDES}"
+        );
+    }
+
+    #[test]
     fn scale_helpers_match_the_a8_contract() {
         assert_eq!(effective_scale(200.0, 100.0, 489.6, 669.6), Some(1.0));
         let scale =
             effective_scale(1200.0, 100.0, 489.6, 669.6).expect("wide diagram");
         assert!((scale - 489.6 / 1200.0).abs() < 1e-9);
         assert!(scale < 0.5);
+        let tall =
+            effective_scale(514.5, 714.75, 489.6, 669.6).expect("tall diagram");
+        assert!(
+            (tall - FIT_HEIGHT_BUDGET * 669.6 / 714.75).abs() < 1e-9,
+            "tall diagram uses the budgeted height: {tall}"
+        );
         assert_eq!(
             scale_warning(1, 12, "flowchart LR", 0.46),
             "Mermaid diagram 1 of 12 (flowchart LR) prints at 46% scale; labels may be small"

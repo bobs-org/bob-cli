@@ -3349,8 +3349,9 @@ fn plan_audio_copy(
 }
 
 /// Letter paper in PostScript points. Generic Markdown uses
-/// `-V geometry:margin=0.85in` below; the diagram scale check uses this
-/// text box (`612 - 2×0.85×72` by `792 - 2×0.85×72`).
+/// `-V geometry:margin=0.85in` below; the budgeted diagram scale check uses
+/// this text box (`612 - 2×0.85×72` by `792 - 2×0.85×72`) times
+/// [`super::diagrams::FIT_HEIGHT_BUDGET`] for the height limit.
 const LETTER_WIDTH_PT: f64 = 612.0;
 const LETTER_HEIGHT_PT: f64 = 792.0;
 const PT_PER_IN: f64 = 72.0;
@@ -3427,8 +3428,9 @@ fn render_temp_pdf(
         .arg("monofontoptions=Ligatures=NoCommon")
         .arg("-V")
         .arg(format!(
-            "header-includes={PANDOC_HEADER_INCLUDES}\n{}",
-            super::return_links::HEADER_INCLUDES
+            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}",
+            super::return_links::HEADER_INCLUDES,
+            super::diagrams::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
@@ -4742,6 +4744,471 @@ mod tests {
         let mut perms = fs::metadata(path).expect("stat fake").permissions();
         perms.set_mode(0o755);
         fs::set_permissions(path, perms).expect("chmod fake");
+    }
+
+    const TALL_WIDTH_PT: f64 = 514.5;
+    const TALL_HEIGHT_PT: f64 = 714.75;
+    const TALL_FLOW: &str = "flowchart TB\n  A --> B\n  B --> C\n";
+
+    fn tall_heading_source() -> String {
+        format!(
+            "# Tall Diagrams\n\nA [model](#data-model-and-ownership) opens the exercise.\n\n### Data model and ownership\n\n```mermaid\n{TALL_FLOW}```\n\nCaption paragraph that follows the diagram and stays with it.\n"
+        )
+    }
+
+    fn tall_heading_opt_out_source() -> String {
+        format!(
+            "---\nbob-return-links: false\n---\n\n# Tall Diagrams\n\nA [model](#data-model-and-ownership) opens the exercise.\n\n### Data model and ownership\n\n```mermaid\n{TALL_FLOW}```\n\nCaption paragraph that follows the diagram and stays with it.\n"
+        )
+    }
+
+    fn render_tall_pdf(
+        temp: &TempDir,
+        source_text: &str,
+        name: &str,
+    ) -> (PathBuf, CreatePlan) {
+        let source = temp.path.join(format!("{name}.md"));
+        fs::write(&source, source_text).expect("write tall source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let id = collected_flow_id(
+            &pandoc,
+            &source,
+            &temp.path.join(format!("{name}-collect")),
+        );
+        let pdf = temp.path.join(format!("{name}-fig.pdf"));
+        super::super::diagrams::write_sized_pdf(
+            &pdf,
+            TALL_WIDTH_PT,
+            TALL_HEIGHT_PT,
+        );
+        let results_path = temp.path.join(format!("{name}-results.json"));
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::diagrams::write_results(
+            &results_path,
+            &super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write tall results");
+        let swap = temp.path.join(format!("{name}-diagrams.lua"));
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        let plan = mermaid_plan(temp, &source);
+        let render_path = render_temp_path(&plan.target).expect("render path");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results: results_path,
+            }),
+        );
+        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+            .expect("render tall PDF");
+        (render_path, plan)
+    }
+
+    fn page_text(pdf: &Path, page: u32) -> String {
+        let output = Command::new("pdftotext")
+            .arg("-layout")
+            .arg("-f")
+            .arg(page.to_string())
+            .arg("-l")
+            .arg(page.to_string())
+            .arg(pdf)
+            .arg("-")
+            .output()
+            .expect("run pdftotext");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn page_count(pdf: &Path) -> u32 {
+        let document = lopdf::Document::load(pdf).expect("load rendered PDF");
+        document.get_pages().len() as u32
+    }
+
+    fn is_body_empty(text: &str) -> bool {
+        let kept: String = text
+            .split_whitespace()
+            .filter(|token| !token.chars().all(|c| c.is_ascii_digit()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        kept.trim().is_empty()
+    }
+
+    #[derive(Debug, Clone)]
+    struct BboxWord {
+        text: String,
+        y_min: f64,
+        y_max: f64,
+    }
+
+    fn bbox_words(pdf: &Path, page: u32) -> Vec<BboxWord> {
+        let output = Command::new("pdftotext")
+            .arg("-bbox")
+            .arg("-f")
+            .arg(page.to_string())
+            .arg("-l")
+            .arg(page.to_string())
+            .arg(pdf)
+            .arg("-")
+            .output()
+            .expect("run pdftotext -bbox");
+        assert!(output.status.success(), "{output:?}");
+        let xml = String::from_utf8_lossy(&output.stdout).into_owned();
+        let mut out = Vec::new();
+        let mut rest = xml.as_str();
+        while let Some(start) = rest.find("<word ") {
+            rest = &rest[start + "<word ".len()..];
+            let Some(end_tag) = rest.find('>') else {
+                break;
+            };
+            let attrs = &rest[..end_tag];
+            rest = &rest[end_tag + 1..];
+            let Some(close) = rest.find("</word>") else {
+                break;
+            };
+            let word_text = rest[..close].to_string();
+            rest = &rest[close + "</word>".len()..];
+            let mut y_min = None;
+            let mut y_max = None;
+            for attr in attrs.split_whitespace() {
+                if let Some(value) = attr.strip_prefix("yMin=\"") {
+                    y_min = value
+                        .strip_suffix('"')
+                        .and_then(|v| v.parse::<f64>().ok());
+                } else if let Some(value) = attr.strip_prefix("yMax=\"") {
+                    y_max = value
+                        .strip_suffix('"')
+                        .and_then(|v| v.parse::<f64>().ok());
+                }
+            }
+            if let (Some(y_min), Some(y_max)) = (y_min, y_max) {
+                out.push(BboxWord {
+                    text: word_text,
+                    y_min,
+                    y_max,
+                });
+            }
+        }
+        out
+    }
+
+    fn find_word<'a>(words: &'a [BboxWord], needle: &str) -> &'a BboxWord {
+        words
+            .iter()
+            .find(|word| word.text == needle)
+            .unwrap_or_else(|| panic!("word {needle} missing: {words:?}"))
+    }
+
+    #[test]
+    fn tall_diagram_shares_page_with_heading_and_stays_in_margin() {
+        if skip_pandoc_xelatex("tall diagram fit") {
+            return;
+        }
+        let temp = TempDir::new("tall-fit");
+        let (render_path, _) =
+            render_tall_pdf(&temp, &tall_heading_source(), "tall");
+        let pages = page_count(&render_path);
+        assert!(pages >= 2, "fixture must span pages: {pages}");
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            assert!(
+                !is_body_empty(&text),
+                "page {page} must not be body-empty: {text:?}"
+            );
+        }
+        let mut heading_page = 0;
+        let mut pill_page = 0;
+        let mut top_page = 0;
+        let mut bottom_page = 0;
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            if text.contains("Data model") {
+                heading_page = page;
+            }
+            if text.contains('↩') {
+                if pill_page == 0 {
+                    pill_page = page;
+                }
+            }
+            if text.contains("diagramtop") {
+                top_page = page;
+            }
+            if text.contains("diagrambottom") {
+                bottom_page = page;
+            }
+        }
+        assert_ne!(heading_page, 0, "heading must render");
+        assert_ne!(pill_page, 0, "return pill must render");
+        assert_ne!(top_page, 0, "diagramtop must render");
+        assert_ne!(bottom_page, 0, "diagrambottom must render");
+        assert_eq!(heading_page, pill_page, "heading and pill share a page");
+        assert_eq!(
+            heading_page, top_page,
+            "heading and diagram top share a page"
+        );
+        assert_eq!(
+            heading_page, bottom_page,
+            "heading and diagram bottom share a page"
+        );
+        let words = bbox_words(&render_path, heading_page);
+        let top = find_word(&words, "diagramtop");
+        let bottom = find_word(&words, "diagrambottom");
+        let margin_line = LETTER_HEIGHT_PT - GENERIC_MARGIN_IN * PT_PER_IN;
+        assert!(
+            bottom.y_max <= margin_line + 1.0,
+            "diagrambottom above the margin line ({}): yMax={}",
+            margin_line,
+            bottom.y_max
+        );
+        let rendered_gap = (top.y_min - bottom.y_min).abs();
+        let fixture_gap = TALL_HEIGHT_PT - 25.0;
+        let expected = fixture_gap
+            * super::super::diagrams::FIT_HEIGHT_BUDGET
+            * GENERIC_DIAGRAM_TEXT_HEIGHT_PT
+            / TALL_HEIGHT_PT;
+        assert!(
+            (rendered_gap - expected).abs() < 8.0,
+            "diagram scaled to the budget: rendered {rendered_gap} vs expected {expected}"
+        );
+    }
+
+    #[test]
+    fn tall_diagram_opt_out_shares_page_without_pills() {
+        if skip_pandoc_xelatex("tall diagram opt-out") {
+            return;
+        }
+        let temp = TempDir::new("tall-opt-out");
+        let (render_path, _) = render_tall_pdf(
+            &temp,
+            &tall_heading_opt_out_source(),
+            "tall-opt-out",
+        );
+        let pages = page_count(&render_path);
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            assert!(
+                !is_body_empty(&text),
+                "page {page} must not be body-empty: {text:?}"
+            );
+        }
+        let mut heading_page = 0;
+        let mut top_page = 0;
+        let mut bottom_page = 0;
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            if text.contains("Data model") {
+                heading_page = page;
+            }
+            if text.contains("diagramtop") {
+                top_page = page;
+            }
+            if text.contains("diagrambottom") {
+                bottom_page = page;
+            }
+        }
+        assert_ne!(heading_page, 0, "heading must render");
+        assert_ne!(top_page, 0, "diagramtop must render");
+        assert_ne!(bottom_page, 0, "diagrambottom must render");
+        assert_eq!(
+            heading_page, top_page,
+            "heading and diagram top share a page"
+        );
+        assert_eq!(
+            heading_page, bottom_page,
+            "heading and diagram bottom share a page"
+        );
+        let words = bbox_words(&render_path, heading_page);
+        let bottom = find_word(&words, "diagrambottom");
+        let margin_line = LETTER_HEIGHT_PT - GENERIC_MARGIN_IN * PT_PER_IN;
+        assert!(
+            bottom.y_max <= margin_line + 1.0,
+            "diagrambottom above the margin line ({}): yMax={}",
+            margin_line,
+            bottom.y_max
+        );
+    }
+
+    #[test]
+    fn tall_anchored_figure_div_shares_page_and_keeps_destinations() {
+        if skip_pandoc_xelatex("tall figure div") {
+            return;
+        }
+        let temp = TempDir::new("tall-div");
+        let mut source = String::from(
+            "# Figure Exercise\n\n[go to figure](#figure-tall) and [again](#figure-tall) open the exercise.\n\n",
+        );
+        for i in 0..8 {
+            source.push_str(&format!(
+                "Filler paragraph {i} pads the exercise so the anchored figure starts low on a page and page labels vary across the render.\n\n"
+            ));
+        }
+        source.push_str(&format!(
+            "<div id=\"figure-tall\">\n\n```mermaid\n{TALL_FLOW}```\n\nFigure caption inside the anchored div.\n\n</div>\n"
+        ));
+        let source_path = temp.path.join("div.md");
+        fs::write(&source_path, &source).expect("write div source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let id = collected_flow_id(
+            &pandoc,
+            &source_path,
+            &temp.path.join("div-collect"),
+        );
+        let pdf = temp.path.join("div-fig.pdf");
+        super::super::diagrams::write_sized_pdf(
+            &pdf,
+            TALL_WIDTH_PT,
+            TALL_HEIGHT_PT,
+        );
+        let results_path = temp.path.join("div-results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::diagrams::write_results(
+            &results_path,
+            &super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write div results");
+        let swap = temp.path.join("div-diagrams.lua");
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        let plan = mermaid_plan(&temp, &source_path);
+        let render_path = render_temp_path(&plan.target).expect("render path");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results: results_path,
+            }),
+        );
+        let outcome =
+            render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+                .expect("render div PDF");
+        let super::super::return_links::ReportOutcome::Report(report) = outcome
+        else {
+            panic!("div render must write a return-link report: {outcome:?}");
+        };
+        assert!(report.paired >= 2, "two div links pair: {report:?}");
+        let document =
+            lopdf::Document::load(&render_path).expect("load div PDF");
+        let dests = named_dest_pages(&document);
+        for name in goto_dest_names(&document) {
+            if let Some(target) = name.strip_prefix(&report.prefix) {
+                assert!(
+                    dests.contains_key(&name),
+                    "return link {target} resolves to a named destination"
+                );
+            }
+        }
+        let pages = page_count(&render_path);
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            assert!(
+                !is_body_empty(&text),
+                "page {page} must not be body-empty: {text:?}"
+            );
+        }
+        let mut pill_page = 0;
+        let mut top_page = 0;
+        for page in 1..=pages {
+            let text = page_text(&render_path, page);
+            if text.contains('↩') && pill_page == 0 {
+                pill_page = page;
+            }
+            if text.contains("diagramtop") {
+                top_page = page;
+            }
+        }
+        assert_ne!(pill_page, 0, "div pills must render");
+        assert_ne!(top_page, 0, "diagramtop must render");
+        assert_eq!(pill_page, top_page, "pills and diagramtop share a page");
+        let words = bbox_words(&render_path, top_page);
+        let bottom = find_word(&words, "diagrambottom");
+        let margin_line = LETTER_HEIGHT_PT - GENERIC_MARGIN_IN * PT_PER_IN;
+        assert!(
+            bottom.y_max <= margin_line + 1.0,
+            "diagrambottom above the margin line ({}): yMax={}",
+            margin_line,
+            bottom.y_max
+        );
+    }
+
+    #[test]
+    fn short_diagram_prints_at_natural_size() {
+        if skip_pandoc_xelatex("short diagram natural") {
+            return;
+        }
+        let temp = TempDir::new("short-natural");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, mermaid_markdown()).expect("write source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let id =
+            collected_flow_id(&pandoc, &source, &temp.path.join("collect"));
+        let pdf = temp.path.join("fig.pdf");
+        super::super::diagrams::write_one_page_pdf(&pdf);
+        let fixture_words = bbox_words(&pdf, 1);
+        let fixture = find_word(&fixture_words, "diagram");
+        let fixture_height = fixture.y_max - fixture.y_min;
+        let results_path = temp.path.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::diagrams::write_results(
+            &results_path,
+            &super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let swap = temp.path.join("diagrams.lua");
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        let plan = mermaid_plan(&temp, &source);
+        let render_path = render_temp_path(&plan.target).expect("render path");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results: results_path,
+            }),
+        );
+        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+            .expect("render short PDF");
+        let pages = page_count(&render_path);
+        let mut found = None;
+        for page in 1..=pages {
+            let words = bbox_words(&render_path, page);
+            if let Some(word) = words.iter().find(|w| w.text == "diagram") {
+                found = Some(word.clone());
+                break;
+            }
+        }
+        let rendered = found.expect("diagram label must render");
+        let rendered_height = rendered.y_max - rendered.y_min;
+        assert!(
+            (rendered_height - fixture_height).abs() < 2.0,
+            "short diagram not scaled: rendered {rendered_height} vs natural {fixture_height}"
+        );
     }
 
     #[test]

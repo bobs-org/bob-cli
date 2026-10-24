@@ -1,6 +1,9 @@
 -- bob ref create: swap Mermaid code blocks for rendered PDFs
 -- (see docs/highlights-create.md).
 --
+-- Success wraps the rendered diagram Image in \BobFitBegin{}/\BobFitEnd{}
+-- (see diagrams.tex) so tall diagrams scale to the height budget.
+--
 -- First `--lua-filter` on both Markdown PDF routes. Reads
 -- `bob-diagrams-results` from Meta. Wrap the file read and
 -- `pandoc.json.decode` in `pcall`. If metadata is absent or unreadable,
@@ -63,7 +66,9 @@ function CodeBlock(cb)
   if pdf then
     local ident = cb.identifier or ""
     return pandoc.Para{
-      pandoc.Image({}, pdf, "", pandoc.Attr(ident))
+      pandoc.RawInline("latex", "\\BobFitBegin{}"),
+      pandoc.Image({}, pdf, "", pandoc.Attr(ident)),
+      pandoc.RawInline("latex", "\\BobFitEnd{}")
     }
   end
   return {note_para(reason or fallback_reason()), cb}

@@ -297,9 +297,14 @@ diagrams: rendered 3 of 4 Mermaid diagrams
 warning: Mermaid diagram 4 of 4 not rendered: Parse error on line 2: …
 ```
 
-Figures scale down to fit the page and are never rearranged or split. When a
-figure would print below 50% of its natural size, Bob warns that its labels may
-be small. The diagrams remain vector text; no raster images are used.
+Figures scale down to fit the text width and at most 80% of the text
+height. That leaves room on the same page for the heading, return links, and
+opening caption line, so a tall diagram no longer leaves a blank page or runs
+into the margin. Figures are still never rearranged or split, and short
+figures print at natural size. When a figure would print below 50% of its
+natural size, Bob warns that its labels may be small; that estimate uses the
+same 80% height budget as the printed scale. The diagrams remain vector text;
+no raster images are used.
 
 The renderer does not backfill existing library PDFs. Recreate an individual
 reference manually when you want its existing PDF replaced. Set

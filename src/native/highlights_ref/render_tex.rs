@@ -279,6 +279,7 @@ fn missing_tex_file(detail: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::super::create::PANDOC_HEADER_INCLUDES;
+    use super::super::diagrams::HEADER_INCLUDES as DIAGRAMS_HEADER_INCLUDES;
     use super::super::note_snapshot::profile::NOTE_HEADER;
     use super::super::return_links::HEADER_INCLUDES;
     use super::*;
@@ -290,7 +291,12 @@ mod tests {
     #[test]
     fn header_packages_are_all_declared() {
         let mut names = BTreeSet::new();
-        for header in [PANDOC_HEADER_INCLUDES, HEADER_INCLUDES, NOTE_HEADER] {
+        for header in [
+            PANDOC_HEADER_INCLUDES,
+            HEADER_INCLUDES,
+            DIAGRAMS_HEADER_INCLUDES,
+            NOTE_HEADER,
+        ] {
             names.extend(tex_packages_in(header));
         }
         let declared: BTreeSet<&str> = RENDER_TEX_PACKAGES
