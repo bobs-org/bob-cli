@@ -1121,7 +1121,13 @@ Two Markdown sidecar shapes are supported. The simple shape is:
 - A standalone note whose text is a `status`/`parent` marker list, or a
   linked-page highlight whose comment is one, is the PDF marker mirrored into
   the sidecar — never one of your annotations — and is excluded from generated
-  content no matter where it sits in the sidecar.
+  content no matter where it sits in the sidecar. Color-grouped exports with
+  no page headings may prefix that list with a setext title (raw two-line
+  `title` + `===` underline, or the already-rendered single-line
+  `title ===...` form); both newly parsed and legacy persisted mirrors are
+  excluded, and the next normal scan/sync removes their phantom `^h-` IDs
+  without tombstones. Ordinary notes in sidecars without page headings are
+  still retained.
 
 Simple sidecar fragment:
 

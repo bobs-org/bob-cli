@@ -1461,6 +1461,153 @@ Comment: Keep this.
     );
 }
 
+#[test]
+fn highlights_ref_sync_drops_color_grouped_mirror_without_tombstone() {
+    let temp = TempDir::new("bob-cli-highlights-ref-color-cleanup");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/remote-sase-agents.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/chat/remote-sase-agents.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: sase_ref\n- title: Remote Sase Agents\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+「remote_sase_agents_consolidated」
+=================================
+
+#### Yellow
+
+##### 2026-06-06:
+
+- status: wip
+- parent: sase_ref
+- agent: research.final-11
+
+---
+
+#### Yellow
+
+##### 2026-06-06:
+
+> A genuine highlight.
+
+Comment: A genuine comment.
+
+---
+
+Note: A genuine standalone note.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("initial color-grouped sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert!(contents.contains("highlights_count: 2\n"), "{contents}");
+    assert!(contents.contains("A genuine highlight."), "{contents}");
+    assert!(
+        contents.contains("A genuine standalone note."),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("remote_sase_agents_consolidated"),
+        "color-grouped marker title must not render:\n{contents}"
+    );
+    assert!(
+        !contents.contains("> [!note] - status:"),
+        "marker mirror must not render:\n{contents}"
+    );
+    assert!(
+        !contents.contains("### "),
+        "color groups stay page-less:\n{contents}"
+    );
+
+    // Plant a previously leaked single-line title callout exactly as
+    // pre-fix syncs wrote it, with an inflated count to match.
+    let leaked = fs::read_to_string(&note)
+        .expect("read note for leak planting")
+        .replacen(
+            "<!-- highlights:begin -->\n",
+            "<!-- highlights:begin -->\n\n> [!note] 「remote_sase_agents_consolidated」 =================================\n> \n> - status: wip\n> - parent: sase_ref\n> - agent: research.final-11\n\n^h-aaaabbbbcccc\n",
+            1,
+        )
+        .replace("highlights_count: 2\n", "highlights_count: 3\n");
+    write_file(&note, &leaked);
+    let planted = fs::read_to_string(&note).expect("read planted note");
+    assert!(planted.contains("^h-aaaabbbbcccc\n"), "{planted}");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run color-grouped cleanup");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: update"),
+        "dry run should report the leak removal:\n{}",
+        format_output(&output)
+    );
+    let dry_contents = fs::read_to_string(&note).expect("read dry-run note");
+    assert!(
+        dry_contents.contains("^h-aaaabbbbcccc\n"),
+        "dry run must not write:\n{dry_contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("writing color-grouped cleanup");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read cleaned note");
+    assert!(
+        !contents.contains("^h-aaaabbbbcccc"),
+        "leaked mirror must be removed:\n{contents}"
+    );
+    assert!(
+        !contents.contains("### Removed highlights"),
+        "leak removal must not leave a tombstone:\n{contents}"
+    );
+    assert!(contents.contains("highlights_count: 2\n"), "{contents}");
+    assert!(
+        contents.contains("A genuine highlight.")
+            && contents.contains("A genuine standalone note."),
+        "genuine annotations must survive:\n{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat color-grouped cleanup");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "cleanup should settle:\n{}",
+        format_output(&output)
+    );
+}
+
 fn legacy_highlight_task_id(
     ref_note_path: &str,
     source_block_id: &str,

@@ -223,11 +223,102 @@ pub(crate) fn parse_managed_region(region: &str) -> RegionParse {
 
 /// The shared marker-mirror predicate: true when `text` parses with
 /// [`parse_marker`] and carries both `status` and `parent`.
+///
+/// Color-grouped Highlights exports prepend a setext title to the marker
+/// list. Both the raw two-line `title` + `===` underline and the
+/// already-rendered single-line `title ===...` form (joined by
+/// [`beautify_annotation_text`]) are recognized: the prefix is stripped and
+/// the entire remainder must still parse as a `status`/`parent` marker.
+/// Blank lines may separate the prefix from the list. A title prefix
+/// followed by extra prose, malformed items, or missing required fields
+/// stays visible.
 pub(crate) fn is_marker_mirror_text(text: &str) -> bool {
-    parse_marker(text).is_ok_and(|projection| {
+    if parse_marker(text).is_ok_and(|projection| {
         projection.contains_key(FIELD_STATUS)
             && projection.contains_key(FIELD_PARENT)
+    }) {
+        return true;
+    }
+    strip_setext_title_prefix(text).is_some_and(|remainder| {
+        parse_marker(&remainder).is_ok_and(|projection| {
+            projection.contains_key(FIELD_STATUS)
+                && projection.contains_key(FIELD_PARENT)
+        })
     })
+}
+
+/// Strip a leading nonempty setext title plus its `===` underline, returning
+/// the remainder that must parse as a marker list.
+///
+/// Supports the raw two-line `title` / `===` shape and the already-rendered
+/// single-line `title ===...` shape. Blank lines may separate the prefix
+/// from the list. Returns `None` when no title prefix is present.
+fn strip_setext_title_prefix(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut non_blank: Vec<usize> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if !line.trim().is_empty() {
+            non_blank.push(index);
+        }
+    }
+    if non_blank.is_empty() {
+        return None;
+    }
+    let first = non_blank[0];
+    // Raw two-line shape: nonempty title plus an `===` underline.
+    if non_blank.len() >= 2 {
+        let second = non_blank[1];
+        let title = lines[first].trim();
+        let underline = lines[second].trim();
+        if !title.is_empty()
+            && !is_setext_underline(title)
+            && !is_marker_list_line_text(title)
+            && is_setext_underline(underline)
+        {
+            return Some(lines[second + 1..].join("\n"));
+        }
+    }
+    // Already-rendered single-line shape: `title ===...` joined by the
+    // beautifier. The trailing `=` run must be at least three wide and
+    // preceded by whitespace with a nonempty title before it.
+    let candidate = lines[first].trim_end();
+    let equals_run = candidate.chars().rev().take_while(|c| *c == '=').count();
+    if equals_run >= 3 {
+        let prefix_len = candidate.len() - equals_run;
+        let before = &candidate[..prefix_len];
+        if before.ends_with(char::is_whitespace)
+            && !before.trim().is_empty()
+            && !is_setext_underline(before.trim())
+            && !is_marker_list_line_text(before.trim())
+        {
+            return Some(lines[first + 1..].join("\n"));
+        }
+    }
+    None
+}
+
+/// A setext level-one underline: at least three `=` with optional
+/// surrounding whitespace.
+fn is_setext_underline(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.len() >= 3 && trimmed.chars().all(|c| c == '=')
+}
+
+/// A marker-list item line (`- key: value` / `* key: value` with a `:`).
+/// Titles that already look like marker items are never treated as a title
+/// prefix; the strict whole-text check owns that shape.
+fn is_marker_list_line_text(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(item) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+    else {
+        return false;
+    };
+    let Some((key, _)) = item.split_once(':') else {
+        return false;
+    };
+    !key.trim().is_empty()
 }
 
 /// Split a note body into its anatomy.

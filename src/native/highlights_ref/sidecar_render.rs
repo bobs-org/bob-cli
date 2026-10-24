@@ -2123,11 +2123,13 @@ fn destination_page_index(destination: &str) -> Option<u32> {
 }
 
 /// Content-based marker-mirror detection shared with the region parser:
-/// a standalone note whose text is a `status`/`parent` marker list, or a
-/// linked-page highlight whose comment is one, is the PDF marker mirrored
-/// into the sidecar — never one of Bryan's annotations (bob-cli-4r). Real
-/// notes never look like a marker list, so every mirror-shaped annotation is
-/// skipped no matter where it sits in the sidecar.
+/// a standalone note whose text is a `status`/`parent` marker list (optionally
+/// prefixed by a color-grouped setext title in raw two-line or rendered
+/// single-line form), or a linked-page highlight whose comment is one, is the
+/// PDF marker mirrored into the sidecar — never one of Bryan's annotations
+/// (bob-cli-4r). Real notes never look like a marker list, so every
+/// mirror-shaped annotation is skipped no matter where it sits in the sidecar.
+/// Color groups stay page-less; no page labels are manufactured.
 pub(super) fn is_sidecar_marker_mirror(annotation: &SidecarAnnotation) -> bool {
     match annotation.kind {
         SidecarAnnotationKind::StandaloneNote => {

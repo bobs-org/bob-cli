@@ -357,6 +357,37 @@ fn show_excludes_mirrors_with_counts() {
 }
 
 #[test]
+fn show_excludes_color_grouped_mirror_with_counts() {
+    let (_temp, vault) = inline_vault(
+        "bob-cli-ref-show-color-mirror",
+        &[(
+            "ref/chat/color_case.md",
+            "---\nstatus: ready\ntitle: Color Case\n---\n\n# Color Case\n\n- [ ] #task #ref [[lib/chat/color.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n> [!note] 「remote_sase_agents_consolidated」 =================================\n> \n> - status: wip\n> - parent: sase_ref\n> - agent: research.final-11\n\n^h-0803707b4f20\n\n> [!quote] A genuine highlight.\n>\n> > [!note] Comment A genuine comment.\n\n^h-e2d9e4fa6422\n\n> [!note] A genuine standalone note.\n\n^h-bbbbbbbbbbbbbbbb\n\n<!-- highlights:end -->\n",
+        )],
+    );
+    let document = run_show_json(&vault, &["ref/chat/color_case.md"]);
+    let row = &document["refs"][0];
+    assert_eq!(row["annotations"].as_array().expect("array").len(), 2);
+    assert_eq!(row["excluded"]["marker_mirrors"], 1);
+    let output = run_show(&vault, &["ref/chat/color_case.md"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("(1 leaked marker block not shown)"),
+        "mirror exclusion line:\n{human}"
+    );
+    assert!(
+        !human.contains("remote_sase_agents_consolidated"),
+        "mirror title never renders:\n{human}"
+    );
+    assert!(
+        human.contains("A genuine highlight.")
+            && human.contains("A genuine standalone note."),
+        "genuine annotations remain:\n{human}"
+    );
+}
+
+#[test]
 fn show_legacy_note_reports_absent_annotations() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-show-legacy");
     let document = run_show_json(&vault, &["ref/ai/legacy_unread.md"]);

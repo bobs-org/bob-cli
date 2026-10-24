@@ -304,6 +304,185 @@ fn region_round_trip_highlight_comment_mirror() {
 }
 
 #[test]
+fn title_prefixed_marker_text_is_a_mirror() {
+    assert!(super::is_marker_mirror_text(
+        "「remote_sase_agents_consolidated」\n=================================\n\n- status: wip\n- parent: sase_ref\n- agent: research.final-11"
+    ));
+    assert!(super::is_marker_mirror_text(
+        "「remote_sase_agents_consolidated」 =================================\n\n- status: wip\n- parent: sase_ref\n- agent: research.final-11"
+    ));
+    assert!(super::is_marker_mirror_text(
+        "- status: wip\n- parent: sase_ref"
+    ));
+    assert!(!super::is_marker_mirror_text(
+        "「remote_sase_agents_consolidated」\n=================================\n\n- status: wip\n- parent: sase_ref\n\nExtra prose"
+    ));
+    assert!(!super::is_marker_mirror_text(
+        "「remote_sase_agents_consolidated」\n=================================\n\n- status: wip"
+    ));
+    assert!(!super::is_marker_mirror_text(
+        "「remote_sase_agents_consolidated」\n=================================\n\n- status wip\n- parent: sase_ref"
+    ));
+    assert!(!super::is_marker_mirror_text("Just a personal note"));
+    assert!(!super::is_marker_mirror_text(
+        "My Title\n=================================\nJust a personal note"
+    ));
+    assert!(!super::is_marker_mirror_text(
+        "My Title\n=================================\n- status: wip\nA discussion with extra prose"
+    ));
+    assert!(!super::is_marker_mirror_text(
+        "===\n- status: wip\n- parent: sase_ref"
+    ));
+    assert!(super::parse_marker("- status: wip\n- parent: sase_ref").is_ok());
+    assert!(super::parse_marker("A title\n===\n- status: wip").is_err());
+}
+
+#[test]
+fn region_parses_rendered_title_prefixed_mirror() {
+    let region = "> [!note] 「remote_sase_agents_consolidated」 =================================\n> \n> - status: wip\n> - parent: sase_ref\n> - agent: research.final-11\n\n^h-0803707b4f20\n";
+    let parsed = super::parse_managed_region(region);
+    assert_eq!(parsed.blocks.len(), 1, "{parsed:?}");
+    assert!(parsed.unparsed.is_empty(), "{parsed:?}");
+    let block = &parsed.blocks[0];
+    assert_eq!(block.kind, super::RegionBlockKind::Note);
+    assert_eq!(block.block_id, "h-0803707b4f20");
+    assert!(block.mirror);
+    assert!(block.page_label.is_none());
+}
+
+#[test]
+fn color_grouped_rerender_drops_phantom_without_tombstone() {
+    let note = super::ParsedNote {
+        frontmatter: Vec::new(),
+        body: "# Example\n\n- [/] #task #ref [[lib/example.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n> [!note] 「remote_sase_agents_consolidated」 =================================\n> \n> - status: wip\n> - parent: sase_ref\n> - agent: research.final-11\n\n^h-0803707b4f20\n\n> [!quote] A genuine highlight.\n>\n> > [!note] Comment A genuine comment.\n\n^h-e2d9e4fa6422\n\n<!-- highlights:end -->\n"
+            .to_string(),
+        original: None,
+    };
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations: super::parse_sidecar_markdown(
+            "「remote_sase_agents_consolidated」\n=================================\n\n#### Yellow\n\n##### 2026-06-06:\n\n- status: wip\n- parent: sase_ref\n- agent: research.final-11\n\n---\n\n#### Yellow\n\n##### 2026-06-06:\n\n> A genuine highlight.\n\nComment: A genuine comment.\n",
+        ),
+    };
+    let config = test_config();
+    let rendered = super::render_sidecar_highlights(
+        &config,
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &note,
+        &sidecar,
+        false,
+    )
+    .expect("render color-grouped cleanup");
+    assert!(
+        !rendered.content.contains("^h-0803707b4f20"),
+        "phantom must drop: {}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("### Removed highlights"),
+        "phantom drop must not tombstone: {}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("^h-e2d9e4fa6422"),
+        "genuine ID must survive: {}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("A genuine highlight."),
+        "{}",
+        rendered.content
+    );
+}
+
+#[test]
+fn color_grouped_genuine_loss_still_tombstones() {
+    let note = super::ParsedNote {
+        frontmatter: Vec::new(),
+        body: "<!-- highlights:begin -->\n\n> [!quote] A genuine highlight.\n\n^h-e2d9e4fa6422\n\n<!-- highlights:end -->"
+            .to_string(),
+        original: None,
+    };
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations: super::parse_sidecar_markdown(
+            "「remote_sase_agents_consolidated」\n=================================\n\n#### Yellow\n\n##### 2026-06-06:\n\n- status: wip\n- parent: sase_ref\n",
+        ),
+    };
+    let rendered = super::render_sidecar_highlights(
+        &test_config(),
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &note,
+        &sidecar,
+        false,
+    )
+    .expect("render genuine loss");
+    assert!(
+        rendered.content.contains("### Removed highlights")
+            && rendered.content.contains("^h-e2d9e4fa6422"),
+        "genuinely lost highlight must tombstone: {}",
+        rendered.content
+    );
+}
+
+#[test]
+fn color_grouped_plain_prose_and_titled_notes_survive() {
+    let annotations = super::parse_sidecar_markdown(
+        "# Empty Highlights Sidecar\n\nThis placeholder reserves the sidecar fixture path for later parser tests.\n",
+    );
+    assert_eq!(annotations.len(), 1);
+    assert!(!super::is_sidecar_marker_mirror(&annotations[0]));
+    let titled = super::parse_sidecar_markdown(
+        "My Title\n=================================\n\nJust a personal note.\n",
+    );
+    assert_eq!(titled.len(), 1, "{titled:?}");
+    assert!(!super::is_sidecar_marker_mirror(&titled[0]));
+    let discussion = super::parse_sidecar_markdown(
+        "My Title\n=================================\n\n- status: wip\nA discussion with extra prose\n",
+    );
+    assert_eq!(discussion.len(), 1, "{discussion:?}");
+    assert!(!super::is_sidecar_marker_mirror(&discussion[0]));
+}
+
+#[test]
+fn color_grouped_mirror_with_task_text_yields_no_task() {
+    let bob_dir = temp_bob_dir("mirror-task");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    let pdf = bob_dir.join("lib/papers/mirror.pdf");
+    let ref_note = bob_dir.join("ref/papers/mirror.md");
+    let sidecar = super::SidecarInput {
+        path: bob_dir.join("lib/papers/mirror.md"),
+        annotations: super::parse_sidecar_markdown(
+            "「remote_sase_agents_consolidated」\n=================================\n\n#### Yellow\n\n##### 2026-06-06:\n\n- status: wip\n- parent: sase_ref\n- agent: research.final-11 #task Do the mirrored thing\n",
+        ),
+    };
+    assert_eq!(sidecar.annotations.len(), 1);
+    assert!(super::is_sidecar_marker_mirror(&sidecar.annotations[0]));
+    let rendered = super::render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &super::ParsedNote::empty(),
+        &sidecar,
+        false,
+    )
+    .expect("render mirrored task sidecar");
+    assert_eq!(rendered.count, 0, "{}", rendered.content);
+    let candidates = super::annotation_task_candidates(
+        &config,
+        &ref_note,
+        &pdf,
+        Some(&sidecar),
+        Some(&rendered),
+        false,
+    )
+    .expect("mirror task candidates");
+    assert!(candidates.is_empty(), "{candidates:?}");
+}
+
+#[test]
 fn region_unknown_callout_is_unparsed() {
     let region = "> [!summary] Something new\n\n^h-abcdef123456\n";
     let parsed = super::parse_managed_region(region);

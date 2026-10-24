@@ -1031,6 +1031,75 @@ Comment: keep the ᵈ tag in comments.
     assert!(stripped.contains("> [!quote] aspirated p"), "{stripped}");
 }
 
+const COLOR_GROUPED_SIDECAR: &str = include_str!(
+    "../../../../tests/fixtures/highlights_ref/color_grouped_sidecar.md"
+);
+
+#[test]
+fn color_grouped_title_prefixed_marker_is_excluded() {
+    let annotations = parse_sidecar_markdown(COLOR_GROUPED_SIDECAR);
+    assert_eq!(annotations.len(), 3, "{annotations:?}");
+    assert!(
+        annotations
+            .iter()
+            .all(|annotation| annotation.page_label.is_none()),
+        "color groups stay page-less: {annotations:?}"
+    );
+    assert!(
+        is_sidecar_marker_mirror(&annotations[0]),
+        "title-prefixed marker must be excluded: {:?}",
+        annotations[0]
+    );
+    assert_eq!(annotations[1].kind, SidecarAnnotationKind::Highlight);
+    assert_eq!(annotations[1].text, "A genuine highlight.");
+    assert_eq!(
+        annotations[1].comment.as_deref(),
+        Some("A genuine comment.")
+    );
+    assert_eq!(annotations[2].kind, SidecarAnnotationKind::StandaloneNote);
+    assert_eq!(annotations[2].text, "A genuine standalone note.");
+
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations,
+    };
+    let rendered = super::render_sidecar_highlights(
+        &test_config(),
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &super::ParsedNote::empty(),
+        &sidecar,
+        false,
+    )
+    .expect("render color-grouped sidecar");
+    assert_eq!(rendered.count, 2, "{}", rendered.content);
+    assert!(
+        rendered.content.contains("A genuine highlight."),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("A genuine standalone note."),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("remote_sase_agents_consolidated"),
+        "marker title must not render: {}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("[!note] - status:"),
+        "marker mirror must not render: {}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("### "),
+        "color groups render without page headings: {}",
+        rendered.content
+    );
+}
+
 #[test]
 fn return_link_strip_keeps_block_ids_stable() {
     let contents = "\
