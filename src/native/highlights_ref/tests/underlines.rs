@@ -16,6 +16,7 @@ fn highlight(
         linked_page_style: false,
         text: text.to_string(),
         section_heading: None,
+        comment_section_heading: None,
         comment: task_source.map(str::to_string),
         task_source: task_source.map(str::to_string),
         image: None,

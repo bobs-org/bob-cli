@@ -1652,20 +1652,26 @@ passage never changes the host ID or later blocks on that page.
 
 ### Sections (`#` and `@`)
 
-- **A sticky note whose first line is `# Name` starts a section.** Everything
-  after that line is the section description.
+- **A sticky note or a comment whose first line is `# Name` starts a section.**
+  For a sticky, the rest is the description. For a comment, the annotation
+  joins the section, and the rest stays its comment.
 - **Tag a note with `@name` at the start or end of a line to file it there.** If
   you can still see the matching `@name` in the rendered annotation, it did not
   group.
 
-In Highlights, write the declaration in a standalone sticky note. Its first
-non-empty line must be one `#`, a space, and a title. Exported date headings
-and an optional `Note:` label before that line are ignored. Add optional aliases
-at the end, such as `# Open questions @q`; the first alias becomes the card's
-tag, while both the title and aliases can match annotations. The remaining
-lines are its description. A `# ` line in a highlight, underline, or image
-comment is ordinary text, not a declaration. Rejected declarations remain
-visible as sticky notes.
+In Highlights, write the declaration in a standalone sticky note or as the
+first line of a highlight, underline, or image comment. Its first non-empty
+line must be one `#`, a space, and a title, after an optional `Comment:` or
+`Note:` label. Exported date headings and an optional `Note:` label before a
+sticky line are ignored. Add optional aliases at the end, such as
+`# Open questions @q`; the first alias becomes the card's tag, while both the
+title and aliases can match annotations. For a sticky, the remaining lines are
+its description. For a comment, the declaration line (and one blank line after
+it) is removed and any remaining text stays that annotation's own comment; an
+emptied comment means no Comment card, and comment declarations contribute no
+description. Only the first comment line declares; later `# ` lines stay
+literal, and `\#` escapes. Rejected declarations remain visible as sticky notes
+(or literal escaped lines for comments).
 
 A positional tag is a whole `@name` token at the beginning or end of a line,
 after an optional `Note:` or `Comment:` label and one list marker. Matching
@@ -1679,6 +1685,7 @@ prose, code, or a `#task` line do not group. A backslash escapes a tag.
 | `@memory` | Joins Memory; the tag is consumed. |
 | `@Memory Compare with table 2` | Joins Memory; the rendered comment is `Compare with table 2`. |
 | `Use these as placeholders @visuals` | Joins Visuals; the trailing tag is consumed. |
+| `# Memory` as a comment's first line | Declares Memory; the annotation joins, the line is removed. |
 | `Keep @chat and @agent!` | Only the final `@agent!` is positional; `@chat` stays in the prose. |
 | `- #task Draft the intro @sase` | Routes the task to `sase.md`; the tag does not group this task line. |
 | `@memory` followed by `- #task Draft the intro @sase` | The first line joins Memory and the second still routes its task. |
@@ -1735,9 +1742,9 @@ section and unknown-tag counts. The JSON fields `notes[].sections` and
 
 Install the release on every host (Mac, athena, and apollo) before writing the
 first declaration; **install everywhere first, then you hold the switch** by
-adding a `# ` sticky. Highlights has not yet been verified to export this
-spelling unchanged. Check the exported sidecar bytes on Mac and iPad before
-relying on it.
+adding a `# ` sticky. Highlights on the Mac exports a comment's `# Name` line
+verbatim (observed in a real sidecar on 2026-10-24); sticky notes and iPad
+exports are still unverified.
 
 The accepted costs are one home per displayed block, page order is grouped by
 section in a sectioned note, and Highlights has no section-tag autocomplete.

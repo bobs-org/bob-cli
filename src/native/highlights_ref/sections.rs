@@ -32,6 +32,10 @@ pub(super) struct PlannedSection {
     pub(super) block_id: String,
     pub(super) keys: BTreeSet<String>,
     pub(super) declaration_orders: Vec<usize>,
+    /// Accepted comment (`# Name` first-line) declaration orders, in sidecar
+    /// order. Sticky semantics (`declaration_orders`, stubs, task mapping)
+    /// never see these.
+    pub(super) anchor_orders: Vec<usize>,
     pub(super) description: String,
     pub(super) page_label: Option<String>,
 }
@@ -79,6 +83,11 @@ pub(super) struct SectionPlan {
     /// Every syntactic declaration sticky, including rejected declarations.
     pub(super) declarations: BTreeSet<usize>,
     pub(super) rejected: BTreeMap<usize, Rejection>,
+    /// Accepted `# Name` first-line comment declarations (highlights,
+    /// absorbed/standalone underlines, images). Followers never declare.
+    pub(super) comment_declarations: BTreeSet<usize>,
+    /// Rejected comment declarations (empty or reserved titles).
+    pub(super) comment_rejected: BTreeMap<usize, Rejection>,
     /// Display-head order -> index in `sections`.
     pub(super) home_of: BTreeMap<usize, usize>,
     /// Annotation order -> consumed effective display source.
@@ -796,19 +805,69 @@ pub(super) fn plan_sections(
     let mut plan = SectionPlan::default();
     let mut slugs = BTreeSet::new();
 
+    enum DeclarationKind {
+        Sticky,
+        Comment,
+    }
+
+    struct Candidate<'a> {
+        annotation: &'a SidecarAnnotation,
+        heading: &'a str,
+        kind: DeclarationKind,
+    }
+
+    let mut candidates = Vec::<Candidate<'_>>::new();
     for annotation in annotations {
-        let Some(heading) = annotation.section_heading.as_deref() else {
-            continue;
-        };
-        plan.declarations.insert(annotation.order);
+        if let Some(heading) = annotation.section_heading.as_deref() {
+            candidates.push(Candidate {
+                annotation,
+                heading,
+                kind: DeclarationKind::Sticky,
+            });
+        } else if let Some(heading) =
+            annotation.comment_section_heading.as_deref()
+        {
+            // Continuation followers (`<`) are never declaration sites; at
+            // most the head of a continuation group declares. This covers
+            // merged followers and dangling `<` markers alike.
+            if folds.continuations.head_of.contains_key(&annotation.order) {
+                continue;
+            }
+            if let Some(source) = annotation.task_source.as_deref()
+                && matches!(
+                    scan_continuation_marker(source),
+                    MarkerScan::Marker { .. }
+                )
+            {
+                continue;
+            }
+            candidates.push(Candidate {
+                annotation,
+                heading,
+                kind: DeclarationKind::Comment,
+            });
+        }
+    }
+
+    for candidate in candidates {
+        let annotation = candidate.annotation;
+        let heading = candidate.heading;
+        let is_sticky = matches!(candidate.kind, DeclarationKind::Sticky);
+        if is_sticky {
+            plan.declarations.insert(annotation.order);
+        }
         match scan_section_declaration(heading) {
             Ok(declaration) => {
                 if let Some(index) = plan.sections.iter().position(|section| {
                     !section.keys.is_disjoint(&declaration.keys)
                 }) {
                     let section = &mut plan.sections[index];
-                    section.declaration_orders.push(annotation.order);
-                    if !annotation.text.trim().is_empty() {
+                    if is_sticky {
+                        section.declaration_orders.push(annotation.order);
+                    } else {
+                        section.anchor_orders.push(annotation.order);
+                    }
+                    if is_sticky && !annotation.text.trim().is_empty() {
                         if !section.description.trim().is_empty() {
                             section.description.push_str("\n\n");
                         }
@@ -832,6 +891,9 @@ pub(super) fn plan_sections(
                                 .unwrap_or("unknown page")
                         ),
                     });
+                    if !is_sticky {
+                        plan.comment_declarations.insert(annotation.order);
+                    }
                 } else {
                     let base = section_slug(
                         &declaration.title,
@@ -840,17 +902,30 @@ pub(super) fn plan_sections(
                         source_pdf_value,
                     );
                     let slug = unique_slug(&base, &mut slugs);
-                    let description = annotation.text.trim().to_string();
+                    let description = if is_sticky {
+                        annotation.text.trim().to_string()
+                    } else {
+                        String::new()
+                    };
+                    let (declaration_orders, anchor_orders) = if is_sticky {
+                        (vec![annotation.order], Vec::new())
+                    } else {
+                        (Vec::new(), vec![annotation.order])
+                    };
                     plan.sections.push(PlannedSection {
                         title: declaration.title,
                         tag: declaration.tag,
                         block_id: format!("s-{slug}"),
                         slug,
                         keys: declaration.keys,
-                        declaration_orders: vec![annotation.order],
+                        declaration_orders,
+                        anchor_orders,
                         description,
                         page_label: annotation.page_label.clone(),
                     });
+                    if !is_sticky {
+                        plan.comment_declarations.insert(annotation.order);
+                    }
                 }
             }
             Err(rejection) => {
@@ -873,7 +948,11 @@ pub(super) fn plan_sections(
                         ),
                     ),
                 };
-                plan.rejected.insert(annotation.order, rejection);
+                if is_sticky {
+                    plan.rejected.insert(annotation.order, rejection);
+                } else {
+                    plan.comment_rejected.insert(annotation.order, rejection);
+                }
                 plan.diagnostics.push(SectionDiagnostic {
                     kind,
                     page_label,
@@ -884,6 +963,11 @@ pub(super) fn plan_sections(
     }
 
     if plan.sections.is_empty() {
+        emit_declaration_in_comment_without_sections(
+            &mut plan,
+            annotations,
+            folds,
+        );
         return plan;
     }
 
@@ -938,6 +1022,18 @@ pub(super) fn plan_sections(
         }
     }
 
+    let order_to_section = plan
+        .sections
+        .iter()
+        .enumerate()
+        .flat_map(|(index, section)| {
+            section
+                .anchor_orders
+                .iter()
+                .map(move |order| (*order, index))
+        })
+        .collect::<BTreeMap<_, _>>();
+
     for (head_order, member_orders) in blocks {
         let member_sources = member_orders
             .iter()
@@ -956,22 +1052,48 @@ pub(super) fn plan_sections(
                 (order, annotation, source)
             })
             .collect::<Vec<_>>();
-        for (_, annotation, source) in &member_sources {
-            if annotation.kind != SidecarAnnotationKind::StandaloneNote
-                && let Some(line) =
-                    source.lines().find(|line| is_escaped_section_heading(line))
+        for (order, annotation, source) in &member_sources {
+            if annotation.kind == SidecarAnnotationKind::StandaloneNote {
+                continue;
+            }
+            // Followers never declare, so even a first-line `#` there is
+            // literal. Declaration sites skip the first line (the declaration
+            // slot or an intentional `\#` escape); only later lines report.
+            let skip_first = !folds.continuations.head_of.contains_key(order);
+            if let Some(line) =
+                first_escaped_heading_after_first_line(source, skip_first)
             {
                 plan.diagnostics.push(SectionDiagnostic {
                     kind: SectionDiagnosticKind::DeclarationInComment,
                     page_label: annotation.page_label.clone(),
-                    detail: format!(
-                        "\"{}\" is literal; declare sections on a sticky note",
-                        line.trim_start_matches('\\')
-                    ),
+                    detail: declaration_in_comment_detail(&line),
                 });
             }
         }
-        let tag_hits = member_sources
+        // Accepted comment declarations in member order (head, then absorbed
+        // underlines; followers never declare). The first is the home; later
+        // ones still declare (merged above) and are consumed with a conflict.
+        let mut declaration_sections_in_order = Vec::<usize>::new();
+        for (order, _, _) in &member_sources {
+            if let Some(index) = order_to_section.get(order).copied()
+                && !declaration_sections_in_order.contains(&index)
+            {
+                declaration_sections_in_order.push(index);
+            }
+        }
+        // Tag scanning sees the source after declaration removal, so a
+        // declaration's own `@alias` tokens never count as tags.
+        let stripped_sources = member_sources
+            .iter()
+            .map(|(order, annotation, source)| {
+                if plan.comment_declarations.contains(order) {
+                    (*order, *annotation, remove_first_declaration_line(source))
+                } else {
+                    (*order, *annotation, source.clone())
+                }
+            })
+            .collect::<Vec<_>>();
+        let tag_hits = stripped_sources
             .iter()
             .flat_map(|(order, annotation, source)| {
                 scan_section_tags(source)
@@ -990,7 +1112,7 @@ pub(super) fn plan_sections(
                         && source_is_only_tags(&annotation.text)
                 },
             );
-        let mut home = None;
+        let mut tag_home = None;
         let mut resolved_tags =
             Vec::<(String, usize, &SidecarAnnotation)>::new();
         for (order, annotation, _, hit) in &tag_hits {
@@ -1016,8 +1138,8 @@ pub(super) fn plan_sections(
                             index,
                             annotation,
                         ));
-                        if home.is_none() {
-                            home = Some(index);
+                        if tag_home.is_none() {
+                            tag_home = Some(index);
                         }
                     } else {
                         let hint =
@@ -1039,27 +1161,53 @@ pub(super) fn plan_sections(
             }
             let _ = order;
         }
+        let declaration_home = declaration_sections_in_order.first().copied();
+        // A declaration beats tags.
+        let home = declaration_home.or(tag_home);
         if let Some(home_index) = home.filter(|_| !sticky_only_tags) {
             plan.home_of.insert(head_order, home_index);
             let home_section = &plan.sections[home_index];
-            let distinct = resolved_tags
+            // Distinct sections in first-appearance order: declarations in
+            // member order first, then tag sections.
+            let mut distinct_order = Vec::<usize>::new();
+            for index in &declaration_sections_in_order {
+                if !distinct_order.contains(index) {
+                    distinct_order.push(*index);
+                }
+            }
+            for (_, index, _) in &resolved_tags {
+                if !distinct_order.contains(index) {
+                    distinct_order.push(*index);
+                }
+            }
+            let others = distinct_order
                 .iter()
-                .filter(|(_, index, _)| *index != home_index)
+                .filter(|index| **index != home_index)
                 .collect::<Vec<_>>();
-            if !distinct.is_empty() {
+            if !others.is_empty() {
                 let mut names = vec![home_section.tag.clone()];
-                for (raw, index, _) in &distinct {
+                for index in &distinct_order {
+                    if *index == home_index {
+                        continue;
+                    }
                     let label = plan.sections[*index].tag.clone();
                     if !names.contains(&label) {
                         names.push(label);
                     }
-                    let _ = raw;
                 }
+                let page_label = resolved_tags
+                    .first()
+                    .and_then(|(_, _, annotation)| {
+                        annotation.page_label.clone()
+                    })
+                    .or_else(|| {
+                        member_sources.first().and_then(|(_, annotation, _)| {
+                            annotation.page_label.clone()
+                        })
+                    });
                 plan.diagnostics.push(SectionDiagnostic {
                     kind: SectionDiagnosticKind::Conflict,
-                    page_label: resolved_tags.first().and_then(
-                        |(_, _, annotation)| annotation.page_label.clone(),
-                    ),
+                    page_label,
                     detail: format!(
                         "{} (kept {})",
                         names.join(", "),
@@ -1067,20 +1215,19 @@ pub(super) fn plan_sections(
                     ),
                 });
             }
-            for order in member_orders {
-                let Some(annotation) =
-                    annotations_by_order.get(&order).copied()
-                else {
-                    continue;
-                };
-                let source = if folds.underlines.host_of.contains_key(&order) {
-                    effective_underline_display_source(annotation)
+            for (order, annotation, source) in &member_sources {
+                let without_decl = if plan.comment_declarations.contains(order)
+                {
+                    remove_first_declaration_line(source)
                 } else {
-                    effective_display_source(annotation, folds)
+                    source.clone()
                 };
-                let rewritten = display_source(&source, &home_section.keys);
-                if rewritten != source {
-                    plan.rewritten.insert(order, rewritten);
+                let rewritten =
+                    display_source(&without_decl, &home_section.keys);
+                if rewritten != *source {
+                    plan.rewritten.insert(*order, rewritten);
+                } else {
+                    let _ = annotation;
                 }
             }
         } else if sticky_only_tags {
@@ -1168,6 +1315,118 @@ fn is_escaped_section_heading(line: &str) -> bool {
         return false;
     };
     first.is_whitespace() && !rest.trim().is_empty()
+}
+
+fn is_unescaped_section_heading_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let Some(rest) = trimmed.strip_prefix('#') else {
+        return false;
+    };
+    if rest.starts_with('#') {
+        return false;
+    }
+    let Some(first) = rest.chars().next() else {
+        return false;
+    };
+    first.is_whitespace() && !rest.trim().is_empty()
+}
+
+fn is_any_section_heading_line(line: &str) -> bool {
+    is_unescaped_section_heading_line(line) || is_escaped_section_heading(line)
+}
+
+/// Remove the first non-empty `# Name` / `\# Name` line and one blank line
+/// after it. Used for accepted comment declarations.
+fn remove_first_declaration_line(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut first: Option<usize> = None;
+    for (index, line) in lines.iter().enumerate() {
+        if !line.trim().is_empty() {
+            first = Some(index);
+            break;
+        }
+    }
+    let Some(index) = first else {
+        return source.to_string();
+    };
+    let line = lines[index];
+    if !is_any_section_heading_line(line) {
+        return source.to_string();
+    }
+    let mut next = index + 1;
+    if next < lines.len() && lines[next].trim().is_empty() {
+        next += 1;
+    }
+    lines[next..].join("\n")
+}
+
+fn first_escaped_heading_after_first_line(
+    source: &str,
+    skip_first: bool,
+) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut start = 0usize;
+    if skip_first {
+        let mut found = false;
+        for (index, line) in lines.iter().enumerate() {
+            if !line.trim().is_empty() {
+                start = index + 1;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+    }
+    for line in &lines[start..] {
+        if is_escaped_section_heading(line) {
+            return Some(line.to_string());
+        }
+    }
+    None
+}
+
+fn declaration_in_comment_detail(line: &str) -> String {
+    format!(
+        "\"{}\" is literal; put \"# Name\" on the first line of a comment or sticky note",
+        line.trim_start_matches('\\')
+    )
+}
+
+fn emit_declaration_in_comment_without_sections(
+    plan: &mut SectionPlan,
+    annotations: &[SidecarAnnotation],
+    folds: &AnnotationFolds,
+) {
+    for annotation in annotations {
+        if annotation.kind == SidecarAnnotationKind::StandaloneNote {
+            continue;
+        }
+        if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        let source = if folds.underlines.host_of.contains_key(&annotation.order)
+        {
+            effective_underline_display_source(annotation)
+        } else {
+            effective_display_source(annotation, folds)
+        };
+        // Followers are never declaration sites, so even a first-line `#`
+        // there is literal. Everywhere else the first line is the declaration
+        // slot (or an intentional `\#` escape), so only later lines report.
+        let skip_first =
+            !folds.continuations.head_of.contains_key(&annotation.order);
+        if let Some(line) =
+            first_escaped_heading_after_first_line(&source, skip_first)
+        {
+            plan.diagnostics.push(SectionDiagnostic {
+                kind: SectionDiagnosticKind::DeclarationInComment,
+                page_label: annotation.page_label.clone(),
+                detail: declaration_in_comment_detail(&line),
+            });
+        }
+    }
 }
 
 fn closest_section_tag(

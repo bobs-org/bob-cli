@@ -347,6 +347,10 @@ pub(super) struct SidecarAnnotation {
     /// Raw heading text for a syntactic `# Name` sticky declaration.
     /// `text` contains only the declaration's description.
     pub(super) section_heading: Option<String>,
+    /// Raw heading text for a `# Name` first-line comment declaration on a
+    /// highlight, underline, or image. Recorded at parse time because the
+    /// rendered `comment` escapes both `# Name` and `\# Name` to `\# Name`.
+    pub(super) comment_section_heading: Option<String>,
     pub(super) comment: Option<String>,
     pub(super) task_source: Option<String>,
     pub(super) image: Option<SidecarImage>,

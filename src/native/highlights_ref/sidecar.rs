@@ -212,9 +212,10 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
     // the first page heading is never an annotation (bob-cli-4r). Sidecars
     // without any page heading have no preamble, so every chunk still parses.
     // The sidecar's page-heading level is the level of its first page-shaped
-    // heading: page-shaped lines at any other level (a `# P values` sticky in
-    // a `####`-paged sidecar) never split the page stream and stay in their
-    // chunk, where the heading filter still applies.
+    // heading: simple page-shaped lines at any other level (a `# P values`
+    // sticky in a `####`-paged sidecar) never split the page stream and stay
+    // in their chunk, where the heading filter still applies. A linked
+    // `[Page N](highlights://…)` heading is a page break at any level.
     let page_heading_level = contents
         .lines()
         .filter_map(sidecar_page_heading_details)
@@ -231,7 +232,8 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
         let next_page_heading =
             match (&page_heading_level, sidecar_page_heading_details(line)) {
                 (Some(expected), Some(heading))
-                    if heading.level == *expected =>
+                    if heading.linked_page_style
+                        || heading.level == *expected =>
                 {
                     Some(heading)
                 }
@@ -374,6 +376,9 @@ pub(super) fn parse_sidecar_chunk(
         if text.is_empty() {
             return Vec::new();
         }
+        let raw_comment_lines = lines[index..].to_vec();
+        let comment_section_heading =
+            comment_section_declaration(&raw_comment_lines);
         let comment_lines = lines[index..]
             .iter()
             .filter_map(|line| {
@@ -396,6 +401,7 @@ pub(super) fn parse_sidecar_chunk(
             linked_page_style,
             text,
             section_heading: None,
+            comment_section_heading,
             comment: (!comment.is_empty()).then_some(comment),
             task_source: (!comment_source.is_empty())
                 .then(|| strip_comment_label_only(&comment_source)),
@@ -405,20 +411,8 @@ pub(super) fn parse_sidecar_chunk(
         }];
     }
 
-    let image_lines = lines
-        .iter()
-        .filter_map(|line| {
-            if is_section_comment_heading(line) {
-                Some(escape_markdown_heading(line))
-            } else if is_markdown_heading(line) {
-                None
-            } else {
-                Some(line.clone())
-            }
-        })
-        .collect::<Vec<_>>();
     let image_annotations = parse_image_sidecar_annotations(
-        &image_lines,
+        &lines,
         page_label,
         page_index,
         linked_page_style,
@@ -459,6 +453,7 @@ pub(super) fn parse_sidecar_chunk(
             linked_page_style,
             text,
             section_heading,
+            comment_section_heading: None,
             comment: None,
             task_source: None,
             image: None,
@@ -504,6 +499,74 @@ fn is_section_comment_heading(line: &str) -> bool {
     section_heading_text(line).is_some()
 }
 
+/// First-line `# Name` comment declaration, recorded before escaping.
+/// Takes the raw comment lines (after the quote, before escaping/filtering),
+/// skips blanks and level 2-6 headings (filtered from the comment source),
+/// strips an optional `Comment:`/`Note:` label, and returns the heading text
+/// when the author typed exactly one `#` plus whitespace. A user-typed
+/// `\# Name` never declares.
+fn comment_section_declaration(raw_lines: &[String]) -> Option<String> {
+    for line in raw_lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(level) = markdown_heading_level(line)
+            && (2..=6).contains(&level)
+        {
+            continue;
+        }
+        // Image markdown lines are not comment text.
+        if !markdown_images_in_line(line).is_empty() {
+            // A line that is only an image carries no declaration; a line
+            // with text around an image keeps that text as the candidate.
+            // For simplicity, skip pure-image lines here; the per-image
+            // splitter below handles mixed lines.
+            let without_images = strip_image_markdown_spans(line);
+            if without_images.trim().is_empty() {
+                continue;
+            }
+        }
+        let trimmed = line.trim();
+        let mut candidate = trimmed;
+        for label in ["Comment:", "comment:", "Note:", "note:"] {
+            if let Some(rest) = trimmed.strip_prefix(label) {
+                let rest = rest.trim_start();
+                if rest.is_empty() {
+                    candidate = "";
+                } else {
+                    candidate = rest;
+                    // Only strip one label; a `Comment: Note: # X` keeps
+                    // `Note: # X` as the candidate, which then fails to
+                    // declare, matching the tag label handling.
+                }
+                break;
+            }
+        }
+        if candidate.trim().is_empty() {
+            continue;
+        }
+        // Strip image spans from a mixed line before checking the heading.
+        let candidate = strip_image_markdown_spans(candidate);
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        return section_heading_text(candidate);
+    }
+    None
+}
+
+fn strip_image_markdown_spans(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+    for image in markdown_images_in_line(line) {
+        output.push_str(&line[cursor..image.start]);
+        cursor = image.end;
+    }
+    output.push_str(&line[cursor..]);
+    output
+}
+
 fn escape_markdown_heading(line: &str) -> String {
     let leading = line.len() - line.trim_start().len();
     format!("{}\\{}", &line[..leading], &line[leading..])
@@ -521,6 +584,7 @@ pub(super) struct MarkdownImage {
 pub(super) struct PendingImageAnnotation {
     pub(super) image: SidecarImage,
     pub(super) comment_lines: Vec<String>,
+    pub(super) comment_raw_lines: Vec<String>,
 }
 
 pub(super) fn parse_image_sidecar_annotations(
@@ -531,15 +595,48 @@ pub(super) fn parse_image_sidecar_annotations(
 ) -> Vec<SidecarAnnotation> {
     let mut images = Vec::<PendingImageAnnotation>::new();
     let mut prefix_comment_lines = Vec::<String>::new();
+    let mut prefix_raw_lines = Vec::<String>::new();
 
     for line in lines {
         let markdown_images = markdown_images_in_line(line);
         if markdown_images.is_empty() {
-            push_image_comment_line(
-                &mut images,
-                &mut prefix_comment_lines,
-                strip_standalone_note_marker(line),
-            );
+            // Preserve blank separators for the declaration blank-line rule.
+            if line.trim().is_empty() {
+                push_image_comment_line(
+                    &mut images,
+                    &mut prefix_comment_lines,
+                    &mut prefix_raw_lines,
+                    String::new(),
+                    String::new(),
+                );
+                continue;
+            }
+            let stripped = strip_standalone_note_marker(line);
+            if is_section_comment_heading(line) {
+                push_image_comment_line(
+                    &mut images,
+                    &mut prefix_comment_lines,
+                    &mut prefix_raw_lines,
+                    escape_markdown_heading(&stripped),
+                    stripped,
+                );
+            } else if is_markdown_heading(line) {
+                // Level 2-6 headings are filtered from the display source but
+                // kept for first-line detection (the helper skips them).
+                push_image_comment_raw_only(
+                    &mut images,
+                    &mut prefix_raw_lines,
+                    stripped,
+                );
+            } else {
+                push_image_comment_line(
+                    &mut images,
+                    &mut prefix_comment_lines,
+                    &mut prefix_raw_lines,
+                    stripped.clone(),
+                    stripped,
+                );
+            }
             continue;
         }
 
@@ -547,11 +644,32 @@ pub(super) fn parse_image_sidecar_annotations(
         for markdown_image in markdown_images {
             let before = line[cursor..markdown_image.start].trim();
             if !before.is_empty() {
-                push_image_comment_line(
-                    &mut images,
-                    &mut prefix_comment_lines,
-                    strip_standalone_note_marker(before),
-                );
+                let stripped = strip_standalone_note_marker(before);
+                let before_is_heading = is_section_comment_heading(before);
+                let before_is_md = is_markdown_heading(before);
+                // A `# Name` fragment before an image is a declaration
+                // candidate; escape it for display like the pure-line path.
+                if before_is_md && !before_is_heading {
+                    // Filtered from display; keep raw only.
+                    push_image_comment_raw_only(
+                        &mut images,
+                        &mut prefix_raw_lines,
+                        stripped,
+                    );
+                } else {
+                    let display = if before_is_heading {
+                        escape_markdown_heading(&stripped)
+                    } else {
+                        stripped.clone()
+                    };
+                    push_image_comment_line(
+                        &mut images,
+                        &mut prefix_comment_lines,
+                        &mut prefix_raw_lines,
+                        display,
+                        stripped,
+                    );
+                }
             }
 
             let mut pending = PendingImageAnnotation {
@@ -560,9 +678,15 @@ pub(super) fn parse_image_sidecar_annotations(
                     alt_text: markdown_image.alt_text,
                 },
                 comment_lines: Vec::new(),
+                comment_raw_lines: Vec::new(),
             };
-            if images.is_empty() && !prefix_comment_lines.is_empty() {
-                pending.comment_lines.append(&mut prefix_comment_lines);
+            if images.is_empty() {
+                if !prefix_comment_lines.is_empty() {
+                    pending.comment_lines.append(&mut prefix_comment_lines);
+                }
+                if !prefix_raw_lines.is_empty() {
+                    pending.comment_raw_lines.append(&mut prefix_raw_lines);
+                }
             }
             images.push(pending);
             cursor = markdown_image.end;
@@ -570,17 +694,37 @@ pub(super) fn parse_image_sidecar_annotations(
 
         let after = line[cursor..].trim();
         if !after.is_empty() {
-            push_image_comment_line(
-                &mut images,
-                &mut prefix_comment_lines,
-                strip_standalone_note_marker(after),
-            );
+            let stripped = strip_standalone_note_marker(after);
+            let after_is_heading = is_section_comment_heading(after);
+            let after_is_md = is_markdown_heading(after);
+            if after_is_md && !after_is_heading {
+                push_image_comment_raw_only(
+                    &mut images,
+                    &mut prefix_raw_lines,
+                    stripped,
+                );
+            } else {
+                let display = if after_is_heading {
+                    escape_markdown_heading(&stripped)
+                } else {
+                    stripped.clone()
+                };
+                push_image_comment_line(
+                    &mut images,
+                    &mut prefix_comment_lines,
+                    &mut prefix_raw_lines,
+                    display,
+                    stripped,
+                );
+            }
         }
     }
 
     images
         .into_iter()
         .filter_map(|pending| {
+            let comment_section_heading =
+                comment_section_declaration(&pending.comment_raw_lines);
             let comment_source =
                 normalize_annotation_text(&pending.comment_lines);
             let comment = strip_comment_label(&comment_source);
@@ -596,6 +740,7 @@ pub(super) fn parse_image_sidecar_annotations(
                 linked_page_style,
                 text,
                 section_heading: None,
+                comment_section_heading,
                 comment: (!comment.is_empty()).then_some(comment),
                 task_source: (!comment_source.is_empty())
                     .then(|| strip_comment_label_only(&comment_source)),
@@ -610,12 +755,28 @@ pub(super) fn parse_image_sidecar_annotations(
 pub(super) fn push_image_comment_line(
     images: &mut [PendingImageAnnotation],
     prefix_comment_lines: &mut Vec<String>,
-    line: String,
+    prefix_raw_lines: &mut Vec<String>,
+    display: String,
+    raw: String,
 ) {
     if let Some(image) = images.last_mut() {
-        image.comment_lines.push(line);
+        image.comment_lines.push(display);
+        image.comment_raw_lines.push(raw);
     } else {
-        prefix_comment_lines.push(line);
+        prefix_comment_lines.push(display);
+        prefix_raw_lines.push(raw);
+    }
+}
+
+fn push_image_comment_raw_only(
+    images: &mut [PendingImageAnnotation],
+    prefix_raw_lines: &mut Vec<String>,
+    raw: String,
+) {
+    if let Some(image) = images.last_mut() {
+        image.comment_raw_lines.push(raw);
+    } else {
+        prefix_raw_lines.push(raw);
     }
 }
 

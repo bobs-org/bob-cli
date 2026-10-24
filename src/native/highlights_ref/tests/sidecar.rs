@@ -408,6 +408,7 @@ fn annotation_block_id_is_stable_across_space_wrapping() {
         text: "Stable quoted text continues across\nphysical lines."
             .to_string(),
         section_heading: None,
+        comment_section_heading: None,
         comment: None,
         task_source: None,
         image: None,
@@ -1223,6 +1224,152 @@ Sticky about page layout.
     assert!(annotations[1].text.contains("page turners"));
     assert!(annotations[2].text.contains("page layout"));
     assert_eq!(annotations[3].page_label.as_deref(), Some("Page 2"));
+}
+
+#[test]
+fn linked_page_headings_split_after_a_simple_marker_page() {
+    // A linked `[Page N](highlights://…)` heading is a page break at any
+    // level, even after a simple `## Page 1` marker page. A level-1
+    // `# P values` sticky still stays in its chunk.
+    let annotations = parse_sidecar_markdown(
+        "\
+## Page 1
+
+- status: wip
+
+---
+
+#### [Page 11](highlights://example#page=11)
+
+> Quote on page eleven.
+
+---
+
+# P values
+
+The sticky text.
+
+---
+
+#### [Page 12](highlights://example#page=12)
+
+> Quote on page twelve.
+",
+    );
+
+    assert_eq!(annotations.len(), 4, "{annotations:?}");
+    let labels: Vec<_> = annotations
+        .iter()
+        .map(|annotation| annotation.page_label.as_deref())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            Some("Page 1"),
+            Some("Page 11"),
+            Some("Page 11"),
+            Some("Page 12")
+        ],
+        "{annotations:?}"
+    );
+    assert_eq!(annotations[2].kind, SidecarAnnotationKind::StandaloneNote);
+    assert!(
+        annotations[2].text.contains("The sticky text."),
+        "sticky stays in its chunk: {annotations:?}"
+    );
+}
+
+#[test]
+fn comment_first_line_hash_declares_for_highlights_and_images() {
+    // A highlight comment whose first line is `# Name` declares; the stored
+    // comment escapes it to `\# Name` but the heading is recorded.
+    let highlights = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> A quote.
+
+# what is it
+",
+    );
+    assert_eq!(highlights.len(), 1);
+    assert_eq!(
+        highlights[0].comment_section_heading.as_deref(),
+        Some("what is it")
+    );
+    assert_eq!(highlights[0].comment.as_deref(), Some("\\# what is it"));
+
+    // `Comment:` label prefix still declares.
+    let labeled = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> A quote.
+
+Comment: # what is it
+",
+    );
+    assert_eq!(
+        labeled[0].comment_section_heading.as_deref(),
+        Some("what is it")
+    );
+
+    // A user-typed `\# Name` first line never declares.
+    let escaped = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> A quote.
+
+\\# what is it
+",
+    );
+    assert_eq!(escaped[0].comment_section_heading, None);
+    assert_eq!(escaped[0].comment.as_deref(), Some("\\# what is it"));
+
+    // A `#` line after the first comment line never declares.
+    let later = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> A quote.
+
+A note
+
+# what is it
+",
+    );
+    assert_eq!(later[0].comment_section_heading, None);
+    assert!(later[0]
+        .comment
+        .as_deref()
+        .unwrap_or_default()
+        .contains("\\# what is it"));
+
+    // Images declare the same way.
+    let images = parse_sidecar_markdown(
+        "\
+#### [Page 4](highlights://example#page=4)
+
+![Figure](assets/figure.png)
+
+# what is it
+",
+    );
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].kind, SidecarAnnotationKind::Image);
+    assert_eq!(
+        images[0].comment_section_heading.as_deref(),
+        Some("what is it")
+    );
 }
 
 const COLOR_GROUPED_QUOTE_SIDECAR: &str = include_str!(

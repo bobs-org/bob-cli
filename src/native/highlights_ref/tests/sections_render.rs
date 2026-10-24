@@ -15,6 +15,7 @@ fn highlight(
         linked_page_style: false,
         text: text.to_string(),
         section_heading: None,
+        comment_section_heading: None,
         comment: comment.map(str::to_string),
         task_source: comment.map(str::to_string),
         image: None,
@@ -31,6 +32,7 @@ fn sticky(order: usize, page_label: &str, text: &str) -> SidecarAnnotation {
         linked_page_style: false,
         text: text.to_string(),
         section_heading: None,
+        comment_section_heading: None,
         comment: None,
         task_source: None,
         image: None,
@@ -52,6 +54,7 @@ fn declaration(
         linked_page_style: false,
         text: description.to_string(),
         section_heading: Some(heading.to_string()),
+        comment_section_heading: None,
         comment: None,
         task_source: None,
         image: None,
@@ -707,4 +710,250 @@ fn section_tasks_use_section_links_and_keep_processed_ids() {
         second_candidates[0].processed_id,
         candidates[0].processed_id
     );
+}
+
+#[test]
+fn comment_declaration_groups_bryans_note_and_keeps_ids() {
+    let bob_dir = temp_bob_dir("sections-comment-bryan");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    let sidecar = "\
+#### [Page 2](highlights://example#page=2)
+
+##### 2026-10-24:
+
+> Unrelated quote on page two.
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> First quote on page four.
+
+# what is it
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> Second quote on page four.
+
+@what-is-it
+
+---
+
+#### [Page 5](highlights://example#page=5)
+
+##### 2026-10-24:
+
+> Quote on page five.
+
+This is an interesting foobar… @what-is-it
+";
+    let annotations = parse_sidecar_markdown(sidecar);
+    assert_eq!(annotations.len(), 4, "{annotations:?}");
+    assert_eq!(
+        annotations[1].comment_section_heading.as_deref(),
+        Some("what is it"),
+        "highlight comment declares: {annotations:?}"
+    );
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations.clone(),
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.sections.len(), 1);
+    assert_eq!(rendered.sections[0].title, "what is it");
+    assert_eq!(rendered.sections[0].tag, "@what-is-it");
+    assert_eq!(rendered.sections[0].count, 3);
+    assert!(
+        rendered.content.contains("### what is it"),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains(
+            "> [!summary|section] @what-is-it · 3 highlights · Pages 4–5"
+        ),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("^s-what-is-it"),
+        "{}",
+        rendered.content
+    );
+    let page4_pos = rendered.content.find("#### Page 4").expect("page 4");
+    let page5_pos = rendered.content.find("#### Page 5").expect("page 5");
+    let other_pos = rendered
+        .content
+        .find("### Other highlights")
+        .expect("other");
+    assert!(page4_pos < page5_pos && page5_pos < other_pos);
+    // Both page-4 quotes render with no Comment card.
+    let section_slice = &rendered.content[page4_pos..page5_pos];
+    assert!(section_slice.contains("First quote on page four."));
+    assert!(section_slice.contains("Second quote on page four."));
+    assert!(
+        !section_slice.contains("[!note] Comment"),
+        "declaring and tagged page-4 blocks have no Comment: {section_slice}"
+    );
+    let page5_slice = &rendered.content[page5_pos..other_pos];
+    assert!(page5_slice.contains("This is an interesting foobar…"));
+    assert!(!page5_slice.contains("@what-is-it"));
+    let other_slice = &rendered.content[other_pos..];
+    assert!(other_slice.contains("#### Page 2"));
+    assert!(other_slice.contains("Unrelated quote on page two."));
+    // IDs equal the same sidecar without the declaration line.
+    let plain = "\
+#### [Page 2](highlights://example#page=2)
+
+##### 2026-10-24:
+
+> Unrelated quote on page two.
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> First quote on page four.
+
+---
+
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> Second quote on page four.
+
+@what-is-it
+
+---
+
+#### [Page 5](highlights://example#page=5)
+
+##### 2026-10-24:
+
+> Quote on page five.
+
+This is an interesting foobar… @what-is-it
+";
+    let plain_annotations = parse_sidecar_markdown(plain);
+    let plain_rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        plain_annotations,
+        &ParsedNote::empty(),
+    );
+    let ids: BTreeSet<String> = rendered
+        .block_ids_by_annotation_order
+        .values()
+        .cloned()
+        .collect();
+    let plain_ids: BTreeSet<String> = plain_rendered
+        .block_ids_by_annotation_order
+        .values()
+        .cloned()
+        .collect();
+    assert_eq!(ids, plain_ids, "declaring keeps ^h- IDs");
+    // Second render against the new region is byte-identical.
+    let second = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations,
+        &region_note(&rendered.content),
+    );
+    assert_eq!(second.content, rendered.content);
+    // Removing the declaration restores the original layout.
+    let third = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        parse_sidecar_markdown(plain),
+        &region_note(&rendered.content),
+    );
+    assert!(!third.content.contains("### what is it"));
+    assert!(third.content.contains("@what-is-it"));
+    assert_eq!(
+        third.content, plain_rendered.content,
+        "removing the declaration restores the plain render"
+    );
+    assert_eq!(
+        third
+            .block_ids_by_annotation_order
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        ids,
+        "removing the declaration keeps IDs"
+    );
+    // Round trip parses.
+    let parsed = parse_managed_region(&rendered.content);
+    assert_eq!(parsed.sections.len(), 1);
+    assert!(parsed.unparsed.is_empty());
+}
+
+#[test]
+fn comment_declaration_keeps_remaining_text_and_task_link() {
+    let bob_dir = temp_bob_dir("sections-comment-remaining");
+    let pdf = bob_dir.join("lib/papers/example.pdf");
+    let ref_note = bob_dir.join("ref/papers/example.md");
+    // Declaring highlight with remaining comment text and a `#task` line.
+    // Parsing records the declaration; rendering removes only the first line.
+    let sidecar = "\
+#### [Page 4](highlights://example#page=4)
+
+##### 2026-10-24:
+
+> A quote.
+
+# Memory
+
+Remaining comment text.
+
+- #task Review memory.
+";
+    let annotations = parse_sidecar_markdown(sidecar);
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(
+        annotations[0].comment_section_heading.as_deref(),
+        Some("Memory")
+    );
+    // Add the section declaration sticky so the comment declaration merges.
+    // Actually the comment itself declares, so no sticky needed; but add a
+    // sticky for another section to prove tags still work? Keep it minimal:
+    // the comment declares Memory, so rendering should group it.
+    let rendered = render(
+        &bob_dir,
+        &pdf,
+        &ref_note,
+        annotations.clone(),
+        &ParsedNote::empty(),
+    );
+    assert_eq!(rendered.sections.len(), 1);
+    assert_eq!(rendered.sections[0].title, "Memory");
+    assert!(rendered.content.contains("### Memory"));
+    assert!(rendered.content.contains("Remaining comment text."));
+    assert!(!rendered.content.contains("\\# Memory"));
+    // The `#task` line stays that block's task, linked to its `^h-` ID.
+    let block_id = rendered
+        .block_ids_by_annotation_order
+        .get(&1)
+        .cloned()
+        .expect("h id");
+    assert!(block_id.starts_with("h-"));
+    let candidates =
+        task_candidates(&bob_dir, &ref_note, &pdf, &annotations, &rendered);
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].source_block_id, block_id);
 }

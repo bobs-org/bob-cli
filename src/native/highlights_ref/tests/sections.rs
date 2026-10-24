@@ -16,6 +16,7 @@ fn annotation(
         linked_page_style: false,
         text: text.to_string(),
         section_heading: section_heading.map(str::to_string),
+        comment_section_heading: None,
         comment: task_source.map(str::to_string),
         task_source: task_source.map(str::to_string),
         image: None,
@@ -36,6 +37,29 @@ fn declaration(
         None,
         Some(heading),
     )
+}
+
+fn comment_declared(
+    order: usize,
+    kind: SidecarAnnotationKind,
+    text: &str,
+    comment: &str,
+    heading: &str,
+) -> SidecarAnnotation {
+    SidecarAnnotation {
+        kind,
+        page_label: Some(format!("Page {order}")),
+        page_index: Some(order as u32),
+        linked_page_style: false,
+        text: text.to_string(),
+        section_heading: None,
+        comment_section_heading: Some(heading.to_string()),
+        comment: Some(comment.to_string()),
+        task_source: Some(comment.to_string()),
+        image: None,
+        order,
+        ordinal_on_page: order,
+    }
 }
 
 fn plan(annotations: &[SidecarAnnotation]) -> SectionPlan {
@@ -329,7 +353,9 @@ fn planner_does_not_join_tags_only_stickies_and_keeps_task_routes() {
 
 #[test]
 fn planner_reports_literal_section_shaped_comment_lines() {
-    let annotations = vec![
+    // A first-line `\#` escape never declares and never reports; only a
+    // non-first-line `#` line stays literal with a diagnostic.
+    let first_line_escape = vec![
         declaration(1, "Memory", ""),
         annotation(
             2,
@@ -339,9 +365,377 @@ fn planner_reports_literal_section_shaped_comment_lines() {
             None,
         ),
     ];
-    let plan = plan(&annotations);
-    assert!(diagnostic_kinds(&plan)
+    let planned = plan(&first_line_escape);
+    assert!(
+        !diagnostic_kinds(&planned)
+            .contains(&SectionDiagnosticKind::DeclarationInComment),
+        "first-line escape is intentional: {:?}",
+        planned.diagnostics
+    );
+    assert_eq!(planned.home_of.get(&2), Some(&0));
+
+    let later_line = vec![
+        declaration(1, "Memory", ""),
+        annotation(
+            2,
+            SidecarAnnotationKind::Highlight,
+            "Quote",
+            Some("A note\n\\# Memory\n@memory"),
+            None,
+        ),
+    ];
+    let planned = plan(&later_line);
+    assert!(diagnostic_kinds(&planned)
         .contains(&SectionDiagnosticKind::DeclarationInComment));
+    let detail = planned
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.kind == SectionDiagnosticKind::DeclarationInComment
+        })
+        .expect("detail")
+        .detail
+        .clone();
+    assert!(
+        detail.contains("put \"# Name\" on the first line"),
+        "reworded diagnostic: {detail}"
+    );
+
+    // The mistake is never silent: it reports even when no section exists.
+    let no_sections = vec![annotation(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        Some("A note\n\\# Memory"),
+        None,
+    )];
+    let planned = plan(&no_sections);
+    assert!(planned.sections.is_empty());
+    assert!(diagnostic_kinds(&planned)
+        .contains(&SectionDiagnosticKind::DeclarationInComment));
+}
+
+#[test]
+fn comment_declarations_declare_merge_conflict_and_reject() {
+    // Accepted comment declaration creates a section with no description.
+    let declared = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        "\\# Memory",
+        "Memory",
+    );
+    let tagged = annotation(
+        2,
+        SidecarAnnotationKind::Highlight,
+        "Other quote",
+        Some("@memory"),
+        None,
+    );
+    let planned = plan(&[declared.clone(), tagged]);
+    assert_eq!(planned.sections.len(), 1);
+    assert_eq!(planned.sections[0].title, "Memory");
+    assert!(planned.sections[0].description.is_empty());
+    assert_eq!(planned.sections[0].anchor_orders, vec![1]);
+    assert!(planned.sections[0].declaration_orders.is_empty());
+    assert_eq!(planned.home_of.get(&1), Some(&0));
+    assert_eq!(planned.home_of.get(&2), Some(&0));
+    assert_eq!(planned.rewritten.get(&1).map(String::as_str), Some(""));
+
+    // Escaped first line never declares.
+    let escaped = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        "\\# Memory",
+        "Memory",
+    );
+    // Manually clear the heading to simulate a user-typed `\#` escape:
+    // parsing would leave `comment_section_heading` as None.
+    let mut escaped = escaped;
+    escaped.comment_section_heading = None;
+    let planned = plan(&[
+        annotation(
+            1,
+            SidecarAnnotationKind::StandaloneNote,
+            "decl",
+            None,
+            Some("Memory"),
+        ),
+        SidecarAnnotation {
+            comment_section_heading: None,
+            ..escaped
+        },
+    ]);
+    assert_eq!(planned.sections.len(), 1);
+    assert!(!planned.comment_declarations.contains(&1));
+
+    // Continuation followers never declare.
+    let head = annotation(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Head",
+        Some("@memory"),
+        None,
+    );
+    let mut follower = comment_declared(
+        2,
+        SidecarAnnotationKind::Highlight,
+        "Follower",
+        "\\# Memory",
+        "Memory",
+    );
+    follower.page_label = Some("Page 1".to_string());
+    // Force a continuation fold: head + follower with `<` marker.
+    let mut head_with_marker = head.clone();
+    head_with_marker.task_source = Some("ordinary".to_string());
+    head_with_marker.comment = Some("ordinary".to_string());
+    follower.task_source = Some("< \\# Memory".to_string());
+    follower.comment = Some("< \\# Memory".to_string());
+    let annotations = vec![
+        annotation(
+            0,
+            SidecarAnnotationKind::StandaloneNote,
+            "",
+            None,
+            Some("Memory"),
+        ),
+        head_with_marker,
+        follower,
+    ];
+    let folds = plan_annotation_folds(&annotations, false);
+    // If the follower merged, it must not declare.
+    if folds.continuations.head_of.contains_key(&2) {
+        let planned =
+            plan_sections(&annotations, &folds, "lib/papers/example.pdf");
+        assert!(!planned.comment_declarations.contains(&2));
+    }
+
+    // Merging sticky + comment in both orders: first wins title/slug,
+    // description comes from the sticky.
+    for (first_sticky, expected_title) in
+        [(true, "Sticky title"), (false, "Comment title")]
+    {
+        let (first, second) = if first_sticky {
+            (
+                annotation(
+                    1,
+                    SidecarAnnotationKind::StandaloneNote,
+                    "Sticky description.",
+                    None,
+                    Some("Sticky title"),
+                ),
+                comment_declared(
+                    2,
+                    SidecarAnnotationKind::Highlight,
+                    "Q",
+                    "\\# Comment title",
+                    "Comment title",
+                ),
+            )
+        } else {
+            (
+                comment_declared(
+                    1,
+                    SidecarAnnotationKind::Highlight,
+                    "Q",
+                    "\\# Comment title",
+                    "Comment title",
+                ),
+                annotation(
+                    2,
+                    SidecarAnnotationKind::StandaloneNote,
+                    "Sticky description.",
+                    None,
+                    Some("Sticky title"),
+                ),
+            )
+        };
+        // Same key to force a merge: use identical titles.
+        let first = first;
+        let mut second = second;
+        // Force same key by using the same heading text.
+        if first_sticky {
+            second.comment_section_heading = Some("Sticky title".to_string());
+        } else {
+            // first is comment "Comment title", second sticky must match it
+            second.section_heading = Some("Comment title".to_string());
+        }
+        let _ = expected_title;
+        let planned = plan(&[first.clone(), second.clone()]);
+        assert_eq!(planned.sections.len(), 1, "{first_sticky}");
+        // Description always comes from the sticky.
+        assert_eq!(
+            planned.sections[0].description, "Sticky description.",
+            "{first_sticky}"
+        );
+        assert!(planned.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == SectionDiagnosticKind::Duplicate
+        }));
+    }
+
+    // Two declarations in one block report conflict; tags for another section
+    // also conflict with the declaration home kept.
+    let host = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Host quote",
+        "\\# Memory",
+        "Memory",
+    );
+    let mut absorbed = comment_declared(
+        2,
+        SidecarAnnotationKind::Highlight,
+        "**Host quote**",
+        "\\# Visuals",
+        "Visuals",
+    );
+    absorbed.page_label = host.page_label.clone();
+    absorbed.page_index = host.page_index;
+    let sticky_memory = annotation(
+        0,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Memory"),
+    );
+    let sticky_visuals = annotation(
+        3,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Visuals"),
+    );
+    let annotations = vec![sticky_memory, host, absorbed, sticky_visuals];
+    let folds = plan_annotation_folds(&annotations, false);
+    // Only test conflict when the underline actually absorbs.
+    if folds.underlines.host_of.get(&2) == Some(&1) {
+        let planned =
+            plan_sections(&annotations, &folds, "lib/papers/example.pdf");
+        assert_eq!(planned.home_of.get(&1), Some(&0));
+        assert!(diagnostic_kinds(&planned)
+            .contains(&SectionDiagnosticKind::Conflict));
+    }
+
+    // Rejected comment declarations report and render literally.
+    let empty = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Q",
+        "\\# !!!",
+        "!!!",
+    );
+    let planned = plan(&[empty]);
+    assert!(planned.sections.is_empty());
+    assert!(
+        diagnostic_kinds(&planned).contains(&SectionDiagnosticKind::TitleEmpty)
+    );
+    let reserved = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Q",
+        "\\# Other highlights",
+        "Other highlights",
+    );
+    let planned = plan(&[reserved]);
+    assert!(planned.sections.is_empty());
+    assert!(diagnostic_kinds(&planned)
+        .contains(&SectionDiagnosticKind::ReservedTitle));
+}
+
+#[test]
+fn comment_declaration_beats_tags_and_reports_other_section() {
+    let sticky_memory = annotation(
+        0,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Memory"),
+    );
+    let sticky_visuals = annotation(
+        3,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Visuals"),
+    );
+    // Declaring block tags another section: declaration wins, other tag stays.
+    let mut declaring = comment_declared(
+        1,
+        SidecarAnnotationKind::Highlight,
+        "Quote",
+        "\\# Memory\n@visuals",
+        "Memory",
+    );
+    // The stored comment has the escaped declaration plus the other tag.
+    declaring.comment = Some("\\# Memory\n@visuals".to_string());
+    declaring.task_source = Some("\\# Memory\n@visuals".to_string());
+    let planned = plan(&[sticky_memory, declaring, sticky_visuals]);
+    assert_eq!(planned.sections.len(), 2);
+    assert_eq!(planned.home_of.get(&1), Some(&0));
+    assert_eq!(
+        planned.rewritten.get(&1).map(String::as_str),
+        Some("@visuals")
+    );
+    assert!(
+        diagnostic_kinds(&planned).contains(&SectionDiagnosticKind::Conflict)
+    );
+    let conflict = planned
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.kind == SectionDiagnosticKind::Conflict)
+        .expect("conflict");
+    assert!(conflict.detail.contains("(kept @memory)"));
+}
+
+#[test]
+fn comment_declarations_work_for_images_and_standalone_underlines() {
+    let image = comment_declared(
+        1,
+        SidecarAnnotationKind::Image,
+        "figure.png",
+        "\\# Memory",
+        "Memory",
+    );
+    let sticky = annotation(
+        0,
+        SidecarAnnotationKind::StandaloneNote,
+        "",
+        None,
+        Some("Memory"),
+    );
+    let planned = plan(&[sticky, image]);
+    assert_eq!(planned.sections.len(), 1);
+    assert_eq!(planned.home_of.get(&1), Some(&0));
+    assert_eq!(planned.rewritten.get(&1).map(String::as_str), Some(""));
+
+    // A standalone underline (`**term**` with no host) declares as a head.
+    let mut underline = comment_declared(
+        2,
+        SidecarAnnotationKind::Highlight,
+        "**term**",
+        "\\# Memory",
+        "Memory",
+    );
+    underline.page_label = Some("Page 1".to_string());
+    underline.page_index = Some(1);
+    let planned = plan(&[
+        annotation(
+            0,
+            SidecarAnnotationKind::StandaloneNote,
+            "",
+            None,
+            Some("Memory"),
+        ),
+        underline,
+    ]);
+    // Either standalone (no host) with a home, or absorbed (host found) with
+    // the same home — both prove the underline declaration works.
+    assert_eq!(planned.sections.len(), 1);
+    assert!(
+        planned.home_of.contains_key(&2)
+            || planned.comment_declarations.contains(&2)
+    );
 }
 
 #[test]

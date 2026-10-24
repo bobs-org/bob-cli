@@ -19,7 +19,51 @@ fn note_identity_key(text: &str) -> String {
 }
 
 fn comment_identity_key(text: &str) -> String {
-    section_match_key(&identity_comment_key(text))
+    section_match_key(&identity_comment_key(&strip_identity_headings(text)))
+}
+
+/// Ignore a first-line `# Name` / `\# Name` heading for tiebreakers, on both
+/// sides and in both spellings, so twin quotes keep their IDs when a comment
+/// declaration is added or removed. All such lines are ignored (not only the
+/// very first) so a head plus an absorbed underline that both declare still
+/// matches after either declaration is removed.
+fn strip_identity_headings(text: &str) -> String {
+    let mut kept = Vec::new();
+    for line in text.lines() {
+        // Strip an optional Comment:/Note: label before checking, mirroring
+        // the declaration slot.
+        let mut candidate = line.trim();
+        for label in ["Comment:", "comment:", "Note:", "note:"] {
+            if let Some(rest) = candidate.strip_prefix(label) {
+                candidate = rest.trim_start();
+                break;
+            }
+        }
+        let is_hash_heading = {
+            let trimmed = candidate.trim_start();
+            if let Some(rest) = trimmed.strip_prefix('#') {
+                !rest.starts_with('#')
+                    && rest.chars().next().is_some_and(char::is_whitespace)
+                    && !rest.trim().is_empty()
+            } else {
+                false
+            }
+        };
+        let is_escaped_heading = {
+            let trimmed = candidate.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("\\#") {
+                rest.chars().next().is_some_and(char::is_whitespace)
+                    && !rest.trim().is_empty()
+            } else {
+                false
+            }
+        };
+        if is_hash_heading || is_escaped_heading {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
 }
 
 /// Effective comment text for duplicate tiebreakers, without double-counting
