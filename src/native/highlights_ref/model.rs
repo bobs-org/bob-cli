@@ -380,6 +380,15 @@ pub(super) enum SidecarAnnotationKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RenderedSection {
+    pub(super) title: String,
+    pub(super) tag: String,
+    pub(super) block_id: String,
+    pub(super) count: usize,
+    pub(super) page_label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RenderedHighlights {
     pub(super) content: String,
     pub(super) count: usize,
@@ -393,6 +402,9 @@ pub(super) struct RenderedHighlights {
     pub(super) image_assets: Vec<ImageAssetWrite>,
     pub(super) block_ids_by_annotation_order: BTreeMap<usize, String>,
     pub(super) standalone_ids_by_annotation_order: BTreeMap<usize, String>,
+    pub(super) sections: Vec<RenderedSection>,
+    pub(super) section_diagnostics:
+        Vec<crate::native::highlights_ref::sections::SectionDiagnostic>,
 }
 
 /// A `<` marker that could not merge because no earlier text highlight exists.

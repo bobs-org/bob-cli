@@ -50,6 +50,7 @@ pub(super) enum SectionDiagnosticKind {
 }
 
 impl SectionDiagnosticKind {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Sections => "sections",

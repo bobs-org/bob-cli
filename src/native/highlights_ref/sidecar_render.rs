@@ -1,5 +1,75 @@
 //! Sidecar highlight rendering and line classifiers.
+use super::sections::{
+    display_source, plan_sections, section_match_key, SectionPlan,
+};
 use super::*;
+
+#[derive(Debug, Clone)]
+struct DisplayBlock {
+    head_order: usize,
+    page_label: Option<String>,
+    markdown: String,
+}
+
+/// Stable note/comment identity shared by current and existing sides.
+/// It layers the `@`-insensitive normalizer over the existing
+/// return-link/beautify/emphasis/whitespace normalization.
+fn note_identity_key(text: &str) -> String {
+    section_match_key(&identity_quote_key(text))
+}
+
+fn comment_identity_key(text: &str) -> String {
+    section_match_key(&identity_comment_key(text))
+}
+
+/// Effective comment text for duplicate tiebreakers, without double-counting
+/// prose that appears in both `comment` and `task_source`.
+fn deduped_effective_comment(annotation: &SidecarAnnotation) -> String {
+    let comment = annotation.comment.as_deref().unwrap_or("").trim();
+    let task_source = annotation.task_source.as_deref().unwrap_or("").trim();
+    if comment.is_empty() {
+        return task_source.to_string();
+    }
+    if task_source.is_empty() {
+        return comment.to_string();
+    }
+    if task_source == comment {
+        return comment.to_string();
+    }
+    // When one contains the other (e.g. task_source is the raw form of the
+    // parsed comment), keep the longer form once instead of joining both.
+    if task_source.contains(comment) {
+        return task_source.to_string();
+    }
+    if comment.contains(task_source) {
+        return comment.to_string();
+    }
+    format!("{comment}\n{task_source}")
+}
+
+fn rejected_declaration_display(annotation: &SidecarAnnotation) -> String {
+    let heading = annotation.section_heading.as_deref().unwrap_or("");
+    let first = format!("\\# {heading}");
+    let description = annotation.text.trim();
+    if description.is_empty() {
+        first
+    } else {
+        format!("{first}\n{description}")
+    }
+}
+
+fn annotation_match_text(annotation: &SidecarAnnotation) -> String {
+    match annotation.kind {
+        SidecarAnnotationKind::StandaloneNote => {
+            if annotation.section_heading.is_some() {
+                note_identity_key(&rejected_declaration_display(annotation))
+            } else {
+                note_identity_key(&annotation.text)
+            }
+        }
+        _ => identity_quote_key(&annotation.text),
+    }
+}
 
 pub(super) fn render_sidecar_highlights(
     config: &Config,
@@ -18,13 +88,18 @@ pub(super) fn render_sidecar_highlights(
     let mut block_ids_by_annotation_order = BTreeMap::new();
     let mut standalone_ids_by_annotation_order = BTreeMap::new();
     let mut rendered = String::new();
-    let mut current_page = None;
+    let mut blocks: Vec<DisplayBlock> = Vec::new();
     let mut image_count = 0usize;
     let mut image_note_count = 0usize;
     let mut image_notes_unresolved = Vec::new();
     let silently_dropped_ids = silently_dropped_block_ids(note);
     let folds = plan_annotation_folds(&sidecar.annotations, strip_return_links);
     let plan = &folds.continuations;
+    let section_plan = plan_sections(
+        &sidecar.annotations,
+        &folds,
+        &source_pdf_value(config, pdf),
+    );
     let annotations_by_order: BTreeMap<usize, &SidecarAnnotation> = sidecar
         .annotations
         .iter()
@@ -37,6 +112,7 @@ pub(super) fn render_sidecar_highlights(
         note,
         &folds,
         &annotations_by_order,
+        &section_plan,
     )?;
     let absorbed_ids = id_plan.absorbed_standalone_ids.clone();
 
@@ -48,6 +124,12 @@ pub(super) fn render_sidecar_highlights(
 
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        // Accepted declarations become cards, never blocks or h IDs.
+        if section_plan.declarations.contains(&annotation.order)
+            && !section_plan.rejected.contains_key(&annotation.order)
+        {
             continue;
         }
         if plan.head_of.contains_key(&annotation.order) {
@@ -125,11 +207,6 @@ pub(super) fn render_sidecar_highlights(
                     .collect();
                 let heading_label = group_page_label(&labels)
                     .or_else(|| annotation.page_label.clone());
-                push_page_heading(
-                    &mut rendered,
-                    &mut current_page,
-                    heading_label.as_deref(),
-                );
 
                 let mut piece_texts = Vec::new();
                 for member in &members {
@@ -208,13 +285,20 @@ pub(super) fn render_sidecar_highlights(
                     let mut comment_parts =
                         Vec::<(String, Option<String>)>::new();
                     let effective = plan.effective_annotation(member);
-                    let source = effective
+                    let raw_source = effective
                         .task_source
                         .as_deref()
                         .or(effective.comment.as_deref())
                         .unwrap_or("");
+                    let source_owned = section_plan
+                        .rewritten
+                        .get(&member.order)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            display_source(raw_source, &BTreeSet::new())
+                        });
                     let (image_note_refs, remaining_text) =
-                        split_image_note_lines(source);
+                        split_image_note_lines(&source_owned);
                     append_resolved_image_notes(
                         config,
                         ref_note_path,
@@ -245,9 +329,17 @@ pub(super) fn render_sidecar_highlights(
                     for contribution in underline_contributions {
                         let underline =
                             annotations_by_order[&contribution.order];
-                        let source = effective_underline_source(underline);
+                        let raw_underline =
+                            effective_underline_source(underline);
+                        let display_underline = section_plan
+                            .rewritten
+                            .get(&contribution.order)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                display_source(&raw_underline, &BTreeSet::new())
+                            });
                         let (image_note_refs, remaining_text) =
-                            split_image_note_lines(&source);
+                            split_image_note_lines(&display_underline);
                         append_resolved_image_notes(
                             config,
                             ref_note_path,
@@ -298,10 +390,13 @@ pub(super) fn render_sidecar_highlights(
                         comment_parts,
                     });
                 }
-                rendered.push_str(&render_highlight_group_block(
-                    &rendered_pieces,
-                    &block_id,
-                ));
+                let markdown =
+                    render_highlight_group_block(&rendered_pieces, &block_id);
+                blocks.push(DisplayBlock {
+                    head_order: annotation.order,
+                    page_label: heading_label,
+                    markdown,
+                });
             }
             SidecarAnnotationKind::Image
             | SidecarAnnotationKind::StandaloneNote => {
@@ -350,19 +445,37 @@ pub(super) fn render_sidecar_highlights(
                     image_count += 1;
                 }
 
-                let image_note_source = match annotation.kind {
+                let is_rejected =
+                    section_plan.rejected.contains_key(&annotation.order);
+                let raw_source_owned: String = match annotation.kind {
                     SidecarAnnotationKind::Image => annotation
                         .task_source
                         .as_deref()
                         .or(annotation.comment.as_deref())
-                        .unwrap_or(""),
+                        .unwrap_or("")
+                        .to_string(),
                     SidecarAnnotationKind::StandaloneNote => {
-                        annotation.text.as_str()
+                        if is_rejected {
+                            rejected_declaration_display(annotation)
+                        } else {
+                            annotation.text.clone()
+                        }
                     }
-                    SidecarAnnotationKind::Highlight => "",
+                    SidecarAnnotationKind::Highlight => String::new(),
                 };
+                let display_source_text = section_plan
+                    .rewritten
+                    .get(&annotation.order)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        if is_rejected {
+                            raw_source_owned.clone()
+                        } else {
+                            display_source(&raw_source_owned, &BTreeSet::new())
+                        }
+                    });
                 let (image_note_refs, remaining_text) =
-                    split_image_note_lines(image_note_source);
+                    split_image_note_lines(&display_source_text);
                 let mut image_note_renders = Vec::new();
                 append_resolved_image_notes(
                     config,
@@ -375,12 +488,7 @@ pub(super) fn render_sidecar_highlights(
                     &mut image_notes_unresolved,
                     &mut image_asset_writes_by_dest,
                 )?;
-                push_page_heading(
-                    &mut rendered,
-                    &mut current_page,
-                    annotation.page_label.as_deref(),
-                );
-                rendered.push_str(&render_annotation_block(
+                let markdown = render_annotation_block(
                     config,
                     ref_note_path,
                     annotation,
@@ -389,7 +497,124 @@ pub(super) fn render_sidecar_highlights(
                     &image_note_renders,
                     &remaining_text,
                     strip_return_links,
-                ));
+                );
+                // Rejected declarations render with their literal heading but
+                // keep the stored page label for grouping.
+                blocks.push(DisplayBlock {
+                    head_order: annotation.order,
+                    page_label: annotation.page_label.clone(),
+                    markdown,
+                });
+            }
+        }
+    }
+
+    if section_plan.sections.is_empty() {
+        let mut current_page: Option<String> = None;
+        for block in &blocks {
+            push_page_heading(
+                &mut rendered,
+                &mut current_page,
+                block.page_label.as_deref(),
+                3,
+            );
+            rendered.push_str(&block.markdown);
+        }
+    } else {
+        let mut ungrouped: Vec<&DisplayBlock> = Vec::new();
+        let mut grouped: BTreeMap<usize, Vec<&DisplayBlock>> = BTreeMap::new();
+        for block in &blocks {
+            if let Some(section_index) =
+                section_plan.home_of.get(&block.head_order).copied()
+            {
+                grouped.entry(section_index).or_default().push(block);
+            } else {
+                ungrouped.push(block);
+            }
+        }
+        for (section_index, planned) in section_plan.sections.iter().enumerate()
+        {
+            push_h3_heading(&mut rendered, &planned.title);
+            let members =
+                grouped.get(&section_index).cloned().unwrap_or_default();
+            let count = members.len();
+            let page_labels: Vec<Option<&str>> = members
+                .iter()
+                .map(|block| block.page_label.as_deref())
+                .collect();
+            let pages = group_page_label(&page_labels);
+            let caption = if count == 0 {
+                format!("{} · nothing tagged yet", planned.tag)
+            } else if count == 1 {
+                match pages.as_deref() {
+                    Some(pages) => {
+                        format!("{} · 1 highlight · {}", planned.tag, pages)
+                    }
+                    None => format!("{} · 1 highlight", planned.tag),
+                }
+            } else {
+                match pages.as_deref() {
+                    Some(pages) => {
+                        format!(
+                            "{} · {count} highlights · {}",
+                            planned.tag, pages
+                        )
+                    }
+                    None => format!("{} · {count} highlights", planned.tag),
+                }
+            };
+            let (image_note_refs, remaining) =
+                split_image_note_lines(&planned.description);
+            let mut card_image_renders = Vec::new();
+            append_resolved_image_notes(
+                config,
+                ref_note_path,
+                planned.declaration_orders.first().copied().unwrap_or(0),
+                &planned.block_id,
+                &image_note_refs,
+                &mut card_image_renders,
+                &mut image_note_count,
+                &mut image_notes_unresolved,
+                &mut image_asset_writes_by_dest,
+            )?;
+            let beautified = beautify_annotation_text(&remaining);
+            let card_text = if beautified.trim().is_empty() {
+                caption.clone()
+            } else {
+                format!("{caption}\n{beautified}")
+            };
+            push_callout_block(
+                &mut rendered,
+                1,
+                "[!summary|section]",
+                &card_text,
+            );
+            push_image_note_renders(&mut rendered, &card_image_renders, 1);
+            rendered.push('\n');
+            rendered.push_str(&format!("^{}", planned.block_id));
+            rendered.push_str("\n\n");
+            let mut section_page: Option<String> = None;
+            for member in members {
+                push_page_heading(
+                    &mut rendered,
+                    &mut section_page,
+                    member.page_label.as_deref(),
+                    4,
+                );
+                rendered.push_str(&member.markdown);
+            }
+        }
+        if !ungrouped.is_empty() {
+            push_h3_heading(&mut rendered, "Other highlights");
+            let mut other_page: Option<String> = None;
+            for block in ungrouped {
+                push_page_heading(
+                    &mut rendered,
+                    &mut other_page,
+                    block.page_label.as_deref(),
+                    4,
+                );
+                rendered.push_str(&block.markdown);
             }
         }
     }
@@ -499,7 +724,22 @@ pub(super) fn render_sidecar_highlights(
         }
     }
 
+    // Every accepted declaration order maps to its section, including merged
+    // declarations. Later fallback filling must not overwrite these.
+    for planned in &section_plan.sections {
+        for order in &planned.declaration_orders {
+            block_ids_by_annotation_order
+                .insert(*order, planned.block_id.clone());
+            standalone_ids_by_annotation_order
+                .insert(*order, planned.block_id.clone());
+        }
+    }
+
     for (&order, id) in &id_plan.effective_by_order {
+        // Preserve section mappings above.
+        if section_plan.declarations.contains(&order) {
+            continue;
+        }
         block_ids_by_annotation_order
             .entry(order)
             .or_insert_with(|| id.clone());
@@ -526,6 +766,24 @@ pub(super) fn render_sidecar_highlights(
         } else {
             let _ = asset;
         }
+    }
+
+    let mut rendered_sections = Vec::new();
+    for (section_index, planned) in section_plan.sections.iter().enumerate() {
+        let displayed = blocks
+            .iter()
+            .filter(|block| {
+                section_plan.home_of.get(&block.head_order).copied()
+                    == Some(section_index)
+            })
+            .count();
+        rendered_sections.push(RenderedSection {
+            title: planned.title.clone(),
+            tag: planned.tag.clone(),
+            block_id: planned.block_id.clone(),
+            count: displayed,
+            page_label: planned.page_label.clone(),
+        });
     }
 
     Ok(RenderedHighlights {
@@ -559,6 +817,8 @@ pub(super) fn render_sidecar_highlights(
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
         standalone_ids_by_annotation_order,
+        sections: rendered_sections,
+        section_diagnostics: section_plan.diagnostics.clone(),
     })
 }
 
@@ -715,6 +975,7 @@ fn push_page_heading(
     rendered: &mut String,
     current_page: &mut Option<String>,
     page_label: Option<&str>,
+    level: usize,
 ) {
     if page_label == current_page.as_deref() {
         return;
@@ -723,11 +984,23 @@ fn push_page_heading(
         if !rendered.is_empty() {
             rendered.push('\n');
         }
-        rendered.push_str("### ");
+        for _ in 0..level {
+            rendered.push('#');
+        }
+        rendered.push(' ');
         rendered.push_str(page_label);
         rendered.push_str("\n\n");
     }
     *current_page = page_label.map(str::to_string);
+}
+
+fn push_h3_heading(rendered: &mut String, title: &str) {
+    if !rendered.is_empty() {
+        rendered.push('\n');
+    }
+    rendered.push_str("### ");
+    rendered.push_str(title);
+    rendered.push_str("\n\n");
 }
 
 fn append_resolved_image_notes(
@@ -927,12 +1200,24 @@ pub(super) fn annotation_block_id(
     annotation: &SidecarAnnotation,
 ) -> String {
     debug_assert_ne!(annotation.kind, SidecarAnnotationKind::Image);
+    let normalized = match annotation.kind {
+        SidecarAnnotationKind::StandaloneNote => {
+            // Rejected declarations use their literal display; ordinary notes
+            // use the shared @-insensitive key.
+            if annotation.section_heading.is_some() {
+                note_identity_key(&rejected_declaration_display(annotation))
+            } else {
+                note_identity_key(&annotation.text)
+            }
+        }
+        _ => identity_quote_key(&annotation.text),
+    };
     stable_base_block_id(
         config,
         pdf,
         annotation.kind.as_str(),
         annotation.page_label.as_deref(),
-        &identity_quote_key(&annotation.text),
+        &normalized,
     )
 }
 
@@ -1058,6 +1343,7 @@ fn plan_block_ids(
     note: &ParsedNote,
     folds: &AnnotationFolds,
     annotations_by_order: &BTreeMap<usize, &SidecarAnnotation>,
+    section_plan: &SectionPlan,
 ) -> Result<BlockIdPlan> {
     let existing_ids = note.generated_block_ids()?;
     let silently_dropped = silently_dropped_block_ids(note);
@@ -1092,7 +1378,7 @@ fn plan_block_ids(
                         kind_str: region_kind_str(block.kind).to_string(),
                         page: block.page_label.clone(),
                         text,
-                        comment: identity_comment_key(
+                        comment: comment_identity_key(
                             block.comment.as_deref().unwrap_or_default(),
                         ),
                         note_index: index,
@@ -1104,7 +1390,7 @@ fn plan_block_ids(
                         block_id: block.block_id.clone(),
                         kind_str: region_kind_str(block.kind).to_string(),
                         page: block.page_label.clone(),
-                        text: identity_quote_key(&text),
+                        text: note_identity_key(&text),
                         comment: String::new(),
                         note_index: index,
                     });
@@ -1118,6 +1404,12 @@ fn plan_block_ids(
     let mut absorbed_orders: Vec<usize> = Vec::new();
     for annotation in &sidecar.annotations {
         if is_sidecar_marker_mirror(annotation) {
+            continue;
+        }
+        // Accepted declarations are cards, never heads.
+        if section_plan.declarations.contains(&annotation.order)
+            && !section_plan.rejected.contains_key(&annotation.order)
+        {
             continue;
         }
         if annotation.kind == SidecarAnnotationKind::Image {
@@ -1150,23 +1442,11 @@ fn plan_block_ids(
                     .collect();
                 let head_effective =
                     plan_continuations.effective_annotation(annotation);
-                let head_comment_raw = head_effective
-                    .task_source
-                    .as_deref()
-                    .or(head_effective.comment.as_deref())
-                    .unwrap_or("");
-                let head_effective_comment = if head_comment_raw.is_empty() {
-                    head_effective.comment.clone().unwrap_or_default()
-                } else {
-                    format!(
-                        "{}\n{}",
-                        head_effective.comment.clone().unwrap_or_default(),
-                        head_effective.task_source.clone().unwrap_or_default()
-                    )
-                };
+                let head_effective_comment =
+                    deduped_effective_comment(&head_effective);
                 let head_text = identity_quote_key(&annotation.text);
                 let head_comment =
-                    identity_comment_key(&head_effective_comment);
+                    comment_identity_key(&head_effective_comment);
                 let head_page = annotation.page_label.clone();
                 let labels: Vec<Option<&str>> = member_refs
                     .iter()
@@ -1196,20 +1476,13 @@ fn plan_block_ids(
                 for member in &member_refs {
                     let effective =
                         plan_continuations.effective_annotation(member);
-                    if let Some(comment) = effective.comment.as_deref() {
-                        if !comment.trim().is_empty() {
-                            full_comment_parts.push(comment.to_string());
-                        }
-                    }
-                    if let Some(task_source) = effective.task_source.as_deref()
-                    {
-                        if !task_source.trim().is_empty() {
-                            full_comment_parts.push(task_source.to_string());
-                        }
+                    let deduped = deduped_effective_comment(&effective);
+                    if !deduped.trim().is_empty() {
+                        full_comment_parts.push(deduped);
                     }
                 }
                 let full_comment =
-                    identity_comment_key(&full_comment_parts.join("\n"));
+                    comment_identity_key(&full_comment_parts.join("\n"));
                 heads.push(CurrentHead {
                     order: annotation.order,
                     kind_str: annotation.kind.as_str().to_string(),
@@ -1224,7 +1497,13 @@ fn plan_block_ids(
                 });
             }
             SidecarAnnotationKind::StandaloneNote => {
-                let text = identity_quote_key(&annotation.text);
+                let raw =
+                    if section_plan.rejected.contains_key(&annotation.order) {
+                        rejected_declaration_display(annotation)
+                    } else {
+                        annotation.text.clone()
+                    };
+                let text = note_identity_key(&raw);
                 let page = annotation.page_label.clone();
                 heads.push(CurrentHead {
                     order: annotation.order,
@@ -1753,7 +2032,7 @@ fn plan_block_ids(
                 .entry(IdentityPrimary {
                     kind: annotation.kind.as_str().to_string(),
                     page: annotation.page_label.clone(),
-                    text: identity_quote_key(&annotation.text),
+                    text: annotation_match_text(annotation),
                 })
                 .or_default()
                 .push(order);
@@ -1788,7 +2067,7 @@ fn plan_block_ids(
                 pdf,
                 annotation.kind.as_str(),
                 annotation.page_label.as_deref(),
-                &identity_quote_key(&annotation.text),
+                &annotation_match_text(annotation),
             );
             if existing_ids.contains(&stable)
                 && !reused_existing.contains(&stable)
@@ -1805,7 +2084,7 @@ fn plan_block_ids(
                 }
                 if live.kind_str == annotation.kind.as_str()
                     && live.page == annotation.page_label
-                    && live.text == identity_quote_key(&annotation.text)
+                    && live.text == annotation_match_text(annotation)
                 {
                     matched = Some(live.block_id.clone());
                     break;
@@ -1825,7 +2104,7 @@ fn plan_block_ids(
                     pdf,
                     annotation.kind.as_str(),
                     annotation.page_label.as_deref(),
-                    &identity_quote_key(&annotation.text),
+                    &annotation_match_text(annotation),
                     index,
                 );
                 if !used_ids.contains(&candidate)

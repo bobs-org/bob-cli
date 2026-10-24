@@ -77,8 +77,7 @@ mod report;
 pub(crate) mod return_links;
 mod scan_json;
 mod scan_receipt;
-#[allow(dead_code)]
-mod sections;
+pub(crate) mod sections;
 mod sidecar;
 mod sidecar_render;
 mod sources;
