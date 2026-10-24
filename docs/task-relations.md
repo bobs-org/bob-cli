@@ -669,8 +669,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 
 ## 16. Label vocabulary
 
-Rules RV1–RV4, the CLI and journal parts of RV7, and RV8 are shipped.
-RV5, RV6, and RV9 remain planned until their phases land.
+Rules RV1–RV9 are shipped.
 
 ### RV1 Words
 
@@ -749,7 +748,7 @@ RV5, RV6, and RV9 remain planned until their phases land.
 
 ### RV5 The relation card
 
-`planned (phase mac-chooser, phase mac-vocab, phase mac-rename)`.
+Shipped in Bob Mac Capture and the Obsidian relation-label stage.
 Ctrl+N/P navigate without touching the query, Tab accepts or
 completes the top match, selection is by key, Ctrl+D hides what
 Return would insert, Ctrl+H toggles the Hidden section, and Ctrl+R
@@ -868,7 +867,7 @@ rename is part of acceptance.
 
 ### RV9 Obsidian
 
-`planned (phase obsidian-vocab, phase obsidian-rename)`. One ranker
+Shipped. One ranker
 and one key shared through byte-for-byte vectors, a read-only
 journal fold, `api.relationLabels` v1 with desktop-only
 hide/unhide/rename writes through bob, and the nav relation-label
@@ -877,7 +876,6 @@ stage with the card's keys and copy.
 ### Shared vectors
 
 `tests/fixtures/relation_labels/vectors.json` is the single source.
-Its `key`, `catalog`, `fold`, `rank`, and `grammar` (`rust_only`, LD
-vectors) sections are consumed by Rust tests; `rename` (`rust_only`)
-arrives with its phase. bob-plugins copies the file byte-for-byte
-when `planned (phase obsidian-vocab)` lands.
+Its `key`, `catalog`, `fold`, `rank`, and `grammar` (LD vectors)
+sections are consumed by Rust tests; rename fold cases live in
+`fold`. bob-plugins copies the file byte-for-byte.

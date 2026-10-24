@@ -898,6 +898,189 @@ Evidence: `research:202610/ref_create_auto_ingest_across_tailnet/ref_create_auto
 `c4ac06f` (create ingest), `fa7745f` (intake-only drain), `5848c39` (producer
 ingest), and `4703619` (intake health).
 
+## Relation Card Tab Accepts Ctrl-D Hides {#relation-card-tab-accepts-ctrl-d-hides}
+
+**Status:** Accepted
+
+Ctrl+N/P navigate the relation card without touching the query, Tab accepts or completes the top match, selection is by key, and Ctrl+D hides what Return would insert.
+
+**Applies to.** The Bob Mac Capture relation card and the Obsidian
+relation-label stage.
+
+**Claim.** Card state is `query`, `selectedKey` (a label key, never an array
+index), and the catalog fetched once on open. Navigation changes only
+`selectedKey` and the sentence pill: it never edits the query, spawns a
+process, or clears freshness. Typing clears the selection and refreshes only
+the typed-row validation probe; the list ranks locally from the catalog. Tab
+accepts the selected row, or completes the top match when nothing is
+selected. One rule ties the keys together: Ctrl+D hides what Return would
+insert (a ghost row with undo on a selection, the one-off toggle otherwise).
+Ctrl+H shows or hides the Hidden section; selection is by key so a refresh
+keeps the key when it survives and clears it when it disappears.
+
+**Why.** Writing the chosen row back into the field and refetching collapsed
+the list to one typed row, so Tab computed `(0+1) mod 1 = 0` forever and fast
+Tabs walked a stale list; the index also outlived its list, started at 0
+(skipping the most-used label), and was never drawn. Index-based selection
+cannot survive a reorder; key-based selection can. Rejected alternatives:
+
+- **Tab cycles suggestions** — the reported bug: refetch-per-accept makes
+  every Tab a no-op on a one-row list.
+- **Index-based selection** — a reorder silently moves the highlight to a
+  different row.
+- **Fetch per keystroke for the list** — navigation must be local and instant;
+  only the typed-row probe may call bob.
+- **Ctrl+Shift+H for the Hidden section** — the accepted `hidden_key`
+  branch is Ctrl+H, mirroring `bob relations -H`; Ctrl+H claims
+  backward-delete only inside this one-line card.
+
+Evidence: `plan:202610/relation_label_vocabulary.md` RV5 with
+`hidden_key = ctrl_h`; `research:202610/relation_card_label_vocabulary`;
+`docs/task-relations.md` §16.
+
+**Cost.** Ctrl+H loses its Emacs backward-delete meaning inside the one-line
+card field (Backspace and fn-Delete still delete). Footers must teach the
+keys because Tab no longer cycles.
+
+**Reopens when.** The Hidden section needs a different chord, navigation must
+refetch, or selection must survive a key disappearing.
+
+## Relation Label Hide Is Suggestions-Only {#relation-label-hide-is-suggestions-only}
+
+**Status:** Accepted
+
+Hiding a relation label removes it from suggestions only; LINKS text, mirrors, chips, counts, and typed use stay unchanged, and using it never unhides it.
+
+**Applies to.** bob-cli `bob relations hide` / `unhide`, capture-complete
+`relation_label` rows, the Mac relation card, and the Obsidian relation-label
+stage.
+
+**Claim.** Hiding a relation label removes it from **suggestions** only: card
+rows, the Obsidian stage, `relations list` defaults, and shell completion.
+LINKS text, LINKED FROM mirrors, chips, counts, and typed use are unchanged.
+Typing a hidden label's exact name still works and is flagged `hidden`; using
+it never unhides it. A one-off `||` label hides only after the capture's notes
+commit succeeds, and hiding a visible existing label warns with the link count
+instead of blocking. This is the twin of
+[Hiding A Theme Removes It From Recent Only](#theme-hide-is-recent-only).
+
+**Why.** Deleting a hidden label from the catalog would rewrite history and
+lose its count. Auto-unhiding on use would fight the hide gesture the next
+time the label is typed. Blocking typed use of a hidden label would make old
+notes un-linkable. Auto-hiding anything (for example low-count labels) would
+create silent state Bryan never asked for. Rejected alternatives:
+
+- **Delete from the catalog** — Stats-equivalent counts and old LINKS lines
+  would lose the name.
+- **Unhide on next use** — typing a hidden label once would bounce it back
+  into every suggestion list.
+- **Block inserting hidden labels** — existing notes carrying the label could
+  no longer be linked with it.
+- **Auto-hide** — any silent hide breaks the no-silent-state rule; every hide
+  is an explicit Ctrl+D, `bob relations hide`, or `||`.
+
+Evidence: `plan:202610/relation_label_vocabulary.md` RV4;
+`research:202610/relation_card_label_vocabulary`;
+`docs/task-relations.md` §16; commits `57d77612`, `6def3ac8`, `895b9ba7`.
+
+**Cost.** Hidden labels still occupy the catalog and still wear counts. Clients
+must filter suggestions after ranking, not drop the catalog row, and must
+render bob's warning message instead of computing the count.
+
+**Reopens when.** Hide should also suppress counts or mirrors, typed use of a
+hidden label should refuse, or using a hidden label should be an unhide
+gesture.
+
+## Relation Label Prefs Live In A Per-Host Journal {#relation-label-prefs-live-in-per-host-journal}
+
+**Status:** Accepted
+
+Relation label hide, unhide, and rename events live in vault-synced .bob/relations/<host>.jsonl; fold is last-writer-wins and bob is the only writer.
+
+**Applies to.** bob-cli, Bob Mac Capture, and Obsidian plugins that hide,
+unhide, or rename relation labels.
+
+**Claim.** Preferences live in `.bob/relations/<host>.jsonl`, one
+append-only file per host inside the vault so Git syncs them. `host` is the
+same label vault-sync uses in commit subjects. Events are `v: 1`
+`relation_label.hide`, `relation_label.unhide`, and `relation_label.rename`
+(`from`, `to`, plus display names), each with `v`, `ts`, `host`, and `via`.
+Fold is exactly the theme rule, implemented once in the shared `pref_journal`
+module: read every `*.jsonl` file, skip malformed lines with a bounded
+warning, sort by `(ts instant, host, path, line)`, and let the last writer win
+per key. A rename moves the source key's explicit state unless the target
+already has state; events after a rename on the old key apply to the old key.
+bob is the only writer; other clients call bob. This is the twin of
+[Theme Preferences Live In A Per-Host Journal](#theme-prefs-live-in-per-host-journal).
+
+**Why.** Frontmatter on daily notes would mix derived history with
+preferences. A machine-local file would not sync hides across apollo and the
+Mac. A single shared JSON file would lose concurrent host appends; the
+append-only per-host journal plus union merge keeps both hosts' writes.
+Rejected alternatives:
+
+- **Daily-note frontmatter** — every hide would dirty today's ledger.
+- **Machine-local store** — a hide on apollo would not reach the Mac.
+- **One shared JSON object** — two hosts writing at once would clobber.
+
+Evidence: `plan:202610/relation_label_vocabulary.md` RV3;
+`research:202610/relation_card_label_vocabulary`;
+`docs/task-relations.md` §16; commit `57d77612`.
+
+**Cost.** Fold must skip malformed lines. Rename is a logged event plus a
+note rewrite, not a journal-only alias. Writers serialize through bob under
+`bob_sync.lock`.
+
+**Reopens when.** Concurrent host folds mis-order clocks often enough to need
+a vector clock, or preferences must live outside the vault.
+
+## Relation Label Rename Rewrites History {#relation-label-rename-rewrites-history}
+
+**Status:** Accepted
+
+bob relations rename rewrites matching label spans everywhere, including done/ and the previous daily note, in one previewed transaction and one revertable commit.
+
+**Applies to.** bob-cli `bob relations rename`, the Mac card Ctrl+R rename
+mode, and the Obsidian relation-label stage rename mode.
+
+**Claim.** A rename runs one previewed transaction and makes one revertable
+commit (`bob relations rename: OLD → NEW`). It rewrites only matching label
+spans on accepted LINKS and LINKED FROM lines across the whole catalog scope,
+including `done/` and the previous daily note — the recorded LR7 exception:
+label spans only, never reopening tasks, minting IDs, pruning edges, or
+reordering entries. Planning refuses (`malformed_links_line`, `stale_note`)
+rather than under-covering. Preview lists every file and changed line, link
+and mirror counts including `done/`, hidden-state and inverse changes, and
+NEW's `replacement` forms. Undo is `git revert` of the one commit.
+
+**Why.** Renaming without touching `done/` would leave history disagreeing
+with the catalog and resurface OLD in suggestions via `renamed_reappeared`
+forever. Rewriting without a single commit would make the rename
+un-revertable. Covering malformed lines silently would corrupt notes the
+rescan cannot verify. The shared `vault_rewrite` transaction (extracted from
+`bob themes rename`) gives lock, pre-sync, snapshot, stale check, atomic
+write with rollback, verify, one commit, and post-sync in one place. Rejected
+alternatives:
+
+- **Exclude done/ and old dailies** — history keeps the old spelling and the
+  catalog never converges.
+- **Rewrite without a commit** — no atomic undo; `git revert` stops working.
+- **Skip malformed lines silently** — unverifiable partial coverage; refuse
+  instead.
+- **Journal-only alias** — OLD text stays in notes, so every scan keeps
+  counting it.
+
+Evidence: `plan:202610/relation_label_vocabulary.md` RV8;
+`research:202610/relation_card_label_vocabulary`;
+`docs/task-relations.md` §16; commits `fd9380cb`, `4c46dadd`.
+
+**Cost.** Malformed or concurrently changed targets refuse instead of
+renaming. Offline runs refuse dirty paths. Clients must render the preview
+and merge arming from bob's JSON, never their own grammar.
+
+**Reopens when.** A rename must touch more than label spans, must cover
+unreadable notes, or `done/` must become fully read-only again.
+
 ## Review Walk Is Tiered With Daily Lane Review {#review-walk-is-tiered}
 
 **Status:** Accepted
