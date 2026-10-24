@@ -185,6 +185,109 @@ fn highlight_identity_survives_insertion_and_underline_absorption() {
 }
 
 #[test]
+fn heading_shaped_quote_wrap_remints_highlight_id() {
+    let bob_dir = temp_bob_dir("highlight-quote-heading-remint");
+    let pdf = bob_dir.join("lib/papers/quote-heading.pdf");
+    let ref_note = bob_dir.join("ref/papers/quote-heading.md");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+
+    let truncated_sidecar = SidecarInput {
+        path: bob_dir.join("lib/papers/quote-heading.md"),
+        annotations: parse_sidecar_markdown(
+            "\
+#### [Page 8](highlights://quote-heading#page=8)
+
+##### 2026-06-15:
+
+> # Set custom agent command
+gt config agent set claude-glm
+",
+        ),
+    };
+    let truncated = render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &ParsedNote::empty(),
+        &truncated_sidecar,
+        false,
+    )
+    .expect("render truncated quote");
+    assert_eq!(truncated.count, 1);
+    let old_id = truncated
+        .block_ids_by_annotation_order
+        .values()
+        .next()
+        .expect("truncated id")
+        .clone();
+    assert!(
+        !truncated.content.contains("# Set default agent"),
+        "{}",
+        truncated.content
+    );
+
+    let wrapped_sidecar = SidecarInput {
+        path: truncated_sidecar.path.clone(),
+        annotations: parse_sidecar_markdown(
+            "\
+#### [Page 8](highlights://quote-heading#page=8)
+
+##### 2026-06-15:
+
+> # Set custom agent command
+gt config agent set claude-glm
+# Set default agent
+gt config default-agent
+",
+        ),
+    };
+    let wrapped = render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &region_note(&truncated.content),
+        &wrapped_sidecar,
+        false,
+    )
+    .expect("remint after quote text changes");
+    assert_eq!(wrapped.count, 1);
+    let new_id = wrapped
+        .block_ids_by_annotation_order
+        .values()
+        .next()
+        .expect("wrapped id")
+        .clone();
+    assert_ne!(old_id, new_id);
+    assert!(
+        wrapped.content.contains(&format!("^{new_id}")),
+        "{}",
+        wrapped.content
+    );
+    assert!(
+        wrapped.content.contains("# Set default agent")
+            && wrapped.content.contains("gt config default-agent"),
+        "{}",
+        wrapped.content
+    );
+    assert!(
+        !wrapped
+            .content
+            .contains("[!note] Comment gt config default-agent"),
+        "{}",
+        wrapped.content
+    );
+    assert!(
+        wrapped.content.contains("[!warning] Removed highlight")
+            && wrapped.content.contains(&format!("^{old_id}")),
+        "changed quote text remints and tombstones {old_id}: {}",
+        wrapped.content
+    );
+    let live = live_ids(&wrapped.content);
+    assert!(live.contains(&new_id));
+    assert!(!live.contains(&old_id));
+}
+
+#[test]
 fn highlight_identity_handles_duplicates_comments_legacy_and_folds() {
     let bob_dir = temp_bob_dir("highlight-identity-vectors");
     let pdf = bob_dir.join("lib/papers/example.pdf");

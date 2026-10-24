@@ -441,6 +441,20 @@ fn sidecar_page_heading_extracts_linked_page_label() {
     assert_eq!(sidecar_page_heading("## p. 12").as_deref(), Some("p. 12"));
     assert_eq!(sidecar_page_heading("# Systems Performance"), None);
     assert_eq!(sidecar_page_heading("##### 2026-06-03:"), None);
+    assert!(is_annotation_date_header("##### 2026-06-03:"));
+    assert!(is_annotation_date_header("##### 2026-06-03"));
+    assert!(!is_annotation_date_header("# Set default agent"));
+    assert!(!is_annotation_date_header(
+        "#### [Page 1](highlights://quote-heading#page=1)"
+    ));
+    assert!(is_quote_continuation_line("# Set default agent"));
+    assert!(is_quote_continuation_line("# should start with <?xml"));
+    assert!(!is_quote_continuation_line("##### 2026-06-03:"));
+    assert!(!is_quote_continuation_line(
+        "#### [Page 8](highlights://quote-heading#page=8)"
+    ));
+    assert!(!is_quote_continuation_line("Comment: revised comment"));
+    assert!(!is_quote_continuation_line("- status: wip"));
 }
 
 #[test]
@@ -750,6 +764,172 @@ fn leaked_mirror_and_preamble_blocks_drop_silently_while_genuine_tombstones() {
         "genuinely lost highlight must still tombstone: {}",
         rendered.content
     );
+}
+
+const QUOTE_HEADING_SIDECAR: &str = include_str!(
+    "../../../../tests/fixtures/highlights_ref/quote_heading_sidecar.md"
+);
+
+#[test]
+fn linked_sidecar_keeps_heading_shaped_quote_wrap() {
+    let annotations = parse_sidecar_markdown(QUOTE_HEADING_SIDECAR);
+    assert_eq!(annotations.len(), 6);
+
+    assert!(annotations[0].linked_page_style);
+    assert_eq!(annotations[0].page_label.as_deref(), Some("Page 8"));
+    assert!(
+        annotations[0].text.contains("# Set default agent"),
+        "{}",
+        annotations[0].text
+    );
+    assert!(
+        annotations[0].text.contains("gt config default-agent"),
+        "{}",
+        annotations[0].text
+    );
+    assert!(
+        annotations[0].text.contains("claude-glm"),
+        "{}",
+        annotations[0].text
+    );
+    assert_eq!(annotations[0].comment, None);
+
+    assert_eq!(annotations[1].page_label.as_deref(), Some("Page 4"));
+    assert!(
+        annotations[1].text.contains("# should start with <?xml"),
+        "{}",
+        annotations[1].text
+    );
+    assert!(
+        annotations[1].text.contains("… <rss"),
+        "{}",
+        annotations[1].text
+    );
+    assert_eq!(annotations[1].comment, None);
+
+    assert_eq!(annotations[2].page_label.as_deref(), Some("Page 2"));
+    assert_eq!(
+        annotations[2].text,
+        "Stable quoted text stays in the quote."
+    );
+    assert_eq!(
+        annotations[2].comment.as_deref(),
+        Some("This unlabeled comment follows a blank line.")
+    );
+
+    assert_eq!(annotations[3].page_label.as_deref(), Some("Page 6"));
+    assert_eq!(annotations[3].text, "First page quote stays here.");
+    assert_eq!(annotations[3].comment, None);
+
+    assert_eq!(annotations[4].page_label.as_deref(), Some("Page 7"));
+    assert_eq!(annotations[4].text, "Next page quote is a new annotation.");
+    assert_eq!(annotations[4].comment, None);
+
+    assert_eq!(annotations[5].page_label.as_deref(), Some("Page 9"));
+    assert_eq!(annotations[5].text, "Quote before a date header.");
+    assert!(
+        !annotations[5].text.contains("2026-06-04"),
+        "{}",
+        annotations[5].text
+    );
+    assert_eq!(
+        annotations[5].comment.as_deref(),
+        Some("Later comment after the date header.")
+    );
+}
+
+#[test]
+fn linked_sidecar_heading_shaped_wrap_renders_inside_quote() {
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations: parse_sidecar_markdown(QUOTE_HEADING_SIDECAR),
+    };
+    let rendered = super::render_sidecar_highlights(
+        &test_config(),
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &super::ParsedNote::empty(),
+        &sidecar,
+        false,
+    )
+    .expect("render heading-shaped quote wrap");
+
+    assert!(
+        rendered.content.contains("# Set default agent"),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("# should start with <?xml"),
+        "{}",
+        rendered.content
+    );
+    assert!(
+        !rendered
+            .content
+            .contains("[!note] Comment gt config default-agent"),
+        "heading-shaped wrap must not become a Comment: {}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("[!note] Comment > … <rss")
+            && !rendered.content.contains("[!note] Comment … <rss"),
+        "heading-shaped wrap must not promote the rest of the quote: {}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains(
+            "> > [!note] Comment This unlabeled comment follows a blank line."
+        ),
+        "{}",
+        rendered.content
+    );
+}
+
+#[test]
+fn live_vault_heading_shaped_quotes_stay_in_quote_when_present() {
+    let gastown = Path::new(
+        "/home/bryan/bob/lib/docs/gastown_readme.textbundle/text.markdown",
+    );
+    if gastown.is_file() {
+        let annotations = parse_sidecar_markdown(
+            &fs::read_to_string(gastown).expect("read gastown sidecar"),
+        );
+        let page8 = annotations
+            .iter()
+            .find(|annotation| {
+                annotation.page_label.as_deref() == Some("Page 8")
+            })
+            .expect("gastown page 8");
+        assert!(page8.text.contains("# Set default agent"), "{}", page8.text);
+        assert!(
+            page8.text.contains("gt config default-agent"),
+            "{}",
+            page8.text
+        );
+        assert_eq!(page8.comment, None, "{:?}", page8.comment);
+    }
+
+    let antennapod =
+        Path::new("/home/bryan/bob/lib/chat/sase_listen_antennapod_setup.md");
+    if antennapod.is_file() {
+        let annotations = parse_sidecar_markdown(
+            &fs::read_to_string(antennapod).expect("read antennapod sidecar"),
+        );
+        let page4 = annotations
+            .iter()
+            .find(|annotation| {
+                annotation.page_label.as_deref() == Some("Page 4")
+            })
+            .expect("antennapod page 4");
+        assert!(
+            page4.text.contains("# should start with <?xml"),
+            "{}",
+            page4.text
+        );
+        assert!(page4.text.contains("… <rss"), "{}", page4.text);
+        assert_eq!(page4.comment, None, "{:?}", page4.comment);
+    }
 }
 
 #[test]

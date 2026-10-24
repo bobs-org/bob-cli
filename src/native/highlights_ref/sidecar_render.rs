@@ -2163,10 +2163,14 @@ pub(super) fn silently_dropped_block_ids(
         .collect()
 }
 
+/// Immediate nonblank lines after a `>` quote stay in the quote, including
+/// heading-shaped wrap lines such as `# Set default agent` (bob-cli-ba).
+/// Page headings and annotation-date headers still bound the quote.
 pub(super) fn is_quote_continuation_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     !trimmed.is_empty()
-        && !is_markdown_heading(line)
+        && sidecar_page_heading_details(line).is_none()
+        && !is_annotation_date_header(line)
         && !is_comment_label_line(trimmed)
         && !is_marker_list_line(trimmed)
 }
@@ -2231,6 +2235,17 @@ pub(super) fn is_markdown_heading(line: &str) -> bool {
             .as_bytes()
             .get(hash_count)
             .is_some_and(u8::is_ascii_whitespace)
+}
+
+/// Dated metadata heading Highlights inserts above each annotation,
+/// e.g. `##### 2026-06-03:`. These bound quotes; they are never quote text.
+pub(super) fn is_annotation_date_header(line: &str) -> bool {
+    if !is_markdown_heading(line) {
+        return false;
+    }
+    let heading = line.trim_start().trim_start_matches('#').trim();
+    let date = heading.strip_suffix(':').unwrap_or(heading).trim();
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok()
 }
 
 pub(super) fn strip_blockquote_marker(line: &str) -> String {
