@@ -208,6 +208,67 @@ fn find_www_and_slash_variants_with_superseded_secondary() {
 }
 
 #[test]
+fn find_medium_twins_are_one_identity() {
+    // bob-cli-7u: the same Medium article recorded under `@` and `%40`
+    // spellings is one identity, so either spelling finds both notes
+    // and both carry the duplicate classification.
+    let (_temp, vault) = fixture_vault("bob-cli-ref-find-twins");
+    for (file, url) in [
+        (
+            "nvim_from_scratch_2025.md",
+            "https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935",
+        ),
+        (
+            "i_switched_to_nvim.md",
+            "https://medium.com/%40edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935",
+        ),
+    ] {
+        fs::write(
+            vault.join("ref/blogs").join(file),
+            format!(
+                "---\nstatus: ready\ntitle: Switching to Neovim\nsource_url: {url}\nsource_pdf: \"[[lib/blogs/nvim.pdf]]\"\n---\n\n# Switching to Neovim\n"
+            ),
+        )
+        .expect("write twin note");
+    }
+    let at_sign = "https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935";
+    let encoded = "https://medium.com/%40edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935";
+    let document = run_find_json(&vault, &[at_sign, encoded]);
+    for query in [at_sign, encoded] {
+        let result = result_for(&document, query);
+        assert_eq!(result["verdict"], "in_library", "query {query}");
+        let paths: Vec<&str> = result["matches"]
+            .as_array()
+            .expect("matches array")
+            .iter()
+            .map(|hit| hit["ref"]["path"].as_str().expect("path string"))
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "ref/blogs/i_switched_to_nvim.md",
+                "ref/blogs/nvim_from_scratch_2025.md",
+            ],
+            "query {query}",
+        );
+        for hit in result["matches"].as_array().expect("matches array") {
+            let codes: Vec<&str> = hit["ref"]["diagnostics"]
+                .as_array()
+                .expect("diagnostics array")
+                .iter()
+                .map(|diagnostic| {
+                    diagnostic["code"].as_str().expect("code string")
+                })
+                .collect();
+            assert!(
+                codes.contains(&"duplicate_identity"),
+                "twin {query} earns duplicate_identity: {codes:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn find_doi_and_arxiv_doi_queries() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-find-doi");
     let document = run_find_json(

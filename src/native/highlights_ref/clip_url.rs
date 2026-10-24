@@ -90,7 +90,7 @@ pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
         key.push_str(&format!(":{port}"));
     }
     let path = url.path().trim_end_matches('/');
-    key.push_str(path);
+    key.push_str(&normalize_path_escapes(path));
     let mut pairs: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(name, _)| !is_tracking_param(name))
@@ -108,6 +108,62 @@ pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
         );
     }
     key
+}
+
+/// Normalize percent-escape spelling in a URL path for the dedupe key
+/// (bob-cli-7u).
+///
+/// Escapes of bytes that are valid literally in a path without changing
+/// meaning decode to that literal: RFC 3986 unreserved characters
+/// (`A-Z a-z 0-9 - . _ ~`) plus `@`, the verified Medium `@`/`%40`
+/// twin. (`@` is reserved, so its equivalence is an explicit rule for
+/// the reported host spellings, not a general reserved-character
+/// claim.) Every other escape is retained with uppercase hex, so
+/// `%2f` and `%2F` agree while encoded delimiters (`%2F`, `%3F`,
+/// `%23`, `%25`) never merge with their structural or literal
+/// counterparts. Malformed `%` sequences pass through untouched, and
+/// decoding is one left-to-right pass, so `%2540` stays `%2540`
+/// instead of collapsing to `@`.
+fn normalize_path_escapes(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            let decoded = high << 4 | low;
+            if decoded == b'@' || is_unreserved(decoded) {
+                out.push(decoded);
+            } else {
+                out.push(b'%');
+                out.push(upper_hex(high));
+                out.push(upper_hex(low));
+            }
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    // Only ASCII `%XX` triples are rewritten, so the UTF-8 boundary
+    // structure of `path` is unchanged and this never fails.
+    String::from_utf8(out).expect("path normalization keeps UTF-8")
+}
+
+/// RFC 3986 unreserved characters: safe to decode in a path because
+/// the literal and escaped spellings name the same resource.
+fn is_unreserved(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+}
+
+fn upper_hex(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        _ => b'A' + (nibble - 10),
+    }
 }
 
 fn normalize_host(host: &str) -> String {
@@ -567,6 +623,92 @@ mod tests {
             .expect("accept second spelling");
         assert_eq!(first.dedupe_key, second.dedupe_key);
         assert_eq!(first.dedupe_key, "https://example.com/a?a=1&b=2");
+    }
+
+    #[test]
+    fn dedupe_key_normalizes_equivalent_path_spellings() {
+        let key =
+            |raw: &str| validate_and_clean(raw).expect("accept URL").dedupe_key;
+        // The reported Medium twin (bob-cli-7u).
+        assert_eq!(
+            key("https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935"),
+            key("https://medium.com/%40edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935"),
+        );
+        // Unreserved escapes decode to their literal spelling.
+        assert_eq!(
+            key("https://example.com/a%41b"),
+            key("https://example.com/aAb")
+        );
+        assert_eq!(
+            key("https://example.com/a%7Eb"),
+            key("https://example.com/a~b")
+        );
+        assert_eq!(
+            key("https://example.com/a%7eb"),
+            key("https://example.com/a~b")
+        );
+        assert_eq!(
+            key("https://example.com/a%2Db"),
+            key("https://example.com/a-b")
+        );
+        // Retained escapes agree across hex case; non-ASCII UTF-8 stays
+        // encoded with normalized case.
+        assert_eq!(
+            key("https://example.com/a%2fb"),
+            "https://example.com/a%2Fb"
+        );
+        assert_eq!(
+            key("https://example.com/caf%c3%a9"),
+            key("https://example.com/caf%C3%A9")
+        );
+    }
+
+    #[test]
+    fn dedupe_key_keeps_delimiter_encoded_resources_distinct() {
+        let key =
+            |raw: &str| validate_and_clean(raw).expect("accept URL").dedupe_key;
+        // Encoded delimiters never merge with their structural or
+        // literal counterparts (bob-cli-7u).
+        assert_ne!(
+            key("https://example.com/a%2Fb"),
+            key("https://example.com/a/b"),
+            "encoded slash is not a path separator"
+        );
+        assert!(
+            key("https://example.com/a%2Fb").contains("%2F"),
+            "the encoded slash is retained, not dropped"
+        );
+        assert_ne!(
+            key("https://example.com/a%3Fb"),
+            key("https://example.com/a?b="),
+            "an encoded question mark is not a query separator"
+        );
+        assert_ne!(
+            key("https://example.com/a%23b"),
+            key("https://example.com/a"),
+            "an encoded fragment marker is not a fragment"
+        );
+        assert_ne!(
+            key("https://example.com/a%25b"),
+            key("https://example.com/a%b"),
+            "an encoded percent is not a literal percent"
+        );
+        // No recursive decoding: `%25` stays an encoded percent, so
+        // `%2540` never collapses to `@`.
+        assert_eq!(
+            key("https://example.com/a%2540b"),
+            "https://example.com/a%2540b"
+        );
+        assert_ne!(
+            key("https://example.com/a%2540b"),
+            key("https://example.com/a@b")
+        );
+        // Malformed escapes pass through untouched.
+        assert_eq!(
+            key("https://example.com/a%zzb"),
+            "https://example.com/a%zzb"
+        );
+        assert_eq!(key("https://example.com/a%b"), "https://example.com/a%b");
     }
 
     #[test]

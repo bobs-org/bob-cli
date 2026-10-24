@@ -1478,6 +1478,34 @@ mod tests {
     }
 
     #[test]
+    fn encoded_twin_spelling_overlaps_the_recorded_capture() {
+        // bob-cli-7u: a collection URL spelled with `%40` overlaps the
+        // recorded capture spelled with `@`, because the shared dedupe
+        // key normalizes the two spellings to one identity.
+        let config = config();
+        let urls = [url(
+            "https://medium.com/%40edominguez.se/piece-163b85aa0935",
+        )];
+        let recorded = [source(
+            "https://medium.com/@edominguez.se/piece-163b85aa0935",
+            "/vault/ref/blogs/piece.md",
+            true,
+        )];
+        assert_eq!(urls[0].dedupe_key, recorded[0].dedupe_key);
+        let error = check_collection_overlap(
+            &config, &recorded, &urls, None, false, false,
+        )
+        .expect_err("the twin spelling overlaps the recorded capture");
+        assert!(
+            error
+                .message
+                .contains("already captured as ref/blogs/piece.md"),
+            "the overlap names the recorded capture: {}",
+            error.message
+        );
+    }
+
+    #[test]
     fn legacy_overlap_is_reported_once_per_note_and_does_not_refuse() {
         let config = config();
         let urls = [

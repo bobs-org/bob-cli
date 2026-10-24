@@ -680,6 +680,31 @@ mod tests {
     }
 
     #[test]
+    fn twin_path_spelling_refuses_as_already_captured() {
+        // bob-cli-7u: a capture of the `%40` spelling refuses against a
+        // recorded `@` source, so one article cannot be captured twice.
+        let recorded = vec![RecordedSource {
+            dedupe_key: validate_and_clean(
+                "https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935",
+            )
+            .expect("recorded URL cleans")
+            .dedupe_key,
+            path: PathBuf::from("ref/blogs/nvim_from_scratch.md"),
+            is_ref_note: true,
+            source_pdf: Some("lib/blogs/nvim_from_scratch.pdf".to_string()),
+            has_audio: false,
+        }];
+        let twin = validate_and_clean(
+            "https://medium.com/%40edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935",
+        )
+        .expect("twin URL cleans")
+        .dedupe_key;
+        assert_eq!(twin, recorded[0].dedupe_key);
+        check_dedupe(&recorded, &twin, None, false)
+            .expect_err("the twin spelling must refuse as already captured");
+    }
+
+    #[test]
     fn non_arxiv_keys_pass_through_unchanged() {
         let recorded = vec![RecordedSource {
             dedupe_key: "https://example.com/a?a=1&b=2".to_string(),

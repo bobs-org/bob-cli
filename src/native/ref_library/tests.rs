@@ -692,6 +692,28 @@ fn arxiv_queries_strip_versions_and_order_by_state() {
 }
 
 #[test]
+fn medium_twins_share_one_identity_key() {
+    // bob-cli-7u: the same Medium article under `@` and `%40` spellings
+    // must share one identity key, so `ref find` with either spelling
+    // discovers a note recorded under the other, and library
+    // supersession/duplicate classification sees one resource.
+    let at_sign = "https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935";
+    let encoded =
+        "https://medium.com/%40edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935";
+    let stored_at = stored_identity(&[at_sign.to_string()]);
+    let stored_encoded = stored_identity(&[encoded.to_string()]);
+    assert_eq!(stored_at.keys, stored_encoded.keys);
+    assert_eq!(stored_at.keys.len(), 1);
+    for query in [at_sign, encoded] {
+        let keys = url_query_keys(query);
+        assert!(
+            keys.iter().any(|key| stored_at.keys.contains(key)),
+            "query {query} must look up the shared key"
+        );
+    }
+}
+
+#[test]
 fn path_name_and_title_queries() {
     let index = fixture_index();
     let by_path =
