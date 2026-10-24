@@ -316,7 +316,9 @@ explicit/global since, else the range start.
 
 **Today is provisional.** The current day gets its own point with
 `provisional: true`; summaries, prior windows, and grouped buckets never
-include it. Day grouping still shows it as the trailing point.
+include it. Day grouping still shows it as the trailing point. An unmet
+provisional boolean point (`value: 0`) displays `not yet`; met points still
+display `met`, and missing values remain `–`.
 
 **Journal gaps.** `review_closed` is evaluated as a dependency even when
 hidden or unselected, so a known closed-review day with no journaled event
@@ -538,7 +540,8 @@ Overview is a header, a sparkline table in each metric's 256-color hue
 in-progress values, journal hosts, then `warning <message>  <code>`
 lines. `·` marks null days; booleans use `●` met / `○` missed. Detail
 (`bob stats show`) draws eighth-block columns, a hollow `▯` today
-column, and a weekday × week grid for booleans. It prints every parts
+column, and a weekday × week grid for booleans. The boolean overview
+sparkline uses `◌` for an unmet provisional today point. It prints every parts
 dimension in a stable order: pomodoro `area`, `project`, `theme`; tasks
 `kind`, `area`, `project`, `note`. Area and project cells use catalog
 labels; under color they prefix a `●` in the area's xterm hue, and
@@ -580,7 +583,7 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M3 | done | U | 5, ref 1 | 4, prj 1 | 1·prov | `^gtd`, recurring, and reopened rows never count; archive maps to source |
 | M4 | created | 2 | 5 | 5 | 1·prov | Archived creation surfaces on Oct 7; `^prj` and `[-]` add Oct 10 |
 | M5 | net | U | U | −1 shrinking | 0·prov | Nulls stay null before the latest dependency start; 5−4−2 |
-| M6 | review_closed | U | met | met | missed·prov | Today's POST TODO in `gtd_daily.md` is due and missed |
+| M6 | review_closed | U | met | met | not yet·prov | Today's POST TODO in `gtd_daily.md` is due and unmet |
 | M7 | dropped | U | U | 2 | 0·prov | `[!]` and `[-]` CANCELLED rows with cancelled dates |
 | M8 | habits | U | 0/2 missed | 1/2 met | 0/2·prov | Skipped Journal, late Meditate, deferred Stretch; ratios pool 25% |
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |

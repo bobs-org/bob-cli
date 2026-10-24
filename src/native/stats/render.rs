@@ -14,6 +14,7 @@ use crate::native::style::{pad_right, terminal_width, Styler, SPARK_BLOCKS};
 const NULL_MARK: char = '·';
 const BOOL_MET: char = '●';
 const BOOL_MISSED: char = '○';
+const BOOL_NOT_YET: char = '◌';
 const TODAY_MARK: char = '▯';
 const CHART_ROWS: usize = 3;
 
@@ -336,6 +337,9 @@ fn spark_value(point: &SeriesPoint) -> Option<i64> {
 }
 
 fn bool_mark(point: &SeriesPoint) -> char {
+    if point.provisional && point.value == Some(0) {
+        return BOOL_NOT_YET;
+    }
     match spark_value(point) {
         None => NULL_MARK,
         Some(value) if value > 0 => BOOL_MET,
@@ -1203,6 +1207,14 @@ mod tests {
         assert_eq!(cells.chars().count(), 3);
         assert_eq!(cells.chars().last(), Some('█'));
         let _ = sparkline(&[0, 1, 4]);
+    }
+
+    #[test]
+    fn bool_sparkline_marks_unmet_provisional_point_not_yet() {
+        let mut today = point(11, Some(0), "not yet");
+        today.provisional = true;
+        assert_eq!(bool_mark(&today), BOOL_NOT_YET);
+        assert_eq!(bool_mark(&point(10, Some(0), "missed")), BOOL_MISSED);
     }
 
     #[test]

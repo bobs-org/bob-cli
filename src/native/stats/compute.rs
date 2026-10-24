@@ -938,7 +938,7 @@ mod tests {
             true,
         );
         assert_eq!(closed.points[1].display, "met");
-        assert_eq!(closed.points[3].display, "missed");
+        assert_eq!(closed.points[3].display, "not yet");
         assert_eq!(closed.summary.headline.value, Some(2));
         assert_eq!(closed.summary.headline.display, "2 of 2 days");
         assert_eq!(closed.summary.days_with_data, 2);

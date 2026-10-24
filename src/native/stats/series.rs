@@ -508,11 +508,19 @@ fn make_points(
 }
 
 fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
+    let display = if value.provisional
+        && unit == MetricUnit::Bool
+        && value.value == Some(0)
+    {
+        "not yet".to_string()
+    } else {
+        format_value(value.value, unit)
+    };
     SeriesPoint {
         date: value.date,
         end: value.date,
         value: value.value,
-        display: format_value(value.value, unit),
+        display,
         quality: value.quality,
         reason: value.reason.clone(),
         provisional: value.provisional,

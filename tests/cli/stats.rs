@@ -32,6 +32,14 @@ fn overview_human_names_metrics() {
     assert!(text.contains("Stats"), "missing Stats:\n{text}");
     assert!(text.contains("Worked"), "missing Worked:\n{text}");
     assert!(text.contains("today so far"), "missing today:\n{text}");
+    assert!(
+        text.contains("Review closed not yet"),
+        "missing provisional boolean:\n{text}"
+    );
+    assert!(
+        text.contains('◌'),
+        "missing provisional boolean spark mark:\n{text}"
+    );
     assert_stdout_has_no_ansi(&output);
 }
 
@@ -55,6 +63,11 @@ fn overview_json_is_ok_schema_one() {
     assert_eq!(worked["chart"]["group"], "day");
     assert!(worked.get("daily_points").is_none());
     assert_eq!(worked["points"][1]["parts_display"]["theme"]["GTD"], "29m");
+    let review_closed = metrics
+        .iter()
+        .find(|metric| metric["id"] == "review_closed")
+        .expect("review_closed");
+    assert_eq!(review_closed["points"][3]["display"], "not yet");
     assert!(!stdout(&output).trim().contains('\n'));
 }
 
@@ -70,6 +83,7 @@ fn overview_csv_has_tidy_header() {
         "date,end,metric,value,display,quality,provisional,num,den\n"
     ));
     assert!(text.contains(",worked,"));
+    assert!(text.contains(",review_closed,0,not yet,ok,true,,"));
 }
 
 #[test]
