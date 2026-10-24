@@ -132,15 +132,19 @@ bobr() {
 init_git_vault() {
     git -C "$vault" init -q \
         || fail "cannot git-init scratch vault"
-    git -C "$vault" -c user.email=acceptance@example.com \
-        -c user.name="Acceptance Kit" commit -q --allow-empty -m init \
+    # bob's vault-sync commits read the repository config; per-command -c
+    # identity would cover only commits made directly by this script.
+    git -C "$vault" config user.name "Acceptance Kit" \
+        || fail "cannot configure scratch vault git identity"
+    git -C "$vault" config user.email acceptance@example.com \
+        || fail "cannot configure scratch vault git identity"
+    git -C "$vault" commit -q --allow-empty -m init \
         || fail "cannot seed scratch vault git history"
     git init -q --bare "$root/origin.git" \
         || fail "cannot create scratch origin"
     git -C "$vault" remote add origin "$root/origin.git" \
         || fail "cannot add scratch origin"
-    git -C "$vault" -c user.email=acceptance@example.com \
-        -c user.name="Acceptance Kit" push -q origin HEAD:refs/heads/master \
+    git -C "$vault" push -q origin HEAD:refs/heads/master \
         || fail "cannot push scratch vault to scratch origin"
     printf -- '---\ntype: "[[area]]"\n---\n\n# Obsidian\n' >"$vault/obsidian.md" \
         || fail "cannot write scratch area note"
@@ -149,8 +153,7 @@ init_git_vault() {
 commit_vault() {
     git -C "$vault" add -A \
         || fail "cannot stage scratch vault"
-    git -C "$vault" -c user.email=acceptance@example.com \
-        -c user.name="Acceptance Kit" commit -q --allow-empty -m "$1" \
+    git -C "$vault" commit -q --allow-empty -m "$1" \
         || fail "cannot commit scratch vault"
 }
 
