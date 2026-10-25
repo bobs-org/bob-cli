@@ -221,7 +221,9 @@ earlier:
 The reading number is 1 plus the number of `earlier:` entries whose
 target is under `ref/` — computed from frontmatter, never parsed from a
 filename, so a stem that merely looks versioned (such as
-`protocol__v2`) is reading 1. The `earlier:` list is written once at
+`protocol__v2`) is reading 1. Several readings sharing one exact
+collection URL set are one family, named `<root>__vN` from the family
+root; unrelated notes sharing keys across families stay ambiguous. The `earlier:` list is written once at
 birth (block style, Obsidian's canonical Properties form; inline reads
 too); the index only reads it, never re-derives it. Every PDF-backed
 row sharing an identity key that sits in one family earns no

@@ -79,6 +79,7 @@ pub(super) enum NameSource {
     SlugWords,
     Folder,
     TitleFlag,
+    Reread,
 }
 
 impl NameSource {
@@ -89,6 +90,9 @@ impl NameSource {
             Self::SlugWords => "words every URL starts with; -N overrides",
             Self::Folder => "the folder every URL shares; -N overrides",
             Self::TitleFlag => "from -T; -N overrides",
+            Self::Reread => {
+                "reread of the exact URL set; -N selects the family"
+            }
         }
     }
 }

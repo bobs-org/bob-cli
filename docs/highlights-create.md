@@ -544,16 +544,26 @@ Import deduplication reads every URL from scalar or list-valued
 the URLs indexed by `bob ref find`.
 
 For several URLs, each part is checked against recorded sources before capture.
-Any part already in a PDF-backed ref or queued intake refuses the complete
-collection, even if the remaining URLs are new. `--force` applies only when
-the queued collection has exactly the same URL set, in any order. A legacy
-PDF-less note is reported as a warning and the collection may proceed. The
-collection marker stores the cleaned URLs in argument order as a YAML list;
-create writes that list to one ref note (or a later `bob ref scan -i` does so
-when intake is queued). A later create of an individual
-part is refused as already captured, and `bob ref find <part URL>` locates the
-collection. Filed collections keep refusing under either force mode in this
-increment; rereads of an exact URL set land with collection support next.
+An order-insensitive exact normalized URL-set match selects one family, even
+when several readings share that set: without force it refuses naming the
+next stem (`hint: -f read it again as <root>__vN`); bare `-f` reads it again
+as the allocated `<root>__vN` beside the earlier readings, with the newest
+reading's parent and type as defaults (explicit `-P`/`-t` win), `id` stamped
+to the new stem, and a `reread:` line where `renamed:` would print. `-N` must
+name a reading of the same family (a free `-N` stays an ordinary capture);
+`-o` on a captured reread exits 2. Any partial overlap, including a single
+URL of a larger collection, refuses under every force mode before adapters
+or fetch, naming the overlapping members with
+`hint: -f recaptures only the exact URL set of <stem>`. Unrelated duplicate
+families sharing the set stay ambiguous: pass `-N <stem>` to choose one.
+`--force` applies to the queued collection only when it has exactly the same
+URL set, in any order. A legacy PDF-less note is reported as a warning and
+the collection may proceed. The collection marker stores the cleaned URLs in
+argument order as a YAML list; create writes that list to one ref note (or a
+later `bob ref scan -i` does so when intake is queued). A later create of an
+individual part is refused as already captured, and `bob ref find <part URL>`
+locates the collection. Queued rereads drain through `bob ref scan` with the
+same lineage and task semantics as inline intake.
 
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 (up to `<stem>_999`): a candidate is occupied when its matching PDF, sidecar,
@@ -621,7 +631,10 @@ companion audio. For a multi-URL collection, bob passes the staged composed
 PDF as `{target}` and `{pdf}`, with the resolved collection title as `{title}`;
 the episode binds to the one installed collection PDF. If the same URL set is
 already captured or queued, in any order, `--listen` attaches an episode to that
-capture. Partial overlap still refuses.
+capture. Partial overlap still refuses. With `-f`, `--listen` narrates the new
+reading instead of attaching (earlier audio is never inherited); when the
+newest reading already has an episode, a hint names its reading number and
+audio path.
 
 ```bash
 bob ref create https://arxiv.org/abs/1706.03762 -L
@@ -731,6 +744,58 @@ audio: /home/bryan/bob/xlib/papers/ea_graph.mp3 (from --listen)
 title: EA-Graph: Artifact-Anchored Verification Memory for Coding Agents under Upstream Drift
 ingested: lib/papers/ea_graph.pdf → ref/papers/ea_graph.md
 sync: committed abc1234 · pushed
+```
+
+## Recapture
+
+`-f [MODE]` / `--force[=MODE]` changes what a repeated capture does. Bare
+`-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite`
+or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as
+`-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f`
+is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an
+explicit `=` value never adopts a following word. A bare `TARGET` that equals
+a mode, or is within edit distance 2 of one, refuses with exit 2: write
+`./overwrite` for a file and `[[overwrite]]` for a vault note.
+
+Bare `-f` on an already-captured source reads it again as `<stem>__vN`
+beside the earlier readings: the newest reading's parent and type become the
+defaults (explicit `-P`/`-t` win, and a reread without any resolvable parent
+still requires `-P`), `id` is stamped to the new stem, earlier audio is never
+inherited, and a `reread:` line prints where `renamed:` would, in real runs
+and dry runs alike:
+
+```text
+reread: attention_is_all_you_need → attention_is_all_you_need__v2 (v1 read · 41 highlights)
+```
+
+Without force the refusal names the next stem
+(`hint: -f read it again as <stem>__vN`). Bare `-f` on a fresh source
+captures it as usual. `-N` must name a reading of the same family (a free
+`-N` stays an ordinary capture); `-o` on a captured reread exits 2
+(`a reread is named <root>__vN; drop -o`). Every supported single-source
+route (Markdown, original local PDF, PDF URL, arXiv, web article with or
+without `-H`, same-day vault-note snapshots) creates a complete new
+bundle and task on explicit reread, with durable `earlier:` lineage, stable
+aliases, and safe naming; old notes, PDFs, sidecars, assets, audio, and
+reading task lines keep their bytes. A library PDF as `TARGET` refuses even
+with `-f` (copying highlights into the next reading is forbidden): reread
+from its recorded `source_url` or the original file instead, while `-L`
+without force still attaches. `-f overwrite` on a filed reference exits 2
+naming the reread it would take (not available yet); without a filed match
+it exits 1.
+
+An exact-URL-set collection rereads the same way in any URL order. Several
+readings sharing one set count as one family; unrelated duplicate families
+sharing the set stay ambiguous until `-N <stem>` chooses one. Any partial
+overlap, including one URL of a larger collection, refuses under every force
+mode before adapters or fetch. Queued-PDF, exact-output (`-o`), and
+companion-audio replacement keep working under either mode, and automatic
+producers (capture workers, `ingest_url`, Keep) never mint a new reading.
+
+```bash
+bob ref create https://example.com/essay -f -P sase
+bob ref create https://example.com/a https://example.com/b -f -P sase
+bob ref create https://example.com/a https://example.com/b -f -L -P sase
 ```
 
 ## Configuration

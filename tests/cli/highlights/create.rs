@@ -8035,3 +8035,688 @@ fn highlights_create_collection_overwrite_fresh_set_refuses_before_adapter() {
     );
     vault_holds_only(&vault, &["sase.md"]);
 }
+
+/// Exact-set collection rereads: reversed URL order still selects the
+/// family, allocates `<root>__v2`, and files lineage, task, and naming
+/// like single-source rereads.
+#[test]
+fn highlights_create_collection_rereads_exact_set_reversed() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-reread");
+    for (n, title) in [
+        (1, "Tokio Internals, Part 1: The Scheduler"),
+        (2, "Tokio Internals, Part 2: The Reactor"),
+        (4, "Tokio Internals, Part 1: The Scheduler"),
+        (5, "Tokio Internals, Part 2: The Reactor"),
+        (6, "Tokio Internals, Part 1: The Scheduler"),
+        (7, "Tokio Internals, Part 2: The Reactor"),
+    ] {
+        fake.respond_n(
+            n,
+            &article_capture(title, "Jane Doe", "2024-01-08", 2140),
+        );
+    }
+
+    let scan = || {
+        bob_command()
+            .arg("highlights")
+            .arg("--no-hooks")
+            .arg("scan")
+            .arg("-b")
+            .arg(&vault)
+            .output()
+            .expect("scan collection PDFs")
+    };
+
+    // v1: capture both parts, then scan the queued PDF into the library.
+    let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
+    capture.arg("-k");
+    assert_success(&capture.output().expect("capture v1 collection"));
+    assert_success(&scan());
+    let v1_note = vault.join("ref/blogs/tokio_internals.md");
+    assert!(v1_note.is_file(), "scan must file the v1 note");
+    let v1_bytes = std::fs::read(&v1_note).expect("read v1 note");
+    let v1_pdf = vault.join("lib/blogs/tokio_internals.pdf");
+    let v1_pdf_bytes = std::fs::read(&v1_pdf).expect("read v1 PDF");
+
+    // Without force the exact set refuses and names the next stem.
+    let mut refusal = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    collection_env(&mut refusal, &curl, &curl_root, &log, &fake.path);
+    let output = refusal.output().expect("refuse exact collection");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("read it again as tokio_internals__v2"),
+        "refusal must name the reread:\n{}",
+        format_output(&output)
+    );
+
+    // Dry run first: the reread line prints at the renamed position and
+    // nothing is written.
+    let mut dry = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    dry.arg("-f").arg("-d");
+    collection_env(&mut dry, &curl, &curl_root, &log, &fake.path);
+    let output = dry.output().expect("dry-run collection reread");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: tokio_internals → tokio_internals__v2 (v1")
+            && report.contains("writes: none"),
+        "dry run must report the reread:\n{report}"
+    );
+    assert!(
+        !vault.join("xlib/blogs/tokio_internals__v2.pdf").exists(),
+        "dry run must not install:\n{report}"
+    );
+
+    // Real reread in reversed order without -P: the newest reading's
+    // task residence supplies the parent default.
+    let mut reread = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    reread
+        .arg("-f")
+        .arg("-k")
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &log)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path);
+    let output = reread.output().expect("reread the collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: tokio_internals → tokio_internals__v2 (v1")
+            && report.contains(
+                "name: tokio_internals__v2 (reread of the exact URL set; -N selects the family)"
+            )
+            && report.contains("parent: sase")
+            && report.contains("title: Tokio Internals"),
+        "reread must carry family defaults:\n{report}"
+    );
+    let staged = vault.join("xlib/blogs/tokio_internals__v2.pdf");
+    assert!(staged.is_file(), "the reread waits in intake:\n{report}");
+
+    // The marker preserves argument order for the new content and stamps
+    // id to the new stem.
+    let marker = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&staged)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect reread marker");
+    assert_success(&marker);
+    let marker_text = stdout(&marker);
+    assert!(
+        marker_text.contains(&format!(
+            "- source_url: [{TOKIO_PART_2}, {TOKIO_PART_1}]"
+        )) && marker_text.contains("- id: tokio_internals__v2\n"),
+        "marker must keep order and stamp id:\n{marker_text}"
+    );
+
+    assert_success(&scan());
+    let v2_note = vault.join("ref/blogs/tokio_internals__v2.md");
+    assert!(v2_note.is_file(), "scan must file the reread note");
+    let v2_contents =
+        std::fs::read_to_string(&v2_note).expect("read reread note");
+    assert!(
+        v2_contents.contains("earlier:")
+            && v2_contents.contains("tokio_internals"),
+        "birth must write lineage:\n{v2_contents}"
+    );
+    assert!(
+        v2_contents.contains("id: tokio_internals__v2"),
+        "the reread stamps id to its stem:\n{v2_contents}"
+    );
+    assert!(
+        v2_contents.contains("title: \"Tokio Internals\""),
+        "the reread keeps the family title:\n{v2_contents}"
+    );
+    let parent = std::fs::read_to_string(vault.join("sase.md"))
+        .expect("read parent note");
+    assert!(
+        parent.contains("^ref-tokio-internals-v2"),
+        "scan must insert the versioned reading task:\n{parent}"
+    );
+    assert_eq!(
+        std::fs::read(&v1_note).expect("reread v1 note"),
+        v1_bytes,
+        "the earlier note keeps its bytes"
+    );
+    assert_eq!(
+        std::fs::read(&v1_pdf).expect("reread v1 PDF"),
+        v1_pdf_bytes,
+        "the earlier PDF keeps its bytes"
+    );
+
+    // A second scan is stable.
+    let v2_bytes = std::fs::read(&v2_note).expect("read v2 note");
+    assert_success(&scan());
+    assert_eq!(
+        std::fs::read(&v2_note).expect("rescan v2 note"),
+        v2_bytes,
+        "a second scan must not rewrite the reread"
+    );
+
+    // The new family earns no duplicate-identity diagnostic.
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "collection reread"]);
+    let doctor = bob_command()
+        .arg("ref")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("run bob ref doctor");
+    assert_success(&doctor);
+    assert!(
+        !stdout(&doctor).contains("duplicate_identity"),
+        "the reread family must not warn:\n{}",
+        format_output(&doctor)
+    );
+}
+
+/// Partial collection overlaps refuse under every force mode before any
+/// adapter or fetch work, naming the overlapping members and the exact
+/// set `-f` would recapture.
+#[test]
+fn highlights_create_collection_partial_overlap_refuses_under_every_mode() {
+    let (_temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-partial-modes",
+    );
+    write_file(
+        &vault.join("ref/blogs/tokio_internals.md"),
+        &format!(
+            "---\ntitle: Tokio Internals\nstatus: ready\nsource_url:\n  - {TOKIO_PART_1}\n  - {TOKIO_PART_2}\nsource_pdf: lib/blogs/tokio_internals.pdf\n---\n\n# Tokio Internals\n"
+        ),
+    );
+    let attempt = |targets: &[&str], extra: &[&str]| {
+        let mut command = collection_create(&vault, targets);
+        for arg in extra {
+            command.arg(arg);
+        }
+        collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+        command.output().expect("run partial collection")
+    };
+
+    for (name, targets) in [
+        ("subset", [TOKIO_PART_1, TOKIO_PART_3].as_slice()),
+        (
+            "superset",
+            [TOKIO_PART_1, TOKIO_PART_2, TOKIO_PART_3].as_slice(),
+        ),
+    ] {
+        for extra in [Vec::new(), vec!["-f"], vec!["-f", "overwrite"]] {
+            let output = attempt(targets, &extra);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{name} {extra:?} must refuse:\n{}",
+                format_output(&output)
+            );
+            let diagnostic = stderr(&output);
+            assert!(
+                diagnostic.contains("URLs are already in the library")
+                    && diagnostic.contains("ref/blogs/tokio_internals.md")
+                    && diagnostic.contains(
+                        "hint: -f recaptures only the exact URL set of tokio_internals"
+                    ),
+                "{name} {extra:?} must name the overlap:\n{}",
+                format_output(&output)
+            );
+        }
+    }
+    assert!(
+        !fake.called(),
+        "partial overlaps must not reach the adapter"
+    );
+    assert!(
+        std::fs::read_to_string(&log)
+            .expect("read curl log")
+            .is_empty(),
+        "partial overlaps must not fetch"
+    );
+    vault_holds_only(&vault, &["sase.md", "ref"]);
+}
+
+/// Three readings of one exact set chain `<root>__v2` then `<root>__v3`
+/// with newest-first lineage.
+#[test]
+fn highlights_create_collection_reread_three_generations() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-generations");
+    for n in [1, 2, 3, 4, 6, 7] {
+        fake.respond_n(
+            n,
+            &article_capture("Tokio Internals", "Jane Doe", "2024-01-08", 2140),
+        );
+    }
+
+    let scan = || {
+        bob_command()
+            .arg("highlights")
+            .arg("--no-hooks")
+            .arg("scan")
+            .arg("-b")
+            .arg(&vault)
+            .output()
+            .expect("scan collection PDFs")
+    };
+    let capture = |targets: &[&str], extra: &[&str]| {
+        let mut command = collection_create(&vault, targets);
+        for arg in extra {
+            command.arg(arg);
+        }
+        collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+        command.arg("-k");
+        command.output().expect("run collection capture")
+    };
+
+    assert_success(&capture(&[TOKIO_PART_1, TOKIO_PART_2], &[]));
+    assert_success(&scan());
+    assert_success(&capture(&[TOKIO_PART_1, TOKIO_PART_2], &["-f"]));
+    assert_success(&scan());
+    assert!(
+        vault.join("ref/blogs/tokio_internals__v2.md").is_file(),
+        "scan must file the second reading"
+    );
+
+    let output = capture(&[TOKIO_PART_2, TOKIO_PART_1], &["-f"]);
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .contains("reread: tokio_internals__v2 → tokio_internals__v3 (v2"),
+        "the third reading follows the second:\n{}",
+        format_output(&output)
+    );
+    assert_success(&scan());
+    let v3 =
+        std::fs::read_to_string(vault.join("ref/blogs/tokio_internals__v3.md"))
+            .expect("read third reading");
+    assert!(v3.contains("earlier:"), "birth must write lineage:\n{v3}");
+    let v2_pos = v3.find("tokio_internals__v2").expect("v2 link");
+    let v1_pos = v3.rfind("tokio_internals|").expect("v1 link");
+    assert!(v2_pos < v1_pos, "lineage must list newest first:\n{v3}");
+}
+
+/// Unrelated families sharing one URL set stay ambiguous until `-N`
+/// chooses one; a member selector proceeds without joining families.
+#[test]
+fn highlights_create_collection_unrelated_families_ask_for_name() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-ambiguity");
+    for (stem, kind) in [("alpha", "blogs"), ("beta", "papers")] {
+        write_file(
+            &vault.join(format!("ref/{kind}/{stem}.md")),
+            &format!(
+                "---\ntitle: {stem}\nstatus: ready\nsource_url:\n  - {TOKIO_PART_1}\n  - {TOKIO_PART_2}\nsource_pdf: lib/{kind}/{stem}.pdf\n---\n\n# {stem}\n"
+            ),
+        );
+    }
+    let attempt = |extra: &[&str]| {
+        let mut command =
+            collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+        for arg in extra {
+            command.arg(arg);
+        }
+        collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+        command.output().expect("run ambiguous collection")
+    };
+
+    let output = attempt(&["-f"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "ambiguity must refuse:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("multiple references share this source")
+            && diagnostic.contains("-N")
+            && diagnostic.contains("ref/blogs/alpha.md")
+            && diagnostic.contains("ref/papers/beta.md"),
+        "ambiguity must list every member:\n{}",
+        format_output(&output)
+    );
+
+    let output = attempt(&["-f", "-N", "other"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unknown selector stays ambiguous:\n{}",
+        format_output(&output)
+    );
+
+    for (member, next) in [("alpha", "alpha__v2"), ("beta", "beta__v2")] {
+        let output = attempt(&["-f", "-d", "-N", member]);
+        assert_success(&output);
+        assert!(
+            stdout(&output).contains(&format!("reread: {member} → {next} (v1")),
+            "a member selector must proceed:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry runs must not write the vault"
+    );
+}
+
+/// An exact queued set keeps the old replacement permission under both
+/// modes and refuses without force; the queue never mints a reading.
+#[test]
+fn highlights_create_collection_queued_only_replacement_both_modes() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-queued");
+    fake.respond_n(
+        1,
+        &article_capture("Tokio One", "Jane Doe", "2024-01-08", 2140),
+    );
+    fake.respond_n(
+        2,
+        &article_capture("Tokio Two", "Jane Doe", "2024-02-01", 1980),
+    );
+
+    let attempt = |extra: &[&str]| {
+        let mut command =
+            collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+        for arg in extra {
+            command.arg(arg);
+        }
+        collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+        command.arg("-k");
+        command.output().expect("run queued collection")
+    };
+
+    assert_success(&attempt(&[]));
+    let queued = vault.join("xlib/blogs/tokio_internals.pdf");
+    assert!(queued.is_file(), "the first capture waits in intake");
+
+    let output = attempt(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a queued set must refuse without force:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already queued"),
+        "queued refusal must keep its remedy:\n{}",
+        format_output(&output)
+    );
+
+    assert_success(&attempt(&["-f"]));
+    assert_success(&attempt(&["-f", "overwrite"]));
+    assert!(queued.is_file(), "replacement keeps the queued PDF");
+    assert!(
+        !vault.join("ref/blogs/tokio_internals.md").exists()
+            && !vault.join("ref/blogs/tokio_internals__v2.md").exists(),
+        "queued replacement must not mint a reading"
+    );
+}
+
+/// Collection reread guards: `-o` and non-member `-N` exit 2 before any
+/// work, overwrite names the pending reread, and a reread without a
+/// resolvable parent still requires `-P`.
+#[test]
+fn highlights_create_collection_reread_guards() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-guards");
+    write_file(
+        &vault.join("ref/blogs/tokio_internals.md"),
+        &format!(
+            "---\ntitle: Tokio Internals\nstatus: ready\nsource_url:\n  - {TOKIO_PART_1}\n  - {TOKIO_PART_2}\nsource_pdf: lib/blogs/tokio_internals.pdf\n---\n\n# Tokio Internals\n"
+        ),
+    );
+    // The fixture carries no reading task, so no parent default resolves.
+    let attempt = |targets: &[&str], extra: &[&str]| {
+        let mut command = collection_create(&vault, targets);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command
+            .env("BOB_HIGHLIGHTS_CURL", &curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &log)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path);
+        command.output().expect("run guarded collection")
+    };
+    let plain = || attempt(&[TOKIO_PART_1, TOKIO_PART_2], &[]);
+
+    let output = plain();
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("read it again as tokio_internals__v2"),
+        "no force must name the reread:\n{}",
+        format_output(&output)
+    );
+
+    let output = attempt(
+        &[TOKIO_PART_1, TOKIO_PART_2],
+        &["-f", "-P", "sase", "-o", "out.pdf"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "-o on a captured reread must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output)
+            .contains("a reread is named tokio_internals__v2; drop -o"),
+        "wrong output flag:\n{}",
+        format_output(&output)
+    );
+
+    let output = attempt(
+        &[TOKIO_PART_1, TOKIO_PART_2],
+        &["-f", "-P", "sase", "-N", "other"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a non-member -N must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output)
+            .contains("-N other is not a reading of tokio_internals"),
+        "wrong member:\n{}",
+        format_output(&output)
+    );
+
+    for extra in [
+        ["-f", "overwrite", "-P", "sase"].as_slice(),
+        ["--force=overwrite", "-P", "sase"].as_slice(),
+    ] {
+        let output = attempt(&[TOKIO_PART_1, TOKIO_PART_2], extra);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{extra:?} overwrite must refuse:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(
+                "-f overwrite is not available yet; -f reads it again as tokio_internals__v2"
+            ),
+            "{extra:?} overwrite must name the pending reread:\n{}",
+            format_output(&output)
+        );
+    }
+
+    let output = attempt(&[TOKIO_PART_1, TOKIO_PART_2], &["-f"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a reread without a resolvable parent needs -P:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("--parent is required"),
+        "missing parent:\n{}",
+        format_output(&output)
+    );
+
+    assert!(!fake.called(), "guarded rereads must not reach the adapter");
+    assert!(
+        std::fs::read_to_string(&log)
+            .expect("read curl log")
+            .is_empty(),
+        "guarded rereads must not fetch"
+    );
+
+    let output =
+        attempt(&[TOKIO_PART_1, TOKIO_PART_2], &["-f", "-P", "sase", "-d"]);
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .contains("reread: tokio_internals → tokio_internals__v2 (v1"),
+        "an explicit parent proceeds:\n{}",
+        format_output(&output)
+    );
+
+    vault_holds_only(&vault, &["sase.md", "ref"]);
+}
+
+/// A failing reread part writes nothing: no compose, no intake PDF, no
+/// changes to the earlier reading.
+#[test]
+fn highlights_create_collection_reread_failed_part_writes_nothing() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-reread-fail");
+    write_file(
+        &vault.join("ref/blogs/tokio_internals.md"),
+        &format!(
+            "---\ntitle: Tokio Internals\nstatus: ready\nsource_url:\n  - {TOKIO_PART_1}\n  - {TOKIO_PART_2}\nsource_pdf: lib/blogs/tokio_internals.pdf\n---\n\n# Tokio Internals\n"
+        ),
+    );
+    fake.respond_n(
+        2,
+        &failure_response("render", "part exploded", "retry later"),
+    );
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command
+        .arg("-f")
+        .arg("-P")
+        .arg("sase")
+        .arg("-k")
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &log)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path);
+    let output = command.output().expect("run failing reread");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("part 2/2")
+            && diagnostic.contains("part exploded")
+            && diagnostic.contains("nothing was written"),
+        "{diagnostic}"
+    );
+    assert!(
+        !fake.compose_called(),
+        "compose must not run after a failed part"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "a failed reread must not stage intake"
+    );
+    vault_holds_only(&vault, &["sase.md", "ref"]);
+}
+
+/// `-f -L` on a captured set narrates the new reading instead of
+/// attaching to the earlier one; the earlier PDF keeps its bytes.
+#[test]
+fn highlights_create_collection_reread_listen_narrates_new_reading() {
+    let (temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-reread-listen",
+    );
+    fake.respond_n(
+        1,
+        &article_capture("Tokio Internals", "Jane Doe", "2024-01-08", 2140),
+    );
+    fake.respond_n(
+        2,
+        &article_capture("Tokio Internals", "Jane Doe", "2024-01-08", 2140),
+    );
+
+    let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
+    capture.arg("-k");
+    assert_success(&capture.output().expect("capture v1 collection"));
+    let scan = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("scan v1 collection");
+    assert_success(&scan);
+    let pdf = vault.join("lib/blogs/tokio_internals.pdf");
+    let pdf_bytes = std::fs::read(&pdf).expect("read v1 PDF");
+    let adapter_calls = fake.request_count();
+
+    let listen_bin = temp.path().join("reread-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create listen bin");
+    let listen_log = temp.path().join("reread-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ "$1" != "listen" ] || [ "$2" != "render" ] || [ ! -f "$3" ]; then
+  exit 9
+fi
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 reread collection episode' > "$arg" ;;
+  esac
+done
+"#,
+    );
+
+    let mut narrate = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    narrate
+        .arg("-f")
+        .arg("-L")
+        .arg("-k")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut narrate, &curl, &curl_root, &log, &fake.path);
+    let output = narrate.output().expect("narrate the reread");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: tokio_internals → tokio_internals__v2 (v1")
+            && report.contains("audio: ")
+            && report.contains("(from --listen)")
+            && !report.contains("attached"),
+        "listen must narrate the new reading:\n{report}"
+    );
+    assert!(
+        fake.request_count() > adapter_calls,
+        "a narrated reread must recapture"
+    );
+    assert!(
+        vault.join("xlib/blogs/tokio_internals__v2.pdf").is_file(),
+        "the narrated reading waits in intake:\n{report}"
+    );
+    assert!(
+        vault.join("xlib/blogs/tokio_internals__v2.mp3").is_file(),
+        "the new episode binds to the new reading:\n{report}"
+    );
+    assert_eq!(
+        std::fs::read(&pdf).expect("reread v1 PDF"),
+        pdf_bytes,
+        "attach must leave the earlier PDF in place"
+    );
+}

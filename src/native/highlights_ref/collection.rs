@@ -20,6 +20,7 @@ use super::{
     clip_url::{self, WebUrl},
     collection_name,
     create::CreateOptions,
+    recapture::{self, RereadPreflight},
     sources::{self, RecordedSource},
     stamp::{self, DefaultTargetIdentity, PdfInfo, TargetPlan, TargetWorkflow},
     CommandError, Config, MarkerValue, ScratchDir, Styler,
@@ -130,74 +131,37 @@ fn run_preflight(
     force: Option<super::force::ForceMode>,
 ) -> Result<PreparedCollection, CommandError> {
     let urls = validate_targets(matches, targets)?;
-    // Duplicate before parent: check overlap before requiring `-P`, so
-    // an already-captured set refuses (exit 1) before a missing parent
-    // errors (exit 2). `-L` attach never needs `-P`.
-    let pre_listen = matches.get_flag("listen");
-    let pre_recorded = sources::collect_recorded_source_urls(config)
-        .map_err(|error| CommandError::new(error.message))?;
-    // A pre-check refusal (exact or partial) wins over the parent error.
-    // `check_collection_overlap` returns `Err` for refusals, `Ok` for
-    // clear/attach. Run it first with no planned target.
-    let pre_overlap = check_collection_overlap(
-        config,
-        &pre_recorded,
-        &urls,
-        None,
-        force,
-        pre_listen,
-    );
-    match &pre_overlap {
-        Err(_) => return pre_overlap.map(|_| unreachable!()),
-        Ok(OverlapCheck::Clear { .. })
-            if super::force::is_overwrite(force)
-                && !has_exact_queued_match(&pre_recorded, &urls) =>
-        {
-            // Under `--force=overwrite` only an exact queued set keeps
-            // the old replacement permission; anything else is fresh
-            // (legacy-only included) and refuses before parent
-            // resolution, fetch, or adapter work.
-            return Err(super::force::nothing_to_overwrite(
-                &targets
-                    .iter()
-                    .map(|target| target.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ));
+    validate_early_flags(matches)?;
+    // Duplicate before parent: refusals (exact, partial, ambiguity) win
+    // over the missing-parent error (exit 2). `-L` attach without reread
+    // force never needs `-P`; a reread narrates a new reading instead of
+    // attaching, so `-L` with reread force runs the shared recapture
+    // preflight like every other mode.
+    let listen_flag = matches.get_flag("listen");
+    let skip_for_attach =
+        listen_flag && force != Some(super::force::ForceMode::Reread);
+    if skip_for_attach {
+        if let Some(prepared) = attach_gate(
+            matches,
+            config,
+            &urls,
+            targets,
+            keep_intake_reason.clone(),
+            force,
+        )? {
+            return Ok(prepared);
         }
-        Ok(OverlapCheck::Attach(hit)) => {
-            let hit = hit.clone();
-            let options = options_without_parent_for_attach(
-                matches,
-                keep_intake_reason.clone(),
-                force,
-            )?;
-            let output_stem = options
-                .output
-                .as_deref()
-                .and_then(Path::file_stem)
-                .and_then(std::ffi::OsStr::to_str);
-            let resolved_name = match collection_name::resolve_collection_name(
-                options.name.as_deref(),
-                output_stem,
-                options.title.as_deref(),
-                &urls,
-            ) {
-                Ok(name) => name,
-                Err(error) => return Err(error),
-            };
-            if let Some(warning) = collection_name::part_order_warning(&urls) {
-                eprintln!("{warning}");
-            }
-            return Ok(PreparedCollection {
-                urls,
-                options,
-                resolved_name,
-                plan: None,
-                overlap: OverlapCheck::Attach(hit),
-            });
-        }
-        Ok(OverlapCheck::Clear { .. }) => {}
+    } else if let Some(preflight) =
+        recapture_gate(config, &urls, targets, matches, force)?
+    {
+        return plan_reread_collection(
+            config,
+            matches,
+            &urls,
+            keep_intake_reason,
+            force,
+            preflight,
+        );
     }
     let options =
         options_from_matches(matches, config, keep_intake_reason, force)?;
@@ -286,6 +250,383 @@ fn run_preflight(
         plan,
         overlap: final_overlap,
     })
+}
+
+/// Validate `-N`/`-t`/`-p` spellings before the duplicate gate, so the
+/// recapture preflight sees the same clean values the planners use.
+fn validate_early_flags(matches: &ArgMatches) -> Result<(), CommandError> {
+    if let Some(name) = matches.get_one::<String>("name") {
+        clip_url::validate_name(name)?;
+    }
+    if let Some(ref_type) = matches.get_one::<String>("ref-type") {
+        stamp::validate_ref_type(ref_type)?;
+    }
+    if let Some(date) = matches.get_one::<String>("published") {
+        clip_url::validate_published(date)?;
+    }
+    Ok(())
+}
+
+/// Listen-without-reread gate: attach to an exact filed or queued set
+/// without `-P`, refuse overlaps, and keep the old overwrite replacement
+/// permission. Returns `None` for a fresh set, which falls through to
+/// normal parent resolution and planning.
+fn attach_gate(
+    matches: &ArgMatches,
+    config: &Config,
+    urls: &[WebUrl],
+    targets: &[OsString],
+    keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
+) -> Result<Option<PreparedCollection>, CommandError> {
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    // A pre-check refusal (exact or partial) wins over the parent error.
+    // `check_collection_overlap` returns `Err` for refusals, `Ok` for
+    // clear/attach. Run it first with no planned target.
+    let overlap =
+        check_collection_overlap(config, &recorded, urls, None, force, true);
+    match &overlap {
+        Err(_) => return overlap.map(|_| None),
+        Ok(OverlapCheck::Clear { .. })
+            if super::force::is_overwrite(force)
+                && !has_exact_queued_match(&recorded, urls) =>
+        {
+            // Under `--force=overwrite` only an exact queued set keeps
+            // the old replacement permission; anything else is fresh
+            // (legacy-only included) and refuses before parent
+            // resolution, fetch, or adapter work.
+            return Err(super::force::nothing_to_overwrite(
+                &targets
+                    .iter()
+                    .map(|target| target.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
+        Ok(OverlapCheck::Attach(hit)) => {
+            let hit = hit.clone();
+            let options = options_without_parent_for_attach(
+                matches,
+                keep_intake_reason,
+                force,
+            )?;
+            let output_stem = options
+                .output
+                .as_deref()
+                .and_then(Path::file_stem)
+                .and_then(std::ffi::OsStr::to_str);
+            let resolved_name = match collection_name::resolve_collection_name(
+                options.name.as_deref(),
+                output_stem,
+                options.title.as_deref(),
+                urls,
+            ) {
+                Ok(name) => name,
+                Err(error) => return Err(error),
+            };
+            if let Some(warning) = collection_name::part_order_warning(urls) {
+                eprintln!("{warning}");
+            }
+            return Ok(Some(PreparedCollection {
+                urls: urls.to_vec(),
+                options,
+                resolved_name,
+                plan: None,
+                overlap: OverlapCheck::Attach(hit),
+            }));
+        }
+        Ok(OverlapCheck::Clear { .. }) => {}
+    }
+    Ok(None)
+}
+
+/// Shared recapture preflight for collections, resolved before `-P` is
+/// required and before any fetch or adapter work. An exact normalized
+/// URL-set match selects one family even when several readings share
+/// that set; otherwise the refusal (filed, ambiguity, or partial, under
+/// every force mode) wins over the missing-parent error. Returns
+/// `Ok(Some(preflight))` for a selected family under reread force and
+/// `Ok(None)` for a fresh capture.
+fn recapture_gate(
+    config: &Config,
+    urls: &[WebUrl],
+    targets: &[OsString],
+    matches: &ArgMatches,
+    force: Option<super::force::ForceMode>,
+) -> Result<Option<RereadPreflight>, CommandError> {
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    let rows = recapture::index_rows(config);
+    let wanted: BTreeSet<String> =
+        urls.iter().map(|url| url.dedupe_key.clone()).collect();
+    let name = matches.get_one::<String>("name").map(String::as_str);
+    let output = matches.get_one::<OsString>("output").map(Path::new);
+    match recapture::preflight_for_url(
+        config,
+        &rows,
+        &recorded,
+        &wanted,
+        name,
+        output,
+        force,
+        &reread_title_fallback(
+            matches.get_one::<String>("name").map(String::as_str),
+            urls,
+        ),
+    )? {
+        Some(preflight) => Ok(Some(preflight)),
+        None => {
+            // No filed family claims the exact set: queued-only handling
+            // keeps the old replacement permission, queued partial
+            // overlaps refuse, and overwrite on a fresh set refuses,
+            // all before parent resolution.
+            fresh_queued_gate(config, &recorded, urls, targets, force)?;
+            Ok(None)
+        }
+    }
+}
+
+/// Queued handling for a fresh collection set (no filed family claims
+/// it): an exact queued set keeps the old replacement permission under
+/// either force mode and refuses without force; any queued partial
+/// overlap refuses under every force mode before adapter work.
+fn fresh_queued_gate(
+    config: &Config,
+    recorded: &[RecordedSource],
+    urls: &[WebUrl],
+    targets: &[OsString],
+    force: Option<super::force::ForceMode>,
+) -> Result<(), CommandError> {
+    if super::force::is_overwrite(force)
+        && !has_exact_queued_match(recorded, urls)
+    {
+        return Err(super::force::nothing_to_overwrite(
+            &targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+    }
+    // No filed family overlaps here (the recapture preflight already
+    // decided those), so this only sees queued and legacy groups: queued
+    // exact replacement or queued partial refusals, with legacy warnings
+    // reported later by the planning recheck.
+    match check_collection_overlap(config, recorded, urls, None, force, false)?
+    {
+        OverlapCheck::Clear { .. } => Ok(()),
+        OverlapCheck::Attach(_) => Ok(()),
+    }
+}
+
+/// Plan a reread of the selected family at its allocated `<root>__vN`
+/// stem. Explicit `-P`/`-t` win; otherwise the newest reading's located
+/// task residence and type become the defaults. `-o` was already refused
+/// at preflight: a reread has a fixed name.
+fn plan_reread_collection(
+    config: &Config,
+    matches: &ArgMatches,
+    urls: &[WebUrl],
+    keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
+    preflight: RereadPreflight,
+) -> Result<PreparedCollection, CommandError> {
+    let parent_input = matches.get_one::<String>("parent").cloned();
+    let (parent, resolved_parent, parent_default_reason) = match parent_input {
+        Some(input) => {
+            let resolved = crate::native::parent_notes::resolve_parent(
+                &config.bob_dir,
+                &input,
+            )
+            .map_err(|error| CommandError::new(error.message()))?;
+            (resolved.route.clone(), Some(resolved), None)
+        }
+        None => match &preflight.defaults.parent {
+            Some(task_path) => {
+                match crate::native::parent_notes::resolve_parent(
+                    &config.bob_dir,
+                    task_path,
+                ) {
+                    Ok(resolved) => (
+                        resolved.route.clone(),
+                        Some(resolved),
+                        Some(format!("newest reading's task in {task_path}")),
+                    ),
+                    Err(_) => {
+                        return Err(super::create::missing_parent_error());
+                    }
+                }
+            }
+            None => return Err(super::create::missing_parent_error()),
+        },
+    };
+    let ref_type = match matches.get_one::<String>("ref-type").cloned() {
+        Some(explicit) => {
+            stamp::validate_ref_type(&explicit)?;
+            explicit
+        }
+        None => preflight
+            .defaults
+            .ref_type
+            .clone()
+            .unwrap_or_else(|| "blogs".to_string()),
+    };
+    let stem = preflight.plan.stem.clone();
+    let resolved_name = collection_name::ResolvedName {
+        name: stem.clone(),
+        source: collection_name::NameSource::Reread,
+    };
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    let identity = DefaultTargetIdentity::Url {
+        keys: urls.iter().map(|url| url.dedupe_key.clone()).collect(),
+        recorded: &recorded,
+    };
+    // The stem was free at preflight; a whole-bundle recheck refuses
+    // when another host filed anything under it since, but keeps the old
+    // queued-intake replacement permission. Never suffixes: a reread has
+    // a fixed name.
+    let plan =
+        recapture::plan_reread_target(config, &stem, &ref_type, &identity)?;
+    let legacy = legacy_overlaps(&recorded, urls);
+    if let Some(warning) = collection_name::part_order_warning(urls) {
+        eprintln!("{warning}");
+    }
+    sources::warn_for_legacy_hits(&legacy);
+    let options = CreateOptions {
+        audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
+        author: matches.get_one::<String>("author").cloned(),
+        closed: false,
+        dry_run: matches.get_flag("dry-run"),
+        force,
+        html: matches.get_one::<OsString>("html").cloned(),
+        include_id: matches.get_flag("include-id"),
+        keep_intake_reason,
+        listen: matches.get_flag("listen"),
+        name: matches.get_one::<String>("name").cloned(),
+        no_audio: matches.get_flag("no-audio"),
+        output: matches.get_one::<OsString>("output").map(PathBuf::from),
+        plain: false,
+        parent,
+        parent_default_reason,
+        resolved_parent,
+        published: matches.get_one::<String>("published").cloned(),
+        sections: Vec::new(),
+        ref_type: Some(ref_type),
+        status: matches
+            .get_one::<String>("status")
+            .expect("defaulted by clap")
+            .clone(),
+        title: matches.get_one::<String>("title").cloned(),
+        reread: Some(preflight),
+    };
+    Ok(PreparedCollection {
+        urls: urls.to_vec(),
+        options,
+        resolved_name,
+        plan: Some(plan),
+        overlap: OverlapCheck::Clear { legacy },
+    })
+}
+
+/// Legacy PDF-less overlaps for the planning report: reported as a
+/// warning while the reread proceeds.
+fn legacy_overlaps(
+    recorded: &[RecordedSource],
+    urls: &[WebUrl],
+) -> Vec<RecordedSource> {
+    let wanted: BTreeSet<String> =
+        urls.iter().map(|url| url.dedupe_key.clone()).collect();
+    let mut legacy_by_path = BTreeMap::new();
+    for group in group_recorded_sources(recorded)
+        .iter()
+        .filter(|group| group.is_legacy() && !group.keys.is_disjoint(&wanted))
+    {
+        legacy_by_path
+            .entry(group.path.clone())
+            .or_insert_with(|| group.first.clone());
+    }
+    legacy_by_path.into_values().collect()
+}
+
+/// The `reread:` fallback title when the family note cannot be read:
+/// the `-N` selector when present, else the first cleaned URL.
+fn reread_title_fallback<'a>(
+    name: Option<&'a str>,
+    urls: &'a [WebUrl],
+) -> &'a str {
+    match name {
+        Some(name) => name,
+        None => urls
+            .first()
+            .map(|url| url.cleaned.as_str())
+            .unwrap_or("collection"),
+    }
+}
+
+/// Re-resolve duplicates after adapter or listen work: a reread compares
+/// its allocated stem against a fresh plan (any new family, or a filed
+/// rival for our stem, refuses rather than installing over it), while a
+/// fresh capture re-runs the recorded-source gate.
+fn recheck_collection_overlap(
+    config: &Config,
+    urls: &[WebUrl],
+    options: &CreateOptions,
+    planned_target: Option<&Path>,
+    listen: bool,
+) -> Result<(), CommandError> {
+    if let Some(preflight) = &options.reread {
+        let recorded = sources::collect_recorded_source_urls(config)
+            .map_err(|error| CommandError::new(error.message))?;
+        let rows = recapture::index_rows(config);
+        let wanted: BTreeSet<String> =
+            urls.iter().map(|url| url.dedupe_key.clone()).collect();
+        let fresh = recapture::preflight_for_url(
+            config,
+            &rows,
+            &recorded,
+            &wanted,
+            options.name.as_deref(),
+            None,
+            options.force,
+            &reread_title_fallback(options.name.as_deref(), urls),
+        )?;
+        if fresh.is_some_and(|next| next.plan.stem != preflight.plan.stem) {
+            return Err(CommandError::new(format!(
+                "reread {} is already filed; nothing written",
+                preflight.plan.stem,
+            )));
+        }
+        return Ok(());
+    }
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    check_collection_overlap(
+        config,
+        &recorded,
+        urls,
+        planned_target,
+        options.force,
+        listen,
+    )?;
+    Ok(())
+}
+
+/// Print the reread report line for an enabled reread, else the existing
+/// `renamed:` line. Rereads occupy the `renamed:` position in both real
+/// runs and dry runs. A narrated reread (`-f` + `-L`) also names the
+/// earlier episode it leaves behind, since earlier audio is never
+/// inherited.
+fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
+    if let Some(preflight) = &options.reread {
+        println!("{}", preflight.plan.report_line());
+        if options.listen {
+            recapture::print_reread_listen_hint(preflight);
+        }
+    } else if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
 }
 
 fn validate_targets(
@@ -518,7 +859,14 @@ fn capture_and_install(
         options.dry_run,
         &captured,
     )?;
-    let derived = derive_collection_meta(&parts, &options, &resolved_name.name);
+    // A reread keeps its family's title: the title fallback uses the
+    // family root, not the allocated `__vN` stem, so every reading of
+    // the set reports the same title.
+    let title_seed: &str = match &options.reread {
+        Some(preflight) => &preflight.plan.family.root_stem,
+        None => &resolved_name.name,
+    };
+    let derived = derive_collection_meta(&parts, &options, title_seed);
     let styler = Styler::detect();
     if options.dry_run {
         let audio = match options.audio.as_deref() {
@@ -606,14 +954,14 @@ fn capture_and_install(
         None => None,
     };
 
-    let recorded = sources::collect_recorded_source_urls(config)
-        .map_err(|error| CommandError::new(error.message))?;
-    check_collection_overlap(
+    // The vault may have changed during the adapter run: re-resolve
+    // the family (a reread refuses when its stem is taken) and the
+    // target collisions before installing anything.
+    recheck_collection_overlap(
         config,
-        &recorded,
         &urls,
+        &options,
         Some(&plan.target),
-        options.force,
         options.listen,
     )?;
     stamp::refuse_target_collisions(
@@ -661,14 +1009,11 @@ fn capture_and_install(
         super::listen::run_listen(command, &values)
             .map_err(|error| error.into_command_error())?;
         // Revalidate identity and the target after the potentially long render.
-        let latest = sources::collect_recorded_source_urls(config)
-            .map_err(|error| CommandError::new(error.message))?;
-        if let Err(error) = check_collection_overlap(
+        if let Err(error) = recheck_collection_overlap(
             config,
-            &latest,
             &urls,
+            &options,
             Some(&plan.target),
-            options.force,
             false,
         ) {
             return Err(super::listen::post_listen_error(
@@ -1049,8 +1394,20 @@ fn bind_listen_hint(
         command
             .push_str(&super::listen::shell_quote(&output.to_string_lossy()));
     } else {
+        // A reread's allocated `__vN` stem is not a family selector on
+        // retry: rebind with the member `-N` (or the family root) so the
+        // same next reading is allocated again.
+        let selector = options.reread.as_ref().map_or_else(
+            || resolved_name.name.clone(),
+            |preflight| {
+                options
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| preflight.plan.family.root_stem.clone())
+            },
+        );
         command.push_str(" -N ");
-        command.push_str(&super::listen::shell_quote(&resolved_name.name));
+        command.push_str(&super::listen::shell_quote(&selector));
     }
     command.push_str(" -P ");
     command.push_str(&super::listen::shell_quote(&options.parent));
@@ -1084,9 +1441,7 @@ fn print_success(
         styler.success_prefix(false),
         urls.len()
     );
-    if let Some(line) = plan.renamed_line() {
-        println!("{line}");
-    }
+    print_reread_or_renamed(plan, options);
     println!(
         "name: {} ({})",
         resolved_name.name,
@@ -1146,9 +1501,7 @@ fn print_dry_run(
         styler.success_prefix(true),
         urls.len()
     );
-    if let Some(line) = plan.renamed_line() {
-        println!("{line}");
-    }
+    print_reread_or_renamed(plan, options);
     println!(
         "name: {} ({})",
         resolved_name.name,
@@ -1412,9 +1765,20 @@ fn partial_overlap_error(
             without_scheme(&urls[index - 1].cleaned),
         ));
     }
-    lines.push(
-        "hint: a URL belongs to one reference; remove those references first, or capture the other URLs on their own".into(),
-    );
+    // Name the exact set `-f` would recapture: the first filed family
+    // stem, else the first overlapping stem.
+    let stem = groups
+        .iter()
+        .copied()
+        .filter(|group| group.is_ref_note)
+        .chain(groups.iter().copied())
+        .next()
+        .and_then(|group| group.path.file_stem().and_then(|stem| stem.to_str()))
+        .unwrap_or("reference")
+        .to_string();
+    lines.push(format!(
+        "hint: -f recaptures only the exact URL set of {stem}"
+    ));
     CommandError::new(lines.join("\n"))
 }
 
@@ -1496,7 +1860,7 @@ mod tests {
             no_name,
             "plain errors stay byte-identical"
         );
-        let partial = "2 of 3 URLs are already in the library\n  1  example.com/a   captured as ref/blogs/a.md\n  3  example.com/c   queued in xlib/blogs/c.pdf\nhint: a URL belongs to one reference";
+        let partial = "2 of 3 URLs are already in the library\n  1  example.com/a   captured as ref/blogs/a.md\n  3  example.com/c   queued in xlib/blogs/c.pdf\nhint: -f recaptures only the exact URL set of a";
         assert_eq!(
             style_error_message(partial, &Styler::plain()),
             format!("bob ref create: error: {partial}"),
@@ -1509,7 +1873,9 @@ mod tests {
             "{styled:?}"
         );
         assert!(
-            styled.contains("\u{1b}[2mhint:\u{1b}[0m a URL belongs"),
+            styled.contains(
+                "\u{1b}[2mhint:\u{1b}[0m -f recaptures only the exact URL set of a"
+            ),
             "{styled:?}"
         );
     }
@@ -1550,6 +1916,13 @@ mod tests {
         assert!(error.message.contains("xlib/blogs/part_two.pdf"));
         assert!(error.message.contains("1  example.com/series-part-1"));
         assert!(error.message.contains("2  example.com/series-part-2"));
+        assert!(
+            error.message.contains(
+                "hint: -f recaptures only the exact URL set of part_one"
+            ),
+            "partial overlap names the exact set:\n{}",
+            error.message
+        );
     }
 
     #[test]
