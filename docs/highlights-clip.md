@@ -139,7 +139,13 @@ written wrong.
 The dedupe key lowercases the scheme and host, drops a leading `www.` and
 the default port, strips the trailing slash, and sorts the remaining
 query parameters, so the same article reached through two URL spellings
-dedupes. Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
+dedupes. In the path, escapes of unreserved characters (`A-Z a-z 0-9 - . _
+~`) decode, and every other escape keeps its byte with uppercase hex, so
+`%7e` matches `~` and `%2f` matches `%2F`, but an encoded `/`, `?`, `#`,
+`%`, or `@` never matches its literal. The one exception is Medium:
+`medium.com/%40author/...` matches `medium.com/@author/...`, because
+Medium serves both spellings of the author sigil as one page. The stored
+`source_url` keeps the spelling you gave. Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
 different reference is suffixed (with a `renamed:` line before `pdf:`),
 and only the same reference refuses. `--force` overwrites the same intake
 target only; library PDFs are never overwritten, and an already-captured

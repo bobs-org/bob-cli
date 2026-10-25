@@ -705,6 +705,27 @@ mod tests {
     }
 
     #[test]
+    fn reserved_at_sign_off_medium_is_a_distinct_capture() {
+        // bob-cli-7u: the `%40` alias is Medium-only, so a different
+        // host's `%40` path is a new source, not a refused duplicate.
+        let recorded = vec![RecordedSource {
+            dedupe_key: validate_and_clean("https://example.com/a@b")
+                .expect("recorded URL cleans")
+                .dedupe_key,
+            path: PathBuf::from("ref/blogs/a_at_b.md"),
+            is_ref_note: true,
+            source_pdf: Some("lib/blogs/a_at_b.pdf".to_string()),
+            has_audio: false,
+        }];
+        let encoded = validate_and_clean("https://example.com/a%40b")
+            .expect("encoded URL cleans")
+            .dedupe_key;
+        assert_ne!(encoded, recorded[0].dedupe_key);
+        check_dedupe(&recorded, &encoded, None, false)
+            .expect("a distinct reserved spelling must not refuse");
+    }
+
+    #[test]
     fn non_arxiv_keys_pass_through_unchanged() {
         let recorded = vec![RecordedSource {
             dedupe_key: "https://example.com/a?a=1&b=2".to_string(),

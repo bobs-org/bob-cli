@@ -6,6 +6,8 @@
 //! scheme/host, no `www.`, no default port, no trailing slash, sorted
 //! query) so the same article reached through two spellings dedupes.
 
+use std::borrow::Cow;
+
 use super::{CommandError, Result};
 
 /// Query parameters stripped from the stored `source_url`. Any parameter
@@ -80,17 +82,18 @@ pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
     if let Some(paper) = super::arxiv::ArxivPaper::parse(url.as_str()) {
         return paper.dedupe_key();
     }
+    let host = normalize_host(url.host_str().unwrap_or_default());
     let mut key = String::new();
     key.push_str(&url.scheme().to_lowercase());
     key.push_str("://");
-    key.push_str(&normalize_host(url.host_str().unwrap_or_default()));
+    key.push_str(&host);
     if let Some(port) = url.port()
         && Some(port) != url.port_or_known_default()
     {
         key.push_str(&format!(":{port}"));
     }
     let path = url.path().trim_end_matches('/');
-    key.push_str(&normalize_path_escapes(path));
+    key.push_str(&normalize_path_escapes(&medium_author_alias(&host, path)));
     let mut pairs: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(name, _)| !is_tracking_param(name))
@@ -110,20 +113,34 @@ pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
     key
 }
 
+/// Spell a Medium author path's leading `%40` sigil as `@`
+/// (bob-cli-7u).
+///
+/// Medium serves `/@author/...` and `/%40author/...` as the same page,
+/// and share links arrive in both spellings. `@` is reserved, so this
+/// is an explicit alias for that verified host, not a general
+/// equivalence: it applies only to the first path segment's leading
+/// sigil on the exact `medium.com` host (after `www.` normalization).
+/// Other hosts, Medium subdomains, and every other `%40` keep their
+/// escape.
+fn medium_author_alias<'a>(host: &str, path: &'a str) -> Cow<'a, str> {
+    match path.strip_prefix("/%40") {
+        Some(rest) if host == "medium.com" => Cow::Owned(format!("/@{rest}")),
+        _ => Cow::Borrowed(path),
+    }
+}
+
 /// Normalize percent-escape spelling in a URL path for the dedupe key
 /// (bob-cli-7u).
 ///
-/// Escapes of bytes that are valid literally in a path without changing
-/// meaning decode to that literal: RFC 3986 unreserved characters
-/// (`A-Z a-z 0-9 - . _ ~`) plus `@`, the verified Medium `@`/`%40`
-/// twin. (`@` is reserved, so its equivalence is an explicit rule for
-/// the reported host spellings, not a general reserved-character
-/// claim.) Every other escape is retained with uppercase hex, so
-/// `%2f` and `%2F` agree while encoded delimiters (`%2F`, `%3F`,
-/// `%23`, `%25`) never merge with their structural or literal
-/// counterparts. Malformed `%` sequences pass through untouched, and
-/// decoding is one left-to-right pass, so `%2540` stays `%2540`
-/// instead of collapsing to `@`.
+/// Escapes of RFC 3986 unreserved characters (`A-Z a-z 0-9 - . _ ~`)
+/// decode to that literal, because both spellings name the same
+/// resource. Every other escape, including reserved `%40`, is retained
+/// with uppercase hex, so `%2f` and `%2F` agree while encoded
+/// delimiters (`%2F`, `%3F`, `%23`, `%25`) never merge with their
+/// structural or literal counterparts. Malformed `%` sequences pass
+/// through untouched, and decoding is one left-to-right pass, so
+/// `%2541` stays `%2541` instead of collapsing to `A`.
 fn normalize_path_escapes(path: &str) -> String {
     let bytes = path.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -135,7 +152,7 @@ fn normalize_path_escapes(path: &str) -> String {
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
         {
             let decoded = high << 4 | low;
-            if decoded == b'@' || is_unreserved(decoded) {
+            if is_unreserved(decoded) {
                 out.push(decoded);
             } else {
                 out.push(b'%');
@@ -703,12 +720,65 @@ mod tests {
             key("https://example.com/a%2540b"),
             key("https://example.com/a@b")
         );
+        assert_eq!(
+            key("https://example.com/a%2541b"),
+            "https://example.com/a%2541b"
+        );
         // Malformed escapes pass through untouched.
         assert_eq!(
             key("https://example.com/a%zzb"),
             "https://example.com/a%zzb"
         );
         assert_eq!(key("https://example.com/a%b"), "https://example.com/a%b");
+    }
+
+    #[test]
+    fn reserved_at_sign_alias_is_only_the_medium_author_sigil() {
+        let key =
+            |raw: &str| validate_and_clean(raw).expect("accept URL").dedupe_key;
+        // The verified alias survives `www.` and hex-case-free `%40`.
+        assert_eq!(
+            key("https://www.medium.com/%40edominguez.se/piece-163b85aa0935"),
+            "https://medium.com/@edominguez.se/piece-163b85aa0935"
+        );
+        // `@` is reserved: other hosts keep `%40` and `@` distinct
+        // (bob-cli-7u).
+        assert_eq!(
+            key("https://example.com/a%40b"),
+            "https://example.com/a%40b"
+        );
+        assert_ne!(
+            key("https://example.com/a%40b"),
+            key("https://example.com/a@b")
+        );
+        assert_ne!(
+            key("https://example.com/%40user/post"),
+            key("https://example.com/@user/post")
+        );
+        // Lookalike hosts and Medium subdomains are not the verified
+        // host.
+        for host in
+            ["notmedium.com", "medium.com.example.org", "blog.medium.com"]
+        {
+            assert_ne!(
+                key(&format!("https://{host}/%40author/post")),
+                key(&format!("https://{host}/@author/post")),
+                "{host} keeps the escape"
+            );
+        }
+        // Only the first segment's leading sigil is aliased.
+        assert_ne!(
+            key("https://medium.com/@author/post%40x"),
+            key("https://medium.com/@author/post@x")
+        );
+        assert_ne!(
+            key("https://medium.com/@author/%40x"),
+            key("https://medium.com/@author/@x")
+        );
+        assert_ne!(
+            key("https://medium.com/p%40x"),
+            key("https://medium.com/p@x")
+        );
     }
 
     #[test]
