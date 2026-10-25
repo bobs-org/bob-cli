@@ -1724,9 +1724,10 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
 }
 
 #[test]
-fn highlights_create_refuses_same_title_library_pdf_with_or_without_force() {
-    // The same title means the same reference: it refuses even with
-    // `--force` and writes nothing.
+fn highlights_create_same_title_library_rereads_from_original_source() {
+    // The same title means the same reference: without force it refuses
+    // with the `-f` remedy, and with bare `-f` it rereads the original
+    // source as `<stem>__v2`.
     let temp = TempDir::new("bob-cli-highlights-create-library-same");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
@@ -1735,45 +1736,61 @@ fn highlights_create_refuses_same_title_library_pdf_with_or_without_force() {
     write_file(&source, "# Report\n");
     write_highlights_pdf(
         &library_pdf,
-        "- status: ready\n- parent: obsidian\n- title: Report\n",
+        "- status: ready\n- parent: sase\n- title: Report\n",
+    );
+    write_file(
+        &vault.join("ref/chat/report.md"),
+        "---\ntitle: Report\nstatus: ready\nsource_pdf: lib/chat/report.pdf\n---\n\n# Report\n",
     );
 
-    for force in [false, true] {
-        let mut command = bob_command();
-        command
-            .arg("highlights")
-            .arg("create")
-            .arg("-P")
-            .arg("sase")
-            .arg(&source)
-            .arg("-b")
-            .arg(&vault)
-            .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc");
-        if force {
-            command.arg("--force");
-        }
+    let refused = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create over a filed same-title reference");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "same-title library PDF should fail without force:\n{}",
+        format_output(&refused)
+    );
+    let diagnostic = stderr(&refused);
+    assert!(
+        diagnostic.contains("already captured")
+            && diagnostic.contains("read it again as report__v2"),
+        "refusal must name the reread:\n{diagnostic}"
+    );
 
-        let output = command.output().unwrap_or_else(|error| {
-            panic!("run create force={force}: {error}")
-        });
-
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "same-title library PDF should fail force={force}:\n{}",
-            format_output(&output)
-        );
-        let diagnostic = stderr(&output);
-        assert!(
-            diagnostic.contains("already captured")
-                && diagnostic.contains("lib/chat/report.pdf"),
-            "{diagnostic}"
-        );
-    }
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("--force")
+        .arg("-d")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create --force over a filed same-title reference");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: report → report__v2 (v1")
+            && report.contains("writes: none"),
+        "force must plan the reread from the original source:\n{report}"
+    );
     assert!(
         !vault.join("xlib/chat/report.pdf").exists()
-            && !vault.join("xlib/chat/report_2.pdf").exists(),
-        "create refusal must not write an intake PDF"
+            && !vault.join("xlib/chat/report__v2.pdf").exists(),
+        "a dry-run reread must not write an intake PDF"
     );
 }
 
@@ -3173,6 +3190,155 @@ fn highlights_create_pdf_url_stamps_and_dedupes() {
         .output()
         .expect("rerun PDF URL");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+}
+
+#[test]
+fn highlights_create_pdf_url_rereads_from_original_source() {
+    // A filed PDF URL refuses with the reread remedy and rereads as
+    // `<stem>__v2` with the fetched metadata preserved.
+    let temp = TempDir::new("bob-cli-create-pdf-url-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(
+        &root.join("paper.pdf"),
+        Some("Remote Paper Title"),
+        Some("Jane Doe"),
+    );
+    let fake = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    write_file(
+        &vault.join("ref/papers/paper.md"),
+        "---\ntitle: Remote Paper Title\nstatus: ready\nsource_pdf: lib/papers/paper.pdf\nsource_url: https://example.com/paper.pdf\n---\n\n# Remote Paper Title\n",
+    );
+
+    let refused = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run PDF URL over a filed reference");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "the filed PDF URL must refuse:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("read it again as paper__v2"),
+        "refusal must name the reread:\n{}",
+        format_output(&refused)
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("reread the PDF URL");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: paper → paper__v2 (v1")
+            && report.contains("title: Remote Paper Title")
+            && report.contains("author: Jane Doe")
+            && report.contains("id: paper__v2"),
+        "the reread keeps the fetched metadata:\n{report}"
+    );
+    assert!(vault.join("xlib/papers/paper__v2.pdf").is_file());
+}
+
+#[test]
+fn highlights_create_arxiv_rereads_from_original_source() {
+    // A filed arXiv paper refuses with the reread remedy and rereads as
+    // `<stem>__vN` with API metadata preserved.
+    let temp = TempDir::new("bob-cli-create-arxiv-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"), Some("Remote"), None);
+    write_arxiv_api_fixture(&root);
+    std::fs::copy(root.join("paper.pdf"), root.join("arxiv.pdf"))
+        .expect("copy arxiv pdf");
+    let fake = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    write_file(
+        &vault.join("ref/papers/attention_is_all_you_need.md"),
+        "---\ntitle: Attention Is All You Need\nstatus: ready\nsource_pdf: lib/papers/attention_is_all_you_need.pdf\nsource_url: https://arxiv.org/abs/1706.03762\n---\n\n# Attention Is All You Need\n",
+    );
+
+    let refused = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run arXiv over a filed reference");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "the filed arXiv paper must refuse:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused)
+            .contains("read it again as attention_is_all_you_need__v2"),
+        "refusal must name the reread:\n{}",
+        format_output(&refused)
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("reread the arXiv paper");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "reread: attention_is_all_you_need → attention_is_all_you_need__v2 (v1"
+        ) && report.contains("title: Attention Is All You Need")
+            && report.contains("author: Ashish Vaswani")
+            && report.contains("id: attention_is_all_you_need__v2"),
+        "the reread keeps the API metadata:\n{report}"
+    );
+    assert!(vault
+        .join("xlib/papers/attention_is_all_you_need__v2.pdf")
+        .is_file());
 }
 
 #[test]
@@ -5113,8 +5279,9 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
 
-    // A PDF-backed note refuses even with --force. A note without a
-    // `source_pdf` instead warns and captures (see
+    // A PDF-backed note refuses without force (naming the next reread),
+    // while bare `--force` rereads it from the original source. A note
+    // without a `source_pdf` instead warns and captures (see
     // `highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning`).
     let dedupe_vault = temp.path().join("dedupe-vault");
     write_file(&dedupe_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
@@ -5122,6 +5289,37 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
         &dedupe_vault.join("ref/blogs/existing.md"),
         "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
     );
+    let refused = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&dedupe_vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over captured URL");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a captured URL must refuse without force:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("already captured")
+            && stderr(&refused).contains("read it again as existing__v2"),
+        "expected the dedupe error with the reread remedy:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        !fake.called(),
+        "the ref-note dedupe must precede the adapter"
+    );
+
     let output = bob_command()
         .arg("highlights")
         .arg("create")
@@ -5131,26 +5329,19 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
         .arg("-b")
         .arg(&dedupe_vault)
         .arg("--force")
+        .arg("-d")
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &curl_root)
         .env("FAKE_CURL_LOG", &curl_log)
         .output()
-        .expect("run bob highlights create over captured URL");
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "a captured URL must refuse even with --force:\n{}",
-        format_output(&output)
-    );
+        .expect("run bob highlights create --force over captured URL");
+    assert_success(&output);
+    let report = stdout(&output);
     assert!(
-        stderr(&output).contains("already captured"),
-        "expected the dedupe error:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        !fake.called(),
-        "the ref-note dedupe must precede the adapter"
+        report.contains("reread: existing → existing__v2 (v1")
+            && report.contains("writes: none"),
+        "force must reread from the original source:\n{report}"
     );
 }
 
@@ -5188,8 +5379,11 @@ fn highlights_create_refuses_each_url_in_pdf_backed_frontmatter_lists() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains("already captured")
-                && stderr(&output).contains("ref/blogs/collection.md"),
+            stderr(&output).contains("1 of 1 URLs are already in the library")
+                && stderr(&output).contains("ref/blogs/collection.md")
+                && stderr(&output).contains(
+                    "hint: -f recaptures only the exact URL set of collection"
+                ),
             "{name} list did not refuse the recorded URL:\n{}",
             format_output(&output)
         );
@@ -5745,7 +5939,7 @@ fn highlights_create_diagram_doctor_warns_without_browser_and_reports_off() {
 }
 
 #[test]
-fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
+fn highlights_create_local_pdf_recapture_rereads_after_scan() {
     let temp = TempDir::new("bob-cli-create-local-recapture");
     let vault = temp.path().join("vault");
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
@@ -5782,26 +5976,589 @@ fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
     assert_success(&run(&["--force"]));
     assert!(vault.join("xlib/papers/paper.pdf").is_file());
 
-    // Simulated scan: move the intake PDF to lib/. The same title still
-    // refuses, even with --force.
+    // Simulated scan: move the intake PDF to lib/ and file its ref note.
+    // Without force the same title refuses with the reread remedy; with
+    // bare force the original file rereads as `paper__v2`.
     let library = vault.join("lib/papers/paper.pdf");
     std::fs::create_dir_all(library.parent().expect("lib parent"))
         .expect("create lib parent");
     std::fs::rename(vault.join("xlib/papers/paper.pdf"), &library)
         .expect("simulate scan");
-    for extra in [&[] as &[&str], &["--force"] as &[&str]] {
-        let output = run(extra);
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "scanned library must refuse extra={extra:?}:\n{}",
-            format_output(&output)
-        );
-        assert!(
-            stderr(&output).contains("already captured"),
-            "{}",
-            format_output(&output)
-        );
+    write_file(
+        &vault.join("ref/papers/paper.md"),
+        "---\ntitle: Local Paper\nstatus: ready\nsource_pdf: lib/papers/paper.pdf\n---\n\n# Local Paper\n",
+    );
+    let output = run(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "scanned library must refuse without force:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already captured")
+            && diagnostic.contains("read it again as paper__v2"),
+        "refusal must name the reread:\n{}",
+        format_output(&output)
+    );
+
+    let output = run(&["--force"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: paper → paper__v2 (v1"),
+        "force must reread the original file:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        report.contains("id: paper__v2"),
+        "rereads stamp id to the new stem:\n{report}"
+    );
+    assert!(
+        vault.join("xlib/papers/paper__v2.pdf").is_file(),
+        "the new reading queues beside the earlier one"
+    );
+    // The earlier reading keeps its bytes.
+    assert!(
+        std::fs::read(&library).expect("read library PDF").len() > 0,
+        "the earlier library PDF must survive"
+    );
+    assert!(
+        !vault.join("xlib/papers/paper.pdf").exists(),
+        "no stray v1 intake PDF may reappear"
+    );
+}
+
+/// `-N` on a captured URL must name a reading of the selected family: a
+/// member selects it (the next stem still comes from the root), anything
+/// else exits 2 before any adapter work.
+#[test]
+fn highlights_create_reread_url_member_selection_and_rejection() {
+    let temp = TempDir::new("bob-cli-highlights-create-reread-member");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let run = |extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("ref")
+            .arg("create")
+            .arg("-P")
+            .arg("sase")
+            .arg("-f")
+            .arg(FOLDED_URL)
+            .arg("-d")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run reread member probe")
+    };
+
+    let output = run(&["-N", "existing"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1"),
+        "a member -N selects the family:\n{report}"
+    );
+    assert!(
+        !report.contains('\u{1b}'),
+        "piped reports carry no ANSI escapes"
+    );
+
+    let output = run(&["-N", "other"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a non-member -N must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("-N other is not a reading of existing"),
+        "rejection must name the family rule:\n{}",
+        format_output(&output)
+    );
+}
+
+/// A free `-N` on an already-captured title route stays an ordinary new
+/// capture, and `-o` on a captured reread exits 2 before any render.
+#[test]
+fn highlights_create_reread_title_free_name_and_output_guards() {
+    let temp = TempDir::new("bob-cli-highlights-create-reread-guards");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Report\n");
+    let library_pdf = vault.join("lib/chat/report.pdf");
+    write_highlights_pdf(
+        &library_pdf,
+        "- status: ready\n- parent: sase\n- title: Report\n",
+    );
+    write_file(
+        &vault.join("ref/chat/report.md"),
+        "---\ntitle: Report\nstatus: ready\nsource_pdf: lib/chat/report.pdf\n---\n\n# Report\n",
+    );
+
+    let ordinary = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("-N")
+        .arg("fresh_name")
+        .arg("-d")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run reread with a free -N");
+    assert_success(&ordinary);
+    let report = stdout(&ordinary);
+    assert!(
+        !report.contains("reread:"),
+        "a free -N stays an ordinary capture:\n{report}"
+    );
+    assert!(
+        report.contains("xlib/chat/fresh_name.pdf"),
+        "the free name plans its own target:\n{report}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("-o")
+        .arg(temp.path().join("out.pdf"))
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run reread with -o");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "-o on a captured reread must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("a reread is named report__v2; drop -o"),
+        "the guard must name the allocated stem:\n{}",
+        format_output(&output)
+    );
+}
+
+/// A reread without `-P` falls back to the newest reading's located task
+/// residence, while explicit `-t`/`-s` override the family defaults.
+#[test]
+fn highlights_create_reread_omits_parent_and_overrides_type_status() {
+    let temp = TempDir::new("bob-cli-highlights-create-reread-defaults");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\n---\n\n- [ ] #task #ref [[ref/blogs/existing|Existing]] [created:: 2026-10-24] ^ref-existing\n",
+    );
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\nstatus: read\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-d")
+        .arg("-t")
+        .arg("papers")
+        .arg("-s")
+        .arg("next")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run reread without -P and with overrides");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1 read"),
+        "the newest reading's status feeds the report:\n{report}"
+    );
+    assert!(
+        report.contains("xlib/papers/existing__v2.pdf"),
+        "explicit -t overrides the family type:\n{report}"
+    );
+    assert!(
+        report.contains("status: next"),
+        "explicit -s overrides the default status:\n{report}"
+    );
+    assert!(
+        report.contains("parent") && report.contains("sase"),
+        "the newest reading's task residence supplies -P:\n{report}"
+    );
+}
+
+/// `-k` queues the reread and a later scan files it with lineage, task,
+/// and no changes to the earlier reading.
+#[test]
+fn highlights_create_reread_queued_then_scan_files_lineage() {
+    let temp = TempDir::new("bob-cli-highlights-create-reread-scan");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\nstatus: ready\n---\n\n# Existing\n",
+    );
+    let before =
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("read note");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg("-k")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("queue a reread");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("reread: existing → existing__v2 (v1"),
+        "queued rereads report the reread line:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/blogs/existing__v2.pdf").is_file(),
+        "the reread waits in intake"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("scan the queued reread");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("1 reading tasks created"),
+        "scan must insert the new reading task:\n{}",
+        format_output(&output)
+    );
+    let parent = std::fs::read_to_string(vault.join("sase.md"))
+        .expect("read parent note");
+    assert!(
+        parent.contains("^ref-existing-v2"),
+        "the new reading task keeps its versioned block id:\n{parent}"
+    );
+    let note = vault.join("ref/blogs/existing__v2.md");
+    assert!(note.is_file(), "scan must file the reread note");
+    let contents = std::fs::read_to_string(&note).expect("read reread note");
+    assert!(
+        contents.contains("earlier:"),
+        "birth writes lineage for the queued reread:\n{contents}"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
+        before,
+        "the earlier reading keeps its bytes"
+    );
+}
+
+/// Retried captures without force never mint a `__vN` reading: duplicates
+/// refuse and queued replacements keep their own stem.
+#[test]
+fn highlights_create_retries_without_force_never_mint_readings() {
+    let temp = TempDir::new("bob-cli-highlights-create-no-mint");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let run = |extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("ref")
+            .arg("create")
+            .arg("-P")
+            .arg("sase")
+            .arg(FOLDED_URL)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run producer-shaped retry")
+    };
+
+    // A producer retry (no force) refuses the duplicate.
+    let output = run(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "duplicate must refuse:\n{}",
+        format_output(&output)
+    );
+
+    // A queued-only replacement under force keeps its own stem: capture
+    // a second URL (queued, deriving its stem from the adapter), then
+    // replace it under force.
+    let other = "https://example.com/article";
+    let queue = |extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("ref")
+            .arg("create")
+            .arg("-P")
+            .arg("sase")
+            .arg(other)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run producer-shaped capture")
+    };
+    assert_success(&queue(&[]));
+    assert_success(&queue(&["--force"]));
+
+    let mut minted = Vec::new();
+    collect_v2_stems(&vault, &mut minted);
+    assert!(
+        minted.is_empty(),
+        "no __vN reading may appear without an explicit reread: {minted:?}"
+    );
+}
+
+/// `-f -L` on a captured URL narrates the new reading instead of
+/// attaching: the listen command runs against the `__vN` target, earlier
+/// audio is never inherited, and the report names the earlier episode.
+#[test]
+fn highlights_create_reread_listen_narrates_new_reading() {
+    let temp = TempDir::new("bob-cli-highlights-create-reread-listen");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\nstatus: ready\naudio: \"[[lib/blogs/existing.mp3]]\"\n---\n\n# Existing\n",
+    );
+    std::fs::create_dir_all(vault.join("lib/blogs")).expect("lib dir");
+    std::fs::write(vault.join("lib/blogs/existing.mp3"), "ID3 old episode")
+        .expect("write earlier episode");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let listen_bin = temp.path().join("reread-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
+    let listen_log = temp.path().join("reread-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 new episode' > "$arg" ;;
+  esac
+done
+"#,
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg("-L")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin))
+        .output()
+        .expect("narrate a reread");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1"),
+        "the new reading is narrated, not attached:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        report.contains("earlier reading v1 keeps its episode"),
+        "the report names the earlier episode it leaves behind:\n{report}"
+    );
+    assert!(
+        report.contains("audio: ")
+            && report.contains("existing__v2.mp3 (from --listen)"),
+        "the new episode binds beside the new reading:\n{report}"
+    );
+    let listen_args =
+        std::fs::read_to_string(&listen_log).expect("listen must run");
+    assert!(
+        listen_args.contains("existing__v2"),
+        "listen must target the new reading, not the old one:\n{listen_args}"
+    );
+    assert!(
+        vault.join("xlib/blogs/existing__v2.mp3").is_file(),
+        "the new episode is staged with the new reading"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("lib/blogs/existing.mp3"))
+            .expect("read earlier episode"),
+        "ID3 old episode",
+        "the earlier episode keeps its bytes"
+    );
+}
+
+/// A library PDF as TARGET refuses even with `-f`: copying highlights
+/// into the next reading is forbidden. The hint names the recorded
+/// `source_url` (or the original file when none is recorded), while `-L`
+/// without force still attaches.
+#[test]
+fn highlights_create_library_pdf_as_target_refuses_reread_with_hint() {
+    let temp = TempDir::new("bob-cli-create-library-target-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let library_pdf = vault.join("lib/papers/paper.pdf");
+    write_bare_pdf(&library_pdf, Some("Library Paper"), None);
+    let outside = temp.path().join("outside.pdf");
+    write_bare_pdf(&outside, Some("Library Paper"), None);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&outside)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-o")
+        .arg(&library_pdf)
+        .arg("--force")
+        .output()
+        .expect("install into lib");
+    assert_success(&output);
+    write_file(
+        &vault.join("ref/papers/paper.md"),
+        "---\ntitle: Library Paper\nstatus: ready\nsource_pdf: lib/papers/paper.pdf\nsource_url: https://example.com/library-paper\n---\n\n# Library Paper\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&library_pdf)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .output()
+        .expect("reread a library PDF target");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a library PDF target must refuse even with -f:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        diagnostic.contains("already captured")
+            && diagnostic.contains("https://example.com/library-paper"),
+        "refusal must point at the recorded source_url:\n{diagnostic}"
+    );
+    assert!(
+        !vault.join("xlib/papers/paper.pdf").exists()
+            && !vault.join("xlib/papers/paper__v2.pdf").exists(),
+        "no reread may start from a library copy"
+    );
+}
+
+fn collect_v2_stems(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_v2_stems(&path, out);
+        } else if let Some(name) =
+            path.file_name().and_then(|name| name.to_str())
+            && name.contains("__v")
+        {
+            out.push(path.display().to_string());
+        }
     }
 }
 
@@ -6024,6 +6781,76 @@ fn highlights_create_renders_vault_note_snapshot_when_available() {
     let document = lopdf::Document::load(&pdf)
         .unwrap_or_else(|error| panic!("load {}: {error}", pdf.display()));
     assert!(!document.get_pages().is_empty(), "snapshot PDF has pages");
+}
+
+#[test]
+fn highlights_create_vault_note_same_day_rereads() {
+    // A same-day snapshot duplicate refuses with the reread remedy and
+    // rereads as `<dated-root>__vN` under bare `-f`; a new day keeps its
+    // ordinary dated create.
+    let temp = TempDir::new("bob-cli-create-vault-note-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    write_file(
+        &vault.join("zk/harbor_cranes.md"),
+        "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA source note.\n",
+    );
+    write_file(
+        &vault.join("ref/notes/harbor_cranes_261016.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[zk/harbor_cranes]]\"\nstatus: ready\ncreated: 2026-10-16T09:00:00-0400\n---\n# Harbor Cranes\n",
+    );
+
+    let run = |extra: &[&str], now: &str| {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("create")
+            .arg("[[zk/harbor_cranes|Harbor]]")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d")
+            .env("BOB_NOW", now)
+            .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc");
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run vault snapshot probe")
+    };
+
+    let refused = run(&[], "2026-10-16 12:00:00");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "the same-day duplicate must refuse:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("read it again as harbor_cranes_261016__v2"),
+        "refusal must name the reread:\n{}",
+        format_output(&refused)
+    );
+
+    let output = run(&["-f"], "2026-10-16 12:00:00");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "reread: harbor_cranes_261016 → harbor_cranes_261016__v2 (v1"
+        ) && report.contains("writes: none"),
+        "same-day duplicates reread:\n{report}"
+    );
+
+    let output = run(&["-f"], "2026-10-17 12:00:00");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("reread:"),
+        "a new day keeps its ordinary dated create:\n{report}"
+    );
+    assert!(
+        report.contains("xlib/notes/harbor_cranes_261017.pdf"),
+        "the new day plans its own dated target:\n{report}"
+    );
 }
 
 #[test]
@@ -6705,11 +7532,99 @@ fn highlights_create_bare_force_fresh_url_dry_run_proceeds() {
     vault_holds_only(&vault, &["sase.md"]);
 }
 
-/// A PDF-backed URL hit refuses under bare `-f` exactly as without it:
-/// filed reread wiring is still pending in this increment.
+/// Bare `-f` on a filed URL reads it again as `<stem>__v2`: the dry
+/// run plans the reread without writing, and the real run queues the new
+/// reading while the filed note keeps its bytes.
 #[test]
-fn highlights_create_bare_force_filed_url_still_refuses() {
+fn highlights_create_bare_force_filed_url_rereads() {
     let temp = TempDir::new("bob-cli-highlights-create-filed-force");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let before =
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("read note");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let dry = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bare force dry run over a captured URL");
+    assert_success(&dry);
+    let report = stdout(&dry);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1")
+            && report.contains("writes: none"),
+        "dry run must plan the reread and write nothing:\n{report}"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
+        before,
+        "the filed note must keep its bytes"
+    );
+    vault_holds_only(&vault, &["ref", "sase.md"]);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bare force over a captured URL");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1"),
+        "real run must report the reread:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        report.contains("id: existing__v2"),
+        "rereads stamp id to the new stem:\n{report}"
+    );
+    assert!(
+        vault.join("xlib/blogs/existing__v2.pdf").is_file(),
+        "the new reading queues beside the earlier one"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
+        before,
+        "the filed note must keep its bytes"
+    );
+}
+
+/// A filed URL without force refuses with the `-f` remedy naming the
+/// computed next stem, before any adapter work.
+#[test]
+fn highlights_create_filed_url_refusal_names_next_reread() {
+    let temp = TempDir::new("bob-cli-highlights-create-filed-refusal");
     let vault = temp.path().join("vault");
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
@@ -6730,7 +7645,6 @@ fn highlights_create_bare_force_filed_url_still_refuses() {
         .arg("create")
         .arg("-P")
         .arg("sase")
-        .arg("-f")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -6739,19 +7653,27 @@ fn highlights_create_bare_force_filed_url_still_refuses() {
         .env("FAKE_CURL_ROOT", &curl_root)
         .env("FAKE_CURL_LOG", &curl_log)
         .output()
-        .expect("run bare force over a captured URL");
+        .expect("run create over a captured URL");
     assert_eq!(
         output.status.code(),
         Some(1),
-        "a filed URL must refuse even with bare -f:\n{}",
+        "a filed URL must refuse without force:\n{}",
         format_output(&output)
     );
+    let diagnostic = stderr(&output);
     assert!(
-        stderr(&output).contains("already captured"),
-        "{}",
+        diagnostic.contains("already captured")
+            && diagnostic.contains("read it again as existing__v2"),
+        "refusal must carry the -f remedy:\n{}",
         format_output(&output)
     );
-    assert!(!fake.called(), "the dedupe must precede the adapter");
+    assert!(!fake.called(), "the preflight must precede the adapter");
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "the preflight must precede any fetch"
+    );
     assert_eq!(
         std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
         before,
@@ -6759,8 +7681,8 @@ fn highlights_create_bare_force_filed_url_still_refuses() {
     );
 }
 
-/// `-f overwrite` on a filed URL exits 2: in-place overwrite is not
-/// available yet.
+/// `-f overwrite` on a filed URL exits 2 naming the reread it would
+/// take: in-place overwrite is not available yet.
 #[test]
 fn highlights_create_overwrite_filed_url_is_unavailable() {
     let temp = TempDir::new("bob-cli-highlights-create-filed-overwrite");
@@ -6804,8 +7726,10 @@ fn highlights_create_overwrite_filed_url_is_unavailable() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains("-f overwrite is not available yet"),
-            "{argv:?} must name the interim limit:\n{}",
+            stderr(&output).contains(
+                "-f overwrite is not available yet; -f reads it again as existing__v2"
+            ),
+            "{argv:?} must name the interim limit and the reread:\n{}",
             format_output(&output)
         );
     }
@@ -6921,6 +7845,101 @@ fn highlights_create_clip_alias_matches_create_for_force() {
         format_output(&refused)
     );
     vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// `-H` replay on a filed URL rereads without any fetch: the saved page
+/// stands in for the download and the probe never runs.
+#[test]
+fn highlights_create_html_replay_rereads_without_fetch() {
+    let temp = TempDir::new("bob-cli-highlights-create-html-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let html = temp.path().join("saved.html");
+    write_file(&html, "<html><body><h1>Saved</h1></body></html>");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-H")
+        .arg(&html)
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("reread with --html replay");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1")
+            && report.contains("writes: none"),
+        "replay must reread like a live capture:\n{report}"
+    );
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "replay must not fetch"
+    );
+}
+
+/// The hidden `bob ref clip` alias rereads exactly like `create`.
+#[test]
+fn highlights_create_clip_alias_rereads_filed_url() {
+    let temp = TempDir::new("bob-cli-highlights-clip-reread");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("clip")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run clip reread dry run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1")
+            && report.contains("writes: none"),
+        "clip must reread like create:\n{report}"
+    );
 }
 
 /// A glued `-foverwrite` is `-f` plus `-o verwrite`, so the exact-output

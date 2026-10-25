@@ -30,6 +30,7 @@ use super::force::{
     triage_overwrite_url,
 };
 use super::note_snapshot;
+use super::recapture::RereadPreflight;
 use super::FIELD_SOURCE_NOTE;
 use super::{
     attach as attach_mod, companion as companion_mod,
@@ -233,6 +234,7 @@ pub(super) struct CreateOptions {
     pub(super) ref_type: Option<String>,
     pub(super) status: String,
     pub(super) title: Option<String>,
+    pub(super) reread: Option<RereadPreflight>,
 }
 
 enum PreparedTarget {
@@ -292,12 +294,6 @@ impl CreatePlan {
             stem: self.stem.clone(),
             renamed_from: self.renamed_from.clone(),
         }
-    }
-}
-
-fn print_renamed_if_needed(plan: &TargetPlan) {
-    if let Some(line) = plan.renamed_line() {
-        println!("{line}");
     }
 }
 
@@ -524,7 +520,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. In this increment filed references still refuse under either mode, and `-f overwrite` on one exits 2 (not available yet). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode; `-f` changes nothing else.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. Bare `-f` on an already-captured single source reads it again as `<stem>__vN` beside the earlier readings: the newest reading's parent and type become the defaults (explicit `-P`/`-t` win), `id` is stamped to the new stem, earlier audio is never inherited, and a `reread:` line prints where `renamed:` would. Without force the refusal names the next stem (`hint: -f  read it again as <stem>__vN`). `-N` must name a reading of the same family (a free `-N` stays an ordinary capture); `-o` on a captured reread exits 2. A library PDF as TARGET refuses even with `-f`: reread from its recorded `source_url` or the original file instead, while `-L` without force still attaches. `-f overwrite` on a filed reference exits 2 naming the reread it would take (not available yet); without a filed match it exits 1. Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode. Collections keep refusing under either mode until the next increment.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
@@ -637,12 +633,34 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
             .with_exit_code(2),
         );
     }
+    // Shared reread preflight: resolve duplicates and family defaults
+    // before requiring -P, doing network work, or invoking adapters. A
+    // filed family refuses here (no force carries the `-f` remedy with
+    // the computed next stem; overwrite names it as unavailable), while
+    // a selected family under reread force proceeds with its allocated
+    // `<root>__vN` stem and newest-reading defaults. `-L` without reread
+    // force keeps the legacy attach path, so it skips preflight.
+    let reread = match preflight_before_parent(
+        &config,
+        &target_os,
+        &prepared,
+        matches,
+        force,
+        matches.get_flag("listen")
+            && force != Some(super::force::ForceMode::Reread),
+    ) {
+        Ok(reread) => reread,
+        Err(error) => return report_create_error(error),
+    };
     let parent_input = matches.get_one::<String>("parent").cloned();
     // Duplicate before parent: on non-vault-note routes a duplicate
     // refuses (exit 1) before a missing -P errors (exit 2). `-L` attach
-    // never needs -P.
+    // never needs -P. A resolved reread already passed its preflight,
+    // so it skips this legacy check (reread narrates a new reading
+    // instead of attaching, and carries its own parent default).
     if !matches!(prepared, PreparedTarget::VaultNote { .. })
         && parent_input.is_none()
+        && reread.is_none()
     {
         if let Some(code) = check_duplicate_before_parent(
             &config, &target_os, &prepared, matches, force,
@@ -652,10 +670,25 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     }
     let parent_input = matches.get_one::<String>("parent").cloned();
     let (parent, resolved_parent, parent_default_reason) =
-        match resolve_parent_for_target(&config, &mut prepared, parent_input) {
+        match resolve_parent_for_target(
+            &config,
+            &mut prepared,
+            parent_input,
+            reread.as_ref(),
+        ) {
             Ok(parent) => parent,
             Err(error) => return report_create_error(error),
         };
+    // Family defaults lose to explicit flags: the newest reading's type
+    // fills in `-t` only when it is absent (explicit `-P` already won
+    // inside parent resolution).
+    let mut ref_type = matches.get_one::<String>("ref-type").cloned();
+    if ref_type.is_none()
+        && let Some(preflight) = &reread
+        && let Some(default) = &preflight.defaults.ref_type
+    {
+        ref_type = Some(default.clone());
+    }
     let options = CreateOptions {
         audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
         author: matches.get_one::<String>("author").cloned(),
@@ -684,6 +717,7 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
+        reread,
     };
 
     match create_pdf(&config, &target_os, &mut prepared, &options) {
@@ -827,6 +861,7 @@ fn resolve_parent_for_target(
     config: &Config,
     target: &mut PreparedTarget,
     parent_input: Option<String>,
+    reread: Option<&RereadPreflight>,
 ) -> Result<(
     String,
     Option<crate::native::parent_notes::ResolvedParent>,
@@ -853,15 +888,32 @@ fn resolve_parent_for_target(
             ))
         }
         _ => {
-            let Some(input) = parent_input else {
-                return Err(missing_parent_error());
-            };
-            let resolved = crate::native::parent_notes::resolve_parent(
-                &config.bob_dir,
-                &input,
-            )
-            .map_err(|error| CommandError::new(error.message()))?;
-            Ok((resolved.route.clone(), Some(resolved), None))
+            if let Some(input) = parent_input {
+                let resolved = crate::native::parent_notes::resolve_parent(
+                    &config.bob_dir,
+                    &input,
+                )
+                .map_err(|error| CommandError::new(error.message()))?;
+                return Ok((resolved.route.clone(), Some(resolved), None));
+            }
+            // A reread carries the newest reading's located task residence
+            // as its parent default; explicit `-P` already won above.
+            if let Some(preflight) = reread
+                && let Some(task_path) = &preflight.defaults.parent
+                && let Ok(resolved) =
+                    crate::native::parent_notes::resolve_parent(
+                        &config.bob_dir,
+                        task_path,
+                    )
+            {
+                let reason = format!("newest reading's task in {task_path}");
+                return Ok((
+                    resolved.route.clone(),
+                    Some(resolved),
+                    Some(reason),
+                ));
+            }
+            Err(missing_parent_error())
         }
     }
 }
@@ -871,6 +923,132 @@ fn missing_parent_error() -> CommandError {
         "--parent is required\nhint: pass -P <note>, for example `-P sase`; list area and project notes with `bob capture-targets`",
     )
     .with_exit_code(2)
+}
+
+/// Shared reread preflight for single-source routes, resolved before `-P`
+/// is required and before any fetch or adapter work. Vault-note targets
+/// defer to their route (their dated stem is known only after snapshot
+/// planning); every other route resolves here so refusals precede
+/// missing-parent errors and rereads carry family defaults.
+fn preflight_before_parent(
+    config: &Config,
+    target_os: &OsString,
+    prepared: &PreparedTarget,
+    matches: &ArgMatches,
+    force: Option<super::force::ForceMode>,
+    skip_for_attach: bool,
+) -> Result<Option<RereadPreflight>> {
+    if skip_for_attach {
+        return Ok(None);
+    }
+    let name = matches.get_one::<String>("name").map(String::as_str);
+    let output = matches.get_one::<OsString>("output").map(Path::new);
+    match prepared {
+        PreparedTarget::Url => {
+            let raw = target_os.to_string_lossy().into_owned();
+            let Ok((url, arxiv)) = super::target::resolve_url_syntactic(&raw)
+            else {
+                return Ok(None);
+            };
+            let recorded = sources_mod::collect_recorded_source_urls(config)
+                .map_err(|error| CommandError::new(error.message.clone()))?;
+            let rows = super::recapture::index_rows(config);
+            let mut wanted = std::collections::BTreeSet::new();
+            wanted.insert(url.dedupe_key.clone());
+            if let Some(paper) = &arxiv {
+                wanted.insert(paper.dedupe_key());
+            }
+            super::recapture::preflight_for_url(
+                config,
+                &rows,
+                &recorded,
+                &wanted,
+                name,
+                output,
+                force,
+                &url.cleaned,
+            )
+        }
+        PreparedTarget::Markdown(path) => {
+            let canonical = match fs::canonicalize(path) {
+                Ok(canonical) => canonical,
+                Err(_) => return Ok(None),
+            };
+            let markdown = match fs::read_to_string(&canonical) {
+                Ok(markdown) => markdown,
+                Err(_) => return Ok(None),
+            };
+            let stem = match name {
+                Some(name) => name.to_string(),
+                None => {
+                    match canonical.file_stem().and_then(|stem| stem.to_str()) {
+                        Some(stem) => stem.to_string(),
+                        None => return Ok(None),
+                    }
+                }
+            };
+            let title = match matches.get_one::<String>("title") {
+                Some(override_title) if !override_title.is_empty() => {
+                    override_title.clone()
+                }
+                _ => match extract_title(&markdown, &canonical) {
+                    Ok(title) => title,
+                    Err(_) => return Ok(None),
+                },
+            };
+            let rows = super::recapture::index_rows(config);
+            super::recapture::preflight_for_stem(
+                config, &rows, &stem, name, output, force, &title,
+            )
+        }
+        PreparedTarget::Pdf(path) => {
+            // A library/intake PDF as TARGET is never a reread source:
+            // copying highlights into the next reading is forbidden. The
+            // identity check below keeps refusing (with `-L` attach), so
+            // preflight stays out of its way.
+            if let Ok(canonical) = fs::canonicalize(path) {
+                let inside = super::relative_inside_canonical(
+                    &canonical,
+                    &config.lib_dir,
+                )
+                .is_some()
+                    || super::relative_inside_canonical(
+                        &canonical,
+                        &config.xlib_dir,
+                    )
+                    .is_some();
+                if inside {
+                    return Ok(None);
+                }
+            }
+            let canonical = match fs::canonicalize(path) {
+                Ok(canonical) => canonical,
+                Err(_) => return Ok(None),
+            };
+            let pdf_plan = match super::pdf_target::plan_local_pdf(
+                &canonical,
+                name,
+                matches.get_one::<String>("title").map(String::as_str),
+                matches.get_one::<String>("author").map(String::as_str),
+                matches.get_one::<String>("published").map(String::as_str),
+                None,
+            ) {
+                Ok(plan) => plan,
+                Err(_) => return Ok(None),
+            };
+            let rows = super::recapture::index_rows(config);
+            super::recapture::preflight_for_stem(
+                config,
+                &rows,
+                &pdf_plan.stem,
+                name,
+                output,
+                force,
+                &pdf_plan.title,
+            )
+        }
+        PreparedTarget::VaultNote { .. } => Ok(None),
+    }
 }
 
 /// Duplicate-before-parent pre-check for non-vault-note routes when `-P`
@@ -1177,7 +1355,12 @@ fn create_pdf(
             Some(paper) => paper.dedupe_key(),
             None => url.dedupe_key.clone(),
         };
-        if let Some(command) = &listen
+        // A shared reread preflight already selected the family: it skips
+        // the attach path (a reread narrates a new reading) and both
+        // dedupe probes. Legacy-only matches never produce a preflight.
+        let rereading = options.reread.is_some();
+        if !rereading
+            && let Some(command) = &listen
             && let Some(hit) = sources_mod::find_refusing_hit(
                 &recorded,
                 &dedupe_key,
@@ -1199,26 +1382,29 @@ fn create_pdf(
             );
         }
         // Overwrite triage runs after `-L` attach (attach is not a
-        // fresh capture) and before any fetch or adapter work.
-        if is_overwrite(options.force) {
+        // fresh capture) and before any fetch or adapter work. A reread
+        // already passed triage at preflight.
+        if !rereading && is_overwrite(options.force) {
             triage_overwrite_url(&recorded, &dedupe_key, target_raw)?;
         }
-        check_dedupe_with_listen_hint(
-            config,
-            &recorded,
-            &dedupe_key,
-            None,
-            options.force.is_some(),
-        )?;
-        // A URL recorded only by legacy notes without a Highlights PDF
-        // warns here, before any fetch, and captures a fresh copy. The
-        // arXiv and PDF routes share this key (`dedupe_key_for` is
-        // arXiv-aware), so they must not warn again; the article route
-        // is told the warning already fired.
-        sources_mod::warn_for_legacy_hits(&sources_mod::legacy_hits(
-            &recorded,
-            &dedupe_key,
-        ));
+        if !rereading {
+            check_dedupe_with_listen_hint(
+                config,
+                &recorded,
+                &dedupe_key,
+                None,
+                options.force.is_some(),
+            )?;
+            // A URL recorded only by legacy notes without a Highlights PDF
+            // warns here, before any fetch, and captures a fresh copy. The
+            // arXiv and PDF routes share this key (`dedupe_key_for` is
+            // arXiv-aware), so they must not warn again; the article route
+            // is told the warning already fired.
+            sources_mod::warn_for_legacy_hits(&sources_mod::legacy_hits(
+                &recorded,
+                &dedupe_key,
+            ));
+        }
         if options.html.is_some() {
             return create_article_route(config, url, options, listen.as_ref());
         }
@@ -1429,6 +1615,7 @@ fn create_article_route(
         ref_type,
         status: options.status.clone(),
         title: options.title.clone(),
+        reread: options.reread.clone(),
     };
     // `-i` is accepted and is a no-op: the clip engine always stamps `id`.
     // (`-L` conflicts with `-a` at the CLI, so both can never be set.)
@@ -1471,6 +1658,22 @@ fn check_dedupe_with_listen_hint(
         force,
     )
     .map_err(|error| CommandError::new(error.message.clone()))
+}
+
+/// Print the reread report line for an enabled reread, else the
+/// existing `renamed:` line. Rereads occupy the `renamed:` position in
+/// both real runs and dry runs. A narrated reread (`-f` + `-L`) also
+/// names the earlier episode it leaves behind, since earlier audio is
+/// never inherited.
+fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
+    if let Some(preflight) = &options.reread {
+        println!("{}", preflight.plan.report_line());
+        if options.listen {
+            super::recapture::print_reread_listen_hint(preflight);
+        }
+    } else if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
 }
 
 fn default_ref_type_for_kind(
@@ -1580,26 +1783,70 @@ fn create_vault_note_route(
         Some(name) => super::clip_url::validate_name(name)?,
         None => snapshot.dated_stem.clone(),
     };
-    let ref_type =
-        default_ref_type_for_kind("note", options.ref_type.as_deref())?;
+    // Same-day duplicates reread as `<dated-root>__vN`; a new day keeps
+    // its ordinary dated create. The dated stem is known only after
+    // snapshot planning, so the vault route preflights here.
+    let rows = super::recapture::index_rows(config);
+    let reread = super::recapture::preflight_for_stem(
+        config,
+        &rows,
+        &stem,
+        options.name.as_deref(),
+        options.output.as_deref(),
+        options.force,
+        &snapshot.identity_title,
+    )?;
+    // Family defaults lose to explicit flags: the newest reading's type
+    // fills in `-t` only when it is absent.
+    let ref_type = match (&options.ref_type, &reread) {
+        (Some(explicit), _) => {
+            validate_ref_type(explicit)?;
+            explicit.clone()
+        }
+        (None, Some(preflight)) if preflight.defaults.ref_type.is_some() => {
+            preflight
+                .defaults
+                .ref_type
+                .clone()
+                .expect("checked ref-type default")
+        }
+        (None, _) => default_ref_type_for_kind("note", None)?,
+    };
     let identity =
         DefaultTargetIdentity::Title(snapshot.identity_title.clone());
-    let target_plan = plan_target_for(
-        config,
-        &stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-        options.include_id,
-        &identity,
-        source_display,
-    )?;
+    // A reread plans its allocated `<root>__vN` stem with no suffix
+    // fallback and always stamps `id`; `-o` on a captured reread was
+    // refused at preflight.
+    let target_plan = match &reread {
+        Some(preflight) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &ref_type,
+            &identity,
+        )?,
+        None => plan_target_for(
+            config,
+            &stem,
+            &ref_type,
+            options.output.as_ref(),
+            options.force,
+            options.include_id,
+            &identity,
+            source_display,
+        )?,
+    };
     let final_stem = target_plan.stem.clone();
-    let id = if options.include_id {
+    let id = if options.include_id || reread.is_some() {
         Some(final_stem)
     } else {
         None
     };
+    // Carry the vault preflight into the shared reports below.
+    let owned = CreateOptions {
+        reread,
+        ..options.clone()
+    };
+    let options = &owned;
     let source_note = snapshot.note.identity.route.clone();
     let author = options.author.clone().filter(|value| !value.is_empty());
     let published = options.published.clone().filter(|value| !value.is_empty());
@@ -1806,7 +2053,7 @@ fn create_snapshot_plan(
         snapshot.source_kind,
         &snapshot.source_digest[..8]
     );
-    print_renamed_if_needed(&plan.target_plan());
+    print_reread_or_renamed(&plan.target_plan(), options);
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1906,7 +2153,7 @@ fn print_snapshot_plan(
         snapshot.source_kind,
         &snapshot.source_digest[..8]
     );
-    print_renamed_if_needed(&plan.target_plan());
+    print_reread_or_renamed(&plan.target_plan(), options);
     println!("pdf: {}", plan.target.display());
     println!("sidecar_guard: {}", plan.sidecar.display());
     if let TargetWorkflow::Intake {
@@ -2478,7 +2725,7 @@ fn create_markdown_plan(
         styler.success_prefix(false)
     );
     println!("source: {}", plan.source);
-    print_renamed_if_needed(&plan.target_plan());
+    print_reread_or_renamed(&plan.target_plan(), options);
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -2519,8 +2766,11 @@ fn create_local_pdf_route(
             source.display()
         ))
     })?;
-    // Attach when the target itself is an existing capture.
-    if let Some(command) = listen
+    // Attach when the target itself is an existing capture. A reread
+    // narrates a new reading instead; a library PDF as TARGET never
+    // produces a preflight, so `-L` attach without force still lands here.
+    if options.reread.is_none()
+        && let Some(command) = listen
         && let Some(attach) =
             attach_mod::attach_for_local_pdf(config, &canonical)?
     {
@@ -2549,16 +2799,27 @@ fn create_local_pdf_route(
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
     let identity = DefaultTargetIdentity::Title(pdf_plan.title.clone());
-    let target_plan = plan_target_for(
-        config,
-        &pdf_plan.stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-        options.include_id,
-        &identity,
-        source_display,
-    )?;
+    // A reread plans its allocated `<root>__vN` stem with no suffix
+    // fallback and always stamps `id`; `-o` on a captured reread was
+    // refused at preflight.
+    let target_plan = match &options.reread {
+        Some(preflight) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &ref_type,
+            &identity,
+        )?,
+        None => plan_target_for(
+            config,
+            &pdf_plan.stem,
+            &ref_type,
+            options.output.as_ref(),
+            options.force,
+            options.include_id,
+            &identity,
+            source_display,
+        )?,
+    };
     let final_stem = target_plan.stem.clone();
     // An out-of-vault marked PDF is already captured: refuse before any
     // write (in-vault cases were handled by attach/identity above).
@@ -2588,7 +2849,9 @@ fn create_local_pdf_route(
         }
         None => (None, audio),
     };
-    let id = if options.include_id {
+    // Rereads always stamp `id` equal to the final stem so the birth
+    // lineage can key on it.
+    let id = if options.include_id || options.reread.is_some() {
         Some(final_stem.clone())
     } else {
         None
@@ -2679,7 +2942,7 @@ fn create_local_pdf_route(
         styler.success_prefix(false)
     );
     println!("source: {} (PDF)", canonical.display());
-    print_renamed_if_needed(&target_plan);
+    print_reread_or_renamed(&target_plan, options);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -2736,20 +2999,34 @@ fn create_pdf_url_route(
         keys: vec![url.dedupe_key.clone()],
         recorded,
     };
-    let target_plan = plan_target_for(
-        config,
-        &pdf_plan.stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-        true,
-        &identity,
-        &url.cleaned,
-    )?;
+    // A reread plans its allocated `<root>__vN` stem with no suffix
+    // fallback; ordinary captures plan from the fetched slug.
+    let target_plan = match &options.reread {
+        Some(preflight) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &ref_type,
+            &identity,
+        )?,
+        None => plan_target_for(
+            config,
+            &pdf_plan.stem,
+            &ref_type,
+            options.output.as_ref(),
+            options.force,
+            true,
+            &identity,
+            &url.cleaned,
+        )?,
+    };
     let final_stem = target_plan.stem.clone();
     // The stem is only known after the fetch, so a race that captured
-    // the URL mid-fetch attaches here instead of refusing.
-    if let Some(command) = listen
+    // the URL mid-fetch attaches here instead of refusing. A reread
+    // narrates its new reading instead, and re-resolves its keys against
+    // the live index (a redirected fetch that now claims another family
+    // refuses).
+    if options.reread.is_none()
+        && let Some(command) = listen
         && let Some(hit) = sources_mod::find_refusing_hit(
             recorded,
             &url.dedupe_key,
@@ -2769,13 +3046,38 @@ fn create_pdf_url_route(
             scratch,
         );
     }
-    check_dedupe_with_listen_hint(
-        config,
-        recorded,
-        &url.dedupe_key,
-        Some(&target_plan.target),
-        options.force.is_some(),
-    )?;
+    if let Some(preflight) = &options.reread {
+        let fresh_recorded = sources_mod::collect_recorded_source_urls(config)
+            .map_err(|error| CommandError::new(error.message.clone()))?;
+        let rows = super::recapture::index_rows(config);
+        let mut wanted = std::collections::BTreeSet::new();
+        wanted.insert(url.dedupe_key.clone());
+        let fresh = super::recapture::preflight_for_url(
+            config,
+            &rows,
+            &fresh_recorded,
+            &wanted,
+            options.name.as_deref(),
+            None,
+            options.force,
+            &url.cleaned,
+        )?;
+        if fresh.is_some_and(|next| next.plan.stem != target_plan.stem) {
+            return Err(CommandError::new(format!(
+                "reread {} is already filed; nothing written",
+                target_plan.stem,
+            )));
+        }
+        let _ = preflight;
+    } else {
+        check_dedupe_with_listen_hint(
+            config,
+            recorded,
+            &url.dedupe_key,
+            Some(&target_plan.target),
+            options.force.is_some(),
+        )?;
+    }
     // A downloaded PDF that already carries a marker is already captured.
     {
         let library_hint: Option<&Path> = match &target_plan.workflow {
@@ -2881,7 +3183,7 @@ fn create_pdf_url_route(
         styler.success_prefix(false)
     );
     println!("source: {} (PDF)", url.cleaned);
-    print_renamed_if_needed(&target_plan);
+    print_reread_or_renamed(&target_plan, options);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -2972,21 +3274,35 @@ fn create_arxiv_route(
         keys: vec![key.clone(), url.dedupe_key.clone()],
         recorded,
     };
-    let target_plan = plan_target_for(
-        config,
-        &pdf_plan.stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-        true,
-        &identity,
-        &url.cleaned,
-    )?;
+    // A reread plans its allocated `<root>__vN` stem with no suffix
+    // fallback; ordinary captures plan from the fetched slug.
+    let target_plan = match &options.reread {
+        Some(preflight) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &ref_type,
+            &identity,
+        )?,
+        None => plan_target_for(
+            config,
+            &pdf_plan.stem,
+            &ref_type,
+            options.output.as_ref(),
+            options.force,
+            true,
+            &identity,
+            &url.cleaned,
+        )?,
+    };
     let final_stem = target_plan.stem.clone();
     // Post-capture dedupe with the final target (stem known only now).
     // Also check the user's URL spelling key (same arXiv key).
-    // With --listen a hit attaches instead of refusing.
-    if let Some(command) = listen {
+    // With --listen a hit attaches instead of refusing. A reread
+    // narrates its new reading instead, and re-resolves both keys
+    // against the live index.
+    if options.reread.is_none()
+        && let Some(command) = listen
+    {
         let hit = sources_mod::find_refusing_hit(
             recorded,
             &key,
@@ -3018,7 +3334,8 @@ fn create_arxiv_route(
                 scratch,
             );
         }
-    } else {
+    }
+    if options.reread.is_none() {
         check_dedupe_with_listen_hint(
             config,
             recorded,
@@ -3033,6 +3350,29 @@ fn create_arxiv_route(
             Some(&target_plan.target),
             options.force.is_some(),
         )?;
+    } else {
+        let fresh_recorded = sources_mod::collect_recorded_source_urls(config)
+            .map_err(|error| CommandError::new(error.message.clone()))?;
+        let rows = super::recapture::index_rows(config);
+        let mut wanted = std::collections::BTreeSet::new();
+        wanted.insert(key.clone());
+        wanted.insert(url.dedupe_key.clone());
+        let fresh = super::recapture::preflight_for_url(
+            config,
+            &rows,
+            &fresh_recorded,
+            &wanted,
+            options.name.as_deref(),
+            None,
+            options.force,
+            &url.cleaned,
+        )?;
+        if fresh.is_some_and(|next| next.plan.stem != target_plan.stem) {
+            return Err(CommandError::new(format!(
+                "reread {} is already filed; nothing written",
+                target_plan.stem,
+            )));
+        }
     }
     // A downloaded arXiv PDF that already carries a marker is already captured.
     {
@@ -3142,7 +3482,7 @@ fn create_arxiv_route(
         styler.success_prefix(false)
     );
     println!("source: {} (arXiv {})", paper.abs_url(), paper.full_id());
-    print_renamed_if_needed(&target_plan);
+    print_reread_or_renamed(&target_plan, options);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -3227,7 +3567,7 @@ fn print_pdf_dry_run(
     } else {
         println!("source: {source_display}");
     }
-    print_renamed_if_needed(target_plan);
+    print_reread_or_renamed(target_plan, options);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -3370,19 +3710,30 @@ fn plan_markdown(
     let ref_type =
         default_ref_type_for_kind("markdown", options.ref_type.as_deref())?;
     let identity = DefaultTargetIdentity::Title(title.clone());
-    let target_plan = plan_target_for(
-        config,
-        &stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-        options.include_id,
-        &identity,
-        source_display,
-    )?;
+    // A reread plans its allocated `<root>__vN` stem with no suffix
+    // fallback and always stamps `id` (the birth lineage keys on it);
+    // `-o` on a captured reread was refused at preflight.
+    let target_plan = match &options.reread {
+        Some(preflight) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &ref_type,
+            &identity,
+        )?,
+        None => plan_target_for(
+            config,
+            &stem,
+            &ref_type,
+            options.output.as_ref(),
+            options.force,
+            options.include_id,
+            &identity,
+            source_display,
+        )?,
+    };
     // The marker id always follows the final output basename, including
-    // an exact `--output` path.
-    let id = if options.include_id {
+    // an exact `--output` path. Rereads always stamp it.
+    let id = if options.include_id || options.reread.is_some() {
         Some(target_plan.stem.clone())
     } else {
         None
@@ -3900,7 +4251,7 @@ fn print_plan(
         styler.success_prefix(true)
     );
     println!("source: {}", plan.source);
-    print_renamed_if_needed(&plan.target_plan());
+    print_reread_or_renamed(&plan.target_plan(), options);
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -3987,6 +4338,7 @@ mod tests {
             ref_type: None,
             status: DEFAULT_STATUS.to_string(),
             title: None,
+            reread: None,
         }
     }
 

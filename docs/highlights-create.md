@@ -517,7 +517,22 @@ hint: -L  add --listen to narrate it and attach the episode to the existing capt
 
 Queued hits render `already queued: <title>` with `hint: -f  replace
 the queued PDF`. Title routes add `hint: -N <name>  capture under a
-different name`. A URL recorded only by legacy notes without a
+different name`. A filed single-source family refuses with its copies
+newest-first (each carrying its `reading vN` number) plus
+`hint: -f  read it again as <root>__vN`; bare `-f` on that family reads
+it again as the named `<root>__vN` beside the earlier readings instead.
+The reread defaults to the newest reading's parent and type (explicit
+`-P`/`-t` win, and a reread without any resolvable parent still requires
+`-P`), stamps `id` to the new stem even where `-i` is otherwise
+optional, never inherits earlier audio, and prints
+`reread: <old> → <new> (vN <status> · <M> highlights)` where `renamed:`
+would print, in real runs and dry runs alike. `-N` must name a reading
+of the same family (a free `-N` stays an ordinary capture); `-o` on a
+captured reread exits 2. A library PDF as TARGET refuses even with `-f`
+(copying highlights into the next reading is forbidden): reread from its
+recorded `source_url` or the original file instead, while `-L` without
+force still attaches. `-f overwrite` on a filed reference exits 2 naming
+the reread it would take; without a filed match it exits 1. A URL recorded only by legacy notes without a
 Highlights PDF warns (`already in the library as <path>, a note without
 a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
 instead of refusing; with `--listen` it is a normal capture plus listen,
@@ -537,7 +552,8 @@ collection marker stores the cleaned URLs in argument order as a YAML list;
 create writes that list to one ref note (or a later `bob ref scan -i` does so
 when intake is queued). A later create of an individual
 part is refused as already captured, and `bob ref find <part URL>` locates the
-collection.
+collection. Filed collections keep refusing under either force mode in this
+increment; rereads of an exact URL set land with collection support next.
 
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 (up to `<stem>_999`): a candidate is occupied when its matching PDF, sidecar,

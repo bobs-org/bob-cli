@@ -399,6 +399,7 @@ fn options_without_parent_for_attach(
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
+        reread: None,
     })
 }
 
@@ -458,6 +459,7 @@ fn options_from_matches(
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
+        reread: None,
     })
 }
 

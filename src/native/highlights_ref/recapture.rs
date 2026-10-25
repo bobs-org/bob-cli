@@ -41,6 +41,8 @@ pub(super) struct FamilyMember {
     pub task_block: Option<String>,
     /// Whether the member's note carries companion audio.
     pub has_audio: bool,
+    /// The member note's `audio` frontmatter value, when any.
+    pub audio_path: Option<String>,
     /// Ref-note `status`, when known.
     pub status: Option<String>,
     /// Ref-note `captured` date, when known.
@@ -125,6 +127,17 @@ pub(super) enum RecaptureMatch {
     },
 }
 
+/// A resolved reread ready to write: the allocated plan plus the family
+/// defaults (newest reading's task residence and type) the route applies
+/// when explicit `-P`/`-t` are absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RereadPreflight {
+    /// The allocated reread plan.
+    pub plan: RereadPlan,
+    /// Defaults from the newest reading.
+    pub defaults: FamilyDefaults,
+}
+
 /// The planned reread: the selected family plus its allocated stem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RereadPlan {
@@ -157,6 +170,20 @@ impl RereadPlan {
 pub(super) struct FamilyDefaults {
     pub parent: Option<String>,
     pub ref_type: Option<String>,
+}
+
+/// Best-effort library rows for reread planning: an unreadable index
+/// behaves like an empty library, and the legacy duplicate checks keep
+/// refusing truthfully.
+pub(super) fn index_rows(config: &Config) -> Vec<RefRow> {
+    let library = LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    };
+    build_index(&library)
+        .map(|index| index.rows)
+        .unwrap_or_default()
 }
 
 /// Defaults from the newest reading's actual located task and type.
@@ -441,6 +468,289 @@ pub(super) fn allocate_for_family(
     })
 }
 
+/// Resolve a single-source URL reread against the live library.
+///
+/// `wanted` holds the complete normalized URL-key set for the capture
+/// (one key for single sources; collections pass the whole set and stay
+/// on the collections path). Returns `Ok(None)` when no filed family
+/// claims the keys: a bare force is an ordinary create, a queued-only
+/// match keeps the old replacement permission, and legacy-only hits warn
+/// elsewhere. Returns `Ok(Some(preflight))` for a selected family under
+/// reread force, after `-N`/`-o` validation and whole-bundle allocation.
+/// Filed refusals carry the `-f` remedy with the computed next stem;
+/// overwrite force carries the interim unavailable message naming it.
+pub(super) fn preflight_for_url(
+    config: &Config,
+    rows: &[RefRow],
+    recorded: &[RecordedSource],
+    wanted: &BTreeSet<String>,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+) -> Result<Option<RereadPreflight>, CommandError> {
+    match resolve_for_url_keys(rows, recorded, wanted, &config.bob_dir) {
+        RecaptureMatch::NoMatch | RecaptureMatch::QueuedOnly { .. } => Ok(None),
+        RecaptureMatch::Selected { family } => finish_selection(
+            config,
+            family,
+            name,
+            output,
+            force,
+            title_fallback,
+        ),
+        RecaptureMatch::Ambiguous { families } => {
+            let family = disambiguate(families, name)?;
+            finish_selection(
+                config,
+                family,
+                name,
+                output,
+                force,
+                title_fallback,
+            )
+        }
+        RecaptureMatch::PartialOverlap {
+            wanted,
+            overlapping,
+        } => Err(partial_overlap_single_error(&wanted, &overlapping)),
+    }
+}
+
+/// Resolve a title-route reread by stem: Markdown, local PDF, and
+/// same-day vault snapshots probe their planned stem against live
+/// families. A free stem is an ordinary capture (`Ok(None)`); a claimed
+/// stem follows the same force/`-N`/`-o` rules as URL routes. An explicit
+/// `-N` naming a member of any family selects it; naming a free stem is
+/// an ordinary new capture and never joins a family.
+pub(super) fn preflight_for_stem(
+    config: &Config,
+    rows: &[RefRow],
+    stem: &str,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+) -> Result<Option<RereadPreflight>, CommandError> {
+    if let Some(name) = name {
+        let mut named = families_for_stem(rows, name, &config.bob_dir);
+        if !named.is_empty() {
+            // `-N` names a family member: include the stem's families so
+            // an ambiguous name across families still asks, then select.
+            if name != stem {
+                for family in families_for_stem(rows, stem, &config.bob_dir) {
+                    if !named
+                        .iter()
+                        .any(|known| known.root_path == family.root_path)
+                    {
+                        named.push(family);
+                    }
+                }
+            }
+            let family = disambiguate(named, Some(name))?;
+            return finish_selection(
+                config,
+                family,
+                Some(name),
+                output,
+                force,
+                title_fallback,
+            );
+        }
+        // A free explicit `-N` is an ordinary new capture.
+        if name != stem {
+            return Ok(None);
+        }
+    }
+    let families = families_for_stem(rows, stem, &config.bob_dir);
+    if families.is_empty() {
+        return Ok(None);
+    }
+    let family = disambiguate(families, name)?;
+    finish_selection(config, family, name, output, force, title_fallback)
+}
+
+/// Finish a selected family: validate `-N`/`-o`, allocate the next stem,
+/// and either return the preflight (reread force) or the refusal
+/// (no force carries the `-f` remedy; overwrite carries the interim
+/// unavailable message naming the same stem).
+fn finish_selection(
+    config: &Config,
+    family: SelectedFamily,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+) -> Result<Option<RereadPreflight>, CommandError> {
+    if let Some(name) = name {
+        validate_reread_name(&family, name)?;
+    }
+    let next = allocate_for_family(config, &family)?;
+    if output.is_some() {
+        return Err(reread_output_error(&next));
+    }
+    match force {
+        None => Err(filed_refusal(config, &family, &next, title_fallback)),
+        Some(super::force::ForceMode::Overwrite) => {
+            Err(super::force::overwrite_filed_unavailable_for(&next))
+        }
+        Some(super::force::ForceMode::Reread) => {
+            let defaults = family_defaults(family.newest());
+            Ok(Some(RereadPreflight {
+                plan: RereadPlan { family, stem: next },
+                defaults,
+            }))
+        }
+    }
+}
+
+/// The filed refusal for a selected family: every copy newest-first with
+/// reading numbers, plus the `-f` remedy naming the allocated next stem.
+fn filed_refusal(
+    config: &Config,
+    family: &SelectedFamily,
+    next_stem: &str,
+    title_fallback: &str,
+) -> CommandError {
+    let title = family
+        .members
+        .iter()
+        .find_map(|member| note_title(&config.bob_dir, &member.path))
+        .unwrap_or_else(|| title_fallback.to_string());
+    let mut copies = Vec::new();
+    for member in &family.members {
+        let path = config.bob_dir.join(&member.path);
+        copies.push(super::duplicate::copy_from_occupant(config, &path));
+    }
+    let refusal = super::duplicate::AlreadyCaptured::new(
+        title,
+        copies,
+        vec![
+            super::duplicate::Remedy::new(
+                "-f",
+                format!("read it again as {next_stem}"),
+            ),
+            super::duplicate::Remedy::new(
+                "-L",
+                "add --listen to narrate it and attach the episode to the existing capture",
+            ),
+        ],
+    )
+    .with_next_stem(next_stem);
+    let styler = crate::native::style::Styler::detect();
+    CommandError::new(refusal.render(&styler))
+}
+
+/// One URL of a single-source capture overlaps a filed collection (or a
+/// filed single whose key set differs): refuse before any fetch under
+/// every force mode, naming the overlapping members.
+fn partial_overlap_single_error(
+    wanted: &[String],
+    overlapping: &[OverlapGroup],
+) -> CommandError {
+    let mut lines = vec![format!(
+        "{} of {} URLs are already in the library",
+        overlapping.len().min(wanted.len()),
+        wanted.len(),
+    )];
+    let mut groups = overlapping.to_vec();
+    groups.sort_by(|left, right| left.root_stem.cmp(&right.root_stem));
+    for group in &groups {
+        let mut paths = group.member_paths.clone();
+        paths.sort();
+        for path in paths {
+            lines.push(format!("  {path}"));
+        }
+    }
+    let stem = groups
+        .first()
+        .map(|group| group.root_stem.as_str())
+        .unwrap_or("reference");
+    lines.push(format!(
+        "hint: -f recaptures only the exact URL set of {stem}"
+    ));
+    CommandError::new(lines.join("\n"))
+}
+
+/// Best-effort ref-note title for the filed refusal.
+fn note_title(bob_dir: &Path, relative: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(bob_dir.join(relative)).ok()?;
+    let (frontmatter, _) = super::frontmatter::split_frontmatter(&contents)?;
+    crate::native::ref_library::ParsedFrontmatter::parse(&frontmatter)
+        .get_str("title")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Plan the intake target for an enabled reread at its allocated
+/// `<root>__vN` stem. The stem was free at preflight; a whole-bundle
+/// recheck refuses when another host filed anything under it since, but
+/// keeps the old queued-intake replacement permission (a queued-only
+/// occupant is replaced through the normal same-intake path). Never
+/// suffixes: a reread has a fixed name.
+pub(super) fn plan_reread_target(
+    config: &Config,
+    stem: &str,
+    ref_type: &str,
+    identity: &super::stamp::DefaultTargetIdentity<'_>,
+) -> Result<super::stamp::TargetPlan, CommandError> {
+    let occupancy =
+        super::stamp::DefaultTargetOccupancy::build(config, ref_type)?;
+    let mut occupants = occupancy.occupants(stem);
+    occupants.sort();
+    if !occupants.is_empty() {
+        let expected_queued =
+            config.xlib_dir.join(ref_type).join(format!("{stem}.pdf"));
+        let queued_only = occupants.len() == 1
+            && occupants
+                .first()
+                .is_some_and(|only| *only == expected_queued);
+        if !queued_only {
+            let list = occupants
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CommandError::new(format!(
+                "reread {stem} is already filed ({list}); nothing written"
+            )));
+        }
+    }
+    let plan = super::stamp::plan_default_target(
+        config,
+        std::ffi::OsStr::new(stem),
+        ref_type,
+        true,
+        identity,
+    )?;
+    if plan.stem != stem {
+        return Err(CommandError::new(format!(
+            "reread {stem} is already filed; nothing written"
+        )));
+    }
+    Ok(plan)
+}
+
+/// When a reread is narrated (`-f` + `-L`) and the newest reading
+/// already has an episode, say so: earlier audio is never inherited, and
+/// the hint names the newest reading's number and its audio path.
+pub(super) fn print_reread_listen_hint(preflight: &RereadPreflight) {
+    let newest = preflight.plan.family.newest();
+    if !newest.has_audio {
+        return;
+    }
+    let reading = newest.reading.unwrap_or(1);
+    match &newest.audio_path {
+        Some(path) => println!(
+            "hint: earlier reading v{reading} keeps its episode at {path}; the new reading is narrated fresh"
+        ),
+        None => println!(
+            "hint: earlier reading v{reading} already has an episode; the new reading is narrated fresh"
+        ),
+    }
+}
+
 /// The `reread:` output line for a finished plan.
 pub(super) fn reread_report_line(
     old_stem: &str,
@@ -545,6 +855,11 @@ fn member_from_row(row: &RefRow, bob_dir: &Path) -> FamilyMember {
             .audio
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
+        audio_path: row
+            .audio
+            .clone()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
         status: row.status.clone(),
         captured: row.captured.clone(),
         highlights: note_highlights(bob_dir, &row.path),
@@ -563,6 +878,7 @@ fn queued_member(hit: &RecordedSource, bob_dir: &Path) -> FamilyMember {
         task_path: None,
         task_block: None,
         has_audio: false,
+        audio_path: None,
         status: None,
         captured: None,
         highlights: None,
@@ -580,6 +896,7 @@ fn unindexed_member(hit: &RecordedSource, relative: &str) -> FamilyMember {
         task_path: None,
         task_block: None,
         has_audio: hit.has_audio,
+        audio_path: None,
         status: None,
         captured: None,
         highlights: None,

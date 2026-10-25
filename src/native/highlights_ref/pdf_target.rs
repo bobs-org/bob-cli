@@ -408,6 +408,24 @@ pub(super) fn refuse_marked_pdf(
     )))
 }
 
+/// The first indexed URL for the reference filed at `vault_rel` (a
+/// `lib/…pdf` source), when the library index knows one.
+fn recorded_source_url(config: &Config, vault_rel: &str) -> Option<String> {
+    let library = crate::native::ref_library::LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    };
+    let index = crate::native::ref_library::build_index(&library).ok()?;
+    index.rows.iter().find_map(|row| {
+        if row.source_pdf.as_deref() == Some(vault_rel) {
+            row.urls.first().cloned()
+        } else {
+            None
+        }
+    })
+}
+
 /// Refuse a local PDF inside the library/intake: a marked one is an
 /// existing capture, an unmarked one must be moved out first. Uses one
 /// shared canonical containment helper so relative (`-b vault`) and
@@ -446,7 +464,22 @@ pub(super) fn check_local_pdf_identity(
             ],
         );
         let styler = crate::native::style::Styler::detect();
-        return Err(CommandError::new(refusal.render(&styler)));
+        let mut message = refusal.render(&styler);
+        // Copying highlights into the next reading is forbidden, so a
+        // library PDF as TARGET refuses even with `-f`: reread from the
+        // recorded source URL or the original file instead.
+        let vault_rel =
+            super::io::vault_relative_path_value(config, &canonical);
+        if let Some(source_url) = recorded_source_url(config, &vault_rel) {
+            message.push_str(&format!(
+                "\nhint: reread from its recorded source_url ({source_url}) or the original file instead"
+            ));
+        } else {
+            message.push_str(
+                "\nhint: reread from the original file instead of this library copy",
+            );
+        }
+        return Err(CommandError::new(message));
     }
     Err(CommandError::new(format!(
         "{} is inside the Highlights library/intake but has no marker; move it out and rerun create on it",

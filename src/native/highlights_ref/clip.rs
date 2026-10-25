@@ -95,6 +95,10 @@ pub(super) struct ClipOptions {
     pub(super) ref_type: String,
     pub(super) status: String,
     pub(super) title: Option<String>,
+    /// The shared reread preflight from create's dispatch (`None` for
+    /// ordinary captures). Carries the allocated `<root>__vN` stem and
+    /// family defaults so the article engine never re-derives them.
+    pub(super) reread: Option<super::recapture::RereadPreflight>,
 }
 
 /// Companion audio for an article capture: none, an explicit `--audio`
@@ -225,14 +229,20 @@ pub(super) fn capture_article(
     // legacy notes without a Highlights PDF warns and captures a fresh
     // copy instead of refusing.
     let recorded = collect_recorded_source_urls(config)?;
-    if let Some(hit) = check_dedupe_for_clip(
-        config,
-        &recorded,
-        &web_url.dedupe_key,
-        None,
-        options.force.is_some(),
-        &companion,
-    )? {
+    // A shared reread preflight already selected the family and allocated
+    // `<root>__vN`: it skips the attach path (a reread narrates a new
+    // reading instead of attaching) and the pre-capture dedupe probes.
+    let rereading = options.reread.is_some();
+    if !rereading
+        && let Some(hit) = check_dedupe_for_clip(
+            config,
+            &recorded,
+            &web_url.dedupe_key,
+            None,
+            options.force.is_some(),
+            &companion,
+        )?
+    {
         return run_clip_attach(
             config,
             &hit,
@@ -248,16 +258,25 @@ pub(super) fn capture_article(
     }
 
     // Fail fast when the target is already known: --output, --name, or a
-    // URL slug all plan before the adapter runs.
+    // URL slug all plan before the adapter runs. A reread skips this
+    // probe: its `<root>__vN` stem is already allocated, and `-o` on a
+    // captured reread was refused at preflight.
     let pre_stem = options.name.clone().or_else(|| stem_from_url(&web_url));
     let pre_identity = DefaultTargetIdentity::Url {
         keys: vec![web_url.dedupe_key.clone()],
         recorded: &recorded,
     };
     let overwrite = options.force == Some(super::force::ForceMode::Overwrite);
-    let pre_plan = match &options.output {
-        Some(output) => Some(
-            plan_exact_output_guarded(config, output, options.force.is_some())
+    let pre_plan = if rereading {
+        None
+    } else {
+        match &options.output {
+            Some(output) => Some(
+                plan_exact_output_guarded(
+                    config,
+                    output,
+                    options.force.is_some(),
+                )
                 .map_err(|error| {
                     if overwrite && error.message.contains("already captured") {
                         super::force::overwrite_filed_unavailable().into()
@@ -265,26 +284,29 @@ pub(super) fn capture_article(
                         error
                     }
                 })?,
-        ),
-        None => pre_stem
-            .as_ref()
-            .map(|stem| {
-                plan_default_target(
-                    config,
-                    std::ffi::OsStr::new(stem),
-                    &options.ref_type,
-                    options.force.is_some(),
-                    &pre_identity,
-                )
-                .map_err(|error| {
-                    if overwrite && error.message.contains("already captured") {
-                        super::force::overwrite_filed_unavailable()
-                    } else {
-                        error
-                    }
+            ),
+            None => pre_stem
+                .as_ref()
+                .map(|stem| {
+                    plan_default_target(
+                        config,
+                        std::ffi::OsStr::new(stem),
+                        &options.ref_type,
+                        options.force.is_some(),
+                        &pre_identity,
+                    )
+                    .map_err(|error| {
+                        if overwrite
+                            && error.message.contains("already captured")
+                        {
+                            super::force::overwrite_filed_unavailable()
+                        } else {
+                            error
+                        }
+                    })
                 })
-            })
-            .transpose()?,
+                .transpose()?,
+        }
     };
     // With `--force=overwrite` an exact `--output` path names the only
     // possible replacement: refuse a free path before the adapter runs.
@@ -295,7 +317,8 @@ pub(super) fn capture_article(
     {
         return Err(super::force::nothing_to_overwrite(&web_url.cleaned).into());
     }
-    if let Some(plan) = &pre_plan
+    if !rereading
+        && let Some(plan) = &pre_plan
         && let Some(hit) = check_dedupe_for_clip(
             config,
             &recorded,
@@ -373,19 +396,25 @@ pub(super) fn capture_article(
             .unwrap_or_default();
         extracted_title = pdf_info_metadata(&out_pdf, &stem_hint).0;
     }
-    let stem = options
-        .name
-        .clone()
-        .or_else(|| stem_from_url(&web_url))
-        .or_else(|| extracted_title.as_ref().map(|title| title_stem(title)))
-        .filter(|stem| !stem.is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "{}_{}",
-                web_url.host.replace('.', "_"),
-                captured.replace('-', "")
-            )
-        });
+    // A reread keeps its allocated `<root>__vN` stem whatever the
+    // adapter derives; ordinary captures derive the stem from `-N`,
+    // the URL slug, or the extracted title.
+    let stem = match &options.reread {
+        Some(preflight) => preflight.plan.stem.clone(),
+        None => options
+            .name
+            .clone()
+            .or_else(|| stem_from_url(&web_url))
+            .or_else(|| extracted_title.as_ref().map(|title| title_stem(title)))
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| {
+                format!(
+                    "{}_{}",
+                    web_url.host.replace('.', "_"),
+                    captured.replace('-', "")
+                )
+            }),
+    };
     let title = extracted_title
         .or_else(|| Some(humanize_stem(&stem)))
         .filter(|title| !title.is_empty())
@@ -395,13 +424,21 @@ pub(super) fn capture_article(
     let author = options.author.clone().or(response.author.clone());
     let published = options.published.clone().or(response.published.clone());
     // The final stem is only known after capture; the final plan re-walks
-    // with it, so the marker (and its id) is composed after planning.
+    // with it, so the marker (and its id) is composed after planning. A
+    // reread instead plans its allocated stem with no suffix fallback.
     let final_identity = DefaultTargetIdentity::Url {
         keys: vec![web_url.dedupe_key.clone()],
         recorded: &recorded,
     };
-    let plan = match &options.output {
-        Some(output) => {
+    let plan = match (&options.reread, &options.output) {
+        (Some(preflight), _) => super::recapture::plan_reread_target(
+            config,
+            &preflight.plan.stem,
+            &options.ref_type,
+            &final_identity,
+        )
+        .map_err(ClipError::from)?,
+        (None, Some(output)) => {
             plan_exact_output_guarded(config, output, options.force.is_some())
                 .map_err(|error| {
                 if overwrite && error.message.contains("already captured") {
@@ -411,7 +448,7 @@ pub(super) fn capture_article(
                 }
             })?
         }
-        None => plan_default_target(
+        (None, None) => plan_default_target(
             config,
             std::ffi::OsStr::new(&stem),
             &options.ref_type,
@@ -451,7 +488,37 @@ pub(super) fn capture_article(
             ("captured", MarkerValue::String(captured.clone())),
         ],
     )?;
-    if let Some(hit) = check_dedupe_for_clip(
+    // The fetched identity is guarded again: a reread re-resolves its
+    // keys against the live index (a redirected or re-identified capture
+    // that now claims another family refuses), while ordinary captures
+    // keep the attach-or-refuse check.
+    if let Some(preflight) = &options.reread {
+        let fresh_recorded = collect_recorded_source_urls(config)?;
+        let rows = super::recapture::index_rows(config);
+        let mut wanted = std::collections::BTreeSet::new();
+        wanted.insert(web_url.dedupe_key.clone());
+        let fresh = super::recapture::preflight_for_url(
+            config,
+            &rows,
+            &fresh_recorded,
+            &wanted,
+            options.name.as_deref(),
+            None,
+            options.force,
+            &web_url.cleaned,
+        )
+        .map_err(ClipError::from)?;
+        // A race that filed our stem (or claimed another family) refuses
+        // instead of installing over it; the recheck allocates the next
+        // free stem, so any difference means our plan is stale.
+        if fresh.is_some_and(|next| next.plan.stem != plan.stem) {
+            return Err(ClipError::new(format!(
+                "reread {} is already filed; nothing written",
+                plan.stem,
+            )));
+        }
+        let _ = preflight;
+    } else if let Some(hit) = check_dedupe_for_clip(
         config,
         &recorded,
         &web_url.dedupe_key,
@@ -558,7 +625,9 @@ pub(super) fn capture_article(
             // The vault may have changed during a long listen: re-run
             // the collision and dedupe checks before installing. Dedupe
             // must re-collect: the pre-listen list cannot see a ref note
-            // the fake (or a race) wrote mid-run.
+            // the fake (or a race) wrote mid-run. A reread re-resolves
+            // its keys instead: any new family (or a filed rival for our
+            // stem) refuses rather than installing over it.
             if let Err(error) = super::refuse_target_collisions(
                 &plan.target,
                 &plan.sidecar,
@@ -572,21 +641,68 @@ pub(super) fn capture_article(
                     bind_hint_for_clip(&web_url.cleaned, &flow.scratch_audio),
                 ));
             }
-            let recorded_after = collect_recorded_source_urls(config)
-                .map_err(ClipError::from)?;
-            if let Err(error) = check_dedupe(
-                config,
-                &recorded_after,
-                &web_url.dedupe_key,
-                Some(&plan.target),
-                options.force.is_some(),
-            ) {
-                return Err(post_listen_install_error(
-                    &mut workdir,
-                    &flow.scratch_audio,
-                    error.message.clone(),
-                    bind_hint_for_clip(&web_url.cleaned, &flow.scratch_audio),
-                ));
+            if let Some(preflight) = &options.reread {
+                let recorded_after = collect_recorded_source_urls(config)
+                    .map_err(ClipError::from)?;
+                let rows = super::recapture::index_rows(config);
+                let mut wanted = std::collections::BTreeSet::new();
+                wanted.insert(web_url.dedupe_key.clone());
+                let fresh = super::recapture::preflight_for_url(
+                    config,
+                    &rows,
+                    &recorded_after,
+                    &wanted,
+                    options.name.as_deref(),
+                    None,
+                    options.force,
+                    &web_url.cleaned,
+                )
+                .map_err(|error| {
+                    post_listen_install_error(
+                        &mut workdir,
+                        &flow.scratch_audio,
+                        error.message.clone(),
+                        bind_hint_for_clip(
+                            &web_url.cleaned,
+                            &flow.scratch_audio,
+                        ),
+                    )
+                })?;
+                if fresh.is_some_and(|next| next.plan.stem != plan.stem) {
+                    return Err(post_listen_install_error(
+                        &mut workdir,
+                        &flow.scratch_audio,
+                        format!(
+                            "reread {} is already filed; nothing written",
+                            plan.stem,
+                        ),
+                        bind_hint_for_clip(
+                            &web_url.cleaned,
+                            &flow.scratch_audio,
+                        ),
+                    ));
+                }
+                let _ = preflight;
+            } else {
+                let recorded_after = collect_recorded_source_urls(config)
+                    .map_err(ClipError::from)?;
+                if let Err(error) = check_dedupe(
+                    config,
+                    &recorded_after,
+                    &web_url.dedupe_key,
+                    Some(&plan.target),
+                    options.force.is_some(),
+                ) {
+                    return Err(post_listen_install_error(
+                        &mut workdir,
+                        &flow.scratch_audio,
+                        error.message.clone(),
+                        bind_hint_for_clip(
+                            &web_url.cleaned,
+                            &flow.scratch_audio,
+                        ),
+                    ));
+                }
             }
             let created = match super::listen::install_listen_audio(
                 flow,
@@ -652,7 +768,12 @@ pub(super) fn capture_article(
         "{} created Highlights-ready web PDF",
         styler.success_prefix(false)
     );
-    if let Some(line) = plan.renamed_line() {
+    if let Some(preflight) = &options.reread {
+        println!("{}", preflight.plan.report_line());
+        if report_audio.is_some_and(|audio| audio.origin == "--listen") {
+            super::recapture::print_reread_listen_hint(preflight);
+        }
+    } else if let Some(line) = plan.renamed_line() {
         println!("{line}");
     }
     println!("pdf: {}", plan.target.display());
@@ -790,7 +911,12 @@ fn print_dry_run(
         styler.success_prefix(true)
     );
     println!("source_url: {}", web_url.cleaned);
-    if let Some(line) = plan.renamed_line() {
+    if let Some(preflight) = &options.reread {
+        println!("{}", preflight.plan.report_line());
+        if audio.is_some_and(|audio| audio.origin == "--listen") {
+            super::recapture::print_reread_listen_hint(preflight);
+        }
+    } else if let Some(line) = plan.renamed_line() {
         println!("{line}");
     }
     println!("pdf: {}", plan.target.display());
