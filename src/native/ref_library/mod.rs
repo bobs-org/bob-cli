@@ -18,6 +18,7 @@ mod coverage;
 mod find;
 mod frontmatter;
 mod identity;
+pub(crate) mod lineage;
 pub(crate) mod list;
 pub(crate) mod output;
 mod resolve;
@@ -47,7 +48,7 @@ pub(crate) use list::{
     validate_since, ListSelection, LIST_STATE_ORDER,
 };
 pub(crate) use resolve::{
-    path_matches, primary_rank, resolve_query, MatchKind,
+    compare_primary, path_matches, resolve_query, MatchKind,
 };
 pub(crate) use row::{
     bare_parent_name, strip_wikilink_brackets, Coverage, Diagnostic,
@@ -176,6 +177,7 @@ pub(crate) fn build_index(
             }
         }
     }
+    lineage::apply_families(&mut rows, &config.bob_dir);
     apply_supersession(&mut rows);
     apply_reference_identity(&mut rows);
     blocked_by::apply_blocked_by(&config.bob_dir, &ref_tasks, &mut rows);
@@ -386,6 +388,10 @@ fn build_row(
     }
     let mut urls = front.get_all("source_url");
     urls.extend(front.get_all("url"));
+    // Note-local lineage: read here, resolved into families once every
+    // row exists. The family key defaults to the row's own path until
+    // `apply_families` connects it.
+    let earlier = lineage::parse_earlier(&front);
     let stored = stored_identity(&urls);
     for opaque in &stored.opaque {
         diagnostics.push(Diagnostic::new(
@@ -515,6 +521,8 @@ fn build_row(
         parent,
         task,
         urls,
+        earlier,
+        reading: None,
         identity: RefIdentity {
             keys: stored.keys,
             arxiv: stored.arxiv,
@@ -546,6 +554,8 @@ fn build_row(
             .map(|value| format!("research:{value}")),
         superseded_by: None,
         diagnostics,
+        family: rel.to_string(),
+        has_later: false,
         id: front_string(&front, "id"),
         source_block: front_string(&front, "source_block"),
         source_path: front_string(&front, "source_path"),
@@ -776,8 +786,10 @@ fn snapshot(front: &ParsedFrontmatter) -> Option<RefSnapshot> {
 }
 
 /// Supersession: a PDF-less note sharing an identity key with a PDF-backed
-/// note is `superseded_by` the first such note by path. Keys shared by
-/// several PDF-backed notes earn a `duplicate_identity` diagnostic.
+/// note is `superseded_by` the newest reading of the sharing family (else
+/// the first such note by path). Keys shared by several PDF-backed notes
+/// earn a `duplicate_identity` diagnostic — unless every sharing note is
+/// in one reading family, in which case the lineage explains the sharing.
 fn apply_supersession(rows: &mut [RefRow]) {
     // Owned keys: the sharing map must not borrow the rows it reorders.
     let mut by_key: BTreeMap<String, Vec<usize>> = BTreeMap::new();
@@ -789,7 +801,7 @@ fn apply_supersession(rows: &mut [RefRow]) {
             }
         }
     }
-    let mut first_pdf_backed: BTreeMap<String, usize> = BTreeMap::new();
+    let mut primary_backed: BTreeMap<String, usize> = BTreeMap::new();
     for (key, sharing) in &by_key {
         let mut backed = sharing
             .iter()
@@ -799,16 +811,44 @@ fn apply_supersession(rows: &mut [RefRow]) {
         if backed.is_empty() {
             continue;
         }
-        backed.sort_by_key(|index| &rows[*index].path);
-        first_pdf_backed.insert(key.clone(), backed[0]);
+        // The family primary: the newest reading wins, else the first
+        // note by path (which preserves the old order exactly when no
+        // row carries a reading number).
+        backed.sort_by(|left, right| {
+            rows[*right]
+                .reading
+                .unwrap_or(1)
+                .cmp(&rows[*left].reading.unwrap_or(1))
+                .then_with(|| rows[*left].path.cmp(&rows[*right].path))
+        });
+        primary_backed.insert(key.clone(), backed[0]);
         if backed.len() > 1 {
-            let paths = backed
+            let families: BTreeSet<&str> = backed
                 .iter()
-                .map(|index| rows[*index].path.clone())
-                .collect::<Vec<_>>();
+                .map(|index| rows[*index].family.as_str())
+                .collect();
+            if families.len() == 1 {
+                continue;
+            }
+            // Name only the cross-family pairs: readings of one family
+            // never warn against each other.
+            let mut pairs = BTreeSet::new();
+            for (position, left) in backed.iter().enumerate() {
+                for right in backed.iter().skip(position + 1) {
+                    if rows[*left].family != rows[*right].family {
+                        let (first, second) =
+                            if rows[*left].path < rows[*right].path {
+                                (&rows[*left].path, &rows[*right].path)
+                            } else {
+                                (&rows[*right].path, &rows[*left].path)
+                            };
+                        pairs.insert(format!("{first} ↔ {second}"));
+                    }
+                }
+            }
             let detail = format!(
-                "shared identity {key} across PDFs: {}",
-                paths.join(", ")
+                "shared identity {key} across families: {}",
+                pairs.into_iter().collect::<Vec<_>>().join(", ")
             );
             for index in sharing {
                 rows[*index]
@@ -828,10 +868,16 @@ fn apply_supersession(rows: &mut [RefRow]) {
                 .identity
                 .keys
                 .iter()
-                .filter_map(|key| first_pdf_backed.get(key))
+                .filter_map(|key| primary_backed.get(key))
                 .copied()
                 .collect::<Vec<_>>();
-            candidates.sort_by_key(|winner| &rows[*winner].path);
+            candidates.sort_by(|left, right| {
+                rows[*right]
+                    .reading
+                    .unwrap_or(1)
+                    .cmp(&rows[*left].reading.unwrap_or(1))
+                    .then_with(|| rows[*left].path.cmp(&rows[*right].path))
+            });
             candidates.first().map(|winner| rows[*winner].path.clone())
         })
         .collect();

@@ -709,7 +709,9 @@ fn append_library_identity_row(
     warnings: &mut Vec<String>,
 ) {
     let mut by_key: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut by_path: BTreeMap<&str, &str> = BTreeMap::new();
     for row in rows.iter().filter(|row| row.source_pdf.is_some()) {
+        by_path.insert(row.path.as_str(), row.family.as_str());
         let mut seen = BTreeSet::new();
         for key in &row.identity.keys {
             if seen.insert(key.as_str()) {
@@ -720,9 +722,21 @@ fn append_library_identity_row(
             }
         }
     }
+    // Keys shared by several PDF-backed notes — unless every note sharing
+    // the key is in one reading family, in which case the lineage explains
+    // the sharing and the key stays quiet.
     let mut shared: Vec<&str> = by_key
         .iter()
-        .filter_map(|(key, paths)| (paths.len() > 1).then_some(*key))
+        .filter_map(|(key, paths)| {
+            if paths.len() <= 1 {
+                return None;
+            }
+            let mut families = BTreeSet::new();
+            for path in paths {
+                families.insert(by_path.get(path).copied().unwrap_or(path));
+            }
+            (families.len() > 1).then_some(*key)
+        })
         .collect();
     shared.sort();
     if !shared.is_empty() {

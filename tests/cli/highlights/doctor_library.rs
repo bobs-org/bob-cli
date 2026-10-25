@@ -552,3 +552,63 @@ fn doctor_intake_last_row_keeps_a_multiline_message_on_one_line() {
         "later lines must not spill: {row}"
     );
 }
+
+fn write_family_notes(vault: &std::path::Path) {
+    write_file(
+        &vault.join("ref/papers/attention.md"),
+        "---\nstatus: read\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention.pdf]]\"\n---\n\n# Attention Is All You Need\n\n- [x] #task #ref [[lib/papers/attention.pdf]] #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/papers/attention__v2.md"),
+        "---\nstatus: ready\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention__v2.pdf]]\"\nearlier:\n  - \"[[ref/papers/attention|v1 · 2026-09-01]]\"\n---\n\n# Attention Is All You Need\n\n- [ ] #task #ref [[lib/papers/attention__v2.pdf]] #hide ^ref\n",
+    );
+}
+
+#[test]
+fn doctor_family_identity_exempt_but_outsider_warns() {
+    let temp = TempDir::new("bob-cli-doctor-family-identity");
+    let vault = base_vault(&temp);
+    write_family_notes(&vault);
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("identity: ok (no superseded notes)"),
+        "one family explains its shared key:\n{report}"
+    );
+
+    write_file(
+        &vault.join("ref/papers/attention_copy.md"),
+        "---\nstatus: ready\ntitle: Attention Copy\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention_copy.pdf]]\"\n---\n\n# Attention Copy\n\n- [ ] #task #ref [[lib/papers/attention_copy.pdf]] #hide ^ref\n",
+    );
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "outsider"]);
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains(
+            "identity: warn (1 identity key shared by more than one PDF-backed note:"
+        ),
+        "an unrelated duplicate keeps warning:\n{report}"
+    );
+}
+
+#[test]
+fn doctor_dangling_earlier_entry_warns() {
+    let temp = TempDir::new("bob-cli-doctor-family-dangling");
+    let vault = base_vault(&temp);
+    write_file(
+        &vault.join("ref/papers/chain.md"),
+        "---\nstatus: read\ntitle: Chain\nsource_url: https://example.com/papers/chain\nsource_pdf: \"[[lib/papers/chain.pdf]]\"\n---\n\n# Chain\n\n- [x] #task #ref [[lib/papers/chain.pdf]] #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/papers/chain__v3.md"),
+        "---\nstatus: ready\ntitle: Chain\nsource_url: https://example.com/papers/chain\nsource_pdf: \"[[lib/papers/chain__v3.pdf]]\"\nearlier:\n  - \"[[ref/papers/chain__v2|v2 · 2026-05-01]]\"\n  - \"[[ref/papers/chain|v1 · 2026-03-02]]\"\n---\n\n# Chain\n\n- [ ] #task #ref [[lib/papers/chain__v3.pdf]] #hide ^ref\n",
+    );
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("1 earlier_dangling"),
+        "the deleted middle reading warns:\n{report}"
+    );
+}

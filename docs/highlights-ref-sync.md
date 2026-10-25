@@ -638,6 +638,24 @@ creation times are not backfilled. A PDF marker containing `created` is
 rejected with a diagnostic explaining that it records reference-note creation
 time, before any note or PDF write.
 
+Like `created`, the reading-family `earlier:` list is a note-local key:
+sync re-emits it verbatim and it stays out of the marker projection and
+its hash. It names every live family member (newest first) plus any
+replaced captures, in block style, and is written once at birth — the
+index only reads it:
+
+```yaml
+earlier:
+  - "[[ref/papers/attention_is_all_you_need__v2|v2 · 2026-09-01]]"
+  - "[[ref/papers/attention|v1 · 2026-03-02]]"
+```
+
+A block-style `earlier:` survives sync byte-for-byte; when sync drops a
+removed block-style managed key, its orphaned continuation lines go with
+it so they are never absorbed into the key above on reparse. `bob ref
+rename` already rewrites frontmatter wikilinks, so renaming a family
+member updates the later readings' `earlier:` links.
+
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
 explicitly listed in `highlights_marker_fields`.

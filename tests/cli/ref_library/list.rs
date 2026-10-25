@@ -908,3 +908,55 @@ fn list_leaves_the_vault_untouched() {
         "list must not write to the vault"
     );
 }
+
+/// A hand-written two-reading family sharing one `source_url`.
+fn family_vault(prefix: &str) -> (TempDir, PathBuf) {
+    let temp = TempDir::new(prefix);
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("ref/papers/attention.md"),
+        "---\nstatus: read\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention.pdf]]\"\n---\n\n# Attention Is All You Need\n\n- [x] #task #ref [[lib/papers/attention.pdf]] #hide ^ref [completion:: 2026-09-02]\n",
+    );
+    write_file(
+        &vault.join("ref/papers/attention__v2.md"),
+        "---\nstatus: ready\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention__v2.pdf]]\"\nearlier:\n  - \"[[ref/papers/attention|v1 · 2026-09-01]]\"\n---\n\n# Attention Is All You Need\n\n- [ ] #task #ref [[lib/papers/attention__v2.pdf]] #hide ^ref\n",
+    );
+    (temp, vault)
+}
+
+#[test]
+fn list_family_rows_wear_reading_chips() {
+    let (_temp, vault) = family_vault("bob-cli-ref-list-family");
+    let output = run_list(&vault, &["-R", "finished,queued,started"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("Attention Is All You Need v2"),
+        "reread wears its chip:\n{human}"
+    );
+    assert!(
+        human.contains("Attention Is All You Need v1"),
+        "root with later readings wears v1:\n{human}"
+    );
+}
+
+#[test]
+fn list_family_json_carries_reading_and_earlier() {
+    let (_temp, vault) = family_vault("bob-cli-ref-list-family-json");
+    let document = run_list_json(&vault, &["-R", "finished,queued,started"]);
+    let rows = document["refs"].as_array().expect("refs array");
+    assert_eq!(rows.len(), 2, "both readings list: {rows:?}");
+    let v2 = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/attention__v2.md")
+        .expect("v2 row");
+    assert_eq!(v2["reading"], 2);
+    assert_eq!(v2["earlier"][0]["target"], "ref/papers/attention");
+    assert_eq!(v2["earlier"][0]["kind"], "reading");
+    let v1 = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/attention.md")
+        .expect("v1 row");
+    assert_eq!(v1["reading"], 1);
+    assert_eq!(v1["earlier"], serde_json::json!([]));
+}

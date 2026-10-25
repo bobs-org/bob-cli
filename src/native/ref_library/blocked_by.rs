@@ -587,6 +587,8 @@ mod tests {
                 scheduled: None,
             }),
             urls: Vec::new(),
+            earlier: Vec::new(),
+            reading: None,
             identity: RefIdentity {
                 keys: Vec::new(),
                 arxiv: None,
@@ -608,6 +610,8 @@ mod tests {
             research_ref: None,
             superseded_by: None,
             diagnostics: Vec::new(),
+            family: "ref/papers/a.md".to_string(),
+            has_later: false,
             id: None,
             source_block: None,
             source_path: None,

@@ -847,3 +847,110 @@ fn find_leaves_the_vault_untouched() {
         "find must never write to the vault",
     );
 }
+
+/// A hand-written two-reading family: `attention` (v1, finished) and
+/// `attention__v2` (v2, queued) share one `source_url`, plus an unrelated
+/// duplicate that shares the key outside the family, and a natural
+/// `protocol__v2` stem with no lineage.
+fn family_vault(prefix: &str) -> (TempDir, PathBuf) {
+    let temp = TempDir::new(prefix);
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("ref/papers/attention.md"),
+        "---\nstatus: read\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention.pdf]]\"\n---\n\n# Attention Is All You Need\n\n- [x] #task #ref [[lib/papers/attention.pdf]] #hide ^ref [completion:: 2026-09-02]\n",
+    );
+    write_file(
+        &vault.join("ref/papers/attention__v2.md"),
+        "---\nstatus: ready\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention__v2.pdf]]\"\nearlier:\n  - \"[[ref/papers/attention|v1 · 2026-09-01]]\"\n---\n\n# Attention Is All You Need\n\n- [ ] #task #ref [[lib/papers/attention__v2.pdf]] #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/papers/attention_copy.md"),
+        "---\nstatus: ready\ntitle: Attention Copy\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention_copy.pdf]]\"\n---\n\n# Attention Copy\n\n- [ ] #task #ref [[lib/papers/attention_copy.pdf]] #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/papers/protocol__v2.md"),
+        "---\nstatus: ready\ntitle: Protocol v2\nsource_url: https://example.com/papers/protocol\nsource_pdf: \"[[lib/papers/protocol__v2.pdf]]\"\n---\n\n# Protocol v2\n\n- [ ] #task #ref [[lib/papers/protocol__v2.pdf]] #hide ^ref\n",
+    );
+    (temp, vault)
+}
+
+#[test]
+fn find_ranks_the_newest_reading_first_with_reason_aware_also() {
+    let (_temp, vault) = family_vault("bob-cli-ref-find-family");
+    let document =
+        run_find_json(&vault, &["https://example.com/papers/attention"]);
+    let result = result_for(&document, "https://example.com/papers/attention");
+    assert_eq!(result["verdict"], "in_library");
+    assert_eq!(result["reading_state"], "queued");
+    let paths: Vec<&str> = result["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .map(|hit| hit["ref"]["path"].as_str().expect("match path"))
+        .collect();
+    assert_eq!(
+        paths[0], "ref/papers/attention__v2.md",
+        "the newest reading ranks first: {paths:?}"
+    );
+    assert_eq!(paths.len(), 3, "every copy is listed: {paths:?}");
+    let primary = &result["matches"][0]["ref"];
+    assert_eq!(primary["reading"], 2);
+    assert_eq!(
+        primary["earlier"],
+        serde_json::json!([{
+            "target": "ref/papers/attention",
+            "label": "v1 · 2026-09-01",
+            "kind": "reading",
+        }]),
+    );
+    let human =
+        stdout(&run_find(&vault, &["https://example.com/papers/attention"]));
+    assert!(
+        human.contains(
+            "also ref/papers/attention.md (modern, earlier reading v1 · read)"
+        ),
+        "family companion names its reading:\n{human}"
+    );
+}
+
+#[test]
+fn find_family_plus_unrelated_duplicate_still_warns() {
+    let (_temp, vault) = family_vault("bob-cli-ref-find-family-dup");
+    let document =
+        run_find_json(&vault, &["https://example.com/papers/attention"]);
+    let result = result_for(&document, "https://example.com/papers/attention");
+    let codes: Vec<Vec<String>> = result["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .map(|hit| {
+            hit["ref"]["diagnostics"]
+                .as_array()
+                .expect("diagnostics array")
+                .iter()
+                .map(|diagnostic| {
+                    diagnostic["code"].as_str().expect("code").to_string()
+                })
+                .collect()
+        })
+        .collect();
+    assert!(
+        codes
+            .iter()
+            .all(|row| row.contains(&"duplicate_identity".to_string())),
+        "an unrelated duplicate keeps warning: {codes:?}"
+    );
+}
+
+#[test]
+fn find_natural_versioned_stem_forms_no_family() {
+    let (_temp, vault) = family_vault("bob-cli-ref-find-noversion");
+    let document =
+        run_find_json(&vault, &["https://example.com/papers/protocol"]);
+    let result = result_for(&document, "https://example.com/papers/protocol");
+    assert_eq!(result["verdict"], "in_library");
+    let row = &result["matches"][0]["ref"];
+    assert_eq!(row["path"], "ref/papers/protocol__v2.md");
+    assert_eq!(row["reading"], serde_json::Value::Null);
+    assert_eq!(row["earlier"], serde_json::json!([]));
+}

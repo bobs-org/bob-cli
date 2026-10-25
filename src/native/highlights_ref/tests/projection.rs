@@ -586,6 +586,90 @@ fn render_places_replaced_hash_after_marker_base() {
 }
 
 #[test]
+fn render_keeps_block_earlier_list_byte_identical() {
+    let note = parse_note(
+        "---\nstatus: read\ntitle: Attention\nearlier:\n  - \"[[ref/papers/attention__v2|v2 · 2026-09-01]]\"\n  - \"[[ref/papers/attention|v1 · 2026-03-02]]\"\n---\n\n# Attention\n",
+    );
+    let mut projection = Projection::new();
+    projection.insert(
+        "status".to_string(),
+        MarkerValue::String("read".to_string()),
+    );
+    projection.insert(
+        "title".to_string(),
+        MarkerValue::String("Attention".to_string()),
+    );
+    let hash = projection_hash(&projection).expect("hash");
+    let rendered = note.render_with_projection(
+        &projection,
+        &hash,
+        None,
+        &PipelineMetadata {
+            source_pdf: "lib/papers/attention.pdf".to_string(),
+            source_pdf_sha256: "abc".to_string(),
+            ref_type: None,
+            highlights_sidecar: None,
+            highlights_count: None,
+            highlights_synced_at: None,
+            created: None,
+            audio: None,
+        },
+        "# Attention\n",
+    );
+    let expected = "earlier:\n  - \"[[ref/papers/attention__v2|v2 · 2026-09-01]]\"\n  - \"[[ref/papers/attention|v1 · 2026-03-02]]\"\n";
+    assert!(
+        rendered.contains(expected),
+        "block earlier: must survive sync byte-for-byte:\n{rendered}"
+    );
+}
+
+#[test]
+fn render_drops_continuations_of_a_removed_block_key() {
+    // A stale block-style managed key (`parent:` with list items) is
+    // re-rendered inline from the projection; its orphaned continuation
+    // lines must not survive to be absorbed into the key above.
+    let note = parse_note(
+        "---\nstatus: read\nparent:\n  - obsidian\n  - extra\nearlier:\n  - \"[[ref/papers/attention|v1 · 2026-03-02]]\"\n---\n\n# Attention\n",
+    );
+    let mut projection = Projection::new();
+    projection.insert(
+        "status".to_string(),
+        MarkerValue::String("read".to_string()),
+    );
+    projection.insert(
+        "parent".to_string(),
+        MarkerValue::String("[[obsidian]]".to_string()),
+    );
+    let hash = projection_hash(&projection).expect("hash");
+    let rendered = note.render_with_projection(
+        &projection,
+        &hash,
+        None,
+        &PipelineMetadata {
+            source_pdf: "lib/papers/attention.pdf".to_string(),
+            source_pdf_sha256: "abc".to_string(),
+            ref_type: None,
+            highlights_sidecar: None,
+            highlights_count: None,
+            highlights_synced_at: None,
+            created: None,
+            audio: None,
+        },
+        "# Attention\n",
+    );
+    assert!(
+        !rendered.contains("  - obsidian") && !rendered.contains("  - extra"),
+        "orphaned continuations of a removed key must go:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "earlier:\n  - \"[[ref/papers/attention|v1 · 2026-03-02]]\"\n"
+        ),
+        "earlier: still survives:\n{rendered}"
+    );
+}
+
+#[test]
 fn append_stale_save_reason_joins_existing_reason() {
     let mut empty = String::new();
     append_stale_save_reason(&mut empty);

@@ -208,6 +208,29 @@ When a PDF-backed note shares an identity key with a note without a
 PDF, the PDF-less note is `superseded_by` the PDF-backed one. `find`
 still reaches superseded notes and prints them as `also` companions.
 
+A reference with no rereads is a family of one. Rereads link their
+lineage through a note-local `earlier:` list naming every live family
+member, newest first:
+
+```yaml
+earlier:
+  - "[[ref/papers/attention_is_all_you_need__v2|v2 · 2026-09-01]]"
+  - "[[ref/papers/attention|v1 · 2026-03-02]]"
+```
+
+The reading number is 1 plus the number of `earlier:` entries whose
+target is under `ref/` — computed from frontmatter, never parsed from a
+filename, so a stem that merely looks versioned (such as
+`protocol__v2`) is reading 1. The `earlier:` list is written once at
+birth (block style, Obsidian's canonical Properties form; inline reads
+too); the index only reads it, never re-derives it. Every PDF-backed
+row sharing an identity key that sits in one family earns no
+`duplicate_identity` diagnostic; a key shared outside one family still
+warns, naming only the cross-family pairs, and a PDF-less note's
+`superseded_by` winner is the newest family reading. An `earlier:`
+entry whose target resolves nowhere warns as `earlier_dangling` (a
+deleted middle reading keeps the surviving numbers).
+
 Import deduplication and library lookup both index every URL in scalar or
 list-valued `source_url` and `url` metadata. This applies to ref notes and
 queued intake markers, so any URL in a collection can prevent a duplicate
@@ -235,7 +258,11 @@ Verdicts per query: `in_library` (an exact match), `in_intake` (only a
 queued intake PDF matched, with `-i`), `possible` (only title
 candidates at or above `--min-score`), `not_found` (nothing matched).
 A title match is only ever a candidate, never proof; `not found` means
-only "not under ref/".
+only "not under ref/". Within one reading family the newest reading is
+primary, ahead of reading state, so an identity query's first match is
+the newest reading; `find` still lists every copy, with family
+companions on dim `also` lines (`also <path> (<era>, earlier reading v1
+· <status>)`).
 
 ## `bob ref list`
 
@@ -291,8 +318,10 @@ with one stderr warning; this is never fatal. Git birth follows file
 renames and reports the oldest commit that added the note.
 
 Human output groups rows under one heading per reading state with its
-count (pre-cap totals), with the status chip, row date (or `—`), title,
-`♫` when audio is bound, type, an optional dim blocked reason, and a dim
+count (pre-cap totals), with the status chip, row date (or `—`), title
+(plus a `vN` reading chip for readings past the first, and a `v1` chip
+on a root that has later readings), `♫` when audio is bound, type, an
+optional dim blocked reason, and a dim
 path. The path drops first on a narrow terminal, then the reason, then
 titles truncate. A blocked row's reason is one of `💤 until YYYY-MM-DD`,
 `⛓ after <title>` (or `+N` more), `🧱 <project stem> blocked`, or
@@ -421,8 +450,11 @@ human|json|markdown` (default human), `-N/--no-annotations`, `-r/--ref-dir`.
 Each `REF` is a vault path, note stem or id, URL, arXiv ID, DOI, or
 exact title. Resolution is exact (the exact match kinds plus a unique
 `title_exact`): several matches collapse to the one note that is not
-superseded, with the superseded companions listed under `also` (a dim
-`also: <path> (superseded legacy note)` line in human output); any other
+superseded, or to the newest reading when every live match is in one
+reading family, with the companions listed under `also` (a dim
+`also: <path> (…)` line in human output — `earlier reading v1 ·
+<status>` for family companions, `superseded legacy note` for
+superseded ones); any other
 multi-match fails as `ambiguous reference` and names its candidates (it
 never picks the first stem); a miss fails as `no reference note matches
 <REF>` with up to three title candidates as `hint:` lines. Every `REF`
@@ -466,7 +498,9 @@ it is absent.
   body).
 - `tasks`: the parsed `## Tasks` lines (`checked`, `mark`, `text`,
   `block_id`, plus `path` only on follow-ups found elsewhere).
-- `also`: superseded companion paths.
+- `also`: companion paths (family companions and superseded notes).
+- `later`: later readings of the shown row (family members with a higher
+  reading number, oldest first).
 
 `-c/--comments-only` keeps only annotations with a comment, standalone
 notes, or image notes (embedded or unresolved), with their quotes. A `<`
@@ -477,9 +511,11 @@ metadata and notes only. The `annotations` array honors the flags; `-N`
 also omits `sections`. `-c` keeps the full `sections` list, because like
 the status and `excluded` counts it describes the whole region.
 
-Human output prints the title, a reading-state header (chip, date,
-type, origin, path), the reading-task line, the metadata rows that have
-a value, then the annotations grouped by page with wrapped quotes
+Human output prints the title, a reading-state header (chip, a `vN`
+reading chip for readings past the first — and a `v1` chip on a root
+that has later readings — date, type, origin, path), the reading-task
+line, the metadata rows that have a value (including an `earlier:` row
+of entry labels and a derived `later:` row), then the annotations grouped by page with wrapped quotes
 (`“…”`), `[image: <vault path>]` lines for image notes,
 yellow `[image not found: <source>]` (or `unreadable` / `unsupported`)
 lines, and cyan `↳` comments, the exclusion parenthetical, and the
@@ -515,7 +551,9 @@ Markdown output is a quotable digest per note: `## <title>`, bullets for
 the note link, reading state with evidence and date, a `- **Reading
 task:** …` bullet with the same text as the human line, source URL and
 arXiv/DOI, origin and type, annotation counts and snapshot date (plus
-`Research report: research:…` when set, and `Also: …` companions), then
+`Research report: research:…` when set, `Earlier:`/`Later:` lineage
+bullets when the row has lineage, and an `Also: …` line naming each
+companion with its parenthetical), then
 `### Annotations` (one `**Page N**` label per page, quotes as `>`
 blockquotes, image notes as `Image: <vault path>` or
 `Image not found: <source>` lines, comments as `Comment: …` lines,
@@ -919,17 +957,22 @@ intake directory). `library` counts exclude superseded notes.
 Each `ref` object is the full index row: path, link, title, origin,
 `marker_id` (the frontmatter `id`, or `null` when absent), ref_type, era,
 status, status_sync, legacy_status,
-reading_state and its source, `blocked`, `blocked_by`, parent, `task`, urls, identity
+reading_state and its source, `blocked`, `blocked_by`, parent, `task`, urls, the
+`earlier:` lineage entries (`target`, `label`, `kind`: `reading` or
+`replaced`) and the `reading` number (`null` for rows outside a family,
+`1` for a root), identity
 keys, author/published/captured, added date/source/instant and finished dates/sources,
 source_pdf, audio, annotation and comment counts, snapshot,
-research_ref, superseded_by, and diagnostics. `task` is always present
+research_ref, superseded_by, and diagnostics. `show` rows add `later`
+(the family paths newer than the shown row). `task` is always present
 (`null` when there is no task): v2 carries `path` (the residence file),
 `block_id`, `link` (`[[path#^id]]` or `[[path]]`), `mark`,
 `archived`, `priority`, and `scheduled`; v1 carries the ref note path,
 `block_id: "ref"`, `link: [[ref/…#^ref]]`, `archived: false`, and the
 same `priority`/`scheduled` fields from the tracker line. One
 `(path, block_id)` join works for both eras. `blocked`, `blocked_by`,
-`task`, `marker_id`, and `added_at` are additive under `schema_version` 1.
+`task`, `marker_id`, `added_at`, `reading`, `earlier`, and `later` are
+additive under `schema_version` 1.
 
 Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
 detail lists `path:line`), `open_ref_task_in_done` (open task under
@@ -937,7 +980,8 @@ detail lists `path:line`), `open_ref_task_in_done` (open task under
 ready/next/wip status but no task), `orphan_ref_task` (a `#ref` line
 resolving to no note), `ref_task_outside_area` (live task outside an
 area/project/inbox), `parent_mismatch` (frontmatter parent differs from
-residence), and `open_v1_tracker` (open in-note `^ref`; run `bob ref
+residence), `earlier_dangling` (an `earlier:` entry whose target
+resolves nowhere), and `open_v1_tracker` (open in-note `^ref`; run `bob ref
 migrate-tasks`).
 
 ## Errors and exit codes

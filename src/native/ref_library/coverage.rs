@@ -477,6 +477,8 @@ mod tests {
             parent: None,
             task: None,
             urls: Vec::new(),
+            earlier: Vec::new(),
+            reading: None,
             identity: super::super::row::RefIdentity {
                 keys: Vec::new(),
                 arxiv: None,
@@ -498,6 +500,8 @@ mod tests {
             research_ref: None,
             superseded_by: None,
             diagnostics: Vec::new(),
+            family: "ref/ai/mirrored.md".to_string(),
+            has_later: false,
             id: None,
             source_block: block.map(str::to_string),
             source_path: Some(path.to_string()),

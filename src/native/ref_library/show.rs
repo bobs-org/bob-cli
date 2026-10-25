@@ -134,6 +134,21 @@ pub(crate) struct ShowRow {
     pub own_notes: String,
     pub tasks: Vec<ShowTask>,
     pub also: Vec<String>,
+    /// Later readings of the shown row (family members with a higher
+    /// reading number, oldest first). Empty serializes as `[]`.
+    pub later: Vec<String>,
+    /// The human parenthetical per `also` path, in the same order:
+    /// `earlier reading v1 · read` for family companions, `superseded
+    /// legacy note` for superseded ones. Kept out of JSON.
+    #[serde(skip_serializing)]
+    pub also_labels: Vec<String>,
+}
+
+/// The human parenthetical for one `also:` companion path, relative to
+/// the primary row's reading: `earlier reading v1 · read` for family
+/// companions, `superseded legacy note` for superseded ones.
+pub(crate) fn also_label(row: &RefRow, primary_reading: Option<u32>) -> String {
+    super::lineage::companion_label(row, primary_reading)
 }
 
 /// A resolved `REF`: the winning row plus superseded companion paths.
@@ -157,7 +172,8 @@ pub(crate) enum ShowFailure {
 
 /// Resolve one `REF` through the exact match kinds plus a unique
 /// `title_exact` hit. Several matches collapse to the one non-superseded
-/// row; any other multi-match is ambiguous and never picks the first stem.
+/// row, or to the newest reading when every live match is in one family;
+/// any other multi-match is ambiguous and never picks the first stem.
 pub(crate) fn resolve_show(
     index: &RefIndex,
     query: &str,
@@ -190,8 +206,7 @@ pub(crate) fn resolve_show(
         exact.push(title_exact[0]);
     }
     exact.sort_by(|left, right| {
-        super::primary_rank(&index.rows[*left])
-            .cmp(&super::primary_rank(&index.rows[*right]))
+        super::compare_primary(&index.rows[*left], &index.rows[*right])
     });
     if exact.len() == 1 {
         return Ok(ResolvedShow {
@@ -207,6 +222,21 @@ pub(crate) fn resolve_show(
             .collect();
         if live.len() == 1 {
             let winner = live[0];
+            let also = exact
+                .iter()
+                .filter(|row| **row != winner)
+                .map(|row| index.rows[*row].path.clone())
+                .collect();
+            return Ok(ResolvedShow { row: winner, also });
+        }
+        if live.len() > 1
+            && super::lineage::is_single_family(&live, &index.rows)
+        {
+            let winner = live
+                .iter()
+                .copied()
+                .max_by_key(|row| index.rows[*row].reading.unwrap_or(1))
+                .expect("non-empty live set");
             let also = exact
                 .iter()
                 .filter(|row| **row != winner)
@@ -399,6 +429,22 @@ pub(crate) fn load_show_row(
             path: Some(follow.path.clone()),
         });
     }
+    let later = super::lineage::later_readings(resolved.row, &index.rows);
+    let by_path: std::collections::BTreeMap<&str, &RefRow> = index
+        .rows
+        .iter()
+        .map(|candidate| (candidate.path.as_str(), candidate))
+        .collect();
+    let also_labels = resolved
+        .also
+        .iter()
+        .map(|path| match by_path.get(path.as_str()) {
+            Some(companion) => {
+                also_label(companion, index.rows[resolved.row].reading)
+            }
+            None => "superseded legacy note".to_string(),
+        })
+        .collect();
     Ok(ShowRow {
         row: row.clone(),
         annotations_status,
@@ -408,6 +454,8 @@ pub(crate) fn load_show_row(
         excluded,
         own_notes: parts.own_notes,
         tasks,
+        later,
+        also_labels,
         also: resolved.also.clone(),
     })
 }
@@ -596,9 +644,23 @@ fn annotation_summary(shown: &[ShowAnnotation]) -> String {
     parts.join(" · ")
 }
 
-/// The header line under the title: state chip, date, type, origin, path.
+/// The reading chip for one shown row: `vN` for readings past the
+/// first, `v1` on a root that has later readings, else nothing.
+pub(crate) fn reading_chip(row: &RefRow) -> Option<String> {
+    match row.reading {
+        Some(number) if number >= 2 => Some(format!("v{number}")),
+        Some(1) if row.has_later => Some("v1".to_string()),
+        _ => None,
+    }
+}
+
+/// The header line under the title: state chip, reading chip, date, type,
+/// origin, path.
 fn header_line(row: &ShowRow, styler: Styler, width: usize) -> String {
     let mut segments = vec![state_chip(styler, &row.row.reading_state)];
+    if let Some(chip) = reading_chip(&row.row) {
+        segments.push(chip);
+    }
     if let Some(dated) = dated_suffix(&row.row) {
         segments.push(dated);
     }
@@ -631,6 +693,21 @@ fn metadata_rows(row: &ShowRow) -> Vec<(String, String)> {
     }
     if let Some(parent) = row.row.parent.as_deref() {
         rows.push(("parent".to_string(), parent.to_string()));
+    }
+    if !row.row.earlier.is_empty() {
+        let labels = row
+            .row
+            .earlier
+            .iter()
+            .map(|entry| {
+                entry.label.clone().unwrap_or_else(|| entry.target.clone())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        rows.push(("earlier".to_string(), labels));
+    }
+    if !row.later.is_empty() {
+        rows.push(("later".to_string(), row.later.join(", ")));
     }
     if let Some(snapshot) = row.row.snapshot.as_ref() {
         let value = match snapshot.synced_at.as_deref() {
@@ -1324,12 +1401,21 @@ fn render_one_human(
         ));
         out.push('\n');
     }
-    for path in &row.also {
-        out.push_str(&styler.dim(&truncate(
-            &format!("  also: {path} (superseded legacy note)"),
-            width,
-        )));
+    for (path, label) in row.also.iter().zip(row.also_labels.iter()) {
+        out.push_str(
+            &styler.dim(&truncate(&format!("  also: {path} ({label})"), width)),
+        );
         out.push('\n');
+    }
+    // A hand-built row without labels keeps the legacy wording.
+    if row.also.len() > row.also_labels.len() {
+        for path in &row.also[row.also_labels.len()..] {
+            out.push_str(&styler.dim(&truncate(
+                &format!("  also: {path} (superseded legacy note)"),
+                width,
+            )));
+            out.push('\n');
+        }
     }
     if !no_annotations {
         let has_excluded = excluded_line(&row.excluded);
@@ -1503,8 +1589,33 @@ fn render_one_markdown(
     if let Some(research) = row.row.research_ref.as_deref() {
         out.push_str(&format!("- Research report: {research}\n"));
     }
+    if !row.row.earlier.is_empty() {
+        let labels = row
+            .row
+            .earlier
+            .iter()
+            .map(|entry| {
+                entry.label.clone().unwrap_or_else(|| entry.target.clone())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("- Earlier: {labels}\n"));
+    }
+    if !row.later.is_empty() {
+        out.push_str(&format!("- Later: {}\n", row.later.join(", ")));
+    }
     if !row.also.is_empty() {
-        out.push_str(&format!("- Also: {}\n", row.also.join(", ")));
+        let companions = row
+            .also
+            .iter()
+            .enumerate()
+            .map(|(position, path)| match row.also_labels.get(position) {
+                Some(label) => format!("{path} ({label})"),
+                None => path.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("- Also: {companions}\n"));
     }
     if !no_annotations
         && (!row.annotations.is_empty()
@@ -1767,6 +1878,8 @@ mod tests {
                 parent: Some("sase_ref".to_string()),
                 task: None,
                 urls: vec!["https://arxiv.org/pdf/2608.04278".to_string()],
+                earlier: Vec::new(),
+                reading: None,
                 identity: RefIdentity {
                     keys: vec![
                         "https://arxiv.org/abs/2608.04278".to_string(),
@@ -1794,6 +1907,8 @@ mod tests {
                 research_ref: None,
                 superseded_by: None,
                 diagnostics: Vec::new(),
+                family: "ref/papers/ea_graph.md".to_string(),
+                has_later: false,
                 id: None,
                 source_block: None,
                 source_path: None,
@@ -1851,6 +1966,8 @@ mod tests {
                 path: None,
             }],
             also: Vec::new(),
+            later: Vec::new(),
+            also_labels: Vec::new(),
         }
     }
 

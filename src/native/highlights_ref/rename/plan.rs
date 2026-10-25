@@ -2535,6 +2535,8 @@ mod tests {
             parent: None,
             task: None,
             urls: Vec::new(),
+            earlier: Vec::new(),
+            reading: None,
             identity: crate::native::ref_library::RefIdentity {
                 keys: Vec::new(),
                 arxiv: None,
@@ -2556,6 +2558,8 @@ mod tests {
             research_ref: None,
             superseded_by: None,
             diagnostics: Vec::new(),
+            family: "ref/ai/book.md".into(),
+            has_later: false,
             id: None,
             source_block: None,
             source_path: None,

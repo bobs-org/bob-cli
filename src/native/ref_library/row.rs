@@ -34,6 +34,14 @@ pub(crate) struct RefRow {
     pub parent: Option<String>,
     pub task: Option<RefTaskView>,
     pub urls: Vec<String>,
+    /// The note-local `earlier:` lineage: live readings under `ref/` and
+    /// replaced captures under `ref_history/`, in file order. Empty notes
+    /// serialize as `[]`.
+    pub earlier: Vec<super::lineage::EarlierEntry>,
+    /// The reading number (1 + the `ref/` entries in `earlier:`). `Some`
+    /// for rows in a family of two or more, and for rows that carry a
+    /// `Reading` entry even when it dangles; else `null`.
+    pub reading: Option<u32>,
     pub identity: RefIdentity,
     pub author: Option<String>,
     pub published: Option<String>,
@@ -72,6 +80,15 @@ pub(crate) struct RefRow {
     /// folded chapter blocks.
     #[serde(skip_serializing)]
     pub source_blocks: Vec<String>,
+    /// The family key: the root member's path. Kept out of JSON; only
+    /// family reasoning reads it.
+    #[serde(skip_serializing)]
+    pub family: String,
+    /// Whether a later reading exists in this row's family. Kept out of
+    /// JSON; only the `v1` chip reads it (`later:` on show rows carries
+    /// the paths).
+    #[serde(skip_serializing)]
+    pub has_later: bool,
     /// True when any v2 candidate exists for this ref (or the body holds
     /// the managed embed); kept out of JSON, only `-g` reads it.
     #[serde(skip_serializing)]

@@ -906,3 +906,166 @@ fn show_is_read_only() {
         "show never writes to the vault"
     );
 }
+
+/// A hand-written two-reading family sharing one `source_url`.
+fn family_vault(prefix: &str) -> (TempDir, PathBuf) {
+    inline_vault(
+        prefix,
+        &[
+            (
+                "ref/papers/attention.md",
+                "---\nstatus: read\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention.pdf]]\"\n---\n\n# Attention Is All You Need\n\n- [x] #task #ref [[lib/papers/attention.pdf]] #hide ^ref [completion:: 2026-09-02]\n",
+            ),
+            (
+                "ref/papers/attention__v2.md",
+                "---\nstatus: ready\ntitle: Attention Is All You Need\nsource_url: https://example.com/papers/attention\nsource_pdf: \"[[lib/papers/attention__v2.pdf]]\"\nearlier:\n  - \"[[ref/papers/attention|v1 · 2026-09-01]]\"\n---\n\n# Attention Is All You Need\n\n- [ ] #task #ref [[lib/papers/attention__v2.pdf]] #hide ^ref\n",
+            ),
+            (
+                "ref/papers/protocol__v2.md",
+                "---\nstatus: ready\ntitle: Protocol v2\nsource_url: https://example.com/papers/protocol\nsource_pdf: \"[[lib/papers/protocol__v2.pdf]]\"\n---\n\n# Protocol v2\n\n- [ ] #task #ref [[lib/papers/protocol__v2.pdf]] #hide ^ref\n",
+            ),
+        ],
+    )
+}
+
+#[test]
+fn show_collapses_an_all_one_family_hit_set_to_the_newest() {
+    let (_temp, vault) = family_vault("bob-cli-ref-show-family");
+    let output = run_show(&vault, &["https://example.com/papers/attention"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains(
+            "also: ref/papers/attention.md (earlier reading v1 · read)"
+        ),
+        "reason-aware also line:\n{human}"
+    );
+    assert!(
+        human.contains("earlier   v1 · 2026-09-01"),
+        "earlier metadata row uses entry labels:\n{human}"
+    );
+    assert!(
+        human.contains("v2"),
+        "newest reading carries a vN chip:\n{human}"
+    );
+    assert!(
+        !human.contains("later"),
+        "the newest reading has no later row:\n{human}"
+    );
+    let markdown = stdout(&run_show(
+        &vault,
+        &["https://example.com/papers/attention", "-f", "markdown"],
+    ));
+    assert!(
+        markdown.contains("- Earlier: v1 · 2026-09-01"),
+        "markdown earlier bullet uses entry labels:\n{markdown}"
+    );
+}
+
+#[test]
+fn show_root_names_later_readings_and_wears_v1() {
+    let (_temp, vault) = family_vault("bob-cli-ref-show-family-root");
+    let output = run_show(&vault, &["ref/papers/attention.md"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("later     ref/papers/attention__v2.md"),
+        "derived later row:\n{human}"
+    );
+    assert!(
+        human.contains("v1"),
+        "root with later readings wears v1:\n{human}"
+    );
+    let markdown = stdout(&run_show(
+        &vault,
+        &["ref/papers/attention.md", "-f", "markdown"],
+    ));
+    assert!(
+        !markdown.contains("- Earlier:"),
+        "the root carries no earlier entries:\n{markdown}"
+    );
+    assert!(
+        markdown.contains("- Later: ref/papers/attention__v2.md"),
+        "markdown later bullet:\n{markdown}"
+    );
+}
+
+#[test]
+fn show_family_json_carries_reading_earlier_and_later() {
+    let (_temp, vault) = family_vault("bob-cli-ref-show-family-json");
+    let document = run_show_json(&vault, &["ref/papers/attention.md"]);
+    let row = &document["refs"][0];
+    assert_eq!(row["path"], "ref/papers/attention.md");
+    assert_eq!(row["reading"], 1);
+    assert_eq!(row["earlier"], serde_json::json!([]));
+    assert_eq!(
+        row["later"],
+        serde_json::json!(["ref/papers/attention__v2.md"])
+    );
+    let document = run_show_json(&vault, &["ref/papers/attention__v2.md"]);
+    let row = &document["refs"][0];
+    assert_eq!(row["reading"], 2);
+    assert_eq!(
+        row["earlier"],
+        serde_json::json!([{
+            "target": "ref/papers/attention",
+            "label": "v1 · 2026-09-01",
+            "kind": "reading",
+        }]),
+    );
+    assert_eq!(row["later"], serde_json::json!([]));
+}
+
+#[test]
+fn show_natural_versioned_stem_has_no_chips_or_lineage() {
+    let (_temp, vault) = family_vault("bob-cli-ref-show-noversion");
+    let output = run_show(&vault, &["ref/papers/protocol__v2.md"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        !human.contains("  earlier"),
+        "no earlier row without lineage:\n{human}"
+    );
+    assert!(
+        !human.contains("  later"),
+        "no later row without lineage:\n{human}"
+    );
+    let document = run_show_json(&vault, &["ref/papers/protocol__v2.md"]);
+    assert_eq!(document["refs"][0]["reading"], serde_json::Value::Null);
+}
+
+/// A three-reading family whose middle reading was deleted: v3 keeps its
+/// number and warns about the dangling entry.
+fn dangling_vault(prefix: &str) -> (TempDir, PathBuf) {
+    inline_vault(
+        prefix,
+        &[
+            (
+                "ref/papers/chain.md",
+                "---\nstatus: read\ntitle: Chain\nsource_url: https://example.com/papers/chain\nsource_pdf: \"[[lib/papers/chain.pdf]]\"\n---\n\n# Chain\n\n- [x] #task #ref [[lib/papers/chain.pdf]] #hide ^ref\n",
+            ),
+            (
+                "ref/papers/chain__v3.md",
+                "---\nstatus: ready\ntitle: Chain\nsource_url: https://example.com/papers/chain\nsource_pdf: \"[[lib/papers/chain__v3.pdf]]\"\nearlier:\n  - \"[[ref/papers/chain__v2|v2 · 2026-05-01]]\"\n  - \"[[ref/papers/chain|v1 · 2026-03-02]]\"\n---\n\n# Chain\n\n- [ ] #task #ref [[lib/papers/chain__v3.pdf]] #hide ^ref\n",
+            ),
+        ],
+    )
+}
+
+#[test]
+fn show_dangling_middle_reading_keeps_numbers_and_warns() {
+    let (_temp, vault) = dangling_vault("bob-cli-ref-show-dangling");
+    let document = run_show_json(&vault, &["ref/papers/chain__v3.md"]);
+    let row = &document["refs"][0];
+    assert_eq!(row["reading"], 3, "deleted v2 leaves numbers unchanged");
+    let document = run_show_json(&vault, &["ref/papers/chain.md"]);
+    assert_eq!(document["refs"][0]["reading"], 1);
+    let output = run_show(&vault, &["ref/papers/chain__v3.md"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("v3"), "v3 chip:\n{human}");
+    assert!(
+        human.contains("v2 · 2026-05-01"),
+        "dangling label still renders:\n{human}"
+    );
+}

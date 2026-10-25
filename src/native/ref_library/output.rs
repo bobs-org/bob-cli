@@ -304,7 +304,7 @@ pub(super) fn render_find_human(
                 for secondary in result.matches.iter().skip(1) {
                     out.push_str(&indent);
                     out.push_str(&styler.dim(&truncate(
-                        &also_line(&secondary.row),
+                        &also_line(&primary.row, &secondary.row),
                         width.saturating_sub(indent.len()),
                     )));
                     out.push('\n');
@@ -408,16 +408,12 @@ fn detail_line(
     format!("{}{}", styler.dim(&path), rest)
 }
 
-/// A dim companion line for a non-primary exact match.
-fn also_line(row: &super::RefRow) -> String {
-    let mut line = format!("also {} ({}, ", row.path, row.era);
-    if row.superseded_by.is_some() {
-        line.push_str("superseded)");
-    } else {
-        line.push_str(row.status.as_deref().unwrap_or("—"));
-        line.push(')');
-    }
-    line
+/// A dim companion line for a non-primary exact match, reason-aware:
+/// family companions name their reading (`also <path> (v1, earlier
+/// reading v1 · read)`), superseded ones keep the legacy wording.
+fn also_line(primary: &super::RefRow, row: &super::RefRow) -> String {
+    let label = super::lineage::companion_label(row, primary.reading);
+    format!("also {} ({}, {label})", row.path, row.era)
 }
 
 /// The one-line summary of the title candidates for a query.
@@ -678,7 +674,7 @@ pub(crate) fn render_list_human(
         .unwrap_or(0);
     let title_width = returned
         .iter()
-        .map(|row| display_width(&row.title))
+        .map(|row| display_width(&list_title(row)))
         .max()
         .unwrap_or(0);
     let type_width = returned
@@ -831,6 +827,16 @@ fn list_status_plain(row: &RefRow) -> String {
     chip
 }
 
+/// The title cell for one list row: the title plus a `vN` reading chip
+/// for readings past the first, and a `v1` chip on a root that has later
+/// readings.
+fn list_title(row: &RefRow) -> String {
+    match super::show::reading_chip(row) {
+        Some(chip) => format!("{} {chip}", row.title),
+        None => row.title.clone(),
+    }
+}
+
 /// The type column for one list row: `ref_type` with ` ♫` when audio is
 /// bound. Padded to the widest value among the rendered rows so the dim
 /// path column lines up.
@@ -865,7 +871,7 @@ fn list_row_line(
     // display columns so undated rows line up with dated ones.
     let date = pad_right(row_date(row).unwrap_or("—"), 10);
     let kind = pad_right(&list_kind(row), type_width);
-    let title = pad_right(&row.title, title_width);
+    let title = pad_right(&list_title(row), title_width);
     let reason_plain =
         super::blocked_by::human_reason_suffix(row).unwrap_or_default();
     let reason_col = if reason_width == 0 {
@@ -929,7 +935,7 @@ pub(crate) fn render_list_markdown(
             state,
             escape_cell(&list_status_plain(row)),
             escape_cell(row_date(row).unwrap_or("—")),
-            escape_cell(&row.title),
+            escape_cell(&list_title(row)),
             escape_cell(row.ref_type.as_deref().unwrap_or("—")),
             escape_cell(&row.link),
         ));
@@ -1024,6 +1030,8 @@ mod tests {
             parent: None,
             task: None,
             urls: Vec::new(),
+            earlier: Vec::new(),
+            reading: None,
             identity: super::super::RefIdentity {
                 keys: Vec::new(),
                 arxiv: None,
@@ -1045,6 +1053,8 @@ mod tests {
             research_ref: None,
             superseded_by: None,
             diagnostics: Vec::new(),
+            family: path.to_string(),
+            has_later: false,
             id: None,
             source_block: None,
             source_path: None,

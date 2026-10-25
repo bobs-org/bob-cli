@@ -6,6 +6,8 @@
 //! on containment when the shorter side has 3 or more tokens.
 use std::collections::BTreeSet;
 
+use std::cmp::Ordering;
+
 use super::identity::{
     classify_query, doi_keys, normalize_doi_query, parse_arxiv_query,
     url_query_keys, QueryKind,
@@ -74,19 +76,35 @@ pub(crate) fn resolve_query(
 }
 
 /// Primary-match ordering: non-superseded first, then the most-advanced
-/// reading state, then path.
-pub(crate) fn primary_rank(row: &RefRow) -> (bool, u8, &str) {
-    (
-        row.superseded_by.is_some(),
-        reading_state_rank(&row.reading_state),
-        row.path.as_str(),
-    )
+/// reading state, then path. Within one reading family the newest reading
+/// is primary ahead of reading state; outside families nothing changes.
+pub(crate) fn compare_primary(left: &RefRow, right: &RefRow) -> Ordering {
+    if left.superseded_by.is_some() != right.superseded_by.is_some() {
+        return left
+            .superseded_by
+            .is_some()
+            .cmp(&right.superseded_by.is_some());
+    }
+    if left.family == right.family
+        && left.reading.is_some()
+        && right.reading.is_some()
+    {
+        return right
+            .reading
+            .cmp(&left.reading)
+            .then_with(|| {
+                reading_state_rank(&left.reading_state)
+                    .cmp(&reading_state_rank(&right.reading_state))
+            })
+            .then_with(|| left.path.cmp(&right.path));
+    }
+    reading_state_rank(&left.reading_state)
+        .cmp(&reading_state_rank(&right.reading_state))
+        .then_with(|| left.path.cmp(&right.path))
 }
 
 fn sort_primary(hits: &mut [ScoredHit], rows: &[RefRow]) {
-    hits.sort_by(|a, b| {
-        primary_rank(&rows[a.row]).cmp(&primary_rank(&rows[b.row]))
-    });
+    hits.sort_by(|a, b| compare_primary(&rows[a.row], &rows[b.row]));
 }
 
 fn exact_hits(
@@ -261,9 +279,8 @@ fn title_candidates(
         .filter(|(_, score, _, _)| *score > 0)
         .collect::<Vec<_>>();
     scored.sort_by(|a, b| {
-        b.1.cmp(&a.1).then_with(|| {
-            primary_rank(&rows[a.0]).cmp(&primary_rank(&rows[b.0]))
-        })
+        b.1.cmp(&a.1)
+            .then_with(|| compare_primary(&rows[a.0], &rows[b.0]))
     });
     scored
         .into_iter()

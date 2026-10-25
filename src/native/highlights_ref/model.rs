@@ -814,6 +814,16 @@ impl Config {
     }
 }
 
+/// A frontmatter line that belongs to the key above it: an indented
+/// line, a list item, or a blank line. Only consulted while dropping the
+/// orphaned continuations of a removed block-style key.
+fn is_continuation_line(raw: &str) -> bool {
+    raw.is_empty()
+        || raw.starts_with([' ', '\t'])
+        || raw.starts_with("- ")
+        || raw == "-"
+}
+
 /// Resolve a vault-relative directory for [`Config::for_vault`]: the env
 /// override when set and non-empty, else the default under `bob_dir`.
 /// Mirrors [`configured_path`](super::note::configured_path) without Clap.
@@ -1094,10 +1104,24 @@ impl ParsedNote {
             push_command_managed_frontmatter_lines(&mut lines, metadata);
         }
 
+        // A removed block-style key leaves orphaned continuation lines
+        // behind; kept, they would be absorbed into the key above on
+        // reparse. Drop them with the key.
+        let mut skipping_continuations = false;
         for entry in &self.frontmatter {
             match &entry.key {
-                Some(key) if removed_keys.contains(key) => {}
-                _ => lines.push(entry.raw.clone()),
+                Some(key) if removed_keys.contains(key) => {
+                    skipping_continuations = true;
+                }
+                _ => {
+                    if skipping_continuations
+                        && is_continuation_line(&entry.raw)
+                    {
+                        continue;
+                    }
+                    skipping_continuations = false;
+                    lines.push(entry.raw.clone());
+                }
             }
         }
 

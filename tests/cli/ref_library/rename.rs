@@ -932,3 +932,45 @@ fn add_listen_link(pdf: &Path, uri: &str) {
     page.set("Annots", Object::Array(annots));
     document.save(pdf).expect("save URI annotation");
 }
+
+#[test]
+fn family_member_rename_rewrites_later_reading_earlier_link() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-family",
+        "attention",
+        concat!(
+            "- status: wip\n",
+            "- parent: sase\n",
+            "- title: Attention\n",
+            "- id: attention\n",
+            "- source_url: https://example.com/papers/attention\n",
+        ),
+        false,
+    );
+    write_file(
+        &vault.join("ref/blogs/attention__v2.md"),
+        "---\nid: attention__v2\ntitle: Attention\nsource_url: https://example.com/papers/attention\nsource_pdf: lib/blogs/attention__v2.pdf\nearlier:\n  - \"[[ref/blogs/attention|v1 · 2026-09-01]]\"\n---\n\n- [ ] #task #ref [[lib/blogs/attention__v2.pdf]] #hide ^ref\n",
+    );
+    git_commit_all(&vault);
+
+    // The bare stem now resolves like `show`: an all-one-family hit set
+    // collapses to the newest reading, so the root is named by path.
+    let output = run_rename(
+        &vault,
+        &["ref/blogs/attention.md", "attention_v1", "-o", "-f", "json"],
+    );
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(document["outcome"], "renamed");
+    let v2 = fs::read_to_string(vault.join("ref/blogs/attention__v2.md"))
+        .expect("read later reading");
+    assert!(
+        v2.contains("[[ref/blogs/attention_v1|v1 · 2026-09-01]]"),
+        "the later reading tracks the rename:\n{v2}"
+    );
+    assert!(
+        !v2.contains("[[ref/blogs/attention|"),
+        "no stale link to the old root remains:\n{v2}"
+    );
+}
