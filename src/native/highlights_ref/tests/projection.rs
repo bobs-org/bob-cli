@@ -573,6 +573,7 @@ fn render_places_replaced_hash_after_marker_base() {
             highlights_synced_at: None,
             created: None,
             audio: None,
+            birth_lineage: None,
         },
         "",
     );
@@ -613,6 +614,7 @@ fn render_keeps_block_earlier_list_byte_identical() {
             highlights_synced_at: None,
             created: None,
             audio: None,
+            birth_lineage: None,
         },
         "# Attention\n",
     );
@@ -654,6 +656,7 @@ fn render_drops_continuations_of_a_removed_block_key() {
             highlights_synced_at: None,
             created: None,
             audio: None,
+            birth_lineage: None,
         },
         "# Attention\n",
     );

@@ -274,6 +274,11 @@ pub(super) struct PipelineMetadata {
     /// Vault-relative library path of a same-stem companion audio file
     /// (`lib/<type>/<stem>.mp3`). Omitted when no companion exists.
     pub(super) audio: Option<String>,
+    /// Birth lineage for a newborn reread (`<base>__vN` with a live
+    /// predecessor sharing identity). Rendered as block-style `earlier:`
+    /// at birth only; repeat syncs preserve the authored lines verbatim
+    /// and never re-derive them, so this stays `None` there.
+    pub(super) birth_lineage: Option<BirthLineage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1102,6 +1107,13 @@ impl ParsedNote {
         }
         if !rendered_command_managed_fields {
             push_command_managed_frontmatter_lines(&mut lines, metadata);
+        }
+        // Newborn reread lineage rides with the other birth-only managed
+        // lines, outside the projection and hash. Existing notes keep
+        // their preserved authored `earlier:` lines instead: repeat plans
+        // carry no lineage here.
+        if let Some(lineage) = &metadata.birth_lineage {
+            lines.extend(super::birth::render_birth_earlier(&lineage.entries));
         }
 
         // A removed block-style key leaves orphaned continuation lines

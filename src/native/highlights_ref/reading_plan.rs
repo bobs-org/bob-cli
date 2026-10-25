@@ -12,7 +12,7 @@ use super::*;
 use crate::native::parent_notes::{ParentError, ResolvedParent};
 use crate::native::ref_tasks::{
     find_managed_embed, is_open_mark, managed_embed_line, select_for_ref,
-    LocatedRefTask, RefTaskDiagnostic, Selected, TrackerHit,
+    LocatedRefTask, ReadingIdentity, RefTaskDiagnostic, Selected, TrackerHit,
 };
 
 /// Which sync branch owns one PDF's note.
@@ -494,13 +494,16 @@ pub(super) enum ReadingTaskAction {
     /// No destination write.
     NoWrite,
     /// Insert a fresh line. `prefer_block_id` reuses the old ID when free
-    /// (reopen keeps the user-renamed address); `None` allocates.
+    /// (reopen keeps the user-renamed address); `None` allocates. A
+    /// confirmed lineage reading renders `Title (vN)` and allocates
+    /// `ref-<root-slug>-vN`; `None` keeps the ordinary birth behavior.
     Insert {
         destination_route: String,
         destination_label: String,
         warning_child: Option<String>,
         mark: char,
         prefer_block_id: Option<String>,
+        reading: Option<ReadingIdentity>,
     },
     /// Flip the checkbox on the located line (the executor re-reads and
     /// stamps closes; archived lines never take this action).
@@ -530,7 +533,9 @@ pub(super) struct ReadingTaskPlan {
 
 /// Pure inputs to [`plan_reading_task`]. Statuses are the parent-free
 /// `status` values; `archive_source_open` tells whether the archived
-/// residence's source parent still accepts work.
+/// residence's source parent still accepts work. `confirmed_reading` is the
+/// lineage-derived reading for birth and reopen inserts (`None` keeps
+/// ordinary behavior).
 pub(super) struct ReadingTaskPlanInputs<'a> {
     pub note_exists: bool,
     pub ref_note_rel: &'a str,
@@ -543,6 +548,7 @@ pub(super) struct ReadingTaskPlanInputs<'a> {
     pub marker_status: Option<&'a str>,
     pub frontmatter_status: Option<&'a str>,
     pub archive_source_open: bool,
+    pub confirmed_reading: Option<ReadingIdentity>,
     pub resolver:
         &'a dyn Fn(&str) -> std::result::Result<ResolvedParent, ParentError>,
 }
@@ -628,6 +634,7 @@ fn plan_birth_task(inputs: &ReadingTaskPlanInputs<'_>) -> ReadingTaskPlan {
                 warning_child: parent.warning_child,
                 mark: status_mark(inputs.resolved_status).unwrap_or(' '),
                 prefer_block_id: None,
+                reading: inputs.confirmed_reading.clone(),
             },
             residence: None,
             // The block ID is allocated at execution against fresh bytes;
@@ -693,6 +700,7 @@ fn plan_existing_task(
                 warning_child: parent.warning_child,
                 mark: status_mark(inputs.resolved_status).unwrap_or(' '),
                 prefer_block_id: located.block_id.clone(),
+                reading: inputs.confirmed_reading.clone(),
             },
             residence: Some(parent.route),
             embed: reopen_embed,

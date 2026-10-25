@@ -344,6 +344,7 @@ Body
             highlights_synced_at: None,
             created: None,
             audio: None,
+            birth_lineage: None,
         },
         &note.body,
     );
@@ -384,6 +385,7 @@ fn new_note_render_emits_exactly_one_created_line() {
             highlights_synced_at: None,
             created: Some("2026-10-03T15:42:18-0400".to_string()),
             audio: None,
+            birth_lineage: None,
         },
         "# Example\n",
     );
@@ -432,6 +434,7 @@ Manual body.
             highlights_synced_at: None,
             created: None,
             audio: None,
+            birth_lineage: None,
         },
         &note.body,
     );

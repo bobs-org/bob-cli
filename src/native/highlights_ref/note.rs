@@ -50,6 +50,9 @@ pub(super) fn pipeline_metadata(
         highlights_synced_at,
         created,
         audio,
+        // The sync plan derives reread lineage only for new notes and
+        // sets it there; repeat plans preserve the authored lines.
+        birth_lineage: None,
     })
 }
 

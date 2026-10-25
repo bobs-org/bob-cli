@@ -813,6 +813,32 @@ fn plan_pdf_sync_v2(
         }
         _ => false,
     };
+    // Reread birth lineage derives once, when the note is new, from the
+    // PDF marker identity: a `<base>__vN` stem probes for a live
+    // predecessor sharing identity, and the confirmed reading flows into
+    // task creation and previews. Reopens confirm from the existing
+    // note's own `earlier:` list instead. Ordinary births carry none.
+    let birth_lineage = if note.exists() {
+        None
+    } else {
+        derive_birth_lineage(config, &note_path, &marker_projection)
+    };
+    let note_raws: Vec<String> = note
+        .frontmatter
+        .iter()
+        .map(|entry| entry.raw.clone())
+        .collect();
+    let confirmed_reading = birth_lineage
+        .as_ref()
+        .map(|lineage| ref_tasks_mod::ReadingIdentity {
+            root_stem: lineage.root_stem.clone(),
+            number: lineage.reading,
+        })
+        .or_else(|| {
+            note.exists()
+                .then(|| reading_from_note_frontmatter(&note_raws))
+                .flatten()
+        });
     let reading_plan = plan_reading_task(ReadingTaskPlanInputs {
         note_exists: note.exists(),
         ref_note_rel: &ref_note_rel,
@@ -825,6 +851,7 @@ fn plan_pdf_sync_v2(
         marker_status: marker_status.as_deref(),
         frontmatter_status: frontmatter_status.as_deref(),
         archive_source_open,
+        confirmed_reading,
         resolver: &|hint| {
             parent_notes_mod::resolve_parent(&config.bob_dir, hint)
         },
@@ -998,7 +1025,7 @@ fn plan_pdf_sync_v2(
         .as_ref()
         .map(|rendered| rendered.image_assets.clone())
         .unwrap_or_default();
-    let stable_metadata = pipeline_metadata(
+    let mut stable_metadata = pipeline_metadata(
         config,
         pdf,
         &marker.source_pdf_sha256,
@@ -1007,10 +1034,25 @@ fn plan_pdf_sync_v2(
         rendered_highlights.as_ref(),
         false,
     )?;
+    if let Some(lineage) = birth_lineage {
+        stable_metadata.birth_lineage = Some(lineage);
+    }
     let highlights_content = rendered_highlights
         .as_ref()
         .map(|rendered| rendered.content.as_str())
         .unwrap_or("");
+    // The confirmed reading for a birth insert: the preview and execution
+    // IDs agree through one base, so the placeholder patch names the same
+    // ID the executor allocates.
+    let insert_reading: Option<ref_tasks_mod::ReadingIdentity> =
+        match &reading_plan.action {
+            ReadingTaskAction::Insert { reading, .. } => reading.clone(),
+            _ => None,
+        };
+    let pdf_stem = pdf
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("ref");
     // Render the body: births use the managed-embed anatomy (no in-note
     // tracker); existing notes heal the embed slot and keep highlights
     // rendering; missing/refused notes never invent a target.
@@ -1021,13 +1063,9 @@ fn plan_pdf_sync_v2(
                 v2_birth_body(
                     &note_title(pdf, &synced_pf),
                     route,
-                    &format!(
-                        "ref-{}",
-                        ref_tasks_mod::slug_ref_stem(
-                            pdf.file_stem()
-                                .and_then(|stem| stem.to_str())
-                                .unwrap_or("ref"),
-                        )
+                    &ref_tasks_mod::birth_preview_id(
+                        pdf_stem,
+                        insert_reading.as_ref(),
                     ),
                     highlights_content,
                     stable_metadata.audio.as_deref(),
@@ -1271,7 +1309,7 @@ pub(super) fn reserve_preview_ids(
     let _ = ctx;
     let mut taken: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     for plan in plans.iter_mut() {
-        let (destination_route, prefer_block_id) = match plan
+        let (destination_route, prefer_block_id, reading) = match plan
             .reading_task_plan
             .as_ref()
             .map(|reading_plan| &reading_plan.action)
@@ -1279,8 +1317,13 @@ pub(super) fn reserve_preview_ids(
             Some(ReadingTaskAction::Insert {
                 destination_route,
                 prefer_block_id,
+                reading,
                 ..
-            }) => (destination_route.clone(), prefer_block_id.clone()),
+            }) => (
+                destination_route.clone(),
+                prefer_block_id.clone(),
+                reading.clone(),
+            ),
             _ => continue,
         };
         let destination =
@@ -1289,33 +1332,29 @@ pub(super) fn reserve_preview_ids(
             preview_taken_for_destination(&config.bob_dir, &destination)
         });
         let is_taken = |id: &str| taken_set.contains(id);
+        let stem = plan
+            .pdf
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("ref");
         let preview = match prefer_block_id.as_deref() {
             Some(preferred) if !preferred.is_empty() => {
                 ref_tasks_mod::allocate_unique_block_id(preferred, &is_taken)
             }
-            _ => {
-                let stem = plan
-                    .pdf
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("ref");
-                ref_tasks_mod::allocate_ref_block_id(stem, &is_taken)
-            }
+            _ => ref_tasks_mod::allocate_birth_block_id(
+                stem,
+                reading.as_ref(),
+                &is_taken,
+            ),
         };
         taken_set.insert(preview.clone());
-        // Patch the planning placeholder (fresh `ref-<slug>` or the reopen
-        // old ID) to the reserved preview so human display names the ID.
-        // Execution reallocates against fresh disk and reports the actual.
+        // Patch the planning placeholder (fresh `ref-<slug>` or
+        // `ref-<root-slug>-vN`, or the reopen old ID) to the reserved
+        // preview so human display names the ID. Execution reallocates
+        // against fresh disk and reports the actual.
         let placeholder = match prefer_block_id.as_deref() {
             Some(preferred) if !preferred.is_empty() => preferred.to_string(),
-            _ => {
-                let stem = plan
-                    .pdf
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("ref");
-                format!("ref-{}", ref_tasks_mod::slug_ref_stem(stem))
-            }
+            _ => ref_tasks_mod::birth_preview_id(stem, reading.as_ref()),
         };
         if preview != placeholder {
             let needle = format!("#^{placeholder}");
@@ -1984,6 +2023,10 @@ fn execute_pdf_sync_v2(
         } else if let Some(parent) = plan.note.frontmatter_value(FIELD_PARENT) {
             render_projection.insert(FIELD_PARENT.to_string(), parent);
         }
+        // Newborn reread lineage is birth-only plan state: the execution
+        // re-render must carry the same `earlier:` the dry-run preview
+        // showed, so repeat syncs preserve it byte-for-byte.
+        metadata.birth_lineage = plan.stable_metadata.birth_lineage.clone();
         let body = execution_body.as_deref().unwrap_or(&plan.rendered_body);
         let rendered = plan.note.render_with_projection(
             &render_projection,
@@ -2137,6 +2180,7 @@ fn execute_v2_reading_action(
             warning_child,
             mark,
             prefer_block_id,
+            reading,
             ..
         } => {
             let ref_rel = vault_rel_forward(config, &plan.note_path);
@@ -2163,6 +2207,7 @@ fn execute_v2_reading_action(
                 destination_route,
                 ref_target: &ref_target,
                 ref_stem: &ref_stem,
+                reading: reading.clone(),
                 title_raw: &title,
                 created: &created,
                 mark: *mark,

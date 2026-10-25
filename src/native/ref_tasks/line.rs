@@ -139,6 +139,17 @@ pub(crate) fn sanitize_title_alias(raw: &str) -> String {
     out
 }
 
+/// Lineage-confirmed reading for a birth or reopen insert: the family
+/// root stem and the reading number. Both are lineage-derived (from the
+/// newborn note's `earlier:` chain or the existing note's own `earlier:`
+/// list), never parsed from a filename, so a natural version-looking stem
+/// such as `protocol__v2` without lineage carries no reading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadingIdentity {
+    pub root_stem: String,
+    pub number: u32,
+}
+
 /// Slug a ref-note stem to lowercase ASCII separated by `-`.
 ///
 /// Every run of characters outside `[a-z0-9]` becomes one `-`; surrounding
@@ -146,6 +157,10 @@ pub(crate) fn sanitize_title_alias(raw: &str) -> String {
 /// at most 44 characters by cutting at a `-` boundary; an empty slug
 /// yields `reading` (so the full ID is `ref-reading`).
 pub(crate) fn slug_ref_stem(stem: &str) -> String {
+    fit_slug_to_len(&slugify(stem), REF_BLOCK_ID_MAX_LEN - "ref-".len())
+}
+
+fn slugify(stem: &str) -> String {
     let mut slug = String::new();
     let mut last_dash = true;
     for byte in stem.bytes() {
@@ -167,15 +182,14 @@ pub(crate) fn slug_ref_stem(stem: &str) -> String {
     if slug.is_empty() {
         return "reading".to_string();
     }
-    fit_slug_to_id_bound(&slug)
+    slug
 }
 
-fn fit_slug_to_id_bound(slug: &str) -> String {
-    let max_slug = REF_BLOCK_ID_MAX_LEN - "ref-".len();
+fn fit_slug_to_len(slug: &str, max_slug: usize) -> String {
     if slug.len() <= max_slug {
         return slug.to_string();
     }
-    let truncated = &slug[..max_slug];
+    let truncated = &slug[..max_slug.min(slug.len())];
     if let Some(pos) = truncated.rfind('-') {
         let cut = truncated[..pos].trim_matches('-');
         if !cut.is_empty() {
@@ -183,6 +197,108 @@ fn fit_slug_to_id_bound(slug: &str) -> String {
         }
     }
     truncated.trim_matches('-').to_string()
+}
+
+/// Base `ref-<root-slug>-vN` block ID for a confirmed later reading. The
+/// `-vN` component is reserved before the 44-character truncation, so a
+/// long root keeps its version instead of sanitizing it away.
+pub(crate) fn reading_block_id_base(reading: &ReadingIdentity) -> String {
+    let suffix = format!("-v{}", reading.number);
+    let max_slug = REF_BLOCK_ID_MAX_LEN
+        .saturating_sub("ref-".len())
+        .saturating_sub(suffix.len());
+    format!(
+        "ref-{}{suffix}",
+        fit_slug_to_len(&slugify(&reading.root_stem), max_slug)
+    )
+}
+
+/// Preview block ID for a birth insert: the reading-aware base for a
+/// confirmed later reading, else the ordinary `ref-<slug>`.
+pub(crate) fn birth_preview_id(
+    ref_stem: &str,
+    reading: Option<&ReadingIdentity>,
+) -> String {
+    match reading {
+        Some(identity) => reading_block_id_base(identity),
+        None => format!("ref-{}", slug_ref_stem(ref_stem)),
+    }
+}
+
+/// Allocate a `ref-<root-slug>-vN` block ID for a confirmed later reading.
+/// The `-vN` component (and any `-2` collision suffix, which follows the
+/// version) survives the 44-character bound.
+pub(crate) fn allocate_reading_block_id(
+    reading: &ReadingIdentity,
+    is_taken: &dyn Fn(&str) -> bool,
+) -> String {
+    let base = reading_block_id_base(reading);
+    if !is_taken(&base) {
+        return base;
+    }
+    let slug = slugify(&reading.root_stem);
+    let version = format!("-v{}", reading.number);
+    let mut n = 2u32;
+    loop {
+        let suffix = format!("{version}-{n}");
+        let max_slug = REF_BLOCK_ID_MAX_LEN
+            .saturating_sub("ref-".len())
+            .saturating_sub(suffix.len());
+        let candidate =
+            format!("ref-{}{suffix}", fit_slug_to_len(&slug, max_slug));
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Allocate a birth block ID: reading-aware for a confirmed later reading,
+/// else the ordinary `ref-<slug>` walk.
+pub(crate) fn allocate_birth_block_id(
+    ref_stem: &str,
+    reading: Option<&ReadingIdentity>,
+    is_taken: &dyn Fn(&str) -> bool,
+) -> String {
+    match reading {
+        Some(identity) => allocate_reading_block_id(identity, is_taken),
+        None => allocate_ref_block_id(ref_stem, is_taken),
+    }
+}
+
+/// Render the task-line title alias for a reading: `Title` for ordinary
+/// births, `Title (vN)` for confirmed later readings. The `(vN)` suffix is
+/// fitted inside the 100-character alias bound at a word boundary, so a
+/// long title never sanitizes it away.
+pub(crate) fn reading_task_alias(
+    title_raw: &str,
+    reading: Option<u32>,
+) -> String {
+    let base = sanitize_title_alias(title_raw);
+    let Some(number) = reading else {
+        return base;
+    };
+    let suffix = format!(" (v{number})");
+    if base.chars().count() + suffix.chars().count() <= REF_TITLE_MAX_LEN {
+        return format!("{base}{suffix}");
+    }
+    let stripped = base.strip_suffix('…').unwrap_or(&base);
+    let max_base = REF_TITLE_MAX_LEN.saturating_sub(suffix.chars().count());
+    let mut end = 0usize;
+    let mut last_space: Option<usize> = None;
+    for (count, (byte, ch)) in stripped.char_indices().enumerate() {
+        if count >= max_base {
+            break;
+        }
+        if ch.is_whitespace() {
+            last_space = Some(byte);
+        }
+        end = byte + ch.len_utf8();
+    }
+    let cut = last_space
+        .map(|pos| &stripped[..pos])
+        .unwrap_or(&stripped[..end]);
+    format!("{}{suffix}", cut.trim_end())
 }
 
 /// Allocate a unique `ref-<slug>` block ID for `stem`.
@@ -241,17 +357,19 @@ pub(crate) fn managed_embed_line(residence: &str, block_id: &str) -> String {
 /// `- [m] #task #ref [[ref/<type>/<stem>|<title>]] [created::YYYY-MM-DD] ^ref-<slug>`
 ///
 /// The link targets the ref note, never the PDF; no `#hide`, verb, or
-/// `[fresh::]`. Terminal marks add `[completion:: DATE]` (`x`/`X`) or
-/// `[cancelled:: DATE]` (`-`) immediately before the block ID, using the
-/// creation date.
+/// `[fresh::]`. A confirmed later reading renders its alias as
+/// `Title (vN)`; ordinary births keep the plain title. Terminal marks add
+/// `[completion:: DATE]` (`x`/`X`) or `[cancelled:: DATE]` (`-`)
+/// immediately before the block ID, using the creation date.
 pub(crate) fn render_ref_task_line(
     mark: char,
     ref_target: &str,
     title_raw: &str,
     created: &str,
     block_id: &str,
+    reading: Option<u32>,
 ) -> String {
-    let alias = sanitize_title_alias(title_raw);
+    let alias = reading_task_alias(title_raw, reading);
     let mut line = format!(
         "- [{mark}] #task #ref [[{ref_target}|{alias}]] [created::{created}]"
     );

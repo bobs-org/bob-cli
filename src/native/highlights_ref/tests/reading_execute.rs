@@ -17,6 +17,7 @@ fn insert_inputs<'a>(
         destination_route: route,
         ref_target: "ref/papers/stem",
         ref_stem: "stem",
+        reading: None,
         title_raw: "Stem",
         created: "2026-10-09",
         mark,

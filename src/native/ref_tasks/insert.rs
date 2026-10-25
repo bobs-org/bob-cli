@@ -30,7 +30,7 @@ use crate::native::collect_done::{
     block_ids_in_markdown, trailing_block_id_in_line,
 };
 
-use super::line::allocate_ref_block_id;
+use super::line::ReadingIdentity;
 
 /// A completed guarded insertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +54,7 @@ pub(crate) fn insert_ref_task(
         line,
         children,
         None,
+        None,
     )
 }
 
@@ -62,15 +63,18 @@ pub(crate) fn insert_ref_task(
 /// The executor passes a reopen's old (possibly user-renamed) address here:
 /// it is kept verbatim only when absent from the fresh destination bytes
 /// and its `done_tasks` archive; otherwise the old ID is suffixed
-/// (`<old>-2`, …) under the same collision rules. `None` always allocates
-/// from the ref stem. The archive is never modified, including when an old
-/// ID must be suffixed in the live note.
+/// (`<old>-2`, …) under the same collision rules. `None` allocates from the
+/// ref stem, or from the confirmed reading (`ref-<root-slug>-vN`, with the
+/// `-2` suffix following the version) when one is passed. The archive is
+/// never modified, including when an old ID must be suffixed in the live
+/// note.
 pub(crate) fn insert_ref_task_with_preferred_id(
     bob_dir: &Path,
     destination: &Path,
     line: &str,
     children: &[String],
     prefer_block_id: Option<&str>,
+    reading: Option<&ReadingIdentity>,
 ) -> Result<InsertedRefTask, String> {
     let stem = destination
         .file_stem()
@@ -115,7 +119,11 @@ pub(crate) fn insert_ref_task_with_preferred_id(
             Some(preferred) if !preferred.is_empty() => {
                 super::line::allocate_unique_block_id(preferred, &is_taken)
             }
-            _ => allocate_ref_block_id(preview_stem, &is_taken),
+            _ => super::line::allocate_birth_block_id(
+                preview_stem,
+                reading,
+                &is_taken,
+            ),
         };
         let task_line = with_final_block_id(line, &block_id);
         let full_block = if children.is_empty() {
@@ -286,6 +294,7 @@ mod tests {
             line,
             &[],
             Some("ref-my-paper"),
+            None,
         )
         .expect("insert");
         assert_eq!(out.block_id, "ref-my-paper");
@@ -312,6 +321,7 @@ mod tests {
             line,
             &[],
             Some("ref-my-paper"),
+            None,
         )
         .expect("insert");
         // A taken old ID is suffixed in the live note; the archived bytes
@@ -341,6 +351,7 @@ mod tests {
             line,
             &[],
             Some("ref-my-paper"),
+            None,
         )
         .expect("insert");
         assert_ne!(out.block_id, "ref-my-paper");

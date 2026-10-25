@@ -397,6 +397,11 @@ impl IntakeSession {
         unit: &IntakeUnit,
         producer: &str,
     ) -> std::result::Result<Ingested, IngestFailure> {
+        // Locked reread recheck before any move/task/note mutation: when
+        // another host filed the whole-bundle name after queue time,
+        // refuse filing and preserve the queued source for recovery.
+        recheck_reread_occupancy(config, unit)
+            .map_err(IngestFailure::Queued)?;
         let mut moves =
             unit_moves(config, unit).map_err(IngestFailure::Queued)?;
         validate_unit_collisions(config, unit, &moves)
@@ -673,6 +678,96 @@ fn unit_moves(
         .into_iter()
         .map(|(from, to)| MovedFile { from, to })
         .collect())
+}
+
+/// Recheck complete reread occupancy under the intake locks, after
+/// lock-taking and pre-sync and before any move/task/note mutation. Only
+/// `<base>__vN` stems probe; ordinary births keep the existing collision
+/// checks. The whole-bundle set (notes, PDFs, sidecars, `.textbundle`,
+/// companion audio, `.assets/`, and case-insensitive reference ids across
+/// every type under `ref/`, `lib/`, and `xlib/`) is rechecked minus the
+/// queued unit's own files. A taken name refuses filing with a
+/// collision/nothing-filed report and preserves the queued source for
+/// recovery; it never re-uses the occupant or leaves a marker id
+/// different from its stem.
+fn recheck_reread_occupancy(
+    config: &Config,
+    unit: &IntakeUnit,
+) -> std::result::Result<(), QueueFailure> {
+    let pdf = unit.library_pdf();
+    let Some(stem) = pdf.file_stem().and_then(|stem| stem.to_str()) else {
+        return Ok(());
+    };
+    if split_reread_stem(stem).is_none() {
+        return Ok(());
+    }
+    let ref_type = pdf_path_metadata(config, pdf)
+        .map_err(|error| {
+            QueueFailure::new(QueueReason::Refused, error.to_string())
+        })?
+        .ref_type;
+    let Some(ref_type) = ref_type else {
+        return Ok(());
+    };
+    let occupancy =
+        DefaultTargetOccupancy::build(config, &ref_type).map_err(|error| {
+            QueueFailure::new(QueueReason::Refused, error.to_string())
+        })?;
+    let own = reread_own_files(unit);
+    let mut occupants = occupancy.occupants_except(stem, &own);
+    if occupants.is_empty() {
+        return Ok(());
+    }
+    occupants.sort();
+    Err(QueueFailure::new(
+        QueueReason::Collision,
+        format!(
+            "reread {stem} is already filed ({}); nothing filed, queued source preserved",
+            occupants
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+    ))
+}
+
+/// The queued unit's own files, ignored by the locked reread recheck:
+/// queued sources plus their same-stem companions, and already-placed
+/// library destinations (which do not exist yet for queued PDFs, but are
+/// harmless to list).
+fn reread_own_files(unit: &IntakeUnit) -> Vec<PathBuf> {
+    if let IntakeUnit::Audio {
+        source,
+        destination,
+        ..
+    } = unit
+    {
+        return vec![source.clone(), destination.clone()];
+    }
+    let (primary, secondary) = match unit {
+        IntakeUnit::Pdf {
+            source,
+            destination,
+        } => (source, Some(destination)),
+        IntakeUnit::LibraryPdf { pdf } => (pdf, None),
+        IntakeUnit::Audio { .. } => unreachable!("handled above"),
+    };
+    let mut own = vec![primary.clone()];
+    let mut bases = vec![primary.clone()];
+    if let Some(other) = secondary {
+        own.push(other.clone());
+        bases.push(other.clone());
+    }
+    for base in &bases {
+        for extension in ["md", "textbundle"] {
+            own.push(base.with_extension(extension));
+        }
+        for extension in AUDIO_COMPANION_EXTENSIONS {
+            own.push(base.with_extension(extension));
+        }
+    }
+    own
 }
 
 fn validate_unit_collisions(

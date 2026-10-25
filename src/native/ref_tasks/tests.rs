@@ -513,6 +513,7 @@ fn render_sanitizes_collapses_and_truncates_title() {
         "Harness [Engineering] | #1",
         "2026-10-09",
         "ref-harness-engineering",
+        None,
     );
     assert_eq!(
         line,
@@ -525,7 +526,14 @@ fn slug_ascii_empty_length_and_numeric_collisions() {
     assert_eq!(slug_ref_stem("Harness_Engineering!"), "harness-engineering");
     assert_eq!(slug_ref_stem("___"), "reading");
     assert_eq!(
-        render_ref_task_line(' ', "ref/papers/x", "T", "2026-10-09", "ref-reading"),
+        render_ref_task_line(
+            ' ',
+            "ref/papers/x",
+            "T",
+            "2026-10-09",
+            "ref-reading",
+            None,
+        ),
         "- [ ] #task #ref [[ref/papers/x|T]] [created::2026-10-09] ^ref-reading"
     );
     // Full ID stays within 44 chars at a separator boundary.
@@ -553,6 +561,7 @@ fn closed_at_birth_carries_completion_or_cancelled_stamp() {
         "Title",
         "2026-10-09",
         "ref-x",
+        None,
     );
     assert_eq!(
         read,
@@ -564,6 +573,7 @@ fn closed_at_birth_carries_completion_or_cancelled_stamp() {
         "Title",
         "2026-10-09",
         "ref-x",
+        None,
     );
     assert!(
         abandoned.contains("[cancelled:: 2026-10-09] ^ref-x"),
@@ -622,4 +632,82 @@ fn insert_checks_archive_and_preserves_crlf() {
     assert!(contents.windows(2).any(|w| w == b"\r\n"), "keeps CRLF");
     let text = String::from_utf8(contents).expect("utf8");
     assert!(text.contains("^ref-y"), "{text}");
+}
+
+#[test]
+fn reading_identity_keeps_version_before_truncation() {
+    let reading = line::ReadingIdentity {
+        root_stem: "alpha".to_string(),
+        number: 2,
+    };
+    assert_eq!(line::reading_block_id_base(&reading), "ref-alpha-v2");
+    let free = |_: &str| false;
+    assert_eq!(
+        line::allocate_reading_block_id(&reading, &free),
+        "ref-alpha-v2"
+    );
+    // A taken base suffixes after the version.
+    let taken_base = |id: &str| id == "ref-alpha-v2";
+    assert_eq!(
+        line::allocate_reading_block_id(&reading, &taken_base),
+        "ref-alpha-v2-2"
+    );
+    // A long root keeps `-vN` inside the 44-char bound.
+    let long = line::ReadingIdentity {
+        root_stem: "a-very-long-ref-note-stem-that-keeps-going-and-going"
+            .to_string(),
+        number: 12,
+    };
+    let base = line::reading_block_id_base(&long);
+    assert!(base.len() <= 44, "{base}");
+    assert!(base.ends_with("-v12"), "{base}");
+    assert!(base.starts_with("ref-a-very-long"), "{base}");
+    // Collisions preserve both the version and the bound.
+    let taken_base_only = |id: &str| id == base;
+    let second = line::allocate_reading_block_id(&long, &taken_base_only);
+    assert!(second.len() <= 44, "{second}");
+    assert!(second.ends_with("-v12-2"), "{second}");
+    // Ordinary births are unchanged.
+    assert_eq!(line::birth_preview_id("alpha__v2", None), "ref-alpha-v2");
+    assert_eq!(
+        line::birth_preview_id(
+            "alpha",
+            Some(&line::ReadingIdentity {
+                root_stem: "alpha".to_string(),
+                number: 2,
+            })
+        ),
+        "ref-alpha-v2"
+    );
+}
+
+#[test]
+fn reading_alias_appends_version_and_fits_long_titles() {
+    assert_eq!(
+        line::reading_task_alias("Alpha Paper", Some(2)),
+        "Alpha Paper (v2)"
+    );
+    assert_eq!(line::reading_task_alias("Alpha Paper", None), "Alpha Paper");
+    let rendered = line::render_ref_task_line(
+        ' ',
+        "ref/papers/alpha__v2",
+        "Alpha Paper",
+        "2026-10-09",
+        "ref-alpha-v2",
+        Some(2),
+    );
+    assert_eq!(
+        rendered,
+        "- [ ] #task #ref [[ref/papers/alpha__v2|Alpha Paper (v2)]] [created::2026-10-09] ^ref-alpha-v2"
+    );
+    // A 100-char title keeps the suffix: the title yields room.
+    let long_title = ("word ".repeat(20)).trim_end().to_string();
+    assert!(long_title.chars().count() <= 100, "{long_title}");
+    let alias = line::reading_task_alias(&long_title, Some(3));
+    assert!(alias.ends_with(" (v3)"), "{alias}");
+    assert!(alias.chars().count() <= 100, "{alias}");
+    let very_long = "word ".repeat(30);
+    let alias = line::reading_task_alias(&very_long, Some(2));
+    assert!(alias.ends_with(" (v2)"), "{alias}");
+    assert!(alias.chars().count() <= 100, "{alias}");
 }

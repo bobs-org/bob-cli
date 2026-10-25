@@ -847,3 +847,341 @@ fn intake_only_empty_queue_writes_no_receipt() {
         "an empty drain never takes the lock and writes no receipt"
     );
 }
+
+/// Stamp a library PDF whose marker carries URL identity, then file its
+/// v1 note and task with `bob ref sync` (the same plan/execute path inline
+/// intake uses after the move).
+fn sync_library_pdf(temp: &TempDir, vault: &Path, rel: &str, marker: &str) {
+    let pdf = vault.join(rel);
+    write_highlights_pdf(&pdf, marker);
+    let output = bob_command()
+        .arg("ref")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", "2026-10-06 12:00:00")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("run ref sync on library PDF");
+    assert_success(&output);
+}
+
+fn alpha_marker() -> &'static str {
+    "- status: ready\n- parent: sase\n- title: Alpha Paper\n- source_url: https://example.com/alpha\n- captured: 2026-09-01\n"
+}
+
+/// File v1 of the alpha family and leave its reread queued in `xlib/`.
+fn seed_alpha_reread(temp: &TempDir, vault: &Path) {
+    sync_library_pdf(temp, vault, "lib/blogs/alpha.pdf", alpha_marker());
+    assert!(
+        vault.join("ref/blogs/alpha.md").is_file(),
+        "ref sync must file the v1 note"
+    );
+    fs::create_dir_all(vault.join("xlib/blogs")).expect("queue dir");
+    fs::copy(
+        vault.join("lib/blogs/alpha.pdf"),
+        vault.join("xlib/blogs/alpha__v2.pdf"),
+    )
+    .expect("queue the reread-shaped PDF");
+}
+
+#[test]
+fn intake_only_files_queued_reread_with_lineage_and_stable_second_scan() {
+    let temp = TempDir::new("bob-cli-scan-intake-reread-birth");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+    let v1_note =
+        fs::read_to_string(vault.join("ref/blogs/alpha.md")).expect("v1 note");
+    let v1_pdf = fs::read(vault.join("lib/blogs/alpha.pdf")).expect("v1 pdf");
+    let v1_task = fs::read_to_string(vault.join("sase.md"))
+        .expect("parent")
+        .lines()
+        .find(|line| line.contains("ref/blogs/alpha|"))
+        .expect("v1 task line")
+        .to_string();
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "ingested: lib/blogs/alpha__v2.pdf → ref/blogs/alpha__v2.md"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("task → sase.md ^ref-alpha-v2"), "{report}");
+    assert!(report.contains("intake: filed 1 · queued 0"), "{report}");
+
+    let note = fs::read_to_string(vault.join("ref/blogs/alpha__v2.md"))
+        .expect("read reread note");
+    assert!(
+        note.contains("earlier:\n  - \"[[ref/blogs/alpha|v1 · 2026-09-01]]\""),
+        "birth writes block-style earlier: for the live family member:\n{note}"
+    );
+    assert!(
+        note.contains("![[sase#^ref-alpha-v2]]"),
+        "the managed embed names the actual reading task:\n{note}"
+    );
+    let parent =
+        fs::read_to_string(vault.join("sase.md")).expect("read parent");
+    assert!(
+        parent.contains("[[ref/blogs/alpha__v2|Alpha Paper (v2)]]"),
+        "the reading task alias carries the version:\n{parent}"
+    );
+    assert!(parent.contains("^ref-alpha-v2"), "{parent}");
+    assert!(parent.contains(&v1_task), "the v1 task line is untouched");
+
+    // Earlier notes, PDFs, and the v1 task keep their bytes.
+    assert_eq!(
+        fs::read_to_string(vault.join("ref/blogs/alpha.md")).expect("v1 note"),
+        v1_note,
+        "no backlinks are written into old notes"
+    );
+    assert_eq!(
+        fs::read(vault.join("lib/blogs/alpha.pdf")).expect("v1 pdf"),
+        v1_pdf
+    );
+    assert!(
+        !vault.join("xlib/blogs/alpha__v2.pdf").exists(),
+        "the queued source is consumed"
+    );
+
+    // A second scan is byte-identical: same task line, same lineage.
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("rerun scan --intake-only");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("ref/blogs/alpha__v2.md"))
+            .expect("reread note"),
+        note,
+        "repeat sync preserves lineage verbatim"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("parent"),
+        parent,
+        "no duplicate reading task"
+    );
+    assert_eq!(
+        parent.matches("^ref-alpha-v2").count(),
+        1,
+        "exactly one v2 task:\n{parent}"
+    );
+}
+
+#[test]
+fn intake_only_refuses_fabricated_reread_occupants_and_recovers() {
+    let temp = TempDir::new("bob-cli-scan-intake-reread-collision");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+
+    // Another host takes the name under a sibling type directory.
+    write_file(
+        &vault.join("ref/papers/alpha__v2.md"),
+        "---\ntitle: Squatter\nstatus: ready\n---\n\n# Squatter\n",
+    );
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a fabricated occupant must keep the item queued:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    assert!(
+        report.contains("queued: xlib/blogs/alpha__v2.pdf (library collision: reread alpha__v2 is already filed (")
+            && report.contains("nothing filed, queued source preserved"),
+        "{report}"
+    );
+    assert!(
+        vault.join("xlib/blogs/alpha__v2.pdf").is_file(),
+        "the queued source is preserved for recovery"
+    );
+    assert!(
+        !vault.join("lib/blogs/alpha__v2.pdf").exists()
+            && !vault.join("ref/blogs/alpha__v2.md").exists(),
+        "nothing is filed over the occupant"
+    );
+
+    // An id-only collision (same reference id, different filename) also
+    // refuses instead of re-using the occupant's name.
+    fs::remove_file(vault.join("ref/papers/alpha__v2.md"))
+        .expect("clear the other-type occupant");
+    write_file(
+        &vault.join("ref/blogs/squatter.md"),
+        "---\ntitle: Squatter\nid: alpha__v2\nstatus: ready\n---\n\n# Squatter\n",
+    );
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("rerun scan --intake-only");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an id-only occupant must keep the item queued:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stdout(&output).contains("reread alpha__v2 is already filed ("),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/blogs/alpha__v2.pdf").is_file(),
+        "the queued source is still preserved"
+    );
+
+    // Clearing the occupant recovers with the same lineage as a clean run.
+    fs::remove_file(vault.join("ref/blogs/squatter.md"))
+        .expect("clear the id-only occupant");
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("rerun scan --intake-only");
+    assert_success(&output);
+    let note = fs::read_to_string(vault.join("ref/blogs/alpha__v2.md"))
+        .expect("read reread note");
+    assert!(
+        note.contains("[[ref/blogs/alpha|v1 · 2026-09-01]]"),
+        "{note}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .expect("parent")
+            .contains("^ref-alpha-v2"),
+        "recovery files the same task"
+    );
+}
+
+#[test]
+fn intake_only_files_version_looking_pdf_without_predecessor_as_ordinary() {
+    let temp = TempDir::new("bob-cli-scan-intake-natural-version");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    write_highlights_pdf(
+        &vault.join("xlib/blogs/protocol__v2.pdf"),
+        "- status: ready\n- parent: sase\n- title: Protocol Paper\n- source_url: https://example.com/protocol\n- captured: 2026-09-01\n",
+    );
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_success(&output);
+    let note = fs::read_to_string(vault.join("ref/blogs/protocol__v2.md"))
+        .expect("read version-looking note");
+    assert!(
+        !note.contains("earlier:"),
+        "a version-looking stem without lineage stays an ordinary birth:\n{note}"
+    );
+    let parent =
+        fs::read_to_string(vault.join("sase.md")).expect("read parent");
+    assert!(
+        parent.contains("[[ref/blogs/protocol__v2|Protocol Paper]]"),
+        "the natural suffix is not family lineage:\n{parent}"
+    );
+    assert!(parent.contains("^ref-protocol-v2"), "{parent}");
+}
+
+#[test]
+fn intake_only_preserves_version_in_long_stem_task_ids() {
+    let temp = TempDir::new("bob-cli-scan-intake-reread-long-stem");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let root = "a-very-long-ref-note-stem-that-keeps-going";
+    let title = "A Very Long Ref Note Stem That Keeps Going And Going On And On Past One Hundred Characters For Sure";
+    sync_library_pdf(
+        &temp,
+        &vault,
+        &format!("lib/blogs/{root}.pdf"),
+        &format!(
+            "- status: ready\n- parent: sase\n- title: {title}\n- source_url: https://example.com/long\n- captured: 2026-09-01\n"
+        ),
+    );
+    // An unrelated task already holds the would-be base ID: the reread
+    // must suffix after the version, not drop it.
+    write_file(
+        &vault.join("sase.md"),
+        &format!(
+            "{}\n- [ ] #task #ref [[ref/blogs/unrelated|Unrelated]] [created::2026-09-01] ^ref-a-very-long-ref-note-stem-that-keeps-v2\n",
+            fs::read_to_string(vault.join("sase.md")).expect("parent")
+        ),
+    );
+    fs::create_dir_all(vault.join("xlib/blogs")).expect("queue dir");
+    fs::copy(
+        vault.join(format!("lib/blogs/{root}.pdf")),
+        vault.join(format!("xlib/blogs/{root}__v2.pdf")),
+    )
+    .expect("queue the long-stem reread");
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_success(&output);
+    let parent =
+        fs::read_to_string(vault.join("sase.md")).expect("read parent");
+    let line = parent
+        .lines()
+        .find(|line| line.contains(&format!("{root}__v2|")))
+        .expect("reread task line");
+    let id = line
+        .rsplit('^')
+        .next()
+        .expect("task line carries a block id");
+    assert!(id.len() <= 44, "task id fits the bound: {id}");
+    assert!(
+        id.ends_with("-v2-2"),
+        "the collision suffix follows the version: {id}"
+    );
+    assert!(
+        line.contains(&format!(" (v2)]] [created::")),
+        "the long-title alias keeps its suffix: {line}"
+    );
+    let alias = line
+        .split('|')
+        .nth(1)
+        .and_then(|rest| rest.split("]]").next())
+        .expect("task alias");
+    assert!(
+        alias.chars().count() <= 100,
+        "alias fits the bound: {alias}"
+    );
+    let note =
+        fs::read_to_string(vault.join(format!("ref/blogs/{root}__v2.md")))
+            .expect("read reread note");
+    assert!(
+        note.contains(&format!("![[sase#^{id}]]")),
+        "the embed names the actual task id:\n{note}"
+    );
+}
+
+#[test]
+fn full_scan_files_queued_reread_with_lineage() {
+    let temp = TempDir::new("bob-cli-scan-full-reread-birth");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+
+    let output = scan_command(&temp, &vault, &[])
+        .output()
+        .expect("run full scan");
+    assert_success(&output);
+    let note = fs::read_to_string(vault.join("ref/blogs/alpha__v2.md"))
+        .expect("read reread note");
+    assert!(
+        note.contains("earlier:\n  - \"[[ref/blogs/alpha|v1 · 2026-09-01]]\""),
+        "{note}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .expect("parent")
+            .contains("[[ref/blogs/alpha__v2|Alpha Paper (v2)]]"),
+        "full scan files the same reading task"
+    );
+}

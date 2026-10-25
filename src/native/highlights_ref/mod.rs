@@ -35,6 +35,7 @@ mod annotation_tasks;
 mod arxiv;
 mod attach;
 mod audio;
+mod birth;
 pub(crate) mod cli;
 mod clip;
 mod clip_adapter;
@@ -100,6 +101,7 @@ mod workdir;
 
 use annotation_tasks::*;
 use audio::*;
+use birth::*;
 use cli::*;
 use clip::*;
 use companion::*;

@@ -830,6 +830,7 @@ fn plan_inputs<'a>(
         marker_status: marker,
         frontmatter_status: frontmatter,
         archive_source_open: archive_open,
+        confirmed_reading: None,
         resolver,
     }
 }
@@ -879,6 +880,7 @@ fn plan_birth_inserts_into_resolved_parent() {
             warning_child: None,
             mark: '*',
             prefer_block_id: None,
+            reading: None,
         }
     );
     assert_eq!(plan.embed, None, "ID allocated at execution");
@@ -1004,6 +1006,7 @@ fn plan_reopen_archived_inserts_into_source_parent() {
             warning_child: None,
             mark: '*',
             prefer_block_id: Some("ref-stem".to_string()),
+            reading: None,
         }
     );
     assert!(!plan.refuse_status_parent_writes);

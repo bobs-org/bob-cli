@@ -19,10 +19,10 @@
 use super::*;
 use crate::native::collect_done::trailing_block_id_in_line as ref_trailing_block_id;
 use crate::native::ref_tasks::{
-    edit_reading_task_checkbox, find_managed_embed,
+    birth_preview_id, edit_reading_task_checkbox, find_managed_embed,
     insert_ref_task_with_preferred_id, locate_original_line,
-    render_ref_task_line, slug_ref_stem, strip_blockquote_prefix, task_mark,
-    LocatedRefTask, READING_TASK_CHANGED,
+    render_ref_task_line, strip_blockquote_prefix, task_mark, LocatedRefTask,
+    ReadingIdentity, READING_TASK_CHANGED,
 };
 
 /// What one executed reading-task action did.
@@ -54,8 +54,12 @@ pub(super) struct ReadingInsertInputs<'a> {
     pub destination_route: &'a str,
     /// Ref-note link target (`ref/<type>/<stem>`), never the PDF.
     pub ref_target: &'a str,
-    /// Ref-note stem, seeding ID allocation.
+    /// Ref-note stem, seeding ID allocation for ordinary births.
     pub ref_stem: &'a str,
+    /// Lineage-confirmed reading for a birth or reopen insert: `Title
+    /// (vN)` alias and `ref-<root-slug>-vN` allocation. `None` keeps the
+    /// ordinary `ref-<slug>` behavior.
+    pub reading: Option<ReadingIdentity>,
     pub title_raw: &'a str,
     /// Invocation date (`YYYY-MM-DD`) for `[created::]` and close stamps.
     pub created: &'a str,
@@ -76,12 +80,14 @@ pub(super) fn execute_reading_insert(
     let destination = inputs
         .bob_dir
         .join(format!("{}.md", inputs.destination_route));
+    let reading_number = inputs.reading.as_ref().map(|reading| reading.number);
     let preview = render_ref_task_line(
         inputs.mark,
         inputs.ref_target,
         inputs.title_raw,
         inputs.created,
-        &format!("ref-{}", slug_ref_stem(inputs.ref_stem)),
+        &birth_preview_id(inputs.ref_stem, inputs.reading.as_ref()),
+        reading_number,
     );
     let children = inputs
         .warning_child
@@ -94,6 +100,7 @@ pub(super) fn execute_reading_insert(
         &preview,
         &children,
         inputs.prefer_block_id,
+        inputs.reading.as_ref(),
     )
     .map_err(CommandError::new)?;
     Ok(ReadingTaskExecution {
