@@ -6444,3 +6444,575 @@ fn highlights_create_plain_vault_note_keeps_snapshot_provenance() {
         "plain mode must keep source_note provenance:\n{marker}"
     );
 }
+
+// --- force_parser: `--force[=MODE]` parsing, adoption, guard, and overwrite triage ---
+
+/// A bare mode-looking TARGET refuses before any work: the adapter and
+/// fetch never run and the vault is untouched.
+#[test]
+fn highlights_create_force_stray_mode_guard_runs_no_adapter_and_writes_nothing()
+{
+    let temp = TempDir::new("bob-cli-highlights-create-force-guard");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg("overwite")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run create with a stray mode word");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a stray mode word must exit 2:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains(
+            "`overwite` looks like a --force mode; use -f overwrite (or --force=overwrite)"
+        ),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "the guard must precede the adapter");
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "the guard must precede fetch"
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// Adopting the only TARGET as the mode leaves no TARGET: the normal
+/// missing-TARGET usage error fires, byte-identical to bare `create`.
+/// Both runs stay flag-free so the rendered usage lines match exactly.
+#[test]
+fn highlights_create_force_adopted_empty_target_matches_missing_target_usage() {
+    let bare = bob_command()
+        .arg("ref")
+        .arg("create")
+        .output()
+        .expect("run bare create");
+    let adopted = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-f")
+        .arg("overwrite")
+        .output()
+        .expect("run create with an adopted-away target");
+    assert_eq!(bare.status.code(), Some(2));
+    assert_eq!(adopted.status.code(), Some(2));
+    assert_eq!(
+        stderr(&adopted),
+        stderr(&bare),
+        "adoption must surface the normal missing-TARGET error"
+    );
+}
+
+/// A second force flag is a clap usage error: no fetch, no adapter, no
+/// writes.
+#[test]
+fn highlights_create_force_repeated_flag_is_clap_usage_error() {
+    let temp = TempDir::new("bob-cli-highlights-create-force-repeat");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    for argv in [
+        vec!["-f", "overwrite", "-f", FOLDED_URL],
+        vec!["--force=reread", "--force=overwrite", FOLDED_URL],
+    ] {
+        let mut command = bob_command();
+        command.arg("ref").arg("create").arg("-P").arg("sase");
+        for word in &argv {
+            command.arg(word);
+        }
+        let output = command
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run create with a repeated force flag");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "repeated force must be a usage error ({argv:?}):\n{}",
+            format_output(&output)
+        );
+        assert!(
+            !stderr(&output).is_empty(),
+            "{argv:?} must explain the usage error"
+        );
+    }
+    assert!(!fake.called(), "usage failures must not run the adapter");
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "usage failures must not fetch"
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// An invalid `--force=` value is a clap error before any work.
+#[test]
+fn highlights_create_force_invalid_equals_mode_is_clap_error() {
+    let temp = TempDir::new("bob-cli-highlights-create-force-invalid");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("--force=bogus")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run create with an invalid force mode");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an invalid mode must be a usage error:\n{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "usage failures must not run the adapter");
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// `-f overwrite` on a fresh URL refuses before fetch or adapter work:
+/// there is no existing reference to recapture in place.
+#[test]
+fn highlights_create_overwrite_fresh_url_refuses_before_fetch() {
+    let temp = TempDir::new("bob-cli-highlights-create-overwrite-fresh");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    for argv in [
+        vec!["-f", "overwrite", FOLDED_URL],
+        vec!["--force=overwrite", FOLDED_URL],
+    ] {
+        let mut command = bob_command();
+        command.arg("ref").arg("create").arg("-P").arg("sase");
+        for word in &argv {
+            command.arg(word);
+        }
+        let output = command
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run overwrite on a fresh URL");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "fresh overwrite must exit 1 ({argv:?}):\n{}",
+            format_output(&output)
+        );
+        let diagnostic = stderr(&output);
+        assert!(
+            diagnostic.contains(&format!(
+                "nothing to overwrite: {FOLDED_URL} is not a reference yet"
+            )) && diagnostic.contains("hint: drop `overwrite`"),
+            "{argv:?} must refuse as fresh:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(!fake.called(), "fresh overwrite must not run the adapter");
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "fresh overwrite must not fetch"
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// Bare `-f` on a fresh URL is an ordinary capture: no refusal.
+#[test]
+fn highlights_create_bare_force_fresh_url_dry_run_proceeds() {
+    let temp = TempDir::new("bob-cli-highlights-create-bare-force");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bare force on a fresh URL");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("writes: none"),
+        "dry run must report no writes:\n{}",
+        format_output(&output)
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// A PDF-backed URL hit refuses under bare `-f` exactly as without it:
+/// filed reread wiring is still pending in this increment.
+#[test]
+fn highlights_create_bare_force_filed_url_still_refuses() {
+    let temp = TempDir::new("bob-cli-highlights-create-filed-force");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let before =
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("read note");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bare force over a captured URL");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a filed URL must refuse even with bare -f:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already captured"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "the dedupe must precede the adapter");
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
+        before,
+        "the filed note must keep its bytes"
+    );
+}
+
+/// `-f overwrite` on a filed URL exits 2: in-place overwrite is not
+/// available yet.
+#[test]
+fn highlights_create_overwrite_filed_url_is_unavailable() {
+    let temp = TempDir::new("bob-cli-highlights-create-filed-overwrite");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let before =
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("read note");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    for argv in [
+        vec!["-f", "overwrite", FOLDED_URL],
+        vec!["--force=overwrite", FOLDED_URL],
+    ] {
+        let mut command = bob_command();
+        command.arg("ref").arg("create").arg("-P").arg("sase");
+        for word in &argv {
+            command.arg(word);
+        }
+        let output = command
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run overwrite over a captured URL");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "filed overwrite must exit 2 ({argv:?}):\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("-f overwrite is not available yet"),
+            "{argv:?} must name the interim limit:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(!fake.called(), "unavailable overwrite must not adapt");
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
+        before,
+        "the filed note must keep its bytes"
+    );
+}
+
+/// A queued-only exact match keeps the old replacement permission under
+/// either explicit mode spelling.
+#[test]
+fn highlights_create_queued_url_overwrite_replaces() {
+    for argv in [
+        vec!["--force=overwrite", FOLDED_URL],
+        vec!["-f", "overwrite", FOLDED_URL],
+    ] {
+        let temp = TempDir::new("bob-cli-highlights-create-queued-overwrite");
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+        let fake = FakeClip::new(&temp, "fake");
+        let curl_root = temp.path().join("curl-root");
+        std::fs::create_dir_all(&curl_root).expect("create curl root");
+        let fake_curl = write_fake_curl(temp.path());
+        let curl_log = temp.path().join("curl.log");
+        std::fs::write(&curl_log, "").expect("init curl log");
+        let target = vault.join(format!("xlib/blogs/{FOLDED_STEM}.pdf"));
+        write_highlights_pdf(
+            &target,
+            "- status: ready\n- parent: obsidian\n- title: Queued\n- source_url: https://example.com/index/open-source-codex-orchestration-symphony/\n",
+        );
+
+        let mut command = bob_command();
+        command.arg("ref").arg("create").arg("-P").arg("sase");
+        for word in &argv {
+            command.arg(word);
+        }
+        let output = command
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run overwrite over a queued URL");
+        assert_success(&output);
+        assert!(
+            stdout(&output).contains("created Highlights-ready web PDF"),
+            "{argv:?} must replace the queued PDF:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+/// The hidden `bob ref clip` alias parses force exactly like `create`.
+#[test]
+fn highlights_create_clip_alias_matches_create_for_force() {
+    let temp = TempDir::new("bob-cli-highlights-create-clip-force");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let dry = bob_command()
+        .arg("ref")
+        .arg("clip")
+        .arg("-P")
+        .arg("sase")
+        .arg(FOLDED_URL)
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run clip dry run");
+    assert_success(&dry);
+
+    let refused = bob_command()
+        .arg("ref")
+        .arg("clip")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg("overwrite")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run clip overwrite on a fresh URL");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "clip overwrite on a fresh URL must exit 1:\n{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("nothing to overwrite"),
+        "{}",
+        format_output(&refused)
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// A glued `-foverwrite` is `-f` plus `-o verwrite`, so the exact-output
+/// path validation refuses it.
+#[test]
+fn highlights_create_force_glued_short_is_output_path_error() {
+    let temp = TempDir::new("bob-cli-highlights-create-force-glued");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg(&source)
+        .arg("-foverwrite")
+        .arg("-P")
+        .arg("sase")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create with a glued force mode");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "glued -foverwrite must fail on the output path:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("output path must have a .pdf extension"),
+        "{}",
+        format_output(&output)
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+/// A fresh two-URL set under an adopted overwrite refuses before any
+/// adapter work: there is no exact set to recapture in place.
+#[test]
+fn highlights_create_collection_overwrite_fresh_set_refuses_before_adapter() {
+    let temp = TempDir::new("bob-cli-highlights-create-collection-overwrite");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_fake_curl(temp.path());
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init curl log");
+    let first = "https://example.com/alpha";
+    let second = "https://example.com/beta";
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(first)
+        .arg(second)
+        .arg("-f")
+        .arg("overwrite")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run collection overwrite on fresh URLs");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "fresh collection overwrite must exit 1:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains(&format!(
+            "nothing to overwrite: {first} {second} is not a reference yet"
+        )) && diagnostic.contains("hint: drop `overwrite`"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "refused collections must not compose");
+    assert!(
+        std::fs::read_to_string(&log)
+            .expect("read curl log")
+            .is_empty(),
+        "refused collections must not fetch"
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}

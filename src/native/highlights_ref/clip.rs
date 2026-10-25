@@ -84,7 +84,7 @@ impl From<AdapterFailure> for ClipError {
 #[derive(Debug, Clone)]
 pub(super) struct ClipOptions {
     pub(super) dry_run: bool,
-    pub(super) force: bool,
+    pub(super) force: Option<super::force::ForceMode>,
     pub(super) author: Option<String>,
     pub(super) html: Option<OsString>,
     pub(super) keep_intake_reason: Option<String>,
@@ -230,7 +230,7 @@ pub(super) fn capture_article(
         &recorded,
         &web_url.dedupe_key,
         None,
-        options.force,
+        options.force.is_some(),
         &companion,
     )? {
         return run_clip_attach(
@@ -254,10 +254,18 @@ pub(super) fn capture_article(
         keys: vec![web_url.dedupe_key.clone()],
         recorded: &recorded,
     };
+    let overwrite = options.force == Some(super::force::ForceMode::Overwrite);
     let pre_plan = match &options.output {
-        Some(output) => {
-            Some(plan_exact_output_guarded(config, output, options.force)?)
-        }
+        Some(output) => Some(
+            plan_exact_output_guarded(config, output, options.force.is_some())
+                .map_err(|error| {
+                    if overwrite && error.message.contains("already captured") {
+                        super::force::overwrite_filed_unavailable().into()
+                    } else {
+                        error
+                    }
+                })?,
+        ),
         None => pre_stem
             .as_ref()
             .map(|stem| {
@@ -265,19 +273,35 @@ pub(super) fn capture_article(
                     config,
                     std::ffi::OsStr::new(stem),
                     &options.ref_type,
-                    options.force,
+                    options.force.is_some(),
                     &pre_identity,
                 )
+                .map_err(|error| {
+                    if overwrite && error.message.contains("already captured") {
+                        super::force::overwrite_filed_unavailable()
+                    } else {
+                        error
+                    }
+                })
             })
             .transpose()?,
     };
+    // With `--force=overwrite` an exact `--output` path names the only
+    // possible replacement: refuse a free path before the adapter runs.
+    if overwrite
+        && options.output.is_some()
+        && let Some(plan) = &pre_plan
+        && !plan.target.exists()
+    {
+        return Err(super::force::nothing_to_overwrite(&web_url.cleaned).into());
+    }
     if let Some(plan) = &pre_plan
         && let Some(hit) = check_dedupe_for_clip(
             config,
             &recorded,
             &web_url.dedupe_key,
             Some(&plan.target),
-            options.force,
+            options.force.is_some(),
             &companion,
         )?
     {
@@ -378,16 +402,36 @@ pub(super) fn capture_article(
     };
     let plan = match &options.output {
         Some(output) => {
-            plan_exact_output_guarded(config, output, options.force)?
+            plan_exact_output_guarded(config, output, options.force.is_some())
+                .map_err(|error| {
+                if overwrite && error.message.contains("already captured") {
+                    super::force::overwrite_filed_unavailable().into()
+                } else {
+                    error
+                }
+            })?
         }
         None => plan_default_target(
             config,
             std::ffi::OsStr::new(&stem),
             &options.ref_type,
-            options.force,
+            options.force.is_some(),
             &final_identity,
-        )?,
+        )
+        .map_err(|error| {
+            if overwrite && error.message.contains("already captured") {
+                super::force::overwrite_filed_unavailable()
+            } else {
+                error
+            }
+        })?,
     };
+    // With `--force=overwrite` only an existing target keeps the old
+    // replacement permission; a free target refuses instead of
+    // capturing fresh.
+    if overwrite && !plan.target.exists() {
+        return Err(super::force::nothing_to_overwrite(&web_url.cleaned).into());
+    }
     let final_stem = plan.stem.clone();
     let marker = compose_marker(
         &options.status,
@@ -412,7 +456,7 @@ pub(super) fn capture_article(
         &recorded,
         &web_url.dedupe_key,
         Some(&plan.target),
-        options.force,
+        options.force.is_some(),
         &companion,
     )? {
         return run_clip_attach(
@@ -439,7 +483,7 @@ pub(super) fn capture_article(
         Companion::Explicit(path) => super::companion::plan_explicit_audio(
             config,
             &plan,
-            options.force,
+            options.force.is_some(),
             path,
         )?,
     };
@@ -519,7 +563,7 @@ pub(super) fn capture_article(
                 &plan.target,
                 &plan.sidecar,
                 &plan.workflow,
-                options.force,
+                options.force.is_some(),
             ) {
                 return Err(post_listen_install_error(
                     &mut workdir,
@@ -535,7 +579,7 @@ pub(super) fn capture_article(
                 &recorded_after,
                 &web_url.dedupe_key,
                 Some(&plan.target),
-                options.force,
+                options.force.is_some(),
             ) {
                 return Err(post_listen_install_error(
                     &mut workdir,
@@ -546,7 +590,7 @@ pub(super) fn capture_article(
             }
             let created = match super::listen::install_listen_audio(
                 flow,
-                options.force,
+                options.force.is_some(),
             ) {
                 Ok(created) => created,
                 Err(error) => {

@@ -289,6 +289,45 @@ fn attached_option_value_uses_prefix() {
 }
 
 #[test]
+fn ref_create_force_value_completes_both_modes() {
+    // Attached `--force=<MODE>` serves the clap possible values with a
+    // `!prefix` directive, like every other static-choice slot.
+    let attached = complete(&["bob", "ref", "create", "--force="]);
+    assert_success(&attached);
+    let lines: Vec<String> =
+        stdout(&attached).lines().map(str::to_string).collect();
+    assert_eq!(lines[0], "!prefix 8");
+    let names = values(&attached);
+    assert!(names.contains(&"reread".to_string()), "{names:?}");
+    assert!(names.contains(&"overwrite".to_string()), "{names:?}");
+    assert_eq!(names.len(), 2, "only the two modes: {names:?}");
+    assert!(
+        groups(&attached).iter().all(|group| group == "mode"),
+        "{:?}",
+        groups(&attached)
+    );
+
+    // The space-separated slot offers the same mode rows first.
+    let spaced = complete(&["bob", "ref", "create", "--force", ""]);
+    assert_success(&spaced);
+    let rows = rows(&spaced);
+    let modes: Vec<&Vec<String>> = rows
+        .iter()
+        .filter(|row| row[2] == "mode" && !row[0].starts_with("--"))
+        .collect();
+    let mode_names: Vec<&str> =
+        modes.iter().map(|row| row[0].as_str()).collect();
+    assert!(mode_names.contains(&"reread"), "{mode_names:?}");
+    assert!(mode_names.contains(&"overwrite"), "{mode_names:?}");
+
+    // The force flag itself stays in the long-option listing.
+    let options = complete(&["bob", "ref", "create", "--"]);
+    assert_success(&options);
+    let names = values(&options);
+    assert!(names.contains(&"--force".to_string()), "{names:?}");
+}
+
+#[test]
 fn value_hints_beat_generic_kinds_entries() {
     // `install -t` carries a `DirPath` hint: directories, not a message.
     let output = complete(&["bob", "completion", "install", "-t", ""]);

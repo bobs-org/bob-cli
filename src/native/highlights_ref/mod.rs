@@ -47,6 +47,7 @@ pub(crate) mod diagrams;
 mod doctor;
 pub(crate) mod duplicate;
 mod fetch;
+pub(super) mod force;
 mod frontmatter;
 mod guard;
 mod hooks;
@@ -288,6 +289,17 @@ fn default_jobs_args(args: Vec<OsString>) -> Vec<OsString> {
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let args = default_jobs_args(args);
+    // The force-mode decoder reads bareness from the raw argv (clap
+    // indices alone cannot separate bare `-f` from an explicit
+    // `--force=` value). Only the create path needs it.
+    let create_raw: Vec<OsString> = if args
+        .first()
+        .is_some_and(|first| first == "create" || first == "clip")
+    {
+        args.iter().skip(1).cloned().collect()
+    } else {
+        Vec::new()
+    };
     let matches = match build_cli().try_get_matches_from(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
@@ -309,7 +321,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
-        Some(("create", sub_matches)) => create::run(sub_matches),
+        Some(("create", sub_matches)) => create::run(sub_matches, &create_raw),
         Some(("find", sub_matches)) => {
             crate::native::ref_library::cli::run_find(sub_matches)
         }

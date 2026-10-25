@@ -72,8 +72,9 @@ pub(super) fn run(
     config: &Config,
     targets: &[OsString],
     keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
 ) -> i32 {
-    match run_collection(matches, config, targets, keep_intake_reason) {
+    match run_collection(matches, config, targets, keep_intake_reason, force) {
         Ok(()) => 0,
         Err(error) => report_error(error),
     }
@@ -84,6 +85,7 @@ fn run_collection(
     config: &Config,
     targets: &[OsString],
     keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
 ) -> Result<(), CommandError> {
     let listen = if matches.get_flag("listen") {
         Some(
@@ -93,7 +95,8 @@ fn run_collection(
     } else {
         None
     };
-    let prepared = run_preflight(matches, config, targets, keep_intake_reason)?;
+    let prepared =
+        run_preflight(matches, config, targets, keep_intake_reason, force)?;
     if let (Some(command), OverlapCheck::Attach(hit)) =
         (listen.as_ref(), &prepared.overlap)
     {
@@ -124,12 +127,12 @@ fn run_preflight(
     config: &Config,
     targets: &[OsString],
     keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
 ) -> Result<PreparedCollection, CommandError> {
     let urls = validate_targets(matches, targets)?;
     // Duplicate before parent: check overlap before requiring `-P`, so
     // an already-captured set refuses (exit 1) before a missing parent
     // errors (exit 2). `-L` attach never needs `-P`.
-    let pre_force = matches.get_flag("force");
     let pre_listen = matches.get_flag("listen");
     let pre_recorded = sources::collect_recorded_source_urls(config)
         .map_err(|error| CommandError::new(error.message))?;
@@ -141,16 +144,33 @@ fn run_preflight(
         &pre_recorded,
         &urls,
         None,
-        pre_force,
+        force,
         pre_listen,
     );
     match &pre_overlap {
         Err(_) => return pre_overlap.map(|_| unreachable!()),
+        Ok(OverlapCheck::Clear { .. })
+            if super::force::is_overwrite(force)
+                && !has_exact_queued_match(&pre_recorded, &urls) =>
+        {
+            // Under `--force=overwrite` only an exact queued set keeps
+            // the old replacement permission; anything else is fresh
+            // (legacy-only included) and refuses before parent
+            // resolution, fetch, or adapter work.
+            return Err(super::force::nothing_to_overwrite(
+                &targets
+                    .iter()
+                    .map(|target| target.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
         Ok(OverlapCheck::Attach(hit)) => {
             let hit = hit.clone();
             let options = options_without_parent_for_attach(
                 matches,
                 keep_intake_reason.clone(),
+                force,
             )?;
             let output_stem = options
                 .output
@@ -179,7 +199,8 @@ fn run_preflight(
         }
         Ok(OverlapCheck::Clear { .. }) => {}
     }
-    let options = options_from_matches(matches, config, keep_intake_reason)?;
+    let options =
+        options_from_matches(matches, config, keep_intake_reason, force)?;
     let output_stem = options
         .output
         .as_deref()
@@ -214,11 +235,26 @@ fn run_preflight(
             &resolved_name.name,
             ref_type,
             options.output.as_deref(),
-            options.force,
+            options.force.is_some(),
             &urls,
             &recorded,
         )?),
     };
+
+    // A lost race between the pre-parent gate and locked planning files
+    // nothing over an occupant: recheck before capturing.
+    if let Some(plan) = &plan
+        && super::force::is_overwrite(force)
+        && !plan.target.exists()
+    {
+        return Err(super::force::nothing_to_overwrite(
+            &targets
+                .iter()
+                .map(|target| target.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ));
+    }
 
     let final_overlap = if let Some(plan) = &plan {
         check_collection_overlap(
@@ -325,6 +361,7 @@ fn validate_targets(
 fn options_without_parent_for_attach(
     matches: &ArgMatches,
     keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
 ) -> Result<CreateOptions, CommandError> {
     if let Some(name) = matches.get_one::<String>("name") {
         clip_url::validate_name(name)?;
@@ -342,7 +379,7 @@ fn options_without_parent_for_attach(
         author: matches.get_one::<String>("author").cloned(),
         closed: false,
         dry_run: matches.get_flag("dry-run"),
-        force: matches.get_flag("force"),
+        force,
         html: matches.get_one::<OsString>("html").cloned(),
         include_id: matches.get_flag("include-id"),
         keep_intake_reason,
@@ -369,6 +406,7 @@ fn options_from_matches(
     matches: &ArgMatches,
     config: &Config,
     keep_intake_reason: Option<String>,
+    force: Option<super::force::ForceMode>,
 ) -> Result<CreateOptions, CommandError> {
     if let Some(name) = matches.get_one::<String>("name") {
         clip_url::validate_name(name)?;
@@ -400,7 +438,7 @@ fn options_from_matches(
         author: matches.get_one::<String>("author").cloned(),
         closed: false,
         dry_run: matches.get_flag("dry-run"),
-        force: matches.get_flag("force"),
+        force,
         html: matches.get_one::<OsString>("html").cloned(),
         include_id: matches.get_flag("include-id"),
         keep_intake_reason,
@@ -485,7 +523,7 @@ fn capture_and_install(
             Some(path) => super::companion::plan_explicit_audio(
                 config,
                 &plan,
-                options.force,
+                options.force.is_some(),
                 path,
             )?,
             None => None,
@@ -580,7 +618,7 @@ fn capture_and_install(
         &plan.target,
         &plan.sidecar,
         &plan.workflow,
-        options.force,
+        options.force.is_some(),
     )
     .map_err(with_nothing_written)?;
 
@@ -594,7 +632,7 @@ fn capture_and_install(
         Some(path) => super::companion::plan_explicit_audio(
             config,
             &plan,
-            options.force,
+            options.force.is_some(),
             path,
         )?,
         None => None,
@@ -647,7 +685,7 @@ fn capture_and_install(
             &plan.target,
             &plan.sidecar,
             &plan.workflow,
-            options.force,
+            options.force.is_some(),
         ) {
             return Err(super::listen::post_listen_error(
                 &mut scratch,
@@ -662,8 +700,8 @@ fn capture_and_install(
             ));
         }
         listened_audio_created = Some(
-            super::listen::install_listen_audio(flow, options.force).map_err(
-                |error| {
+            super::listen::install_listen_audio(flow, options.force.is_some())
+                .map_err(|error| {
                     super::listen::post_listen_error(
                         &mut scratch,
                         &flow.scratch_audio,
@@ -675,8 +713,7 @@ fn capture_and_install(
                             &flow.scratch_audio,
                         ),
                     )
-                },
-            )?,
+                })?,
         );
     }
     let install_result = if let Some((stamped, page_count)) = &staged_stamp {
@@ -1223,9 +1260,10 @@ fn check_collection_overlap(
     recorded: &[RecordedSource],
     urls: &[WebUrl],
     planned_target: Option<&Path>,
-    force: bool,
+    force: Option<super::force::ForceMode>,
     listen: bool,
 ) -> Result<OverlapCheck, CommandError> {
+    let force_flag = force.is_some();
     let wanted: BTreeSet<String> =
         urls.iter().map(|url| url.dedupe_key.clone()).collect();
     let groups = group_recorded_sources(recorded);
@@ -1255,6 +1293,9 @@ fn check_collection_overlap(
             return Ok(OverlapCheck::Attach(hit.clone()));
         }
         if hit.is_ref_note {
+            if super::force::is_overwrite(force) {
+                return Err(super::force::overwrite_filed_unavailable());
+            }
             let copy = super::duplicate::copy_from_occupant(config, &hit.path);
             let title = copy.stem.clone();
             let refusal = super::duplicate::AlreadyCaptured::new(
@@ -1272,7 +1313,7 @@ fn check_collection_overlap(
             stamp::normalize_lexically(target)
                 == stamp::normalize_lexically(&hit.path)
         });
-        if force && (same_target || planned_target.is_none()) {
+        if force_flag && (same_target || planned_target.is_none()) {
             return Ok(OverlapCheck::Clear { legacy: Vec::new() });
         }
         let copy = super::duplicate::copy_from_occupant(config, &hit.path);
@@ -1297,6 +1338,21 @@ fn check_collection_overlap(
         .filter(|group| !group.keys.is_disjoint(&wanted))
         .collect();
     Err(partial_overlap_error(config, urls, &overlaps))
+}
+
+/// Under `--force=overwrite`, only an exact queued URL-set match keeps
+/// the old replacement permission: one recorded group whose keys equal
+/// the wanted set and whose PDFs are still queued (not filed notes).
+/// Legacy-only groups count as fresh: they name no PDF to overwrite.
+fn has_exact_queued_match(
+    recorded: &[RecordedSource],
+    urls: &[WebUrl],
+) -> bool {
+    let wanted: BTreeSet<String> =
+        urls.iter().map(|url| url.dedupe_key.clone()).collect();
+    group_recorded_sources(recorded)
+        .iter()
+        .any(|group| group.keys == wanted && !group.is_ref_note)
 }
 
 fn group_recorded_sources(recorded: &[RecordedSource]) -> Vec<SourceGroup> {
@@ -1477,7 +1533,12 @@ mod tests {
             ),
         ];
         let error = check_collection_overlap(
-            &config, &recorded, &urls, None, true, false,
+            &config,
+            &recorded,
+            &urls,
+            None,
+            Some(super::super::force::ForceMode::Reread),
+            false,
         )
         .expect_err("partial overlap refuses even with --force");
         assert!(error
@@ -1510,7 +1571,7 @@ mod tests {
             ),
         ];
         let error = check_collection_overlap(
-            &config, &recorded, &urls, None, false, false,
+            &config, &recorded, &urls, None, None, false,
         )
         .expect_err("same existing collection refuses without listen");
         assert!(error.message.contains("already captured"));
@@ -1518,7 +1579,7 @@ mod tests {
         assert!(error.message.contains("-L"));
 
         let attach = check_collection_overlap(
-            &config, &recorded, &urls, None, false, true,
+            &config, &recorded, &urls, None, None, true,
         )
         .expect("same set with listen is an attach candidate");
         assert!(matches!(attach, OverlapCheck::Attach(_)));
@@ -1549,7 +1610,7 @@ mod tests {
             &recorded,
             &urls,
             Some(&target),
-            false,
+            None,
             false,
         )
         .expect_err("queued exact set refuses without force");
@@ -1561,7 +1622,7 @@ mod tests {
             &recorded,
             &urls,
             Some(&target),
-            true,
+            Some(super::super::force::ForceMode::Reread),
             false,
         )
         .expect("force can overwrite the exact queued target");
@@ -1584,7 +1645,7 @@ mod tests {
         )];
         assert_eq!(urls[0].dedupe_key, recorded[0].dedupe_key);
         let error = check_collection_overlap(
-            &config, &recorded, &urls, None, false, false,
+            &config, &recorded, &urls, None, None, false,
         )
         .expect_err("the twin spelling overlaps the recorded capture");
         assert!(
@@ -1618,7 +1679,7 @@ mod tests {
             &[first, second],
             &urls,
             None,
-            false,
+            None,
             false,
         )
         .expect("legacy-only overlap continues");

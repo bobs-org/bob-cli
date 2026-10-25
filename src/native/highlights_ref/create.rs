@@ -25,6 +25,10 @@ fn pdf_progress(line: &str) {
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
 
+use super::force::{
+    is_overwrite, nothing_to_overwrite, overwrite_filed_unavailable,
+    triage_overwrite_url,
+};
 use super::note_snapshot;
 use super::FIELD_SOURCE_NOTE;
 use super::{
@@ -211,7 +215,7 @@ pub(super) struct CreateOptions {
     pub(super) author: Option<String>,
     pub(super) closed: bool,
     pub(super) dry_run: bool,
-    pub(super) force: bool,
+    pub(super) force: Option<super::force::ForceMode>,
     pub(super) html: Option<OsString>,
     pub(super) include_id: bool,
     pub(super) keep_intake_reason: Option<String>,
@@ -395,13 +399,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
-        .arg(
-            Arg::new("force")
-                .long("force")
-                .short('f')
-                .action(ArgAction::SetTrue)
-                .help("Overwrite an existing target PDF"),
-        )
+        .arg(super::force::force_arg())
         .arg(
             Arg::new("html")
                 .long("html")
@@ -526,17 +524,17 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. In this increment filed references still refuse under either mode, and `-f overwrite` on one exits 2 (not available yet). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode; `-f` changes nothing else.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
-pub(super) fn run(matches: &ArgMatches) -> i32 {
-    let code = run_create(matches);
+pub(super) fn run(matches: &ArgMatches, raw: &[OsString]) -> i32 {
+    let code = run_create(matches, raw);
     super::listen_feed::print_deferred_notices();
     code
 }
 
-fn run_create(matches: &ArgMatches) -> i32 {
+fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     let config = Config::from_matches(matches);
     let (ingest_enabled, disabled_reason) =
         match super::intake::ingest_on_create() {
@@ -550,11 +548,23 @@ fn run_create(matches: &ArgMatches) -> i32 {
     } else {
         None
     };
-    let targets: Vec<OsString> = matches
-        .get_many::<OsString>("target")
-        .expect("required by clap")
-        .cloned()
-        .collect();
+    // Decode `--force[=MODE]` before dispatch: an adopted mode word
+    // leaves TARGET, so single-target versus collection dispatch sees
+    // the adopted list.
+    let decoded = match super::force::decode_force(matches, raw) {
+        Ok(decoded) => decoded,
+        Err(super::force::ForceDecodeError::StrayMode { word }) => {
+            return report_create_error(
+                CommandError::new(super::force::stray_mode_message(&word))
+                    .with_exit_code(2),
+            );
+        }
+        Err(super::force::ForceDecodeError::MissingTarget) => {
+            return report_missing_target();
+        }
+    };
+    let force = decoded.mode;
+    let targets = decoded.targets;
     if targets.len() > 1 {
         if matches.get_flag("closed") || matches.get_flag("plain") {
             return report_create_error(
@@ -569,6 +579,7 @@ fn run_create(matches: &ArgMatches) -> i32 {
             &config,
             &targets,
             keep_intake_reason,
+            force,
         );
     }
     let target_os = targets.into_iter().next().expect("required by clap");
@@ -634,7 +645,7 @@ fn run_create(matches: &ArgMatches) -> i32 {
         && parent_input.is_none()
     {
         if let Some(code) = check_duplicate_before_parent(
-            &config, &target_os, &prepared, matches,
+            &config, &target_os, &prepared, matches, force,
         ) {
             return code;
         }
@@ -650,7 +661,7 @@ fn run_create(matches: &ArgMatches) -> i32 {
         author: matches.get_one::<String>("author").cloned(),
         closed: matches.get_flag("closed"),
         dry_run: matches.get_flag("dry-run"),
-        force: matches.get_flag("force"),
+        force,
         html: matches.get_one::<OsString>("html").cloned(),
         include_id: matches.get_flag("include-id"),
         keep_intake_reason,
@@ -684,6 +695,33 @@ fn run_create(matches: &ArgMatches) -> i32 {
 fn report_create_error(error: CommandError) -> i32 {
     let styler = Styler::detect();
     super::duplicate::report_error(COMMAND_NAME, error, &styler)
+}
+
+/// Report the normal missing-TARGET usage error after an adopted mode
+/// word emptied TARGET. Re-parsing the bare subcommand keeps the
+/// usage, message, and exit code identical to clap's own error.
+fn report_missing_target() -> i32 {
+    match command().try_get_matches_from(["bob ref create"]) {
+        Ok(_) => {
+            let styler = Styler::detect();
+            eprintln!(
+                "{COMMAND_NAME}: {}: internal: expected a missing TARGET",
+                styler.red("error")
+            );
+            1
+        }
+        Err(error) => {
+            let code = error.exit_code();
+            if let Err(print_error) = error.print()
+                && print_error.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                eprintln!(
+                    "{COMMAND_NAME}: failed to print command-line error: {print_error}"
+                );
+            }
+            code
+        }
+    }
 }
 
 fn prepare_target(
@@ -845,8 +883,10 @@ fn check_duplicate_before_parent(
     target_os: &OsString,
     prepared: &PreparedTarget,
     matches: &ArgMatches,
+    force: Option<super::force::ForceMode>,
 ) -> Option<i32> {
-    let force = matches.get_flag("force");
+    let source_display = target_os.to_string_lossy().into_owned();
+    let force_flag = force.is_some();
     let listen = matches.get_flag("listen");
     match prepared {
         PreparedTarget::Url => {
@@ -873,7 +913,7 @@ fn check_duplicate_before_parent(
                     &recorded,
                     &dedupe_key,
                     None,
-                    force,
+                    force_flag,
                 ) {
                     let command = match super::listen::require_validated() {
                         Ok(command) => command,
@@ -922,12 +962,23 @@ fn check_duplicate_before_parent(
                     }
                 }
             }
+            // Overwrite triage runs after `-L` attach (attach is not a
+            // fresh capture) and before the plain refusal.
+            if is_overwrite(force)
+                && let Err(error) = triage_overwrite_url(
+                    &recorded,
+                    &dedupe_key,
+                    &source_display,
+                )
+            {
+                return Some(report_create_error(error));
+            }
             match sources_mod::check_dedupe(
                 config,
                 &recorded,
                 &dedupe_key,
                 None,
-                force,
+                force_flag,
             ) {
                 Ok(()) => None,
                 Err(error) => Some(report_create_error(CommandError::new(
@@ -935,12 +986,20 @@ fn check_duplicate_before_parent(
                 ))),
             }
         }
-        PreparedTarget::Markdown(path) => {
-            check_markdown_stamp_before_parent(config, path, matches)
-        }
-        PreparedTarget::Pdf(path) => {
-            check_pdf_stamp_before_parent(config, path, matches)
-        }
+        PreparedTarget::Markdown(path) => check_markdown_stamp_before_parent(
+            config,
+            path,
+            matches,
+            force,
+            &source_display,
+        ),
+        PreparedTarget::Pdf(path) => check_pdf_stamp_before_parent(
+            config,
+            path,
+            matches,
+            force,
+            &source_display,
+        ),
         PreparedTarget::VaultNote { .. } => None,
     }
 }
@@ -949,8 +1008,9 @@ fn check_markdown_stamp_before_parent(
     config: &Config,
     source: &Path,
     matches: &ArgMatches,
+    force: Option<super::force::ForceMode>,
+    source_display: &str,
 ) -> Option<i32> {
-    let force = matches.get_flag("force");
     let canonical = fs::canonicalize(source).ok()?;
     let markdown = fs::read_to_string(&canonical).ok()?;
     let stem = match matches.get_one::<String>("name") {
@@ -981,11 +1041,26 @@ fn check_markdown_stamp_before_parent(
         config,
         std::ffi::OsStr::new(&stem),
         &ref_type,
-        force,
+        force.is_some(),
         &identity,
     ) {
-        Ok(_) => None,
-        Err(error) => Some(report_create_error(error)),
+        Ok(plan) => {
+            if is_overwrite(force) && !plan.target.exists() {
+                return Some(report_create_error(nothing_to_overwrite(
+                    source_display,
+                )));
+            }
+            None
+        }
+        Err(error) => {
+            if is_overwrite(force) && error.message.contains("already captured")
+            {
+                return Some(
+                    report_create_error(overwrite_filed_unavailable()),
+                );
+            }
+            Some(report_create_error(error))
+        }
     }
 }
 
@@ -993,8 +1068,9 @@ fn check_pdf_stamp_before_parent(
     config: &Config,
     source: &Path,
     matches: &ArgMatches,
+    force: Option<super::force::ForceMode>,
+    source_display: &str,
 ) -> Option<i32> {
-    let force = matches.get_flag("force");
     if let Err(error) = pdf_target_mod::check_local_pdf_identity(config, source)
     {
         // Only pre-empt the parent error for duplicates; other
@@ -1002,6 +1078,12 @@ fn check_pdf_stamp_before_parent(
         if error.message.contains("already captured")
             || error.message.contains("already queued")
         {
+            if is_overwrite(force) && error.message.contains("already captured")
+            {
+                return Some(
+                    report_create_error(overwrite_filed_unavailable()),
+                );
+            }
             return Some(report_create_error(error));
         }
         return None;
@@ -1030,11 +1112,26 @@ fn check_pdf_stamp_before_parent(
         config,
         std::ffi::OsStr::new(&pdf_plan.stem),
         &ref_type,
-        force,
+        force.is_some(),
         &identity,
     ) {
-        Ok(_) => None,
-        Err(error) => Some(report_create_error(error)),
+        Ok(plan) => {
+            if is_overwrite(force) && !plan.target.exists() {
+                return Some(report_create_error(nothing_to_overwrite(
+                    source_display,
+                )));
+            }
+            None
+        }
+        Err(error) => {
+            if is_overwrite(force) && error.message.contains("already captured")
+            {
+                return Some(
+                    report_create_error(overwrite_filed_unavailable()),
+                );
+            }
+            Some(report_create_error(error))
+        }
     }
 }
 
@@ -1085,7 +1182,7 @@ fn create_pdf(
                 &recorded,
                 &dedupe_key,
                 None,
-                options.force,
+                options.force.is_some(),
             )
         {
             let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
@@ -1101,12 +1198,17 @@ fn create_pdf(
                 &mut scratch,
             );
         }
+        // Overwrite triage runs after `-L` attach (attach is not a
+        // fresh capture) and before any fetch or adapter work.
+        if is_overwrite(options.force) {
+            triage_overwrite_url(&recorded, &dedupe_key, target_raw)?;
+        }
         check_dedupe_with_listen_hint(
             config,
             &recorded,
             &dedupe_key,
             None,
-            options.force,
+            options.force.is_some(),
         )?;
         // A URL recorded only by legacy notes without a Highlights PDF
         // warns here, before any fetch, and captures a fresh copy. The
@@ -1170,6 +1272,7 @@ fn create_pdf(
             &mut scratch,
             options,
             listen.as_ref(),
+            target_raw,
         ),
         PreparedTarget::Markdown(path) => create_markdown_route(
             config,
@@ -1177,6 +1280,7 @@ fn create_pdf(
             &mut scratch,
             options,
             listen.as_ref(),
+            target_raw,
         ),
         PreparedTarget::Pdf(path) => create_local_pdf_route(
             config,
@@ -1184,6 +1288,7 @@ fn create_pdf(
             &mut scratch,
             options,
             listen.as_ref(),
+            target_raw,
         ),
         PreparedTarget::Url => {
             Err(CommandError::new("unexpected target classification"))
@@ -1385,33 +1490,61 @@ fn default_ref_type_for_kind(
     })
 }
 
+/// Plan the intake target for the vault-note, Markdown, local-PDF,
+/// PDF-URL, and arXiv routes. Under `--force=overwrite`, a filed
+/// refusal stays refused with the interim exit-2 message, and a free
+/// target refuses as fresh (exit 1) instead of capturing: only an
+/// existing exact-output or queued target keeps the old replacement
+/// permission.
 fn plan_target_for(
     config: &Config,
     stem: &str,
     ref_type: &str,
     output: Option<&PathBuf>,
-    force: bool,
+    force: Option<super::force::ForceMode>,
     include_id: bool,
     identity: &DefaultTargetIdentity<'_>,
+    source_display: &str,
 ) -> Result<TargetPlan> {
-    match output {
+    let plan = match output {
         Some(output) => {
-            let plan = plan_exact_output(config, output, force)?;
+            let plan = plan_exact_output(config, output, force.is_some())
+                .map_err(|error| {
+                    if is_overwrite(force)
+                        && error.message.contains("already captured")
+                    {
+                        overwrite_filed_unavailable()
+                    } else {
+                        error
+                    }
+                })?;
             if include_id {
                 super::stamp::ensure_reference_id_available(
                     config, &plan.stem,
                 )?;
             }
-            Ok(plan)
+            plan
         }
         None => plan_default_target(
             config,
             std::ffi::OsStr::new(stem),
             ref_type,
-            force,
+            force.is_some(),
             identity,
-        ),
+        )
+        .map_err(|error| {
+            if is_overwrite(force) && error.message.contains("already captured")
+            {
+                overwrite_filed_unavailable()
+            } else {
+                error
+            }
+        })?,
+    };
+    if is_overwrite(force) && !plan.target.exists() {
+        return Err(nothing_to_overwrite(source_display));
     }
+    Ok(plan)
 }
 
 fn create_vault_note_route(
@@ -1421,6 +1554,7 @@ fn create_vault_note_route(
     scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     listen: Option<&super::listen::ListenCommand>,
+    source_display: &str,
 ) -> Result<()> {
     let snapshot_date = bob_env::current_datetime().date();
     let settings =
@@ -1458,6 +1592,7 @@ fn create_vault_note_route(
         options.force,
         options.include_id,
         &identity,
+        source_display,
     )?;
     let final_stem = target_plan.stem.clone();
     let id = if options.include_id {
@@ -1636,7 +1771,7 @@ fn create_snapshot_plan(
                 &outcome.pdf,
                 &marker,
                 &info,
-                options.force,
+                options.force.is_some(),
             )?;
             (pages, outcome.report)
         }
@@ -1651,7 +1786,7 @@ fn create_snapshot_plan(
                 &plan.target,
                 &plan.sidecar,
                 &plan.workflow,
-                options.force,
+                options.force.is_some(),
             )?;
             pdf_target_mod::install_stamped_pdf(
                 &stamped,
@@ -2138,8 +2273,9 @@ fn create_markdown_route(
     scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     listen: Option<&super::listen::ListenCommand>,
+    source_display: &str,
 ) -> Result<()> {
-    let plan = plan_markdown(config, source, options)?;
+    let plan = plan_markdown(config, source, options, source_display)?;
     create_markdown_plan(config, plan, scratch, options, listen)
 }
 
@@ -2254,7 +2390,7 @@ fn create_markdown_plan(
                 &plan.target,
                 &plan.sidecar,
                 &plan.workflow,
-                options.force,
+                options.force.is_some(),
             ) {
                 return Err(super::listen::post_listen_error(
                     scratch,
@@ -2263,16 +2399,18 @@ fn create_markdown_plan(
                     bind_create_hint(&plan.source, &flow.scratch_audio),
                 ));
             }
-            let created =
-                super::listen::install_listen_audio(flow, options.force)
-                    .map_err(|error| {
-                        super::listen::post_listen_error(
-                            scratch,
-                            &flow.scratch_audio,
-                            error.to_string(),
-                            bind_create_hint(&plan.source, &flow.scratch_audio),
-                        )
-                    })?;
+            let created = super::listen::install_listen_audio(
+                flow,
+                options.force.is_some(),
+            )
+            .map_err(|error| {
+                super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&plan.source, &flow.scratch_audio),
+                )
+            })?;
             let marker =
                 stamp_marker_for_outcome(&plan, options, &link_outcome)?;
             let page_count = match stamp_and_install(
@@ -2373,6 +2511,7 @@ fn create_local_pdf_route(
     scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     listen: Option<&super::listen::ListenCommand>,
+    source_display: &str,
 ) -> Result<()> {
     let canonical = fs::canonicalize(source).map_err(|error| {
         CommandError::new(format!(
@@ -2418,6 +2557,7 @@ fn create_local_pdf_route(
         options.force,
         options.include_id,
         &identity,
+        source_display,
     )?;
     let final_stem = target_plan.stem.clone();
     // An out-of-vault marked PDF is already captured: refuse before any
@@ -2516,7 +2656,7 @@ fn create_local_pdf_route(
                 &unstamped,
                 &marker,
                 &info,
-                options.force,
+                options.force.is_some(),
             )?
         }
         None => {
@@ -2604,6 +2744,7 @@ fn create_pdf_url_route(
         options.force,
         true,
         &identity,
+        &url.cleaned,
     )?;
     let final_stem = target_plan.stem.clone();
     // The stem is only known after the fetch, so a race that captured
@@ -2613,7 +2754,7 @@ fn create_pdf_url_route(
             recorded,
             &url.dedupe_key,
             Some(&target_plan.target),
-            options.force,
+            options.force.is_some(),
         )
     {
         let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
@@ -2633,7 +2774,7 @@ fn create_pdf_url_route(
         recorded,
         &url.dedupe_key,
         Some(&target_plan.target),
-        options.force,
+        options.force.is_some(),
     )?;
     // A downloaded PDF that already carries a marker is already captured.
     {
@@ -2715,7 +2856,7 @@ fn create_pdf_url_route(
             &downloaded,
             &marker,
             &info,
-            options.force,
+            options.force.is_some(),
         )?,
         None => {
             let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
@@ -2839,6 +2980,7 @@ fn create_arxiv_route(
         options.force,
         true,
         &identity,
+        &url.cleaned,
     )?;
     let final_stem = target_plan.stem.clone();
     // Post-capture dedupe with the final target (stem known only now).
@@ -2849,14 +2991,14 @@ fn create_arxiv_route(
             recorded,
             &key,
             Some(&target_plan.target),
-            options.force,
+            options.force.is_some(),
         )
         .or_else(|| {
             sources_mod::find_refusing_hit(
                 recorded,
                 &url.dedupe_key,
                 Some(&target_plan.target),
-                options.force,
+                options.force.is_some(),
             )
         });
         if let Some(hit) = hit {
@@ -2882,14 +3024,14 @@ fn create_arxiv_route(
             recorded,
             &key,
             Some(&target_plan.target),
-            options.force,
+            options.force.is_some(),
         )?;
         check_dedupe_with_listen_hint(
             config,
             recorded,
             &url.dedupe_key,
             Some(&target_plan.target),
-            options.force,
+            options.force.is_some(),
         )?;
     }
     // A downloaded arXiv PDF that already carries a marker is already captured.
@@ -2978,7 +3120,7 @@ fn create_arxiv_route(
             &dest,
             &marker,
             &info,
-            options.force,
+            options.force.is_some(),
         )?,
         None => {
             let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
@@ -3053,7 +3195,7 @@ fn plan_pdf_audio(
         return companion_mod::plan_explicit_audio(
             config,
             target_plan,
-            options.force,
+            options.force.is_some(),
             explicit,
         );
     }
@@ -3145,13 +3287,14 @@ fn plan_create(
     source: &Path,
     options: &CreateOptions,
 ) -> Result<CreatePlan> {
-    plan_markdown(config, source, options)
+    plan_markdown(config, source, options, &source.display().to_string())
 }
 
 fn plan_markdown(
     config: &Config,
     source: &Path,
     options: &CreateOptions,
+    source_display: &str,
 ) -> Result<CreatePlan> {
     validate_markdown_path(source)?;
     let canonical = fs::canonicalize(source).map_err(|error| {
@@ -3235,6 +3378,7 @@ fn plan_markdown(
         options.force,
         options.include_id,
         &identity,
+        source_display,
     )?;
     // The marker id always follows the final output basename, including
     // an exact `--output` path.
@@ -3549,7 +3693,7 @@ fn plan_audio_copy(
         return companion_mod::plan_explicit_audio(
             config,
             target_plan,
-            options.force,
+            options.force.is_some(),
             explicit,
         );
     }
@@ -3565,7 +3709,7 @@ fn plan_audio_copy(
             return companion_mod::plan_audio_copy_for_source(
                 config,
                 target_plan,
-                options.force,
+                options.force.is_some(),
                 source,
                 format!("episode {episode_id}"),
             );
@@ -3590,7 +3734,7 @@ fn plan_audio_copy(
             return companion_mod::plan_audio_copy_for_source(
                 config,
                 target_plan,
-                options.force,
+                options.force.is_some(),
                 source,
                 "narration sha256".to_string(),
             );
@@ -3826,7 +3970,7 @@ mod tests {
             author: None,
             closed: false,
             dry_run: false,
-            force: false,
+            force: None,
             html: None,
             include_id: false,
             keep_intake_reason: None,
