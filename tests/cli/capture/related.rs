@@ -376,15 +376,53 @@ fn draft_related_stays_under_the_debug_perf_gate() {
             &format!("---\ntype: [[area]]\n---\n{tasks}"),
         );
     }
-    let start = std::time::Instant::now();
-    let result = related_json(
-        &vault,
-        "Analyze pipeline event system note 5 task 12 @area-05",
-        &[],
+    // Trivial baseline over the same query so process startup and machine
+    // load cancel out of the gated quantity.
+    let tiny = temp.path().join("tiny");
+    write_capture_task_settings(&tiny);
+    write_file(
+        &tiny.join("area-05.md"),
+        "---\ntype: [[area]]\n---\n- [ ] #task Analyze pipeline event system note 5 task 12 ^event-5-12\n",
     );
-    let elapsed = start.elapsed();
+    let draft = "Analyze pipeline event system note 5 task 12 @area-05";
+    // Warm the binary and the page cache once, untimed.
+    let warm = related_json(&vault, draft, &[]);
+    assert!(warm["ok"] == true);
+    let warm_tiny = related_json(&tiny, draft, &[]);
+    assert!(warm_tiny["ok"] == true);
+    // Take the minimum of several paired timed runs so a scheduling spike
+    // from parallel `cargo test` load falls out instead of failing the gate.
+    let mut big_samples = Vec::with_capacity(7);
+    let mut tiny_samples = Vec::with_capacity(7);
+    let mut result = serde_json::Value::Null;
+    for _ in 0..7 {
+        let start = std::time::Instant::now();
+        result = related_json(&vault, draft, &[]);
+        big_samples.push(start.elapsed());
+        let start = std::time::Instant::now();
+        let tiny_result = related_json(&tiny, draft, &[]);
+        tiny_samples.push(start.elapsed());
+        assert!(tiny_result["ok"] == true);
+    }
     assert!(result["ok"] == true);
-    assert!(elapsed.as_millis() < 500, "draft query took {elapsed:?}");
+    let min_big = *big_samples.iter().min().expect("big samples");
+    let min_tiny = *tiny_samples.iter().min().expect("tiny samples");
+    let min_diff = big_samples
+        .iter()
+        .zip(tiny_samples.iter())
+        .map(|(big, tiny)| big.saturating_sub(*tiny))
+        .min()
+        .expect("paired samples");
+    assert!(
+        min_diff.as_millis() < 500,
+        "draft query cost above baseline took {min_diff:?} \
+         (big min {min_big:?} in {big_samples:?}; \
+         tiny min {min_tiny:?} in {tiny_samples:?})"
+    );
+    assert!(
+        min_big.as_millis() < 2000,
+        "draft query gross bound took {min_big:?} in {big_samples:?}"
+    );
 }
 
 #[test]
