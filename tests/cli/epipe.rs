@@ -53,3 +53,71 @@ fn closed_stdout_pipe_exits_zero_with_empty_stderr() {
         "stderr leaked EPIPE:\n{stderr}"
     );
 }
+
+#[test]
+fn closed_stderr_usage_error_exits_two_quietly() {
+    // An invalid subcommand prints a clap error to stderr. Dropping the
+    // read ends immediately after spawn closes the pipes before bob writes,
+    // so `error.print()` deterministically hits BrokenPipe without sleep.
+    let mut child = bob_command()
+        .args(["bogus-subcommand-xyz"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bob bogus subcommand");
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    let output = child.wait_with_output().expect("wait for bob bogus");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "usage error into a closed pipe keeps exit 2"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "stderr leaked a panic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Broken pipe"),
+        "stderr leaked EPIPE:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("BrokenPipe"),
+        "stderr leaked EPIPE:\n{stderr}"
+    );
+}
+
+#[test]
+fn closed_stdout_help_exits_zero_quietly() {
+    // `--help` renders to stdout with clap exit code 0. Dropping the read
+    // ends immediately after spawn closes the pipes before bob writes, so
+    // the render deterministically hits BrokenPipe without sleep.
+    let mut child = bob_command()
+        .args(["--help"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn bob --help");
+    drop(child.stdout.take());
+    drop(child.stderr.take());
+    let output = child.wait_with_output().expect("wait for bob --help");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "help into a closed pipe keeps exit 0"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "stderr leaked a panic:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Broken pipe"),
+        "stderr leaked EPIPE:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("BrokenPipe"),
+        "stderr leaked EPIPE:\n{stderr}"
+    );
+}

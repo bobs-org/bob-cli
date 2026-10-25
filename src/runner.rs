@@ -854,31 +854,33 @@ impl Error for RunnerError {}
 pub fn run_bob() -> i32 {
     // Rust ignores SIGPIPE, so a closed stdout/stderr pipe surfaces as an
     // EPIPE `print!`/`eprintln!` panic, not a signal. Silence only that
-    // panic at this boundary and map it to a quiet exit 0; every other
-    // panic is rethrown after the previous hook is restored, keeping
-    // today's message and exit 101. SIGPIPE disposition is unchanged:
-    // bob writes to child stdin in production, where the default
-    // disposition would kill bob mid-operation.
+    // panic at this boundary and map it to a quiet exit 0. SIGPIPE
+    // disposition is unchanged: bob writes to child stdin in production,
+    // where the default disposition would kill bob mid-operation.
+    run_with_quiet_epipe(run_bob_inner)
+}
+
+fn run_with_quiet_epipe(run: impl FnOnce() -> i32) -> i32 {
+    // Delegate every non-EPIPE panic to the previous hook at panic time and
+    // stay silent only for EPIPE-shaped print panics. `resume_unwind` below
+    // never invokes a hook, so delegating here is the only chance a
+    // non-EPIPE panic has to print; the hook runs exactly once per panic,
+    // including panics in threads spawned during `run`.
     let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|info| {
+    std::panic::set_hook(Box::new(move |info| {
         if !is_epipe_print_panic(info.payload()) {
-            // Non-EPIPE panics stay silent only here: the payload is
-            // rethrown below after the previous hook is restored, so
-            // today's message prints exactly once with exit 101.
+            previous_hook(info);
         }
     }));
-    let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run_bob_inner));
-    std::panic::set_hook(previous_hook);
-    match outcome {
+    // The hook is intentionally not restored: the process exits right after
+    // `run_bob` returns, and `native::completion` takes and restores
+    // whatever hook is current, so it keeps working either way.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
         Ok(exit_code) => exit_code,
-        Err(payload) => {
-            if is_epipe_print_panic(payload.as_ref()) {
-                0
-            } else {
-                std::panic::resume_unwind(payload);
-            }
-        }
+        Err(payload) if is_epipe_print_panic(payload.as_ref()) => 0,
+        // The hook already printed this panic once; resume_unwind does not
+        // run it again, and the runtime turns the unwind into exit 101.
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -1007,10 +1009,13 @@ fn route_help(path: &[OsString]) -> Result<Vec<OsString>, i32> {
         );
         let exit_code = error.exit_code();
         if let Err(print_error) = error.print() {
-            // A closed pipe renders nothing: stay quiet with a clean
-            // exit instead of reporting the failed render.
+            // A closed pipe renders nothing: stay quiet instead of
+            // reporting the failed render, but keep clap's own exit code so
+            // a usage error never reports success. Help/version renders keep
+            // exit 0 because clap's DisplayHelp/DisplayVersion exit code is
+            // already 0.
             if print_error.kind() == std::io::ErrorKind::BrokenPipe {
-                return Err(0);
+                return Err(exit_code);
             }
             eprintln!("bob: failed to print command-line error: {print_error}");
         }
@@ -1047,10 +1052,13 @@ fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
         Err(error) => {
             let exit_code = error.exit_code();
             if let Err(print_error) = error.print() {
-                // A closed pipe renders nothing: stay quiet with a clean
-                // exit instead of reporting the failed render.
+                // A closed pipe renders nothing: stay quiet instead of
+                // reporting the failed render, but keep clap's own exit code
+                // so a usage error never reports success. Help/version
+                // renders keep exit 0 because clap's DisplayHelp/
+                // DisplayVersion exit code is already 0.
                 if print_error.kind() == std::io::ErrorKind::BrokenPipe {
-                    return 0;
+                    return exit_code;
                 }
                 eprintln!(
                     "bob: failed to print command-line error: {print_error}"
@@ -1659,9 +1667,26 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{
-        is_epipe_print_panic, rewrite_alias_args, Section, SECTIONS,
-        SUBCOMMANDS,
+        is_epipe_print_panic, rewrite_alias_args, run_with_quiet_epipe,
+        Section, SECTIONS, SUBCOMMANDS,
     };
+
+    const GUARD_PROBE_ENV: &str = "BOB_RUNNER_GUARD_PROBE";
+
+    fn spawn_guard_probe_child(
+        test_name: &str,
+        probe: &str,
+    ) -> std::process::Output {
+        let exe = std::env::current_exe().expect("current test executable");
+        std::process::Command::new(exe)
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(GUARD_PROBE_ENV, probe)
+            .output()
+            .expect("spawn guard probe child")
+    }
 
     fn boxed_payload(message: &str) -> Box<dyn std::any::Any + Send> {
         // `panic!("{message}")` payloads are owned `String`s, matching what
@@ -1696,6 +1721,105 @@ mod tests {
         assert!(!is_epipe_print_panic(unrelated.as_ref()));
         let non_string: Box<dyn std::any::Any + Send> = Box::new(42_u32);
         assert!(!is_epipe_print_panic(non_string.as_ref()));
+    }
+
+    #[test]
+    fn guard_unrelated_panic_prints_once() {
+        const PROBE: &str = "unrelated";
+        const MESSAGE: &str = "runner-guard-probe unrelated boom 7f3a";
+        if let Ok(value) = std::env::var(GUARD_PROBE_ENV) {
+            if value == PROBE {
+                let outcome = std::panic::catch_unwind(|| {
+                    run_with_quiet_epipe(|| {
+                        panic!("{MESSAGE}");
+                    })
+                });
+                let code = match outcome {
+                    Ok(code) => code,
+                    Err(_) => 101,
+                };
+                std::process::exit(code);
+            }
+            return;
+        }
+        let test_name = "runner::tests::guard_unrelated_panic_prints_once";
+        let output = spawn_guard_probe_child(test_name, PROBE);
+        assert_eq!(output.status.code(), Some(101), "unrelated panic exit");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("panicked"),
+            "unrelated panic printed nothing:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(MESSAGE),
+            "unrelated panic message missing:\n{stderr}"
+        );
+        assert_eq!(
+            stderr.matches(MESSAGE).count(),
+            1,
+            "unrelated panic printed more than once:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn guard_thread_panic_prints_and_exits_zero() {
+        const PROBE: &str = "thread";
+        const MESSAGE: &str = "runner-guard-probe thread boom 9c2e";
+        if let Ok(value) = std::env::var(GUARD_PROBE_ENV) {
+            if value == PROBE {
+                let outcome = std::panic::catch_unwind(|| {
+                    run_with_quiet_epipe(|| {
+                        let handle = std::thread::spawn(|| {
+                            panic!("{MESSAGE}");
+                        });
+                        let _ = handle.join();
+                        0
+                    })
+                });
+                let code = match outcome {
+                    Ok(code) => code,
+                    Err(_) => 101,
+                };
+                std::process::exit(code);
+            }
+            return;
+        }
+        let test_name =
+            "runner::tests::guard_thread_panic_prints_and_exits_zero";
+        let output = spawn_guard_probe_child(test_name, PROBE);
+        assert_eq!(output.status.code(), Some(0), "thread panic exit");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(MESSAGE),
+            "thread panic message missing:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn guard_epipe_panic_exits_zero_quietly() {
+        const PROBE: &str = "epipe";
+        if let Ok(value) = std::env::var(GUARD_PROBE_ENV) {
+            if value == PROBE {
+                let outcome = std::panic::catch_unwind(|| {
+                    run_with_quiet_epipe(|| {
+                        std::panic::panic_any(String::from(
+                            "failed printing to stdout: Broken pipe (os error 32)",
+                        ))
+                    })
+                });
+                let code = match outcome {
+                    Ok(code) => code,
+                    Err(_) => 101,
+                };
+                std::process::exit(code);
+            }
+            return;
+        }
+        let test_name = "runner::tests::guard_epipe_panic_exits_zero_quietly";
+        let output = spawn_guard_probe_child(test_name, PROBE);
+        assert_eq!(output.status.code(), Some(0), "EPIPE exit");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.is_empty(), "EPIPE probe leaked stderr:\n{stderr}");
     }
 
     #[test]

@@ -89,10 +89,15 @@ fn run_write(kind: WriteKind, args: Vec<OsString>) -> i32 {
 fn print_clap_error(kind: WriteKind, error: clap::Error) -> i32 {
     let exit_code = error.exit_code();
     if let Err(print_error) = error.print() {
-        eprintln!(
-            "{}: failed to print command-line error: {print_error}",
-            command_name(kind)
-        );
+        // A closed pipe renders nothing: stay quiet instead of
+        // reporting the failed render, but keep clap's own exit
+        // code so a usage error never reports success.
+        if print_error.kind() != std::io::ErrorKind::BrokenPipe {
+            eprintln!(
+                "{}: failed to print command-line error: {print_error}",
+                command_name(kind)
+            );
+        }
     }
     exit_code
 }

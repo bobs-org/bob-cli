@@ -30,9 +30,14 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Err(error) => {
             let code = error.exit_code();
             if let Err(print_error) = error.print() {
-                eprintln!(
-                    "bob completion: failed to print command-line error: {print_error}"
-                );
+                // A closed pipe renders nothing: stay quiet instead of
+                // reporting the failed render, but keep clap's own exit
+                // code so a usage error never reports success.
+                if print_error.kind() != std::io::ErrorKind::BrokenPipe {
+                    eprintln!(
+                        "bob completion: failed to print command-line error: {print_error}"
+                    );
+                }
             }
             return code;
         }
