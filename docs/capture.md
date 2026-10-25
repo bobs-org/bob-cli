@@ -4705,12 +4705,13 @@ piped stdin stream, so a multi-line authored-bullet draft survives a pipe:
 `printf 'parent\n- child\n' | bob capture`. Put options before text, or use
 `--` when the task itself starts with a hyphen; a multi-line draft passed as
 an argument needs its own shell quoting, for example
-`bob capture -- "$(printf 'parent\n- child\n')"`. An unknown `--flag`
-before `--` is rejected with exit 2 (`unexpected argument '--flag' found`,
-JSON `ok: false` under `-f json`) and writes nothing, so text starting with
-`--` plus a letter must follow `--` (`bob capture -- --anything` still files
-`--anything`); `--` plus a non-letter (such as `--2`) and single-hyphen
-starts still capture as text. Embedded newlines inside a
+`bob capture -- "$(printf 'parent\n- child\n')"`. Before draft text begins,
+an unknown alphabetic `--flag` is rejected with exit 2
+(`unexpected argument '--flag' found`, JSON `ok: false` under `-f json`)
+and writes nothing. After `--` or an earlier text argument it stays literal:
+`bob capture -- --anything` and `bob capture hello --world` both capture text.
+`--` plus a non-letter (such as `--2`) and single-hyphen starts also begin
+text. Embedded newlines inside a
 single `TEXT` argument stay intact; multiple `TEXT` arguments are still
 joined with single spaces, never newlines. Editor clients such as Bob Mac Capture should
 call `bob capture --format json -- <text>` and parse the JSON object, whose

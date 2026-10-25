@@ -278,7 +278,8 @@ Contract: [Project Task Sync](../projects.md),
 
 ### Inbox notes
 
-`inbox.md` at the vault root, plus area children of it. Default capture
+`inbox.md` at the vault root, plus its direct area children. Projects and
+untyped descendants do not count. Default capture
 target is `mac_inbox.md`. `bob gkeep pull` drains into `gkeep_inbox.md`
 (`gkeep.target` can name another vault-relative note). Current inbox files
 set `ready_cap: off`. New captures here have no `fresh` stamp, so they
@@ -291,8 +292,9 @@ Contract: [Inbox File](glossary.md#inbox-file).
 
 ### Day notes and the Pomodoro ledger
 
-Path `<bob-dir>/YYYY/YYYYMMDD.md` for the local date, or `BOB_DAY_FILE` when
-set. The ledger is the `## Pomodoros…` section up to the next `## `
+Path `<bob-dir>/YYYY/YYYYMMDD.md` for Bob's current date, selected by the
+configured `timezone` or the host timezone, or `BOB_DAY_FILE` when set.
+The ledger is the `## Pomodoros…` section up to the next `## `
 heading.
 
 ```markdown
@@ -314,11 +316,16 @@ ALL-CAPS name) names it. Child bullets that are exactly one Task Link are
 that session's queued work. `bob capture` session operators (`=`, `+N`,
 `++N`, `x`) rewrite this section.
 
+A `+` separates themes within a name: `WORK + ADMIN` has two themes. The
+theme catalog comes from canonical daily notes, with hide and color
+preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
+the ledger and its history remain intact.
+
 Each daily note also templates a `^gtd` task for review chores. Canonical
 daily-note Next tasks are the R9 carve-out from sticky lanes.
 
 Contract: [The ledger](../plan.md#the-ledger), [Pomodoro](glossary.md#pomodoro),
-[Pomodoro homes](../pomodoro-homes.md).
+[Pomodoro homes](../pomodoro-homes.md), [Pomodoro themes](../pomodoro-themes.md).
 
 ### Reference notes
 
@@ -358,6 +365,13 @@ the note that joins a continuation leaves a redirect to the combined quote.
 An underline absorbed into another highlight leaves a redirect only when a
 vault Markdown link targets its old ID or a stub already exists.
 
+Annotation sections are derived from Highlights comments and sticky notes:
+`# Name` declares a section; a matching `@name` or `#name` token at a line's
+start or end joins it. Section headings and summary cards render inside the
+managed region, with `^s-…` section anchors and stable `^h-…` annotation IDs.
+Edits to the source annotations in Highlights update the grouping on the next
+full scan. See [Annotation sections](../highlights-ref-sync.md#sections-and).
+
 Contract: [Reference library](../ref.md),
 [Highlights Reference Note Sync](../highlights-ref-sync.md),
 [Reference Note](glossary.md#reference-note).
@@ -386,6 +400,8 @@ vault/
 ├── file/                    # saved clipboard snippets
 ├── _conflicts/              # local copies vault-sync could not merge
 ├── _templates/              # skipped by lane queries
+├── .bob/themes/             # synced per-host theme preference journals
+├── .bob/relations/          # synced per-host relation-label preference journals
 └── .obsidian/plugins/       # installed community plugins, including Bob's
 ```
 

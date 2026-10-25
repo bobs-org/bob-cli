@@ -226,7 +226,7 @@ interpret shell quotes unless their contract says otherwise.
 | `BOB_NOW` | Current time in configured `timezone`, else the host's system timezone | Valid `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS`, or `T`-separated timestamp pins Bob's clock. Invalid text is ignored. |
 | `BOB_PRIORITY_ROLL_SEED` | Fresh time/process-derived seed | A nonnegative integer seed makes `$<N>` priority rolls reproducible. |
 | `BOB_CAPTURE_TEMPLATES_FILE` | `$XDG_STATE_HOME/bob-cli/capture/templates.json`, else `$HOME/.local/state/bob-cli/capture/templates.json` | Exact saved-template shelf file. |
-| `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, task reroll, and Pomodoro theme journal writes. |
+| `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, task reroll, and theme/relation-label journal writes and renames. |
 | `BOB_VAULT_SYNC_STATE_FILE` | `$XDG_STATE_HOME/bob-cli/vault-sync.json`, else `$HOME/.local/state/bob-cli/vault-sync.json` | Vault-sync status JSON path. |
 | `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. See [compatibility shims](compatibility.md#compatibility-shims). |
 

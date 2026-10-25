@@ -19,6 +19,11 @@ define Blocked as `?`. Quote tokens in Zsh (`*`, `!`, `?`, and `#` glob).
 Zsh's `EQUALS` expansion rewrites a word that starts with `=`, so `bob capture =focus` fails unquoted: always single-quote (`'=focus'`, `'x =focus'`).
 Network, clipboard, sync, and hook execution are not used here.
 
+Options precede the draft. An unknown alphabetic long option such as
+`--anything` is rejected before draft text begins; after text begins it is
+literal. `--` ends option parsing: `bob capture -- '--anything'` captures
+that text, and `bob capture --dry-run -- '--'` previews the bare shift token.
+
 ## Token index
 
 Each row is a distinct operation. Equivalent spellings share a heading.
@@ -246,6 +251,27 @@ bob capture -r work -- 'https://example.com/article'
 
 Contract: [Command-line options](../capture.md#command-line-options) and
 [Saving links](../capture.md#saving-links-to-your-reading-queue).
+
+#### Inbox task destinations
+
+A capture that changes an existing inbox task's status reports a route
+candidate. The CLI leaves unanswered candidates in place. Repeatable
+`-i N=note` or `--inbox-route KEY=note` moves a candidate after the capture action;
+`-i N=` keeps one, and `-i keep` keeps every otherwise unanswered candidate.
+Numbers and keys come from that draft's `inbox_route` preview.
+
+For an existing Ready task `^triage` in `mac_inbox.md`:
+
+```bash
+bob capture --dry-run -f json -- '@mac_inbox:triage'
+bob capture --dry-run -i 'mac_inbox.md#^triage=work' -- '@mac_inbox:triage'
+```
+
+The second preview links the task, then moves it to `work.md` and repairs
+its links. New tasks and unchanged statuses do not produce candidates.
+Destinations exclude inboxes; stale keys or refused moves abort the batch.
+
+Contract: [Routing inbox tasks out](../capture.md#routing-inbox-tasks-out).
 
 ## URL routing and audio
 
@@ -808,10 +834,10 @@ Contract: [Shifting the current Pomodoro](../capture.md#shifting-the-current-pom
 
 ### `--[N]` {#minus-minus-shift}
 
-Shift N units earlier. Bare `--` is one unit.
+Shift N units earlier. Bare `--` is one unit; pass it after the option delimiter.
 
 ```bash
-bob capture --dry-run '--'
+bob capture --dry-run -- '--'
 ```
 
 ```text { .no-copy title="Output" }
@@ -847,7 +873,8 @@ Start the named Pomodoro now (`=focus`, same token as `=#focus`; equivalent spel
 starts in place; a completed match starts a new session with that name
 ("again"); otherwise a new named session is created and started. While
 another session runs, a different named target swaps in. Empty `<X>` keeps
-the running ledger. Write `#` only when a number comes first (`=3#bugs`) or the name starts with a digit or reads as a close (`=#2fa`, `=#x2`).
+the running ledger. Use `#` when a number comes first (`=3#bugs`), the name
+starts with a digit or reads as a close (`=#2fa`, `=#x2`), or the name is quoted.
 
 ```bash
 bob capture '=focus'
@@ -859,7 +886,24 @@ bob capture '=focus'
   - [ ] (**1200-1225** [t:: 25m]) — FOCUS
 ```
 
-Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro).
+#### Exact Pomodoro names
+
+`#"NAME"` selects by normalized name equality, preserving spaces and
+punctuation instead of using slug/prefix matching. For example, `DEEP WORK`
+and `DEEP-WORK` stay distinct. The literal also works in link suffixes.
+Whitespace collapses and letters become uppercase. Straight or curly double
+quotes are accepted; an unclosed quote is incomplete input.
+
+```bash
+bob capture --dry-run '=#"DEEP WORK"'
+bob capture --dry-run '@work:outline#"DEEP WORK"'
+```
+
+The `#` is required: `="DEEP WORK"` is prose. Completion uses exact
+literals when a slug would lose the spelling or select a different name.
+
+Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro)
+and [Lossless acceptance](../pomodoro-themes.md#pt8-lossless-acceptance).
 
 ### `~<K>` {#tilde-drop}
 

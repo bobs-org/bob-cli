@@ -70,7 +70,7 @@ previews, pickers, and discovery calls for the Mac app and editors.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob capture` | `-f json` | One result per item: routing, task line, placement, plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, and `pull_in` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
+| `bob capture` | `-f json` | Item results plus batch `captures`, `warnings`, `plan_budget`, `pomodoro_blocks`, `task_blocks`, `open_notes`, `pull_in`, and `inbox_route`; one-off labels add per-item `relation_label_hides` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-parse` | `-f json` | Per-item `mode`, spans, diagnostics, and `needs` for incomplete input | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-complete` | `-f json` | Completion context plus candidates and replacement ranges | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro | `schema_version: 1` | [Capture](../capture.md) |
@@ -80,13 +80,6 @@ previews, pickers, and discovery calls for the Mac app and editors.
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, and route `targets` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings | `schema_version: 1` | [Capture](../capture.md) |
-
-For `bob capture-complete` in `relation_label` context, visible catalog rows include
-`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A typed row
-is first and includes `typed: true`, `existing`, and `hidden`; when the typed key exists,
-it also includes `count` and uses the catalog spelling. Hidden labels are omitted from
-the visible rows, but an exact typed hidden label remains available with `hidden: true`.
-The response includes `hidden_count` for this context.
 | `bob capture-task-sections` | `-f json` | ALL-CAPS child sections of one task | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
@@ -94,6 +87,33 @@ The response includes `hidden_count` for this context.
 | `bob capture-templates show` | `-f json` | One saved definition | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates delete` | `-f json` | Removed entries plus remaining count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
+
+For `bob capture-complete` in `relation_label` context, visible catalog rows include
+`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A typed row
+is first and includes `typed: true`, `existing`, and `hidden`; when the typed key exists,
+it also includes `count` and uses the catalog spelling. Hidden labels are omitted from
+the visible rows, but an exact typed hidden label remains available with `hidden: true`.
+The response includes `hidden_count` for this context. Rows also carry
+`hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
+in `replacement` and adds `one_off: true`.
+
+### Inbox-routing results
+
+Successful captures, including dry runs, return `inbox_route` with
+`supported: true`, `candidate_count`, `routed_count`, `kept_count`, and
+`candidates`. Candidates describe existing inbox task blocks whose status changes;
+new tasks are excluded. Each has an opaque `key`, a 1-based `n`, before/after
+status, an `answer`, and an `outcome` (`pending`, `kept`, or `moved`).
+`destinations` is present only when candidates exist.
+
+Repeatable `--inbox-route` answers select a destination or keep a candidate
+in place. A moved candidate gains `moved` with its final path, line, block
+ID, previous block ID, and freshness date. The batch adds repair and rename
+reports and `needs_reconcile`; `task_blocks` and `open_notes` follow the
+move. Without an answer or the client guard, a capture succeeds with pending
+candidates left in their inbox. See the
+[inbox-routing contract](../capture.md#routing-inbox-tasks-out) for answer
+syntax, guard errors, and atomic-write guarantees.
 
 ### Similar-task draft results
 
@@ -154,6 +174,35 @@ total's sign. Other numeric headlines use daily medians; ratios pool
 numerators and denominators, and booleans count met days over days with data.
 The envelope remains schema 1; see
 [Stats summaries](../stats.md#ranges-grouping-summaries-display).
+
+An unmet boolean for provisional today has `value: 0`, `display: "not yet"`,
+and `provisional: true`; a completed day can display `missed`. The Obsidian
+Day strip is a plugin view, not a `day_strip` field in CLI JSON. See
+[Daily Stats](../stats.md).
+
+## Pomodoro themes and relation labels
+
+Bare `bob themes` and `bob relations` run their `list` command. Lists read
+the vault and may update disposable local caches. Hide, unhide, and color
+commands write preference journals; rename previews with `-d` and otherwise
+rewrites matching vault content in a verified transaction.
+
+| Command | Flag | Shape | Version | Contract |
+| --- | --- | --- | --- | --- |
+| `bob themes list` | `-f json` | `today`, `window_days`, `counts`, `themes`, hue-collision `hints`, `renamed_reappeared`, and `warnings`; no success `ok` field | `schema_version: 1` | [Pomodoro themes](../pomodoro-themes.md#json-contract) |
+| `bob themes hide`, `bob themes unhide` | `-f json` | `ok`, `hidden` or `unhidden` names, and `via` | `schema_version: 1` | [Pomodoro themes](../pomodoro-themes.md#json-contract) |
+| `bob themes color` | `-f json` | `ok`, `name`, `hue`, `pinned`, and `via`; `auto` returns `hue: null` and `pinned: false` | `schema_version: 1` | [Pomodoro themes](../pomodoro-themes.md#json-contract) |
+| `bob themes rename` | `-f json` | `mode`, `changed`, `from`, `to`, `merge`, affected `files` and `entries`, `state`, `color`, `commit`, `sync`, and `warnings` | `schema_version: 1` | [Global rename](../pomodoro-themes.md#pt10-global-rename) |
+| `bob relations list` | `-f json` | `ok`, `counts`, `labels` with spelling variants and replacement strings, `renamed_reappeared`, and `warnings` | `schema_version: 1` | [Relation vocabulary](../task-relations.md#rv7-contracts) |
+| `bob relations hide`, `bob relations unhide` | `-f json` | `ok`, `hidden` or `unhidden` names, and `via` | `schema_version: 1` | [Relation vocabulary](../task-relations.md#rv7-contracts) |
+| `bob relations rename` | `-f json` | `mode`, `changed`, `from`, `to`, `merge`, affected `files`, `counts`, `state`, `inverse`, replacement strings, `commit`, `sync`, and `warnings` | `schema_version: 1` | [Rename transaction](../task-relations.md#rv8-the-rename-transaction) |
+
+Theme colors also appear in existing reports as `{key, name, hue, hue_source}`
+objects: `themes` on Pomodoro-name parse spans, completion rows, and ledger
+entries; `theme_refs` beside plan `theme_names`; and `added_theme_refs` in
+capture's `plan_budget`. Stats supplies `theme_hues` keyed by normalized
+theme key. These additions retain each command's existing envelope version;
+`bob plan` remains schema 2 and capture remains unversioned.
 
 ## Tasks, reconciliation, and queries
 

@@ -144,6 +144,10 @@ failure, which yields empty output.
     git.
   - `task reroll --level`: configured priority labels in config order;
     the description is the roll window (for example `2–7 days`).
+  - `relations rename OLD NEW`: catalog labels, including hidden ones,
+    grouped `relation labels`, with link counts and hidden-state descriptions.
+    Relation `hide`/`unhide` arguments, theme names, and `--inbox-route`
+    answers remain free text.
   - `query --tasks-note`, `query --origin`, `ready NOTE`,
     `capture-task-id --note-path`: vault notes
     as `!files-in <bob-dir>\t*.md`.
@@ -425,6 +429,13 @@ another thin client of that service (see `docs/capture.md`
   the `x` line. The exact lone `+` remains an action; capture completion
   separately opens the parent-task picker, while shell completion offers
   only identified `@route+block-id` values in the `parent tasks` group.
+- **Named starts and links complete Pomodoro names.** `=name`, `=#name`,
+  and link-name suffixes use today's entries plus the theme catalog. Recent
+  rows exclude hidden themes and components already represented by Today;
+  at most 5 appear for an empty query and 12 for a nonempty query. They are
+  grouped `Recent` with last-use and day-count descriptions. Acceptance
+  preserves the name with an exact quoted literal when needed, and never
+  changes theme preferences. See [Menu composition](pomodoro-themes.md#pt7-menu-composition).
 - **Whole-item `!` completes open tasks.** A leading `!` token opens the
   Complete picker over every open task in the vault, and shell completion
   offers only identified, enabled `!note:block-id` values (ID-less and
@@ -445,7 +456,10 @@ another thin client of that service (see `docs/capture.md`
   (`relation_label`). Shell completion offers identified, enabled
   `~note:block-id` / `~~note:block-id` values, grouped `links to` /
   `linked from`. Quote `~` on the shell; zsh globs it. See
-  [Linking tasks](capture.md#linking-tasks).
+  [Linking tasks](capture.md#linking-tasks). Label suggestions use the shared
+  catalog: hidden labels are omitted, but typing an exact hidden label keeps
+  it available. `||` selects a one-off label that hides only after the
+  capture succeeds; requesting or accepting completion writes nothing.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human
