@@ -264,6 +264,144 @@ fn doctor_coverage_warn_counts_unmirrored_zorg_records() {
     assert!(report.contains("result: ok"), "{report}");
 }
 
+#[test]
+fn doctor_reference_ids_ok_when_ids_match_stems() {
+    let temp = TempDir::new("bob-cli-doctor-reference-ids-ok");
+    let vault = base_vault(&temp);
+    write_file(
+        &vault.join("ref/papers/matched.md"),
+        "---\nstatus: ready\ntitle: Matched Note\nid: matched\n---\n\n# Matched Note\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/blogs/other.md"),
+        "---\nstatus: ready\ntitle: Other Note\nid: other\n---\n\n# Other Note\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report
+            .contains("reference ids: ok (2 notes with ids, all match stems)"),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
+fn doctor_reference_ids_warn_on_mismatch_and_case_insensitive_duplicate() {
+    let temp = TempDir::new("bob-cli-doctor-reference-ids-warn");
+    let vault = base_vault(&temp);
+    write_file(
+        &vault.join("ref/papers/mismatch.md"),
+        "---\nstatus: ready\ntitle: Mismatch Note\nid: wrong-id\n---\n\n# Mismatch Note\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/blogs/a.md"),
+        "---\nstatus: ready\ntitle: A Note\nid: DuP\n---\n\n# A Note\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/blogs/b.md"),
+        "---\nstatus: ready\ntitle: B Note\nid: dup\n---\n\n# B Note\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    commit_vault(&vault);
+
+    let output = run_doctor(&vault);
+    // Identity problems are warnings, never failures.
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "reference ids: warn (1 duplicate id \"DuP\" across 2 notes · 3 id/stem mismatches · e.g. ref/blogs/a.md, ref/blogs/b.md, ref/papers/mismatch.md — repair with bob ref rename <REF> <NAME>)"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "library diagnostics: warn (3 notes: 2 duplicate_ref_id, 3 id_stem_mismatch · e.g. ref/blogs/a.md, ref/blogs/b.md, ref/papers/mismatch.md)"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
+fn doctor_reference_ids_repair_through_rename_clears_the_row() {
+    const NOW: &str = "2026-10-25 12:00:00";
+    let temp = TempDir::new("bob-cli-doctor-reference-ids-repair");
+    let (vault, _, _) = init_vault_sync_pair(&temp);
+    for directory in ["lib", "ref", "xlib"] {
+        fs::create_dir_all(vault.join(directory)).expect("create vault dir");
+    }
+    write_area_note(&vault.join("sase.md"), "SASE");
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "vault dirs"]);
+    let source = temp.path().join("src.md");
+    write_file(&source, "# Hello\n\nSome text.\n");
+    let create = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg(&source)
+        .args(["-P", "sase", "-t", "papers", "-i"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob ref create");
+    assert_success(&create);
+    let intake = bob_command()
+        .arg("ref")
+        .args(["scan", "-i"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob ref scan -i");
+    assert_success(&intake);
+
+    // Simulate legacy bad data: an id that no longer matches the stem.
+    let note = vault.join("ref/papers/src.md");
+    let contents = fs::read_to_string(&note).expect("read created note");
+    fs::write(&note, contents.replacen("id: src", "id: stale-id", 1))
+        .expect("write mismatched id");
+    let before = stdout(&run_doctor(&vault));
+    assert!(
+        before.contains(
+            "reference ids: warn (1 id/stem mismatch · e.g. ref/papers/src.md — repair with bob ref rename <REF> <NAME>)"
+        ),
+        "{before}"
+    );
+
+    // The prescribed repair: sync the marker, then rename to the stem.
+    let scan = bob_command()
+        .arg("ref")
+        .args(["scan", "-w"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob ref scan -w");
+    assert_success(&scan);
+    let rename = bob_command()
+        .arg("ref")
+        .args(["rename", "src", "src"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob ref rename");
+    assert_success(&rename);
+    assert!(
+        stdout(&rename).contains("id: stale-id → src"),
+        "{}",
+        format_output(&rename)
+    );
+
+    let after = stdout(&run_doctor(&vault));
+    assert!(
+        after
+            .contains("reference ids: ok (1 note with an id, all match stems)"),
+        "{after}"
+    );
+    assert!(after.contains("result: ok"), "{after}");
+}
+
 fn queue_xlib_pdf(vault: &std::path::Path, name: &str, age_secs: u64) {
     let path = vault.join(format!("xlib/chat/{name}.pdf"));
     write_file(&path, "%PDF-1.4 queued\n");

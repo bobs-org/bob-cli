@@ -117,6 +117,11 @@ never fail the command:
   structural `project_name_aliases` problems.
 - `identity` reports legacy notes superseded by a newer capture, or warns
   about identity keys shared by more than one PDF-backed note.
+- `reference ids` reports mismatched or duplicated reference ids: a recorded
+  frontmatter `id` that differs from the note stem (`id_stem_mismatch`), or
+  one id recorded by more than one note (`duplicate_ref_id`, matched
+  ASCII-case-insensitively). Both name the `bob ref rename <REF> <NAME>`
+  repair; notes without an id stay id-less.
 - `annotations` warns while notes still render a leaked marker mirror; the
   next `bob ref scan` removes those blocks without tombstones.
 - `coverage` counts zorg-era `status::` reading records in `*.md` files

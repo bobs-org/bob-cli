@@ -497,6 +497,7 @@ fn append_library_doctor_rows(config: &Config, warnings: &mut Vec<String>) {
     append_ref_tasks_row(&index, warnings);
     append_parents_row(&config.bob_dir, warnings);
     append_library_identity_row(&index.rows, warnings);
+    append_reference_ids_row(&index.rows, warnings);
     append_library_annotations_row(&index.rows, warnings);
 
     let zorg: crate::native::ref_library::ZorgCoverage =
@@ -757,6 +758,116 @@ fn append_library_identity_row(
             "identity: ok ({superseded} legacy notes superseded by newer captures)"
         );
     }
+}
+
+/// The `reference ids` rollup: frontmatter ids that differ from their note
+/// stem (`id_stem_mismatch`) and ids recorded by more than one note
+/// (`duplicate_ref_id`), both repaired through `bob ref rename` (phase
+/// `ref-doctor-identity`). Like every library row it never fails the
+/// command: problems are warnings.
+fn append_reference_ids_row(
+    rows: &[crate::native::ref_library::RefRow],
+    warnings: &mut Vec<String>,
+) {
+    let mut mismatches: Vec<&str> = Vec::new();
+    let mut duplicated: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for row in rows {
+        let mut mismatch = false;
+        let mut duplicate = false;
+        for diagnostic in &row.diagnostics {
+            match diagnostic.code.as_str() {
+                "id_stem_mismatch" => mismatch = true,
+                "duplicate_ref_id" => duplicate = true,
+                _ => {}
+            }
+        }
+        if mismatch {
+            mismatches.push(row.path.as_str());
+        }
+        if duplicate {
+            if let Some(id) = row.id.as_deref() {
+                duplicated
+                    .entry(id.to_lowercase())
+                    .or_default()
+                    .push(row.path.as_str());
+            }
+        }
+    }
+    let with_ids = rows.iter().filter(|row| row.id.is_some()).count();
+    if mismatches.is_empty() && duplicated.is_empty() {
+        if with_ids == 0 {
+            println!("reference ids: ok (no recorded ids)");
+        } else {
+            println!(
+                "reference ids: ok ({} {}, all match stems)",
+                with_ids,
+                if with_ids == 1 {
+                    "note with an id"
+                } else {
+                    "notes with ids"
+                },
+            );
+        }
+        return;
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !duplicated.is_empty() {
+        let notes: usize = duplicated.values().map(Vec::len).sum();
+        if duplicated.len() == 1 {
+            let (key, _) = duplicated.iter().next().expect("one duplicate id");
+            let recorded = rows
+                .iter()
+                .find_map(|row| {
+                    row.id.as_deref().filter(|id| id.to_lowercase() == *key)
+                })
+                .unwrap_or(key);
+            parts.push(format!(
+                "1 duplicate id {recorded:?} across {}",
+                plural_notes(notes),
+            ));
+        } else {
+            parts.push(format!(
+                "{} duplicate ids across {}",
+                duplicated.len(),
+                plural_notes(notes),
+            ));
+        }
+    }
+    if !mismatches.is_empty() {
+        parts.push(if mismatches.len() == 1 {
+            "1 id/stem mismatch".to_string()
+        } else {
+            format!("{} id/stem mismatches", mismatches.len())
+        });
+    }
+    let mut examples: Vec<&str> = Vec::new();
+    for path in &mismatches {
+        if examples.len() >= 3 {
+            break;
+        }
+        examples.push(path);
+    }
+    if examples.len() < 3 {
+        for paths in duplicated.values() {
+            for path in paths {
+                if examples.len() >= 3 {
+                    break;
+                }
+                if !examples.contains(path) {
+                    examples.push(path);
+                }
+            }
+        }
+    }
+    println!(
+        "reference ids: warn ({} · e.g. {} — repair with bob ref rename <REF> <NAME>)",
+        parts.join(" · "),
+        examples.join(", "),
+    );
+    warnings.push(format!(
+        "{}; repair with bob ref rename <REF> <NAME>",
+        parts.join(" · "),
+    ));
 }
 
 fn append_library_annotations_row(

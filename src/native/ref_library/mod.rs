@@ -177,6 +177,7 @@ pub(crate) fn build_index(
         }
     }
     apply_supersession(&mut rows);
+    apply_reference_identity(&mut rows);
     blocked_by::apply_blocked_by(&config.bob_dir, &ref_tasks, &mut rows);
     for row in &mut rows {
         row.diagnostics
@@ -837,6 +838,68 @@ fn apply_supersession(rows: &mut [RefRow]) {
     for (row, winner) in rows.iter_mut().zip(winners) {
         if winner.as_deref() != Some(row.path.as_str()) {
             row.superseded_by = winner;
+        }
+    }
+}
+
+/// Reference-id identity diagnostics (phase `ref-doctor-identity`).
+///
+/// A recorded frontmatter `id` must equal the note stem
+/// (`decisions:reference-ids-follow-file-stems`); the only exception is a
+/// `_N` suffix that avoids a duplicate across `ref/`, which still compares
+/// equal here. Two warning-level diagnostics, both repaired through
+/// `bob ref rename`:
+/// - `id_stem_mismatch`: the recorded id differs from the note stem
+///   (exact comparison; a case-only difference still mismatches).
+/// - `duplicate_ref_id`: the same id (ASCII-case-insensitive) is recorded
+///   by more than one note anywhere under `ref/`.
+/// Notes without a recorded id stay id-less and earn no diagnostic.
+fn apply_reference_identity(rows: &mut [RefRow]) {
+    let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        if let Some(id) = row.id.as_deref() {
+            by_id.entry(id.to_lowercase()).or_default().push(index);
+        }
+    }
+    // Owned duplicate details per row, resolved before any mutation.
+    let duplicate_details: Vec<Option<String>> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let id = row.id.as_deref()?;
+            let sharing = by_id.get(&id.to_lowercase())?;
+            if sharing.len() < 2 {
+                return None;
+            }
+            let others = sharing
+                .iter()
+                .filter(|other| **other != index)
+                .map(|other| rows[*other].path.clone())
+                .collect::<Vec<_>>();
+            Some(format!(
+                "id {id:?} is also recorded by {}; keep one and repair the rest with bob ref rename <REF> <NAME>",
+                others.join(", "),
+            ))
+        })
+        .collect();
+    for (row, duplicate) in rows.iter_mut().zip(duplicate_details) {
+        if let Some(detail) = duplicate {
+            row.diagnostics
+                .push(Diagnostic::new("duplicate_ref_id", detail));
+        }
+        let Some(id) = row.id.clone() else { continue };
+        let stem = Path::new(&row.path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("")
+            .to_string();
+        if id != stem {
+            row.diagnostics.push(Diagnostic::new(
+                "id_stem_mismatch",
+                format!(
+                    "id {id:?} differs from file stem {stem:?}; repair with bob ref rename <REF> <NAME>",
+                ),
+            ));
         }
     }
 }
