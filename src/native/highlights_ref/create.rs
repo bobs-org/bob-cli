@@ -65,8 +65,11 @@ pub(super) const PANDOC_HEADER_INCLUDES: &str = concat!(
     r"\newcommand{\BobListenPlay}{\colorbox{BobListenRule}{\textcolor{white}{\textbf{▶\,Play}}}}",
     r"\AtBeginDocument{\raggedright\hyphenpenalty=10000\exhyphenpenalty=10000}",
 );
-/// Pandoc Lua filter that gives long inline code somewhere to break and renders
-/// listen-card Divs as a compact LaTeX callout.
+/// Pandoc Lua filter that gives long inline code somewhere to break, renders
+/// listen-card Divs as a compact LaTeX callout, and numbers sections from the
+/// file's top section level (a lone H1 becomes an unnumbered, unlisted title
+/// heading and every other heading moves up) whenever pandoc numbers sections
+/// for LaTeX output.
 pub(super) const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
 local PLAY_URI = nil
 
@@ -168,7 +171,38 @@ function Div(div)
     pandoc.write(pandoc.Pandoc({pandoc.Plain(content)}), "latex") .. "}")
 end
 
-return {{Meta = Meta}, {Code = Code, Div = Div}}
+local function number_from_top_level(doc)
+  if not (FORMAT:match("latex") and PANDOC_WRITER_OPTIONS
+      and PANDOC_WRITER_OPTIONS.number_sections) then
+    return nil
+  end
+  local h1 = 0
+  doc:walk({ Header = function(h) if h.level == 1 then h1 = h1 + 1 end end })
+  local lone = h1 == 1
+  local shallowest = nil
+  doc:walk({ Header = function(h)
+    if not (lone and h.level == 1) and (shallowest == nil or h.level < shallowest) then
+      shallowest = h.level
+    end
+  end })
+  local shift = (shallowest or 1) - 1
+  local listed = 0
+  doc = doc:walk({ Header = function(h)
+    if lone and h.level == 1 then
+      for _, class in ipairs({ "unnumbered", "unlisted" }) do
+        if not h.classes:includes(class) then h.classes:insert(class) end
+      end
+    elseif shift > 0 then
+      h.level = h.level - shift
+    end
+    if not h.classes:includes("unlisted") then listed = listed + 1 end
+    return h
+  end })
+  if listed == 0 then doc.meta.toc = false end
+  return doc
+end
+
+return {{Meta = Meta}, {Code = Code, Div = Div}, {Pandoc = number_from_top_level}}
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4017,6 +4051,225 @@ mod tests {
         assert!(
             latex.contains(r"\texttt{bead}"),
             "code without separators must stay a single span: {latex}"
+        );
+    }
+
+    fn section_latex(source_text: &str, numbered: bool, toc: bool) -> String {
+        let pandoc = pandoc_command().unwrap_or_else(|| {
+            panic!("skipping section numbering test: pandoc is required")
+        });
+        let id = std::sync::atomic::AtomicU64::fetch_add(
+            {
+                static COUNTER: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(0);
+                &COUNTER
+            },
+            1,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let temp = TempDir::new(&format!("section-numbering-{id}"));
+        let filter = temp.path.join("filter.lua");
+        fs::write(&filter, PANDOC_CODE_BREAK_FILTER).expect("write filter");
+        let source = temp.path.join("report.md");
+        fs::write(&source, source_text).expect("write source");
+        let mut cmd = Command::new(&pandoc);
+        cmd.arg(&source).arg("--to=latex");
+        if numbered {
+            cmd.arg("--number-sections");
+        }
+        if toc {
+            cmd.arg("-s").arg("--toc");
+        }
+        cmd.arg("--lua-filter").arg(&filter);
+        let output = cmd.output().expect("run pandoc");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    const LONE_H1_SOURCE: &str = "# Report\n\n## Setup\n\n### Details\n\n## Results\n\n```\n# not a heading\n```\n";
+
+    #[test]
+    fn section_numbering_lone_atx_h1_moves_sections_up() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex(LONE_H1_SOURCE, true, false);
+        assert!(latex.contains(r"\section*{Report}"), "{latex}");
+        assert!(latex.contains(r"\label{report}"), "{latex}");
+        assert!(
+            !latex.contains(r"\addcontentsline{toc}{section}{Report}"),
+            "lone H1 stays out of Contents: {latex}"
+        );
+        assert!(latex.contains(r"\section{Setup}"), "{latex}");
+        assert!(latex.contains(r"\subsection{Details}"), "{latex}");
+        assert!(latex.contains(r"\section{Results}"), "{latex}");
+        assert!(!latex.contains(r"\subsection{Setup}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_lone_setext_h1_moves_sections_up() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("Report\n======\n\n## Setup\n", true, false);
+        assert!(latex.contains(r"\section*{Report}"), "{latex}");
+        assert!(latex.contains(r"\section{Setup}"), "{latex}");
+        assert!(!latex.contains(r"\subsection{Setup}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_lone_h1_with_only_h3_children() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex(
+            "# Report\n\n### Deep one\n\n### Deep two\n",
+            true,
+            false,
+        );
+        assert!(latex.contains(r"\section*{Report}"), "{latex}");
+        assert!(latex.contains(r"\section{Deep one}"), "{latex}");
+        assert!(latex.contains(r"\section{Deep two}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_without_h1_numbers_from_shallowest() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("## Setup\n\n### Details\n", true, false);
+        assert!(latex.contains(r"\section{Setup}"), "{latex}");
+        assert!(latex.contains(r"\subsection{Details}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_two_h1s_keeps_levels() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("# One\n\n## Child\n\n# Two\n", true, false);
+        assert!(latex.contains(r"\section{One}"), "{latex}");
+        assert!(latex.contains(r"\subsection{Child}"), "{latex}");
+        assert!(latex.contains(r"\section{Two}"), "{latex}");
+        assert!(!latex.contains(r"\section*{"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_gate_off_keeps_levels() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex(LONE_H1_SOURCE, false, false);
+        assert!(latex.contains(r"\section{Report}"), "{latex}");
+        assert!(latex.contains(r"\subsection{Setup}"), "{latex}");
+        assert!(!latex.contains(r"\section*{Report}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_contents_kept_only_when_listed() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let with_sections = section_latex(LONE_H1_SOURCE, true, true);
+        assert!(
+            with_sections.contains(r"\tableofcontents"),
+            "lone H1 with sections keeps Contents: {with_sections}"
+        );
+        let lone_only = section_latex("# Only\n", true, true);
+        assert!(
+            !lone_only.contains(r"\tableofcontents"),
+            "lone-H1-only file skips Contents: {lone_only}"
+        );
+        let headingless =
+            section_latex("Just text, no headings.\n", true, true);
+        assert!(
+            !headingless.contains(r"\tableofcontents"),
+            "heading-less file skips Contents: {headingless}"
+        );
+    }
+
+    #[test]
+    fn section_numbering_xelatex_render_numbers_from_top_level() {
+        if skip_pandoc_xelatex("section numbering pdf") {
+            return;
+        }
+        let temp = TempDir::new("section-numbering-pdf");
+        let source = temp.path.join("report.md");
+        fs::write(&source, LONE_H1_SOURCE).expect("write source");
+        let target = temp.path.join("xlib/chat/report.pdf");
+        fs::create_dir_all(target.parent().expect("target parent"))
+            .expect("create output directory");
+        let plan = CreatePlan {
+            source: source.display().to_string(),
+            source_kind: "markdown",
+            target: target.clone(),
+            sidecar: target.with_extension("md"),
+            workflow: TargetWorkflow::Intake {
+                library_destination: temp.path.join("lib/chat/report.pdf"),
+            },
+            stem: "report".to_string(),
+            renamed_from: None,
+            title: "Report".to_string(),
+            title_source: "markdown",
+            author: None,
+            published: None,
+            source_url: None,
+            source_note: None,
+            source_markdown: Some(LONE_H1_SOURCE.to_string()),
+            captured: None,
+            id: None,
+            marker: compose_marker(
+                "ready",
+                "obsidian_ref",
+                "Report",
+                None,
+                &[],
+            )
+            .expect("compose marker"),
+            audio: None,
+            page_count_hint: None,
+        };
+        let render_path = render_temp_path(&target).expect("render path");
+        let filters = filters_with_optional_diagrams(&temp.path, None);
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+            .expect("render section numbering PDF");
+        let document =
+            lopdf::Document::load(&render_path).expect("load rendered PDF");
+        assert_eq!(
+            outline_titles(&document),
+            vec!["Setup", "Details", "Results"],
+            "title bookmark stays out of the outline"
+        );
+        let text = pdf_haystack(&render_path);
+        let normalized: Vec<String> = text
+            .lines()
+            .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+            .collect();
+        let has_prefix = |prefix: &str| {
+            normalized.iter().any(|line| {
+                line.strip_prefix(prefix).is_some_and(|rest| {
+                    rest.is_empty() || rest.starts_with(' ')
+                })
+            })
+        };
+        assert!(has_prefix("1 Setup"), "Setup numbers 1: {text}");
+        assert!(has_prefix("1.1 Details"), "Details numbers 1.1: {text}");
+        assert!(has_prefix("2 Results"), "Results numbers 2: {text}");
+        assert!(
+            !normalized.iter().any(|line| line.contains("0.1")),
+            "no zero-based numbers: {text}"
+        );
+        assert!(
+            !has_prefix("1 Report"),
+            "title heading prints unnumbered: {text}"
         );
     }
 

@@ -153,6 +153,12 @@ Markdown outside the vault, local PDFs, and URLs continue to require
 `bob capture-targets`. Markdown files render ragged-right, with hyphenation
 off and `Ligatures=NoCommon` on the DejaVu serif, sans, and mono families, so
 Highlights quotes stay free of hyphen splits and common ligatures.
+This covers plain Markdown files and `-M` vault-note renders. Sections are
+numbered from the file's top section level. A lone H1 prints as an unnumbered
+title heading and stays out of the Contents list and the bookmarks, so its H2s
+number `1`, `2`, …. A file with no H1 numbers from its shallowest heading.
+Files with two or more H1s number those H1s. A PDF with no listed heading skips
+the Contents list.
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.
