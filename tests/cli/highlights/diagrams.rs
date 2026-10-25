@@ -58,19 +58,22 @@ fn skip_if_missing_note_profile_packages(vault: &std::path::Path) -> bool {
 }
 
 fn pdf_haystack(path: &std::path::Path) -> String {
-    if Command::new("pdftotext").arg("-v").output().is_ok() {
-        let output = Command::new("pdftotext")
-            .arg("-layout")
-            .arg(path)
-            .arg("-")
-            .output()
-            .expect("pdftotext");
-        if output.status.success() {
-            return String::from_utf8_lossy(&output.stdout).into_owned();
-        }
-    }
-    String::from_utf8_lossy(&std::fs::read(path).expect("read pdf"))
-        .into_owned()
+    // Callers gate on `skip_pandoc_xelatex`, which requires pdftotext.
+    // There is no raw-bytes fallback: searching compressed PDF bytes for
+    // visible text is not a valid extraction and lets negative assertions
+    // pass falsely.
+    let output = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(path)
+        .arg("-")
+        .output()
+        .expect("pdftotext is required for PDF text assertions");
+    assert!(
+        output.status.success(),
+        "pdftotext failed on {}: {output:?}",
+        path.display()
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn mermaid_source(extra: &str) -> String {

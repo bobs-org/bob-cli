@@ -1502,22 +1502,22 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
     }
 
     fn pdf_haystack(path: &Path) -> String {
-        if std::process::Command::new("pdftotext")
-            .arg("-v")
+        // Callers gate on `skip_real_diagram_render`, which requires
+        // pdftotext. There is no raw-bytes fallback: searching compressed
+        // PDF bytes for visible text is not a valid extraction and lets
+        // negative assertions pass falsely.
+        let output = std::process::Command::new("pdftotext")
+            .arg("-layout")
+            .arg(path)
+            .arg("-")
             .output()
-            .is_ok()
-        {
-            let output = std::process::Command::new("pdftotext")
-                .arg("-layout")
-                .arg(path)
-                .arg("-")
-                .output()
-                .expect("pdftotext");
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout).into_owned();
-            }
-        }
-        String::from_utf8_lossy(&fs::read(path).expect("read pdf")).into_owned()
+            .expect("pdftotext is required for PDF text assertions");
+        assert!(
+            output.status.success(),
+            "pdftotext failed on {}: {output:?}",
+            path.display()
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
     fn skip_real_diagram_render(test_name: &str) -> bool {
@@ -1531,6 +1531,14 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .is_err()
         {
             eprintln!("skipping {test_name}: pandoc/xelatex is required");
+            return true;
+        }
+        if std::process::Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping {test_name}: pdftotext is required");
             return true;
         }
         skip_if_missing_note_profile_packages(test_name)
