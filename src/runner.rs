@@ -852,6 +852,58 @@ impl fmt::Display for RunnerError {
 impl Error for RunnerError {}
 
 pub fn run_bob() -> i32 {
+    // Rust ignores SIGPIPE, so a closed stdout/stderr pipe surfaces as an
+    // EPIPE `print!`/`eprintln!` panic, not a signal. Silence only that
+    // panic at this boundary and map it to a quiet exit 0; every other
+    // panic is rethrown after the previous hook is restored, keeping
+    // today's message and exit 101. SIGPIPE disposition is unchanged:
+    // bob writes to child stdin in production, where the default
+    // disposition would kill bob mid-operation.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|info| {
+        if !is_epipe_print_panic(info.payload()) {
+            // Non-EPIPE panics stay silent only here: the payload is
+            // rethrown below after the previous hook is restored, so
+            // today's message prints exactly once with exit 101.
+        }
+    }));
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(run_bob_inner));
+    std::panic::set_hook(previous_hook);
+    match outcome {
+        Ok(exit_code) => exit_code,
+        Err(payload) => {
+            if is_epipe_print_panic(payload.as_ref()) {
+                0
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+}
+
+/// std's `print!`/`println!` panic with
+/// `failed printing to stdout: Broken pipe (os error 32)` (and the
+/// `eprintln!` variants with `stderr`) once the reader closes the pipe.
+/// Only that narrow shape maps to a quiet exit; any other panic payload
+/// keeps today's behavior.
+fn is_epipe_print_panic(payload: &(dyn std::any::Any + Send)) -> bool {
+    let message = if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else if let Some(message) = payload.downcast_ref::<&str>() {
+        message
+    } else {
+        return false;
+    };
+    let is_print_panic = message.contains("failed printing to stdout")
+        || message.contains("failed printing to stderr");
+    let is_broken_pipe = message.contains("Broken pipe")
+        || message.contains("BrokenPipe")
+        || message.contains("os error 32");
+    is_print_panic && is_broken_pipe
+}
+
+fn run_bob_inner() -> i32 {
     let argv: Vec<OsString> = env::args_os().collect();
     // Hidden shell-completion endpoint. It intercepts before the root
     // clap parse and before the script fallback, and it never appears in
@@ -955,6 +1007,11 @@ fn route_help(path: &[OsString]) -> Result<Vec<OsString>, i32> {
         );
         let exit_code = error.exit_code();
         if let Err(print_error) = error.print() {
+            // A closed pipe renders nothing: stay quiet with a clean
+            // exit instead of reporting the failed render.
+            if print_error.kind() == std::io::ErrorKind::BrokenPipe {
+                return Err(0);
+            }
             eprintln!("bob: failed to print command-line error: {print_error}");
         }
         return Err(exit_code);
@@ -990,6 +1047,11 @@ fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
         Err(error) => {
             let exit_code = error.exit_code();
             if let Err(print_error) = error.print() {
+                // A closed pipe renders nothing: stay quiet with a clean
+                // exit instead of reporting the failed render.
+                if print_error.kind() == std::io::ErrorKind::BrokenPipe {
+                    return 0;
+                }
                 eprintln!(
                     "bob: failed to print command-line error: {print_error}"
                 );
@@ -1596,7 +1658,45 @@ fn set_asset_permissions(_path: &Path, _executable: bool) -> io::Result<()> {
 mod tests {
     use std::ffi::OsString;
 
-    use super::{rewrite_alias_args, Section, SECTIONS, SUBCOMMANDS};
+    use super::{
+        is_epipe_print_panic, rewrite_alias_args, Section, SECTIONS,
+        SUBCOMMANDS,
+    };
+
+    fn boxed_payload(message: &str) -> Box<dyn std::any::Any + Send> {
+        // `panic!("{message}")` payloads are owned `String`s, matching what
+        // std's `print!` failure produces.
+        Box::new(message.to_owned())
+    }
+
+    #[test]
+    fn epipe_classifier_accepts_stdout_and_stderr_broken_pipes() {
+        let stdout = boxed_payload(
+            "failed printing to stdout: Broken pipe (os error 32)",
+        );
+        assert!(is_epipe_print_panic(stdout.as_ref()));
+        let stderr = boxed_payload(
+            "failed printing to stderr: Broken pipe (os error 32)",
+        );
+        assert!(is_epipe_print_panic(stderr.as_ref()));
+        let borrowed: Box<dyn std::any::Any + Send> =
+            Box::new("failed printing to stdout: Broken pipe (os error 32)");
+        assert!(is_epipe_print_panic(borrowed.as_ref()));
+    }
+
+    #[test]
+    fn epipe_classifier_rejects_non_epipe_panics() {
+        // A real bug elsewhere must keep today's message and exit 101.
+        let other_io = boxed_payload(
+            "failed printing to stdout: No space left on device (os error 28)",
+        );
+        assert!(!is_epipe_print_panic(other_io.as_ref()));
+        let unrelated: Box<dyn std::any::Any + Send> =
+            Box::new("index out of bounds: the len is 0 but the index is 3");
+        assert!(!is_epipe_print_panic(unrelated.as_ref()));
+        let non_string: Box<dyn std::any::Any + Send> = Box::new(42_u32);
+        assert!(!is_epipe_print_panic(non_string.as_ref()));
+    }
 
     #[test]
     fn subcommands_are_contiguous_in_section_order_and_alphabetical() {

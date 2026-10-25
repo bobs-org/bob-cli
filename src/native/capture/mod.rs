@@ -231,6 +231,11 @@ fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
         {
             Ok(()) => 0,
             Err(error) => {
+                // A reader that closed the pipe got what it asked for:
+                // end quietly instead of reporting the failed write.
+                if error.kind() == io::ErrorKind::BrokenPipe {
+                    return 0;
+                }
                 eprintln!("{COMMAND_NAME}: failed to write expansion: {error}");
                 1
             }

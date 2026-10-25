@@ -8,6 +8,7 @@ mod completion;
 mod dataview;
 mod dataview_oom;
 mod docs_reference;
+mod epipe;
 mod freshness;
 mod help;
 mod help_options;
