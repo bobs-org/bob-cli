@@ -73,8 +73,8 @@ Roots are derived from today's note tree at read time, never written. A
 leftover `rollup:` frontmatter key is silently ignored: project rollup is
 retired and never regroups homes. Labels use the bare root stem (`sase`,
 `gtd`); buckets keep `GTD review`, `unlinked`, `unfiled`. Hues follow R8:
-colour means area, a segment means a root parent, and same-area roots share
-a hue. Stats splits each session per task first, then sums shares by root,
+bob reports each root's area hue (R8); bars give every root they show a distinct
+colour (see stats.md). Stats splits each session per task first, then sums shares by root,
 so every dimension still sums to the metric total; `apportioned` root
 minutes come from sessions with two or more distinct roots. Count mode
 assigns the session to the root with the most distinct tasks (ties to the

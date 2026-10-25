@@ -87,6 +87,20 @@ never captured as prose. The editor-facing `capture-*` companion commands are no
 captures, nor are `bob gkeep pull`, `bob ref create`, or Obsidian keymaps. A draft with
 two or more items is a [Bulk Capture](#bulk-capture); the grammar lives in `docs/capture.md`.
 
+### Day Strip {#day-strip}
+
+*Aliases: day stats.*
+
+The read-only daily Stats summary at the top of the `bob-plan` block on
+canonical daily notes, above the badges, in Live Preview and Reading
+view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
+LABEL-value facts, a [Root Parent](#root-parent) legend with `so far · HH:MM`, and
+the full-width root-parent bar that separates it from the badges. bob
+owns every value, and it never writes the note. `## Pomodoros` no longer
+repeats its total. Facts and the bar open the [Stats Dash](#stats-dash) with the day
+pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
+Not the [Morning GTD Review Footer](#morning-gtd-review-footer).
+
 ### Inbox File {#inbox-file}
 
 *Aliases: inbox note.*
@@ -248,6 +262,18 @@ sync reconciles this with note and PDF status. New lines include `#ref`; legacy 
 without that tag remain recognized. Follow-up tasks track separate work. See
 `docs/highlights-ref-sync.md`.
 
+### Root Parent {#root-parent}
+
+The [Area Note](#area-note) a task lives in, else the [Top-Level Project](#top-level-project) above
+its project note. Archive and reference wrappers are walked through, and
+an area-less walk falls back to the outermost project. Buckets `GTD
+review`, `unlinked`, and `unfiled` stay buckets. Derived at read time
+from today's note tree and never written; `rollup:` no longer exists. The
+[Day Strip](#day-strip) bar and the default [Stats Dash](#stats-dash) view group by it; Stats
+JSON calls the dimension `root_parent`. It is not the nearest home
+(`project`), a top-level area, or a [Pomodoro Theme](#pomodoro-theme); see
+`docs/pomodoro-homes.md`.
+
 ### Rotten Log {#rotten-log}
 
 *Aliases: keep log.*
@@ -267,6 +293,17 @@ never write it; Pending summaries stay in the [Work Log](#work-log) and deferral
 ### Schedule Log {#schedule-log}
 
 When the `<ctrl+shift+p>` Obsidian keymap is used to add the `scheduled` or `priority` dataview property to a task — Task Card `1`–`4` picks a P-level and its frozen date, Enter opens explicit Schedule, and classic search (`/` or type to filter) reaches the same properties — or when `bob capture` uses `$<N>`, we add a `SCHEDULE LOG` bullet that contains one sub-bullet for each scheduling. Log grammar, opt-in markers, and blank-reason `🤷 no reason given` are unchanged.
+
+### Stats Dash {#stats-dash}
+
+*Aliases: dash_stats.*
+
+`~/bob/dash_stats.md` (Obsidian aliases Stats, Dashboard Stats), whose
+single `bob-stats` fence renders `bob stats` JSON: tiles, the focus
+chart, day pinning, and family panels. "Where the time went" groups by
+[Root Parent](#root-parent) by default, with sub-projects one click away, or by
+[Pomodoro Theme](#pomodoro-theme). Opened from the dashboard STATS chip, Open Stats, or
+any [Day Strip](#day-strip) fact. Not `dash.md` or the `bob stats` terminal output.
 
 ### Successor Offer {#successor-offer}
 
@@ -331,6 +368,18 @@ the source task's 🪢 **LINKS:** line and mirrored on the target task's generat
 **LINKED FROM:** line. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its status, schedule, priority, or freshness.
+
+### Top-Level Project {#top-level-project}
+
+*Aliases: top project.*
+
+A [Project Note](#project-note) whose `parent` walk reaches an [Area Note](#area-note) before any
+other project — normally its `parent` is an area, and a sub-area counts. A
+project under another project is a sub-project at any depth and belongs to
+the top-level project above it. It is the project grain of
+[Root Parent](#root-parent) reporting: working time groups by root parent, never by
+leaf project. "Top" is never folder depth, size, or status; see
+`docs/pomodoro-homes.md`.
 
 ### Work Log {#work-log}
 

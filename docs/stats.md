@@ -794,8 +794,10 @@ The context panel follows the focused metric family:
 
 - Pomodoro metrics open on **Where the time went**, grouped by root parent by
   default, with **Themes** one click away. The root bar reuses the area-bar component
-  and is fed root rows in the same order and hues as the Day strip bar (area hue-slot
-  order, then label, with buckets last in gray); its `aria-label` reads
+  and is fed root rows in the same order as the Day strip bar (area hue-slot
+  order, then label, with buckets last in gray), with those same distinct root
+  colours; root rows and their sub-project leaves match them and area headers keep
+  the area hue; its `aria-label` reads
   `Root parent split: …`. Groups rank by area total from `area` parts. Each group
   shows its header row (dot, area link, `value · share`, `sessions N`), then up to 3
   root rows plus `N more` / `Show fewer`. The area's own root reads
@@ -883,11 +885,12 @@ is a second mouse-only target for the legend's action. A metric hidden
 by `stats.hide` is omitted from the strip, not faked.
 
 Segments group D's `worked` minutes by root parent (see
-[pomodoro-homes.md](pomodoro-homes.md)), in the same order and hues as
+[pomodoro-homes.md](pomodoro-homes.md)), in the same order as
 the Stats page's "Where the time went" bar: area hue-slot order, then
-label, with buckets last in gray. Colour means area; a segment means a
-root parent, so same-area roots share a hue and are told apart by order,
-gaps, and labels. A report without `root_parent` parts, from an older
+label, with buckets last in gray. Every root parent in the bar gets its own
+colour: the biggest root of each area keeps the reported area hue, and the
+other same-hue roots take the next free palette hue. `unlinked` and `unfiled`
+stay gray. A report without `root_parent` parts, from an older
 bob, falls back to `parts.area`, and the copy then honestly says
 "Time by area". Labels never ellipsize: below about 30em a container
 query hides the rank-3 legend item and swaps in a second counter, `+N`
@@ -896,8 +899,9 @@ with N = segments − 2; the painter renders both counters, and each one's
 `title` read `Time by root parent: <label> <display>, …`, listing every
 segment, and the group `aria-label` sentence uses the same phrase.
 
-Bob owns every value: labels, values, part displays, definitions, and
-hues all come from the report. The strip writes its own fixed copy only
+Bob owns every value: labels, values, part displays, and definitions all
+come from the report. The strip derives its colours from the report's area
+hues. The strip writes its own fixed copy only
 (`so far`, `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`,
 `Retry`) plus accessibility sentences and date words derived from D.
 
