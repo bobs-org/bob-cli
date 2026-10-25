@@ -50,11 +50,11 @@ groups:
         order: 14
         reader: guides/keep-ready-under-cap.md
       - stem: projects
-        summary: "`bob projects` `^prj` lifecycle, schedules, and reporting-only rollup"
+        summary: "`bob projects` `^prj` lifecycle and schedules"
         order: 16
         reader: concepts/projects-and-dependencies.md
       - stem: pomodoro-homes
-        summary: "Derived Pomodoro homes, rollup, labels, chips, hues, and JSON contract"
+        summary: "Derived Pomodoro homes, labels, chips, hues, and JSON contract"
         order: 17
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: pomodoro-themes

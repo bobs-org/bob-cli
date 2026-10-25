@@ -240,8 +240,8 @@ fn projects_list_reports_invalid_and_duplicate_inline_prj_scheduled() {
 }
 
 #[test]
-fn projects_list_marks_reporting_rollup_and_warns_without_failure() {
-    let temp = TempDir::new("bob-cli-projects-rollup");
+fn projects_list_ignores_leftover_rollup_key() {
+    let temp = TempDir::new("bob-cli-projects-rollup-retired");
     let vault = temp.path().join("vault");
     write_file(
         &vault.join("Opted.md"),
@@ -251,57 +251,23 @@ fn projects_list_marks_reporting_rollup_and_warns_without_failure() {
         &vault.join("Invalid.md"),
         "---\ntype: [[project]]\nrollup: yes please\n---\n- [ ] #task #prj Finish invalid #hide ^prj\n",
     );
-    write_file(
-        &vault.join("Off.md"),
-        "---\ntype: [[project]]\nrollup: off\n---\n- [ ] #task #prj Finish off #hide ^prj\n",
-    );
 
     let output = bob_command()
         .args(["projects", "list", "-b"])
         .arg(&vault)
         .output()
-        .expect("run bob projects list with rollup config");
+        .expect("run bob projects list with leftover rollup key");
 
     assert_success(&output);
     assert_stdout_has_no_ansi(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("Opted rollup"),
-        "missing rollup marker:\n{out}"
+        !out.contains("rollup"),
+        "leftover rollup key must not render:\n{out}"
     );
     assert!(
-        !out.contains("Off  rollup"),
-        "off value was rendered:\n{out}"
-    );
-    assert!(
-        !out.contains("Invalid  rollup"),
-        "invalid value was rendered:\n{out}"
-    );
-    let status_column = out
-        .lines()
-        .find(|line| line.contains("PROJECT") && line.contains("STATUS"))
-        .and_then(|line| line.find("STATUS"))
-        .expect("status header column");
-    for name in ["Invalid", "Off", "Opted"] {
-        let row = out
-            .lines()
-            .find(|line| line.trim_start().starts_with(name))
-            .unwrap_or_else(|| panic!("missing project row {name}:\n{out}"));
-        assert_eq!(
-            row.find("wip"),
-            Some(status_column),
-            "STATUS column shifted for {name}:\n{out}"
-        );
-    }
-    let err = stderr(&output);
-    assert_eq!(
-        err.lines().count(),
-        1,
-        "expected one rollup warning:\n{err}"
-    );
-    assert!(
-        err.contains("Invalid.md: rollup_invalid")
-            && err.contains("yes please"),
-        "missing invalid-value warning:\n{err}"
+        stderr(&output).is_empty(),
+        "leftover rollup key must not warn:\n{}",
+        format_output(&output)
     );
 }

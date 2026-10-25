@@ -46,8 +46,8 @@ queued intake; full scans also synchronize annotations. The
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
 | [plan.md](plan.md) | Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
-| [projects.md](projects.md) | `bob projects` `^prj` lifecycle, schedules, and reporting-only rollup |
-| [pomodoro-homes.md](pomodoro-homes.md) | Derived Pomodoro homes, rollup, labels, chips, hues, and JSON contract |
+| [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
+| [pomodoro-homes.md](pomodoro-homes.md) | Derived Pomodoro homes, labels, chips, hues, and JSON contract |
 | [pomodoro-themes.md](pomodoro-themes.md) | Pomodoro theme catalog, hues, hide journal, `bob themes`, and JSON |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
 | [ref.md](ref.md) | Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback |

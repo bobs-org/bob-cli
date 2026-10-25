@@ -13,7 +13,6 @@ use clap::{
 
 use super::{
     env as bob_env, is_always_excluded_note_directory_name,
-    pomodoro_homes::{rollup_value, Rollup},
     style::{display_width, pad_right, Styler},
 };
 
@@ -75,9 +74,7 @@ anchored with ^prj.\n\n\
 The list subcommand is read-only: it scans project notes, validates leftover \
 scheduled: YYYY-MM-DD frontmatter and inline [scheduled:: YYYY-MM-DD] on \
 ^prj, counts open #task items, counts open non-hidden tasks, and shows the \
-current ^prj state. A `rollup: subprojects` project is marked `rollup` in the \
-list output; invalid rollup values are warned about without changing its exit \
-status. The sync subcommand updates project status, hoists leftover \
+current ^prj state. The sync subcommand updates project status, hoists leftover \
 frontmatter scheduled onto ^prj, propagates that date onto ordinary tasks, \
 and manages the single Sub-projects line from the ^prj task.",
         )
@@ -92,7 +89,7 @@ and manages the single Sub-projects line from the ^prj task.",
 
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List project notes, ^prj task state, and reporting rollups")
+        .about("List project notes and ^prj task state")
         .after_help(
             "Examples:\n  bob projects list\n  bob projects list --bob-dir ~/bob\n  bob projects list -b /tmp/bob-vault",
         )
@@ -155,16 +152,6 @@ fn run_list(matches: &ArgMatches) -> i32 {
     let report = scan_projects(&bob_dir);
     let styler = Styler::detect();
     print_project_list(&report.projects, &styler);
-
-    for project in &report.projects {
-        if let Some(raw) = &project.rollup_invalid {
-            eprintln!(
-                "{COMMAND_NAME}: {}: rollup_invalid: invalid rollup value {:?}; use `subprojects` or `off`",
-                project.relative_path.display(),
-                raw,
-            );
-        }
-    }
 
     for issue in &report.issues {
         eprintln!("{COMMAND_NAME}: {}", issue.display());

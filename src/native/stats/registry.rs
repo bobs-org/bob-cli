@@ -478,7 +478,7 @@ measure: minutes
 unit: minutes
 direction: up
 color: orange
-description: "Minutes in closed Pomodoros under ## Pomodoros; equals each daily note's heading."
+description: "Minutes in closed Pomodoros under ## Pomodoros."
 limits:
   - Open Pomodoros are plans and never count.
   - Attributed from Task Links.

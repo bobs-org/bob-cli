@@ -56,8 +56,6 @@ pub(super) struct Project {
     pub(super) link_name: String,
     pub(super) link_stem: String,
     pub(super) parent_target: Option<String>,
-    pub(super) rollup: bool,
-    pub(super) rollup_invalid: Option<String>,
     pub(super) scheduled: Option<ProjectSchedule>,
     pub(super) status: ProjectStatus,
     pub(super) open_task_count: usize,

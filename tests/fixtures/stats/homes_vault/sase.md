@@ -1,7 +1,6 @@
 ---
 type: "[[project]]"
 parent: "[[dev]]"
-rollup: subprojects
 ---
 # SASE
 

@@ -25,7 +25,6 @@ that task instead of asking users to edit machine-facing metadata directly.
 
 - [Commands](#commands)
 - [Project notes](#project-notes)
-- [Rollup (reporting only)](#rollup-reporting-only)
 - [External names (`project_name_aliases`)](#external-names-project_name_aliases)
 - [The `^prj` task](#the-prj-task)
 - [Sync rules](#sync-rules)
@@ -51,9 +50,7 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 
 `list` is read-only. It scans project notes, validates project scheduling,
 prints frontmatter status, open `#task` count, dashboard-visible task count,
-and the current `^prj` state. Projects with `rollup: subprojects` also show a
-dim `rollup` marker after the project name. An invalid `rollup` value prints a
-`rollup_invalid` warning and does not change the command's exit status.
+and the current `^prj` state.
 
 `sync` mutates only the exact lines it needs to change. It prints one line for
 each action or warning, then a summary. Per-file errors are reported without
@@ -70,20 +67,6 @@ type: "[[project]]"
 
 Bare `type: [[project]]` is accepted too. The scan skips `done/`, `.git/`,
 `.obsidian/`, `_templates/`, and `_generated/`.
-
-### Rollup (reporting only)
-
-`rollup: subprojects` on a project makes its descendant projects report under
-that project in Pomodoro homes and Stats. When nested projects also opt in, the
-outermost opted-in project wins. `bob projects list` marks opted-in projects
-with `rollup`; invalid values are warned about once per note and treated as
-off. Use `rollup: off` (or omit the key) to leave a project ungrouped.
-
-Rollup is reporting only. It does not change project blocking or
-`#prj_is_blocked` inheritance, Ready caps, Sub-projects lines, review tiers,
-capture routing, or the plan budget. It groups reported values while retaining
-the original project chain for drill-down filters. See
-[`pomodoro-homes.md`](pomodoro-homes.md) for the shared contract.
 
 `sync` also reads an optional `parent` frontmatter field when it is an Obsidian
 wikilink, such as `parent: "[[Parent Project]]"`.

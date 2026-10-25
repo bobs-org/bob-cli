@@ -94,7 +94,6 @@ impl<'a> HomesEngine<'a> {
         Vec<StatsWarning>,
         Vec<SessionFact>,
     ) {
-        let mut rolled_up = BTreeMap::<String, u32>::new();
         let mut top_areas: BTreeMap<Hue, Vec<(String, String)>> =
             BTreeMap::new();
         {
@@ -111,13 +110,6 @@ impl<'a> HomesEngine<'a> {
                     NoteKind::Project => {
                         let home = resolver.resolve_note(path);
                         self.remember(&home);
-                        let path_key = path_string(path);
-                        if home.key != path_key
-                            && home.kind == HomeKind::Project
-                        {
-                            *rolled_up.entry(home.key.clone()).or_default() +=
-                                1;
-                        }
                     }
                     NoteKind::Area => {
                         let home = resolver.resolve_note(path);
@@ -141,14 +133,6 @@ impl<'a> HomesEngine<'a> {
         {
             let resolver = self.resolver.borrow();
             let resolver_health: ResolverHealth = resolver.health().clone();
-            health.rollup_invalid = resolver_health
-                .rollup_invalid
-                .iter()
-                .map(|lint| HomeLintReport {
-                    path: lint.path.clone(),
-                    raw: lint.raw.clone(),
-                })
-                .collect();
             health.area_color_invalid = resolver_health
                 .area_color_invalid
                 .iter()
@@ -238,10 +222,7 @@ impl<'a> HomesEngine<'a> {
 
         let mut catalog = BTreeMap::new();
         for (key, home) in self.seen.borrow().iter() {
-            catalog.insert(
-                key.clone(),
-                catalog_entry(home, rolled_up.get(key).copied()),
-            );
+            catalog.insert(key.clone(), catalog_entry(home));
         }
 
         let warnings = homes_warnings(&health);
@@ -288,15 +269,13 @@ impl<'a> HomesEngine<'a> {
     }
 }
 
-/// Parse facts only for notes that can affect rollup, hue, or area color.
+/// Parse facts only for notes that can affect hue or area color.
 /// Refs and dailies without those keys stay unread in the global pass.
 fn needs_global_inspect(contents: &str) -> bool {
     let Some(head) = yaml_frontmatter_head(contents) else {
         return false;
     };
-    head.contains("[[area]]")
-        || head.contains("[[project]]")
-        || head.contains("rollup:")
+    head.contains("[[area]]") || head.contains("[[project]]")
 }
 
 fn yaml_frontmatter_head(contents: &str) -> Option<&str> {
@@ -320,12 +299,12 @@ fn bucket_home(key: &str, label: &str) -> Home {
             area_label: label.to_string(),
             subarea: None,
             hue: None,
-            pre_rollup_chain: Vec::new(),
+            residence_chain: Vec::new(),
         },
     }
 }
 
-fn catalog_entry(home: &Home, rolled_up: Option<u32>) -> HomeCatalogEntry {
+fn catalog_entry(home: &Home) -> HomeCatalogEntry {
     let path = (!home.key.starts_with('@')).then(|| home.key.clone());
     let project_label = (home.kind == HomeKind::Area)
         .then(|| format!("{} · area tasks", home.label));
@@ -337,7 +316,6 @@ fn catalog_entry(home: &Home, rolled_up: Option<u32>) -> HomeCatalogEntry {
         path,
         hue: home.hue,
         project_label,
-        rolled_up: rolled_up.filter(|count| *count > 0),
     }
 }
 
@@ -526,25 +504,6 @@ fn link_health(
 
 fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
     let mut warnings = Vec::new();
-    for lint in &health.rollup_invalid {
-        let message = if lint.raw == "rollup on non-project note" {
-            format!(
-                "{}: rollup is only valid on project notes and is treated as off",
-                lint.path
-            )
-        } else {
-            format!(
-                "{}: invalid rollup {:?}; treated as off",
-                lint.path, lint.raw
-            )
-        };
-        warnings.push(StatsWarning {
-            code: "rollup_invalid".to_string(),
-            metric: None,
-            date: None,
-            message,
-        });
-    }
     for lint in &health.area_color_invalid {
         warnings.push(StatsWarning {
             code: "area_color_invalid".to_string(),
@@ -758,7 +717,8 @@ mod tests {
         assert_eq!(part_value(worked, "area", "@unlinked"), 10);
         assert_eq!(part_value(worked, "area", "@unfiled"), 15);
 
-        assert_eq!(part_value(worked, "project", "sase.md"), 80);
+        assert_eq!(part_value(worked, "project", "sase.md"), 30);
+        assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
         assert_eq!(part_value(worked, "project", "@review:GTD"), 35);
         assert_eq!(part_value(worked, "project", "bob.md"), 10);
         assert_eq!(part_value(worked, "project", "dev.md"), 10);
@@ -787,7 +747,8 @@ mod tests {
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
         assert_eq!(dimension_total(sessions, "area"), 8);
         assert_eq!(dimension_total(sessions, "project"), 8);
-        assert_eq!(part_value(sessions, "project", "sase.md"), 2);
+        assert_eq!(part_value(sessions, "project", "sase.md"), 1);
+        assert_eq!(part_value(sessions, "project", "sase_blog.md"), 1);
         assert_eq!(part_value(sessions, "project", "@review:GTD"), 2);
 
         let done = metric(&report, "done");
@@ -815,13 +776,14 @@ mod tests {
         assert_eq!(part_value(sase_time, "project", "sase.md"), 10);
         assert_eq!(part_value(sase_time, "theme", "SASE"), 10);
 
-        // H9 in:[sase] keeps pre-rollup matches, including rolled-up blog
+        // H9 in:[sase] keeps residence-chain matches, including sase_blog
         // and the sase share of HACK; review/unlinked never match.
         let sase_in = metric(&report, "sase_in");
         assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
         assert_eq!(dimension_total(sase_in, "area"), 80);
         assert_eq!(dimension_total(sase_in, "project"), 80);
-        assert_eq!(part_value(sase_in, "project", "sase.md"), 80);
+        assert_eq!(part_value(sase_in, "project", "sase.md"), 30);
+        assert_eq!(part_value(sase_in, "project", "sase_blog.md"), 50);
 
         // H14 count mode keeps a session once any linked task matches in:.
         let sase_count_in = metric(&report, "sase_count_in");
@@ -832,13 +794,13 @@ mod tests {
         assert_eq!(dimension_total(sase_count_in, "area"), 3);
         assert_eq!(dimension_total(sase_count_in, "project"), 3);
 
-        // H10 in:[sase_blog] still measures blog time under rollup.
+        // H10 in:[sase_blog] measures on its own.
         let sase_blog_in = metric(&report, "sase_blog_in");
         assert_eq!(
             sase_blog_in.summary.total.as_ref().unwrap().value,
             Some(50)
         );
-        assert_eq!(part_value(sase_blog_in, "project", "sase.md"), 50);
+        assert_eq!(part_value(sase_blog_in, "project", "sase_blog.md"), 50);
 
         // H11 exclude_in:[sase] never drops review/unlinked; work tasks
         // whose chain matches sase are removed (HACK keeps bob+dev = 20).
@@ -873,19 +835,17 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 10, 18).unwrap()
         );
 
-        assert_eq!(report.homes["sase.md"].rolled_up, Some(1));
         assert!(!report.homes.contains_key("body.md"));
         assert!(!report.homes.contains_key("invalid.md"));
         assert_eq!(report.health.homes.unlinked_sessions, 1);
         assert_eq!(report.health.homes.unlinked_minutes, 10);
         assert_eq!(report.health.homes.unfiled_links, 1);
-        assert!(!report.health.homes.rollup_invalid.is_empty());
         assert!(!report.health.homes.hue_collisions.is_empty());
         assert!(report
             .warnings
             .iter()
             .any(|w| w.code == "area_hue_collision"));
-        assert!(report.warnings.iter().any(|w| w.code == "rollup_invalid"));
+        assert!(!report.warnings.iter().any(|w| w.code == "rollup_invalid"));
 
         let first = serde_json::to_vec(&report).unwrap();
         let second = compute(&homes_request(homes_vault(), write_config(&dir)))

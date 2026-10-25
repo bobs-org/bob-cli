@@ -548,7 +548,7 @@ fn home_chain_matches(
     index: &StatsIndex,
 ) -> bool {
     notes.iter().any(|target| {
-        home.pre_rollup_chain
+        home.residence_chain
             .iter()
             .any(|path| note_target_matches(index, target, path))
             || note_target_matches(index, target, &home.key)

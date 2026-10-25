@@ -1296,7 +1296,6 @@ mod tests {
                 path: None,
                 hue: Some(Hue::Orange),
                 project_label: None,
-                rolled_up: None,
             },
         );
         report.metrics[0].parts_summary.insert(

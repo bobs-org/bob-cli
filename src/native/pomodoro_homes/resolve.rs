@@ -4,10 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{facts::NoteFacts, palette::Hue, NoteKind, Rollup};
-use crate::native::{
-    projects::trim_yaml_scalar,
-    vault_links::{LinkResolution, NoteIndex, VaultLinkResolver},
+use super::{facts::NoteFacts, palette::Hue, NoteKind};
+use crate::native::vault_links::{
+    LinkResolution, NoteIndex, VaultLinkResolver,
 };
 
 const MAX_PROJECT_DEPTH: usize = 16;
@@ -105,8 +104,8 @@ pub(crate) struct Home {
     pub(crate) area_label: String,
     pub(crate) subarea: Option<String>,
     pub(crate) hue: Option<Hue>,
-    /// Residence chain before any project rollup is applied.
-    pub(crate) pre_rollup_chain: Vec<String>,
+    /// Full residence chain from the linked note through its ancestors.
+    pub(crate) residence_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +119,6 @@ pub(crate) struct ResolverHealth {
     pub(crate) unfiled_links: u32,
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,
-    pub(crate) rollup_invalid: Vec<NoteLint>,
     pub(crate) area_color_invalid: Vec<NoteLint>,
 }
 
@@ -128,7 +126,6 @@ pub(crate) struct HomeResolver<S> {
     source: S,
     homes: HashMap<PathBuf, Home>,
     facts: HashMap<PathBuf, Option<NoteFacts>>,
-    rollup_linted: BTreeSet<PathBuf>,
     color_linted: BTreeSet<PathBuf>,
     health: ResolverHealth,
 }
@@ -139,7 +136,6 @@ impl<S: HomeSource> HomeResolver<S> {
             source,
             homes: HashMap::new(),
             facts: HashMap::new(),
-            rollup_linted: BTreeSet::new(),
             color_linted: BTreeSet::new(),
             health: ResolverHealth::default(),
         }
@@ -239,20 +235,9 @@ impl<S: HomeSource> HomeResolver<S> {
             return home;
         };
 
-        // Rollup applies only to projects and the highest opted-in project
-        // on the chain wins. The original chain remains attached to the home
-        // for later `in:` filtering.
-        let rollup_path = chain
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, facts))| {
-                facts.kind == NoteKind::Project
-                    && facts.rollup == Rollup::Subprojects
-            })
-            .map(|(index, _)| index)
-            .last();
-        let selected = rollup_path.unwrap_or(nearest_home);
-        let (home_path, home_facts) = &chain[selected];
+        // The home is the nearest area or project. The full residence
+        // chain stays attached to the home for later `in:` filtering.
+        let (home_path, home_facts) = &chain[nearest_home];
 
         let area_indices = chain
             .iter()
@@ -295,7 +280,7 @@ impl<S: HomeSource> HomeResolver<S> {
             area_label,
             subarea,
             hue,
-            pre_rollup_chain: chain
+            residence_chain: chain
                 .iter()
                 .map(|(path, _)| path_string(path))
                 .collect(),
@@ -312,9 +297,9 @@ impl<S: HomeSource> HomeResolver<S> {
             LinkResolution::Found(path) => Some(self.resolve_note(&path)),
             LinkResolution::Ambiguous | LinkResolution::Missing => None,
         };
-        let pre_rollup_chain = reviewed
+        let residence_chain = reviewed
             .as_ref()
-            .map(|home| home.pre_rollup_chain.clone())
+            .map(|home| home.residence_chain.clone())
             .unwrap_or_default();
         let (area, area_label, hue) = reviewed
             .filter(|home| home.area != "@unfiled")
@@ -330,7 +315,7 @@ impl<S: HomeSource> HomeResolver<S> {
             area_label,
             subarea: None,
             hue,
-            pre_rollup_chain,
+            residence_chain,
         }
     }
 
@@ -339,24 +324,8 @@ impl<S: HomeSource> HomeResolver<S> {
             return facts.clone();
         }
         let facts = self.source.read_facts(path);
-        if let Some(facts) = &facts {
-            if facts.rollup_present && facts.kind != NoteKind::Project {
-                self.lint_rollup(path, "rollup on non-project note");
-            } else if let Rollup::Invalid(raw) = &facts.rollup {
-                self.lint_rollup(path, raw);
-            }
-        }
         self.facts.insert(path.to_path_buf(), facts.clone());
         facts
-    }
-
-    fn lint_rollup(&mut self, path: &Path, raw: &str) {
-        if self.rollup_linted.insert(path.to_path_buf()) {
-            self.health.rollup_invalid.push(NoteLint {
-                path: path_string(path),
-                raw: raw.to_string(),
-            });
-        }
     }
 
     fn lint_color(&mut self, path: &Path, raw: &str) {
@@ -366,14 +335,6 @@ impl<S: HomeSource> HomeResolver<S> {
                 raw: raw.to_string(),
             });
         }
-    }
-}
-
-pub(crate) fn rollup_value(raw: &str) -> Rollup {
-    match trim_yaml_scalar(raw).trim().to_ascii_lowercase().as_str() {
-        "off" => Rollup::Off,
-        "subprojects" => Rollup::Subprojects,
-        _ => Rollup::Invalid(trim_yaml_scalar(raw).trim().to_string()),
     }
 }
 
@@ -392,7 +353,7 @@ pub(crate) fn unfiled_home() -> Home {
     unfiled_at(Vec::new())
 }
 
-fn unfiled_at(pre_rollup_chain: Vec<String>) -> Home {
+fn unfiled_at(residence_chain: Vec<String>) -> Home {
     Home {
         key: "@unfiled".to_string(),
         label: "unfiled".to_string(),
@@ -401,7 +362,7 @@ fn unfiled_at(pre_rollup_chain: Vec<String>) -> Home {
         area_label: "unfiled".to_string(),
         subarea: None,
         hue: None,
-        pre_rollup_chain,
+        residence_chain,
     }
 }
 
@@ -414,6 +375,6 @@ pub(crate) fn unlinked_home() -> Home {
         area_label: "unlinked".to_string(),
         subarea: None,
         hue: None,
-        pre_rollup_chain: Vec::new(),
+        residence_chain: Vec::new(),
     }
 }

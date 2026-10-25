@@ -132,7 +132,7 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   components (`GTD + SASE` splits its minutes across both parts, remainder to
   the first); unnamed rows are `(unnamed)`. Count mode attributes each row to
   its first matching component so parts add up to the total. `in:` /
-  `exclude_in:` match a linked task's pre-rollup home chain with the same
+  `exclude_in:` match a linked task's residence chain with the same
   path, basename, and parent-ancestry rules as task `in:`. Minutes mode
   keeps those tasks' even shares and re-splits theme parts only when a filter
   removes a task share; count mode keeps the session when any task matches and
@@ -214,7 +214,7 @@ stats:
       kind: pomodoro
       measure: minutes
       in: [sase]
-    sase_blog_time:   # still measures blog time when sase_blog rolls up
+    sase_blog_time:   # measures blog time on its own
       label: SASE blog time
       kind: pomodoro
       measure: minutes
@@ -334,9 +334,9 @@ task counts once per limitation, never once per metric or day),
 `health.journal` (tracking start, malformed-line count, and per-host event
 counts with the latest timestamp and day), and `health.homes` (in-window
 `unlinked_minutes` / `unlinked_sessions` / `unfiled_links` /
-`ambiguous_links` / `unresolved_links`, plus global `rollup_invalid`,
-`area_color_invalid`, and hue-collision lists). Matching
-`warning <message>  <code>` lines use `rollup_invalid`, `area_color_invalid`,
+`ambiguous_links` / `unresolved_links`, plus global
+`area_color_invalid` and hue-collision lists). Matching
+`warning <message>  <code>` lines use `area_color_invalid`
 and `area_hue_collision`. `invalid_dates` counts a task
 when created, done, or cancelled is malformed or future, or when scheduled
 is malformed. A future `scheduled` date is ordinary planning data and does
@@ -431,8 +431,8 @@ Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 (with prior metadata), per-metric definitions/summaries/chart/points/parts/
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
-`subarea`, `path`, `hue`; `project_label` on area-kind entries;
-`rolled_up` on rollup homes), and a top-level `sessions` array when the
+`subarea`, `path`, `hue`; `project_label` on area-kind entries),
+and a top-level `sessions` array when the
 report includes at least one pomodoro metric. The catalog and `sessions`
 are omitted when empty. `sessions` lists every closed Pomodoro in the
 display window (today included) in chronological order. Each element is
@@ -452,7 +452,7 @@ add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`rolled_up`, `health.homes` lint lists, and `sessions`.
+`health.homes` lint lists, and `sessions`.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -634,14 +634,14 @@ metric total.
 | --- | --- | --- |
 | H1 | worked total 167m | Complete-window minutes; today 15m is provisional |
 | H2 | worked area | gtd 45, dev 90, job 7, @unlinked 10, @unfiled 15; sums to 167 |
-| H3 | worked project | sase 80 (blog rollup 50 + HACK 10 + GTD+SASE 20), @review:GTD 35, bob 10, dev 10, job 4, job_apply 3, @unlinked 10, @unfiled 15; sums to 167 |
+| H3 | worked project | sase 30, sase_blog 50, @review:GTD 35, bob 10, dev 10, job 4, job_apply 3, @unlinked 10, @unfiled 15; sums to 167 |
 | H4 | apportioned | sase 10 and job 4 from multi-home sessions; gtd area 10 from HACK |
-| H5 | sessions | 8 closed rows; lead homes put 2 on sase and 2 on @review:GTD |
+| H5 | sessions | 8 closed rows; lead homes put 1 on sase, 1 on sase_blog, and 2 on @review:GTD |
 | H6 | done | 7 completions; 2 on sase, 1 @unfiled; job area tasks use `job · area tasks` |
 | H7 | sase_time | themes:[SASE] counted C is 10m, then split onto sase/dev |
-| H8 | health | 1 unlinked session / 10m, 1 unfiled link, rollup_invalid on invalid.md, hue collision gtd+body orange |
+| H8 | health | 1 unlinked session / 10m, 1 unfiled link, hue collision gtd+body orange |
 | H9 | sase_in | `in: [sase]` is 80m (blog 50 + HACK sase share 10 + GTD+SASE 20); review/unlinked never match |
-| H10 | sase_blog_in | `in: [sase_blog]` is 50m on rolled-up sase — blog time still measures under rollup |
+| H10 | sase_blog_in | `in: [sase_blog]` is 50m on sase_blog — blog time measures on its own |
 | H11 | exclude_sase | `exclude_in: [sase]` is 87m (167 − 80); review 35m and unlinked 10m stay |
 | H12 | review_only | `review: only` is 35m on `@review:GTD` (named 25 + unnamed bridge 10) |
 | H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
@@ -651,7 +651,7 @@ metric total.
 Oct 14 adds the separate H15 check: an unnamed 50m work session links the
 Oct 15 `^gtd` row and `bob`; it is not treated as the same-day review bridge.
 Oct 15: named GTD review 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
-sase_blog (rolls to sase), HACK 30m split bob/sase/dev, JOB 7m split 4/3,
+sase_blog, HACK 30m split bob/sase/dev, JOB 7m split 4/3,
 MISC 15m on an article (@unfiled), GTD+SASE 20m all on sase (theme remainder
 gives SASE 10m), unnamed 10m review via `[[#^gtd]]`. Oct 17 is an empty
 Pomodoros section (real zero). Oct 18 (today) BLOG 15m is in `sessions` and

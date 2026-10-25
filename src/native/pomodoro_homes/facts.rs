@@ -11,18 +11,9 @@ pub(crate) enum NoteKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Rollup {
-    Off,
-    Subprojects,
-    Invalid(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NoteFacts {
     pub(crate) kind: NoteKind,
     pub(crate) parent: Option<String>,
-    pub(crate) rollup_present: bool,
-    pub(crate) rollup: Rollup,
     pub(crate) color: Option<String>,
 }
 
@@ -43,13 +34,6 @@ impl NoteFacts {
             .as_ref()
             .and_then(|frontmatter| frontmatter_value(frontmatter, "parent"))
             .and_then(wikilink_path_target);
-        let rollup_raw = frontmatter
-            .as_ref()
-            .and_then(|frontmatter| frontmatter_value(frontmatter, "rollup"));
-        let rollup_present = rollup_raw.is_some();
-        let rollup = rollup_raw
-            .map(super::resolve::rollup_value)
-            .unwrap_or(Rollup::Off);
         let color = frontmatter
             .as_ref()
             .and_then(|frontmatter| frontmatter_value(frontmatter, "color"))
@@ -57,8 +41,6 @@ impl NoteFacts {
         Self {
             kind,
             parent,
-            rollup_present,
-            rollup,
             color,
         }
     }

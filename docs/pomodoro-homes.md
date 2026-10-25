@@ -33,20 +33,12 @@ daily note. The top-level area is the outermost area on the chain. A subarea is
 the nearest area below that top-level area. A home without an area uses
 `@unfiled` for its area dimension.
 
-## R2 — Project rollup
+## R2 — Retired: project rollup
 
-`rollup: subprojects` on a project maps every descendant project to that
-project for reporting, at any depth and regardless of descendant status.
-Absent and `off` values disable rollup. Invalid values, and any `rollup` key on
-a non-project note, produce one `rollup_invalid` lint per note and act as off.
-When several projects on a chain opt in, the outermost project wins. There is
-no child-side opt-out in this version.
-
-Keep the original note chain before rollup. Later filters use that chain to
-measure a child project on its own even when its reports are grouped under a
-parent. Rollup does not change blocking or `#prj_is_blocked` inheritance, Ready
-caps, Sub-projects lines, review tiers, capture routing, or the plan budget.
-See [Project Task Sync](projects.md#rollup-reporting-only).
+Project rollup is retired. A leftover `rollup:` frontmatter key is silently
+ignored: it never regroups homes and never warns. Each task reports under its
+nearest area or project home, and `in:` / `exclude_in:` filters match the
+full residence chain.
 
 ## R3 — Links that count
 
@@ -197,8 +189,8 @@ an unlinked forecast has an empty `parts` array.
 
 ## R10 — Current note tree
 
-Resolve homes from the current vault tree each time. Moving a task, changing a
-project parent, or toggling rollup can regroup past minutes, but cannot change
+Resolve homes from the current vault tree each time. Moving a task or changing a
+project parent can regroup past minutes, but cannot change
 the total time. Stats surfaces say “Grouped by today's note tree · from Task
 Links”. V1 does not store snapshots.
 
@@ -212,14 +204,14 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 
 | Case | What it proves |
 | --- | --- |
-| `rollup-archive-review` | nested rollup, archive/ref chain, struck links, de-duplication, review sessions and same-day bridge |
-| `resolution-and-lints` | archived/ref/project/area homes, cycles, invalid config, explicit and fallback hues |
+| `subproject-archive-review` | archive/ref chain, struck links, de-duplication, review sessions and same-day bridge |
+| `resolution-and-lints` | archived/ref/project/area homes, cycles, explicit and fallback hues |
 | `ambiguous-basename` | duplicate basename resolves to `@unfiled`; the sole `rust_only` case |
 | `chips, forecast shares, empty forecasts, and session identity` | chip suppression, forecast and unlinked shapes, ties, named sessions |
 | `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
 | `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
 | `daily-review-link` | another day's canonical `^gtd` is a review-home task share; only a same-day link triggers the unnamed review bridge |
-| `rollup-depth-and-parent-shapes` | direct child and grandchild rollup, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |
+| `depth-and-parent-shapes` | direct child and grandchild homes, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |
 | `parent-scalar-shapes` | quoted scalar wikilinks resolve; single-item YAML lists and bare strings do not |
 | `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
 | `review-decisions` | named review sessions, same-day bridge, and mixed named work |
@@ -232,4 +224,4 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
   notes, prose, and schedule/dependency logs do not attribute time.
 - Session names are never rewritten from derived homes; history is not frozen
   at close; there is no composite `Mixed` bucket; names are never used to guess
-  a home; and children cannot opt out of a parent's rollup in v1.
+  a home.

@@ -279,8 +279,6 @@ pub(crate) struct HomeCatalogEntry {
     pub(crate) hue: Option<Hue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) project_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) rolled_up: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -297,8 +295,6 @@ pub(crate) struct HomesHealthReport {
     pub(crate) unfiled_links: u32,
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub(crate) rollup_invalid: Vec<HomeLintReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) area_color_invalid: Vec<HomeLintReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

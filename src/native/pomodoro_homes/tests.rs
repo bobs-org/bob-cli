@@ -44,7 +44,6 @@ struct ExpectedHealth {
     unfiled_links: u32,
     ambiguous_links: u32,
     unresolved_links: u32,
-    rollup_invalid: usize,
     area_color_invalid: usize,
 }
 
@@ -129,20 +128,33 @@ fn fallback_palette_fnv_vector_is_pinned() {
 }
 
 #[test]
-fn rollup_accepts_only_off_or_subprojects() {
-    assert_eq!(super::rollup_value("off"), super::Rollup::Off);
-    assert_eq!(
-        super::rollup_value("SUBPROJECTS"),
-        super::Rollup::Subprojects
+fn leftover_rollup_key_neither_regroups_nor_warns() {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("dev.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
     );
-    assert_eq!(
-        super::rollup_value("false"),
-        super::Rollup::Invalid("false".to_string())
+    notes.insert(
+        PathBuf::from("sase.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\n---\n".to_string(),
     );
+    notes.insert(
+        PathBuf::from("sase_blog.md"),
+        "---\ntype: [[project]]\nparent: [[sase]]\nrollup: subprojects\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+    let home = resolver.resolve_note(Path::new("sase_blog.md"));
+    assert_eq!(home.key, "sase_blog.md");
+    assert_eq!(resolver.health().area_color_invalid.len(), 0);
 }
 
 #[test]
-fn rolled_home_keeps_the_pre_rollup_note_chain() {
+fn resolved_home_keeps_the_residence_note_chain() {
     let vectors: Vectors = serde_json::from_str(include_str!(
         "../../../tests/fixtures/pomodoro_homes/vectors.json"
     ))
@@ -151,9 +163,9 @@ fn rolled_home_keeps_the_pre_rollup_note_chain() {
     let mut resolver =
         HomeResolver::new(IndexedHomeSource::new(&note_index, &vectors.notes));
     let home = resolver.resolve_note(Path::new("sase_blog_notes.md"));
-    assert_eq!(home.key, "sase.md");
+    assert_eq!(home.key, "sase_blog_notes.md");
     assert_eq!(
-        home.pre_rollup_chain,
+        home.residence_chain,
         ["sase_blog_notes.md", "sase_blog.md", "sase.md", "dev.md"]
     );
 }
@@ -225,11 +237,6 @@ fn assert_health(
     assert_eq!(
         actual.unresolved_links, expected.unresolved_links,
         "unresolved: {case}"
-    );
-    assert_eq!(
-        actual.rollup_invalid.len(),
-        expected.rollup_invalid,
-        "rollup lints: {case}"
     );
     assert_eq!(
         actual.area_color_invalid.len(),

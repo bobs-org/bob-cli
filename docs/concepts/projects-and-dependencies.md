@@ -47,6 +47,6 @@ Descendant recovery can require a reconcile pass, because non-Task-Card writers 
 - [Tasks and lanes](tasks-and-lanes.md) — what Blocked overrides and how recovery recomputes.
 - [Today and the Pomodoro ledger](today-and-the-pomodoro-ledger.md) — where successor offers land.
 - [Understand Bob](index.md) — the eight nouns and where projects fit.
-- [Project Task Sync](../projects.md) — the authoritative `^prj` lifecycle and rollup.
+- [Project Task Sync](../projects.md) — the authoritative `^prj` lifecycle.
 - [Task dependency links](../task-dependencies.md) — Depends-On grammar, blocking, and successor offers.
 - [Task Status Hooks](../task-status-hooks.md) — how reconcile derives and consumes Blocked.

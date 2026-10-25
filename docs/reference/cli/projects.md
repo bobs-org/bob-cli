@@ -11,12 +11,12 @@ List and sync project notes via their ^prj tasks
 ```text title="bob projects --help"
 Manage Bob project notes through the completion-criteria task anchored with ^prj.
 
-The list subcommand is read-only: it scans project notes, validates leftover scheduled: YYYY-MM-DD frontmatter and inline [scheduled:: YYYY-MM-DD] on ^prj, counts open #task items, counts open non-hidden tasks, and shows the current ^prj state. A `rollup: subprojects` project is marked `rollup` in the list output; invalid rollup values are warned about without changing its exit status. The sync subcommand updates project status, hoists leftover frontmatter scheduled onto ^prj, propagates that date onto ordinary tasks, and manages the single Sub-projects line from the ^prj task.
+The list subcommand is read-only: it scans project notes, validates leftover scheduled: YYYY-MM-DD frontmatter and inline [scheduled:: YYYY-MM-DD] on ^prj, counts open #task items, counts open non-hidden tasks, and shows the current ^prj state. The sync subcommand updates project status, hoists leftover frontmatter scheduled onto ^prj, propagates that date onto ordinary tasks, and manages the single Sub-projects line from the ^prj task.
 
 Usage: bob projects <COMMAND>
 
 Commands:
-  list  List project notes, ^prj task state, and reporting rollups
+  list  List project notes and ^prj task state
   sync  Sync project status, task schedules, and sub-projects
   help  Print this message or the help of the given subcommand(s)
 

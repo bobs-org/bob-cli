@@ -270,7 +270,7 @@ While `^prj` is Blocked by its own open prerequisites or a future inline
 `scheduled` date, every open resident is Blocked and tagged `#prj_is_blocked`.
 `^prj` itself is never tagged. `bob projects sync` maps checked to
 `status: done`, canceled to `status: canceled`, and a reopened terminal
-project to `status: wip`. Optional `rollup: subprojects` is reporting only.
+project to `status: wip`.
 
 Contract: [Project Task Sync](../projects.md),
 [Project Note](glossary.md#project-note),
