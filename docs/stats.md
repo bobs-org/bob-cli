@@ -868,8 +868,12 @@ above the badges. `## Pomodoros` carries no total; the strip repeats it,
 so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
-`review_closed`, in that order). Each fact reads `LABEL value`: the
-report's metric label, uppercased, then the D point `display`. Line 2
+`review_closed`, in that order). Each fact stacks the report's metric
+label (small, uppercased, muted) over the D point `display` (large,
+tabular). Facts share the line's width in columns split by hairlines and
+fold into three columns below about 34em. In numeric displays, the unit
+letters are set smaller. The displayed text is always bob's `display`
+exactly. Line 2
 holds the legend plus the meta: one `span[role=link]` with the top three
 roots by minutes in bar order — each a hue dot, the bare label, and the
 value — then `+N`, with the timestamp (`so far · HH:MM`, the fetch time
@@ -909,15 +913,15 @@ Display states: today in progress shows provisional values with
 `so far · HH:MM`, and an unmet closeout reads `not yet`. A past day shows
 values with no meta, and `missed` is allowed. `not_tracked` shows `–`.
 `missing`, or a report warning for D, shows `–` (or the display) plus a
-small `⚠`. The legend and bar are omitted if `worked` is absent, is not
+small `⚠` beside the label. The legend and bar are omitted if `worked` is absent, is not
 measured in minutes, or has no nonempty `parts.root_parent` (or fallback
 `parts.area`) anywhere in its daily series.
 Otherwise a zero worked day with `quality: ok` shows an empty track and
 `no Pomodoros`. With no bar or status text, line 2 holds the meta alone.
 A future daily note shows nothing: no element height, no spawn. The first
 load paints a skeleton in the loaded geometry, including the empty bar
-track. A failed refresh keeps the values with `refresh failed` (today:
-`so far · HH:MM · refresh failed`). A failure with nothing cached shows
+track. A failed refresh keeps the cached values, in muted text, with
+`refresh failed` (today: `so far · HH:MM · refresh failed`). A failure with nothing cached shows
 one muted line, `Day stats unavailable — <title>.`, plus a `Retry` link;
 when bob is not found the line names `stats.bob_path`. Mobile and hosts
 without process-launch support render no strip. The strip never shows
