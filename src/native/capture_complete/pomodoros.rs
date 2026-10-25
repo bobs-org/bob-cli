@@ -268,9 +268,9 @@ pub(super) fn today_start_rows(
         .filter(|entry| entry.state == PomodoroState::Open)
         .map(entry_key)
         .collect::<Vec<_>>();
-    // Deduplicate completed keys keeping the latest in document order,
-    // then list the most recent first so an empty query resurfaces the
-    // last session first.
+    // Deduplicate completed keys keeping the latest occurrence last in
+    // document order, then list the most recent first so an empty query
+    // resurfaces the last session first.
     let mut again_entries = Vec::<&PomodoroEntry>::new();
     for entry in &scan.entries {
         if entry.state != PomodoroState::Completed
@@ -283,10 +283,9 @@ pub(super) fn today_start_rows(
             .iter()
             .position(|existing| entry_key(existing) == entry_key(entry))
         {
-            again_entries[position] = entry;
-        } else {
-            again_entries.push(entry);
+            again_entries.remove(position);
         }
+        again_entries.push(entry);
     }
     again_entries.reverse();
     let mut again = Vec::new();

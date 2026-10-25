@@ -812,3 +812,71 @@ fn bare_start_name_replacements_prefix_hash_when_the_slug_cannot_be_bare() {
     assert!(!replacements.contains(&"2fa"), "{replacements:?}");
     assert!(!replacements.contains(&"x2"), "{replacements:?}");
 }
+
+#[test]
+fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
+    // Ledger order A, B, A: ALPHA is the most recent session, so its
+    // again row must precede BETA's in both JSON and shell rows.
+    let ledger = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0800-0825** [t:: 25m]) — ALPHA\n",
+        "- [x] (**0830-0855** [t:: 25m]) — BETA\n",
+        "- [x] (**0900-0925** [t:: 25m]) — ALPHA\n",
+    );
+    let scan = capture_pomodoros::scan(ledger);
+    let candidates = pomodoro_start_name_candidates_from_scan(&scan, "");
+    let json = serde_json::to_value(CaptureCompleteResult {
+        ok: true,
+        schema_version: SCHEMA_VERSION,
+        cursor: 2,
+        replacement: Replacement { start: 0, end: 2 },
+        context: Some(CompletionContext::PomodoroStartName),
+        candidates: Candidates::PomodoroName(candidates.clone()),
+        r#override: None,
+        block_id: None,
+        warnings: Vec::new(),
+        query: None,
+        owner: None,
+        relation: None,
+        picker: None,
+        hidden_count: None,
+        one_off: None,
+    })
+    .expect("start-name json");
+    let names = json["candidates"]
+        .as_array()
+        .expect("candidates array")
+        .iter()
+        .filter_map(|row| row.get("name").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    let alpha = names
+        .iter()
+        .position(|name| *name == "ALPHA")
+        .expect("ALPHA row");
+    let beta = names
+        .iter()
+        .position(|name| *name == "BETA")
+        .expect("BETA row");
+    assert!(alpha < beta, "ALPHA newest-first before BETA: {names:?}");
+
+    let lines = candidate_lines(
+        &Candidates::PomodoroName(candidates),
+        Some(CompletionContext::PomodoroStartName),
+    );
+    let presented = lines
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    let alpha = presented
+        .iter()
+        .position(|name| *name == "ALPHA")
+        .expect("ALPHA shell row");
+    let beta = presented
+        .iter()
+        .position(|name| *name == "BETA")
+        .expect("BETA shell row");
+    assert!(
+        alpha < beta,
+        "ALPHA newest-first before BETA: {presented:?}"
+    );
+}
