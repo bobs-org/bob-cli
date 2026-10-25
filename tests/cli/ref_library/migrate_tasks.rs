@@ -93,6 +93,9 @@ fn vault_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
         for entry in fs::read_dir(&dir).expect("read dir") {
             let entry = entry.expect("entry");
             let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
                 continue;

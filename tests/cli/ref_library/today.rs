@@ -134,7 +134,10 @@ fn walk_text(root: &Path, path: &Path, files: &mut Vec<(String, String)>) {
     for entry in entries {
         let entry = entry.expect("dir entry");
         let child = entry.path();
-        if child.file_name().is_some_and(|name| name == ".obsidian") {
+        if child
+            .file_name()
+            .is_some_and(|name| name == ".obsidian" || name == ".git")
+        {
             continue;
         }
         if child.is_dir() {

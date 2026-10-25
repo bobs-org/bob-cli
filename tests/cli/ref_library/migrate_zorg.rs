@@ -421,9 +421,7 @@ fn walk_snapshot(root: &Path, path: &Path, files: &mut Vec<(String, Vec<u8>)>) {
             .expect("under root")
             .to_string_lossy()
             .replace('\\', "/");
-        let Ok(bytes) = fs::read(&child) else {
-            continue;
-        };
+        let bytes = fs::read(&child).expect("read file");
         files.push((name, bytes));
     }
 }
