@@ -37,9 +37,41 @@ fn url_routing_in_library_matches_create_refusal() {
     let output = command.output().expect("run create over captured URL");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
-        stderr(&output).contains("already captured as")
+        stderr(&output).contains("already captured")
             && stderr(&output).contains("ref/papers/captured.md"),
         "expected the already-captured refusal:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn url_routing_duplicate_refuses_before_missing_parent() {
+    // A captured URL without -P refuses as already captured (exit 1),
+    // not as missing parent (exit 2).
+    let temp = TempDir::new("bob-cli-url-routing-duplicate-no-parent");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/papers/captured.md"),
+        "---\ntitle: Captured Post\nstatus: ready\nsource_url: https://example.com/captured\nsource_pdf: lib/papers/captured.pdf\n---\n\n- [ ] ^ref\n",
+    );
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/captured")
+        .arg("-b")
+        .arg(&vault);
+    dead_network(&mut command);
+    let output = command
+        .output()
+        .expect("run create over captured URL without -P");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("already captured")
+            && stderr(&output).contains("ref/papers/captured.md"),
+        "expected the already-captured refusal before parent:\n{}",
         format_output(&output)
     );
 }
@@ -67,7 +99,7 @@ fn url_routing_in_intake_matches_create_refusal() {
     let output = command.output().expect("run create over queued URL");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
-        stderr(&output).contains("already queued in")
+        stderr(&output).contains("already queued")
             && stderr(&output).contains("xlib/blogs/queued.pdf"),
         "expected the already-queued refusal:\n{}",
         format_output(&output)

@@ -360,32 +360,72 @@ pub(super) fn plan_default_target(
                     .contains(occupant)
         });
         if has_library_or_note {
-            let hint = format!(
-                "to add audio to that capture, run bob ref create {} --listen",
-                library_destination.display()
-            );
-            return Err(CommandError::new(format!(
-                "already captured as {} ({}); pass -N/--name to capture under a different name\nhint: {hint}",
-                occupants
-                    .iter()
-                    .find(|occupant| *occupant == &library_destination
+            let primary = occupants
+                .iter()
+                .find(|occupant| {
+                    *occupant == &library_destination
                         || *occupant == &ref_note
                         || library_destination_sidecars(&library_destination)
-                            .contains(occupant))
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| library_destination.display().to_string()),
-                normalize_title_for_report(identity),
-            )));
+                            .contains(occupant)
+                })
+                .cloned()
+                .unwrap_or_else(|| library_destination.clone());
+            let copy = super::duplicate::copy_from_occupant(config, &primary);
+            let title = match identity {
+                DefaultTargetIdentity::Title(title) => title.clone(),
+                DefaultTargetIdentity::Url { keys, .. } => {
+                    keys.first().cloned().unwrap_or_else(|| copy.stem.clone())
+                }
+                DefaultTargetIdentity::AlwaysDifferent => copy.stem.clone(),
+            };
+            let refusal = super::duplicate::AlreadyCaptured::new(
+                title,
+                vec![copy],
+                vec![
+                    super::duplicate::Remedy::new(
+                        "-N <name>",
+                        "capture under a different name",
+                    ),
+                    super::duplicate::Remedy::new(
+                        "-L",
+                        &format!(
+                            "add audio with bob ref create {} --listen",
+                            library_destination.display()
+                        ),
+                    ),
+                ],
+            );
+            let styler = crate::native::style::Styler::detect();
+            return Err(CommandError::new(refusal.render(&styler)));
         }
         if !force {
-            let hint = format!(
-                "to add audio to that capture, run bob ref create {} --listen",
-                library_destination.display()
+            let copy = super::duplicate::copy_from_occupant(config, &target);
+            let title = match identity {
+                DefaultTargetIdentity::Title(title) => title.clone(),
+                DefaultTargetIdentity::Url { keys, .. } => {
+                    keys.first().cloned().unwrap_or_else(|| copy.stem.clone())
+                }
+                DefaultTargetIdentity::AlwaysDifferent => copy.stem.clone(),
+            };
+            let refusal = super::duplicate::AlreadyCaptured::new(
+                title,
+                vec![copy],
+                vec![
+                    super::duplicate::Remedy::new(
+                        "-f",
+                        "replace the queued PDF",
+                    ),
+                    super::duplicate::Remedy::new(
+                        "-L",
+                        &format!(
+                            "add audio with bob ref create {} --listen",
+                            library_destination.display()
+                        ),
+                    ),
+                ],
             );
-            return Err(CommandError::new(format!(
-                "already queued in {}; pass --force to overwrite it\nhint: {hint}",
-                target.display(),
-            )));
+            let styler = crate::native::style::Styler::detect();
+            return Err(CommandError::new(refusal.render(&styler)));
         }
         // --force same-intake overwrite: the library/sidecar checks stay.
         refuse_target_collisions(&target, &sidecar, &workflow, force)?;
@@ -414,6 +454,7 @@ pub(super) fn plan_default_target(
     )))
 }
 
+#[allow(dead_code)]
 fn normalize_title_for_report(identity: &DefaultTargetIdentity<'_>) -> String {
     match identity {
         DefaultTargetIdentity::Title(title) => {
@@ -1324,8 +1365,8 @@ mod tests {
         .expect_err("same intake must refuse without force");
         let message = error.to_string();
         assert!(message.contains("already queued"), "{message}");
-        assert!(message.contains("--force"), "{message}");
-        assert!(message.contains("--listen"), "{message}");
+        assert!(message.contains("-f"), "{message}");
+        assert!(message.contains("-L"), "{message}");
 
         let plan = plan_default_target(
             &config(&temp.path),
@@ -1360,7 +1401,8 @@ mod tests {
             let message = error.to_string();
             assert!(message.contains("already captured"), "{message}");
             assert!(message.contains("Report"), "{message}");
-            assert!(message.contains("--listen"), "{message}");
+            assert!(message.contains("-L"), "{message}");
+            assert!(message.contains("-N <name>"), "{message}");
         }
     }
 

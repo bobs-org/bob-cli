@@ -4103,7 +4103,10 @@ fn landing_library_collision_hints_listen_attach() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let diagnostic = stderr(&output);
     assert!(
-        diagnostic.contains("to add audio to that capture, run bob ref create"),
+        diagnostic.contains("already captured")
+            && diagnostic.contains("-L")
+            && diagnostic.contains("bob ref create")
+            && diagnostic.contains("--listen"),
         "{diagnostic}"
     );
 }
@@ -5141,7 +5144,7 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
         format_output(&output)
     );
     assert!(
-        stderr(&output).contains("already captured as"),
+        stderr(&output).contains("already captured"),
         "expected the dedupe error:\n{}",
         format_output(&output)
     );
@@ -5185,7 +5188,7 @@ fn highlights_create_refuses_each_url_in_pdf_backed_frontmatter_lists() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains("already captured as")
+            stderr(&output).contains("already captured")
                 && stderr(&output).contains("ref/blogs/collection.md"),
             "{name} list did not refuse the recorded URL:\n{}",
             format_output(&output)
@@ -5362,7 +5365,7 @@ fn highlights_create_folded_still_refuses_a_pdf_backed_url_note() {
         format_output(&output)
     );
     assert!(
-        stderr(&output).contains("already captured as"),
+        stderr(&output).contains("already captured"),
         "expected the dedupe error:\n{}",
         format_output(&output)
     );
@@ -5410,7 +5413,7 @@ fn highlights_create_folded_force_overwrites_the_same_intake_target() {
         format_output(&output)
     );
     assert!(
-        stderr(&output).contains("already queued in"),
+        stderr(&output).contains("already queued"),
         "{}",
         format_output(&output)
     );

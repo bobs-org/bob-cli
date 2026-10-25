@@ -593,6 +593,19 @@ fn run_create(matches: &ArgMatches) -> i32 {
         );
     }
     let parent_input = matches.get_one::<String>("parent").cloned();
+    // Duplicate before parent: on non-vault-note routes a duplicate
+    // refuses (exit 1) before a missing -P errors (exit 2). `-L` attach
+    // never needs -P.
+    if !matches!(prepared, PreparedTarget::VaultNote { .. })
+        && parent_input.is_none()
+    {
+        if let Some(code) = check_duplicate_before_parent(
+            &config, &target_os, &prepared, matches,
+        ) {
+            return code;
+        }
+    }
+    let parent_input = matches.get_one::<String>("parent").cloned();
     let (parent, resolved_parent, parent_default_reason) =
         match resolve_parent_for_target(&config, &mut prepared, parent_input) {
             Ok(parent) => parent,
@@ -636,14 +649,7 @@ fn run_create(matches: &ArgMatches) -> i32 {
 
 fn report_create_error(error: CommandError) -> i32 {
     let styler = Styler::detect();
-    let message = error.message;
-    if let Some((first, hint)) = message.split_once("\nhint: ") {
-        eprintln!("{COMMAND_NAME}: {}: {first}", styler.red("error"));
-        eprintln!("hint: {hint}");
-    } else {
-        eprintln!("{COMMAND_NAME}: {}: {message}", styler.red("error"));
-    }
-    error.exit_code.unwrap_or(1)
+    super::duplicate::report_error(COMMAND_NAME, error, &styler)
 }
 
 fn prepare_target(
@@ -795,6 +801,209 @@ fn missing_parent_error() -> CommandError {
     .with_exit_code(2)
 }
 
+/// Duplicate-before-parent pre-check for non-vault-note routes when `-P`
+/// is missing: report an already-captured refusal (exit 1) instead of the
+/// missing-parent error (exit 2), and run `-L` attach without a parent.
+/// Returns `Some(exit code)` when the pre-check decided, `None` when the
+/// caller should proceed to parent resolution.
+fn check_duplicate_before_parent(
+    config: &Config,
+    target_os: &OsString,
+    prepared: &PreparedTarget,
+    matches: &ArgMatches,
+) -> Option<i32> {
+    let force = matches.get_flag("force");
+    let listen = matches.get_flag("listen");
+    match prepared {
+        PreparedTarget::Url => {
+            let raw = target_os.to_string_lossy().into_owned();
+            let Ok((url, arxiv)) = super::target::resolve_url_syntactic(&raw)
+            else {
+                return None;
+            };
+            let recorded =
+                match sources_mod::collect_recorded_source_urls(config) {
+                    Ok(recorded) => recorded,
+                    Err(error) => {
+                        return Some(report_create_error(CommandError::new(
+                            error.message.clone(),
+                        )));
+                    }
+                };
+            let dedupe_key = match &arxiv {
+                Some(paper) => paper.dedupe_key(),
+                None => url.dedupe_key.clone(),
+            };
+            if listen {
+                if let Some(hit) = sources_mod::find_refusing_hit(
+                    &recorded,
+                    &dedupe_key,
+                    None,
+                    force,
+                ) {
+                    let command = match super::listen::require_validated() {
+                        Ok(command) => command,
+                        Err(error) => {
+                            return Some(report_create_error(
+                                error.into_command_error(),
+                            ));
+                        }
+                    };
+                    let attach =
+                        match attach_mod::attach_for_dedupe_hit(config, &hit) {
+                            Ok(attach) => attach,
+                            Err(error) => {
+                                return Some(report_create_error(error))
+                            }
+                        };
+                    let (source_line, target_value) =
+                        url_attach_lines(&url, &arxiv);
+                    let mut scratch =
+                        match super::ScratchDir::create("create-attach") {
+                            Ok(scratch) => scratch,
+                            Err(error) => {
+                                return Some(report_create_error(error))
+                            }
+                        };
+                    let keep = if matches.get_flag("keep-intake") {
+                        Some("requested with -k".to_string())
+                    } else {
+                        None
+                    };
+                    let dry_run = matches.get_flag("dry-run");
+                    match attach_mod::run_attach(
+                        config,
+                        &command,
+                        &attach,
+                        &source_line,
+                        &target_value,
+                        dry_run,
+                        keep.as_deref(),
+                        &mut scratch,
+                    ) {
+                        Ok(()) => return Some(0),
+                        Err(error) => {
+                            return Some(report_create_error(error));
+                        }
+                    }
+                }
+            }
+            match sources_mod::check_dedupe(
+                config,
+                &recorded,
+                &dedupe_key,
+                None,
+                force,
+            ) {
+                Ok(()) => None,
+                Err(error) => Some(report_create_error(CommandError::new(
+                    error.message.clone(),
+                ))),
+            }
+        }
+        PreparedTarget::Markdown(path) => {
+            check_markdown_stamp_before_parent(config, path, matches)
+        }
+        PreparedTarget::Pdf(path) => {
+            check_pdf_stamp_before_parent(config, path, matches)
+        }
+        PreparedTarget::VaultNote { .. } => None,
+    }
+}
+
+fn check_markdown_stamp_before_parent(
+    config: &Config,
+    source: &Path,
+    matches: &ArgMatches,
+) -> Option<i32> {
+    let force = matches.get_flag("force");
+    let canonical = fs::canonicalize(source).ok()?;
+    let markdown = fs::read_to_string(&canonical).ok()?;
+    let stem = match matches.get_one::<String>("name") {
+        Some(name) => super::clip_url::validate_name(name).ok()?,
+        None => canonical
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)?,
+    };
+    let title = match matches.get_one::<String>("title") {
+        Some(override_title) if !override_title.is_empty() => {
+            override_title.clone()
+        }
+        _ => extract_title(&markdown, &canonical).ok()?,
+    };
+    let ref_type = matches
+        .get_one::<String>("ref-type")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_MARKDOWN_REF_TYPE.to_string());
+    if validate_ref_type(&ref_type).is_err() {
+        return None;
+    }
+    let recorded = sources_mod::collect_recorded_source_urls(config).ok()?;
+    let identity = DefaultTargetIdentity::Title(title.clone());
+    // Keep a clone for the refusal title; the identity borrows it.
+    let _ = &recorded;
+    match plan_default_target(
+        config,
+        std::ffi::OsStr::new(&stem),
+        &ref_type,
+        force,
+        &identity,
+    ) {
+        Ok(_) => None,
+        Err(error) => Some(report_create_error(error)),
+    }
+}
+
+fn check_pdf_stamp_before_parent(
+    config: &Config,
+    source: &Path,
+    matches: &ArgMatches,
+) -> Option<i32> {
+    let force = matches.get_flag("force");
+    if let Err(error) = pdf_target_mod::check_local_pdf_identity(config, source)
+    {
+        // Only pre-empt the parent error for duplicates; other
+        // library/intake placement errors still surface after `-P`.
+        if error.message.contains("already captured")
+            || error.message.contains("already queued")
+        {
+            return Some(report_create_error(error));
+        }
+        return None;
+    }
+    let canonical = fs::canonicalize(source).ok()?;
+    let pdf_plan = pdf_target_mod::plan_local_pdf(
+        &canonical,
+        matches.get_one::<String>("name").map(String::as_str),
+        matches.get_one::<String>("title").map(String::as_str),
+        matches.get_one::<String>("author").map(String::as_str),
+        matches.get_one::<String>("published").map(String::as_str),
+        None,
+    )
+    .ok()?;
+    let ref_type = matches
+        .get_one::<String>("ref-type")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_PDF_REF_TYPE.to_string());
+    if validate_ref_type(&ref_type).is_err() {
+        return None;
+    }
+    let recorded = sources_mod::collect_recorded_source_urls(config).ok()?;
+    let identity = DefaultTargetIdentity::Title(pdf_plan.title.clone());
+    let _ = &recorded;
+    match plan_default_target(
+        config,
+        std::ffi::OsStr::new(&pdf_plan.stem),
+        &ref_type,
+        force,
+        &identity,
+    ) {
+        Ok(_) => None,
+        Err(error) => Some(report_create_error(error)),
+    }
+}
+
 pub(super) fn pandoc_command() -> Option<OsString> {
     if let Some(command) =
         bob_env::var_os(ENV_PANDOC_COMMAND).filter(|value| !value.is_empty())
@@ -859,6 +1068,7 @@ fn create_pdf(
             );
         }
         check_dedupe_with_listen_hint(
+            config,
             &recorded,
             &dedupe_key,
             None,
@@ -1108,22 +1318,20 @@ fn create_article_route(
 }
 
 fn check_dedupe_with_listen_hint(
+    config: &Config,
     recorded: &[sources_mod::RecordedSource],
     dedupe_key: &str,
     planned_target: Option<&Path>,
     force: bool,
 ) -> Result<()> {
-    sources_mod::check_dedupe(recorded, dedupe_key, planned_target, force)
-        .map_err(|error| {
-            let mut message = error.message.clone();
-            message.push_str(
-                "\nhint: add --listen to narrate it and attach the episode to the existing capture",
-            );
-            if let Some(hint) = error.hint.clone() {
-                message.push_str(&format!(" ({hint})"));
-            }
-            CommandError::new(message)
-        })
+    sources_mod::check_dedupe(
+        config,
+        recorded,
+        dedupe_key,
+        planned_target,
+        force,
+    )
+    .map_err(|error| CommandError::new(error.message.clone()))
 }
 
 fn default_ref_type_for_kind(
@@ -2387,6 +2595,7 @@ fn create_pdf_url_route(
         );
     }
     check_dedupe_with_listen_hint(
+        config,
         recorded,
         &url.dedupe_key,
         Some(&target_plan.target),
@@ -2635,12 +2844,14 @@ fn create_arxiv_route(
         }
     } else {
         check_dedupe_with_listen_hint(
+            config,
             recorded,
             &key,
             Some(&target_plan.target),
             options.force,
         )?;
         check_dedupe_with_listen_hint(
+            config,
             recorded,
             &url.dedupe_key,
             Some(&target_plan.target),

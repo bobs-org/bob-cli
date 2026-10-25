@@ -429,10 +429,24 @@ pub(super) fn check_local_pdf_identity(
         return Ok(());
     }
     if pdf_already_captured(&canonical) {
-        return Err(CommandError::new(format!(
-            "already captured; bob ref sync {} re-syncs it\nhint: add --listen to narrate it and attach the episode to the existing capture",
-            canonical.display()
-        )));
+        let copy = super::duplicate::copy_from_occupant(config, &canonical);
+        let title = copy.stem.clone();
+        let refusal = super::duplicate::AlreadyCaptured::new(
+            title,
+            vec![copy],
+            vec![
+                super::duplicate::Remedy::new(
+                    "-L",
+                    "add --listen to narrate it and attach the episode to the existing capture",
+                ),
+                super::duplicate::Remedy::new(
+                    "bob ref sync",
+                    &format!("re-sync {}", canonical.display()),
+                ),
+            ],
+        );
+        let styler = crate::native::style::Styler::detect();
+        return Err(CommandError::new(refusal.render(&styler)));
     }
     Err(CommandError::new(format!(
         "{} is inside the Highlights library/intake but has no marker; move it out and rerun create on it",

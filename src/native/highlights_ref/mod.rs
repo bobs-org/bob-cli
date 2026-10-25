@@ -45,6 +45,7 @@ mod companion;
 mod continuation;
 pub(crate) mod diagrams;
 mod doctor;
+pub(crate) mod duplicate;
 mod fetch;
 mod frontmatter;
 mod guard;

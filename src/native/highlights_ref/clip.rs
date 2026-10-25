@@ -112,13 +112,14 @@ pub(super) enum Companion {
 /// existing capture when `--listen` is set, or refuse with the
 /// `--listen` attach hint otherwise.
 fn check_dedupe_for_clip(
+    config: &Config,
     recorded: &[RecordedSource],
     dedupe_key: &str,
     planned_target: Option<&Path>,
     force: bool,
     companion: &Companion,
 ) -> std::result::Result<Option<RecordedSource>, ClipError> {
-    match check_dedupe(recorded, dedupe_key, planned_target, force) {
+    match check_dedupe(config, recorded, dedupe_key, planned_target, force) {
         Ok(()) => Ok(None),
         Err(error) => {
             if matches!(companion, Companion::Listen(_))
@@ -131,16 +132,9 @@ fn check_dedupe_for_clip(
             {
                 return Ok(Some(hit));
             }
-            let hint = match error.hint {
-                Some(hint) => format!(
-                    "add --listen to narrate it and attach the episode to the existing capture ({hint})"
-                ),
-                None => "add --listen to narrate it and attach the episode to the existing capture"
-                    .to_string(),
-            };
             Err(ClipError {
                 message: error.message,
-                hint: Some(hint),
+                hint: None,
                 exit_code: None,
             })
         }
@@ -232,6 +226,7 @@ pub(super) fn capture_article(
     // copy instead of refusing.
     let recorded = collect_recorded_source_urls(config)?;
     if let Some(hit) = check_dedupe_for_clip(
+        config,
         &recorded,
         &web_url.dedupe_key,
         None,
@@ -278,6 +273,7 @@ pub(super) fn capture_article(
     };
     if let Some(plan) = &pre_plan
         && let Some(hit) = check_dedupe_for_clip(
+            config,
             &recorded,
             &web_url.dedupe_key,
             Some(&plan.target),
@@ -412,6 +408,7 @@ pub(super) fn capture_article(
         ],
     )?;
     if let Some(hit) = check_dedupe_for_clip(
+        config,
         &recorded,
         &web_url.dedupe_key,
         Some(&plan.target),
@@ -534,6 +531,7 @@ pub(super) fn capture_article(
             let recorded_after = collect_recorded_source_urls(config)
                 .map_err(ClipError::from)?;
             if let Err(error) = check_dedupe(
+                config,
                 &recorded_after,
                 &web_url.dedupe_key,
                 Some(&plan.target),

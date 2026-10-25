@@ -500,9 +500,18 @@ Every URL dedupes before any fetch on its syntactic key. arXiv spellings
 `https://arxiv.org/abs/<id>`; everything else uses the web-article key. Ref notes
 record `source_url` and legacy `url:`, and queued intake markers record
 both, so existing paper refs take part instead of duplicating. A
-PDF-backed ref-note hit or a queued-intake hit refuses (use `--force`
-only to overwrite the same intake target). The refusal hint points at
-`--listen` attach mode. A URL recorded only by legacy notes without a
+duplicate refuses before any fetch, before a missing `-P` error, and
+lists every copy:
+
+```text
+bob ref: error: already captured: Attention Is All You Need
+  ref/papers/attention_is_all_you_need.md · read · 41 highlights · captured 2026-03-02
+hint: -L  add --listen to narrate it and attach the episode to the existing capture
+```
+
+Queued hits render `already queued: <title>` with `hint: -f  replace
+the queued PDF`. Title routes add `hint: -N <name>  capture under a
+different name`. A URL recorded only by legacy notes without a
 Highlights PDF warns (`already in the library as <path>, a note without
 a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
 instead of refusing; with `--listen` it is a normal capture plus listen,
@@ -529,11 +538,10 @@ Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 or note exists in any reference-type directory under `xlib/`, `lib/`, or
 `ref/`, or when any note under `ref/` already records that id. A free
 candidate is chosen, a candidate occupied by a different reference is
-skipped, and a candidate occupied by the same reference refuses
-(`already captured as <path>` for library or ref-note occupants,
-`already queued in <path>; pass --force to overwrite it` for intake
-occupants). Both refusals keep
-`hint: to add audio to that capture, run bob ref create <library PDF> --listen`.
+skipped, and a candidate occupied by the same reference refuses through
+the same renderer (`already captured: <title>` for library or ref-note
+occupants, `already queued: <title>` for intake occupants, each with its
+copy rows and `hint:` remedies).
 For Markdown and local PDFs the identity is the create-time title (the `-T`
 override, else frontmatter/H1/stem or Info title/filename): a candidate is
 the same reference when its intake or library PDF carries that title as its

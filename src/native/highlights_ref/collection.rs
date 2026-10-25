@@ -126,6 +126,59 @@ fn run_preflight(
     keep_intake_reason: Option<String>,
 ) -> Result<PreparedCollection, CommandError> {
     let urls = validate_targets(matches, targets)?;
+    // Duplicate before parent: check overlap before requiring `-P`, so
+    // an already-captured set refuses (exit 1) before a missing parent
+    // errors (exit 2). `-L` attach never needs `-P`.
+    let pre_force = matches.get_flag("force");
+    let pre_listen = matches.get_flag("listen");
+    let pre_recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    // A pre-check refusal (exact or partial) wins over the parent error.
+    // `check_collection_overlap` returns `Err` for refusals, `Ok` for
+    // clear/attach. Run it first with no planned target.
+    let pre_overlap = check_collection_overlap(
+        config,
+        &pre_recorded,
+        &urls,
+        None,
+        pre_force,
+        pre_listen,
+    );
+    match &pre_overlap {
+        Err(_) => return pre_overlap.map(|_| unreachable!()),
+        Ok(OverlapCheck::Attach(hit)) => {
+            let hit = hit.clone();
+            let options = options_without_parent_for_attach(
+                matches,
+                keep_intake_reason.clone(),
+            )?;
+            let output_stem = options
+                .output
+                .as_deref()
+                .and_then(Path::file_stem)
+                .and_then(std::ffi::OsStr::to_str);
+            let resolved_name = match collection_name::resolve_collection_name(
+                options.name.as_deref(),
+                output_stem,
+                options.title.as_deref(),
+                &urls,
+            ) {
+                Ok(name) => name,
+                Err(error) => return Err(error),
+            };
+            if let Some(warning) = collection_name::part_order_warning(&urls) {
+                eprintln!("{warning}");
+            }
+            return Ok(PreparedCollection {
+                urls,
+                options,
+                resolved_name,
+                plan: None,
+                overlap: OverlapCheck::Attach(hit),
+            });
+        }
+        Ok(OverlapCheck::Clear { .. }) => {}
+    }
     let options = options_from_matches(matches, config, keep_intake_reason)?;
     let output_stem = options
         .output
@@ -267,6 +320,49 @@ fn validate_targets(
         ));
     }
     Ok(urls)
+}
+
+fn options_without_parent_for_attach(
+    matches: &ArgMatches,
+    keep_intake_reason: Option<String>,
+) -> Result<CreateOptions, CommandError> {
+    if let Some(name) = matches.get_one::<String>("name") {
+        clip_url::validate_name(name)?;
+    }
+    let ref_type = matches.get_one::<String>("ref-type").cloned();
+    if let Some(ref_type) = &ref_type {
+        stamp::validate_ref_type(ref_type)?;
+    }
+    let published = matches.get_one::<String>("published").cloned();
+    if let Some(date) = &published {
+        clip_url::validate_published(date)?;
+    }
+    Ok(CreateOptions {
+        audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
+        author: matches.get_one::<String>("author").cloned(),
+        closed: false,
+        dry_run: matches.get_flag("dry-run"),
+        force: matches.get_flag("force"),
+        html: matches.get_one::<OsString>("html").cloned(),
+        include_id: matches.get_flag("include-id"),
+        keep_intake_reason,
+        listen: matches.get_flag("listen"),
+        name: matches.get_one::<String>("name").cloned(),
+        no_audio: matches.get_flag("no-audio"),
+        output: matches.get_one::<OsString>("output").map(PathBuf::from),
+        plain: false,
+        parent: String::new(),
+        parent_default_reason: None,
+        resolved_parent: None,
+        published,
+        sections: Vec::new(),
+        ref_type,
+        status: matches
+            .get_one::<String>("status")
+            .expect("defaulted by clap")
+            .clone(),
+        title: matches.get_one::<String>("title").cloned(),
+    })
 }
 
 fn options_from_matches(
@@ -1159,11 +1255,18 @@ fn check_collection_overlap(
             return Ok(OverlapCheck::Attach(hit.clone()));
         }
         if hit.is_ref_note {
-            return Err(CommandError::new(format!(
-                "already captured as {} (source_url {})\nhint: add --listen to narrate it and attach the episode to the existing capture (open the note, or delete it to recapture)",
-                path_for_report(config, &hit.path),
-                urls[0].dedupe_key,
-            )));
+            let copy = super::duplicate::copy_from_occupant(config, &hit.path);
+            let title = copy.stem.clone();
+            let refusal = super::duplicate::AlreadyCaptured::new(
+                title,
+                vec![copy],
+                vec![super::duplicate::Remedy::new(
+                    "-L",
+                    "add --listen to narrate it and attach the episode to the existing capture",
+                )],
+            );
+            let styler = crate::native::style::Styler::detect();
+            return Err(CommandError::new(refusal.render(&styler)));
         }
         let same_target = planned_target.is_some_and(|target| {
             stamp::normalize_lexically(target)
@@ -1172,11 +1275,21 @@ fn check_collection_overlap(
         if force && (same_target || planned_target.is_none()) {
             return Ok(OverlapCheck::Clear { legacy: Vec::new() });
         }
-        return Err(CommandError::new(format!(
-            "already queued in {} (source_url {})\nhint: pass --force to overwrite the same intake target, or delete the queued PDF to recapture",
-            path_for_report(config, &hit.path),
-            urls[0].dedupe_key,
-        )));
+        let copy = super::duplicate::copy_from_occupant(config, &hit.path);
+        let title = copy.stem.clone();
+        let refusal = super::duplicate::AlreadyCaptured::new(
+            title,
+            vec![copy],
+            vec![
+                super::duplicate::Remedy::new("-f", "replace the queued PDF"),
+                super::duplicate::Remedy::new(
+                    "-L",
+                    "add --listen to narrate it and attach the episode to the existing capture",
+                ),
+            ],
+        );
+        let styler = crate::native::style::Styler::detect();
+        return Err(CommandError::new(refusal.render(&styler)));
     }
 
     let overlaps: Vec<&SourceGroup> = groups
@@ -1276,40 +1389,17 @@ fn report_error(error: CommandError) -> i32 {
 }
 
 fn style_error_message(message: &str, styler: &Styler) -> String {
-    let mut lines = message.lines();
-    let first = lines.next().unwrap_or_default();
-    let command_prefix = format!("{CREATE_COMMAND_NAME}: error:");
-    let first_line = if let Some(remainder) =
-        first.strip_prefix(&command_prefix)
-    {
-        format!("{CREATE_COMMAND_NAME}: {}:{remainder}", styler.red("error"))
-    } else {
-        format!("{CREATE_COMMAND_NAME}: {}: {first}", styler.red("error"))
-    };
-    let mut output = vec![first_line];
-    for line in lines {
-        if line.starts_with("hint:") {
-            output.push(line.to_string());
-        } else if let Some(row) = style_error_row(line, styler) {
-            output.push(row);
-        } else {
-            output.push(line.to_string());
-        }
-    }
-    output.join("\n")
-}
-
-fn style_error_row(line: &str, styler: &Styler) -> Option<String> {
-    let row = line.strip_prefix("  ")?;
-    let digits = row.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 || row.get(digits..)?.get(..2)? != "  " {
-        return None;
-    }
-    Some(format!(
-        "  {}  {}",
-        styler.dim(&row[..digits]),
-        &row[digits + 2..]
-    ))
+    // Shared printer keeps every detail row and every `hint:` row.
+    // Collection messages never carry the command prefix, so strip it
+    // first when present to avoid doubling it.
+    let command_prefix = format!("{CREATE_COMMAND_NAME}: error: ");
+    let body = message
+        .strip_prefix(&command_prefix)
+        .or_else(|| {
+            message.strip_prefix(&format!("{CREATE_COMMAND_NAME}: error:"))
+        })
+        .unwrap_or(message);
+    super::duplicate::format_error(CREATE_COMMAND_NAME, body, styler)
 }
 
 #[cfg(test)]
@@ -1360,7 +1450,10 @@ mod tests {
             styled.contains("\u{1b}[2m1\u{1b}[0m  example.com/a"),
             "{styled:?}"
         );
-        assert!(styled.contains("\nhint: a URL belongs"), "{styled:?}");
+        assert!(
+            styled.contains("\u{1b}[2mhint:\u{1b}[0m a URL belongs"),
+            "{styled:?}"
+        );
     }
 
     #[test]
@@ -1420,10 +1513,9 @@ mod tests {
             &config, &recorded, &urls, None, false, false,
         )
         .expect_err("same existing collection refuses without listen");
-        assert!(error
-            .message
-            .contains("already captured as ref/blogs/series.md"));
-        assert!(error.message.contains("add --listen"));
+        assert!(error.message.contains("already captured"));
+        assert!(error.message.contains("ref/blogs/series.md"));
+        assert!(error.message.contains("-L"));
 
         let attach = check_collection_overlap(
             &config, &recorded, &urls, None, false, true,
@@ -1461,9 +1553,8 @@ mod tests {
             false,
         )
         .expect_err("queued exact set refuses without force");
-        assert!(error
-            .message
-            .contains("already queued in xlib/blogs/series.pdf"));
+        assert!(error.message.contains("already queued"));
+        assert!(error.message.contains("xlib/blogs/series.pdf"));
 
         let allowed = check_collection_overlap(
             &config,
@@ -1497,9 +1588,7 @@ mod tests {
         )
         .expect_err("the twin spelling overlaps the recorded capture");
         assert!(
-            error
-                .message
-                .contains("already captured as ref/blogs/piece.md"),
+            error.message.contains("ref/blogs/piece.md"),
             "the overlap names the recorded capture: {}",
             error.message
         );

@@ -45,6 +45,7 @@ impl SourcesError {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
@@ -406,23 +407,23 @@ pub(super) fn find_refusing_hit(
     None
 }
 
-pub(super) fn check_dedupe(
+/// Every recorded source that would refuse `dedupe_key`: all PDF-backed
+/// ref notes sharing the key, plus queued intake PDFs that `--force`
+/// cannot still overwrite.
+pub(super) fn refusing_hits(
     recorded: &[RecordedSource],
     dedupe_key: &str,
     planned_target: Option<&Path>,
     force: bool,
-) -> std::result::Result<(), SourcesError> {
+) -> Vec<RecordedSource> {
+    let mut hits = Vec::new();
     for hit in recorded {
         if hit.dedupe_key != dedupe_key {
             continue;
         }
         if is_refusing_ref_note(hit) {
-            return Err(SourcesError::new(format!(
-                "already captured as {} (source_url {})",
-                hit.path.display(),
-                dedupe_key,
-            ))
-            .with_hint("open the note, or delete it to recapture"));
+            hits.push(hit.clone());
+            continue;
         }
         if hit.is_ref_note {
             continue;
@@ -438,16 +439,38 @@ pub(super) fn check_dedupe(
             // check with the final target decides.
             continue;
         }
-        return Err(SourcesError::new(format!(
-            "already queued in {} (source_url {})",
-            hit.path.display(),
-            dedupe_key,
-        ))
-        .with_hint(
-            "pass --force to overwrite the same intake target, or delete the queued PDF to recapture",
+        hits.push(hit.clone());
+    }
+    hits
+}
+
+pub(super) fn check_dedupe(
+    config: &Config,
+    recorded: &[RecordedSource],
+    dedupe_key: &str,
+    planned_target: Option<&Path>,
+    force: bool,
+) -> std::result::Result<(), SourcesError> {
+    let hits = refusing_hits(recorded, dedupe_key, planned_target, force);
+    if hits.is_empty() {
+        return Ok(());
+    }
+    let mut refusal = super::duplicate::AlreadyCaptured::from_recorded(
+        config, &hits, dedupe_key,
+    );
+    let queued_only = hits.iter().all(|hit| !hit.is_ref_note);
+    if queued_only {
+        refusal.remedies.push(super::duplicate::Remedy::new(
+            "-f",
+            "replace the queued PDF",
         ));
     }
-    Ok(())
+    refusal.remedies.push(super::duplicate::Remedy::new(
+        "-L",
+        "add --listen to narrate it and attach the episode to the existing capture",
+    ));
+    let styler = crate::native::style::Styler::detect();
+    Err(SourcesError::new(refusal.render(&styler)))
 }
 
 #[cfg(test)]
@@ -514,11 +537,16 @@ mod tests {
         ] {
             let cleaned =
                 validate_and_clean(raw).expect("clean arXiv spelling");
-            let error =
-                check_dedupe(&recorded, &cleaned.dedupe_key, None, false)
-                    .expect_err("legacy url must refuse every spelling");
+            let error = check_dedupe(
+                &config,
+                &recorded,
+                &cleaned.dedupe_key,
+                None,
+                false,
+            )
+            .expect_err("legacy url must refuse every spelling");
             assert!(
-                error.message.contains("already captured as"),
+                error.message.contains("already captured"),
                 "unexpected message: {}",
                 error.message
             );
@@ -547,7 +575,7 @@ mod tests {
 
         let cleaned = validate_and_clean("https://example.com/essay/")
             .expect("clean url");
-        check_dedupe(&recorded, &cleaned.dedupe_key, None, false)
+        check_dedupe(&config, &recorded, &cleaned.dedupe_key, None, false)
             .expect("a legacy-only hit must not refuse");
         assert!(
             find_refusing_hit(&recorded, &cleaned.dedupe_key, None, false)
@@ -585,7 +613,7 @@ mod tests {
                 recorded.iter().any(|source| source.dedupe_key == key),
                 "missing source URL {key}"
             );
-            check_dedupe(&recorded, &key, None, false)
+            check_dedupe(&config, &recorded, &key, None, false)
                 .expect_err("each list value must refuse as already captured");
         }
         fs::remove_dir_all(&root).ok();
@@ -612,7 +640,7 @@ mod tests {
                 recorded.iter().any(|source| source.dedupe_key == key),
                 "missing source URL {key}"
             );
-            check_dedupe(&recorded, &key, None, false).expect_err(
+            check_dedupe(&config, &recorded, &key, None, false).expect_err(
                 "each block-list value must refuse as already captured",
             );
         }
@@ -639,6 +667,12 @@ mod tests {
 
     #[test]
     fn pdf_backed_note_still_refuses_beside_a_legacy_only_note() {
+        let config = Config {
+            bob_dir: PathBuf::from("/vault"),
+            lib_dir: PathBuf::from("/vault/lib"),
+            ref_dir: PathBuf::from("/vault/ref"),
+            xlib_dir: PathBuf::from("/vault/xlib"),
+        };
         let recorded = vec![
             RecordedSource {
                 dedupe_key: "https://example.com/essay".to_string(),
@@ -655,11 +689,16 @@ mod tests {
                 has_audio: false,
             },
         ];
-        let error =
-            check_dedupe(&recorded, "https://example.com/essay", None, false)
-                .expect_err("the PDF-backed hit must refuse");
+        let error = check_dedupe(
+            &config,
+            &recorded,
+            "https://example.com/essay",
+            None,
+            false,
+        )
+        .expect_err("the PDF-backed hit must refuse");
         assert!(
-            error.message.contains("already captured as")
+            error.message.contains("already captured")
                 && error.message.contains("ref/blogs/fresh.md"),
             "the refusal names the PDF-backed note: {}",
             error.message
@@ -683,6 +722,12 @@ mod tests {
     fn twin_path_spelling_refuses_as_already_captured() {
         // bob-cli-7u: a capture of the `%40` spelling refuses against a
         // recorded `@` source, so one article cannot be captured twice.
+        let config = Config {
+            bob_dir: PathBuf::from("/vault"),
+            lib_dir: PathBuf::from("/vault/lib"),
+            ref_dir: PathBuf::from("/vault/ref"),
+            xlib_dir: PathBuf::from("/vault/xlib"),
+        };
         let recorded = vec![RecordedSource {
             dedupe_key: validate_and_clean(
                 "https://medium.com/@edominguez.se/so-i-switched-to-neovim-in-2025-163b85aa0935",
@@ -700,7 +745,7 @@ mod tests {
         .expect("twin URL cleans")
         .dedupe_key;
         assert_eq!(twin, recorded[0].dedupe_key);
-        check_dedupe(&recorded, &twin, None, false)
+        check_dedupe(&config, &recorded, &twin, None, false)
             .expect_err("the twin spelling must refuse as already captured");
     }
 
@@ -708,6 +753,12 @@ mod tests {
     fn reserved_at_sign_off_medium_is_a_distinct_capture() {
         // bob-cli-7u: the `%40` alias is Medium-only, so a different
         // host's `%40` path is a new source, not a refused duplicate.
+        let config = Config {
+            bob_dir: PathBuf::from("/vault"),
+            lib_dir: PathBuf::from("/vault/lib"),
+            ref_dir: PathBuf::from("/vault/ref"),
+            xlib_dir: PathBuf::from("/vault/xlib"),
+        };
         let recorded = vec![RecordedSource {
             dedupe_key: validate_and_clean("https://example.com/a@b")
                 .expect("recorded URL cleans")
@@ -721,12 +772,18 @@ mod tests {
             .expect("encoded URL cleans")
             .dedupe_key;
         assert_ne!(encoded, recorded[0].dedupe_key);
-        check_dedupe(&recorded, &encoded, None, false)
+        check_dedupe(&config, &recorded, &encoded, None, false)
             .expect("a distinct reserved spelling must not refuse");
     }
 
     #[test]
     fn non_arxiv_keys_pass_through_unchanged() {
+        let config = Config {
+            bob_dir: PathBuf::from("/vault"),
+            lib_dir: PathBuf::from("/vault/lib"),
+            ref_dir: PathBuf::from("/vault/ref"),
+            xlib_dir: PathBuf::from("/vault/xlib"),
+        };
         let recorded = vec![RecordedSource {
             dedupe_key: "https://example.com/a?a=1&b=2".to_string(),
             path: PathBuf::from("ref/blogs/existing.md"),
@@ -734,9 +791,21 @@ mod tests {
             source_pdf: Some("lib/blogs/existing.pdf".to_string()),
             has_audio: false,
         }];
-        check_dedupe(&recorded, "https://example.com/a?a=1&b=2", None, false)
-            .expect_err("an exact key still refuses");
-        check_dedupe(&recorded, "https://example.com/other", None, false)
-            .expect("a different key passes");
+        check_dedupe(
+            &config,
+            &recorded,
+            "https://example.com/a?a=1&b=2",
+            None,
+            false,
+        )
+        .expect_err("an exact key still refuses");
+        check_dedupe(
+            &config,
+            &recorded,
+            "https://example.com/other",
+            None,
+            false,
+        )
+        .expect("a different key passes");
     }
 }
