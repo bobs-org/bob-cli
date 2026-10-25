@@ -846,11 +846,13 @@ fn apply_supersession(rows: &mut [RefRow]) {
 ///
 /// A recorded frontmatter `id` must equal the note stem
 /// (`decisions:reference-ids-follow-file-stems`); the only exception is a
-/// `_N` suffix that avoids a duplicate across `ref/`, which still compares
-/// equal here. Two warning-level diagnostics, both repaired through
-/// `bob ref rename`:
+/// `_N` suffix (N ≥ 2) that avoids a duplicate across `ref/`, which is
+/// exactly what `bob ref rename` allocates when another note already
+/// records the bare stem id. Two warning-level diagnostics, both repaired
+/// through `bob ref rename`:
 /// - `id_stem_mismatch`: the recorded id differs from the note stem
-///   (exact comparison; a case-only difference still mismatches).
+///   (exact comparison; a case-only difference still mismatches), unless
+///   it is `<stem>_N` while another note records `<stem>`.
 /// - `duplicate_ref_id`: the same id (ASCII-case-insensitive) is recorded
 ///   by more than one note anywhere under `ref/`.
 /// Notes without a recorded id stay id-less and earn no diagnostic.
@@ -885,26 +887,53 @@ fn apply_reference_identity(rows: &mut [RefRow]) {
             ))
         })
         .collect();
-    for (row, duplicate) in rows.iter_mut().zip(duplicate_details) {
+    let mismatch_details: Vec<Option<String>> = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let id = row.id.as_deref()?;
+            let stem = Path::new(&row.path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("");
+            if id == stem {
+                return None;
+            }
+            let stem_owned_elsewhere = by_id
+                .get(&stem.to_ascii_lowercase())
+                .is_some_and(|owners| owners.iter().any(|other| *other != index));
+            if stem_owned_elsewhere && is_duplicate_avoiding_suffix(id, stem) {
+                return None;
+            }
+            Some(format!(
+                "id {id:?} differs from file stem {stem:?}; repair with bob ref rename <REF> <NAME>",
+            ))
+        })
+        .collect();
+    for ((row, duplicate), mismatch) in
+        rows.iter_mut().zip(duplicate_details).zip(mismatch_details)
+    {
         if let Some(detail) = duplicate {
             row.diagnostics
                 .push(Diagnostic::new("duplicate_ref_id", detail));
         }
-        let Some(id) = row.id.clone() else { continue };
-        let stem = Path::new(&row.path)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or("")
-            .to_string();
-        if id != stem {
-            row.diagnostics.push(Diagnostic::new(
-                "id_stem_mismatch",
-                format!(
-                    "id {id:?} differs from file stem {stem:?}; repair with bob ref rename <REF> <NAME>",
-                ),
-            ));
+        if let Some(detail) = mismatch {
+            row.diagnostics
+                .push(Diagnostic::new("id_stem_mismatch", detail));
         }
     }
+}
+
+/// Whether `id` is `<stem>_N` with N ≥ 2, the shape `bob ref rename`
+/// allocates to avoid a duplicate id.
+fn is_duplicate_avoiding_suffix(id: &str, stem: &str) -> bool {
+    id.strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('_'))
+        .filter(|digits| {
+            !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+        .and_then(|digits| digits.parse::<u64>().ok())
+        .is_some_and(|n| n >= 2)
 }
 
 /// Library counts over non-superseded rows.

@@ -120,7 +120,9 @@ never fail the command:
 - `reference ids` reports mismatched or duplicated reference ids: a recorded
   frontmatter `id` that differs from the note stem (`id_stem_mismatch`), or
   one id recorded by more than one note (`duplicate_ref_id`, matched
-  ASCII-case-insensitively). Both name the `bob ref rename <REF> <NAME>`
+  ASCII-case-insensitively). An id of `<stem>_N` (N ≥ 2) is not a mismatch
+  while another note records `<stem>`; that is the suffix `bob ref rename`
+  allocates to avoid a duplicate. Both name the `bob ref rename <REF> <NAME>`
   repair; notes without an id stay id-less.
 - `annotations` warns while notes still render a leaked marker mirror; the
   next `bob ref scan` removes those blocks without tombstones.

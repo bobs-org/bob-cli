@@ -325,6 +325,37 @@ fn doctor_reference_ids_warn_on_mismatch_and_case_insensitive_duplicate() {
 }
 
 #[test]
+fn doctor_reference_ids_allow_only_a_suffix_that_avoids_a_duplicate() {
+    let temp = TempDir::new("bob-cli-doctor-reference-ids-suffix");
+    let vault = base_vault(&temp);
+    // `bob ref rename` gives the second `shared` stem `shared_2` because
+    // ref/blogs/shared.md already records `shared`: allowed.
+    write_file(
+        &vault.join("ref/blogs/shared.md"),
+        "---\nstatus: ready\ntitle: Shared Blog\nid: shared\n---\n\n# Shared Blog\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    write_file(
+        &vault.join("ref/papers/shared.md"),
+        "---\nstatus: ready\ntitle: Shared Paper\nid: shared_2\n---\n\n# Shared Paper\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    // No other note records `lonely`, so its suffix avoids nothing.
+    write_file(
+        &vault.join("ref/papers/lonely.md"),
+        "---\nstatus: ready\ntitle: Lonely Paper\nid: lonely_2\n---\n\n# Lonely Paper\n\n- [ ] #task #ref #hide ^ref\n",
+    );
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains(
+            "reference ids: warn (1 id/stem mismatch · e.g. ref/papers/lonely.md — repair with bob ref rename <REF> <NAME>)"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
 fn doctor_reference_ids_repair_through_rename_clears_the_row() {
     const NOW: &str = "2026-10-25 12:00:00";
     let temp = TempDir::new("bob-cli-doctor-reference-ids-repair");
