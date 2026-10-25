@@ -116,9 +116,10 @@ pub(crate) fn display_url(cleaned: &str) -> String {
         host = stripped.to_string();
     }
     let mut text = host;
-    if let Some(port) = parsed.port()
-        && Some(port) != parsed.port_or_known_default()
-    {
+    // `port()` already returns `None` for a scheme-default port, so
+    // keeping it preserves explicit non-default ports while a spelled-out
+    // default still normalizes away (bob-cli-c3).
+    if let Some(port) = parsed.port() {
         text.push_str(&format!(":{port}"));
     }
     let path = parsed.path();
@@ -300,6 +301,24 @@ mod tests {
 
         // A trailing dot leaves an empty host label and is rejected.
         assert!(classify_token("https://example.com.").is_none());
+    }
+
+    #[test]
+    fn display_keeps_explicit_non_default_ports() {
+        // A non-default port stays in the display text (bob-cli-c3).
+        assert_eq!(
+            display_url("https://example.com:8443/a"),
+            "example.com:8443/a"
+        );
+        // A spelled-out default port normalizes away.
+        assert_eq!(display_url("https://example.com:443/a"), "example.com/a");
+        // No port keeps the bare host.
+        assert_eq!(display_url("https://example.com/a"), "example.com/a");
+        // The classifier carries the same display through.
+        let intent = classify_token("https://example.com:8443/a")
+            .expect("port URL classifies");
+        assert_eq!(intent.display, "example.com:8443/a");
+        assert_eq!(intent.dedupe_key, "https://example.com:8443/a");
     }
 
     #[test]

@@ -87,9 +87,10 @@ pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
     key.push_str(&url.scheme().to_lowercase());
     key.push_str("://");
     key.push_str(&host);
-    if let Some(port) = url.port()
-        && Some(port) != url.port_or_known_default()
-    {
+    // `url.port()` already returns `None` for a scheme-default port, so
+    // keeping it preserves explicit non-default ports while a spelled-out
+    // default still normalizes away (bob-cli-c3).
+    if let Some(port) = url.port() {
         key.push_str(&format!(":{port}"));
     }
     let path = url.path().trim_end_matches('/');
@@ -917,6 +918,44 @@ mod tests {
         let parsed = url::Url::parse("https://WWW.Example.COM:443/a/?b=2&a=1")
             .expect("parse URL");
         assert_eq!(dedupe_key_for(&parsed), "https://example.com/a?a=1&b=2");
+    }
+
+    #[test]
+    fn dedupe_key_keeps_explicit_non_default_ports() {
+        let key =
+            |raw: &str| validate_and_clean(raw).expect("accept URL").dedupe_key;
+        // A non-default port is part of the identity (bob-cli-c3).
+        assert_eq!(
+            key("https://example.com:8443/a"),
+            "https://example.com:8443/a"
+        );
+        // A spelled-out default port normalizes away: the url crate
+        // reports `port()` as `None` for it.
+        assert_eq!(key("https://example.com:443/a"), "https://example.com/a");
+        // No port keeps the bare host.
+        assert_eq!(key("https://example.com/a"), "https://example.com/a");
+        // The same host and path on different ports are distinct sources.
+        assert_ne!(
+            key("https://example.com:8443/a"),
+            key("https://example.com/a"),
+            "a self-hosted :8443 copy is not the :443 site"
+        );
+        assert_ne!(
+            key("https://example.com:8443/a"),
+            key("https://example.com:9443/a"),
+            "two non-default ports are distinct sources"
+        );
+        // An explicit default port agrees with no port.
+        assert_eq!(
+            key("https://example.com:443/a"),
+            key("https://example.com/a"),
+        );
+        // The http default behaves the same way.
+        assert_eq!(key("http://example.com:80/a"), "http://example.com/a");
+        assert_eq!(
+            key("http://example.com:8080/a"),
+            "http://example.com:8080/a"
+        );
     }
 
     #[test]
