@@ -71,7 +71,7 @@ Usage: bob capture [OPTIONS] [TEXT]...
 
 Arguments:
   [TEXT]...
-          Task text; multiple args are joined with spaces; unknown `--flag` before `--` is rejected
+          Task text; multiple args are joined with spaces; an unknown `--flag` where TEXT would begin is rejected, later tokens stay literal
 
 Options:
   -b, --bob-dir <DIR>

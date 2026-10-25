@@ -251,8 +251,8 @@ fn text_arg() -> Arg {
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
         .help(
-            "Template draft; multiple args are joined with spaces; \
-             unknown `--flag` before `--` is rejected",
+            "Template draft; multiple args are joined with spaces; an unknown \
+             `--flag` where TEXT would begin is rejected, later tokens stay literal",
         )
 }
 

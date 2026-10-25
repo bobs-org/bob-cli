@@ -27,7 +27,7 @@ Usage: bob capture-rewrite [OPTIONS] [TEXT]...
 
 Arguments:
   [TEXT]...
-          Capture text; multiple args are joined with spaces; unknown `--flag` before `--` is rejected
+          Capture text; multiple args are joined with spaces; an unknown `--flag` where TEXT would begin is rejected, later tokens stay literal
 
 Options:
   -c, --cursor <N>

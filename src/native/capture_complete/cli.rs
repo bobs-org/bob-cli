@@ -297,8 +297,8 @@ pub(super) fn text_arg() -> Arg {
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
         .help(
-            "Capture text; multiple args are joined with spaces; \
-             unknown `--flag` before `--` is rejected",
+            "Capture text; multiple args are joined with spaces; an unknown \
+             `--flag` where TEXT would begin is rejected, later tokens stay literal",
         )
 }
 
