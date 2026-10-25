@@ -792,23 +792,42 @@ labels and values use Obsidian text colors.
 
 The context panel follows the focused metric family:
 
-- Pomodoro metrics open on **Where the time went**, grouped by the report's area and
-  project parts. The area bar follows the configured hue-slot order, with unfiled and
-  unlinked buckets last in gray. Rows group projects under their top-level area; area
-  tasks use the catalog's `project_label`, rolled-up projects report their descendant
-  count, and bucket rows include fix-it guidance. Multi-home minutes use a lighter tint
-  for the apportioned share. The footer explains that attribution follows today's note
-  tree and comes from Task Links.
+- Pomodoro metrics open on **Where the time went**, grouped by root parent by
+  default, with **Themes** one click away. The root bar reuses the area-bar component
+  and is fed root rows in the same order and hues as the Day strip bar (area hue-slot
+  order, then label, with buckets last in gray); its `aria-label` reads
+  `Root parent split: …`. Groups rank by area total from `area` parts. Each group
+  shows its header row (dot, area link, `value · share`, `sessions N`), then up to 3
+  root rows plus `N more` / `Show fewer`. The area's own root reads
+  `<area> · area tasks` from the catalog's `project_label`. Root rows carry a label
+  link, `value · share`, the apportioned mini bar, `sessions N` (sessions with any
+  part whose catalog `root_parent` is this root), and fix-it copy for buckets.
+  Multi-home minutes use a lighter tint for the apportioned share. A project root
+  with at least one other leaf in the span offers a quiet `▸ N sub-projects` toggle
+  (N excludes the root itself); expanded leaf rows come from `project` parts whose
+  catalog `root_parent` is the root, ranked by value, each with a label link, a
+  value, and a mini bar scaled to the root's value, and the root's own leaf reads
+  `<root> · own tasks`. The toggle state is `homeSubsExpanded[root]` with focus key
+  `panel-home-subs-<key>`, collapsed by default. `@unlinked` and `@unfiled` render
+  as their header row plus fix-it copy only, never repeating themselves as a child
+  row. The footer reads
+  `▒ split from sessions with several root parents · grouped by today's note tree · from Task Links`.
+  Opening the dash with a day pinned (`openStatsForDay({ panel: "homes" })`) selects
+  the Root parents view, even right after a Themes visit. Reports without
+  `parts_summary.root_parent` fall back to the old `Areas & projects` leaf grouping
+  with an `Update bob to group by root parent.` hint; a stale
+  `homesView === "areas"` maps to `roots`.
 - **Themes** remains one click away and shows the supplied theme breakdown. Reports
-  without area/project parts default to Themes and show an update-bob hint. Reports
+  without `root_parent` parts default to Themes and show an update-bob hint. Reports
   without the additive `sessions` list omit session drill-down controls.
-- Area/project rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
+- Root rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
   expand contributing sessions (newest first, 20 initially) with date, time range,
   duration, authored name, and home shares; selecting a session opens its daily note at
   the ledger line. Pinning a day or bucket switches the table and title to that supplied
   span. Count metrics use the same groups without color tint.
 - Task metrics show the Created, Done, Dropped, and Net flow series when those metrics
-  are present, followed by the focused task metric's area/project counts.
+  are present, followed by the focused task metric's `<Label> by root parent` counts
+  with the same grouping and no bar.
 - Review metrics show supplied answers by tier and outcome; Keep rate also shows its
   90% reference line and the review-time context.
 - Checklist metrics show a daily state calendar and, when supplied, the full chore
@@ -837,22 +856,45 @@ start, and limits. No definition or metric value is reconstructed by the rendere
 
 ### Day strip
 
-In desktop Obsidian, a Day strip renders directly under the `bob-plan`
-badges in canonical daily notes (`YYYY/YYYYMMDD.md`), in Live Preview
-and Reading view. It summarizes that note's date, called D below.
-Daily notes without a `bob-plan` block show no automatic strip.
+In desktop Obsidian, a Day strip renders as the first child of the
+rendered `bob-plan` block in canonical daily notes (`YYYY/YYYYMMDD.md`),
+with the `.bob-plan` badges directly after it, in Live Preview and
+Reading view. It summarizes that note's date, called D below. Daily
+notes without a `bob-plan` block show no automatic strip. The full-width
+working-time bar is the strip's last line, so it reads as the separator
+above the badges. `## Pomodoros` carries no total; the strip repeats it,
+so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
 `review_closed`, in that order). Each fact reads `LABEL value`: the
 report's metric label, uppercased, then the D point `display`. Line 2
-holds a short segmented bar of D's `worked` minutes by area, in the same
-order and hues as the Stats page's "Where the time went" bar, with a
-legend for the three largest areas plus `+N` for additional areas. The timestamp reads
-`so far · HH:MM` — the fetch time of the shown report, not the wall clock
-— right-aligned on today's note only. There are no history marks, no
-collapse control, and no separate Stats link: every fact is itself the
-link to Stats. A metric hidden by `stats.hide` is omitted from the strip,
-not faked.
+holds the legend plus the meta: one `span[role=link]` with the top three
+roots by minutes in bar order — each a hue dot, the bare label, and the
+value — then `+N`, with the timestamp (`so far · HH:MM`, the fetch time
+of the shown report, not the wall clock) right-aligned on today's note
+only. Line 3 is the full-width bar: a 4 px fully rounded `div`
+(`aria-hidden`) with one segment per root, `flex-grow` set to minutes and
+2 px gaps of note background between segments, never track colour. Each
+segment's `title` reads `<label> <display>`; the track
+(`--background-modifier-border`) shows only when the bar is empty or in
+the skeleton. There are no history marks, no collapse control, and no
+separate Stats link: every fact is itself the link to Stats, and the bar
+is a second mouse-only target for the legend's action. A metric hidden
+by `stats.hide` is omitted from the strip, not faked.
+
+Segments group D's `worked` minutes by root parent (see
+[pomodoro-homes.md](pomodoro-homes.md)), in the same order and hues as
+the Stats page's "Where the time went" bar: area hue-slot order, then
+label, with buckets last in gray. Colour means area; a segment means a
+root parent, so same-area roots share a hue and are told apart by order,
+gaps, and labels. A report without `root_parent` parts, from an older
+bob, falls back to `parts.area`, and the copy then honestly says
+"Time by area". Labels never ellipsize: below about 30em a container
+query hides the rank-3 legend item and swaps in a second counter, `+N`
+with N = segments − 2; the painter renders both counters, and each one's
+`title` lists the roots it hides. The legend link's `aria-label` and
+`title` read `Time by root parent: <label> <display>, …`, listing every
+segment, and the group `aria-label` sentence uses the same phrase.
 
 Bob owns every value: labels, values, part displays, definitions, and
 hues all come from the report. The strip writes its own fixed copy only
@@ -863,13 +905,14 @@ Display states: today in progress shows provisional values with
 `so far · HH:MM`, and an unmet closeout reads `not yet`. A past day shows
 values with no meta, and `missed` is allowed. `not_tracked` shows `–`.
 `missing`, or a report warning for D, shows `–` (or the display) plus a
-small `⚠`. The area bar is omitted if `worked` is absent, is not measured
-in minutes, or has no nonempty `parts.area` anywhere in its daily series.
+small `⚠`. The legend and bar are omitted if `worked` is absent, is not
+measured in minutes, or has no nonempty `parts.root_parent` (or fallback
+`parts.area`) anywhere in its daily series.
 Otherwise a zero worked day with `quality: ok` shows an empty track and
-`no Pomodoros`. With no bar or status text, line 2 is absent.
+`no Pomodoros`. With no bar or status text, line 2 holds the meta alone.
 A future daily note shows nothing: no element height, no spawn. The first
-load paints a skeleton in the loaded
-geometry. A failed refresh keeps the values with `refresh failed` (today:
+load paints a skeleton in the loaded geometry, including the empty bar
+track. A failed refresh keeps the values with `refresh failed` (today:
 `so far · HH:MM · refresh failed`). A failure with nothing cached shows
 one muted line, `Day stats unavailable — <title>.`, plus a `Retry` link;
 when bob is not found the line names `stats.bob_path`. Mobile and hosts
@@ -877,9 +920,12 @@ without process-launch support render no strip. The strip never shows
 another date's result while loading: a report whose
 `today` predates the local date is never shown as "so far".
 
-Where it renders: a stable child inside the rendered `bob-plan` block,
-after the badges — in both Live Preview and Reading view, because both
-run the code-block processor. Nowhere else automatically: not under the
+Where it renders: a stable host as the first child of the rendered
+`bob-plan` block — on first paint and every 5 s repaint, in both Live
+Preview and Reading view, because both run the code-block processor. The
+host node is never detached. With no host (strip off, future day,
+non-daily note, dashboard), `.bob-plan` stays the first child as before.
+Nowhere else automatically: not under the
 dashboard's `bob-plan` block or any non-daily note, not in hover
 popovers, embeds, or canvas nodes, not in source mode, and not on mobile.
 A `bob-day-stats` code fence embeds a strip in another note, such as a
@@ -889,12 +935,23 @@ asks for a daily note or an explicit date. An explicit fence and the
 automatic strip can both appear in the same daily note.
 
 Interaction: clicking a fact opens Stats with D pinned and that metric
-focused; clicking the mix opens Stats with `worked` focused, D pinned,
-and "Where the time went" revealed. An already-open Stats tab is reused;
+focused; clicking the legend or the bar opens Stats with `worked`
+focused, D pinned, and "Where the time went" on the Root parents view
+revealed. An already-open Stats tab is reused;
 otherwise Ctrl/Cmd-click and middle-click open a new tab. Enter and Space
-activate. `mousedown` never steals focus, so vim keeps working.
-Facts and the mix are `span` links (`role="link"`,
-`tabindex="0"`): the strip contains no `<button>` elements.
+activate facts and the legend. `mousedown` never steals focus (the bar
+calls `preventDefault`), so vim keeps working.
+Facts and the legend are `span` links (`role="link"`,
+`tabindex="0"`); the bar has no tabindex: the strip contains no
+`<button>` elements.
+
+Layout: `.bob-day-strip` keeps `margin: .5rem 0 0` and
+`container-type: inline-size`. `.bob-plan-has-day-strip > .bob-plan`
+takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. Line 2 sits
+`~.2em` below line 1, and the bar sits `~.45em` below line 2, with no
+card, border, background, shadow, or button. Height budget at a 16 px
+base: at most 56 px when the facts fit on one line (540 and 700 px),
+at most 80 px when they wrap once (410 px).
 
 Data: the strip reuses the cached default Stats report when its daily
 series covers every date D−7…D and D is before `report.today`, or D and
