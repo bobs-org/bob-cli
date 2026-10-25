@@ -1779,14 +1779,6 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         if skip_real_diagram_render("tall snapshot fit") {
             return;
         }
-        if std::process::Command::new("pdftotext")
-            .arg("-v")
-            .output()
-            .is_err()
-        {
-            eprintln!("skipping tall snapshot fit: pdftotext is required");
-            return;
-        }
         let temp = tempfile::tempdir().expect("tempdir");
         let scratch = temp.path().join("scratch");
         fs::create_dir_all(&scratch).expect("scratch");

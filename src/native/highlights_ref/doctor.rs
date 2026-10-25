@@ -787,7 +787,7 @@ fn append_reference_ids_row(
         if duplicate {
             if let Some(id) = row.id.as_deref() {
                 duplicated
-                    .entry(id.to_lowercase())
+                    .entry(id.to_ascii_lowercase())
                     .or_default()
                     .push(row.path.as_str());
             }
@@ -818,7 +818,9 @@ fn append_reference_ids_row(
             let recorded = rows
                 .iter()
                 .find_map(|row| {
-                    row.id.as_deref().filter(|id| id.to_lowercase() == *key)
+                    row.id
+                        .as_deref()
+                        .filter(|id| id.to_ascii_lowercase() == *key)
                 })
                 .unwrap_or(key);
             parts.push(format!(

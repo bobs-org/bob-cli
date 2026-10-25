@@ -6801,7 +6801,7 @@ the deleted ids and any unresolved selector strings in `missing`; clear
 returns the number of entries removed. Error JSON includes `ok: false`,
 `error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
 `saved_templates_disabled`, existing `template_*` definition errors, and an
-unknown `--flag` before `--` (`saved_templates_unknown_flag`) exit
+unknown `--flag` where the draft would begin (`saved_templates_unknown_flag`) exit
 2; `saved_templates_newer_schema`, `saved_templates_busy`, and
 `saved_templates_io` exit 1.
 

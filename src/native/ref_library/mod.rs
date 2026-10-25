@@ -858,7 +858,10 @@ fn apply_reference_identity(rows: &mut [RefRow]) {
     let mut by_id: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
         if let Some(id) = row.id.as_deref() {
-            by_id.entry(id.to_lowercase()).or_default().push(index);
+            by_id
+                .entry(id.to_ascii_lowercase())
+                .or_default()
+                .push(index);
         }
     }
     // Owned duplicate details per row, resolved before any mutation.
@@ -867,7 +870,7 @@ fn apply_reference_identity(rows: &mut [RefRow]) {
         .enumerate()
         .map(|(index, row)| {
             let id = row.id.as_deref()?;
-            let sharing = by_id.get(&id.to_lowercase())?;
+            let sharing = by_id.get(&id.to_ascii_lowercase())?;
             if sharing.len() < 2 {
                 return None;
             }

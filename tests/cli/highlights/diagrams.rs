@@ -16,12 +16,21 @@ fn skip_pandoc_xelatex(test_name: &str) -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success());
-    let pdftotext_available =
-        Command::new("pdftotext").arg("-v").output().is_ok();
-    if !pandoc_available || !xelatex_available || !pdftotext_available {
-        eprintln!(
-            "skipping {test_name}: pandoc/xelatex/pdftotext are required"
-        );
+    if !pandoc_available || !xelatex_available {
+        eprintln!("skipping {test_name}: pandoc/xelatex are required");
+        return true;
+    }
+    false
+}
+
+/// Gate for tests that assert on rendered PDF text: they also need
+/// pdftotext, while render-only tests keep running without it.
+fn skip_pdf_text_render(test_name: &str) -> bool {
+    if skip_pandoc_xelatex(test_name) {
+        return true;
+    }
+    if Command::new("pdftotext").arg("-v").output().is_err() {
+        eprintln!("skipping {test_name}: pdftotext is required");
         return true;
     }
     false
@@ -58,7 +67,7 @@ fn skip_if_missing_note_profile_packages(vault: &std::path::Path) -> bool {
 }
 
 fn pdf_haystack(path: &std::path::Path) -> String {
-    // Callers gate on `skip_pandoc_xelatex`, which requires pdftotext.
+    // Callers gate on `skip_pdf_text_render`, which requires pdftotext.
     // There is no raw-bytes fallback: searching compressed PDF bytes for
     // visible text is not a valid extraction and lets negative assertions
     // pass falsely.
@@ -95,7 +104,7 @@ fn seed_parent(vault: &std::path::Path) {
 
 #[test]
 fn highlights_create_renders_mermaid_via_stub_adapter() {
-    if skip_pandoc_xelatex("mermaid success") {
+    if skip_pdf_text_render("mermaid success") {
         return;
     }
     let temp = TempDir::new("bob-cli-diagrams-success");
@@ -141,7 +150,7 @@ fn highlights_create_renders_mermaid_via_stub_adapter() {
 
 #[test]
 fn highlights_create_mermaid_partial_failure_keeps_note_and_exits_0() {
-    if skip_pandoc_xelatex("mermaid partial") {
+    if skip_pdf_text_render("mermaid partial") {
         return;
     }
     let temp = TempDir::new("bob-cli-diagrams-partial");
@@ -218,7 +227,7 @@ fn highlights_create_mermaid_partial_failure_keeps_note_and_exits_0() {
 
 #[test]
 fn highlights_create_mermaid_adapter_crash_invalid_and_timeout_degrade() {
-    if skip_pandoc_xelatex("mermaid degrade") {
+    if skip_pdf_text_render("mermaid degrade") {
         return;
     }
     let source_body = mermaid_source("");
@@ -296,7 +305,7 @@ fn highlights_create_mermaid_adapter_crash_invalid_and_timeout_degrade() {
 
 #[test]
 fn highlights_create_mermaid_missing_adapter_warns_and_exits_0() {
-    if skip_pandoc_xelatex("mermaid missing adapter") {
+    if skip_pdf_text_render("mermaid missing adapter") {
         return;
     }
     let temp = TempDir::new("bob-cli-diagrams-missing-adapter");
@@ -333,7 +342,7 @@ fn highlights_create_mermaid_missing_adapter_warns_and_exits_0() {
 
 #[test]
 fn highlights_create_mermaid_kill_switch_skips_stub_and_prints_source() {
-    if skip_pandoc_xelatex("mermaid kill switch") {
+    if skip_pdf_text_render("mermaid kill switch") {
         return;
     }
     let temp = TempDir::new("bob-cli-diagrams-kill-switch");
@@ -403,7 +412,7 @@ fn highlights_create_without_mermaid_does_not_spawn_stub() {
 
 #[test]
 fn highlights_create_snapshot_mermaid_success_and_failure_shape() {
-    if skip_pandoc_xelatex("snapshot mermaid") {
+    if skip_pdf_text_render("snapshot mermaid") {
         return;
     }
     let temp = TempDir::new("bob-cli-diagrams-snapshot");
@@ -531,7 +540,7 @@ fn highlights_create_mermaid_scale_warning_when_figure_is_wide() {
 
 #[test]
 fn highlights_create_recognizes_definition_list_mermaid_fences() {
-    if skip_pandoc_xelatex("definition-list Mermaid") {
+    if skip_pdf_text_render("definition-list Mermaid") {
         return;
     }
     let markdown = definition_list_mermaid_source();

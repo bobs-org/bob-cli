@@ -329,38 +329,28 @@ fn doctor_reference_ids_repair_through_rename_clears_the_row() {
     const NOW: &str = "2026-10-25 12:00:00";
     let temp = TempDir::new("bob-cli-doctor-reference-ids-repair");
     let (vault, _, _) = init_vault_sync_pair(&temp);
-    for directory in ["lib", "ref", "xlib"] {
+    for directory in ["lib/papers", "ref", "xlib"] {
         fs::create_dir_all(vault.join(directory)).expect("create vault dir");
     }
     write_area_note(&vault.join("sase.md"), "SASE");
+    // Simulate legacy bad data: a synced reference whose recorded id no
+    // longer matches its stem. A marker-bearing PDF plus `bob ref sync`
+    // needs no pandoc, so this also runs on CI hosts without it.
+    let pdf = vault.join("lib/papers/src.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: sase\n- title: Src\n- id: stale-id\n",
+    );
+    let sync = bob_command()
+        .args(["ref", "sync"])
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob ref sync");
+    assert_success(&sync);
     git_in(&vault, ["add", "-A"]);
-    git_in(&vault, ["commit", "-q", "-m", "vault dirs"]);
-    let source = temp.path().join("src.md");
-    write_file(&source, "# Hello\n\nSome text.\n");
-    let create = bob_command()
-        .arg("ref")
-        .arg("create")
-        .arg(&source)
-        .args(["-P", "sase", "-t", "papers", "-i"])
-        .env("BOB_DIR", &vault)
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run bob ref create");
-    assert_success(&create);
-    let intake = bob_command()
-        .arg("ref")
-        .args(["scan", "-i"])
-        .env("BOB_DIR", &vault)
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run bob ref scan -i");
-    assert_success(&intake);
-
-    // Simulate legacy bad data: an id that no longer matches the stem.
-    let note = vault.join("ref/papers/src.md");
-    let contents = fs::read_to_string(&note).expect("read created note");
-    fs::write(&note, contents.replacen("id: src", "id: stale-id", 1))
-        .expect("write mismatched id");
+    git_in(&vault, ["commit", "-q", "-m", "synced reference"]);
     let before = stdout(&run_doctor(&vault));
     assert!(
         before.contains(
@@ -369,15 +359,7 @@ fn doctor_reference_ids_repair_through_rename_clears_the_row() {
         "{before}"
     );
 
-    // The prescribed repair: sync the marker, then rename to the stem.
-    let scan = bob_command()
-        .arg("ref")
-        .args(["scan", "-w"])
-        .env("BOB_DIR", &vault)
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run bob ref scan -w");
-    assert_success(&scan);
+    // The prescribed repair: a same-stem rename re-keys the id.
     let rename = bob_command()
         .arg("ref")
         .args(["rename", "src", "src"])
