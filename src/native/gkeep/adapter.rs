@@ -554,17 +554,10 @@ mod tests {
         body: &str,
     ) -> PathBuf {
         let path = dir.path().join(name);
-        std::fs::write(&path, body).expect("write fake adapter script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&path)
-                .expect("stat fake adapter script")
-                .permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&path, permissions)
-                .expect("chmod fake adapter script");
-        }
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(&path, body);
         path
     }
 

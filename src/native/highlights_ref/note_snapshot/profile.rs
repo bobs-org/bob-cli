@@ -466,7 +466,6 @@ fn first_error_excerpt(log: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-    use std::os::unix::fs::PermissionsExt;
 
     /// Note-profile renders need the packages used by the complete Markdown
     /// render. Read the same declaration as `bob ref doctor`; keep this test
@@ -525,10 +524,10 @@ mod tests {
     }
 
     fn write_executable(path: &Path, body: &str) {
-        fs::write(path, body).expect("write fake executable");
-        let mut perms = fs::metadata(path).expect("stat fake").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod fake");
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(path, body);
     }
 
     fn test_meta() -> NoteMeta {

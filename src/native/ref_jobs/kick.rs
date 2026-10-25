@@ -186,13 +186,10 @@ mod tests {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("script parent");
         }
-        fs::write(path, contents).expect("write script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-                .expect("chmod script");
-        }
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(path, contents);
     }
 
     #[test]

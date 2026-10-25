@@ -4725,31 +4725,8 @@ mod tests {
     }
 
     fn write_executable(path: &Path, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        // Scratch + `cp` so this process never holds a writable descriptor
-        // on the executed inode (ETXTBSY under parallel `cargo test`).
-        let payload = path.with_file_name(format!(
-            ".{}.payload",
-            path.file_name().expect("stub name").to_string_lossy()
-        ));
-        fs::write(&payload, body).expect("write fake executable payload");
-        let _ = fs::remove_file(path);
-        let output = Command::new("cp")
-            .arg("--")
-            .arg(&payload)
-            .arg(path)
-            .output()
-            .expect("copy fake executable");
-        assert!(
-            output.status.success(),
-            "copy fake executable {}: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        fs::remove_file(&payload).expect("remove payload");
-        let mut perms = fs::metadata(path).expect("stat fake").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod fake");
+        // Shared fork-safe scratch-then-copy writer (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(path, body);
     }
 
     const TALL_WIDTH_PT: f64 = 514.5;

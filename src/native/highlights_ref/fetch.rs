@@ -392,13 +392,10 @@ case "$url" in
   *) cp "$ROOT/paper.pdf" "$dest"; printf '200\napplication/pdf\n\n' ;;
 esac
 "#;
-        fs::write(&path, script).expect("write fake curl");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-                .expect("chmod fake curl");
-        }
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(&path, script);
         path
     }
 

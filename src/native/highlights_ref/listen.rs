@@ -1065,17 +1065,10 @@ mod tests {
 
     fn write_executable(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
-        fs::write(&path, body).expect("write fake listen script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = fs::metadata(&path)
-                .expect("stat fake listen script")
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&path, permissions)
-                .expect("chmod fake listen script");
-        }
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(&path, body);
         path
     }
 

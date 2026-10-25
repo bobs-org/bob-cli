@@ -947,7 +947,6 @@ fn short_sha(sha: &str) -> String {
 mod tests {
     use std::{
         fs, io,
-        os::unix::fs::PermissionsExt,
         path::Path,
         process::{Command, Stdio},
         sync::{
@@ -1563,9 +1562,13 @@ mod tests {
 
     fn reject_commits(vault: &Path) {
         let hook = vault.join(".git/hooks/commit-msg");
-        fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write commit-msg hook");
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
-            .expect("chmod commit-msg hook");
+        // Fork-safe scratch-then-copy writer: git executes this hook while
+        // other test threads fork, so an in-place `fs::write` can fail the
+        // hook exec with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &hook,
+            "#!/bin/sh\nexit 1\n",
+        );
     }
 
     fn git_subject(vault: &Path) -> String {
