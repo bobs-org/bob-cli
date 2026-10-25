@@ -89,29 +89,32 @@ previews, pickers, and discovery calls for the Mac app and editors.
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
 For `bob capture-complete` in `relation_label` context, visible catalog rows include
-`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A typed row
-is first and includes `typed: true`, `existing`, and `hidden`; when the typed key exists,
-it also includes `count` and uses the catalog spelling. Hidden labels are omitted from
+`label`, normalized `key`, `count`, `replacement`, and optional `inverse`. A nonempty
+query adds a typed row first, with `typed: true`, `existing`, and `hidden`.
+When its key exists, it also includes `count` and uses the catalog spelling.
+Hidden labels are omitted from
 the visible rows, but an exact typed hidden label remains available with `hidden: true`.
 The response includes `hidden_count` for this context. Rows also carry
 `hide_replacement` for the `||` spelling; a `||` probe preserves both pipes
-in `replacement` and adds `one_off: true`.
+in each row's `replacement` and adds `one_off: true` to the response.
 
 ### Inbox-routing results
 
 Successful captures, including dry runs, return `inbox_route` with
 `supported: true`, `candidate_count`, `routed_count`, `kept_count`, and
-`candidates`. Candidates describe existing inbox task blocks whose status changes;
-new tasks are excluded. Each has an opaque `key`, a 1-based `n`, before/after
-status, an `answer`, and an `outcome` (`pending`, `kept`, or `moved`).
+`candidates`. Each candidate is an existing top-level inbox task block whose
+root or nested task changes status; new tasks are excluded. Each has an opaque
+`key`, a 1-based `n`, the root's before/after status, an `answer` (initially
+`null`), and an `outcome` (`pending`, `kept`, or `moved`).
 `destinations` is present only when candidates exist.
 
 Repeatable `--inbox-route` answers select a destination or keep a candidate
-in place. A moved candidate gains `moved` with its final path, line, block
-ID, previous block ID, and freshness date. The batch adds repair and rename
-reports and `needs_reconcile`; `task_blocks` and `open_notes` follow the
-move. Without an answer or the client guard, a capture succeeds with pending
-candidates left in their inbox. See the
+in place. A moved candidate gains `moved` with `destination`, `line`,
+`block_id`, `previous_block_id`, and `fresh` (a date or `null`). The
+`inbox_route` object adds `repaired_files`, `renamed_block_ids`, and
+`needs_reconcile`; top-level `task_blocks` and `open_notes` follow the move.
+Without an answer or `--require-inbox-route-choice`, a capture succeeds
+with pending candidates left in their inbox. See the
 [inbox-routing contract](../capture.md#routing-inbox-tasks-out) for answer
 syntax, guard errors, and atomic-write guarantees.
 

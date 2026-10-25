@@ -157,9 +157,9 @@ segments. Decoding runs once, so `%2541` stays distinct from `A`.
 | `https://medium.com/@author/post%40x` and `https://medium.com/@author/post@x` | No |
 | `https://example.com/a%40b` and `https://example.com/a@b` | No |
 
-The stored `source_url` is the cleaned URL: its fragment and tracking
-parameters are removed, but path escapes retain their spelling. The dedupe
-key is used for comparison, not written back over `source_url`.
+The stored `source_url` is the parsed URL with its fragment and tracking
+parameters removed. The dedupe key's additional path-escape normalization
+is used for comparison, not written back over `source_url`.
 [Library lookup](ref.md#identity) uses the same key.
 
 Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a

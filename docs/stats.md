@@ -814,18 +814,17 @@ start, and limits. No definition or metric value is reconstructed by the rendere
 
 ### Day strip
 
-On every canonical daily note (`YYYY/YYYYMMDD.md`) that holds a
-`bob-plan` block, a Day strip renders directly under the plan badges, in
-Live Preview and Reading view: a compact receipt of that note's own day
-— never a window, a target, or a comparison. Daily notes without a
-`bob-plan` block show no automatic strip.
+In desktop Obsidian, a Day strip renders directly under the `bob-plan`
+badges in canonical daily notes (`YYYY/YYYYMMDD.md`), in Live Preview
+and Reading view. It summarizes that note's date, called D below.
+Daily notes without a `bob-plan` block show no automatic strip.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
 `review_closed`, in that order). Each fact reads `LABEL value`: the
 report's metric label, uppercased, then the D point `display`. Line 2
 holds a short segmented bar of D's `worked` minutes by area, in the same
 order and hues as the Stats page's "Where the time went" bar, with a
-legend for the three largest areas plus `+N`. The meta reads
+legend for the three largest areas plus `+N` for additional areas. The timestamp reads
 `so far · HH:MM` — the fetch time of the shown report, not the wall clock
 — right-aligned on today's note only. There are no history marks, no
 collapse control, and no separate Stats link: every fact is itself the
@@ -837,21 +836,22 @@ hues all come from the report. The strip writes its own fixed copy only
 (`so far`, `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`,
 `Retry`) plus accessibility sentences and date words derived from D.
 
-Honest states: today in progress shows provisional values with
+Display states: today in progress shows provisional values with
 `so far · HH:MM`, and an unmet closeout reads `not yet`. A past day shows
 values with no meta, and `missed` is allowed. `not_tracked` shows `–`.
 `missing`, or a report warning for D, shows `–` (or the display) plus a
-small `⚠`. A real `0m` worked day shows `WORKED 0m`, an empty track, and
-the legend text `no Pomodoros`. A redefined `worked` (not minutes, or no
-`parts.area`) omits the mix: line 2 holds only the meta on today's note
-and is absent on a past day. A future daily note shows nothing: no
-element height, no spawn. The first load paints a skeleton in the loaded
+small `⚠`. The area bar is omitted if `worked` is absent, is not measured
+in minutes, or has no nonempty `parts.area` anywhere in its daily series.
+Otherwise a zero worked day with `quality: ok` shows an empty track and
+`no Pomodoros`. With no bar or status text, line 2 is absent.
+A future daily note shows nothing: no element height, no spawn. The first
+load paints a skeleton in the loaded
 geometry. A failed refresh keeps the values with `refresh failed` (today:
 `so far · HH:MM · refresh failed`). A failure with nothing cached shows
 one muted line, `Day stats unavailable — <title>.`, plus a `Retry` link;
-when bob is not found the line names `stats.bob_path`. Mobile, or
-wherever `bob` cannot spawn, renders nothing — never an error card. The
-strip never shows another date's result while loading: a report whose
+when bob is not found the line names `stats.bob_path`. Mobile and hosts
+without process-launch support render no strip. The strip never shows
+another date's result while loading: a report whose
 `today` predates the local date is never shown as "so far".
 
 Where it renders: a stable child inside the rendered `bob-plan` block,
@@ -859,37 +859,42 @@ after the badges — in both Live Preview and Reading view, because both
 run the code-block processor. Nowhere else automatically: not under the
 dashboard's `bob-plan` block or any non-daily note, not in hover
 popovers, embeds, or canvas nodes, not in source mode, and not on mobile.
-A ` ```bob-day-stats ` fence embeds a strip anywhere (for example a
-weekly note) and takes an optional `day: YYYY-MM-DD` body; without it,
-the fence uses its note's own date. A fence placed inside a daily note
-simply renders its own strip; there is no fence stand-down.
+A `bob-day-stats` code fence embeds a strip in another note, such as a
+weekly note, with `day: YYYY-MM-DD` in its body. The date can be omitted
+only in a canonical daily note, whose path supplies D. Otherwise the fence
+asks for a daily note or an explicit date. An explicit fence and the
+automatic strip can both appear in the same daily note.
 
 Interaction: clicking a fact opens Stats with D pinned and that metric
 focused; clicking the mix opens Stats with `worked` focused, D pinned,
-and "Where the time went" revealed. Ctrl/Cmd-click and middle-click open
-a new leaf; Enter and Space activate. `mousedown` never steals focus, so
-vim keeps working. Facts and the mix are `span` links (`role="link"`,
+and "Where the time went" revealed. An already-open Stats tab is reused;
+otherwise Ctrl/Cmd-click and middle-click open a new tab. Enter and Space
+activate. `mousedown` never steals focus, so vim keeps working.
+Facts and the mix are `span` links (`role="link"`,
 `tabindex="0"`): the strip contains no `<button>` elements.
 
-Data: the strip reads D from the shared default report — the Stats
-page's default arguments, so the page and every recent strip share one
-cache entry. Any other day fetches
-`stats show -a -f json -g day -r <D-7>..<D>`. A cached report whose
-`today` predates the local date is never shown as "so far"; the strip
-refetches instead.
+Data: the strip reuses the cached default Stats report when its daily
+series covers every date D−7…D and D is before `report.today`, or D and
+`report.today` both equal today's date on the device.
+With no cached report, today's strip requests the default report; past
+days request `bob stats show -a -f json -g day -r <D-7>..<D>`.
+That explicit range is also used when the cached default lacks coverage.
+A report from before local midnight is not reused for its formerly
+provisional day or a later date.
 
-Refresh budget: painting from cache costs one frame and zero spawns;
-an automatic host paints immediately from cache but never fetches before
-its first visibility notification; typing never rebuilds the strip; an
-off-screen or backgrounded strip spawns nothing; network checks stay
-visible/dirty/aged gated with the today/past age limits; strips sharing a
-cache key with the page settle through one spawn at a time.
+Refresh: cached values paint without running `bob`. Automatic strips wait
+for a visibility notification before fetching; without an observer, they
+check whether the block is connected and shown. Backgrounded or hidden
+strips make no requests. A visible strip fetches missing data; cached
+data refreshes after a vault change or ten minutes of age, with a minimum
+age of 30 seconds for today and ten minutes for past days. Strips and the
+Stats page sharing a cache key share one running request.
 
 Controls: `stats.day_strip` in `~/.config/bob/config.yml` (`true` by
 default) is the durable on/off for the automatic host — explicit fences
-still render when it is `false`. The `Toggle Day stats` command is a
-session-only toggle. Opening or refreshing a strip never changes note
-bytes and never appends journal events.
+still render when it is `false`. The `Toggle Day stats` command toggles
+automatic strips for the current plugin session. Opening or refreshing a
+strip never changes note bytes and never appends journal events.
 
 ### Browser preview and fixtures
 

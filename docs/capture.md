@@ -4710,7 +4710,7 @@ an unknown alphabetic `--flag` is rejected with exit 2
 (`unexpected argument '--flag' found`, JSON `ok: false` under `-f json`)
 and writes nothing. After `--` or an earlier text argument it stays literal:
 `bob capture -- --anything` and `bob capture hello --world` both capture text.
-`--` plus a non-letter (such as `--2`) and single-hyphen starts also begin
+`--` plus a non-letter (such as `--2`) and a bare `-` also begin
 text. Embedded newlines inside a
 single `TEXT` argument stay intact; multiple `TEXT` arguments are still
 joined with single spaces, never newlines. Editor clients such as Bob Mac Capture should

@@ -459,7 +459,8 @@ another thin client of that service (see `docs/capture.md`
   [Linking tasks](capture.md#linking-tasks). Label suggestions use the shared
   catalog: hidden labels are omitted, but typing an exact hidden label keeps
   it available. `||` selects a one-off label that hides only after the
-  capture succeeds; requesting or accepting completion writes nothing.
+  capture succeeds; requesting or accepting completion changes neither vault
+  notes nor label preferences.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human

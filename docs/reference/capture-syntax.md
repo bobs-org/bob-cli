@@ -254,8 +254,9 @@ Contract: [Command-line options](../capture.md#command-line-options) and
 
 #### Inbox task destinations
 
-A capture that changes an existing inbox task's status reports a route
-candidate. The CLI leaves unanswered candidates in place. Repeatable
+A capture that changes an existing inbox task's status reports its top-level
+task block as a route candidate; changing a nested task routes that whole block.
+The CLI leaves unanswered candidates in place. Repeatable
 `-i N=note` or `--inbox-route KEY=note` moves a candidate after the capture action;
 `-i N=` keeps one, and `-i keep` keeps every otherwise unanswered candidate.
 Numbers and keys come from that draft's `inbox_route` preview.
@@ -267,8 +268,10 @@ bob capture --dry-run -f json -- '@mac_inbox:triage'
 bob capture --dry-run -i 'mac_inbox.md#^triage=work' -- '@mac_inbox:triage'
 ```
 
-The second preview links the task, then moves it to `work.md` and repairs
-its links. New tasks and unchanged statuses do not produce candidates.
+Both commands only preview. The second plans the link, then the move to
+`work.md` and link repairs. Removing `--dry-run` from that second command
+commits the action and move together; do not commit the first command before
+answering. New tasks and blocks with no status changes produce no candidates.
 Destinations exclude inboxes; stale keys or refused moves abort the batch.
 
 Contract: [Routing inbox tasks out](../capture.md#routing-inbox-tasks-out).
@@ -888,19 +891,21 @@ bob capture '=focus'
 
 #### Exact Pomodoro names
 
-`#"NAME"` selects by normalized name equality, preserving spaces and
-punctuation instead of using slug/prefix matching. For example, `DEEP WORK`
-and `DEEP-WORK` stay distinct. The literal also works in link suffixes.
-Whitespace collapses and letters become uppercase. Straight or curly double
-quotes are accepted; an unclosed quote is incomplete input.
+`#"NAME"` matches the complete normalized name, preserving spaces and
+supported punctuation instead of using slug/prefix matching. For example,
+`DEEP WORK` and `DEEP-WORK` stay distinct. The literal also works in link
+suffixes. Whitespace collapses and ASCII letters become uppercase. Straight
+or curly double quotes are accepted; an unclosed quote is incomplete input.
 
 ```bash
 bob capture --dry-run '=#"DEEP WORK"'
 bob capture --dry-run '@work:outline#"DEEP WORK"'
 ```
 
-The `#` is required: `="DEEP WORK"` is prose. Completion uses exact
-literals when a slug would lose the spelling or select a different name.
+The inner double quotes are part of Bob's syntax; the outer single quotes
+preserve them in the shell. The `#` is required: `'="DEEP WORK"'` captures
+prose. Completion uses exact literals when a slug would lose the spelling
+or select a different name.
 
 Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro)
 and [Lossless acceptance](../pomodoro-themes.md#pt8-lossless-acceptance).

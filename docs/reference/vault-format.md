@@ -278,8 +278,9 @@ Contract: [Project Task Sync](../projects.md),
 
 ### Inbox notes
 
-`inbox.md` at the vault root, plus its direct area children. Projects and
-untyped descendants do not count. Default capture
+`inbox.md` at the vault root, plus area notes whose frontmatter `parent`
+resolves directly to it. This is a note relationship, not a folder hierarchy;
+projects and untyped children do not count. Default capture
 target is `mac_inbox.md`. `bob gkeep pull` drains into `gkeep_inbox.md`
 (`gkeep.target` can name another vault-relative note). Current inbox files
 set `ready_cap: off`. New captures here have no `fresh` stamp, so they
@@ -366,9 +367,10 @@ An underline absorbed into another highlight leaves a redirect only when a
 vault Markdown link targets its old ID or a stub already exists.
 
 Annotation sections are derived from Highlights comments and sticky notes:
-`# Name` declares a section; a matching `@name` or `#name` token at a line's
-start or end joins it. Section headings and summary cards render inside the
-managed region, with `^s-…` section anchors and stable `^h-…` annotation IDs.
+`# Name` on the first nonempty line declares a section; a matching `@name`
+or `#name` at the start or end of a non-task line joins it. Section headings
+and summary cards render inside the managed region, with `^s-…` section
+anchors and stable `^h-…` annotation IDs.
 Edits to the source annotations in Highlights update the grouping on the next
 full scan. See [Annotation sections](../highlights-ref-sync.md#sections-and).
 
