@@ -1,10 +1,25 @@
+use std::ffi::OsStr;
+
 use super::{
     super::{
         model::Candidates, render::candidate_lines, shell::shell_completion,
     },
     result, write_file, write_settings, TempDir,
 };
-use crate::native::capture_language::CompletionContext;
+use crate::native::{capture_language::CompletionContext, env::TestEnvGuard};
+
+/// Relation-label completion loads the relation catalog, which writes
+/// its cache under `XDG_CACHE_HOME`. Point that at a tempdir so `cargo
+/// test` never touches the real `~/.cache/bob-cli/relations`.
+fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
+    TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache.as_os_str())),
+        (
+            "BOB_CONFIG_FILE",
+            Some(OsStr::new("/nonexistent/bob-cli-test-config.yml")),
+        ),
+    ])
+}
 
 fn relation_fixture() -> TempDir {
     let temp = TempDir::new("bob-cli-capture-complete-relations");
@@ -26,6 +41,8 @@ fn relation_fixture() -> TempDir {
 
 #[test]
 fn relation_target_contexts_use_directional_markers_and_owner_links() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
 
     let bare_to = result(temp.path(), "New task ~", "New task ~".len());
@@ -90,6 +107,8 @@ fn relation_target_contexts_use_directional_markers_and_owner_links() {
 
 #[test]
 fn relation_target_replacement_stops_before_an_existing_label() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     let raw = "New task ~tasks:tar|\"follow-up of\"";
     let cursor = raw.find('|').expect("label separator");
@@ -104,6 +123,8 @@ fn relation_target_replacement_stops_before_an_existing_label() {
 
 #[test]
 fn relation_pools_follow_directional_tiers_and_editability() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     let raw = "Use this @mac_inbox+owner ~";
     let to = result(temp.path(), raw, raw.len());
@@ -150,6 +171,8 @@ fn relation_pools_follow_directional_tiers_and_editability() {
 
 #[test]
 fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     let raw = "Use this @mac_inbox+owner ~tasks:target|follow";
     let value = result(temp.path(), raw, raw.len());
@@ -264,6 +287,8 @@ fn relation_label_suggestions_count_links_and_put_typed_spelling_first() {
 
 #[test]
 fn relation_label_completions_carry_relation_and_owner() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     for (raw, direction, token, separator) in [
         ("New task ~tasks:target|", "to", "~tasks:target", 22),
@@ -337,6 +362,8 @@ fn relation_label_completions_carry_relation_and_owner() {
 
 #[test]
 fn relation_label_double_pipe_keeps_pipes_and_reports_one_off() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     // A `||` probe reads the label text past both pipes: the query drops
     // the second pipe, the typed replacement keeps `||`, every row gains
@@ -389,6 +416,8 @@ fn relation_label_double_pipe_keeps_pipes_and_reports_one_off() {
 
 #[test]
 fn relation_label_leading_and_dependency_tail_keep_narrow_ranges() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     for (raw, token_start, separator, owner) in [
         ("~tasks:target| Fix it", 0, 13, "Fix it"),
@@ -425,6 +454,8 @@ fn relation_label_leading_and_dependency_tail_keep_narrow_ranges() {
 
 #[test]
 fn parent_picker_reports_typed_relation_direction_and_target_text() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     let raw = "~tasks:target New task +";
     let value = result(temp.path(), raw, raw.len());
@@ -440,6 +471,8 @@ fn parent_picker_reports_typed_relation_direction_and_target_text() {
 
 #[test]
 fn relation_shell_groups_are_directional_and_skip_guarded_rows() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     let temp = relation_fixture();
     for (raw, group, expected) in [
         ("New task ~", "links to", "~tasks:target"),

@@ -1,17 +1,34 @@
 //! Shared-vector coverage for the relation label vocabulary:
 //! `tests/fixtures/relation_labels/vectors.json`.
 
-use std::{collections::BTreeMap, fs};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    fs,
+    time::{Duration, SystemTime},
+};
 
 use serde::{Deserialize, Serialize};
 
-use crate::native::task_relations::label::inverse_phrase;
+use crate::native::{env::TestEnvGuard, task_relations::label::inverse_phrase};
 
 use super::{
     count_label,
     journal::{self, EventPayload},
-    relation_label_key, sort_spellings, Catalog, HiddenFilter, LabelRecord,
+    relation_label_key,
+    scan::{self, CACHE_VERSION},
+    sort_spellings, Catalog, HiddenFilter, LabelRecord,
 };
+
+fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
+    TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache.as_os_str())),
+        (
+            "BOB_CONFIG_FILE",
+            Some(OsStr::new("/nonexistent/bob-cli-test-config.yml")),
+        ),
+    ])
+}
 
 #[derive(Debug, Deserialize)]
 struct Vectors {
@@ -119,6 +136,8 @@ fn vector_keys_match_the_one_key_function() {
 
 #[test]
 fn vector_catalogs_scan_every_scope() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
     for case in &load_vectors().catalog {
         let temp = tempfile::tempdir().expect("scratch vault");
         for note in &case.notes {
@@ -307,4 +326,70 @@ fn inverse_phrases_match_the_contract_table() {
     }
     assert_eq!(inverse_phrase("see"), None);
     assert_eq!(inverse_phrase("followed up by"), None);
+}
+
+#[test]
+fn catalog_scan_prunes_vanished_vaults_and_sweeps_orphan_files() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let _guard = isolate_catalog_env(cache_home.path());
+    let live = tempfile::tempdir().expect("live vault");
+    let vanished = tempfile::tempdir().expect("vanished vault");
+    fs::write(
+        live.path().join("tasks.md"),
+        "- [ ] #task Live ^live\n  - 🪢 **LINKS:** see [[tasks#^live]]\n",
+    )
+    .expect("live note");
+
+    // Prime the cache for the vault that is about to vanish, then
+    // remove the vault directory itself.
+    let vanished_cache = scan::cache_path(vanished.path());
+    Catalog::load(vanished.path()).expect("prime vanished cache");
+    assert!(vanished_cache.is_file(), "vanished cache is primed");
+
+    let old_version = scan::relations_dir().join(format!(
+        "catalog-v{}-{}.json",
+        CACHE_VERSION - 1,
+        "0".repeat(64)
+    ));
+    let unparseable = scan::relations_dir()
+        .join(format!("catalog-v{CACHE_VERSION}-{}.json", "f".repeat(64)));
+    let unrelated = scan::relations_dir().join("notes.txt");
+    let stale_temp = scan::relations_dir().join(format!(
+        ".catalog-v{CACHE_VERSION}-{}.json.123.tmp",
+        "0".repeat(64)
+    ));
+    let fresh_temp = scan::relations_dir().join(format!(
+        ".catalog-v{CACHE_VERSION}-{}.json.456.tmp",
+        "0".repeat(64)
+    ));
+    fs::write(&old_version, "stale version").unwrap();
+    fs::write(&unparseable, "not json").unwrap();
+    fs::write(&unrelated, "unrelated").unwrap();
+    fs::write(&stale_temp, "stale write").unwrap();
+    fs::write(&fresh_temp, "active write").unwrap();
+    let stale_file = fs::File::options().write(true).open(&stale_temp).unwrap();
+    stale_file
+        .set_times(
+            fs::FileTimes::new().set_modified(
+                SystemTime::now() - Duration::from_secs(10 * 60 + 1),
+            ),
+        )
+        .unwrap();
+
+    drop(vanished);
+
+    let catalog = Catalog::load(live.path()).expect("live catalog loads");
+    assert_eq!(catalog.known_count(), 1, "live scan finds its label");
+
+    let live_cache = scan::cache_path(live.path());
+    assert!(live_cache.is_file(), "live vault cache is kept");
+    assert!(!vanished_cache.exists(), "vanished vault cache is removed");
+    assert!(!old_version.exists(), "stale-version file is removed");
+    assert!(!stale_temp.exists(), "stale atomic-write temp is removed");
+    assert!(fresh_temp.exists(), "fresh atomic-write temp is kept");
+    assert!(
+        unparseable.exists(),
+        "unparseable current-version file is kept"
+    );
+    assert!(unrelated.exists(), "unrelated file is kept");
 }

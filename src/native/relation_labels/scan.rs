@@ -15,7 +15,7 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -31,8 +31,10 @@ use super::{
     count_label, sort_spellings, LabelRecord, LabelSpelling, MAX_LABEL_WARNINGS,
 };
 
-const CACHE_VERSION: u32 = 2;
+pub(crate) const CACHE_VERSION: u32 = 2;
 const SNAPSHOT_TTL_SECS: u64 = 60;
+/// Atomic-write `.tmp` files older than this are swept with the catalog.
+const STALE_TMP_SECS: u64 = 10 * 60;
 
 #[derive(Default, Serialize, Deserialize)]
 struct ScanCache {
@@ -145,6 +147,11 @@ pub(crate) fn load_scan(
         if let Ok(text) = serde_json::to_string(&cache) {
             let _ = collect_done::atomic_write(&cache_path, &text);
         }
+        // Bound the cache the way the theme catalog does: one file per
+        // vault would otherwise grow without bound. A failed sweep never
+        // fails the scan, and the 60 s snapshot TTL already bounds how
+        // often a full rescan (and so this sweep) runs.
+        sweep_catalog_cache(&cache.vault);
     }
     Ok((rows, warnings))
 }
@@ -256,20 +263,96 @@ fn fingerprint(path: &Path) -> Option<(u64, u64)> {
     Some((u64::try_from(modified.as_nanos()).ok()?, metadata.len()))
 }
 
-fn cache_path(vault: &Path) -> PathBuf {
+pub(crate) fn relations_dir() -> PathBuf {
+    bob_env::bob_cli_cache_dir().join("relations")
+}
+
+pub(crate) fn cache_path(vault: &Path) -> PathBuf {
     use sha2::{Digest, Sha256};
     let key = vault_key(vault);
     let digest = hex::encode(Sha256::digest(key.as_bytes()));
-    bob_env::bob_cli_cache_dir()
-        .join("relations")
-        .join(format!("catalog-v{CACHE_VERSION}-{digest}.json"))
+    relations_dir().join(format!("catalog-v{CACHE_VERSION}-{digest}.json"))
+}
+
+/// Sweep sibling cache files after a full rescan stores, modeled on the
+/// theme catalog's `sweep_orphaned_files`:
+/// - remove a `catalog-v{CACHE_VERSION}-<64 hex>.json` whose stored
+///   `vault` path is no longer a directory (except the vault just
+///   written);
+/// - remove `catalog-v<older version>-*.json` files;
+/// - remove atomic-write `.tmp` files older than 10 minutes;
+/// - leave unparseable or unrelated files alone, unless they match
+///   these exact name patterns.
+/// Every I/O failure is ignored: the sweep never fails a scan.
+fn sweep_catalog_cache(keep_vault: &str) {
+    let Ok(entries) = fs::read_dir(relations_dir()) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(rest) = name
+            .strip_prefix("catalog-v")
+            .and_then(|name| name.strip_suffix(".json"))
+        {
+            sweep_catalog_file(&path, rest, keep_vault);
+            continue;
+        }
+        if path.extension().is_some_and(|extension| extension == "tmp") {
+            let stale = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age.as_secs() >= STALE_TMP_SECS);
+            if stale {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
+
+fn sweep_catalog_file(path: &Path, version_and_hash: &str, keep_vault: &str) {
+    let Some((version, _hash)) = version_and_hash.split_once('-') else {
+        return;
+    };
+    let Ok(version): Result<u32, _> = version.parse() else {
+        return;
+    };
+    if version != CACHE_VERSION {
+        // A stale-version file matches the catalog name pattern, so it
+        // goes even when its body no longer parses.
+        let _ = fs::remove_file(path);
+        return;
+    }
+    if _hash.len() != 64 || !_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return;
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(stored) = serde_json::from_str::<ScanCache>(&text) else {
+        // Unparseable current-version files stay: only the exact
+        // vanished-vault and stale-version patterns are removed.
+        return;
+    };
+    if stored.version != CACHE_VERSION
+        || stored.vault == keep_vault
+        || Path::new(&stored.vault).is_dir()
+    {
+        return;
+    }
+    let _ = fs::remove_file(path);
 }
 
 pub(crate) fn invalidate(vault: &Path) {
     let _ = fs::remove_file(cache_path(vault));
 }
 
-fn vault_key(vault: &Path) -> String {
+pub(crate) fn vault_key(vault: &Path) -> String {
     fs::canonicalize(vault)
         .unwrap_or_else(|_| vault.to_path_buf())
         .display()

@@ -705,6 +705,9 @@ Rules RV1–RV9 are shipped.
   modification-time and size fingerprints. The full snapshot is reused
   for up to 60 seconds; a cache miss checks changed, new, and deleted
   notes, and successful `bob capture` writes invalidate it immediately.
+  Every full rescan that stores also prunes the cache directory: vanished-vault
+  and stale-version files go, stale atomic-write `.tmp` files go, and
+  unparseable or unrelated files stay.
 - **Display spelling.** The most-used spelling of the key, with ties
   going to the first seen. `spellings[]` lists every spelling with
   its count, so case drift is visible.
