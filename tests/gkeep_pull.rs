@@ -2151,12 +2151,21 @@ fn run_pull_pty(
         cmd.env(key, value);
     }
     let mut child = cmd.spawn().expect("run script(1) for the pty pull");
-    child
+    // If `script(1)` exits before the answers are fed, the write can hit
+    // EPIPE. That race is benign: the exit-code assertions below still pin
+    // the behavior, so tolerate `BrokenPipe` and fail on any other error.
+    let write_result = child
         .stdin
         .take()
         .expect("pty stdin")
-        .write_all(stdin_bytes)
-        .expect("feed pty answers");
+        .write_all(stdin_bytes);
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "feed pty answers"
+        );
+    }
     let out = child.wait_with_output().expect("collect pty output");
     let code = out.status.code().unwrap_or(-1);
     let mut typescript = String::from_utf8_lossy(&out.stdout).into_owned();

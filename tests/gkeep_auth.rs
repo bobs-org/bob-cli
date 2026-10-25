@@ -96,6 +96,11 @@ fn write_auth_config(env: &GkeepEnv, token_command: &str, store_command: &str) {
 }
 
 /// Run `bob gkeep login` with `stdin_text` on stdin.
+///
+/// When the child exits before reading (for example a setup error when
+/// `gkeep.email` is missing), the stdin write can hit EPIPE. That race is
+/// benign: the exit status and stderr assertions below still pin the
+/// behavior, so tolerate `BrokenPipe` and keep failing on any other error.
 fn run_login(
     env: &GkeepEnv,
     fake: &FakeAdapter,
@@ -112,12 +117,14 @@ fn run_login(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().expect("spawn bob gkeep login");
-    child
+    let write_result = child
         .stdin
         .take()
         .expect("piped stdin")
-        .write_all(stdin_text.as_bytes())
-        .expect("write stdin");
+        .write_all(stdin_text.as_bytes());
+    if let Err(error) = write_result {
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "write stdin");
+    }
     child.wait_with_output().expect("wait for login")
 }
 

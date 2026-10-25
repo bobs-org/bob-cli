@@ -17,6 +17,10 @@ use gkeep_support::{
 ///
 /// A just-written executable can report transient `ETXTBSY` under
 /// concurrent load; that one error retries like `spawn_adapter`.
+///
+/// If the adapter exits before reading, the write can hit EPIPE. That
+/// race is benign: the status assertions below still pin the behavior,
+/// so tolerate `BrokenPipe` and keep failing on any other error.
 fn run_fake(path: &std::path::Path, request: &str) -> std::process::Output {
     let mut attempts = 0;
     let mut child = loop {
@@ -36,12 +40,18 @@ fn run_fake(path: &std::path::Path, request: &str) -> std::process::Output {
             Err(error) => panic!("spawn fake adapter: {error}"),
         }
     };
-    child
+    let write_result = child
         .stdin
         .take()
         .expect("piped stdin")
-        .write_all(request.as_bytes())
-        .expect("write request");
+        .write_all(request.as_bytes());
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write request"
+        );
+    }
     child.wait_with_output().expect("wait for fake adapter")
 }
 
