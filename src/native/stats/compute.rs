@@ -257,7 +257,10 @@ fn prune_home_catalog(
     let mut used = BTreeSet::new();
     for metric in metrics {
         for (dimension, parts) in &metric.parts_summary {
-            if dimension == "area" || dimension == "project" {
+            if dimension == "area"
+                || dimension == "project"
+                || dimension == "root_parent"
+            {
                 used.extend(parts.iter().map(|part| part.key.clone()));
             }
         }
@@ -267,7 +270,7 @@ fn prune_home_catalog(
             .chain(&metric.prior_points)
             .chain(&metric.daily_points)
         {
-            for dimension in ["area", "project"] {
+            for dimension in ["area", "project", "root_parent"] {
                 if let Some(parts) = point.parts.get(dimension) {
                     used.extend(parts.keys().cloned());
                 }
@@ -293,6 +296,7 @@ fn prune_home_catalog(
                 .area
                 .iter()
                 .chain(&entry.subarea)
+                .chain(std::iter::once(&entry.root_parent))
                 .cloned()
                 .collect::<Vec<_>>()
         })

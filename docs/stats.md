@@ -277,9 +277,13 @@ definitions (plus downstream dependents) with local warnings.
 
 Every metric yields one value per date: an integer `value` (or `null`), an
 optional ratio `num`/`den` in basis points, a quality, an optional non-ok
-reason, and dimension parts (`area`, `project`, `theme`, `kind`, `note`,
-`tier`, `outcome`, `met`/`missed`). Pomodoro and task metrics add `area` and
-`project` homes from the shared resolver in [pomodoro-homes.md](pomodoro-homes.md).
+reason, and dimension parts (`area`, `root_parent`, `project`, `theme`,
+`kind`, `note`, `tier`, `outcome`, `met`/`missed`). Pomodoro and task
+metrics add `area`, `root_parent`, and `project` homes from the shared
+resolver in [pomodoro-homes.md](pomodoro-homes.md). `root_parent` is the
+additive working-time grouping by root parent; every metric that carries
+`area` and `project` parts also carries it, in grouped and prior points too,
+with no `other` collapse.
 The `theme` dimension splits a named session on the same `+` components as
 the plan budget; catalog identity and hues are in
 [pomodoro-themes.md](pomodoro-themes.md). Minutes-mode days also carry
@@ -376,8 +380,9 @@ linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
 `summary.p25`/`p75` stay daily even when the chart is grouped. Parts
 summaries rank dimensions by total; only `note` and `theme` collapse to top
-five plus `other`. `area` and `project` keep every key (the note tree already
-bounds them). Rolling medians span 7 day points, 4 week buckets, or 3
+five plus `other`. `area`, `root_parent`, and `project` keep every key (the
+note tree already bounds them). Rolling medians span 7 day points, 4 week
+buckets, or 3
 month buckets, with a 6-day / 3-week / 2-month lead-in so the first displayed
 point can fill, need half the window in real observations, and stay `null`
 for today.
@@ -431,7 +436,9 @@ Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 (with prior metadata), per-metric definitions/summaries/chart/points/parts/
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
-`subarea`, `path`, `hue`; `project_label` on area-kind entries),
+`subarea`, `path`, `hue`, `root_parent`; `project_label` on area-kind
+entries, and every referenced root present even when only a leaf carries
+minutes),
 and a top-level `sessions` array when the
 report includes at least one pomodoro metric. The catalog and `sessions`
 are omitted when empty. `sessions` lists every closed Pomodoro in the
@@ -443,9 +450,10 @@ the 2026-10-18 live vault, `bob stats -f json -r all` is 1,945,299 bytes
 (1.90 MiB) with 1,093 session facts. Ratio points
 add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
 `parts_summary`, `parts_display`, `apportioned`) and empty lists
-(`daily_points`, `chores`) are omitted. `PartSummary` rows for `area` and
-`project` add an optional `label` plus minutes-mode `apportioned` /
-`apportioned_display`. Points add an optional `apportioned` map,
+(`daily_points`, `chores`) are omitted. `PartSummary` rows for `area`,
+`root_parent`, and `project` add an optional `label` plus minutes-mode
+`apportioned` / `apportioned_display`, with `root_parent` labels using the
+bare catalog label. Points add an optional `apportioned` map,
 `{dimension: {key: minutes}}`, omitted when empty.
 `definition`, `limits`, `parameters`, `chart`, and `total` are always present
 (total and chart quartiles may be JSON `null`). Optional fields that appear
@@ -542,10 +550,11 @@ lines. `·` marks null days; booleans use `●` met / `○` missed. Detail
 (`bob stats show`) draws eighth-block columns, a hollow `▯` today
 column, and a weekday × week grid for booleans. The boolean overview
 sparkline uses `◌` for an unmet provisional today point. It prints every parts
-dimension in a stable order: pomodoro `area`, `project`, `theme`; tasks
-`kind`, `area`, `project`, `note`. Area and project cells use catalog
-labels; under color they prefix a `●` in the area's xterm hue, and
-buckets render dim. The project line shows the top five homes plus
+dimension in a stable order: pomodoro `area`, `root parent`, `project`,
+`theme`; tasks `kind`, `area`, `root parent`, `project`, `note`. Area,
+root-parent, and project cells use catalog labels; under color they prefix a
+`●` in the area's xterm hue, and buckets render dim. The project line shows
+the top five homes plus
 `other`, with buckets always shown outside those five. When apportioned
 minutes are non-zero, a dim `split` line reports the share of project
 minutes that came from sessions with several homes. Review bucket dots use
@@ -647,6 +656,7 @@ metric total.
 | H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
 | H14 | sase_count_in | `measure: count`, `in: [sase]` keeps 3 complete-window sessions when any linked task matches |
 | H15 | review_time / review_count | Oct 14 work session splits 50m into 25m `@review:GTD` and 25m `bob`; review-only minutes and count keep the review share/session |
+| H16 | worked `root_parent` | sase 80 (blog 50 + sase 30), `@review:GTD` 35, bob 10, dev 10, job 4, job_apply 3, `@unlinked` 10, `@unfiled` 15; sums to 167 |
 
 Oct 14 adds the separate H15 check: an unnamed 50m work session links the
 Oct 15 `^gtd` row and `bob`; it is not treated as the same-day review bridge.
@@ -742,6 +752,19 @@ The final stats-drilldown median is 4.7% above the 174 ms plan baseline,
 within its 15% budget (200.1 ms). The measured 4-week JSON is 220,827 bytes.
 The same clock's `-r all` JSON is 1,945,299 bytes (1.90 MiB; 1,093
 closed sessions).
+
+Root-parent measurement (athena, live `~/bob`, this checkout,
+`BOB_NOW=2026-10-18T12:00:00`, `NO_COLOR=1`, release
+`bob stats -f json -r 4w`, nine runs after one warmup, Python
+`perf_counter`):
+
+| Path | Time |
+| --- | --- |
+| Before (clean base, median / min / max) | 179.1 ms / 171.9 ms / 188.6 ms |
+| Root-parent after (median / min / max) | 177.5 ms / 170.4 ms / 181.4 ms |
+
+The after median is 0.9% below the before median, within the 10% budget.
+The measured 4-week JSON is 82,632 bytes on this vault window.
 
 ## Obsidian Stats block
 

@@ -106,6 +106,10 @@ pub(crate) struct Home {
     pub(crate) hue: Option<Hue>,
     /// Full residence chain from the linked note through its ancestors.
     pub(crate) residence_chain: Vec<String>,
+    /// Root parent grouping for stats: the area the task lives in, else
+    /// the top-level project above its project note. Buckets are their
+    /// own root.
+    pub(crate) root_parent: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,6 +272,24 @@ impl<S: HomeSource> HomeResolver<S> {
             ("@unfiled".to_string(), "unfiled".to_string(), None)
         };
 
+        let root_parent = match home_facts.kind {
+            NoteKind::Area => path_string(home_path),
+            NoteKind::Project => {
+                let end = chain[nearest_home + 1..]
+                    .iter()
+                    .position(|(_, facts)| facts.kind == NoteKind::Area)
+                    .map(|offset| nearest_home + 1 + offset)
+                    .unwrap_or(chain.len());
+                chain[nearest_home..end]
+                    .iter()
+                    .filter(|(_, facts)| facts.kind == NoteKind::Project)
+                    .last()
+                    .map(|(path, _)| path_string(path))
+                    .unwrap_or_else(|| path_string(home_path))
+            }
+            NoteKind::Other => unreachable!("home kind was selected"),
+        };
+
         let home = Home {
             key: path_string(home_path),
             label: note_stem(home_path),
@@ -284,6 +306,7 @@ impl<S: HomeSource> HomeResolver<S> {
                 .iter()
                 .map(|(path, _)| path_string(path))
                 .collect(),
+            root_parent,
         };
 
         self.homes.insert(path.to_path_buf(), home.clone());
@@ -308,7 +331,7 @@ impl<S: HomeSource> HomeResolver<S> {
                 (bucket.clone(), format!("{name} review"), None)
             });
         Home {
-            key: bucket,
+            key: bucket.clone(),
             label: format!("{name} review"),
             kind: super::HomeKind::Bucket,
             area,
@@ -316,6 +339,7 @@ impl<S: HomeSource> HomeResolver<S> {
             subarea: None,
             hue,
             residence_chain,
+            root_parent: bucket,
         }
     }
 
@@ -363,6 +387,7 @@ fn unfiled_at(residence_chain: Vec<String>) -> Home {
         subarea: None,
         hue: None,
         residence_chain,
+        root_parent: "@unfiled".to_string(),
     }
 }
 
@@ -376,5 +401,6 @@ pub(crate) fn unlinked_home() -> Home {
         subarea: None,
         hue: None,
         residence_chain: Vec::new(),
+        root_parent: "@unlinked".to_string(),
     }
 }

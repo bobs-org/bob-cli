@@ -36,10 +36,13 @@ pub(crate) struct SessionSplit {
     pub(crate) kind: SessionKind,
     pub(crate) project: Vec<(String, i64)>,
     pub(crate) area: Vec<(String, i64)>,
+    pub(crate) root_parent: Vec<(String, i64)>,
     pub(crate) project_apportioned: Vec<(String, i64)>,
     pub(crate) area_apportioned: Vec<(String, i64)>,
+    pub(crate) root_parent_apportioned: Vec<(String, i64)>,
     pub(crate) lead_project: Option<String>,
     pub(crate) lead_area: Option<String>,
+    pub(crate) lead_root_parent: Option<String>,
 }
 
 impl<'a> HomesEngine<'a> {
@@ -251,6 +254,21 @@ impl<'a> HomesEngine<'a> {
         if home.area.starts_with('@') {
             self.needed_area_stub(&home.area, Some(&home.area_label));
         }
+        self.ensure_root(home);
+    }
+
+    fn ensure_root(&self, home: &Home) {
+        if home.root_parent == home.key || home.root_parent.starts_with('@') {
+            return;
+        }
+        if self.seen.borrow().contains_key(&home.root_parent) {
+            return;
+        }
+        let root_home = self
+            .resolver
+            .borrow_mut()
+            .resolve_note(Path::new(&home.root_parent));
+        self.remember(&root_home);
     }
 
     fn needed_area_stub(&self, area: &str, label: Option<&str>) {
@@ -300,6 +318,7 @@ fn bucket_home(key: &str, label: &str) -> Home {
             subarea: None,
             hue: None,
             residence_chain: Vec::new(),
+            root_parent: key.to_string(),
         },
     }
 }
@@ -316,6 +335,7 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
         path,
         hue: home.hue,
         project_label,
+        root_parent: home.root_parent.clone(),
     }
 }
 
@@ -343,13 +363,31 @@ pub(crate) fn split_from_kept(
         group.tasks += 1;
         group.minutes = group.minutes.saturating_add(*minutes);
     }
-    let mut project = Vec::new();
-    let mut area = Vec::new();
+    let mut project: Vec<(String, i64)> = Vec::new();
+    let mut area: Vec<(String, i64)> = Vec::new();
+    let mut root_parent: Vec<(String, i64)> = Vec::new();
     if minutes_mode {
         for group in &grouped {
             project.push((group.home.key.clone(), i64::from(group.minutes)));
             add_named(&mut area, &group.home.area, i64::from(group.minutes));
+            add_named(
+                &mut root_parent,
+                &group.home.root_parent,
+                i64::from(group.minutes),
+            );
         }
+    }
+    // Root task counts come from distinct kept tasks, not grouped homes.
+    let mut root_counts: HashMap<String, (u32, usize)> = HashMap::new();
+    for (index, (home, _)) in kept.iter().enumerate() {
+        let entry = root_counts
+            .entry(home.root_parent.clone())
+            .or_insert((0, index));
+        entry.0 += 1;
+        entry.1 = entry.1.min(index);
+    }
+    if !minutes_mode {
+        root_parent = Vec::new();
     }
     let project_keys = project
         .iter()
@@ -359,6 +397,17 @@ pub(crate) fn split_from_kept(
         .iter()
         .map(|(key, _)| key.as_str())
         .collect::<BTreeSet<_>>();
+    let root_keys = if minutes_mode {
+        root_parent
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<BTreeSet<_>>()
+    } else {
+        root_counts
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+    };
     let project_apportioned = if project_keys.len() >= 2 {
         project.clone()
     } else {
@@ -366,6 +415,11 @@ pub(crate) fn split_from_kept(
     };
     let area_apportioned = if area_keys.len() >= 2 {
         area.clone()
+    } else {
+        Vec::new()
+    };
+    let root_parent_apportioned = if root_keys.len() >= 2 && minutes_mode {
+        root_parent.clone()
     } else {
         Vec::new()
     };
@@ -377,14 +431,26 @@ pub(crate) fn split_from_kept(
                 .then_with(|| right.first.cmp(&left.first))
         })
         .map(|group| group.home.clone());
+    let lead_root_parent = root_counts
+        .into_iter()
+        .max_by(|left, right| {
+            left.1
+                 .0
+                .cmp(&right.1 .0)
+                .then_with(|| right.1 .1.cmp(&left.1 .1))
+        })
+        .map(|(key, _)| key);
     SessionSplit {
         kind: SessionKind::Work,
         project,
         area,
+        root_parent,
         project_apportioned,
         area_apportioned,
+        root_parent_apportioned,
         lead_project: lead.as_ref().map(|home| home.key.clone()),
         lead_area: lead.as_ref().map(|home| home.area.clone()),
+        lead_root_parent,
     }
 }
 
@@ -414,6 +480,59 @@ pub(crate) fn split_from_homes(
             }
         }
     }
+    // Root parts group per-task shares by root, never by splitting the
+    // session across roots directly.
+    let mut root_parent: Vec<(String, i64)> = Vec::new();
+    let mut root_counts: HashMap<String, (u32, usize)> = HashMap::new();
+    if !attributed.task_homes.is_empty() {
+        for (index, home) in attributed.task_homes.iter().enumerate() {
+            let entry = root_counts
+                .entry(home.root_parent.clone())
+                .or_insert((0, index));
+            entry.0 += 1;
+            entry.1 = entry.1.min(index);
+        }
+        if minutes_mode {
+            let total: u32 = attributed
+                .homes
+                .parts
+                .iter()
+                .filter_map(|part| part.minutes)
+                .sum();
+            let shares = crate::native::pomodoro_homes::split_minutes(
+                total,
+                attributed.task_homes.len(),
+            );
+            for (index, home) in attributed.task_homes.iter().enumerate() {
+                let minutes =
+                    i64::from(shares.get(index).copied().unwrap_or(0));
+                if let Some(existing) = root_parent
+                    .iter_mut()
+                    .find(|(key, _)| *key == home.root_parent)
+                {
+                    existing.1 = existing.1.saturating_add(minutes);
+                } else {
+                    root_parent.push((home.root_parent.clone(), minutes));
+                }
+            }
+        }
+    } else if minutes_mode {
+        for part in &attributed.homes.parts {
+            let minutes = i64::from(part.minutes.unwrap_or(0));
+            add_named(&mut root_parent, &part.key, minutes);
+            let first = root_counts.len();
+            let entry =
+                root_counts.entry(part.key.clone()).or_insert((0, first));
+            entry.0 += 1;
+        }
+    } else if let Some(lead) = attributed.lead_home.as_ref() {
+        root_counts
+            .entry(lead.root_parent.clone())
+            .or_insert((1, 0));
+    }
+    if !minutes_mode && attributed.task_homes.is_empty() {
+        // Count-mode buckets keep the lead root from the bucket home.
+    }
     let project_keys = project
         .iter()
         .map(|(key, _)| key.as_str())
@@ -422,6 +541,17 @@ pub(crate) fn split_from_homes(
         .iter()
         .map(|(key, _)| key.as_str())
         .collect::<BTreeSet<_>>();
+    let root_keys = if minutes_mode {
+        root_parent
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<BTreeSet<_>>()
+    } else {
+        root_counts
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+    };
     let project_apportioned = if project_keys.len() >= 2 {
         project.clone()
     } else {
@@ -432,15 +562,36 @@ pub(crate) fn split_from_homes(
     } else {
         Vec::new()
     };
+    let root_parent_apportioned = if root_keys.len() >= 2 && minutes_mode {
+        root_parent.clone()
+    } else {
+        Vec::new()
+    };
     let lead = attributed.lead_home.as_ref();
+    let lead_root_parent = if attributed.task_homes.is_empty() {
+        lead.map(|home| home.root_parent.clone())
+    } else {
+        root_counts
+            .into_iter()
+            .max_by(|left, right| {
+                left.1
+                     .0
+                    .cmp(&right.1 .0)
+                    .then_with(|| right.1 .1.cmp(&left.1 .1))
+            })
+            .map(|(key, _)| key)
+    };
     SessionSplit {
         kind: attributed.homes.kind,
         project,
         area,
+        root_parent,
         project_apportioned,
         area_apportioned,
+        root_parent_apportioned,
         lead_project: lead.map(|home| home.key.clone()),
         lead_area: lead.map(|home| home.area.clone()),
+        lead_root_parent,
     }
 }
 
@@ -547,7 +698,10 @@ pub(crate) fn label_parts(
     catalog: &BTreeMap<String, HomeCatalogEntry>,
 ) {
     for (dimension, parts) in parts_summary {
-        if dimension != "area" && dimension != "project" {
+        if dimension != "area"
+            && dimension != "project"
+            && dimension != "root_parent"
+        {
             continue;
         }
         for part in parts {
@@ -727,6 +881,18 @@ mod tests {
         assert_eq!(part_value(worked, "project", "@unlinked"), 10);
         assert_eq!(part_value(worked, "project", "@unfiled"), 15);
 
+        // H16 worked root_parent sums to 167 with leaf projects folded
+        // into their top-level root.
+        assert_eq!(dimension_total(worked, "root_parent"), 167);
+        assert_eq!(part_value(worked, "root_parent", "sase.md"), 80);
+        assert_eq!(part_value(worked, "root_parent", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
+        assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
+        assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
+        assert_eq!(part_value(worked, "root_parent", "job_apply.md"), 3);
+        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "root_parent", "@unfiled"), 15);
+
         let sase = worked.parts_summary["project"]
             .iter()
             .find(|part| part.key == "sase.md")
@@ -742,23 +908,70 @@ mod tests {
             .find(|part| part.key == "gtd.md")
             .unwrap();
         assert_eq!(gtd_area.apportioned, Some(10));
+        // Root apportioned comes from sessions with two or more roots:
+        // HACK spreads bob/sase/dev and JOB spreads job/job_apply.
+        let sase_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "sase.md")
+            .unwrap();
+        assert_eq!(sase_root.apportioned, Some(10));
+        assert_eq!(sase_root.apportioned_display.as_deref(), Some("10m"));
+        let bob_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "bob.md")
+            .unwrap();
+        assert_eq!(bob_root.apportioned, Some(10));
+        let dev_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "dev.md")
+            .unwrap();
+        assert_eq!(dev_root.apportioned, Some(10));
+        let job_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "job.md")
+            .unwrap();
+        assert_eq!(job_root.apportioned, Some(4));
+        let job_apply_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "job_apply.md")
+            .unwrap();
+        assert_eq!(job_apply_root.apportioned, Some(3));
+        let review_root = worked.parts_summary["root_parent"]
+            .iter()
+            .find(|part| part.key == "@review:GTD")
+            .unwrap();
+        assert_eq!(review_root.apportioned, None);
+        // Root labels are bare catalog labels.
+        assert_eq!(sase_root.label.as_deref(), Some("sase"));
+        assert_eq!(review_root.label.as_deref(), Some("GTD review"));
 
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
         assert_eq!(dimension_total(sessions, "area"), 8);
         assert_eq!(dimension_total(sessions, "project"), 8);
+        assert_eq!(dimension_total(sessions, "root_parent"), 8);
         assert_eq!(part_value(sessions, "project", "sase.md"), 1);
         assert_eq!(part_value(sessions, "project", "sase_blog.md"), 1);
         assert_eq!(part_value(sessions, "project", "@review:GTD"), 2);
+        // Count-mode lead roots group distinct tasks by root.
+        assert_eq!(part_value(sessions, "root_parent", "sase.md"), 2);
+        assert_eq!(part_value(sessions, "root_parent", "@review:GTD"), 2);
 
         let done = metric(&report, "done");
         assert_eq!(done.summary.total.as_ref().unwrap().value, Some(7));
         assert_eq!(dimension_total(done, "kind"), 7);
         assert_eq!(dimension_total(done, "area"), 7);
+        assert_eq!(dimension_total(done, "root_parent"), 7);
         assert_eq!(dimension_total(done, "project"), 7);
         assert_eq!(dimension_total(done, "note"), 7);
         assert_eq!(part_value(done, "project", "sase.md"), 2);
         assert_eq!(part_value(done, "project", "@unfiled"), 1);
+        assert_eq!(part_value(done, "root_parent", "sase.md"), 2);
+        assert_eq!(part_value(done, "root_parent", "bob.md"), 1);
+        assert_eq!(part_value(done, "root_parent", "job.md"), 1);
+        assert_eq!(part_value(done, "root_parent", "job_apply.md"), 1);
+        assert_eq!(part_value(done, "root_parent", "gtd.md"), 1);
+        assert_eq!(part_value(done, "root_parent", "@unfiled"), 1);
         assert_eq!(
             done.parts_summary["project"]
                 .iter()
@@ -772,8 +985,10 @@ mod tests {
         let sase_time = metric(&report, "sase_time");
         assert_eq!(sase_time.summary.total.as_ref().unwrap().value, Some(10));
         assert_eq!(dimension_total(sase_time, "area"), 10);
+        assert_eq!(dimension_total(sase_time, "root_parent"), 10);
         assert_eq!(dimension_total(sase_time, "project"), 10);
         assert_eq!(part_value(sase_time, "project", "sase.md"), 10);
+        assert_eq!(part_value(sase_time, "root_parent", "sase.md"), 10);
         assert_eq!(part_value(sase_time, "theme", "SASE"), 10);
 
         // H9 in:[sase] keeps residence-chain matches, including sase_blog
@@ -781,9 +996,11 @@ mod tests {
         let sase_in = metric(&report, "sase_in");
         assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
         assert_eq!(dimension_total(sase_in, "area"), 80);
+        assert_eq!(dimension_total(sase_in, "root_parent"), 80);
         assert_eq!(dimension_total(sase_in, "project"), 80);
         assert_eq!(part_value(sase_in, "project", "sase.md"), 30);
         assert_eq!(part_value(sase_in, "project", "sase_blog.md"), 50);
+        assert_eq!(part_value(sase_in, "root_parent", "sase.md"), 80);
 
         // H14 count mode keeps a session once any linked task matches in:.
         let sase_count_in = metric(&report, "sase_count_in");
@@ -801,6 +1018,20 @@ mod tests {
             Some(50)
         );
         assert_eq!(part_value(sase_blog_in, "project", "sase_blog.md"), 50);
+        assert_eq!(dimension_total(sase_blog_in, "root_parent"), 50);
+        assert_eq!(part_value(sase_blog_in, "root_parent", "sase.md"), 50);
+        // The catalog keeps the referenced root even when only the leaf
+        // carries minutes in the span.
+        assert!(report.homes.contains_key("sase.md"));
+        assert_eq!(
+            report.homes["sase_blog.md"].root_parent,
+            "sase.md".to_string()
+        );
+        assert_eq!(report.homes["sase.md"].root_parent, "sase.md".to_string());
+        assert_eq!(
+            report.homes["@review:GTD"].root_parent,
+            "@review:GTD".to_string()
+        );
 
         // H11 exclude_in:[sase] never drops review/unlinked; work tasks
         // whose chain matches sase are removed (HACK keeps bob+dev = 20).
@@ -880,5 +1111,152 @@ mod tests {
         assert_eq!(part_value(review_time, "project", "@review:GTD"), 25);
         assert_eq!(review_count.summary.total.as_ref().unwrap().value, Some(1));
         assert_eq!(part_value(review_count, "project", "@review:GTD"), 1);
+    }
+
+    #[test]
+    fn worked_root_parent_conserves_totals_in_week_grouping() {
+        let dir = TempDir::new().unwrap();
+        let config = write_config(&dir);
+        let today = NaiveDate::from_ymd_opt(2026, 10, 18)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let mut request = StatsRequest::at(homes_vault(), config, today);
+        request.selection = MetricSelection::Explicit(
+            ["worked"].into_iter().map(str::to_string).collect(),
+        );
+        request.range = Some("2026-10-15..2026-10-18".to_string());
+        request.grouping = Grouping::Week;
+        let report = compute(&request).expect("week grouping computes");
+        let worked = metric(&report, "worked");
+        assert_eq!(dimension_total(worked, "area"), 167);
+        assert_eq!(dimension_total(worked, "project"), 167);
+        assert_eq!(dimension_total(worked, "root_parent"), 167);
+        assert_eq!(part_value(worked, "root_parent", "sase.md"), 80);
+        for point in worked
+            .points
+            .iter()
+            .chain(&worked.prior_points)
+            .chain(&worked.daily_points)
+        {
+            let area: i64 = point
+                .parts
+                .get("area")
+                .map_or(0, |entries| entries.values().sum());
+            let root: i64 = point
+                .parts
+                .get("root_parent")
+                .map_or(0, |entries| entries.values().sum());
+            let project: i64 = point
+                .parts
+                .get("project")
+                .map_or(0, |entries| entries.values().sum());
+            if point.value.is_some() {
+                assert_eq!(area, project, "area/project mismatch");
+                assert_eq!(root, project, "root/project mismatch");
+            }
+            let area_app: i64 = point
+                .apportioned
+                .get("area")
+                .map_or(0, |entries| entries.values().sum());
+            let root_app: i64 = point
+                .apportioned
+                .get("root_parent")
+                .map_or(0, |entries| entries.values().sum());
+            let project_app: i64 = point
+                .apportioned
+                .get("project")
+                .map_or(0, |entries| entries.values().sum());
+            let _ = (area_app, root_app, project_app);
+        }
+    }
+
+    #[test]
+    fn lead_root_groups_tasks_not_projects() {
+        use crate::native::pomodoro_homes::{Home, HomeKind};
+        fn home(key: &str, root: &str, area: &str) -> Home {
+            Home {
+                key: key.to_string(),
+                label: key.to_string(),
+                kind: HomeKind::Project,
+                area: area.to_string(),
+                area_label: area.to_string(),
+                subarea: None,
+                hue: None,
+                residence_chain: vec![key.to_string()],
+                root_parent: root.to_string(),
+            }
+        }
+        // A=2 and B=2 tasks under root R, C=3 under root S. The lead
+        // project is C but the lead root is R (4 tasks vs 3).
+        let kept = vec![
+            (home("a.md", "r.md", "dev.md"), 10),
+            (home("a.md", "r.md", "dev.md"), 10),
+            (home("b.md", "r.md", "dev.md"), 10),
+            (home("b.md", "r.md", "dev.md"), 10),
+            (home("c.md", "s.md", "gtd.md"), 10),
+            (home("c.md", "s.md", "gtd.md"), 10),
+            (home("c.md", "s.md", "gtd.md"), 10),
+        ];
+        let split = super::split_from_kept(&kept, true);
+        assert_eq!(split.lead_project.as_deref(), Some("c.md"));
+        assert_eq!(split.lead_root_parent.as_deref(), Some("r.md"));
+        assert_eq!(
+            split
+                .root_parent
+                .iter()
+                .find(|(key, _)| key == "r.md")
+                .map(|(_, value)| *value),
+            Some(40)
+        );
+        assert_eq!(
+            split
+                .root_parent
+                .iter()
+                .find(|(key, _)| key == "s.md")
+                .map(|(_, value)| *value),
+            Some(30)
+        );
+        let count = super::split_from_kept(&kept, false);
+        assert_eq!(count.lead_root_parent.as_deref(), Some("r.md"));
+    }
+
+    #[test]
+    fn golden_json_carries_root_parent_beside_area_and_project() {
+        let dir = TempDir::new().unwrap();
+        let report = compute(&homes_request(homes_vault(), write_config(&dir)))
+            .expect("golden report computes");
+        let value = serde_json::to_value(&report).expect("report serializes");
+        let worked = value["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|metric| metric["id"] == "worked")
+            .expect("worked metric");
+        let summary = &worked["parts_summary"];
+        assert!(summary.get("root_parent").is_some());
+        assert!(summary.get("area").is_some());
+        assert!(summary.get("project").is_some());
+        let roots = summary["root_parent"].as_array().unwrap();
+        let sase = roots
+            .iter()
+            .find(|part| part["key"] == "sase.md")
+            .expect("sase root");
+        assert_eq!(sase["value"], 80);
+        assert_eq!(sase["label"], "sase");
+        assert!(sase.get("apportioned").is_some());
+        let point = &worked["points"][0];
+        assert!(point["parts"].get("root_parent").is_some());
+        assert!(point["parts"].get("area").is_some());
+        assert!(point["parts"].get("project").is_some());
+        let catalog = value["homes"].as_object().unwrap();
+        assert_eq!(
+            catalog["sase_blog.md"]["root_parent"],
+            serde_json::Value::String("sase.md".to_string())
+        );
+        assert_eq!(
+            catalog["sase.md"]["root_parent"],
+            serde_json::Value::String("sase.md".to_string())
+        );
     }
 }

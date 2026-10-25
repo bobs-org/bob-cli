@@ -33,12 +33,54 @@ daily note. The top-level area is the outermost area on the chain. A subarea is
 the nearest area below that top-level area. A home without an area uses
 `@unfiled` for its area dimension.
 
-## R2 — Retired: project rollup
+## R2 — Root parent
 
-Project rollup is retired. A leftover `rollup:` frontmatter key is silently
-ignored: it never regroups homes and never warns. Each task reports under its
-nearest area or project home, and `in:` / `exclude_in:` filters match the
-full residence chain.
+A task's working time groups under its **root parent**: the area note the
+task lives in, else the top-level project above its project note. A
+top-level project is a project whose `parent` walk reaches an area before
+any other project (normally its `parent` is an area; a sub-area counts). A
+project under another project is a sub-project at any depth. "Top" is never
+folder depth, size, or status.
+
+Take `chain` as built in R1 and `h` as the nearest-home index:
+
+- If `chain[h]` is an area, `root = chain[h]`.
+- If `chain[h]` is a project, let `a` be the first area index above `h`,
+  or the chain's end. Then `root` is the last project in `chain[h..a]`.
+  Non-area, non-project notes in between are walked through, exactly as R1
+  walks archive and ref notes.
+- If the walk never reaches an area, the outermost project reached stands
+  in as the root. It is not a top-level project, and its area stays
+  `@unfiled`.
+- A bucket is its own root: `@review:<NAME>`, `@unlinked`, and `@unfiled`.
+
+| Task lives in | Walk | Root parent |
+| --- | --- | --- |
+| `sase_blog.md` (project) | `sase_blog → sase → dev` | `sase` |
+| `sase.md` / `bob.md` (project) | `→ dev` / `→ gtd` | itself |
+| `dev.md` (area) | — | `dev` |
+| `gtd_daily.md` (sub-area) | — | `gtd_daily` |
+| `p.md` (project, parent `gtd_daily`) | `p → gtd_daily` | `p` |
+| `done/sase_blog_done.md` (archive) | `→ sase_blog → sase → dev` | `sase` |
+| `ref/x.md` (parent `bob`) | `→ bob → dev` | `bob` |
+| `ref/y.md` (parent `dev`) | `→ dev` | `dev` |
+| orphan project `o.md` (no area above) | `o → …` | `o`, area `@unfiled` |
+| GTD review session / `[[#^gtd]]` bridge | — | `@review:GTD` |
+| closed session with no Task Link | — | `@unlinked` |
+| missing or ambiguous link | — | `@unfiled` |
+
+Roots are derived from today's note tree at read time, never written. A
+leftover `rollup:` frontmatter key is silently ignored: project rollup is
+retired and never regroups homes. Labels use the bare root stem (`sase`,
+`gtd`); buckets keep `GTD review`, `unlinked`, `unfiled`. Hues follow R8:
+colour means area, a segment means a root parent, and same-area roots share
+a hue. Stats splits each session per task first, then sums shares by root,
+so every dimension still sums to the metric total; `apportioned` root
+minutes come from sessions with two or more distinct roots. Count mode
+assigns the session to the root with the most distinct tasks (ties to the
+first task in ledger order), which is not always the lead project's root.
+`in:` and `exclude_in:` keep matching the full residence chain, so
+`in: [sase_blog]` still measures blog time on its own.
 
 ## R3 — Links that count
 
@@ -189,10 +231,10 @@ an unlinked forecast has an empty `parts` array.
 
 ## R10 — Current note tree
 
-Resolve homes from the current vault tree each time. Moving a task or changing a
-project parent can regroup past minutes, but cannot change
-the total time. Stats surfaces say “Grouped by today's note tree · from Task
-Links”. V1 does not store snapshots.
+Resolve homes and root parents from the current vault tree each time.
+Moving a task or changing a project parent can regroup past minutes by root,
+but cannot change the total time. Stats surfaces say “Grouped by today's
+note tree · from Task Links”. V1 does not store snapshots.
 
 ## Shared conformance vectors
 

@@ -154,6 +154,157 @@ fn leftover_rollup_key_neither_regroups_nor_warns() {
 }
 
 #[test]
+fn root_parent_follows_the_examples_table() {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    let mut notes = BTreeMap::new();
+    let area = |parent: &str| {
+        format!("---\ntype: [[area]]\nparent: [[{parent}]]\n---\n")
+    };
+    let project = |parent: &str| {
+        format!("---\ntype: [[project]]\nparent: [[{parent}]]\n---\n")
+    };
+    notes.insert(
+        PathBuf::from("dev.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("gtd.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    notes.insert(PathBuf::from("gtd_daily.md"), area("gtd"));
+    notes.insert(PathBuf::from("sase.md"), project("dev"));
+    notes.insert(PathBuf::from("bob.md"), project("gtd"));
+    notes.insert(PathBuf::from("sase_blog.md"), project("sase"));
+    notes.insert(PathBuf::from("sase_blog_notes.md"), project("sase_blog"));
+    notes.insert(PathBuf::from("deep.md"), project("sase_blog_notes"));
+    notes.insert(PathBuf::from("p.md"), project("gtd_daily"));
+    notes.insert(
+        PathBuf::from("plain.md"),
+        "---\ntype: [[note]]\nparent: [[q]]\n---\n".to_string(),
+    );
+    notes.insert(PathBuf::from("q.md"), project("dev"));
+    notes.insert(PathBuf::from("leaf.md"), project("plain"));
+    notes.insert(
+        PathBuf::from("done/sase_blog_done.md"),
+        "---\ntype: [[done]]\nparent: [[sase_blog]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("ref_x.md"),
+        "---\ntype: [[ref]]\nparent: [[bob]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("ref_y.md"),
+        "---\ntype: [[ref]]\nparent: [[dev]]\n---\n".to_string(),
+    );
+    notes.insert(PathBuf::from("orphan.md"), project("orphan_parent"));
+    notes.insert(
+        PathBuf::from("orphan_parent.md"),
+        "---\ntype: [[project]]\n---\n".to_string(),
+    );
+    notes.insert(PathBuf::from("cycle_a.md"), project("cycle_b"));
+    notes.insert(PathBuf::from("cycle_b.md"), project("cycle_a"));
+    // 16-note cap chain: depth0..depth15 plus an area at depth16.
+    for depth in 0..=15 {
+        notes.insert(
+            PathBuf::from(format!("cap{depth}.md")),
+            format!(
+                "---\ntype: [[note]]\nparent: [[cap{}.md]]\n---\n",
+                depth + 1
+            ),
+        );
+    }
+    notes.insert(
+        PathBuf::from("cap16.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    // Plain project chain: leaf lives in a project under a plain note.
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+    // Top-level projects are their own root.
+    assert_eq!(
+        resolver.resolve_note(Path::new("sase.md")).root_parent,
+        "sase.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("bob.md")).root_parent,
+        "bob.md"
+    );
+    // Sub-projects fold into the top-level project.
+    assert_eq!(
+        resolver.resolve_note(Path::new("sase_blog.md")).root_parent,
+        "sase.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("sase_blog_notes.md"))
+            .root_parent,
+        "sase.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("deep.md")).root_parent,
+        "sase.md"
+    );
+    // Areas are their own root, including sub-areas.
+    assert_eq!(
+        resolver.resolve_note(Path::new("dev.md")).root_parent,
+        "dev.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("gtd_daily.md")).root_parent,
+        "gtd_daily.md"
+    );
+    // A project under a sub-area is its own root.
+    assert_eq!(resolver.resolve_note(Path::new("p.md")).root_parent, "p.md");
+    // Archive and reference wrappers are walked through.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("done/sase_blog_done.md"))
+            .root_parent,
+        "sase.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("ref_x.md")).root_parent,
+        "bob.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("ref_y.md")).root_parent,
+        "dev.md"
+    );
+    // A project under a plain note under a project folds to the top.
+    assert_eq!(
+        resolver.resolve_note(Path::new("leaf.md")).root_parent,
+        "q.md"
+    );
+    // An area-less walk falls back to the outermost project.
+    let orphan = resolver.resolve_note(Path::new("orphan.md"));
+    assert_eq!(orphan.root_parent, "orphan_parent.md");
+    assert_eq!(orphan.area, "@unfiled");
+    // Cycles stop on repeat; the outermost reached project stands in.
+    let cycle = resolver.resolve_note(Path::new("cycle_a.md"));
+    assert_eq!(cycle.root_parent, "cycle_b.md");
+    // The 16-note cap never reaches the area, so the link is unfiled.
+    let capped = resolver.resolve_note(Path::new("cap0.md"));
+    assert_eq!(capped.key, "@unfiled");
+    assert_eq!(capped.root_parent, "@unfiled");
+    // Buckets are their own root.
+    assert_eq!(unlinked_home_root(), "@unlinked");
+    assert_eq!(unfiled_home_root(), "@unfiled");
+    let review = resolver.review_home("GTD", Path::new("dev.md"));
+    assert_eq!(review.key, "@review:GTD");
+    assert_eq!(review.root_parent, "@review:GTD");
+}
+
+fn unlinked_home_root() -> String {
+    super::unlinked_home().root_parent.clone()
+}
+
+fn unfiled_home_root() -> String {
+    super::unfiled_home().root_parent.clone()
+}
+
+#[test]
 fn resolved_home_keeps_the_residence_note_chain() {
     let vectors: Vectors = serde_json::from_str(include_str!(
         "../../../tests/fixtures/pomodoro_homes/vectors.json"

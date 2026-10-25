@@ -179,8 +179,10 @@ struct PomodoroDay {
     theme_parts: BTreeMap<String, i64>,
     area_parts: BTreeMap<String, i64>,
     project_parts: BTreeMap<String, i64>,
+    root_parent_parts: BTreeMap<String, i64>,
     area_apportioned: BTreeMap<String, i64>,
     project_apportioned: BTreeMap<String, i64>,
+    root_parent_apportioned: BTreeMap<String, i64>,
     used_fallback: bool,
     missing_duration: bool,
 }
@@ -302,6 +304,9 @@ fn evaluate_pomodoros(
                     if let Some(area) = split.lead_area {
                         add_part(&mut day.area_parts, area, 1);
                     }
+                    if let Some(root) = split.lead_root_parent {
+                        add_part(&mut day.root_parent_parts, root, 1);
+                    }
                 }
                 PomodoroMeasure::Minutes => {
                     let Some((counted, fallback, original_theme_parts)) =
@@ -361,6 +366,12 @@ fn evaluate_pomodoros(
                     }
                     for (key, value) in split.area_apportioned {
                         add_part(&mut day.area_apportioned, key, value);
+                    }
+                    for (key, value) in split.root_parent {
+                        add_part(&mut day.root_parent_parts, key, value);
+                    }
+                    for (key, value) in split.root_parent_apportioned {
+                        add_part(&mut day.root_parent_apportioned, key, value);
                     }
                 }
             }
@@ -434,6 +445,12 @@ fn evaluate_pomodoros(
                     if !day.area_parts.is_empty() {
                         parts.insert("area".to_string(), day.area_parts.clone());
                     }
+                    if !day.root_parent_parts.is_empty() {
+                        parts.insert(
+                            "root_parent".to_string(),
+                            day.root_parent_parts.clone(),
+                        );
+                    }
                     if !day.project_parts.is_empty() {
                         parts.insert(
                             "project".to_string(),
@@ -451,6 +468,12 @@ fn evaluate_pomodoros(
                         apportioned.insert(
                             "area".to_string(),
                             day.area_apportioned.clone(),
+                        );
+                    }
+                    if !day.root_parent_apportioned.is_empty() {
+                        apportioned.insert(
+                            "root_parent".to_string(),
+                            day.root_parent_apportioned.clone(),
                         );
                     }
                     if !day.project_apportioned.is_empty() {
@@ -649,6 +672,7 @@ fn evaluate_tasks(
         add_dimension_part(parts_for_day, "note", &task.source_path, 1);
         let home = homes.home_for_note(&task.source_path);
         add_dimension_part(parts_for_day, "area", &home.area, 1);
+        add_dimension_part(parts_for_day, "root_parent", &home.root_parent, 1);
         add_dimension_part(parts_for_day, "project", &home.key, 1);
     }
 

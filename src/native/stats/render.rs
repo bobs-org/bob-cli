@@ -843,8 +843,8 @@ fn parts_lines(
     styler: &Styler,
 ) -> String {
     let order: &[&str] = match metric.kind.as_str() {
-        "pomodoro" => &["area", "project", "theme"],
-        "tasks" => &["kind", "area", "project", "note"],
+        "pomodoro" => &["area", "root_parent", "project", "theme"],
+        "tasks" => &["kind", "area", "root_parent", "project", "note"],
         _ => return legacy_parts_lines(metric, styler),
     };
     let mut out = String::new();
@@ -873,9 +873,14 @@ fn parts_lines(
                 )
             })
             .collect();
+        let label = if *name == "root_parent" {
+            "root parent"
+        } else {
+            name
+        };
         out.push_str(&format!(
             " {:<8} {}\n",
-            name,
+            label,
             cells.join(&format!(" {sep} ")),
         ));
     }
@@ -883,6 +888,10 @@ fn parts_lines(
         .parts_summary
         .get("area")
         .is_some_and(|parts| !parts.is_empty())
+        || metric
+            .parts_summary
+            .get("root_parent")
+            .is_some_and(|parts| !parts.is_empty())
         || metric
             .parts_summary
             .get("project")
@@ -1026,7 +1035,10 @@ fn format_part_cell(
             None => format!("{} {body}", styler.dim("□")),
         };
     }
-    if dimension != "area" && dimension != "project" {
+    if dimension != "area"
+        && dimension != "project"
+        && dimension != "root_parent"
+    {
         return body;
     }
     let entry = catalog.get(&part.key);
@@ -1275,6 +1287,18 @@ mod tests {
             }],
         );
         report.metrics[0].parts_summary.insert(
+            "root_parent".to_string(),
+            vec![PartSummary {
+                key: "sase.md".to_string(),
+                value: 25,
+                display: "25m".to_string(),
+                share: "78%".to_string(),
+                label: Some("sase".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
             "project".to_string(),
             vec![PartSummary {
                 key: "@review:GTD".to_string(),
@@ -1296,6 +1320,20 @@ mod tests {
                 path: None,
                 hue: Some(Hue::Orange),
                 project_label: None,
+                root_parent: "@review:GTD".to_string(),
+            },
+        );
+        report.homes.insert(
+            "sase.md".to_string(),
+            HomeCatalogEntry {
+                label: "sase".to_string(),
+                kind: HomeKind::Project,
+                area: Some("dev.md".to_string()),
+                subarea: None,
+                path: Some("sase.md".to_string()),
+                hue: Some(Hue::Blue),
+                project_label: None,
+                root_parent: "sase.md".to_string(),
             },
         );
         report.metrics[0].parts_summary.insert(
@@ -1316,6 +1354,10 @@ mod tests {
             "{text:?}"
         );
         assert!(
+            text.contains("root parent") && text.contains("sase 25m 78%"),
+            "{text:?}"
+        );
+        assert!(
             text.contains("project") && text.contains("GTD review 25m 78%"),
             "{text:?}"
         );
@@ -1325,9 +1367,14 @@ mod tests {
         );
         assert!(text.contains("grouped by today's note tree · from Task Links"));
         let area_idx = text.find("area").expect("area dimension");
+        let root_idx = text.find("root parent").expect("root dimension");
         let project_idx = text.find("project").expect("project dimension");
         let theme_idx = text.find("theme").expect("theme dimension");
-        assert!(area_idx < project_idx && project_idx < theme_idx);
+        assert!(
+            area_idx < root_idx
+                && root_idx < project_idx
+                && project_idx < theme_idx
+        );
         assert!(!text.contains("●"));
         let colored = detail(&report, &Styler::colored());
         assert!(colored.contains("\u{1b}[38;5;208m●"), "{colored:?}");
@@ -1412,6 +1459,18 @@ mod tests {
             }],
         );
         report.metrics[0].parts_summary.insert(
+            "root_parent".to_string(),
+            vec![PartSummary {
+                key: "sase.md".to_string(),
+                value: 3,
+                display: "3".to_string(),
+                share: "43%".to_string(),
+                label: Some("sase".to_string()),
+                apportioned: None,
+                apportioned_display: None,
+            }],
+        );
+        report.metrics[0].parts_summary.insert(
             "project".to_string(),
             vec![PartSummary {
                 key: "sase.md".to_string(),
@@ -1445,6 +1504,10 @@ mod tests {
             "{text:?}"
         );
         assert!(
+            text.contains("root parent") && text.contains("sase 3 43%"),
+            "{text:?}"
+        );
+        assert!(
             text.contains("project") && text.contains("sase 3 43%"),
             "{text:?}"
         );
@@ -1454,11 +1517,13 @@ mod tests {
         );
         let kind_idx = text.find("kind").expect("kind dimension");
         let area_idx = text.find("area").expect("area dimension");
+        let root_idx = text.find("root parent").expect("root dimension");
         let project_idx = text.find("project").expect("project dimension");
         let note_idx = text.find("note").expect("note dimension");
         assert!(
             kind_idx < area_idx
-                && area_idx < project_idx
+                && area_idx < root_idx
+                && root_idx < project_idx
                 && project_idx < note_idx
         );
     }
