@@ -362,19 +362,65 @@ fn catalog_scan_prunes_vanished_vaults_and_sweeps_orphan_files() {
         ".catalog-v{CACHE_VERSION}-{}.json.456.tmp",
         "0".repeat(64)
     ));
+    let stale_old_temp = scan::relations_dir().join(format!(
+        ".catalog-v{}-{}.json.789.tmp",
+        CACHE_VERSION - 1,
+        "0".repeat(64)
+    ));
+    let future_catalog = scan::relations_dir().join(format!(
+        "catalog-v{}-{}.json",
+        CACHE_VERSION + 1,
+        "a".repeat(64)
+    ));
+    let future_temp = scan::relations_dir().join(format!(
+        ".catalog-v{}-{}.json.999.tmp",
+        CACHE_VERSION + 1,
+        "a".repeat(64)
+    ));
+    let unrelated_tmp = scan::relations_dir().join("unrelated.tmp");
+    let malformed_catalog = scan::relations_dir()
+        .join(format!("catalog-v{CACHE_VERSION}-short.json"));
+    let malformed_version_catalog = scan::relations_dir()
+        .join(format!("catalog-vXYZ-{}.json", "0".repeat(64)));
+    let malformed_temp_pid = scan::relations_dir().join(format!(
+        ".catalog-v{CACHE_VERSION}-{}.json.abc.tmp",
+        "0".repeat(64)
+    ));
+    let malformed_temp_hash = scan::relations_dir()
+        .join(format!(".catalog-v{CACHE_VERSION}-short.json.123.tmp"));
     fs::write(&old_version, "stale version").unwrap();
     fs::write(&unparseable, "not json").unwrap();
     fs::write(&unrelated, "unrelated").unwrap();
     fs::write(&stale_temp, "stale write").unwrap();
     fs::write(&fresh_temp, "active write").unwrap();
-    let stale_file = fs::File::options().write(true).open(&stale_temp).unwrap();
-    stale_file
-        .set_times(
-            fs::FileTimes::new().set_modified(
+    fs::write(&stale_old_temp, "stale older write").unwrap();
+    fs::write(&future_catalog, "future version").unwrap();
+    fs::write(&future_temp, "future write").unwrap();
+    fs::write(&unrelated_tmp, "unrelated tmp").unwrap();
+    fs::write(&malformed_catalog, "bad hash").unwrap();
+    fs::write(&malformed_version_catalog, "bad version").unwrap();
+    fs::write(&malformed_temp_pid, "bad pid").unwrap();
+    fs::write(&malformed_temp_hash, "bad hash temp").unwrap();
+    for aged in [
+        &stale_temp,
+        &stale_old_temp,
+        &future_temp,
+        &unrelated_tmp,
+        &future_catalog,
+        &malformed_catalog,
+        &malformed_version_catalog,
+        &malformed_temp_pid,
+        &malformed_temp_hash,
+    ] {
+        fs::File::options()
+            .write(true)
+            .open(aged)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(
                 SystemTime::now() - Duration::from_secs(10 * 60 + 1),
-            ),
-        )
-        .unwrap();
+            ))
+            .unwrap();
+    }
 
     drop(vanished);
 
@@ -386,10 +432,39 @@ fn catalog_scan_prunes_vanished_vaults_and_sweeps_orphan_files() {
     assert!(!vanished_cache.exists(), "vanished vault cache is removed");
     assert!(!old_version.exists(), "stale-version file is removed");
     assert!(!stale_temp.exists(), "stale atomic-write temp is removed");
+    assert!(
+        !stale_old_temp.exists(),
+        "stale older-version atomic-write temp is removed"
+    );
     assert!(fresh_temp.exists(), "fresh atomic-write temp is kept");
     assert!(
         unparseable.exists(),
         "unparseable current-version file is kept"
     );
     assert!(unrelated.exists(), "unrelated file is kept");
+    assert!(unrelated_tmp.exists(), "aged unrelated tmp is preserved");
+    assert!(
+        future_catalog.exists(),
+        "future-version catalog is preserved"
+    );
+    assert!(
+        future_temp.exists(),
+        "aged future-version atomic temp is preserved"
+    );
+    assert!(
+        malformed_catalog.exists(),
+        "malformed catalog name is preserved"
+    );
+    assert!(
+        malformed_version_catalog.exists(),
+        "non-numeric catalog version is preserved"
+    );
+    assert!(
+        malformed_temp_pid.exists(),
+        "non-numeric pid temp is preserved"
+    );
+    assert!(
+        malformed_temp_hash.exists(),
+        "malformed-hash temp is preserved"
+    );
 }

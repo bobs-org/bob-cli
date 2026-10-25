@@ -279,11 +279,43 @@ pub(crate) fn cache_path(vault: &Path) -> PathBuf {
 /// - remove a `catalog-v{CACHE_VERSION}-<64 hex>.json` whose stored
 ///   `vault` path is no longer a directory (except the vault just
 ///   written);
-/// - remove `catalog-v<older version>-*.json` files;
-/// - remove atomic-write `.tmp` files older than 10 minutes;
-/// - leave unparseable or unrelated files alone, unless they match
-///   these exact name patterns.
+/// - remove `catalog-v<older version>-<64 hex>.json` files; preserve
+///   future versions and malformed catalog names;
+/// - remove owned atomic-write `.catalog-v<current-or-older>-<64
+///   hex>.json.<pid>.tmp` files older than 10 minutes; preserve
+///   future-version, malformed, and unrelated `.tmp` names;
+/// - leave unparseable current-version files and unrelated files alone.
 /// Every I/O failure is ignored: the sweep never fails a scan.
+fn parse_catalog_version_and_hash(
+    version_and_hash: &str,
+) -> Option<(u32, &str)> {
+    let (version_text, hash) = version_and_hash.split_once('-')?;
+    let version: u32 = version_text.parse().ok()?;
+    if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((version, hash))
+}
+
+/// Recognize the atomic-write name produced by
+/// `collect_done::temporary_write_path` for a catalog file:
+/// `.catalog-v<version>-<64 hex>.json.<pid>.tmp` with a numeric PID.
+fn owned_temp_version(name: &str) -> Option<u32> {
+    let inner = name.strip_prefix('.')?.strip_suffix(".tmp")?;
+    let (catalog_part, pid_text) = inner.rsplit_once('.')?;
+    if pid_text.is_empty()
+        || !pid_text.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let _: u32 = pid_text.parse().ok()?;
+    let rest = catalog_part
+        .strip_suffix(".json")?
+        .strip_prefix("catalog-v")?;
+    let (version, _) = parse_catalog_version_and_hash(rest)?;
+    Some(version)
+}
+
 fn sweep_catalog_cache(keep_vault: &str) {
     let Ok(entries) = fs::read_dir(relations_dir()) else {
         return;
@@ -301,7 +333,10 @@ fn sweep_catalog_cache(keep_vault: &str) {
             sweep_catalog_file(&path, rest, keep_vault);
             continue;
         }
-        if path.extension().is_some_and(|extension| extension == "tmp") {
+        if let Some(version) = owned_temp_version(name) {
+            if version > CACHE_VERSION {
+                continue;
+            }
             let stale = fs::metadata(&path)
                 .and_then(|metadata| metadata.modified())
                 .ok()
@@ -315,20 +350,18 @@ fn sweep_catalog_cache(keep_vault: &str) {
 }
 
 fn sweep_catalog_file(path: &Path, version_and_hash: &str, keep_vault: &str) {
-    let Some((version, _hash)) = version_and_hash.split_once('-') else {
+    let Some((version, _hash)) =
+        parse_catalog_version_and_hash(version_and_hash)
+    else {
         return;
     };
-    let Ok(version): Result<u32, _> = version.parse() else {
-        return;
-    };
-    if version != CACHE_VERSION {
-        // A stale-version file matches the catalog name pattern, so it
-        // goes even when its body no longer parses.
+    if version < CACHE_VERSION {
+        // An obsolete-version file matches the generated catalog basename,
+        // so it goes even when its body no longer parses.
         let _ = fs::remove_file(path);
         return;
     }
-    if _hash.len() != 64 || !_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
+    if version > CACHE_VERSION {
         return;
     }
     let Ok(text) = fs::read_to_string(path) else {
