@@ -142,10 +142,27 @@ query parameters, so the same article reached through two URL spellings
 dedupes. In the path, escapes of unreserved characters (`A-Z a-z 0-9 - . _
 ~`) decode, and every other escape keeps its byte with uppercase hex, so
 `%7e` matches `~` and `%2f` matches `%2F`, but an encoded `/`, `?`, `#`,
-`%`, or `@` never matches its literal. The one exception is Medium:
-`medium.com/%40author/...` matches `medium.com/@author/...`, because
-Medium serves both spellings of the author sigil as one page. The stored
-`source_url` keeps the spelling you gave. Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
+`%`, or `@` never matches its literal except for Medium's author prefix.
+That exception applies only to a leading `/%40` on `medium.com` after
+removing `www.`; it does not apply to Medium subdomains or later path
+segments. Decoding runs once, so `%2541` stays distinct from `A`.
+
+| URL pair | Same dedupe key? |
+| --- | --- |
+| `https://example.com/%7eguide` and `https://example.com/~guide` | Yes |
+| `https://example.com/a%2fb` and `https://example.com/a%2Fb` | Yes |
+| `https://example.com/a%2Fb` and `https://example.com/a/b` | No |
+| `https://www.medium.com/%40author/post` and `https://medium.com/@author/post` | Yes |
+| `https://blog.medium.com/%40author/post` and `https://blog.medium.com/@author/post` | No |
+| `https://medium.com/@author/post%40x` and `https://medium.com/@author/post@x` | No |
+| `https://example.com/a%40b` and `https://example.com/a@b` | No |
+
+The stored `source_url` is the cleaned URL: its fragment and tracking
+parameters are removed, but path escapes retain their spelling. The dedupe
+key is used for comparison, not written back over `source_url`.
+[Library lookup](ref.md#identity) uses the same key.
+
+Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
 different reference is suffixed (with a `renamed:` line before `pdf:`),
 and only the same reference refuses. `--force` overwrites the same intake
 target only; library PDFs are never overwritten, and an already-captured

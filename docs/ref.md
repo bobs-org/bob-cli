@@ -179,10 +179,18 @@ and unknown otherwise. Its `reading_state_source` is
 ## Identity
 
 Stored values come from `source_url` then `url` (scalars or lists).
-HTTP(S) values key on the cleaned dedupe key (already arXiv-aware),
+HTTP(S) values key on the shared
+[URL dedupe key](highlights-clip.md#marker-fields-and-dedupe) (already arXiv-aware),
 plus `arxiv:<id>` for arXiv URLs (including `10.48550/arXiv.<id>` DOIs)
 and `doi:<doi>` for `doi.org` URLs. Values that fail validation use
 opaque `raw:` keys and earn an `opaque_url` diagnostic.
+
+Path-escape normalization applies to both stored URLs and lookup queries:
+`%7e` matches `~`, while reserved escapes stay distinct from their literal
+characters. The sole `@` alias is the leading `/%40` on `medium.com`
+(including `www.medium.com`), which matches `/@`. Other hosts, Medium
+subdomains, and later `@` characters do not receive that alias. Matching
+does not rewrite the note's stored URLs.
 
 Queries classify in order: URL, arXiv ID (bare or `arxiv:`-prefixed),
 DOI (bare or `doi:`-prefixed), path (contains `/` or ends in
