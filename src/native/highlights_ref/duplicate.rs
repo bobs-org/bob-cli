@@ -19,6 +19,10 @@ pub(crate) struct CapturedCopy {
     pub(crate) path: String,
     /// Filename stem for hint text.
     pub(crate) stem: String,
+    /// Computed reading number from the note's `earlier:` lineage, when
+    /// the copy is a filed family member. `None` for queued PDFs, stamp
+    /// occupants, and notes outside a multi-reading family.
+    pub(crate) reading: Option<u32>,
     /// Ref-note `status` or marker status, when known.
     pub(crate) status: Option<String>,
     /// Highlight count for ref notes; queued PDFs report 0.
@@ -57,10 +61,15 @@ impl Remedy {
 pub(crate) struct AlreadyCaptured {
     /// Reference title for the first line.
     pub(crate) title: String,
-    /// Every existing copy, primary first.
+    /// Every existing copy, newest reading first.
     pub(crate) copies: Vec<CapturedCopy>,
     /// Remedy rows printed as `hint:` lines.
     pub(crate) remedies: Vec<Remedy>,
+    /// Allocated `<root>__vN` stem for the next reread, when a family was
+    /// selected. Carried for the reread remedy and the overwrite interim
+    /// refusal that later phases render; never printed here, so no route
+    /// advertises a reread that is not enabled yet.
+    pub(crate) next_stem: Option<String>,
 }
 
 impl AlreadyCaptured {
@@ -69,11 +78,22 @@ impl AlreadyCaptured {
         copies: Vec<CapturedCopy>,
         remedies: Vec<Remedy>,
     ) -> Self {
+        let mut copies = copies;
+        sort_copies(&mut copies);
         Self {
             title: title.into(),
             copies,
             remedies,
+            next_stem: None,
         }
+    }
+
+    /// Carry the allocated next-reread stem for later-phase remedies.
+    /// Consumed by the `single_sources` phase; allowed until it wires up.
+    #[allow(dead_code)]
+    pub(crate) fn with_next_stem(mut self, stem: impl Into<String>) -> Self {
+        self.next_stem = Some(stem.into());
+        self
     }
 
     fn queued_only(&self) -> bool {
@@ -149,12 +169,15 @@ impl AlreadyCaptured {
                 copies.push(copy);
             }
         }
-        sort_copies(&mut copies);
-        Self {
-            title,
-            copies,
-            remedies: Vec::new(),
+        let readings = super::recapture::family_readings_for(config);
+        for copy in &mut copies {
+            if copy.reading.is_none()
+                && let Some(number) = readings.get(&copy.path)
+            {
+                copy.reading = Some(*number);
+            }
         }
+        Self::new(title, copies, Vec::new())
     }
 }
 
@@ -171,6 +194,9 @@ impl CapturedCopy {
     fn render(&self, styler: &Styler) -> String {
         let sep = styler.dim("·");
         let mut parts = vec![self.path.clone()];
+        if let Some(reading) = self.reading {
+            parts.push(format!("reading v{reading}"));
+        }
         if let Some(status) = &self.status {
             parts.push(paint_status(styler, status));
         }
@@ -199,15 +225,30 @@ fn paint_status(styler: &Styler, status: &str) -> String {
     }
 }
 
+/// Newest reading first (copies with a computed reading number sort
+/// before copies without one), then the existing captured-date order.
+/// Copies without readings keep their previous relative order.
 fn sort_copies(copies: &mut [CapturedCopy]) {
-    copies.sort_by(|a, b| match (&a.captured, &b.captured) {
-        (Some(left), Some(right)) => {
-            right.cmp(left).then_with(|| a.path.cmp(&b.path))
-        }
+    copies.sort_by(|a, b| match (a.reading, b.reading) {
+        (Some(left), Some(right)) => right
+            .cmp(&left)
+            .then_with(|| compare_captured(a, b))
+            .then_with(|| a.path.cmp(&b.path)),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => a.path.cmp(&b.path),
+        (None, None) => {
+            compare_captured(a, b).then_with(|| a.path.cmp(&b.path))
+        }
     });
+}
+
+fn compare_captured(a: &CapturedCopy, b: &CapturedCopy) -> std::cmp::Ordering {
+    match (&a.captured, &b.captured) {
+        (Some(left), Some(right)) => right.cmp(left),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
 }
 
 /// Vault-relative display path for reports.
@@ -226,6 +267,7 @@ fn copy_from_ref_note(config: &Config, path: &Path) -> CapturedCopy {
     CapturedCopy {
         path: display,
         stem,
+        reading: None,
         status,
         highlights: highlights.unwrap_or(0),
         has_highlights: highlights.is_some(),
@@ -245,6 +287,7 @@ fn copy_from_queued(config: &Config, path: &Path) -> CapturedCopy {
     CapturedCopy {
         path: display,
         stem,
+        reading: None,
         status,
         highlights: 0,
         has_highlights: false,
@@ -280,6 +323,7 @@ pub(crate) fn copy_from_occupant(config: &Config, path: &Path) -> CapturedCopy {
         return CapturedCopy {
             path: display,
             stem,
+            reading: None,
             status,
             highlights: highlights.unwrap_or(0),
             has_highlights: highlights.is_some(),
@@ -290,6 +334,7 @@ pub(crate) fn copy_from_occupant(config: &Config, path: &Path) -> CapturedCopy {
     CapturedCopy {
         path: display,
         stem,
+        reading: None,
         status: None,
         highlights: 0,
         has_highlights: false,
@@ -435,6 +480,17 @@ mod tests {
         captured: Option<&str>,
         is_queued: bool,
     ) -> CapturedCopy {
+        copy_with_reading(path, None, status, highlights, captured, is_queued)
+    }
+
+    fn copy_with_reading(
+        path: &str,
+        reading: Option<u32>,
+        status: Option<&str>,
+        highlights: u64,
+        captured: Option<&str>,
+        is_queued: bool,
+    ) -> CapturedCopy {
         CapturedCopy {
             path: path.to_string(),
             stem: Path::new(path)
@@ -442,6 +498,7 @@ mod tests {
                 .and_then(|stem| stem.to_str())
                 .unwrap_or_default()
                 .to_string(),
+            reading,
             status: status.map(str::to_string),
             highlights,
             has_highlights: true,
@@ -510,11 +567,11 @@ mod tests {
             vec![Remedy::new("-N <name>", "capture under a different name")],
         );
         let plain = refusal.render(&Styler::plain());
-        assert!(plain.contains("  ref/blogs/series.md"), "{plain}");
         assert!(
-            plain.contains("  also: ref/blogs/series_other.md"),
-            "{plain}"
+            plain.contains("  ref/blogs/series_other.md"),
+            "newest capture first:\n{plain}",
         );
+        assert!(plain.contains("  also: ref/blogs/series.md"), "{plain}");
     }
 
     #[test]
@@ -524,6 +581,7 @@ mod tests {
             vec![CapturedCopy {
                 path: "xlib/blogs/queued.pdf".to_string(),
                 stem: "queued".to_string(),
+                reading: None,
                 status: None,
                 highlights: 0,
                 has_highlights: false,
@@ -558,6 +616,161 @@ mod tests {
         assert!(colored.contains("\u{1b}[2mhint:\u{1b}[0m"), "{colored:?}");
         let plain = refusal.render(&Styler::plain());
         assert!(!plain.contains("\u{1b}["), "{plain:?}");
+    }
+
+    #[test]
+    fn family_copies_render_reading_numbers_newest_first() {
+        let refusal = AlreadyCaptured::new(
+            "Attention Is All You Need",
+            vec![
+                copy_with_reading(
+                    "ref/papers/attention_is_all_you_need.md",
+                    Some(1),
+                    Some("read"),
+                    41,
+                    Some("2026-03-02"),
+                    false,
+                ),
+                copy_with_reading(
+                    "ref/papers/attention_is_all_you_need__v2.md",
+                    Some(2),
+                    Some("wip"),
+                    3,
+                    Some("2026-09-01"),
+                    false,
+                ),
+            ],
+            vec![Remedy::new("-N <name>", "capture under a different name")],
+        );
+        let plain = refusal.render(&Styler::plain());
+        assert!(
+            plain.starts_with("already captured: Attention Is All You Need"),
+            "{plain}"
+        );
+        let v2 = plain
+            .find("ref/papers/attention_is_all_you_need__v2.md")
+            .expect("v2 row");
+        let v1 = plain
+            .find("ref/papers/attention_is_all_you_need.md ·")
+            .expect("v1 row");
+        assert!(v2 < v1, "newest reading first:\n{plain}");
+        assert!(
+            plain.contains(
+                "  ref/papers/attention_is_all_you_need__v2.md · reading v2 · wip · 3 highlights · captured 2026-09-01"
+            ),
+            "{plain}"
+        );
+        assert!(
+            plain.contains(
+                "  also: ref/papers/attention_is_all_you_need.md · reading v1 · read · 41 highlights · captured 2026-03-02"
+            ),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn readings_sort_before_queued_copies() {
+        let refusal = AlreadyCaptured::new(
+            "Mixed",
+            vec![
+                copy("xlib/blogs/mixed.pdf", None, 0, None, true),
+                copy_with_reading(
+                    "ref/blogs/mixed.md",
+                    Some(1),
+                    Some("ready"),
+                    0,
+                    Some("2026-09-01"),
+                    false,
+                ),
+            ],
+            vec![Remedy::new("-f", "replace the queued PDF")],
+        );
+        let plain = refusal.render(&Styler::plain());
+        let filed = plain.find("ref/blogs/mixed.md").expect("filed row");
+        let queued = plain.find("xlib/blogs/mixed.pdf").expect("queued row");
+        assert!(filed < queued, "readings first:\n{plain}");
+        assert!(plain.contains("reading v1"), "{plain}");
+    }
+
+    #[test]
+    fn next_stem_is_carried_but_never_rendered() {
+        let refusal = AlreadyCaptured::new(
+            "Title",
+            vec![copy(
+                "ref/papers/a.md",
+                Some("read"),
+                1,
+                Some("2026-01-01"),
+                false,
+            )],
+            vec![Remedy::new("-L", "narrate it")],
+        )
+        .with_next_stem("a__v2");
+        assert_eq!(refusal.next_stem.as_deref(), Some("a__v2"));
+        let plain = refusal.render(&Styler::plain());
+        assert!(!plain.contains("a__v2"), "{plain}");
+    }
+
+    #[test]
+    fn from_recorded_enriches_family_readings_newest_first() {
+        let root = std::env::temp_dir().join(format!(
+            "bob-duplicate-{}-{}-family",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+        ));
+        std::fs::create_dir_all(root.join("ref/papers")).expect("ref dir");
+        for (rel, earlier) in [
+            ("ref/papers/enriched.md", String::new()),
+            (
+                "ref/papers/enriched__v2.md",
+                "earlier:\n  - \"[[ref/papers/enriched|v1 · 2026-01-01]]\"\n"
+                    .to_string(),
+            ),
+        ] {
+            std::fs::write(
+                root.join(rel),
+                format!(
+                    "---\ntitle: Enriched\nsource_url: https://example.com/enriched\nsource_pdf: lib/papers/backing.pdf\nstatus: ready\nhighlights_count: 7\ncaptured: 2026-09-01\n{earlier}---\n# Enriched\n",
+                ),
+            )
+            .expect("write fixture note");
+        }
+        let config = Config {
+            bob_dir: root.clone(),
+            lib_dir: root.join("lib"),
+            ref_dir: root.join("ref"),
+            xlib_dir: root.join("xlib"),
+        };
+        let url_key = super::super::clip_url::validate_and_clean(
+            "https://example.com/enriched",
+        )
+        .expect("fixture url")
+        .dedupe_key;
+        let hits: Vec<super::super::sources::RecordedSource> =
+            ["ref/papers/enriched.md", "ref/papers/enriched__v2.md"]
+                .iter()
+                .map(|rel| super::super::sources::RecordedSource {
+                    dedupe_key: url_key.clone(),
+                    path: root.join(rel),
+                    is_ref_note: true,
+                    source_pdf: Some("lib/papers/backing.pdf".to_string()),
+                    has_audio: false,
+                })
+                .collect();
+        let refusal =
+            AlreadyCaptured::from_recorded(&config, &hits, "Enriched");
+        let readings: Vec<Option<u32>> =
+            refusal.copies.iter().map(|copy| copy.reading).collect();
+        assert_eq!(readings, vec![Some(2), Some(1)], "{readings:?}");
+        let plain = refusal.render(&Styler::plain());
+        assert!(plain.contains("enriched__v2.md · reading v2"), "{plain}");
+        assert!(
+            plain.contains("also: ref/papers/enriched.md · reading v1"),
+            "{plain}"
+        );
     }
 
     #[test]

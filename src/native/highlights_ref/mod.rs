@@ -70,6 +70,11 @@ pub(crate) mod pdf_write_policy;
 mod projection;
 mod reading_execute;
 mod reading_plan;
+// The family-planning seam: read-only recapture classification and
+// allocation. The `single_sources` and `collections_acceptance` phases
+// consume it when they enable reread writes.
+#[allow(dead_code)]
+mod recapture;
 mod region;
 // The dependent `ref rename` command consumes this module in the next phase.
 #[allow(dead_code)]

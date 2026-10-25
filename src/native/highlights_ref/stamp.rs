@@ -77,7 +77,7 @@ pub(super) const MARKER_EXTRA_ORDER: &[&str] = &[
 /// Existing names and ids that a default target must not duplicate.
 /// The requested type comes first so same-reference checks retain their
 /// existing preferred occupant, followed by every sibling type directory.
-struct DefaultTargetOccupancy {
+pub(super) struct DefaultTargetOccupancy {
     intake_dirs: Vec<PathBuf>,
     library_dirs: Vec<PathBuf>,
     reference_dirs: Vec<PathBuf>,
@@ -85,7 +85,7 @@ struct DefaultTargetOccupancy {
 }
 
 impl DefaultTargetOccupancy {
-    fn build(config: &Config, ref_type: &str) -> Result<Self> {
+    pub(super) fn build(config: &Config, ref_type: &str) -> Result<Self> {
         let mut reference_ids = BTreeMap::new();
         if config.ref_dir.is_dir() {
             collect_reference_ids(&config.ref_dir, &mut reference_ids)?;
@@ -98,11 +98,50 @@ impl DefaultTargetOccupancy {
         })
     }
 
-    fn occupants(&self, stem: &str) -> Vec<PathBuf> {
+    /// Every reserved path for `stem`: notes, PDFs, sidecars,
+    /// `.textbundle` bundles, known companion-audio extensions,
+    /// `.assets/` directories, and case-insensitive reference ids,
+    /// across every type under `ref/`, `lib/`, and `xlib/`. The reread
+    /// allocator walks this whole-bundle set.
+    pub(super) fn occupants(&self, stem: &str) -> Vec<PathBuf> {
+        self.occupants_except(stem, &[])
+    }
+
+    /// The full reservation set minus `own` (lexically normalized), so a
+    /// locked filing can recheck a reread name against everything but the
+    /// queued unit's own files.
+    pub(super) fn occupants_except(
+        &self,
+        stem: &str,
+        own: &[PathBuf],
+    ) -> Vec<PathBuf> {
+        self.collect_occupants(stem, own, true)
+    }
+
+    /// Occupants for the ordinary default-target walk: the full
+    /// reservation set except companion audio. Audio keeps its targeted
+    /// planner refusal (`target audio already exists … pass --force`),
+    /// including the force-overwrite permission; folding it into the
+    /// walk would silently rename instead of refusing.
+    pub(super) fn walk_occupants(&self, stem: &str) -> Vec<PathBuf> {
+        self.collect_occupants(stem, &[], false)
+    }
+
+    fn collect_occupants(
+        &self,
+        stem: &str,
+        own: &[PathBuf],
+        include_audio: bool,
+    ) -> Vec<PathBuf> {
+        let ignored: BTreeSet<PathBuf> =
+            own.iter().map(|path| normalize_lexically(path)).collect();
         let mut occupants = Vec::new();
         let mut seen = BTreeSet::new();
         let mut add = |path: PathBuf| {
-            if path.exists() && seen.insert(path.clone()) {
+            if path.exists()
+                && seen.insert(path.clone())
+                && !ignored.contains(&normalize_lexically(&path))
+            {
                 occupants.push(path);
             }
         };
@@ -111,6 +150,12 @@ impl DefaultTargetOccupancy {
             for extension in ["pdf", "md", "textbundle"] {
                 add(directory.join(stem).with_extension(extension));
             }
+            if include_audio {
+                for extension in super::audio::AUDIO_COMPANION_EXTENSIONS {
+                    add(directory.join(stem).with_extension(extension));
+                }
+            }
+            add(directory.join(format!("{stem}.assets")));
         }
         for directory in &self.library_dirs {
             let pdf = directory.join(stem).with_extension("pdf");
@@ -118,9 +163,16 @@ impl DefaultTargetOccupancy {
             for sidecar in library_destination_sidecars(&pdf) {
                 add(sidecar);
             }
+            if include_audio {
+                for extension in super::audio::AUDIO_COMPANION_EXTENSIONS {
+                    add(directory.join(stem).with_extension(extension));
+                }
+            }
+            add(directory.join(format!("{stem}.assets")));
         }
         for directory in &self.reference_dirs {
             add(directory.join(stem).with_extension("md"));
+            add(directory.join(format!("{stem}.assets")));
         }
 
         if let Some(paths) = self.reference_ids.get(&stem.to_lowercase()) {
@@ -313,7 +365,7 @@ pub(super) fn plan_default_target(
             .join(ref_type)
             .join(&candidate)
             .with_extension("md");
-        let occupants = occupancy.occupants(&candidate);
+        let occupants = occupancy.walk_occupants(&candidate);
         if index == 1
             && let Some(first) = occupants.first().cloned()
         {
