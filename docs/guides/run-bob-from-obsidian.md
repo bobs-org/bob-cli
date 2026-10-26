@@ -108,6 +108,6 @@ older than the plugin expects.
 
 ## Related
 
-- [Bob Command Mode reference](https://bobs-org.github.io/bob-command-mode/)
+- [Bob Command Mode reference](https://bobs-org.github.io/reference/plugins/bob-command-mode/)
 - [Obsidian plugins](../reference/plugins/index.md)
 - [Continue in Obsidian](../start/obsidian.md)
