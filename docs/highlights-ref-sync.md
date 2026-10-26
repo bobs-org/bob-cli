@@ -2019,7 +2019,13 @@ when the hint is unresolvable, ambiguous, or terminal. A uniquely located
 orphan is adopted before any insertion; ambiguous or archive-open
 candidates refuse instead of guessing. IDs allocate as `ref-<stem>` with
 numeric suffixes on destination or archive collision, honoring
-`BOB_NOW` for the created date. Births carry no `#hide` or `[fresh::]`
+`BOB_NOW` for the created date. A confirmed later reading instead files
+its task as `Title (vN)` with ID `ref-<root-slug>-vN`: the `-vN` component
+is reserved before the 44-character truncation so a long root keeps its
+version, and a collision suffix follows the version (`ref-<root>-v2-2`).
+The `(vN)` alias is fitted inside the 100-character alias bound at a word
+boundary. The reread note carries the family's `earlier:` lineage (see
+above). Births carry no `#hide` or `[fresh::]`
 tags, and a birth at a closed status stamps its close date like any
 generated close. A repeated run after a successful sync is a no-op.
 

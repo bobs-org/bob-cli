@@ -117,8 +117,10 @@ the PDFKit measurements found that Chromium/Skia with variable fonts damages
 some extracted words.
 
 A second snapshot of the same note on the same day refuses with `already
-queued` (use `-f` to replace it) or `already captured`. Pass `-N` for a
-deliberate second snapshot that day. Older plain-Markdown renders of a note
+queued` (use `-f` to replace it) or `already captured` (`-f` rereads it as
+`<dated-root>__vN`). Pass `-N` for a deliberate second snapshot under a
+different name that day; a new-day snapshot is an ordinary dated create that
+needs no force. Older plain-Markdown renders of a note
 stay where they are when note snapshots are created.
 
 Embedded PNG and JPEG images are copied into the private render scratch as-is
@@ -519,7 +521,7 @@ Queued hits render `already queued: <title>` with `hint: -f  replace
 the queued PDF`. Title routes add `hint: -N <name>  capture under a
 different name`. A filed single-source family refuses with its copies
 newest-first (each carrying its `reading vN` number) plus
-`hint: -f  read it again as <root>__vN`; bare `-f` on that family reads
+`hint: -f read it again as <root>__vN`; bare `-f` on that family reads
 it again as the named `<root>__vN` beside the earlier readings instead.
 The reread defaults to the newest reading's parent and type (explicit
 `-P`/`-t` win, and a reread without any resolvable parent still requires
@@ -527,12 +529,14 @@ The reread defaults to the newest reading's parent and type (explicit
 optional, never inherits earlier audio, and prints
 `reread: <old> → <new> (vN <status> · <M> highlights)` where `renamed:`
 would print, in real runs and dry runs alike. `-N` must name a reading
-of the same family (a free `-N` stays an ordinary capture); `-o` on a
+of the same family (a free `-N` stays an ordinary capture) and selects the
+reading a later overwrite recaptures in place; `-o` on a
 captured reread exits 2. A library PDF as TARGET refuses even with `-f`
 (copying highlights into the next reading is forbidden): reread from its
 recorded `source_url` or the original file instead, while `-L` without
-force still attaches. `-f overwrite` on a filed reference exits 2 naming
-the reread it would take; without a filed match it exits 1. A URL recorded only by legacy notes without a
+force still attaches to the newest reading. `-f overwrite` on a filed
+reference exits 2 naming the reread it would take (not available yet);
+without a filed match it exits 1. A URL recorded only by legacy notes without a
 Highlights PDF warns (`already in the library as <path>, a note without
 a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
 instead of refusing; with `--listen` it is a normal capture plus listen,
@@ -550,7 +554,8 @@ next stem (`hint: -f read it again as <root>__vN`); bare `-f` reads it again
 as the allocated `<root>__vN` beside the earlier readings, with the newest
 reading's parent and type as defaults (explicit `-P`/`-t` win), `id` stamped
 to the new stem, and a `reread:` line where `renamed:` would print. `-N` must
-name a reading of the same family (a free `-N` stays an ordinary capture);
+name a reading of the same family (a free `-N` stays an ordinary capture)
+and selects the reading a later overwrite recaptures in place;
 `-o` on a captured reread exits 2. Any partial overlap, including a single
 URL of a larger collection, refuses under every force mode before adapters
 or fetch, naming the overlapping members with
@@ -630,11 +635,14 @@ configured `highlights.listen_command` and binds the episode as the PDF's
 companion audio. For a multi-URL collection, bob passes the staged composed
 PDF as `{target}` and `{pdf}`, with the resolved collection title as `{title}`;
 the episode binds to the one installed collection PDF. If the same URL set is
-already captured or queued, in any order, `--listen` attaches an episode to that
-capture. Partial overlap still refuses. With `-f`, `--listen` narrates the new
-reading instead of attaching (earlier audio is never inherited); when the
-newest reading already has an episode, a hint names its reading number and
-audio path.
+already captured or queued, in any order, `--listen` attaches an episode to the
+newest reading of that capture. Partial overlap still refuses. With `-f`,
+`--listen` narrates the new reading instead of attaching (earlier audio is
+never inherited); when the newest reading already has an episode, a hint of
+the form `hint: earlier reading vN keeps its episode at <audio path>; the
+new reading is narrated fresh` names its reading number and audio path. A
+plain reread (no `-L` or `-a`) of a narrated family instead prints
+`hint: vN is narrated (<audio path>); add -L to narrate this reading`.
 
 ```bash
 bob ref create https://arxiv.org/abs/1706.03762 -L
@@ -708,7 +716,8 @@ in normal mode, `copy it to <xlib dest> for scan to pair` in attach mode).
 ## Attach
 
 When `--listen` is given and the target is already captured, the new
-episode attaches to the existing capture instead of refusing:
+episode attaches to the newest reading of the existing capture instead of
+refusing:
 
 1. A ref-note dedupe hit: the PDF is the note's `source_pdf` (it must
    resolve inside `lib/` and exist, else `ref note has no resolvable
@@ -771,18 +780,26 @@ reread: attention_is_all_you_need → attention_is_all_you_need__v2 (v1 read · 
 Without force the refusal names the next stem
 (`hint: -f read it again as <stem>__vN`). Bare `-f` on a fresh source
 captures it as usual. `-N` must name a reading of the same family (a free
-`-N` stays an ordinary capture); `-o` on a captured reread exits 2
+`-N` stays an ordinary capture) and selects the reading a later overwrite
+recaptures in place; `-o` on a captured reread exits 2
 (`a reread is named <root>__vN; drop -o`). Every supported single-source
 route (Markdown, original local PDF, PDF URL, arXiv, web article with or
 without `-H`, same-day vault-note snapshots) creates a complete new
 bundle and task on explicit reread, with durable `earlier:` lineage, stable
 aliases, and safe naming; old notes, PDFs, sidecars, assets, audio, and
-reading task lines keep their bytes. A library PDF as `TARGET` refuses even
+reading task lines keep their bytes. A plain reread (no `-L` or `-a`) of a
+narrated family prints `hint: vN is narrated (<audio path>); add -L to
+narrate this reading`, naming the newest narrated reading; with `-f -L`
+the hint instead names the earlier reading's kept episode. A library PDF
+as `TARGET` refuses even
 with `-f` (copying highlights into the next reading is forbidden): reread
 from its recorded `source_url` or the original file instead, while `-L`
-without force still attaches. `-f overwrite` on a filed reference exits 2
+without force still attaches to the newest reading. `-f overwrite` on a
+filed reference exits 2
 naming the reread it would take (not available yet); without a filed match
-it exits 1.
+it exits 1. No force is needed for a URL recorded only by legacy notes
+without a Highlights PDF (it warns and captures a fresh copy) or for a
+new-day vault-note snapshot (an ordinary dated create).
 
 An exact-URL-set collection rereads the same way in any URL order. Several
 readings sharing one set count as one family; unrelated duplicate families

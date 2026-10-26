@@ -501,3 +501,94 @@ fn create_rolls_back_pdf_when_birth_task_selection_refuses() {
         "pre-sync should leave a clean tree after rollback"
     );
 }
+
+/// An inline-filing reread files the library PDF, a note with `earlier:`,
+/// and a versioned reading task in one run, leaving the earlier bundle and
+/// its task line byte-identical.
+#[test]
+fn create_reread_files_inline_with_lineage_and_versioned_task() {
+    let temp = TempDir::new("bob-cli-create-reread-inline");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Report\n\nCaptured report.\n");
+
+    let output = create_command(&temp, &vault, &source, &fixture, &pandoc)
+        .output()
+        .expect("create v1 inline");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ingested: lib/chat/report.pdf → ref/chat/report.md"),
+        "{report}"
+    );
+    assert!(report.contains("task → sase.md ^ref-report"), "{report}");
+
+    let before_note =
+        fs::read(vault.join("ref/chat/report.md")).expect("read v1 note");
+    let before_pdf =
+        fs::read(vault.join("lib/chat/report.pdf")).expect("read v1 PDF");
+    let before_parent =
+        fs::read_to_string(vault.join("sase.md")).expect("read parent");
+
+    let output = create_command(&temp, &vault, &source, &fixture, &pandoc)
+        .arg("-f")
+        .output()
+        .expect("reread inline");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: report → report__v2 (v1"),
+        "real run must report the reread:\n{report}"
+    );
+    assert!(
+        report.contains(
+            "ingested: lib/chat/report__v2.pdf → ref/chat/report__v2.md"
+        ),
+        "the reread must file inline:\n{report}"
+    );
+    assert!(
+        vault.join("lib/chat/report__v2.pdf").is_file(),
+        "the new reading files beside the earlier one"
+    );
+    assert!(
+        !vault.join("xlib/chat/report__v2.pdf").exists(),
+        "nothing waits in intake:\n{report}"
+    );
+    let note = fs::read_to_string(vault.join("ref/chat/report__v2.md"))
+        .expect("read reread note");
+    assert!(
+        note.contains("earlier:") && note.contains("ref/chat/report"),
+        "birth writes lineage for the inline reread:\n{note}"
+    );
+    assert!(
+        note.contains("id: report__v2"),
+        "the reread stamps id to its stem:\n{note}"
+    );
+    let parent =
+        fs::read_to_string(vault.join("sase.md")).expect("reread parent");
+    assert!(
+        parent.contains("^ref-report-v2"),
+        "the reread files a versioned reading task:\n{parent}"
+    );
+    assert_eq!(
+        fs::read(vault.join("ref/chat/report.md")).expect("reread v1 note"),
+        before_note,
+        "the earlier note keeps its bytes"
+    );
+    assert_eq!(
+        fs::read(vault.join("lib/chat/report.pdf")).expect("reread v1 PDF"),
+        before_pdf,
+        "the earlier PDF keeps its bytes"
+    );
+    let v1_line = before_parent
+        .lines()
+        .find(|line| {
+            line.contains("^ref-report") && !line.contains("^ref-report-v")
+        })
+        .expect("v1 task line");
+    assert!(
+        parent.lines().any(|line| line == v1_line),
+        "the earlier reading task line survives byte-identical:\n{parent}"
+    );
+}

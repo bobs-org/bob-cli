@@ -1481,6 +1481,75 @@ fn already_in_library_archives_without_fetch() {
     );
 }
 
+/// A Keep note whose URL belongs to a filed two-reading family archives
+/// without fetching and without minting a new reading: no `__v3` file
+/// appears anywhere in the vault.
+#[test]
+fn filed_two_reading_family_never_mints_reread() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-nomint");
+    fs::create_dir_all(env.vault().join("ref/papers")).expect("ref dir");
+    fs::write(
+        env.vault().join("ref/papers/captured.md"),
+        "---\ntitle: Captured Post\nstatus: ready\nsource_url: https://example.com/captured\nsource_pdf: lib/papers/captured.pdf\n---\n\n- [ ] ^ref\n",
+    )
+    .expect("seed v1 ref note");
+    fs::write(
+        env.vault().join("ref/papers/captured__v2.md"),
+        "---\ntitle: Captured Post\nstatus: ready\nsource_url: https://example.com/captured\nsource_pdf: lib/papers/captured__v2.pdf\nearlier:\n  - \"[[ref/papers/captured|v1 · 2026-10-01]]\"\n---\n\n- [ ] ^ref\n",
+    )
+    .expect("seed v2 ref note");
+    // The filed family must never touch the network.
+    let (sentinel, hit) = write_sentinel(state.path(), "curl");
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/captured")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &[],
+        &[("BOB_HIGHLIGHTS_CURL", sentinel.to_str().expect("path"))],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(!hit.is_file(), "no fetch for a filed family");
+    let body = stdout(&out);
+    assert!(
+        body.contains("already in library"),
+        "filed family row:\n{body}"
+    );
+    assert!(
+        !read_target(env.vault()).contains("example.com"),
+        "no task written"
+    );
+    let mut minted = Vec::new();
+    collect_versioned_names(env.vault(), &mut minted);
+    assert!(
+        minted.iter().all(|name| !name.contains("__v3")),
+        "no __v3 reading may appear without an explicit reread: {minted:?}"
+    );
+}
+
+/// Every file under `dir` whose name carries a versioned `__vN` suffix.
+fn collect_versioned_names(dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_versioned_names(&path, out);
+        } else if let Some(name) =
+            path.file_name().and_then(|name| name.to_str())
+            && name.contains("__v")
+        {
+            out.push(path.display().to_string());
+        }
+    }
+}
+
 #[test]
 fn retryable_clip_failure_stays_in_keep_and_fails() {
     let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-retry");

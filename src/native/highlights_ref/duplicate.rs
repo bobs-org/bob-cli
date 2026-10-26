@@ -67,8 +67,7 @@ pub(crate) struct AlreadyCaptured {
     pub(crate) remedies: Vec<Remedy>,
     /// Allocated `<root>__vN` stem for the next reread, when a family was
     /// selected. Carried for the reread remedy and the overwrite interim
-    /// refusal that later phases render; never printed here, so no route
-    /// advertises a reread that is not enabled yet.
+    /// refusal; never printed here.
     pub(crate) next_stem: Option<String>,
 }
 
@@ -88,9 +87,8 @@ impl AlreadyCaptured {
         }
     }
 
-    /// Carry the allocated next-reread stem for later-phase remedies.
-    /// Consumed by the `single_sources` phase; allowed until it wires up.
-    #[allow(dead_code)]
+    /// Carry the allocated next-reread stem for the reread remedy and
+    /// the overwrite interim refusal.
     pub(crate) fn with_next_stem(mut self, stem: impl Into<String>) -> Self {
         self.next_stem = Some(stem.into());
         self

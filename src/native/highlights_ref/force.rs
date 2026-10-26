@@ -52,7 +52,9 @@ pub(super) fn force_arg() -> Arg {
         .value_parser(["reread", "overwrite"])
         .action(ArgAction::Set)
         .ignore_case(true)
-        .help("Recapture a source that is already a reference [reread (bare -f) | overwrite]")
+        .help(
+            "Recapture a source that is already a reference (bare -f rereads)",
+        )
 }
 
 /// A decoded force selection: the mode plus TARGET with any adopted
@@ -229,17 +231,16 @@ pub(super) fn stray_mode_message(word: &str) -> String {
     )
 }
 
-/// `-f overwrite` on a filed reference: parsed but not available in
-/// this increment (reread writers land later), so refuse with exit 2.
+/// `-f overwrite` on a filed reference: parsed but not implemented
+/// (the later overwrite phase owns it), so refuse with exit 2.
 pub(super) fn overwrite_filed_unavailable() -> CommandError {
     CommandError::new("-f overwrite is not available yet for filed references")
         .with_exit_code(2)
 }
 
 /// `-f overwrite` on a filed reference that already has a reread plan:
-/// still refused in this increment, naming the reread it would take.
-/// Consumed by the `single_sources` phase when it enables reread writes.
-#[allow(dead_code)]
+/// still refused (overwrite is not implemented yet), naming the reread
+/// `-f` would take instead.
 pub(super) fn overwrite_filed_unavailable_for(next_stem: &str) -> CommandError {
     CommandError::new(format!(
         "-f overwrite is not available yet; -f reads it again as {next_stem}"
@@ -255,7 +256,7 @@ pub(super) fn nothing_to_overwrite(source: &str) -> CommandError {
     ))
 }
 
-/// Is this an overwrite-mode selection (filed rereads still pending)?
+/// Is this an overwrite-mode selection (filed overwrite still pending)?
 pub(super) fn is_overwrite(force: Option<ForceMode>) -> bool {
     force == Some(ForceMode::Overwrite)
 }

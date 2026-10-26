@@ -6213,6 +6213,74 @@ fn highlights_create_local_pdf_recapture_rereads_after_scan() {
     );
 }
 
+/// A local-PDF reread keeps every byte of the earlier bundle: the ref note,
+/// the library PDF and its sidecar, the bound audio, and the reading task
+/// line. The new reading queues without inheriting audio.
+#[test]
+fn highlights_create_local_pdf_reread_keeps_earlier_bundle_bytes() {
+    let temp = TempDir::new("bob-cli-create-local-reread-bytes");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\n---\n\n- [ ] #task #ref [[ref/papers/paper|Paper]] [created::2026-10-01] ^ref-paper\n",
+    );
+    let source = temp.path().join("paper.pdf");
+    write_bare_pdf(&source, Some("Paper"), None);
+    write_highlights_pdf(
+        &vault.join("lib/papers/paper.pdf"),
+        "- status: ready\n- parent: sase\n- title: Paper\n",
+    );
+    std::fs::write(vault.join("lib/papers/paper.md"), "sidecar for paper")
+        .expect("write earlier sidecar");
+    write_file(
+        &vault.join("ref/papers/paper.md"),
+        "---\ntitle: Paper\nstatus: ready\nsource_pdf: lib/papers/paper.pdf\naudio: \"[[lib/papers/paper.mp3]]\"\n---\n\n# Paper\n",
+    );
+    std::fs::write(vault.join("lib/papers/paper.mp3"), b"ID3 earlier episode")
+        .expect("write earlier episode");
+
+    let before = snapshot_vault_dirs(&vault, &["lib", "ref"]);
+    let before_parent =
+        std::fs::read_to_string(vault.join("sase.md")).expect("read parent");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("--force")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("reread a filed local PDF");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: paper → paper__v2 (v1"),
+        "real run must report the reread:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/papers/paper__v2.pdf").is_file(),
+        "the new reading queues beside the earlier one:\n{report}"
+    );
+    assert!(
+        !vault.join("xlib/papers/paper__v2.mp3").exists(),
+        "the new reading inherits no audio:\n{report}"
+    );
+    assert_eq!(
+        snapshot_vault_dirs(&vault, &["lib", "ref"]),
+        before,
+        "note, PDF, sidecar, and audio keep their bytes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("sase.md")).expect("reread parent"),
+        before_parent,
+        "the reading task line keeps its bytes"
+    );
+}
+
 /// `-N` on a captured URL must name a reading of the selected family: a
 /// member selects it (the next stem still comes from the root), anything
 /// else exits 2 before any adapter work.
@@ -7877,6 +7945,88 @@ fn highlights_create_bare_force_filed_url_rereads() {
         std::fs::read(vault.join("ref/blogs/existing.md")).expect("reread"),
         before,
         "the filed note must keep its bytes"
+    );
+}
+
+/// A URL reread keeps every byte of the earlier bundle: the ref note, the
+/// library PDF, the bound audio, and the reading task line. The new reading
+/// queues without inheriting audio.
+#[test]
+fn highlights_create_url_reread_keeps_earlier_bundle_bytes() {
+    let temp = TempDir::new("bob-cli-highlights-create-url-reread-bytes");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\n---\n\n- [ ] #task #ref [[ref/blogs/existing|Existing]] [created::2026-10-01] ^ref-existing\n",
+    );
+    write_highlights_pdf(
+        &vault.join("lib/blogs/existing.pdf"),
+        &format!(
+            "- status: ready\n- parent: sase\n- title: Existing\n- source_url: {FOLDED_URL}\n"
+        ),
+    );
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        &format!(
+            "---\ntitle: Existing\nstatus: ready\nsource_url: {FOLDED_URL}\nsource_pdf: lib/blogs/existing.pdf\naudio: \"[[lib/blogs/existing.mp3]]\"\n---\n# Existing\n"
+        ),
+    );
+    std::fs::write(
+        vault.join("lib/blogs/existing.mp3"),
+        b"ID3 earlier episode",
+    )
+    .expect("write earlier episode");
+
+    let before = snapshot_vault_dirs(&vault, &["lib", "ref"]);
+    let before_parent =
+        std::fs::read_to_string(vault.join("sase.md")).expect("read parent");
+
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("-f")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("reread a filed URL");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2 (v1"),
+        "real run must report the reread:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/blogs/existing__v2.pdf").is_file(),
+        "the new reading queues beside the earlier one:\n{report}"
+    );
+    assert!(
+        !vault.join("xlib/blogs/existing__v2.mp3").exists(),
+        "the new reading inherits no audio:\n{report}"
+    );
+    assert_eq!(
+        snapshot_vault_dirs(&vault, &["lib", "ref"]),
+        before,
+        "note, PDF, and audio keep their bytes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("sase.md")).expect("reread parent"),
+        before_parent,
+        "the reading task line keeps its bytes"
     );
 }
 

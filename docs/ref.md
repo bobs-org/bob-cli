@@ -208,9 +208,12 @@ When a PDF-backed note shares an identity key with a note without a
 PDF, the PDF-less note is `superseded_by` the PDF-backed one. `find`
 still reaches superseded notes and prints them as `also` companions.
 
-A reference with no rereads is a family of one. Rereads link their
-lineage through a note-local `earlier:` list naming every live family
-member, newest first:
+A reference with no rereads is a family of one. Every explicit reread
+— single-source (vault note, Markdown, local PDF, PDF URL, arXiv, web
+article) or exact-URL-set collection — is named `<root>__vN` from the
+family root: the second reading is `<root>__v2`, the third `<root>__v3`.
+Rereads link their lineage through a note-local `earlier:` list naming
+every live family member, newest first:
 
 ```yaml
 earlier:

@@ -1103,3 +1103,75 @@ fn ref_jobs_old_created_records_still_render_as_clipped() {
     assert_eq!(parsed["summary"]["ingested"], 0);
     assert!(parsed["jobs"][0].get("intake").is_none());
 }
+
+/// A producer retry against a filed two-reading family resolves through the
+/// real worker without minting a reading: the job reports already-in-library,
+/// the adapter never runs, and no `__vN` file appears anywhere in the vault.
+#[test]
+fn ref_jobs_run_filed_family_never_mints_reread() {
+    let temp = TempDir::new("bob-cli-ref-jobs-filed-family");
+    let vault = temp.path().join("vault");
+    let note_dir = vault.join("ref/papers");
+    std::fs::create_dir_all(&note_dir).expect("create ref dir");
+    std::fs::write(
+        note_dir.join("post.md"),
+        "---\ntitle: Post\nsource_url: https://example.com/post\nsource_pdf: lib/papers/post.pdf\n---\n\n# Post\n",
+    )
+    .expect("write v1 ref note");
+    std::fs::write(
+        note_dir.join("post__v2.md"),
+        "---\ntitle: Post\nsource_url: https://example.com/post\nsource_pdf: lib/papers/post__v2.pdf\nearlier:\n  - \"[[ref/papers/post|v1 · 2026-10-01]]\"\n---\n\n# Post\n",
+    )
+    .expect("write v2 ref note");
+    seed_pending(&temp, &vault, "20261007T143012-nomint", FIXED_CREATED_AT);
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path(), 0);
+    let mut before = Vec::new();
+    collect_v2_names(&vault, &mut before);
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .output()
+        .expect("run bob ref jobs run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("already in library"),
+        "a filed family must resolve without clipping:\n{}",
+        format_output(&output)
+    );
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("already_in_library") || done.contains("in_library"),
+        "{done}"
+    );
+    assert!(
+        !fake.called(),
+        "a filed family must never reach the adapter"
+    );
+    let mut after = Vec::new();
+    collect_v2_names(&vault, &mut after);
+    assert_eq!(
+        after, before,
+        "no new __vN reading may appear without an explicit reread"
+    );
+}
+
+/// Every file under `dir` whose name carries a `__v` reading suffix.
+fn collect_v2_names(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_v2_names(&path, out);
+        } else if let Some(name) =
+            path.file_name().and_then(|name| name.to_str())
+            && name.contains("__v")
+        {
+            out.push(path.display().to_string());
+        }
+    }
+}

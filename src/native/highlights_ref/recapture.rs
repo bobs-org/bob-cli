@@ -4,8 +4,8 @@
 //! classifies live filed hits into one selected family, an ambiguity, or
 //! a partial overlap; allocates the whole-bundle `<root>__vN` stem; and
 //! validates reread-only `-N`/`-o` spellings. It never mutates the vault:
-//! the `single_sources` and `collections_acceptance` phases consume this
-//! seam when they enable reread writes.
+//! the single-source, collection, and clip routes consume its preflight
+//! to plan reread writes.
 //!
 //! The family read model in
 //! [`crate::native::ref_library::lineage`] stays authority: a family's
