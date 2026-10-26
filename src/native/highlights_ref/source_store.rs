@@ -9,7 +9,7 @@
 //! `no_catalog`.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -23,8 +23,6 @@ use super::model::{CommandError, Result};
 
 pub(crate) const STORE_ROOT: &str = ".bob/ref-sources";
 pub(crate) const STORE_VERSION: u32 = 1;
-#[allow(dead_code)]
-pub(crate) const _FIELD_SOURCE_MARKDOWN: &str = "source_markdown";
 
 /// Allowlist line for the vault `.gitignore` so catalogs sync.
 pub(crate) const CODE_JSON_ALLOWLIST: &str = "!/.bob/ref-sources/**/*.json";
@@ -255,7 +253,7 @@ pub(crate) fn write_store(
             });
         }
         // Same bytes: refresh `code.json` only when it differs.
-        let catalog = build_stored_catalog(params, &digest)?;
+        let catalog = build_stored_catalog(&params, &digest)?;
         let rendered =
             serde_json::to_string_pretty(&catalog).map_err(|error| {
                 CommandError::new(format!(
@@ -298,7 +296,7 @@ pub(crate) fn write_store(
             source_abs.display()
         ))
     })?;
-    let catalog = build_stored_catalog(params, &digest)?;
+    let catalog = build_stored_catalog(&params, &digest)?;
     let rendered = serde_json::to_string_pretty(&catalog).map_err(|error| {
         CommandError::new(format!(
             "encode source catalog {}: {error}",
@@ -326,7 +324,7 @@ pub(crate) fn write_store(
 }
 
 fn build_stored_catalog(
-    params: StoreWriteParams<'_>,
+    params: &StoreWriteParams<'_>,
     digest: &str,
 ) -> Result<StoredCatalog> {
     let (blocks, catalog_error) = match params.catalog {
@@ -345,13 +343,13 @@ fn build_stored_catalog(
         source: StoredSource {
             sha256: digest.to_string(),
             bytes: params.source_bytes.len(),
-            origin: params.origin,
+            origin: params.origin.clone(),
             source_note: params.source_note.clone(),
             source_note_sha256: params.source_note_sha256.clone(),
         },
         pdf: StoredPdf {
-            path: params.pdf_rel,
-            sha256: params.pdf_sha256,
+            path: params.pdf_rel.clone(),
+            sha256: params.pdf_sha256.clone(),
         },
         renderer: StoredRenderer {
             bob: env!("CARGO_PKG_VERSION").to_string(),
@@ -385,11 +383,107 @@ fn ignored_catalog_warning_if_ignored(
 }
 
 /// Shared vault-git trackability probe for store paths. Used by create
-/// (warn-only) and by future attach/overwrite flows.
-#[allow(dead_code)]
+/// (warn-only) and by overwrite (commit `source.md`, keep `code.json` on
+/// disk, warn, and keep `prove_commit` sound).
 pub(crate) fn code_catalog_ignored(bob_dir: &Path, dir_rel: &Path) -> bool {
     let child_env = super::ob::child_env();
     is_ignored(bob_dir, &child_env, &dir_rel.join("code.json"))
+}
+
+/// True when `path` is a vault-relative `code.json` under the source store.
+pub(crate) fn is_store_code_json(path: &Path) -> bool {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    normalized.starts_with(&format!("{STORE_ROOT}/"))
+        && normalized.ends_with("/code.json")
+}
+
+/// Planned store identity for an overwrite of `source_bytes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedSourceStore {
+    pub(crate) dir_rel: PathBuf,
+    pub(crate) pointer: String,
+    pub(crate) source_rel: String,
+    pub(crate) code_rel: String,
+}
+
+impl PlannedSourceStore {
+    pub(crate) fn for_bytes(
+        ref_type: &str,
+        stem: &str,
+        source_bytes: &[u8],
+    ) -> Self {
+        let (dir_rel, pointer) = planned_pointer(ref_type, stem, source_bytes);
+        let code_rel = dir_rel
+            .join("code.json")
+            .to_string_lossy()
+            .replace('\\', "/");
+        Self {
+            dir_rel,
+            source_rel: pointer.clone(),
+            pointer,
+            code_rel,
+        }
+    }
+}
+
+/// Scratch copies of `source.md` and `code.json` ready to install inside
+/// the overwrite transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StagedStoreFiles {
+    pub(crate) planned: PlannedSourceStore,
+    pub(crate) scratch_source: PathBuf,
+    pub(crate) scratch_code: PathBuf,
+}
+
+/// Write `source.md` and `code.json` into `scratch` (outside the vault)
+/// using the same catalog encoding as [`write_store`].
+pub(crate) fn stage_store_files(
+    scratch: &Path,
+    params: StoreWriteParams<'_>,
+) -> Result<StagedStoreFiles> {
+    let planned = PlannedSourceStore::for_bytes(
+        params.ref_type,
+        params.stem,
+        params.source_bytes,
+    );
+    let digest = sha256_hex(params.source_bytes);
+    let catalog = build_stored_catalog(&params, &digest)?;
+    let rendered = serde_json::to_string_pretty(&catalog).map_err(|error| {
+        CommandError::new(format!("encode staged source catalog: {error}"))
+    })?;
+    fs::create_dir_all(scratch).map_err(|error| {
+        CommandError::new(format!(
+            "create staged source store {}: {error}",
+            scratch.display()
+        ))
+    })?;
+    let scratch_source = scratch.join("source.md");
+    let scratch_code = scratch.join("code.json");
+    super::reference_mutation::atomic_write_bytes(
+        &scratch_source,
+        params.source_bytes,
+    )
+    .map_err(|error| {
+        CommandError::new(format!(
+            "stage source store {}: {error}",
+            scratch_source.display()
+        ))
+    })?;
+    super::reference_mutation::atomic_write_bytes(
+        &scratch_code,
+        rendered.as_bytes(),
+    )
+    .map_err(|error| {
+        CommandError::new(format!(
+            "stage source catalog {}: {error}",
+            scratch_code.display()
+        ))
+    })?;
+    Ok(StagedStoreFiles {
+        planned,
+        scratch_source,
+        scratch_code,
+    })
 }
 
 /// Birth lookup: the single store under
@@ -430,7 +524,6 @@ pub(crate) fn find_birth_store(
 
 /// Read and verify a store pointer. Returns the verified bytes and catalog.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum StoreStatus {
     Available,
     NoCode,
@@ -441,15 +534,15 @@ pub(crate) enum StoreStatus {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct StoreRead {
     pub(crate) status: StoreStatus,
+    #[allow(dead_code)]
     pub(crate) detail: Option<String>,
+    #[allow(dead_code)]
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) catalog: Option<StoredCatalog>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
     let trimmed = pointer.trim();
     if trimmed.is_empty() {
@@ -598,6 +691,225 @@ pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
         detail: None,
         bytes: Some(bytes),
         catalog: Some(catalog),
+    }
+}
+
+/// One doctor finding against the write-once source store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceStoreIssue {
+    Dangling { note: String, pointer: String },
+    DigestMismatch { note: String, pointer: String },
+    MissingCatalog { note: String, pointer: String },
+    Orphan { store: String },
+}
+
+/// Read-only health of `.bob/ref-sources` versus live note pointers.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SourceStoreHealth {
+    pub(crate) saved: usize,
+    pub(crate) code_blocks: usize,
+    pub(crate) dangling: Vec<SourceStoreIssue>,
+    pub(crate) digest_mismatch: Vec<SourceStoreIssue>,
+    pub(crate) missing_catalog: Vec<SourceStoreIssue>,
+    pub(crate) orphans: Vec<SourceStoreIssue>,
+    pub(crate) ignored_catalogs: usize,
+}
+
+/// Walk notes and the store tree. Never writes. Frozen notes under
+/// `ref_history/` keep their `source_markdown` pointer, so they count as
+/// live pointers when classifying orphans.
+pub(crate) fn inspect_source_stores(
+    bob_dir: &Path,
+    rows: &[crate::native::ref_library::RefRow],
+) -> SourceStoreHealth {
+    let mut health = SourceStoreHealth::default();
+    let mut pointed: BTreeSet<String> = BTreeSet::new();
+    let mut ignored: BTreeSet<PathBuf> = BTreeSet::new();
+    for row in rows {
+        if let Some(pointer) = row.source_markdown.as_deref() {
+            consider_pointer(
+                bob_dir,
+                &row.path,
+                pointer,
+                &mut health,
+                &mut pointed,
+                &mut ignored,
+            );
+        }
+    }
+    walk_history_pointers(bob_dir, &mut health, &mut pointed, &mut ignored);
+    let root = bob_dir.join(STORE_ROOT);
+    if let Ok(types) = fs::read_dir(&root) {
+        for type_entry in types.flatten() {
+            if !type_entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Ok(stores) = fs::read_dir(type_entry.path()) else {
+                continue;
+            };
+            for store in stores.flatten() {
+                if !store.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                let source = store.path().join("source.md");
+                if !source.is_file() {
+                    continue;
+                }
+                let rel = store
+                    .path()
+                    .strip_prefix(bob_dir)
+                    .unwrap_or(&store.path())
+                    .join("source.md");
+                let pointer = rel.to_string_lossy().replace('\\', "/");
+                let dir_rel = store
+                    .path()
+                    .strip_prefix(bob_dir)
+                    .unwrap_or(&store.path())
+                    .to_path_buf();
+                if !pointed.contains(&pointer) {
+                    health.orphans.push(SourceStoreIssue::Orphan {
+                        store: dir_rel.to_string_lossy().replace('\\', "/"),
+                    });
+                }
+                if code_catalog_ignored(bob_dir, &dir_rel) {
+                    ignored.insert(dir_rel);
+                }
+            }
+        }
+    }
+    health.ignored_catalogs = ignored.len();
+    health
+}
+
+fn consider_pointer(
+    bob_dir: &Path,
+    note: &str,
+    pointer: &str,
+    health: &mut SourceStoreHealth,
+    pointed: &mut BTreeSet<String>,
+    ignored: &mut BTreeSet<PathBuf>,
+) {
+    let pointer = pointer.trim();
+    if pointer.is_empty() {
+        return;
+    }
+    let normalized = pointer.replace('\\', "/");
+    let first_pointer = pointed.insert(normalized.clone());
+    let read = read_store(bob_dir, &normalized);
+    match read.status {
+        StoreStatus::SourceMissing | StoreStatus::NoSource => {
+            health.dangling.push(SourceStoreIssue::Dangling {
+                note: note.to_string(),
+                pointer: normalized.clone(),
+            });
+        }
+        StoreStatus::SourceInvalid => {
+            health
+                .digest_mismatch
+                .push(SourceStoreIssue::DigestMismatch {
+                    note: note.to_string(),
+                    pointer: normalized.clone(),
+                });
+        }
+        StoreStatus::NoCatalog => {
+            health
+                .missing_catalog
+                .push(SourceStoreIssue::MissingCatalog {
+                    note: note.to_string(),
+                    pointer: normalized.clone(),
+                });
+            if first_pointer {
+                health.saved += 1;
+            }
+        }
+        StoreStatus::NoCode | StoreStatus::Available => {
+            if first_pointer {
+                health.saved += 1;
+                if let Some(catalog) = &read.catalog {
+                    health.code_blocks += catalog.blocks.len();
+                }
+            }
+        }
+    }
+    if let Some(dir) = Path::new(&normalized).parent()
+        && code_catalog_ignored(bob_dir, dir)
+    {
+        ignored.insert(dir.to_path_buf());
+    }
+}
+
+fn pointer_from_contents(contents: &str) -> Option<String> {
+    let (front, _) = super::frontmatter::split_frontmatter(contents)?;
+    for line in front {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.trim() != super::FIELD_SOURCE_MARKDOWN {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn walk_history_pointers(
+    bob_dir: &Path,
+    health: &mut SourceStoreHealth,
+    pointed: &mut BTreeSet<String>,
+    ignored: &mut BTreeSet<PathBuf>,
+) {
+    walk_history_dir(
+        &bob_dir.join("ref_history"),
+        bob_dir,
+        health,
+        pointed,
+        ignored,
+    );
+}
+
+fn walk_history_dir(
+    dir: &Path,
+    bob_dir: &Path,
+    health: &mut SourceStoreHealth,
+    pointed: &mut BTreeSet<String>,
+    ignored: &mut BTreeSet<PathBuf>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        let file_type = entry.file_type().ok();
+        if file_type.is_some_and(|kind| kind.is_dir()) {
+            if name.ends_with(".assets") {
+                continue;
+            }
+            walk_history_dir(&path, bob_dir, health, pointed, ignored);
+            continue;
+        }
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(pointer) = pointer_from_contents(&contents) else {
+            continue;
+        };
+        let rel = path
+            .strip_prefix(bob_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        consider_pointer(bob_dir, &rel, &pointer, health, pointed, ignored);
     }
 }
 
@@ -887,6 +1199,179 @@ mod tests {
             fs::read(bob_dir.join(&first.pointer)).expect("still corrupted"),
             b"# Corrupted\n"
         );
+        let _ = fs::remove_dir_all(&bob_dir);
+    }
+
+    fn inspect_row(
+        path: &str,
+        pointer: Option<&str>,
+    ) -> crate::native::ref_library::RefRow {
+        crate::native::ref_library::RefRow {
+            path: path.to_string(),
+            link: format!("[[{}]]", path.trim_end_matches(".md")),
+            title: "Note".to_string(),
+            marker_id: None,
+            origin: "external".to_string(),
+            ref_type: Some("papers".to_string()),
+            era: "modern".to_string(),
+            status: Some("ready".to_string()),
+            status_sync: "ok".to_string(),
+            frontmatter_status: None,
+            legacy_status: None,
+            blocked: false,
+            blocked_by: Vec::new(),
+            reading_state: "queued".to_string(),
+            reading_state_source: "ref_task:[ ]".to_string(),
+            parent: None,
+            task: None,
+            urls: Vec::new(),
+            earlier: Vec::new(),
+            reading: None,
+            identity: crate::native::ref_library::RefIdentity {
+                keys: Vec::new(),
+                arxiv: None,
+                doi: None,
+            },
+            author: None,
+            published: None,
+            captured: None,
+            added: None,
+            added_source: None,
+            added_at: None,
+            finished: None,
+            finished_source: None,
+            source_pdf: None,
+            audio: None,
+            annotation_count: 0,
+            comment_count: 0,
+            snapshot: None,
+            research_ref: None,
+            source_markdown: pointer.map(str::to_string),
+            superseded_by: None,
+            diagnostics: Vec::new(),
+            family: path.to_string(),
+            has_later: false,
+            id: None,
+            source_block: None,
+            source_path: None,
+            source_id: None,
+            source_blocks: Vec::new(),
+            v2: false,
+            task_line: None,
+        }
+    }
+
+    fn write_catalog(
+        path: &Path,
+        digest: &str,
+        bytes: usize,
+        blocks: usize,
+        catalog_error: Option<&str>,
+    ) {
+        let blocks_json: String = (0..blocks)
+            .map(|i| {
+                format!(
+                    r#"{{"n":{},"kind":"code","text":"fn {i}() {{}}","classes":[],"attrs":{{}}}}"#,
+                    i + 1
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let error = match catalog_error {
+            Some(reason) => format!(r#","catalog_error":"{reason}""#),
+            None => String::new(),
+        };
+        let json = format!(
+            r#"{{"version":1,"captured_at":"2026-10-16T00:00:00Z","route":"markdown","source":{{"sha256":"{digest}","bytes":{bytes},"origin":"/tmp/n.md"}},"pdf":{{"path":"lib/papers/n.pdf","sha256":"{}"}},"renderer":{{"bob":"0","pandoc":"test"}}{error},"blocks":[{blocks_json}]}}"#,
+            "0".repeat(64)
+        );
+        fs::write(path, json).expect("code.json");
+    }
+
+    #[test]
+    fn inspect_reports_dangling_mismatch_missing_orphan_and_history() {
+        let bob_dir = temp_bob_dir("inspect");
+        let saved = b"# Saved\n";
+        let digest = sha256_hex(saved);
+        let hash12 = &digest[..12];
+        let pointer =
+            format!(".bob/ref-sources/papers/saved--{hash12}/source.md");
+        let saved_dir =
+            bob_dir.join(format!(".bob/ref-sources/papers/saved--{hash12}"));
+        fs::create_dir_all(&saved_dir).expect("saved dir");
+        fs::write(saved_dir.join("source.md"), saved).expect("source");
+        write_catalog(
+            &saved_dir.join("code.json"),
+            &digest,
+            saved.len(),
+            2,
+            None,
+        );
+
+        let missing_ptr =
+            ".bob/ref-sources/papers/missing--bbbbbbbbbbbb/source.md";
+        let missing_dir =
+            bob_dir.join(".bob/ref-sources/papers/missing--bbbbbbbbbbbb");
+        fs::create_dir_all(&missing_dir).expect("missing dir");
+        fs::write(missing_dir.join("source.md"), b"# no catalog\n")
+            .expect("source");
+
+        let mismatch_ptr =
+            ".bob/ref-sources/papers/mismatch--cccccccccccc/source.md";
+        let mismatch_dir =
+            bob_dir.join(".bob/ref-sources/papers/mismatch--cccccccccccc");
+        fs::create_dir_all(&mismatch_dir).expect("mismatch dir");
+        fs::write(mismatch_dir.join("source.md"), b"# corrupted\n")
+            .expect("source");
+        write_catalog(
+            &mismatch_dir.join("code.json"),
+            &digest,
+            saved.len(),
+            0,
+            None,
+        );
+
+        let orphan_dir =
+            bob_dir.join(".bob/ref-sources/papers/orphan--dddddddddddd");
+        fs::create_dir_all(&orphan_dir).expect("orphan dir");
+        fs::write(orphan_dir.join("source.md"), b"# orphan\n").expect("source");
+
+        let history_dir = bob_dir.join("ref_history/papers");
+        fs::create_dir_all(&history_dir).expect("history");
+        fs::write(
+            history_dir.join("saved__2026-10-16.md"),
+            format!("---\nsource_markdown: {pointer}\n---\n# Frozen\n"),
+        )
+        .expect("frozen");
+
+        let rows = vec![
+            inspect_row("ref/papers/saved.md", Some(&pointer)),
+            inspect_row(
+                "ref/papers/dangling.md",
+                Some(".bob/ref-sources/papers/gone--aaaaaaaaaaaa/source.md"),
+            ),
+            inspect_row("ref/papers/missing.md", Some(missing_ptr)),
+            inspect_row("ref/papers/mismatch.md", Some(mismatch_ptr)),
+            inspect_row("ref/papers/plain.md", None),
+        ];
+        let health = inspect_source_stores(&bob_dir, &rows);
+        assert_eq!(health.saved, 2, "saved + missing-catalog source.md");
+        assert_eq!(health.code_blocks, 2);
+        assert_eq!(health.dangling.len(), 1);
+        assert_eq!(health.digest_mismatch.len(), 1);
+        assert_eq!(health.missing_catalog.len(), 1);
+        assert_eq!(
+            health.orphans.len(),
+            1,
+            "frozen note keeps the saved pointer from being an orphan: {:?}",
+            health.orphans
+        );
+        assert!(health.orphans.iter().any(|issue| match issue {
+            SourceStoreIssue::Orphan { store } => {
+                store.ends_with("orphan--dddddddddddd")
+            }
+            _ => false,
+        }));
         let _ = fs::remove_dir_all(&bob_dir);
     }
 }

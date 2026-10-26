@@ -1434,6 +1434,7 @@ fn capture_and_install_overwrite(
                 private_pdf: staged_pdf_path,
                 audio: staged_audio,
                 marker,
+                source_store: None,
             },
         )
     })();

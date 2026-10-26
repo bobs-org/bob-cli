@@ -865,7 +865,24 @@ PDF, same-day vault-note snapshot, or single-URL web capture (article,
 saved HTML, PDF URL, arXiv) replaces that reading in place: the note
 path, stem, id, and reading task stay, companion audio is preserved
 unless `-a` or `-L` (which narrates the replacement) replaces it, and
-`--no-audio` leaves an existing episode in place. Clap's default `-s ready`
+`--no-audio` leaves an existing episode in place. Markdown-rendered
+overwrites stage, install, and repoint the write-once source store
+inside the same transaction; a non-Markdown overwrite clears
+`source_markdown` on the live note.
+
+| Overwrite input | Live `source_markdown` | Store |
+| --- | --- | --- |
+| Markdown, new bytes | Repoints at the new `source.md` | New directory; old directory stays as history |
+| Markdown, same bytes | Keeps the existing pointer | Reuses the directory; refreshes `code.json` if it differs |
+| Non-Markdown | Cleared | Existing directory stays as history |
+| Annotated Markdown | Live note as above | Frozen note keeps the old pointer |
+| Rollback before commit | Restored | New directory removed |
+
+If this host still ignores `code.json`, overwrite commits `source.md`,
+keeps the catalog on disk, and warns. See
+[Reference sources](vault-git-sync.md#reference-sources). `bob ref doctor`
+prints a `ref sources` row for dangling pointers, digest mismatches,
+missing catalogs, orphans, and an ignored catalog. Clap's default `-s ready`
 is not an explicit reopen; pass `-s` to change the kept task. An explicit
 open status cannot reopen a task archived in `done/`; reopen it where it lives
 first. Any status overwrite cannot stamp is rejected before rendering. Exact-set

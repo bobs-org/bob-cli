@@ -972,6 +972,7 @@ pub(super) fn capture_article_overwrite(
                 private_pdf: staged_path,
                 audio,
                 marker: final_marker,
+                source_store: None,
             },
         )
         .map_err(ClipError::from)

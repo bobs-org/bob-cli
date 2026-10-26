@@ -70,6 +70,10 @@ fn doctor_library_rows_report_ok_on_clean_vault() {
         "{report}"
     );
     assert!(
+        report.contains("ref sources: ok (0 saved · 0 code blocks)"),
+        "{report}"
+    );
+    assert!(
         report.contains(
             "coverage: ok (no unindexed zorg-era reading records outside ref/)"
         ),
@@ -611,4 +615,139 @@ fn doctor_dangling_earlier_entry_warns() {
         report.contains("1 earlier_dangling"),
         "the deleted middle reading warns:\n{report}"
     );
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn write_source_catalog(
+    vault: &std::path::Path,
+    stem: &str,
+    source: &str,
+    blocks: usize,
+    catalog_error: Option<&str>,
+) -> String {
+    let digest = sha256_bytes(source.as_bytes());
+    let hash12 = &digest[..12];
+    let dir = vault.join(format!(".bob/ref-sources/papers/{stem}--{hash12}"));
+    fs::create_dir_all(&dir).expect("store dir");
+    write_file(&dir.join("source.md"), source);
+    let blocks_json: String = (0..blocks)
+        .map(|i| {
+            format!(
+                r#"{{"n":{},"kind":"code","text":"fn {i}() {{}}","classes":[],"attrs":{{}}}}"#,
+                i + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let error = match catalog_error {
+        Some(reason) => format!(r#","catalog_error":"{reason}""#),
+        None => String::new(),
+    };
+    write_file(
+        &dir.join("code.json"),
+        &format!(
+            r#"{{"version":1,"captured_at":"2026-10-16T00:00:00Z","route":"markdown","source":{{"sha256":"{digest}","bytes":{},"origin":"/tmp/{stem}.md"}},"pdf":{{"path":"lib/papers/{stem}.pdf","sha256":"{}"}},"renderer":{{"bob":"0","pandoc":"test"}}{error},"blocks":[{blocks_json}]}}"#,
+            source.len(),
+            "0".repeat(64)
+        ),
+    );
+    format!(".bob/ref-sources/papers/{stem}--{hash12}/source.md")
+}
+
+fn note_with_pointer(title: &str, pointer: &str) -> String {
+    format!(
+        "---\nstatus: ready\ntitle: {title}\nsource_markdown: {pointer}\n---\n\n# {title}\n\n- [ ] #task #ref #hide ^ref\n"
+    )
+}
+
+#[test]
+fn doctor_ref_sources_ok_counts_saved_code_blocks() {
+    let temp = TempDir::new("bob-cli-doctor-ref-sources-ok");
+    let vault = base_vault(&temp);
+    let pointer = write_source_catalog(&vault, "saved", "# Saved\n", 2, None);
+    write_file(
+        &vault.join("ref/papers/saved.md"),
+        &note_with_pointer("Saved", &pointer),
+    );
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("ref sources: ok (1 saved · 2 code blocks)"),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
+fn doctor_ref_sources_warns_on_dangling_mismatch_missing_and_orphan() {
+    let temp = TempDir::new("bob-cli-doctor-ref-sources-warn");
+    let vault = base_vault(&temp);
+    write_file(
+        &vault.join("ref/papers/dangling.md"),
+        &note_with_pointer(
+            "Dangling",
+            ".bob/ref-sources/papers/dangling--aaaaaaaaaaaa/source.md",
+        ),
+    );
+    let mismatch =
+        write_source_catalog(&vault, "mismatch", "# Mismatch\n", 0, None);
+    fs::write(vault.join(&mismatch), b"# corrupted source\n")
+        .expect("corrupt source");
+    write_file(
+        &vault.join("ref/papers/mismatch.md"),
+        &note_with_pointer("Mismatch", &mismatch),
+    );
+    let missing =
+        write_source_catalog(&vault, "missing", "# Missing\n", 0, None);
+    fs::remove_file(vault.join(&missing).parent().unwrap().join("code.json"))
+        .expect("drop catalog");
+    write_file(
+        &vault.join("ref/papers/missing.md"),
+        &note_with_pointer("Missing", &missing),
+    );
+    write_source_catalog(&vault, "orphan", "# Orphan\n", 0, None);
+    commit_vault(&vault);
+
+    let output = run_doctor(&vault);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ref sources: warn (")
+            && report.contains("1 dangling")
+            && report.contains("1 digest mismatch")
+            && report.contains("1 missing catalog")
+            && report.contains("1 orphan"),
+        "{report}"
+    );
+    assert!(report.contains("bob ref attach-source"), "{report}");
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
+fn doctor_ref_sources_warns_on_ignored_catalog() {
+    let temp = TempDir::new("bob-cli-doctor-ref-sources-ignored");
+    let vault = base_vault(&temp);
+    write_file(&vault.join(".gitignore"), ".bob/ref-sources/**/*.json\n");
+    let pointer = write_source_catalog(&vault, "saved", "# Saved\n", 1, None);
+    write_file(
+        &vault.join("ref/papers/saved.md"),
+        &note_with_pointer("Saved", &pointer),
+    );
+    commit_vault(&vault);
+
+    let output = run_doctor(&vault);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ignored catalog")
+            && report.contains("!/.bob/ref-sources/**/*.json")
+            && report.contains("docs/vault-git-sync.md#reference-sources"),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
 }

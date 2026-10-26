@@ -499,6 +499,7 @@ fn append_library_doctor_rows(config: &Config, warnings: &mut Vec<String>) {
     append_library_identity_row(&index.rows, warnings);
     append_reference_ids_row(&index.rows, warnings);
     append_library_annotations_row(&index.rows, warnings);
+    append_ref_sources_row(config, &index.rows, warnings);
 
     let zorg: crate::native::ref_library::ZorgCoverage =
         crate::native::ref_library::count_zorg_records(
@@ -915,6 +916,128 @@ fn append_library_annotations_row(
             "{mirrors} reference notes still render a leaked marker mirror"
         ));
     }
+}
+
+fn append_ref_sources_row(
+    config: &Config,
+    rows: &[crate::native::ref_library::RefRow],
+    warnings: &mut Vec<String>,
+) {
+    let health =
+        super::source_store::inspect_source_stores(&config.bob_dir, rows);
+    let mut parts: Vec<String> = Vec::new();
+    push_issue_part(&mut parts, health.dangling.len(), "dangling", "dangling");
+    push_issue_part(
+        &mut parts,
+        health.digest_mismatch.len(),
+        "digest mismatch",
+        "digest mismatches",
+    );
+    push_issue_part(
+        &mut parts,
+        health.missing_catalog.len(),
+        "missing catalog",
+        "missing catalogs",
+    );
+    push_issue_part(&mut parts, health.orphans.len(), "orphan", "orphans");
+    if health.ignored_catalogs > 0 {
+        parts.push(if health.ignored_catalogs == 1 {
+            "ignored catalog".to_string()
+        } else {
+            format!("{} ignored catalogs", health.ignored_catalogs)
+        });
+    }
+    if parts.is_empty() {
+        println!(
+            "ref sources: ok ({} saved · {} code blocks)",
+            format_count(health.saved),
+            format_count(health.code_blocks),
+        );
+        return;
+    }
+    let mut examples: Vec<String> = Vec::new();
+    for issue in health
+        .dangling
+        .iter()
+        .chain(health.digest_mismatch.iter())
+        .chain(health.missing_catalog.iter())
+        .chain(health.orphans.iter())
+    {
+        if examples.len() >= 3 {
+            break;
+        }
+        let example = match issue {
+            super::source_store::SourceStoreIssue::Dangling {
+                note, ..
+            }
+            | super::source_store::SourceStoreIssue::DigestMismatch {
+                note,
+                ..
+            }
+            | super::source_store::SourceStoreIssue::MissingCatalog {
+                note,
+                ..
+            } => note.clone(),
+            super::source_store::SourceStoreIssue::Orphan { store } => {
+                store.clone()
+            }
+        };
+        if !examples.contains(&example) {
+            examples.push(example);
+        }
+    }
+    let mut hint = String::new();
+    if !health.dangling.is_empty() || !health.digest_mismatch.is_empty() {
+        hint.push_str(" — bob ref attach-source");
+    }
+    if health.ignored_catalogs > 0 {
+        if hint.is_empty() {
+            hint.push_str(" — ");
+        } else {
+            hint.push_str("; ");
+        }
+        hint.push_str(
+            "add \"!/.bob/ref-sources/**/*.json\" (docs/vault-git-sync.md#reference-sources)",
+        );
+    }
+    let example_text = if examples.is_empty() {
+        String::new()
+    } else {
+        format!(" · e.g. {}", examples.join(", "))
+    };
+    println!(
+        "ref sources: warn ({}{example_text}{hint})",
+        parts.join(" · "),
+    );
+    warnings.push(format!("reference sources: {}{hint}", parts.join(" · "),));
+}
+
+fn push_issue_part(
+    parts: &mut Vec<String>,
+    count: usize,
+    singular: &str,
+    plural: &str,
+) {
+    if count == 0 {
+        return;
+    }
+    if count == 1 {
+        parts.push(format!("1 {singular}"));
+    } else {
+        parts.push(format!("{count} {plural}"));
+    }
+}
+
+fn format_count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn plural_notes(count: usize) -> String {

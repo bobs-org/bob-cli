@@ -1124,6 +1124,170 @@ fn markdown_overwrite_uses_fake_pandoc_and_skips_it_on_dry_run() {
     );
 }
 
+fn paper_stores(vault: &Path) -> Vec<PathBuf> {
+    let parent = vault.join(".bob/ref-sources/papers");
+    let mut dirs = Vec::new();
+    if let Ok(entries) = fs::read_dir(&parent) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(&format!("{STEM}--")) {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs.sort();
+    dirs
+}
+
+fn note_source_markdown(fixture: &OverwriteVault) -> Option<String> {
+    for line in note_body(fixture).lines() {
+        if let Some(rest) = line.strip_prefix("source_markdown:") {
+            let value = rest.trim().trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn markdown_overwrite(
+    fixture: &OverwriteVault,
+    source: &Path,
+) -> std::process::Output {
+    let fixture_pdf = fixture.temp.path().join("render-fixture.pdf");
+    write_bare_pdf(&fixture_pdf, Some(TITLE));
+    let pandoc = write_fake_pandoc(fixture.temp.path());
+    overwrite_command(fixture, source)
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("FAKE_PANDOC_FIXTURE", &fixture_pdf)
+        .output()
+        .expect("markdown overwrite")
+}
+
+#[test]
+fn markdown_overwrite_repoints_and_reuses_unchanged_bytes() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-md-store", "ready", false, false);
+    let source = source_markdown(&fixture, TITLE, "Replacement body.");
+    let first = markdown_overwrite(&fixture, &source);
+    assert_success(&first);
+    let pointer = note_source_markdown(&fixture)
+        .expect("markdown overwrite sets source_markdown");
+    assert!(
+        pointer.starts_with(&format!(".bob/ref-sources/papers/{STEM}--"))
+            && pointer.ends_with("/source.md"),
+        "pointer: {pointer}"
+    );
+    assert_eq!(paper_stores(&fixture.vault).len(), 1);
+    let store = fixture.vault.join(&pointer);
+    assert_eq!(
+        fs::read(&store).expect("source.md"),
+        fs::read(&source).expect("input")
+    );
+
+    // Same source bytes reuse the store. Change the title so the
+    // overwrite still has a scoped commit (identical PDF/note/store
+    // bytes would otherwise fail prove_commit).
+    let fixture_pdf = fixture.temp.path().join("render-fixture-reuse.pdf");
+    write_bare_pdf(&fixture_pdf, Some(TITLE));
+    let pandoc = write_fake_pandoc(fixture.temp.path());
+    let again = overwrite_command(&fixture, &source)
+        .arg("-T")
+        .arg("A Better Report")
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("FAKE_PANDOC_FIXTURE", &fixture_pdf)
+        .output()
+        .expect("reuse overwrite");
+    assert_success(&again);
+    assert_eq!(
+        note_source_markdown(&fixture).as_deref(),
+        Some(pointer.as_str())
+    );
+    assert_eq!(
+        paper_stores(&fixture.vault).len(),
+        1,
+        "unchanged bytes reuse the directory"
+    );
+
+    let changed = source_markdown(&fixture, TITLE, "A different body.");
+    let second = markdown_overwrite(&fixture, &changed);
+    assert_success(&second);
+    let new_pointer =
+        note_source_markdown(&fixture).expect("changed bytes repoint");
+    assert_ne!(new_pointer, pointer);
+    assert_eq!(paper_stores(&fixture.vault).len(), 2);
+    assert!(fixture.vault.join(&pointer).is_file(), "old store stays");
+}
+
+#[test]
+fn pdf_overwrite_clears_source_markdown() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-pdf-clear-store", "ready", false, false);
+    let source = source_markdown(&fixture, TITLE, "Saved markdown.");
+    assert_success(&markdown_overwrite(&fixture, &source));
+    assert!(note_source_markdown(&fixture).is_some());
+    let stores_before = paper_stores(&fixture.vault);
+    assert_eq!(stores_before.len(), 1);
+
+    let pdf = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &pdf)
+        .output()
+        .expect("pdf overwrite");
+    assert_success(&output);
+    assert_eq!(
+        note_source_markdown(&fixture),
+        None,
+        "non-Markdown overwrite clears the pointer:\n{}",
+        note_body(&fixture)
+    );
+    assert!(
+        stores_before[0].join("source.md").is_file(),
+        "old store stays as history"
+    );
+}
+
+#[test]
+fn markdown_overwrite_ignored_catalog_warns_and_commits_source() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-md-ignored-json", "ready", false, false);
+    write_file(
+        &fixture.vault.join(".gitignore"),
+        ".bob/ref-sources/**/*.json\n",
+    );
+    commit_vault(&fixture.vault, "ignore source catalogs");
+    let source = source_markdown(&fixture, TITLE, "Ignored catalog body.");
+    let output = markdown_overwrite(&fixture, &source);
+    assert_success(&output);
+    let diagnostic = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        diagnostic.contains("code catalogs are ignored")
+            && diagnostic.contains("!/.bob/ref-sources/**/*.json"),
+        "ignored catalog must warn:\n{diagnostic}"
+    );
+    let pointer = note_source_markdown(&fixture).expect("pointer");
+    assert!(fixture.vault.join(&pointer).is_file());
+    let code = fixture
+        .vault
+        .join(&pointer)
+        .parent()
+        .unwrap()
+        .join("code.json");
+    assert!(code.is_file(), "catalog stays on disk");
+    let tracked = stdout(&git_in(
+        &fixture.vault,
+        ["ls-files", "--", pointer.as_str(), &code.to_string_lossy()],
+    ));
+    assert!(
+        tracked.contains(&pointer),
+        "source.md is committed:\n{tracked}"
+    );
+    assert!(
+        !tracked.contains("code.json"),
+        "ignored catalog is omitted from the commit:\n{tracked}"
+    );
+}
+
 #[test]
 fn vault_note_same_day_overwrite_plain_markdown() {
     let fixture = filed_vault("bob-cli-overwrite-note", "ready", false, false);

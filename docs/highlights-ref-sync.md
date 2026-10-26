@@ -2266,8 +2266,11 @@ MacBook validation checklist:
 - `bob ref doctor` reports valid vault/library/ref paths, the xlib intake
   path and pending count, the pre-scan hook status, marker readability, PDF
   write coordination (`on`/`off` on macOS, `n/a` elsewhere), Git status,
-  optional `ob` availability, and the library health and coverage rows. A
-  missing `~/bob/xlib` is warning-only because `create` creates it on demand.
+  optional `ob` availability, and the library health and coverage rows,
+  including `ref sources` (`ok` with saved-source and code-block counts, or
+  `warn` for dangling pointers, digest mismatches, missing catalogs,
+  orphans, and an ignored `code.json`). A missing `~/bob/xlib` is
+  warning-only because `create` creates it on demand.
 - `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If

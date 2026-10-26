@@ -32,7 +32,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
 | Drain queued PDFs | `bob ref scan -i` (`--intake-only`) | File only the PDFs and late audio queued in `xlib/` (pull, note, reading task, one commit each, push); exits 1 while anything stays queued |
 | Repair references or sync annotations | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then process queued PDFs and sync notes/annotations |
-| Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, and index diagnostics |
+| Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, index diagnostics, and the write-once `ref sources` store |
 | Bring old reading records into the index | `bob ref migrate-zorg`, then `--write` | Preview, then create and commit legacy notes; see [migration](#migrating-zorg-era-records-bob-ref-migrate-zorg) |
 
 When `bob ref create` records a reference `id`, the id matches the final output
@@ -77,6 +77,15 @@ zorg-era `status::` reading records outside `ref/` are not indexed
 until `bob ref migrate-zorg --write` copies them into `ref/zorg/` (`bob ref
 doctor` counts any that remain), and annotations are the snapshot
 written by the last Highlights scan, not live PDF state.
+
+`bob ref doctor` also prints a `ref sources` row for the write-once
+store under `.bob/ref-sources/`. `ok (N saved · M code blocks)` means
+every `source_markdown` pointer verified; `warn` lists dangling
+pointers, digest mismatches, missing catalogs, orphans, and ignored
+`code.json` files, with `bob ref attach-source` and
+[Reference sources](vault-git-sync.md#reference-sources) as hints.
+Frozen notes under `ref_history/` keep their pointer, so a store the
+archive still names is not an orphan. Doctor never writes.
 
 ## Reading state
 

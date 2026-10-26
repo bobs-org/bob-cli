@@ -19,9 +19,9 @@ use sha2::{Digest, Sha256};
 
 use super::super::reading_plan::ReadingTaskAction;
 use super::super::{
-    frontmatter, guard, marker, note, ob, reference_mutation, sync,
-    CommandError, Config, MarkerValue, PdfSyncOutcome, Projection, SyncOptions,
-    FIELD_ID, FIELD_PARENT, FIELD_STATUS,
+    frontmatter, guard, marker, note, ob, reference_mutation, source_store,
+    sync, CommandError, Config, MarkerValue, PdfSyncOutcome, Projection,
+    SyncOptions, FIELD_ID, FIELD_PARENT, FIELD_SOURCE_MARKDOWN, FIELD_STATUS,
 };
 use super::{recovery, OverwritePreflight, OverwriteRequest};
 use crate::native::file_coordination::Coordination;
@@ -102,6 +102,8 @@ pub(in crate::native::highlights_ref) struct StagedOverwrite {
     pub(crate) private_pdf: PathBuf,
     pub(crate) audio: Option<StagedAudio>,
     pub(crate) marker: FinalMarkerMetadata,
+    /// Markdown-rendered replacement: staged `source.md` + `code.json`.
+    pub(crate) source_store: Option<source_store::StagedStoreFiles>,
 }
 
 /// Structured facts for a route-specific success renderer.
@@ -248,6 +250,7 @@ fn execute_with_sync_and_session(
         .with_code("preimage_changed"));
     }
     ensure_staged_audio_is_preflighted(request, &locked, &staged)?;
+    ensure_staged_store_is_preflighted(request, &locked, &staged)?;
 
     let base_head = reference_mutation::git_head(&config.bob_dir, &child_env)
         .map_err(|error| {
@@ -731,6 +734,28 @@ fn annotated_writes(
             sha256: hash,
         });
     }
+    if let Some(store) = &staged.source_store {
+        for (relative, scratch) in [
+            (
+                store.planned.source_rel.as_str(),
+                store.scratch_source.as_path(),
+            ),
+            (
+                store.planned.code_rel.as_str(),
+                store.scratch_code.as_path(),
+            ),
+        ] {
+            let created = plan.bundle_preimages.iter().any(|preimage| {
+                preimage.path == relative && preimage.sha256.is_none()
+            });
+            if created {
+                writes.push(recovery::PendingWrite {
+                    path: relative.to_string(),
+                    sha256: hash_file(scratch)?,
+                });
+            }
+        }
+    }
     Ok(writes)
 }
 
@@ -896,7 +921,19 @@ fn manifest_commit_paths(
     for relative in manifest {
         let absolute = vault.join(relative);
         match fs::symlink_metadata(&absolute) {
-            Ok(metadata) if metadata.is_file() => paths.push(relative.clone()),
+            Ok(metadata) if metadata.is_file() => {
+                if source_store::is_store_code_json(relative)
+                    && source_store::code_catalog_ignored(
+                        vault,
+                        relative.parent().unwrap_or(relative),
+                    )
+                {
+                    // Keep `code.json` on disk and omit it from the commit
+                    // so `git add` cannot fail on an ignored catalog.
+                    continue;
+                }
+                paths.push(relative.clone());
+            }
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => {
                 return Err(CommandError::new(format!(
@@ -938,12 +975,21 @@ fn validate_staged_files(
     let vault = fs::canonicalize(&config.bob_dir).map_err(|error| {
         CommandError::new(format!("could not resolve Bob vault: {error}"))
     })?;
-    for (label, path) in std::iter::once(("PDF", &staged.private_pdf)).chain(
-        staged
-            .audio
-            .iter()
-            .map(|audio| ("audio", &audio.private_path)),
-    ) {
+    let store_files = staged.source_store.as_ref().map(|store| {
+        [
+            ("source.md", store.scratch_source.as_path()),
+            ("code.json", store.scratch_code.as_path()),
+        ]
+    });
+    for (label, path) in std::iter::once(("PDF", staged.private_pdf.as_path()))
+        .chain(
+            staged
+                .audio
+                .iter()
+                .map(|audio| ("audio", audio.private_path.as_path())),
+        )
+        .chain(store_files.into_iter().flatten())
+    {
         let metadata = fs::symlink_metadata(path).map_err(|error| {
             CommandError::new(format!(
                 "could not read staged {label} {}: {error}",
@@ -1056,6 +1102,43 @@ fn ensure_staged_audio_is_preflighted(
     }
 }
 
+fn ensure_staged_store_is_preflighted(
+    request: &OverwriteRequest,
+    plan: &OverwritePreflight,
+    staged: &StagedOverwrite,
+) -> Result<(), CommandError> {
+    let Some(store) = &staged.source_store else {
+        return Ok(());
+    };
+    let Some(planned) = &request.planned_source_store else {
+        return Err(CommandError::new(
+            "staged source store was not included in overwrite preflight",
+        ));
+    };
+    if planned.source_rel != store.planned.source_rel
+        || planned.code_rel != store.planned.code_rel
+    {
+        return Err(CommandError::new(
+            "staged source store does not match the overwrite preflight",
+        ));
+    }
+    let source_ok = plan
+        .bundle_preimages
+        .iter()
+        .any(|preimage| preimage.path == store.planned.source_rel);
+    let code_ok = plan
+        .bundle_preimages
+        .iter()
+        .any(|preimage| preimage.path == store.planned.code_rel);
+    if source_ok && code_ok {
+        Ok(())
+    } else {
+        Err(CommandError::new(
+            "staged source store destination was not included in overwrite preflight",
+        ))
+    }
+}
+
 fn apply_and_verify(
     config: &Config,
     plan: &OverwritePreflight,
@@ -1123,6 +1206,10 @@ fn apply_and_verify(
     if let Some(audio) = &staged.audio {
         all_paths.insert(PathBuf::from(&audio.destination));
     }
+    if let Some(store) = &staged.source_store {
+        all_paths.insert(PathBuf::from(&store.planned.source_rel));
+        all_paths.insert(PathBuf::from(&store.planned.code_rel));
+    }
     if let Some(annotated) = &plan.annotated {
         all_paths.insert(PathBuf::from(&annotated.bundle.note_path));
         all_paths.insert(PathBuf::from(&annotated.bundle.annotated_pdf_path));
@@ -1170,6 +1257,10 @@ fn apply_and_verify(
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterPdf)?;
 
+    if let Some(store) = &staged.source_store {
+        install_staged_source_store(config, plan, store)?;
+    }
+
     let body = super::render_fresh_skeleton(
         config,
         &plan.note_path,
@@ -1191,6 +1282,11 @@ fn apply_and_verify(
         archive_path(plan),
         &plan.planned_date,
         plan.highlights,
+        staged
+            .source_store
+            .as_ref()
+            .map(|store| store.planned.pointer.clone()),
+        request.clear_source_markdown || staged.source_store.is_some(),
     )?;
     write_expected_bytes(
         config,
@@ -1756,6 +1852,58 @@ fn write_expected_file(
     write_expected_bytes(config, plan, relative, &bytes)
 }
 
+fn install_staged_source_store(
+    config: &Config,
+    plan: &OverwritePreflight,
+    store: &source_store::StagedStoreFiles,
+) -> Result<(), CommandError> {
+    let source_bytes = fs::read(&store.scratch_source).map_err(|error| {
+        CommandError::new(format!("could not read staged source.md: {error}"))
+    })?;
+    let dest_source = config.bob_dir.join(&store.planned.source_rel);
+    let existing_source = dest_source
+        .is_file()
+        .then(|| fs::read(&dest_source).ok())
+        .flatten();
+    let reuse = existing_source.as_deref() == Some(source_bytes.as_slice());
+    if existing_source.is_some() && !reuse {
+        eprintln!(
+            "warning: source store {} already holds different bytes; refusing to overwrite",
+            store.planned.dir_rel.display()
+        );
+        return Ok(());
+    }
+    if !reuse {
+        write_expected_bytes(
+            config,
+            plan,
+            &store.planned.source_rel,
+            &source_bytes,
+        )?;
+    }
+    let code_bytes = fs::read(&store.scratch_code).map_err(|error| {
+        CommandError::new(format!("could not read staged code.json: {error}"))
+    })?;
+    let dest_code = config.bob_dir.join(&store.planned.code_rel);
+    let code_unchanged = dest_code.is_file()
+        && fs::read(&dest_code).ok().as_deref() == Some(code_bytes.as_slice());
+    if !code_unchanged {
+        write_expected_bytes(
+            config,
+            plan,
+            &store.planned.code_rel,
+            &code_bytes,
+        )?;
+    }
+    if source_store::code_catalog_ignored(
+        config.bob_dir.as_path(),
+        &store.planned.dir_rel,
+    ) {
+        eprintln!("{}", source_store::ignored_catalog_warning());
+    }
+    Ok(())
+}
+
 fn write_expected_bytes(
     config: &Config,
     plan: &OverwritePreflight,
@@ -1932,6 +2080,8 @@ fn fresh_note_contents(
     archive: Option<&str>,
     date: &str,
     highlights: u64,
+    source_markdown: Option<String>,
+    replace_source_markdown: bool,
 ) -> Result<String, CommandError> {
     let lined = match archive {
         Some(path) => {
@@ -1941,23 +2091,43 @@ fn fresh_note_contents(
         None => existing.to_string(),
     };
     let parsed = frontmatter::parse_note(&lined);
-    let retained = retain_note_local_frontmatter(parsed.frontmatter);
+    let retained = retain_note_local_frontmatter(
+        parsed.frontmatter,
+        replace_source_markdown,
+    );
+    let mut entries = with_recaptured(retained, date);
+    if let Some(pointer) = source_markdown {
+        entries.push(source_markdown_entry(&pointer));
+    }
     let note = super::super::ParsedNote {
-        frontmatter: with_recaptured(retained, date),
+        frontmatter: entries,
         body: body.to_string(),
         original: None,
     };
     Ok(note.render_original())
 }
 
+fn source_markdown_entry(pointer: &str) -> super::super::FrontmatterEntry {
+    super::super::FrontmatterEntry {
+        key: Some(FIELD_SOURCE_MARKDOWN.to_string()),
+        value: Some(MarkerValue::String(pointer.to_string())),
+        raw: format!(
+            "{FIELD_SOURCE_MARKDOWN}: {}",
+            MarkerValue::String(pointer.to_string()).as_frontmatter_value()
+        ),
+    }
+}
+
 fn retain_note_local_frontmatter(
     entries: Vec<super::super::FrontmatterEntry>,
+    drop_source_markdown: bool,
 ) -> Vec<super::super::FrontmatterEntry> {
     let mut retained = Vec::new();
     let mut skipping_continuations = false;
     for entry in entries {
         let keep = match entry.key.as_deref() {
             Some("created" | "earlier" | "recaptured") => true,
+            Some(FIELD_SOURCE_MARKDOWN) if drop_source_markdown => false,
             Some(key) => {
                 !super::super::is_managed_frontmatter_field(key)
                     && !super::super::is_standard_user_field(key)
@@ -1969,7 +2139,11 @@ fn retain_note_local_frontmatter(
             None if keep => skipping_continuations = false,
             None => {}
         }
-        if keep && entry.key.as_deref() != Some("recaptured") {
+        if keep
+            && entry.key.as_deref() != Some("recaptured")
+            && !(drop_source_markdown
+                && entry.key.as_deref() == Some(FIELD_SOURCE_MARKDOWN))
+        {
             retained.push(entry);
         }
     }
@@ -2587,7 +2761,7 @@ mod tests {
             "---\ntitle: Old\ncreated: 2026-01-01\nearlier:\n  - [[ref/papers/old]]\nrecaptured: 2026-01-02\ncustom:\n  keep: yes\nhighlights_marker_hash: deadbeef\n---\nbody\n",
         );
         let entries = with_recaptured(
-            retain_note_local_frontmatter(parsed.frontmatter),
+            retain_note_local_frontmatter(parsed.frontmatter, false),
             "2026-02-03",
         );
         let note = super::super::super::ParsedNote {
@@ -2602,6 +2776,30 @@ mod tests {
         assert!(note.contains("recaptured: 2026-02-03"));
         assert!(!note.contains("highlights_marker_hash"));
         assert!(!note.contains("title: Old"));
+    }
+
+    #[test]
+    fn note_local_frontmatter_drops_source_markdown_when_replacing() {
+        let parsed = frontmatter::parse_note(concat!(
+            "---\n",
+            "created: 2026-01-01\n",
+            "source_markdown: .bob/ref-sources/papers/old--abcabcabcabc/source.md\n",
+            "custom: keep\n",
+            "---\n",
+            "body\n",
+        ));
+        let kept =
+            retain_note_local_frontmatter(parsed.frontmatter.clone(), false);
+        assert!(kept.iter().any(|entry| {
+            entry.key.as_deref() == Some(FIELD_SOURCE_MARKDOWN)
+        }));
+        let dropped = retain_note_local_frontmatter(parsed.frontmatter, true);
+        assert!(dropped.iter().all(|entry| {
+            entry.key.as_deref() != Some(FIELD_SOURCE_MARKDOWN)
+        }));
+        assert!(dropped
+            .iter()
+            .any(|entry| entry.key.as_deref() == Some("custom")));
     }
 
     struct FailpointGuard;
@@ -2867,6 +3065,7 @@ mod tests {
                 parent: Some("sase".into()),
                 captured: Some("2026-10-16".into()),
             },
+            source_store: None,
         };
         let note = vault.join("ref/papers/report.md");
         let sidecar_text = vault.join("lib/papers/report.textbundle/text.md");
@@ -3086,6 +3285,65 @@ mod tests {
             &fixture.vault,
             &["status", "--porcelain=v1", "--untracked-files=all"],
         );
+    }
+
+    fn seed_live_store(fixture: &mut ExecuteFixture, bytes: &[u8]) -> String {
+        let planned = source_store::PlannedSourceStore::for_bytes(
+            &fixture.plan.ref_type,
+            &fixture.plan.member.stem,
+            bytes,
+        );
+        let dir = fixture.vault.join(&planned.dir_rel);
+        fs::create_dir_all(&dir).expect("store dir");
+        fs::write(dir.join("source.md"), bytes).expect("source.md");
+        fs::write(dir.join("code.json"), "{}\n").expect("code.json");
+        let mut note = fs::read_to_string(&fixture.note).expect("note");
+        if !note.contains("source_markdown:") {
+            // Insert with the other preserved note-local fields, just
+            // before the pipeline block, so a dry-run sync still sees
+            // the note as in-sync.
+            let line = format!("source_markdown: {}\n", planned.pointer);
+            note = if let Some(idx) = note.find("source_pdf:") {
+                format!("{}{}{}", &note[..idx], line, &note[idx..])
+            } else {
+                note.replacen("---\n", &format!("---\n{line}"), 1)
+            };
+            fs::write(&fixture.note, note).expect("write pointer");
+        }
+        git(&fixture.vault, &["add", "-A"]);
+        git(&fixture.vault, &["commit", "-q", "-m", "seed source store"]);
+        refresh_fixture_plan(fixture);
+        planned.pointer
+    }
+
+    fn attach_staged_store(
+        fixture: &mut ExecuteFixture,
+        source_bytes: &[u8],
+    ) -> source_store::StagedStoreFiles {
+        let scratch = fixture._temp.path().join("store-scratch");
+        let ref_type = fixture.plan.ref_type.clone();
+        let stem = fixture.plan.member.stem.clone();
+        let pdf_rel = fixture.plan.pdf_path.clone();
+        let catalog =
+            super::super::super::code_catalog::CatalogOutcome::Missing;
+        let params = source_store::StoreWriteParams {
+            ref_type: &ref_type,
+            stem: &stem,
+            source_bytes,
+            route: "markdown",
+            origin: "/tmp/report.md".to_string(),
+            source_note: None,
+            source_note_sha256: None,
+            pdf_rel,
+            pdf_sha256: hex::encode(Sha256::digest(b"staged-pdf")),
+            catalog: &catalog,
+        };
+        let staged = source_store::stage_store_files(&scratch, params)
+            .expect("stage store");
+        fixture.request.planned_source_store = Some(staged.planned.clone());
+        refresh_fixture_plan(fixture);
+        fixture.staged.source_store = Some(staged.clone());
+        staged
     }
 
     fn annotated_execute_fixture(tag: &str) -> ExecuteFixture {
@@ -3711,6 +3969,82 @@ mod tests {
             );
             assert_intact_old_state(&fixture);
         }
+    }
+
+    #[test]
+    fn overwrite_repoints_source_markdown_and_keeps_frozen_pointer() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-store-repoint");
+        let old_bytes = b"# Old saved markdown\n";
+        let old_pointer = seed_live_store(&mut fixture, old_bytes);
+        let new_bytes = b"# Replacement saved markdown\n";
+        let staged = attach_staged_store(&mut fixture, new_bytes);
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            live.contains(&format!(
+                "source_markdown: {}",
+                staged.planned.pointer
+            )),
+            "live note must repoint:\n{live}"
+        );
+        assert!(
+            !live.contains(&format!("source_markdown: {old_pointer}")),
+            "live note must drop the old pointer:\n{live}"
+        );
+        let archive = fixture
+            .plan
+            .frozen_note
+            .as_ref()
+            .expect("fixture plans a frozen note");
+        let frozen = fs::read_to_string(fixture.vault.join(&archive.path))
+            .expect("frozen note");
+        assert!(
+            frozen.contains(&format!("source_markdown: {old_pointer}")),
+            "frozen note keeps the old pointer:\n{frozen}"
+        );
+        assert!(
+            fixture.vault.join(&old_pointer).is_file(),
+            "old store stays as history"
+        );
+        assert!(
+            fixture.vault.join(&staged.planned.source_rel).is_file(),
+            "new store is installed"
+        );
+    }
+
+    #[test]
+    fn after_note_failpoint_removes_new_store_and_restores_pointer() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-store-rollback");
+        let old_bytes = b"# Old saved markdown\n";
+        let old_pointer = seed_live_store(&mut fixture, old_bytes);
+        let new_bytes = b"# Replacement saved markdown\n";
+        let staged = attach_staged_store(&mut fixture, new_bytes);
+        let _armed = arm(OverwriteFailpoint::AfterNote);
+        let error = run_execute(&fixture, |_| Ok(()))
+            .expect_err("injected failpoint must abort");
+        assert!(
+            error.to_string().contains("injected failpoint")
+                || error.code == Some("injected_failpoint"),
+            "unexpected error: {error}"
+        );
+        assert_intact_old_state(&fixture);
+        let live = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(
+            live.contains(&format!("source_markdown: {old_pointer}")),
+            "rollback restores the old pointer:\n{live}"
+        );
+        assert!(
+            fixture.vault.join(&old_pointer).is_file(),
+            "old store survives rollback"
+        );
+        assert!(
+            !fixture.vault.join(&staged.planned.source_rel).exists(),
+            "new store must be removed on rollback"
+        );
     }
 
     #[test]

@@ -1796,7 +1796,17 @@ fn overwrite_request(
         explicit_status: options.explicit_status.clone(),
         explicit_title: options.title.clone(),
         dry_run: options.dry_run,
+        planned_source_store: None,
+        clear_source_markdown: false,
     }
+}
+
+/// How an overwrite treats the write-once source store.
+pub(super) enum OverwriteSourcePolicy<'a> {
+    /// Markdown-rendered replacement: stage a new or reused store.
+    Save { bytes: &'a [u8] },
+    /// Non-Markdown replacement: clear `source_markdown` on the live note.
+    Clear,
 }
 
 fn replacing_audio(options: &CreateOptions) -> bool {
@@ -1808,18 +1818,49 @@ pub(super) fn prepare_local_overwrite(
     options: &CreateOptions,
     selection: &OverwriteSelection,
 ) -> Result<(OverwritePreflight, OverwriteRequest, bool)> {
+    prepare_local_overwrite_with_source(
+        config,
+        options,
+        selection,
+        OverwriteSourcePolicy::Clear,
+    )
+}
+
+pub(super) fn prepare_local_overwrite_with_source(
+    config: &Config,
+    options: &CreateOptions,
+    selection: &OverwriteSelection,
+    source: OverwriteSourcePolicy<'_>,
+) -> Result<(OverwritePreflight, OverwriteRequest, bool)> {
     let member = selection.family.selected_member();
     let date = super::current_local_date();
     let replacing = replacing_audio(options);
     let mut request = overwrite_request(options, None);
+    match &source {
+        OverwriteSourcePolicy::Clear => {
+            request.clear_source_markdown = true;
+        }
+        OverwriteSourcePolicy::Save { .. } => {}
+    }
     let preview = super::overwrite::prepare(config, member, &request, &date)
         .map_err(|refusal| refusal.command_error())?;
+    if let OverwriteSourcePolicy::Save { bytes, .. } = &source {
+        request.planned_source_store =
+            Some(super::source_store::PlannedSourceStore::for_bytes(
+                &preview.ref_type,
+                &preview.member.stem,
+                bytes,
+            ));
+    }
+    let reprepare = replacing || request.planned_source_store.is_some();
     if replacing {
         request.replacement_audio_path =
             Some(overwrite_audio_destination(&preview, options));
+    }
+    if reprepare {
         let plan = super::overwrite::prepare(config, member, &request, &date)
             .map_err(|refusal| refusal.command_error())?;
-        Ok((plan, request, true))
+        Ok((plan, request, replacing))
     } else {
         Ok((preview, request, false))
     }
@@ -1970,6 +2011,7 @@ fn finish_local_overwrite(
     replacing: bool,
     scratch: &mut super::ScratchDir,
     rebind_source: &str,
+    source_store: Option<super::source_store::StagedStoreFiles>,
 ) -> Result<()> {
     // A finished narration survives every later failure: marker extraction
     // and execution run under the preservation path so a corrupt stage or
@@ -1992,6 +2034,7 @@ fn finish_local_overwrite(
                 private_pdf: staged_path,
                 audio,
                 marker,
+                source_store,
             },
         )
     })();
@@ -2087,6 +2130,7 @@ fn overwrite_local_pdf(
         replacing,
         scratch,
         &canonical.display().to_string(),
+        None,
     )
 }
 
@@ -2117,8 +2161,14 @@ fn overwrite_markdown(
         }
         _ => extract_title(&markdown, &canonical)?,
     };
-    let (plan, request, replacing) =
-        prepare_local_overwrite(config, options, selection)?;
+    let (plan, request, replacing) = prepare_local_overwrite_with_source(
+        config,
+        options,
+        selection,
+        OverwriteSourcePolicy::Save {
+            bytes: markdown.as_bytes(),
+        },
+    )?;
     if options.dry_run {
         super::overwrite::local::print_dry_run(
             &plan,
@@ -2145,7 +2195,7 @@ fn overwrite_markdown(
         published: published.clone(),
         source_url: None,
         source_note: None,
-        source_markdown: Some(markdown),
+        source_markdown: Some(markdown.clone()),
         captured: Some(super::current_local_date()),
         id: Some(plan.member.stem.clone()),
         marker: String::new(),
@@ -2172,7 +2222,7 @@ fn overwrite_markdown(
         scratch.path(),
     );
     filters.diagrams = diagram_pass.filter.clone();
-    let _ = render_temp_pdf_from(
+    let reports = render_temp_pdf_from(
         &pandoc,
         &create_plan,
         &render_path,
@@ -2197,6 +2247,18 @@ fn overwrite_markdown(
         extras,
         &PdfInfo::default(),
     )?;
+    let source_store = stage_overwrite_source_store(
+        config,
+        &plan,
+        scratch.path(),
+        markdown.as_bytes(),
+        "markdown",
+        canonical.display().to_string(),
+        None,
+        None,
+        &stamped,
+        &reports.code_catalog,
+    )?;
     let rebind_source = canonical.display().to_string();
     let audio = stage_overwrite_audio(
         options,
@@ -2219,6 +2281,7 @@ fn overwrite_markdown(
         replacing,
         scratch,
         &rebind_source,
+        Some(source_store),
     )
 }
 
@@ -2232,8 +2295,17 @@ fn overwrite_vault_note(
 ) -> Result<()> {
     let title = snapshot.identity_title.clone();
     let source_note = snapshot.note.identity.route.clone();
-    let (plan, request, replacing) =
-        prepare_local_overwrite(config, options, selection)?;
+    let (store_bytes, store_route) = if options.plain {
+        (snapshot.source_markdown.as_bytes(), "plain_note")
+    } else {
+        (snapshot.projected_markdown.as_bytes(), "note_snapshot")
+    };
+    let (plan, request, replacing) = prepare_local_overwrite_with_source(
+        config,
+        options,
+        selection,
+        OverwriteSourcePolicy::Save { bytes: store_bytes },
+    )?;
     if options.dry_run {
         super::overwrite::local::print_dry_run(
             &plan,
@@ -2260,7 +2332,14 @@ fn overwrite_vault_note(
     // The replacement keeps the Play link ordinary create would render,
     // bound to the replacement companion when one is staged.
     let audio_uri = overwrite_play_uri(config, &plan, &request)?;
-    let render_path = if options.plain {
+    let store_origin = snapshot.note.canonical_path.display().to_string();
+    let store_note_sha = snapshot.source_digest.clone();
+    let store_bytes_owned = if options.plain {
+        snapshot.source_markdown.clone()
+    } else {
+        snapshot.projected_markdown.clone()
+    };
+    let (render_path, store_catalog) = if options.plain {
         let dummy_target = scratch.path().join("overwrite.pdf");
         let create_plan = CreatePlan {
             source: snapshot.note.canonical_path.display().to_string(),
@@ -2303,7 +2382,7 @@ fn overwrite_vault_note(
             scratch.path(),
         );
         filters.diagrams = diagram_pass.filter.clone();
-        let _ = render_temp_pdf_from(
+        let reports = render_temp_pdf_from(
             &pandoc,
             &create_plan,
             &render_path,
@@ -2311,7 +2390,7 @@ fn overwrite_vault_note(
             audio_uri.as_deref(),
             Some(&frozen_source),
         )?;
-        render_path
+        (render_path, reports.code_catalog)
     } else {
         let mut snapshot = snapshot;
         let asset_preparation = note_snapshot::assets::prepare(&mut snapshot)
@@ -2343,7 +2422,7 @@ fn overwrite_vault_note(
             },
         )?;
         let _ = diagram_pass;
-        outcome.pdf
+        (outcome.pdf, outcome.code_catalog)
     };
     let stamped = stamp_overwrite_source(
         config,
@@ -2354,6 +2433,18 @@ fn overwrite_vault_note(
         &title,
         extras,
         &info,
+    )?;
+    let source_store = stage_overwrite_source_store(
+        config,
+        &plan,
+        scratch.path(),
+        store_bytes_owned.as_bytes(),
+        store_route,
+        store_origin,
+        Some(source_note.clone()),
+        Some(store_note_sha),
+        &stamped,
+        &store_catalog,
     )?;
     let listen_target = if options.plain {
         stamped.display().to_string()
@@ -2381,6 +2472,7 @@ fn overwrite_vault_note(
         replacing,
         scratch,
         &source_note,
+        Some(source_store),
     )
 }
 
@@ -3449,6 +3541,45 @@ fn print_dry_run_snapshot_store(
     println!("source_markdown: {pointer}");
 }
 
+/// Stage `source.md` and `code.json` in scratch for an overwrite. The
+/// transaction installs them under `bob_sync.lock`.
+fn stage_overwrite_source_store(
+    _config: &Config,
+    plan: &OverwritePreflight,
+    scratch: &Path,
+    source_bytes: &[u8],
+    route: &str,
+    origin: String,
+    source_note: Option<String>,
+    source_note_sha256: Option<String>,
+    staged_pdf: &Path,
+    catalog: &super::code_catalog::CatalogOutcome,
+) -> Result<super::source_store::StagedStoreFiles> {
+    let pdf_sha256 = super::io::sha256_file(staged_pdf).map_err(|error| {
+        CommandError::new(format!(
+            "hash staged overwrite PDF {}: {error}",
+            staged_pdf.display()
+        ))
+    })?;
+    let pdf_rel = plan.pdf_path.clone();
+    let params = super::source_store::StoreWriteParams {
+        ref_type: &plan.ref_type,
+        stem: &plan.member.stem,
+        source_bytes,
+        route,
+        origin,
+        source_note,
+        source_note_sha256,
+        pdf_rel,
+        pdf_sha256,
+        catalog,
+    };
+    super::source_store::stage_store_files(
+        &scratch.join("ref-source-store"),
+        params,
+    )
+}
+
 /// Persist the write-once source store for the Markdown / `-M` route and
 /// print the `source_markdown:` and `code:` lines. External targets print
 /// the `none` line and write nothing. Store failures warn and never fail
@@ -4161,6 +4292,7 @@ fn overwrite_pdf_url(
         replacing,
         scratch,
         &url.cleaned,
+        None,
     )
 }
 
@@ -4535,6 +4667,7 @@ fn overwrite_arxiv(
         replacing,
         scratch,
         &url.cleaned,
+        None,
     )
 }
 

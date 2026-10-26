@@ -56,6 +56,13 @@ pub(super) struct OverwriteRequest {
     /// Dry runs may render an annotated archive preview on any host. Real
     /// annotated execution is gated by macOS file coordination in preflight.
     pub(super) dry_run: bool,
+    /// Planned write-once source store for a Markdown-rendered overwrite.
+    /// Prepare records these as created/touched paths so apply, rollback,
+    /// and the scoped commit include them.
+    pub(super) planned_source_store:
+        Option<super::source_store::PlannedSourceStore>,
+    /// Non-Markdown overwrite: drop `source_markdown` from the live note.
+    pub(super) clear_source_markdown: bool,
 }
 
 /// A path and its observed preimage. `sha256: None` means it was absent.
@@ -629,6 +636,10 @@ pub(super) fn prepare(
         }
         touched.insert(relative);
     }
+    if let Some(store) = &request.planned_source_store {
+        touched.insert(PathBuf::from(&store.source_rel));
+        touched.insert(PathBuf::from(&store.code_rel));
+    }
     let user_fields = ["aliases", "topics", "research"]
         .into_iter()
         .filter_map(|key| {
@@ -746,6 +757,10 @@ pub(super) fn prepare(
     dirty.extend(ignored);
     dirty.sort();
     dirty.dedup();
+    // An ignored `code.json` must not fail overwrite: commit `source.md`,
+    // keep the catalog on disk, and warn. Other ignored touched paths
+    // still refuse as `dirty_paths`.
+    dirty.retain(|path| !super::source_store::is_store_code_json(path));
     if !dirty.is_empty() {
         return Err(OverwriteRefusal::new(
             "dirty_paths",
@@ -1369,6 +1384,9 @@ fn render_frozen_note(
     copy_yaml_key(old_map, &mut archive_front, "title");
     copy_yaml_key(old_map, &mut archive_front, "source_url");
     copy_yaml_key(old_map, &mut archive_front, "created");
+    // The old store stays as history; the frozen note keeps the pointer
+    // so the archived capture still names its saved Markdown.
+    copy_yaml_key(old_map, &mut archive_front, super::FIELD_SOURCE_MARKDOWN);
     archive_front.insert(
         YamlValue::String("parent".to_string()),
         YamlValue::String(format!(
@@ -2035,6 +2053,34 @@ mod tests {
             "source_url must remain a YAML list"
         );
         assert!(yaml.as_mapping().unwrap().get("id").is_none());
+    }
+
+    #[test]
+    fn frozen_frontmatter_keeps_source_markdown_pointer() {
+        let old = concat!(
+            "---\n",
+            "title: Paper\n",
+            "source_markdown: .bob/ref-sources/papers/paper--aaaaaaaaaaaa/source.md\n",
+            "created: 2020-01-01\n",
+            "---\n",
+            "# Paper\n",
+        );
+        let frozen = render_frozen_note(
+            old,
+            "ref/papers/paper.md",
+            "papers",
+            "paper",
+            "2026-10-25",
+            Some("2020-01-01"),
+            "ready",
+            "Paper",
+            0,
+            None,
+        )
+        .expect("frozen note");
+        assert!(frozen.contains(
+            "source_markdown: .bob/ref-sources/papers/paper--aaaaaaaaaaaa/source.md"
+        ));
     }
 
     #[test]
