@@ -882,6 +882,16 @@ an invalid `freshness:` block or a non-Dataview task format.
 D = `2026-10-08`. Each gives the input line, the expected line, and
 `changed`. The bob-ledger-tools JavaScript tests use these verbatim.
 
+Pomodoro ledger headlines are refused as `not_task` by every fresh-producing
+placement writer. Line-only placement recognizes a leading `()` placeholder or a
+compact `HHMM-HHMM` / colon `HH:MM-HH:MM` range immediately after the checkbox;
+it does not search ordinary task prose for a time range. Context-aware callers
+also refuse any top-level checkbox row under `## Pomodoros`, including legacy
+headlines without a parseable range. Refusals preserve every byte, including
+existing freshness fields. Nested real tasks and Task Link targets outside the
+Pomodoros section remain eligible. This covers generic stamps, keeps, refresh
+set/clear, and Rust's preserve-keeps stamp; `[unblocked::]` placement is unchanged.
+
 - **P1 bare:** `- [ ] #task Buy milk` →
   `- [ ] #task Buy milk [fresh:: 2026-10-08]` (`changed: true`)
 - **P2 created:** `- [ ] #task Buy milk [created::2026-09-29]` →
@@ -937,6 +947,19 @@ D = `2026-10-08`. Each gives the input line, the expected line, and
   (quote markers are stripped for task detection only, mirroring the
   vault scanner; the `>` bytes stay in place, and more than three
   leading spaces before `>` is still not a task)
+- **P19 Pomodoro ledger rows:** every input below returns the exact same
+  bytes, `changed: false`, refused as `not_task` by generic stamp,
+  set/clear refresh, and counted/uncounted keep; Rust preserve-keeps also
+  refuses them unchanged:
+  - `- [ ] (**0920-0950** [t:: 30m]) — FOCUS`
+  - `- [x] (**0920-0950** [t:: 30m]) — FOCUS [fresh:: 2026-10-01]`
+  - `- [ ] () — PLANNED`
+  - `- [ ] (09:20 - 09:50) — FOCUS`
+  - `- [ ] (0920 - 0950) [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]`
+  - `\t- [ ] (**0920-0950**) — INDENTED`
+  - `> - [ ] (**09:20-09:50**) — QUOTED`
+- **P20 time in ordinary prose:** `- [ ] #task Review 09:20-09:50 before lunch` →
+  `- [ ] #task Review 09:20-09:50 before lunch [fresh:: 2026-10-08]`
 
 ## 10. State conformance examples
 

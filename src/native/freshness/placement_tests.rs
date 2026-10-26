@@ -273,6 +273,50 @@ fn cancelled_is_refused_like_done() {
 }
 
 #[test]
+fn pomodoro_ledger_rows_are_refused_byte_for_byte_by_every_stamp_writer() {
+    let rows = [
+        "- [ ] (**0920-0950** [t:: 30m]) — FOCUS",
+        "- [x] (**0920-0950** [t:: 30m]) — FOCUS [fresh:: 2026-10-01]",
+        "- [ ] () — PLANNED",
+        "- [ ] (09:20 - 09:50) — FOCUS",
+        "- [ ] (0920 - 0950) [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2]",
+        "\t- [ ] (**0920-0950**) — INDENTED",
+        "> - [ ] (**09:20-09:50**) — QUOTED",
+    ];
+
+    for line in rows {
+        let operations = [
+            stamp_fresh(line, day()),
+            set_refresh(line, Some(30), day()),
+            set_refresh(line, None, day()),
+            stamp_fresh_preserve_keeps(line, day()),
+        ];
+        for stamped in operations {
+            assert_eq!(
+                stamped.line, line,
+                "ledger row must stay byte-exact: {line:?}"
+            );
+            assert!(
+                !stamped.changed,
+                "ledger row must not be changed: {line:?}"
+            );
+            assert_eq!(stamped.refused, Some(Refusal::NotTask), "{line:?}");
+        }
+    }
+}
+
+#[test]
+fn prose_that_mentions_a_time_range_remains_stampable() {
+    let line = "- [ ] #task Review 09:20-09:50 before lunch";
+    let stamped = stamp(line);
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Review 09:20-09:50 before lunch [fresh:: 2026-10-08]"
+    );
+    assert_eq!(stamped.refused, None);
+}
+
+#[test]
 fn set_refresh_replaces_existing_value() {
     let input = "- [ ] #task A [fresh:: 2026-10-01] [refresh:: 14] [created::2026-09-01]";
     let updated = set_refresh(input, Some(30), day());

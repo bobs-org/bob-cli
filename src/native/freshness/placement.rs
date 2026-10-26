@@ -179,6 +179,13 @@ fn stamp_inner(
             refused: Some(Refusal::NotTask),
         };
     };
+    if is_pomodoro_ledger_line(line) {
+        return Stamp {
+            line: line.to_string(),
+            changed: false,
+            refused: Some(Refusal::NotTask),
+        };
+    }
     if is_closed_status(status) {
         return Stamp {
             line: line.to_string(),
@@ -667,6 +674,104 @@ fn task_status(line: &str) -> Option<char> {
         return None;
     }
     Some(status)
+}
+
+/// The task body after its list checkbox, preserving the accepted
+/// indentation and blockquote prefixes. Freshness placement must be safe
+/// without a file or heading context, so the ledger signature is anchored
+/// at this body boundary rather than searched for in task prose.
+fn checkbox_body(line: &str) -> Option<&str> {
+    let line = strip_blockquote_prefix(line);
+    let bytes = line.as_bytes();
+    let mut index = bytes
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    index = after_list_marker(line, index)?;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'[') {
+        return None;
+    }
+    let close = index + 1 + line[index + 1..].find(']')?;
+    if line[index + 1..close].chars().count() != 1 {
+        return None;
+    }
+    let after = &line[close + 1..];
+    if !after.is_empty() && !after.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let mut body_start = close + 1;
+    while matches!(bytes.get(body_start), Some(b' ' | b'\t')) {
+        body_start += 1;
+    }
+    Some(&line[body_start..])
+}
+
+/// Pomodoro headlines have either a leading empty placeholder or a
+/// leading compact/colon time range in parentheses. Keep this lexical
+/// guard independent of the daily-note heading so every placement caller
+/// gets the same protection, including injected/older stampers upstream.
+fn is_pomodoro_ledger_line(line: &str) -> bool {
+    let Some(body) = checkbox_body(line) else {
+        return false;
+    };
+    let Some(inside) = body.strip_prefix('(') else {
+        return false;
+    };
+    let placeholder_end = inside.find(')');
+    if placeholder_end.is_some_and(|end| inside[..end].trim().is_empty()) {
+        return true;
+    }
+
+    let opening_bold = inside.starts_with("**");
+    let time = if opening_bold { &inside[2..] } else { inside };
+    let Some((after_start, colon_format)) = take_clock(time) else {
+        return false;
+    };
+    let after_dash = after_start.trim_start_matches(char::is_whitespace);
+    let Some(after_dash) = after_dash.strip_prefix('-') else {
+        return false;
+    };
+    let after_dash = after_dash.trim_start_matches(char::is_whitespace);
+    let Some((after_end, end_colon_format)) = take_clock(after_dash) else {
+        return false;
+    };
+    if colon_format != end_colon_format {
+        return false;
+    }
+    let after_end = if opening_bold {
+        let Some(rest) = after_end.strip_prefix("**") else {
+            return false;
+        };
+        rest
+    } else if after_end.starts_with("**") {
+        return false;
+    } else {
+        after_end
+    };
+    let Some(close) = after_end.find(')') else {
+        return false;
+    };
+    close == 0 || after_end[..close].starts_with(char::is_whitespace)
+}
+
+/// Consume a compact `HHMM` or colon `HH:MM` prefix.
+fn take_clock(text: &str) -> Option<(&str, bool)> {
+    let bytes = text.as_bytes();
+    let digits = |range: std::ops::Range<usize>| {
+        bytes
+            .get(range)
+            .is_some_and(|part| part.iter().all(u8::is_ascii_digit))
+    };
+    if bytes.get(2) == Some(&b':') && digits(0..2) && digits(3..5) {
+        return Some((&text[5..], true));
+    }
+    if digits(0..4) {
+        return Some((&text[4..], false));
+    }
+    None
 }
 
 fn after_list_marker(line: &str, index: usize) -> Option<usize> {
