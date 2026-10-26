@@ -795,9 +795,14 @@ as `TARGET` refuses even
 with `-f` (copying highlights into the next reading is forbidden): reread
 from its recorded `source_url` or the original file instead, while `-L`
 without force still attaches to the newest reading. `-f overwrite` on a
-filed reference exits 2
-naming the reread it would take (not available yet); without a filed match
-it exits 1. No force is needed for a URL recorded only by legacy notes
+filed Markdown file, original local PDF, or same-day vault-note snapshot
+replaces that reading in place: the note path, stem, id, and reading task
+stay, companion audio is preserved unless `-a` or `-L` replaces it, and
+`--no-audio` leaves an existing episode in place. Clap's default `-s ready`
+is not an explicit reopen; pass `-s` to change the kept task. URL,
+collection, and clip overwrite still exit 2 naming the reread they would
+take (not available yet); without a filed match overwrite exits 1. No
+force is needed for a URL recorded only by legacy notes
 without a Highlights PDF (it warns and captures a fresh copy) or for a
 new-day vault-note snapshot (an ordinary dated create).
 

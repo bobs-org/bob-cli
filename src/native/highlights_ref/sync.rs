@@ -59,11 +59,17 @@ pub(super) fn write_single_pdf_sync(
 
 /// Apply one finalized PDF plan when the caller already owns the complete
 /// per-PDF file-coordination scope.
+///
+/// Overwrite publishes the replacement PDF/note (and optional audio) under
+/// its own preimage and dirty-path checks, then asks single-PDF sync to
+/// fill pipeline fields. Those published files are already dirty versus
+/// HEAD, so the ordinary scan dirty-target veto would refuse the rest of
+/// the same transaction. Scan and `sync` still go through
+/// [`write_single_pdf_sync`].
 pub(super) fn write_single_pdf_sync_with_external_coordination(
     config: &Config,
     plan: &PdfSyncPlan,
 ) -> Result<PdfSyncOutcome> {
-    ensure_safe_to_write(config, iter::once(plan))?;
     let mut session = MarkerWriteSession::for_external_coordination();
     execute_pdf_sync(config, plan, &mut RunWriteState::default(), &mut session)
 }

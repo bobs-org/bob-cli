@@ -138,6 +138,55 @@ pub(super) struct RereadPreflight {
     pub defaults: FamilyDefaults,
 }
 
+/// A filed member selected for in-place overwrite. Defaults come from the
+/// selected member (explicit `-N`, else the newest reading), not from
+/// reread's newest-member allocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct OverwriteSelection {
+    /// The family whose selected member will be replaced.
+    pub family: SelectedFamily,
+    /// Defaults from the selected member's located task and type.
+    pub defaults: FamilyDefaults,
+}
+
+/// Typed capture outcome for ordinary create, reread, and overwrite.
+/// Routes branch on this instead of inferring overwrite from error
+/// strings or stacking booleans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CaptureOutcome {
+    /// No filed family: an ordinary new capture (or a fresh-overwrite
+    /// refusal later, once the target plan is known).
+    Fresh,
+    /// An allocated reread of a filed family.
+    Reread(RereadPreflight),
+    /// An in-place overwrite of the selected family member.
+    Overwrite(OverwriteSelection),
+}
+
+impl CaptureOutcome {
+    pub(super) fn reread(&self) -> Option<&RereadPreflight> {
+        match self {
+            Self::Reread(preflight) => Some(preflight),
+            Self::Fresh | Self::Overwrite(_) => None,
+        }
+    }
+
+    pub(super) fn overwrite(&self) -> Option<&OverwriteSelection> {
+        match self {
+            Self::Overwrite(selection) => Some(selection),
+            Self::Fresh | Self::Reread(_) => None,
+        }
+    }
+
+    pub(super) fn is_reread(&self) -> bool {
+        matches!(self, Self::Reread(_))
+    }
+
+    pub(super) fn is_overwrite(&self) -> bool {
+        matches!(self, Self::Overwrite(_))
+    }
+}
+
 /// The planned reread: the selected family plus its allocated stem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RereadPlan {
@@ -162,10 +211,9 @@ impl RereadPlan {
     }
 }
 
-/// Defaults carried from the newest reading: its located task residence
-/// and its library type. Explicit `-P`/`-t` always win at the call site;
-/// the default status stays `ready` with an explicit `-s` honored; and
-/// companion audio is never inherited.
+/// Defaults carried from a family member: its located task residence and
+/// its library type. Reread uses the newest reading; overwrite uses the
+/// selected member. Explicit `-P`/`-t` always win at the call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct FamilyDefaults {
     pub parent: Option<String>,
@@ -195,11 +243,11 @@ pub(super) fn index_rows(config: &Config) -> Vec<RefRow> {
         .unwrap_or_default()
 }
 
-/// Defaults from the newest reading's actual located task and type.
-pub(super) fn family_defaults(newest: &FamilyMember) -> FamilyDefaults {
+/// Defaults from a family member's actual located task and type.
+pub(super) fn family_defaults(member: &FamilyMember) -> FamilyDefaults {
     FamilyDefaults {
-        parent: newest.task_path.clone(),
-        ref_type: newest.ref_type.clone(),
+        parent: member.task_path.clone(),
+        ref_type: member.ref_type.clone(),
     }
 }
 
@@ -718,7 +766,7 @@ pub(super) fn preflight_for_url(
 ) -> Result<Option<RereadPreflight>, CommandError> {
     match resolve_for_url_keys(rows, recorded, wanted, &config.bob_dir) {
         RecaptureMatch::NoMatch | RecaptureMatch::QueuedOnly { .. } => Ok(None),
-        RecaptureMatch::Selected { family } => finish_selection(
+        RecaptureMatch::Selected { family } => url_reread_from_selection(
             config,
             family,
             name,
@@ -731,7 +779,7 @@ pub(super) fn preflight_for_url(
         ),
         RecaptureMatch::Ambiguous { families } => {
             let family = disambiguate(families, name)?;
-            finish_selection(
+            url_reread_from_selection(
                 config,
                 family,
                 name,
@@ -854,12 +902,13 @@ pub(super) fn select_overwrite_for_stem(
     Ok(Some(disambiguate(families, name)?))
 }
 
-/// Resolve a title-route reread by stem: Markdown, local PDF, and
-/// same-day vault snapshots probe their planned stem against live
-/// families. A free stem is an ordinary capture (`Ok(None)`); a claimed
-/// stem follows the same force/`-N`/`-o` rules as URL routes. An explicit
-/// `-N` naming a member of any family selects it; naming a free stem is
-/// an ordinary new capture and never joins a family.
+/// Resolve a title-route reread or overwrite by stem: Markdown, local PDF,
+/// and same-day vault snapshots probe their planned stem against live
+/// families. A free stem is an ordinary capture (`Fresh`); a claimed
+/// stem follows the same force/`-N`/`-o` rules as URL routes, except
+/// overwrite is enabled and selects the named (or newest) member in
+/// place. An explicit `-N` naming a member of any family selects it;
+/// naming a free stem is an ordinary new capture and never joins a family.
 pub(super) fn preflight_for_stem(
     config: &Config,
     rows: &[RefRow],
@@ -869,7 +918,7 @@ pub(super) fn preflight_for_stem(
     force: Option<super::force::ForceMode>,
     title_fallback: &str,
     identity: StemIdentity<'_>,
-) -> Result<Option<RereadPreflight>, CommandError> {
+) -> Result<CaptureOutcome, CommandError> {
     if let Some(name) = name {
         let mut named =
             families_for_stem_identity(config, rows, name, identity);
@@ -899,16 +948,17 @@ pub(super) fn preflight_for_stem(
                 None,
                 true,
                 false,
+                true,
             );
         }
         // A free explicit `-N` is an ordinary new capture.
         if name != stem {
-            return Ok(None);
+            return Ok(CaptureOutcome::Fresh);
         }
     }
     let families = families_for_stem_identity(config, rows, stem, identity);
     if families.is_empty() {
-        return Ok(None);
+        return Ok(CaptureOutcome::Fresh);
     }
     let family = disambiguate(families, name)?;
     finish_selection(
@@ -921,14 +971,13 @@ pub(super) fn preflight_for_stem(
         None,
         true,
         false,
+        true,
     )
 }
 
-/// Finish a selected family: validate `-N`/`-o`, allocate the next stem,
-/// and either return the preflight (reread force) or the refusal
-/// (no force carries the `-f` remedy; overwrite carries the interim
-/// unavailable message naming the same stem).
-fn finish_selection(
+/// Map a URL-route selection onto the existing reread preflight. Overwrite
+/// stays refused here; the web phase enables those routes.
+fn url_reread_from_selection(
     config: &Config,
     family: SelectedFamily,
     name: Option<&str>,
@@ -939,6 +988,44 @@ fn finish_selection(
     title_route: bool,
     attach_available: bool,
 ) -> Result<Option<RereadPreflight>, CommandError> {
+    match finish_selection(
+        config,
+        family,
+        name,
+        output,
+        force,
+        title_fallback,
+        expected_keys,
+        title_route,
+        attach_available,
+        false,
+    )? {
+        CaptureOutcome::Reread(preflight) => Ok(Some(preflight)),
+        CaptureOutcome::Fresh | CaptureOutcome::Overwrite(_) => {
+            unreachable!(
+                "URL finish_selection refuses overwrite and never returns Fresh"
+            )
+        }
+    }
+}
+
+/// Finish a selected family: validate `-N`/`-o`, then either allocate a
+/// reread stem, select the member for in-place overwrite, or refuse.
+/// No force carries the `-f` remedy; URL overwrite still names the
+/// interim unavailable message; local overwrite returns the selected
+/// member without allocating `__vN`.
+fn finish_selection(
+    config: &Config,
+    family: SelectedFamily,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+    expected_keys: Option<&BTreeSet<String>>,
+    title_route: bool,
+    attach_available: bool,
+    overwrite_enabled: bool,
+) -> Result<CaptureOutcome, CommandError> {
     if expected_keys
         .is_some_and(|wanted| !family_has_exact_keys(&family, wanted))
     {
@@ -955,30 +1042,50 @@ fn finish_selection(
     if let Some(name) = name {
         validate_reread_name(&family, name)?;
     }
-    let next = allocate_for_family(config, &family)?;
     match force {
-        None => Err(filed_refusal(
-            config,
-            &family,
-            &next,
-            title_fallback,
-            title_route,
-            attach_available,
-        )),
+        None => {
+            let next = allocate_for_family(config, &family)?;
+            Err(filed_refusal(
+                config,
+                &family,
+                &next,
+                title_fallback,
+                title_route,
+                attach_available,
+            ))
+        }
+        Some(super::force::ForceMode::Overwrite) if overwrite_enabled => {
+            if output.is_some() {
+                return Err(overwrite_output_error());
+            }
+            Ok(CaptureOutcome::Overwrite(OverwriteSelection {
+                defaults: family_defaults(family.selected_member()),
+                family,
+            }))
+        }
         Some(super::force::ForceMode::Overwrite) => {
+            let next = allocate_for_family(config, &family)?;
             Err(super::force::overwrite_filed_unavailable_for(&next))
         }
         Some(super::force::ForceMode::Reread) => {
+            let next = allocate_for_family(config, &family)?;
             if output.is_some() {
                 return Err(reread_output_error(&next));
             }
             let defaults = family_defaults(family.newest());
-            Ok(Some(RereadPreflight {
+            Ok(CaptureOutcome::Reread(RereadPreflight {
                 plan: RereadPlan { family, stem: next },
                 defaults,
             }))
         }
     }
+}
+
+fn overwrite_output_error() -> CommandError {
+    CommandError::new(
+        "-o cannot select a path for an in-place overwrite\nhint: drop -o; overwrite keeps the filed reference path",
+    )
+    .with_exit_code(2)
 }
 
 /// The filed refusal for a selected family: every copy newest-first with
@@ -2279,6 +2386,7 @@ mod tests {
             "Alpha",
             None,
             true,
+            false,
             false,
         )
         .expect_err("no force keeps the captured refusal");

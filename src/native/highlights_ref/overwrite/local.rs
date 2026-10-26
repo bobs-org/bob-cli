@@ -1,0 +1,172 @@
+//! Local-route overwrite reports and staged-PDF marker extraction.
+//!
+//! Create's Markdown, original local PDF, and same-day vault-note routes
+//! own rendering into private scratch. This module turns the prepared
+//! plan and executor result into the user-facing dry-run and success
+//! lines those routes share.
+
+use std::path::Path;
+
+use super::super::{
+    marker, CommandError, MarkerValue, FIELD_CAPTURED, FIELD_ID, FIELD_PARENT,
+    FIELD_STATUS,
+};
+use super::execute::{FinalMarkerMetadata, OverwriteResult};
+use super::OverwritePreflight;
+
+/// Dry-run plan for a local overwrite. No adapters, pandoc, or listen
+/// run before this is printed, and it always ends with `writes: none`.
+pub(in crate::native::highlights_ref) fn print_dry_run(
+    plan: &OverwritePreflight,
+    title: &str,
+    replacing_audio: bool,
+) {
+    println!("ok would replace Highlights-ready PDF");
+    println!("overwrite: {}/{}", plan.ref_type, plan.member.stem);
+    println!("title: {title}");
+    print_archive_line(plan);
+    print_task_line(plan);
+    if replacing_audio {
+        println!(
+            "audio: replace {}",
+            plan.audio_path.as_deref().unwrap_or("companion")
+        );
+    } else if let Some(audio) = &plan.audio_path {
+        println!("audio: keep {audio}");
+    } else {
+        println!("audio: none");
+    }
+    println!("writes: none");
+}
+
+/// Success report after a verified local overwrite commit.
+pub(in crate::native::highlights_ref) fn print_success(
+    plan: &OverwritePreflight,
+    result: &OverwriteResult,
+    title: &str,
+    replaced_audio: Option<&str>,
+    kept_closed: bool,
+) {
+    println!("ok replaced Highlights-ready PDF");
+    println!("overwrite: {}/{}", plan.ref_type, plan.member.stem);
+    println!("title: {title}");
+    print_archive_line(plan);
+    print_task_line(plan);
+    if let Some(audio) = replaced_audio {
+        println!("audio: replaced {audio}");
+    } else if let Some(audio) = &plan.audio_path {
+        println!("audio: kept {audio}");
+    }
+    if kept_closed {
+        println!("pass -s ready to reopen");
+    }
+    if result.push_pending {
+        println!(
+            "overwritten; push pending (run bob vault-sync) {}",
+            result.commit_sha
+        );
+    } else {
+        println!("committed {}", result.commit_sha);
+    }
+}
+
+fn print_archive_line(plan: &OverwritePreflight) {
+    match &plan.frozen_note {
+        Some(archive) => println!("earlier: {}", archive.path),
+        None => println!(
+            "earlier: nothing to archive (0 highlights, no notes); git keeps the old capture"
+        ),
+    }
+}
+
+fn print_task_line(plan: &OverwritePreflight) {
+    let block = plan.task.block_id.as_deref().unwrap_or("ref");
+    println!(
+        "task: kept {} ^{block} [{}] {}",
+        plan.task.path, plan.task.mark, plan.status
+    );
+}
+
+/// Read final marker identity from a privately stamped overwrite PDF.
+pub(in crate::native::highlights_ref) fn marker_from_pdf(
+    path: &Path,
+) -> Result<FinalMarkerMetadata, CommandError> {
+    let marker = marker::read_pdf_marker(path)?;
+    let projection = marker::parse_marker(&marker.contents)?;
+    let id = projection
+        .get(FIELD_ID)
+        .and_then(MarkerValue::as_string)
+        .unwrap_or_default()
+        .to_string();
+    let title = projection
+        .get("title")
+        .and_then(MarkerValue::as_string)
+        .unwrap_or_default()
+        .to_string();
+    let status = projection
+        .get(FIELD_STATUS)
+        .and_then(MarkerValue::as_string)
+        .unwrap_or_default()
+        .to_string();
+    let parent = projection
+        .get(FIELD_PARENT)
+        .and_then(MarkerValue::as_string)
+        .map(str::to_string);
+    let captured = projection
+        .get(FIELD_CAPTURED)
+        .and_then(MarkerValue::as_string)
+        .map(str::to_string);
+    Ok(FinalMarkerMetadata {
+        id,
+        title,
+        status,
+        parent,
+        captured,
+    })
+}
+
+/// Vault-relative companion destination for a requested replacement.
+/// Reuses the existing episode path when one is already bound; otherwise
+/// the MP3 beside the library PDF.
+pub(in crate::native::highlights_ref) fn replacement_audio_destination(
+    plan: &OverwritePreflight,
+) -> String {
+    plan.audio_path.clone().unwrap_or_else(|| {
+        Path::new(&plan.pdf_path)
+            .with_extension("mp3")
+            .to_string_lossy()
+            .replace('\\', "/")
+    })
+}
+
+/// Status to stamp on the replacement PDF. An explicit `-s` wins;
+/// otherwise the located task's status is preserved. A blocked overlay
+/// keeps the existing live-status class (`ready`/`next`/`wip`) because
+/// the marker cannot itself be `blocked`.
+pub(in crate::native::highlights_ref) fn stamp_status(
+    plan: &OverwritePreflight,
+    explicit_status: Option<&str>,
+    existing_marker_status: Option<&str>,
+) -> String {
+    if let Some(status) = explicit_status {
+        return status.to_string();
+    }
+    if plan.status == "blocked" {
+        return existing_marker_status
+            .filter(|status| matches!(*status, "ready" | "next" | "wip"))
+            .unwrap_or("ready")
+            .to_string();
+    }
+    plan.status.clone()
+}
+
+/// True when the kept task is closed or archived and the user did not
+/// pass `-s` to reopen it.
+pub(in crate::native::highlights_ref) fn kept_closed_task(
+    plan: &OverwritePreflight,
+    explicit_status: Option<&str>,
+) -> bool {
+    explicit_status.is_none()
+        && (plan.task_view.archived
+            || matches!(plan.task.mark, 'x' | 'X' | '-'))
+}

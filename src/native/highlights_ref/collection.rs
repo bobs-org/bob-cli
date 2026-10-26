@@ -536,7 +536,9 @@ fn plan_reread_collection(
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
-        reread: Some(preflight),
+        explicit_status: None,
+        capture: super::recapture::CaptureOutcome::Reread(preflight),
+        keep_intake: matches.get_flag("keep-intake"),
     };
     Ok(PreparedCollection {
         urls: urls.to_vec(),
@@ -593,7 +595,7 @@ fn recheck_collection_overlap(
     planned_target: Option<&Path>,
     listen: bool,
 ) -> Result<(), CommandError> {
-    if let Some(preflight) = &options.reread {
+    if let Some(preflight) = options.reread() {
         let recorded = sources::collect_recorded_source_urls(config)
             .map_err(|error| CommandError::new(error.message))?;
         let rows = recapture::index_rows(config);
@@ -637,7 +639,7 @@ fn recheck_collection_overlap(
 /// or `-a` names the newest narrated earlier reading (if any), since
 /// earlier audio is never inherited.
 fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
-    if let Some(preflight) = &options.reread {
+    if let Some(preflight) = options.reread() {
         println!("{}", preflight.plan.report_line());
         if options.listen {
             recapture::print_reread_audio_hint(preflight, true);
@@ -760,7 +762,9 @@ fn options_without_parent_for_attach(
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
-        reread: None,
+        explicit_status: None,
+        capture: super::recapture::CaptureOutcome::Fresh,
+        keep_intake: matches.get_flag("keep-intake"),
     })
 }
 
@@ -820,7 +824,9 @@ fn options_from_matches(
             .expect("defaulted by clap")
             .clone(),
         title: matches.get_one::<String>("title").cloned(),
-        reread: None,
+        explicit_status: None,
+        capture: super::recapture::CaptureOutcome::Fresh,
+        keep_intake: matches.get_flag("keep-intake"),
     })
 }
 
@@ -882,7 +888,7 @@ fn capture_and_install(
     // A reread keeps its family's title: the title fallback uses the
     // family root, not the allocated `__vN` stem, so every reading of
     // the set reports the same title.
-    let title_seed: &str = match &options.reread {
+    let title_seed: &str = match options.reread() {
         Some(preflight) => &preflight.plan.family.root_stem,
         None => &resolved_name.name,
     };
@@ -1417,7 +1423,7 @@ fn bind_listen_hint(
         // A reread's allocated `__vN` stem is not a family selector on
         // retry: rebind with the member `-N` (or the family root) so the
         // same next reading is allocated again.
-        let selector = options.reread.as_ref().map_or_else(
+        let selector = options.reread().map_or_else(
             || resolved_name.name.clone(),
             |preflight| {
                 options

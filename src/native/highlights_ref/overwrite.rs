@@ -7,6 +7,7 @@
 //! holds the mutation locks.
 
 pub(super) mod execute;
+pub(super) mod local;
 pub(crate) mod recovery;
 
 use std::{
@@ -295,7 +296,13 @@ pub(super) fn prepare(
     let task_view = row.task.as_ref().ok_or_else(|| task_refusal(row))?;
     if let Some(parent) = request.resolved_parent.as_deref() {
         let expected = route_for_task(task_view);
-        if normalize_route(parent) != normalize_route(&expected) {
+        let parent_norm = normalize_route(parent);
+        let task_match = parent_norm == normalize_route(&expected);
+        let note_parent_match =
+            row.parent.as_deref().is_some_and(|note_parent| {
+                parent_norm == normalize_route(note_parent)
+            });
+        if !task_match && !note_parent_match {
             return Err(OverwriteRefusal::new(
                 "parent_mismatch",
                 format!("-P resolves to {parent}, but the reading task lives in {expected}"),
