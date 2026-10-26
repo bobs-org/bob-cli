@@ -75,6 +75,55 @@ pub(crate) struct OverwriteIntent {
     pub(crate) created: Vec<String>,
 }
 
+impl OverwriteIntent {
+    /// Build the durable manifest from the exact preimages accepted by the
+    /// transaction's locked revalidation.
+    pub(in crate::native::highlights_ref) fn for_transaction(
+        config: &Config,
+        stem: &str,
+        ref_type: &str,
+        base_head: &str,
+        expected_subject: String,
+        preimages: &[super::FilePreimage],
+    ) -> std::result::Result<Self, CommandError> {
+        let vault = canonical_vault(config)?;
+        let mut touched = Vec::new();
+        let mut created = Vec::new();
+        for preimage in preimages {
+            if preimage.sha256.is_some() {
+                touched.push(preimage.path.clone());
+            } else {
+                created.push(preimage.path.clone());
+            }
+        }
+        touched.sort();
+        touched.dedup();
+        created.sort();
+        created.dedup();
+        Ok(Self {
+            schema_version: INTENT_SCHEMA_VERSION,
+            vault,
+            stem: stem.to_string(),
+            ref_type: ref_type.to_string(),
+            base_head: base_head.to_string(),
+            expected_subject,
+            expected_head: None,
+            touched,
+            created,
+        })
+    }
+
+    /// Store the exact commit SHA after Git proves the scoped commit landed.
+    pub(in crate::native::highlights_ref) fn record_expected_head(
+        &mut self,
+        config: &Config,
+        head: &str,
+    ) -> std::result::Result<(), String> {
+        self.expected_head = Some(head.to_string());
+        save_intent(config, self).map(|_| ())
+    }
+}
+
 /// Persist (or replace) the intent for `config`'s vault atomically: write
 /// a temp file, fsync it, rename over the destination, then fsync the
 /// directory. Consumed by the transaction phase.
@@ -112,6 +161,17 @@ pub(crate) fn clear_intent(config: &Config) -> std::result::Result<(), String> {
             path.display()
         )),
     }
+}
+
+/// Roll back a transaction that failed before its commit. The marker stays
+/// durable until the scoped restore and unstage both succeed.
+pub(in crate::native::highlights_ref) fn rollback_transaction(
+    config: &Config,
+    child_env: &ob::ChildEnv,
+    intent: &OverwriteIntent,
+) -> std::result::Result<(), CommandError> {
+    let state_dir = state_ref_dir();
+    recover_locked(&state_dir, config, child_env, intent, false).map(|_| ())
 }
 
 /// Entry hook for commands that do not hold locks yet (`ref create` and

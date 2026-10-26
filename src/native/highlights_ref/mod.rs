@@ -75,15 +75,12 @@ mod reading_plan;
 // allocation, consumed by the single-source and collection reread writers.
 pub(crate) mod recapture;
 mod region;
-// Read-only overwrite preflight and archive rendering, consumed by later
-// capture-route and transaction phases.
-#[allow(dead_code)]
-pub(crate) mod overwrite;
 // Lock, precondition, scoped-git, and rollback helpers shared by rename
 // and the overwrite transaction that consumes them in later phases.
 pub(crate) mod reference_mutation;
 // Staged in-place overwrite of unannotated references; recovery hooks run
 // before create and scan can sync.
+#[allow(dead_code)]
 pub(crate) mod overwrite;
 // The dependent `ref rename` command consumes this module in the next phase.
 #[allow(dead_code)]

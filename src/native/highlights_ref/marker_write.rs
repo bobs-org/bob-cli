@@ -98,6 +98,19 @@ impl MarkerWriteSession {
         Self::from_config(ReadingHoldMode::Exempt)
     }
 
+    /// Explicit overwrite owns one outer file-coordination scope for the
+    /// staged replacement and its marker sync. The inner sync must not ask
+    /// NSFileCoordinator for the same PDF a second time.
+    pub(super) fn for_external_coordination() -> Self {
+        Self::new(
+            PdfWritePolicy::from_config(
+                &bob_config::HighlightsConfig::default(),
+            )
+            .with_reading_hold(ReadingHoldMode::Exempt),
+            MarkerWriteCoordinator::Direct,
+        )
+    }
+
     pub(super) fn uncoordinated() -> Self {
         Self::new(
             PdfWritePolicy::from_config(
@@ -118,6 +131,27 @@ impl MarkerWriteSession {
         } else {
             Some(remaining.min(self.policy.per_pdf_budget))
         }
+    }
+
+    /// Wrap a complete explicit PDF write when coordination is enabled.
+    /// The accessor is never run on a hold or coordination failure.
+    pub(super) fn coordinate_explicit_pdf_write<T>(
+        pdf: &Path,
+        accessor: impl FnOnce() -> T,
+    ) -> Result<Coordination<T>> {
+        let session = Self::for_explicit_write()?;
+        if !session.policy.coordinate_pdf_writes || !session.coordinates() {
+            return Ok(Coordination::Granted {
+                value: accessor(),
+                waited: Duration::ZERO,
+            });
+        }
+        let Some(budget) = session.next_budget() else {
+            return Ok(Coordination::Held(file_coordination::TimedOut {
+                waited: Duration::ZERO,
+            }));
+        };
+        Ok(session.coordinator.run(pdf, budget, accessor))
     }
 
     fn record_wait(&mut self, waited: Duration) {

@@ -26,8 +26,8 @@ pub(crate) use insert::{insert_ref_task, insert_ref_task_with_preferred_id};
 pub(crate) use line::{
     allocate_birth_block_id, allocate_ref_block_id, allocate_unique_block_id,
     birth_preview_id, is_embed_task_line, managed_embed_line,
-    render_ref_task_line, sanitize_title_alias, slug_ref_stem,
-    strip_blockquote_prefix, task_mark, ReadingIdentity,
+    reading_task_alias, render_ref_task_line, sanitize_title_alias,
+    slug_ref_stem, strip_blockquote_prefix, task_mark, ReadingIdentity,
 };
 pub(crate) use select::{
     is_open_mark, select_for_ref, RefTaskDiagnostic, RefTaskSelection,

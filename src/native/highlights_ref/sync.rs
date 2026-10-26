@@ -57,6 +57,17 @@ pub(super) fn write_single_pdf_sync(
     execute_pdf_sync(config, plan, &mut RunWriteState::default(), &mut session)
 }
 
+/// Apply one finalized PDF plan when the caller already owns the complete
+/// per-PDF file-coordination scope.
+pub(super) fn write_single_pdf_sync_with_external_coordination(
+    config: &Config,
+    plan: &PdfSyncPlan,
+) -> Result<PdfSyncOutcome> {
+    ensure_safe_to_write(config, iter::once(plan))?;
+    let mut session = MarkerWriteSession::for_external_coordination();
+    execute_pdf_sync(config, plan, &mut RunWriteState::default(), &mut session)
+}
+
 pub(super) fn scan_library(
     config: &Config,
     options: SyncOptions,

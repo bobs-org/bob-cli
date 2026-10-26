@@ -6,6 +6,9 @@
 //! transaction consumes the fingerprints and prepared note bytes while it
 //! holds the mutation locks.
 
+pub(super) mod execute;
+pub(crate) mod recovery;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -37,6 +40,14 @@ pub(super) struct OverwriteRequest {
     pub(super) explicit_ref_type: Option<String>,
     /// Canonical resolved route (without `.md`), not the user's spelling.
     pub(super) resolved_parent: Option<String>,
+    /// Destination chosen before rendering for requested companion audio.
+    /// Including it here makes its preimage part of the read-only plan.
+    pub(super) replacement_audio_path: Option<String>,
+    /// Status explicitly supplied by the user. `None` preserves the located
+    /// task's checkbox, including blocked and terminal marks.
+    pub(super) explicit_status: Option<String>,
+    /// Optional explicit title. Otherwise the staged source title wins.
+    pub(super) explicit_title: Option<String>,
 }
 
 /// A path and its observed preimage. `sha256: None` means it was absent.
@@ -55,6 +66,7 @@ pub(super) struct TaskFingerprint {
     pub(super) mark: char,
     pub(super) line: String,
     pub(super) subtree_sha256: String,
+    pub(super) subtree: String,
     pub(super) file_sha256: String,
 }
 
@@ -73,6 +85,8 @@ pub(super) struct OverwritePreflight {
     pub(super) note_path: String,
     pub(super) pdf_path: String,
     pub(super) task: TaskFingerprint,
+    pub(super) task_view: RefTaskView,
+    pub(super) parent: Option<String>,
     pub(super) bundle_preimages: Vec<FilePreimage>,
     pub(super) bundle_sha256: String,
     pub(super) frozen_note: Option<FrozenNote>,
@@ -85,6 +99,7 @@ pub(super) struct OverwritePreflight {
     pub(super) title: String,
     pub(super) ref_type: String,
     pub(super) audio_path: Option<String>,
+    pub(super) planned_date: String,
 }
 
 /// A typed refusal so route renderers can preserve the established JSON code.
@@ -483,6 +498,18 @@ pub(super) fn prepare(
     {
         touched.insert(relative.to_path_buf());
     }
+    if let Some(replacement_audio) = &request.replacement_audio_path {
+        let relative = PathBuf::from(replacement_audio);
+        if let Err(error) = checked_vault_path(config, &relative) {
+            return Err(OverwriteRefusal::new(
+                "not_in_sync",
+                format!("invalid replacement audio path {replacement_audio}: {error}"),
+                Some("run bob ref scan -w on the Mac first"),
+                2,
+            ));
+        }
+        touched.insert(relative);
+    }
     let projection = note_parsed
         .synced_projection_with_normalization()
         .map_err(|error| {
@@ -606,6 +633,8 @@ pub(super) fn prepare(
         note_path: row.path.clone(),
         pdf_path: reference_mutation::vault_path(&pdf_relative),
         task,
+        task_view: task_view.clone(),
+        parent: row.parent.clone(),
         bundle_preimages,
         bundle_sha256,
         frozen_note,
@@ -622,6 +651,7 @@ pub(super) fn prepare(
                 path.strip_prefix(&config.bob_dir).unwrap_or(&path),
             )
         }),
+        planned_date: date.to_string(),
     })
 }
 
@@ -777,7 +807,8 @@ fn locate_task_fingerprint(
     let mark = ref_tasks::task_mark(&ref_tasks::strip_blockquote_prefix(&line))
         .ok_or_else(|| task_refusal(row))?;
     let end = task_subtree_end(&lines, line_index);
-    let subtree = lines[line_index..end].join("\n");
+    let segments = contents.split_inclusive('\n').collect::<Vec<_>>();
+    let subtree = segments[line_index..end].concat();
     Ok(TaskFingerprint {
         path: task.path.clone(),
         block_id: task.block_id.clone(),
@@ -785,6 +816,7 @@ fn locate_task_fingerprint(
         mark,
         line,
         subtree_sha256: sha256(subtree.as_bytes()),
+        subtree,
         file_sha256: sha256(&bytes),
     })
 }
