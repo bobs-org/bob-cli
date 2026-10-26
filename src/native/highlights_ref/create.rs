@@ -239,8 +239,8 @@ pub(super) struct CreateOptions {
     pub(super) explicit_status: Option<String>,
     pub(super) title: Option<String>,
     /// Typed capture outcome: ordinary create, allocated reread, or
-    /// selected in-place overwrite. Local routes enable overwrite; URL
-    /// routes still refuse it at preflight.
+    /// selected in-place overwrite. Local and single-URL routes enable
+    /// overwrite; collections still refuse it at preflight.
     pub(super) capture: CaptureOutcome,
     /// True only when the user passed `-k`; disabled ingest is a
     /// different `keep_intake_reason` and does not refuse overwrite.
@@ -542,7 +542,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. Bare `-f` on an already-captured source reads it again as `<stem>__vN` beside the earlier readings: the newest reading's parent and type become the defaults (explicit `-P`/`-t` win), `id` is stamped to the new stem, earlier audio is never inherited, and a `reread:` line prints where `renamed:` would. An exact-URL-set collection rereads the same way in any URL order (several readings sharing one set count as one family); any partial overlap refuses under every mode. Bare `-f` on a fresh source captures it as usual. Without force the refusal names the next stem (`hint: -f read it again as <stem>__vN`). `-N` must name a reading of the same family (a free `-N` stays an ordinary capture) and selects the reading a later overwrite recaptures in place; `-o` on a captured reread exits 2. A library PDF as TARGET refuses even with `-f`: reread from its recorded `source_url` or the original file instead. `-L` without force still attaches to the captured set, while `-f -L` narrates the new reading. `-f overwrite` on a filed Markdown file, original local PDF, or same-day vault-note snapshot replaces that reading in place, keeping the note, stem, id, and reading task; companion audio is preserved unless `-a` or `-L` replaces it, and `--no-audio` leaves it in place. `-s` is preserved unless passed explicitly. URL, collection, and clip overwrite still exit 2 naming the reread they would take (not available yet); without a filed match overwrite exits 1. No force is needed for a URL recorded only by legacy notes without a Highlights PDF (it warns and captures a fresh copy) or for a new-day vault-note snapshot (an ordinary dated create). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode and files it into the library with the existing PDF, or leaves it queued in `xlib/` when `-k` is set or intake cannot run. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown. If this or an earlier episode is still queued for feed publishing, bob ends with a podcast-feed warning and recovery hint.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nRecapture:\n  `-f [MODE]`, `--force[=MODE]` changes what a repeated capture does. Bare `-f` means `--force=reread`; an explicit mode needs `=`: `--force=overwrite` or `-f=overwrite` (a glued `-foverwrite` is not a mode; it parses as `-f -o verwrite`). A `reread` or `overwrite` word directly after a bare `-f` is adopted as the mode (`-f overwrite URL` captures URL with overwrite); an explicit `=` value never adopts a following word. A bare TARGET that equals a mode, or is within edit distance 2 of one, refuses with exit 2: write `./overwrite` for a file and `[[overwrite]]` for a vault note. Bare `-f` on an already-captured source reads it again as `<stem>__vN` beside the earlier readings: the newest reading's parent and type become the defaults (explicit `-P`/`-t` win), `id` is stamped to the new stem, earlier audio is never inherited, and a `reread:` line prints where `renamed:` would. An exact-URL-set collection rereads the same way in any URL order (several readings sharing one set count as one family); any partial overlap refuses under every mode. Bare `-f` on a fresh source captures it as usual. Without force the refusal names the next stem (`hint: -f read it again as <stem>__vN`). `-N` must name a reading of the same family (a free `-N` stays an ordinary capture) and selects the reading a later overwrite recaptures in place; `-o` on a captured reread exits 2. A library PDF as TARGET refuses even with `-f`: reread from its recorded `source_url` or the original file instead. `-L` without force still attaches to the captured set, while `-f -L` narrates the new reading and `-f overwrite -L` narrates the in-place replacement. `-f overwrite` on a filed Markdown file, original local PDF, same-day vault-note snapshot, or single-URL web capture (article, saved HTML, PDF URL, arXiv) replaces that reading in place, keeping the note, stem, id, and reading task; companion audio is preserved unless `-a` or `-L` replaces it, and `--no-audio` leaves it in place. `-s` is preserved unless passed explicitly. Collection overwrite still exits 2 naming the reread it would take (not available yet); without a filed match overwrite exits 1. No force is needed for a URL recorded only by legacy notes without a Highlights PDF (it warns and captures a fresh copy) or for a new-day vault-note snapshot (an ordinary dated create). Queued-PDF, exact-output (`-o`), and companion-audio replacement keep working under either mode.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
@@ -672,8 +672,8 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     // Shared capture preflight: resolve duplicates and family defaults
     // before requiring -P, doing network work, or invoking adapters. A
     // filed family refuses here (no force carries the `-f` remedy with
-    // the computed next stem). Local overwrite selects the member in
-    // place; URL overwrite still names the reread as unavailable. `-L`
+    // the computed next stem). Local and single-URL overwrite select the
+    // member in place; collections still refuse overwrite. `-L`
     // without force keeps the legacy attach path, so it skips preflight.
     let capture = match preflight_before_parent(
         &config,
@@ -1042,20 +1042,18 @@ fn preflight_before_parent(
             if let Some(paper) = &arxiv {
                 wanted.insert(paper.dedupe_key());
             }
-            Ok(
-                match super::recapture::preflight_for_url(
-                    config,
-                    &rows,
-                    &recorded,
-                    &wanted,
-                    name,
-                    output,
-                    force,
-                    &url.cleaned,
-                )? {
-                    Some(preflight) => CaptureOutcome::Reread(preflight),
-                    None => CaptureOutcome::Fresh,
-                },
+            // Single-URL routes enable in-place overwrite; a filed family
+            // with `--force=overwrite` selects its member here so later
+            // stages refuse annotated targets before any fetch.
+            super::recapture::preflight_for_url_outcome(
+                config,
+                &rows,
+                &recorded,
+                &wanted,
+                name,
+                output,
+                force,
+                &url.cleaned,
             )
         }
         PreparedTarget::Markdown(path) => {
@@ -1503,11 +1501,13 @@ fn create_pdf(
             Some(paper) => paper.dedupe_key(),
             None => url.dedupe_key.clone(),
         };
-        // A shared reread preflight already selected the family: it skips
-        // the attach path (a reread narrates a new reading) and both
-        // dedupe probes. Legacy-only matches never produce a preflight.
-        let rereading = options.reread().is_some();
-        if !rereading
+        // A shared reread or overwrite preflight already selected the
+        // family: it skips the attach path (a reread narrates a new
+        // reading; an overwrite replaces in place) and both dedupe
+        // probes. Legacy-only matches never produce a preflight.
+        let selected =
+            options.reread().is_some() || options.overwrite().is_some();
+        if !selected
             && let Some(command) = &listen
             && let Some(hit) = sources_mod::find_refusing_hit(
                 &recorded,
@@ -1532,10 +1532,11 @@ fn create_pdf(
             );
         }
         // Overwrite triage runs after `-L` attach (attach is not a
-        // fresh capture) and before any fetch or adapter work. A reread
-        // already passed triage at preflight. An existing exact-output
-        // file keeps the old replacement permission.
-        if !rereading && is_overwrite(options.force) {
+        // fresh capture) and before any fetch or adapter work. A
+        // selected reread or overwrite already passed triage at
+        // preflight. An existing exact-output file keeps the old
+        // replacement permission.
+        if !selected && is_overwrite(options.force) {
             triage_overwrite_url(
                 &recorded,
                 &dedupe_key,
@@ -1543,7 +1544,7 @@ fn create_pdf(
                 options.output.as_deref().map(std::path::Path::new),
             )?;
         }
-        if !rereading {
+        if !selected {
             check_dedupe_with_listen_hint(
                 config,
                 &recorded,
@@ -1560,6 +1561,22 @@ fn create_pdf(
                 &recorded,
                 &dedupe_key,
             ));
+        }
+        // A selected web overwrite proves eligibility before any fetch or
+        // adapter work, so annotated or incompatible targets do no network
+        // work. Dry runs stop here with the selected plan and `writes:
+        // none`; the replacement title is known only after the fetch.
+        if let Some(selection) = options.overwrite().cloned() {
+            let (plan, _, replacing) =
+                prepare_web_overwrite(config, options, &selection)?;
+            if options.dry_run {
+                super::overwrite::local::print_dry_run(
+                    &plan,
+                    &plan.title,
+                    replacing,
+                );
+                return Ok(());
+            }
         }
         if options.html.is_some() {
             return create_article_route(config, url, options, listen.as_ref());
@@ -1792,6 +1809,18 @@ fn prepare_local_overwrite(
     } else {
         Ok((preview, request, false))
     }
+}
+
+/// Shared read-only overwrite plan for the single-URL web routes. The
+/// request, preview, and replacement-audio destination work exactly as
+/// for local routes; only the renderer that consumes the staged PDF
+/// differs.
+fn prepare_web_overwrite(
+    config: &Config,
+    options: &CreateOptions,
+    selection: &OverwriteSelection,
+) -> Result<(OverwritePreflight, OverwriteRequest, bool)> {
+    prepare_local_overwrite(config, options, selection)
 }
 
 fn overwrite_audio_destination(
@@ -2281,6 +2310,34 @@ fn create_article_route(
             ));
         }
     };
+    // A selected web overwrite replaces the filed member in place through
+    // the same staged transaction as local routes. Eligibility was proven
+    // before any fetch; the adapter result below is validated against the
+    // selected family before publication.
+    if let Some(selection) = options.overwrite().cloned() {
+        let (plan, request, replacing) =
+            prepare_web_overwrite(config, options, &selection)?;
+        if options.dry_run {
+            super::overwrite::local::print_dry_run(
+                &plan,
+                &plan.title,
+                replacing,
+            );
+            return Ok(());
+        }
+        return super::clip::capture_article_overwrite(
+            config,
+            &url,
+            &clip_options,
+            companion,
+            &selection,
+            &request,
+            &plan,
+            replacing,
+            options.explicit_status.as_deref(),
+        )
+        .map_err(CommandError::from);
+    }
     // The top-level dispatch already warned about legacy-only hits
     // before its fetch.
     super::clip::capture_article(
@@ -3649,6 +3706,80 @@ fn create_local_pdf_route(
     Ok(())
 }
 
+/// Replace a filed PDF-URL member in place. The fetched redirect is
+/// validated against the selected family before publication, and the
+/// executor's locked recheck still applies after long renders.
+fn overwrite_pdf_url(
+    config: &Config,
+    url: super::clip_url::WebUrl,
+    downloaded: PathBuf,
+    final_url: String,
+    scratch: &mut super::ScratchDir,
+    options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
+    selection: &OverwriteSelection,
+) -> Result<()> {
+    let (plan, request, replacing) =
+        prepare_web_overwrite(config, options, selection)?;
+    super::recapture::refuse_redirected_overwrite(
+        config,
+        &url.dedupe_key,
+        &final_url,
+        selection,
+    )?;
+    let library_pdf = config.bob_dir.join(&plan.pdf_path);
+    pdf_target_mod::refuse_marked_pdf(&downloaded, Some(&library_pdf))?;
+    let captured = super::current_local_date();
+    let pdf_plan = pdf_target_mod::plan_pdf_url(
+        &url,
+        &downloaded,
+        None,
+        options.title.as_deref(),
+        options.author.as_deref(),
+        options.published.as_deref(),
+        &captured,
+        Some(&pdf_progress),
+    )?;
+    let title = pdf_plan.title.clone();
+    let mut extras = Vec::new();
+    if let Some(source_url) = &pdf_plan.source_url {
+        extras.push(("source_url", MarkerValue::String(source_url.clone())));
+    }
+    if let Some(author) = &pdf_plan.author {
+        extras.push(("author", MarkerValue::String(author.clone())));
+    }
+    if let Some(published) = &pdf_plan.published {
+        extras.push(("published", MarkerValue::String(published.clone())));
+    }
+    let info = PdfInfo {
+        title: Some(title.clone()),
+        author: pdf_plan.author.clone(),
+    };
+    let stamped = stamp_overwrite_source(
+        config,
+        &plan,
+        options,
+        &downloaded,
+        scratch,
+        &title,
+        extras,
+        &info,
+    )?;
+    let audio = stage_overwrite_audio(
+        options,
+        &plan,
+        &request,
+        scratch,
+        listen,
+        &url.cleaned,
+        &stamped,
+        &title,
+    )?;
+    finish_local_overwrite(
+        config, options, &plan, &request, stamped, audio, &title, replacing,
+    )
+}
+
 fn create_pdf_url_route(
     config: &Config,
     url: super::clip_url::WebUrl,
@@ -3659,6 +3790,12 @@ fn create_pdf_url_route(
     recorded: &[sources_mod::RecordedSource],
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
+    if let Some(selection) = options.overwrite().cloned() {
+        return overwrite_pdf_url(
+            config, url, downloaded, final_url, scratch, options, listen,
+            &selection,
+        );
+    }
     let captured = super::current_local_date();
     let pdf_plan = pdf_target_mod::plan_pdf_url(
         &url,
@@ -3899,6 +4036,110 @@ fn create_pdf_url_route(
     Ok(())
 }
 
+/// Replace a filed arXiv member in place. Eligibility is proven before
+/// the API and PDF fetches; the fetched redirect is validated against
+/// the selected family before publication.
+fn overwrite_arxiv(
+    config: &Config,
+    paper: super::arxiv::ArxivPaper,
+    url: super::clip_url::WebUrl,
+    scratch: &mut super::ScratchDir,
+    options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
+    selection: &OverwriteSelection,
+) -> Result<()> {
+    let (plan, request, replacing) =
+        prepare_web_overwrite(config, options, selection)?;
+    if options.dry_run {
+        super::overwrite::local::print_dry_run(&plan, &plan.title, replacing);
+        return Ok(());
+    }
+    let captured = super::current_local_date();
+    let (metadata, warning) = super::arxiv::fetch_metadata(
+        &paper,
+        scratch.path(),
+        Some(&fetch_progress),
+    );
+    if let Some(warning) = warning {
+        eprintln!("warning: {warning}");
+    }
+    let dest = scratch.path().join("arxiv.pdf");
+    let pdf_url = paper.pdf_url();
+    let fetch =
+        super::fetch::fetch_url(&pdf_url, &dest, 300, Some(&fetch_progress))
+            .map_err(|error| match error.hint() {
+                Some(hint) => CommandError::new(format!(
+                    "fetch arXiv PDF {pdf_url}: {}\nhint: {hint}",
+                    error.message()
+                )),
+                None => CommandError::new(format!(
+                    "fetch arXiv PDF {pdf_url}: {}",
+                    error.message()
+                )),
+            })?;
+    if !(200..300).contains(&fetch.status) {
+        return Err(CommandError::new(format!(
+            "server returned HTTP {} for {pdf_url}",
+            fetch.status
+        )));
+    }
+    if !target_mod::file_starts_with_pdf(&dest) {
+        return Err(CommandError::new(format!(
+            "server said PDF but sent something else: {pdf_url}"
+        )));
+    }
+    super::recapture::refuse_redirected_overwrite(
+        config,
+        &paper.dedupe_key(),
+        &fetch.final_url,
+        selection,
+    )?;
+    let library_pdf = config.bob_dir.join(&plan.pdf_path);
+    pdf_target_mod::refuse_marked_pdf(&dest, Some(&library_pdf))?;
+    let pdf_plan = pdf_target_mod::plan_arxiv(
+        &paper,
+        None,
+        options.title.as_deref(),
+        options.author.as_deref(),
+        options.published.as_deref(),
+        metadata.as_ref(),
+        &dest,
+        &captured,
+        Some(&pdf_progress),
+    )?;
+    let title = pdf_plan.title.clone();
+    let mut extras = Vec::new();
+    if let Some(source_url) = &pdf_plan.source_url {
+        extras.push(("source_url", MarkerValue::String(source_url.clone())));
+    }
+    if let Some(author) = &pdf_plan.author {
+        extras.push(("author", MarkerValue::String(author.clone())));
+    }
+    if let Some(published) = &pdf_plan.published {
+        extras.push(("published", MarkerValue::String(published.clone())));
+    }
+    let info = PdfInfo {
+        title: Some(title.clone()),
+        author: pdf_plan.author.clone(),
+    };
+    let stamped = stamp_overwrite_source(
+        config, &plan, options, &dest, scratch, &title, extras, &info,
+    )?;
+    let audio = stage_overwrite_audio(
+        options,
+        &plan,
+        &request,
+        scratch,
+        listen,
+        &url.cleaned,
+        &stamped,
+        &title,
+    )?;
+    finish_local_overwrite(
+        config, options, &plan, &request, stamped, audio, &title, replacing,
+    )
+}
+
 fn create_arxiv_route(
     config: &Config,
     paper: super::arxiv::ArxivPaper,
@@ -3908,6 +4149,11 @@ fn create_arxiv_route(
     recorded: &[sources_mod::RecordedSource],
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
+    if let Some(selection) = options.overwrite().cloned() {
+        return overwrite_arxiv(
+            config, paper, url, scratch, options, listen, &selection,
+        );
+    }
     let captured = super::current_local_date();
     let (metadata, warning) = super::arxiv::fetch_metadata(
         &paper,

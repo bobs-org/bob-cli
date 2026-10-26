@@ -798,6 +798,110 @@ pub(super) fn preflight_for_url(
     }
 }
 
+/// Resolve a single URL against the live library, selecting the filed
+/// member for in-place overwrite when `--force=overwrite` names one.
+/// Collections keep calling [`preflight_for_url`], which refuses overwrite.
+pub(super) fn preflight_for_url_outcome(
+    config: &Config,
+    rows: &[RefRow],
+    recorded: &[RecordedSource],
+    wanted: &BTreeSet<String>,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+) -> Result<CaptureOutcome, CommandError> {
+    match resolve_for_url_keys(rows, recorded, wanted, &config.bob_dir) {
+        RecaptureMatch::NoMatch | RecaptureMatch::QueuedOnly { .. } => {
+            Ok(CaptureOutcome::Fresh)
+        }
+        RecaptureMatch::Selected { family } => url_selection_from_selection(
+            config,
+            family,
+            name,
+            output,
+            force,
+            title_fallback,
+            Some(wanted),
+            false,
+            true,
+            true,
+        ),
+        RecaptureMatch::Ambiguous { families } => {
+            let family = disambiguate(families, name)?;
+            url_selection_from_selection(
+                config,
+                family,
+                name,
+                output,
+                force,
+                title_fallback,
+                Some(wanted),
+                false,
+                true,
+                true,
+            )
+        }
+        RecaptureMatch::PartialOverlap {
+            wanted,
+            overlapping,
+        } => Err(partial_overlap_single_error(&wanted, &overlapping)),
+    }
+}
+
+/// Refuse an overwrite whose fetched redirect now claims another family.
+/// A final URL inside the selected family's own key set (for example an
+/// arXiv alias) still proceeds; anything already captured elsewhere
+/// refuses before publication without retargeting the overwrite.
+pub(super) fn refuse_redirected_overwrite(
+    config: &Config,
+    requested_dedupe: &str,
+    final_url: &str,
+    selection: &OverwriteSelection,
+) -> std::result::Result<(), CommandError> {
+    if final_url.trim().is_empty() {
+        return Ok(());
+    }
+    let Ok(cleaned) = super::clip_url::validate_and_clean(final_url) else {
+        return Ok(());
+    };
+    let final_dedupe = cleaned.dedupe_key;
+    if final_dedupe == requested_dedupe {
+        return Ok(());
+    }
+    if selection.family.source_keys.contains(&final_dedupe) {
+        return Ok(());
+    }
+    let Ok(recorded) = super::sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message.clone()))
+    else {
+        return Ok(());
+    };
+    let Some(hit) = recorded.iter().find(|hit| {
+        hit.dedupe_key == final_dedupe
+            && ((hit.is_ref_note && hit.source_pdf.is_some())
+                || !hit.is_ref_note)
+    }) else {
+        return Ok(());
+    };
+    let relative = hit
+        .path
+        .strip_prefix(&config.bob_dir)
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| hit.path.display().to_string());
+    if selection
+        .family
+        .members
+        .iter()
+        .any(|member| member.path == relative)
+    {
+        return Ok(());
+    }
+    Err(CommandError::new(format!(
+        "redirected to {final_url} which is already captured as {relative}; nothing written"
+    )))
+}
+
 /// Resolve a destructive in-place overwrite without allocating a reread
 /// stem. Unlike [`preflight_for_url`], the explicit `-N` selection names
 /// the member to replace and `__v999` exhaustion is irrelevant.
@@ -975,8 +1079,34 @@ pub(super) fn preflight_for_stem(
     )
 }
 
-/// Map a URL-route selection onto the existing reread preflight. Overwrite
-/// stays refused here; the web phase enables those routes.
+/// Map a URL-route selection onto a capture outcome. Single-URL routes
+/// enable in-place overwrite; exact-set collections keep refusing it.
+fn url_selection_from_selection(
+    config: &Config,
+    family: SelectedFamily,
+    name: Option<&str>,
+    output: Option<&Path>,
+    force: Option<super::force::ForceMode>,
+    title_fallback: &str,
+    expected_keys: Option<&BTreeSet<String>>,
+    title_route: bool,
+    attach_available: bool,
+    overwrite_enabled: bool,
+) -> Result<CaptureOutcome, CommandError> {
+    finish_selection(
+        config,
+        family,
+        name,
+        output,
+        force,
+        title_fallback,
+        expected_keys,
+        title_route,
+        attach_available,
+        overwrite_enabled,
+    )
+}
+
 fn url_reread_from_selection(
     config: &Config,
     family: SelectedFamily,
@@ -988,7 +1118,7 @@ fn url_reread_from_selection(
     title_route: bool,
     attach_available: bool,
 ) -> Result<Option<RereadPreflight>, CommandError> {
-    match finish_selection(
+    match url_selection_from_selection(
         config,
         family,
         name,

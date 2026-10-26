@@ -799,6 +799,224 @@ pub(super) fn capture_article(
     Ok(())
 }
 
+/// Replace a filed web-article member in place through the staged
+/// overwrite transaction. Eligibility was proven before the adapter ran,
+/// so annotated targets never reach the network; the adapter's final URL
+/// is validated against the selected family before publication, and the
+/// executor's locked recheck still applies after long renders. Saved-HTML
+/// (`-H`) shares these semantics.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn capture_article_overwrite(
+    config: &Config,
+    url: &WebUrl,
+    options: &ClipOptions,
+    companion: Companion,
+    selection: &super::recapture::OverwriteSelection,
+    request: &super::overwrite::OverwriteRequest,
+    plan: &super::overwrite::OverwritePreflight,
+    replacing: bool,
+    explicit_status: Option<&str>,
+) -> std::result::Result<(), ClipError> {
+    if options.dry_run {
+        super::overwrite::local::print_dry_run(plan, &plan.title, replacing);
+        return Ok(());
+    }
+    let workdir = ScratchDir::create("clip-overwrite")
+        .map_err(|error| ClipError::from(CommandError::new(error.message)))?;
+    let html_path = match &options.html {
+        None => None,
+        Some(path) if path == "-" => {
+            let replay = workdir.path().join("input.html");
+            let mut stdin = String::new();
+            std::io::stdin()
+                .read_to_string(&mut stdin)
+                .map_err(|error| {
+                    ClipError::new(format!("read HTML from stdin: {error}"))
+                })?;
+            fs::write(&replay, stdin).map_err(|error| {
+                ClipError::new(format!(
+                    "write stdin HTML {}: {error}",
+                    replay.display()
+                ))
+            })?;
+            Some(replay.into_os_string())
+        }
+        Some(path) => Some(path.clone()),
+    };
+    let out_pdf = workdir.path().join("render.pdf");
+    let captured = current_local_date();
+    let overrides = MetadataOverrides {
+        title: options.title.clone(),
+        author: options.author.clone(),
+        published: options.published.clone(),
+    };
+    let adapter_request = CaptureRequest::new(
+        url.cleaned.clone(),
+        html_path.map(|path| path.to_string_lossy().into_owned()),
+        workdir.path().to_string_lossy().into_owned(),
+        out_pdf.to_string_lossy().into_owned(),
+        options.dry_run,
+        captured.clone(),
+        overrides,
+    );
+    let client = ClipAdapterClient::resolve()?;
+    if std::io::stderr().is_terminal() {
+        eprintln!("capturing {}…", url.host);
+    }
+    let response = client.capture(&adapter_request)?;
+    // The fetched identity is guarded before publication: a redirect that
+    // now claims another family refuses instead of retargeting the
+    // overwrite.
+    if let Some(final_url) = response.final_url.as_deref() {
+        super::recapture::refuse_redirected_overwrite(
+            config,
+            &url.dedupe_key,
+            final_url,
+            selection,
+        )
+        .map_err(ClipError::from)?;
+    }
+    let stem = plan.member.stem.clone();
+    let title = options
+        .title
+        .clone()
+        .filter(|title| !title.is_empty())
+        .or(response.title.clone())
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| humanize_stem(&stem));
+    let author = options.author.clone().or(response.author.clone());
+    let published = options.published.clone().or(response.published.clone());
+    let existing_status = super::overwrite::local::marker_from_pdf(
+        &config.bob_dir.join(&plan.pdf_path),
+    )
+    .ok()
+    .map(|marker| marker.status);
+    let status = super::overwrite::local::stamp_status(
+        plan,
+        explicit_status,
+        existing_status.as_deref(),
+    );
+    let marker = compose_marker(
+        &status,
+        &options.parent,
+        &title,
+        Some(&stem),
+        &[
+            ("source_url", MarkerValue::String(url.cleaned.clone())),
+            (
+                "author",
+                MarkerValue::String(author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(published.clone().unwrap_or_default()),
+            ),
+            ("captured", MarkerValue::String(captured.clone())),
+        ],
+    )?;
+    let info = PdfInfo {
+        title: Some(title.clone()),
+        author: author.clone(),
+    };
+    let (staged_pdf, _) = super::pdf_target::stamp_pdf_to_scratch(
+        &out_pdf, &workdir, &marker, &info,
+    )
+    .map_err(ClipError::from)?;
+    let audio = stage_article_overwrite_audio(
+        request,
+        &companion,
+        &workdir,
+        &stem,
+        &url.cleaned,
+        &out_pdf,
+        &title,
+    )?;
+    let final_marker = super::overwrite::local::marker_from_pdf(&staged_pdf)
+        .map_err(ClipError::from)?;
+    let result = super::overwrite::execute::execute(
+        config,
+        plan,
+        request,
+        super::overwrite::execute::StagedOverwrite {
+            private_pdf: staged_pdf,
+            audio,
+            marker: final_marker,
+        },
+    )
+    .map_err(ClipError::from)?;
+    super::overwrite::local::print_success(
+        plan,
+        &result,
+        &title,
+        replacing
+            .then_some(
+                request
+                    .replacement_audio_path
+                    .as_deref()
+                    .or(plan.audio_path.as_deref()),
+            )
+            .flatten(),
+        super::overwrite::local::kept_closed_task(plan, explicit_status),
+    );
+    Ok(())
+}
+
+/// Stage replacement audio for an article overwrite: a `--listen` episode
+/// rendered into private scratch, or an explicit `--audio` file copied
+/// there. `None` preserves the existing companion.
+fn stage_article_overwrite_audio(
+    request: &super::overwrite::OverwriteRequest,
+    companion: &Companion,
+    workdir: &ScratchDir,
+    stem: &str,
+    cleaned: &str,
+    out_pdf: &Path,
+    title: &str,
+) -> std::result::Result<
+    Option<super::overwrite::execute::StagedAudio>,
+    ClipError,
+> {
+    let Some(destination) = request.replacement_audio_path.clone() else {
+        return Ok(None);
+    };
+    match companion {
+        Companion::Listen(command) => {
+            let private = workdir.path().join(format!("{stem}.mp3"));
+            let values = super::listen::ListenValues {
+                target: cleaned.to_string(),
+                pdf: out_pdf.to_path_buf(),
+                audio: private.clone(),
+                title: title.to_string(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| ClipError::from(error.into_command_error()))?;
+            Ok(Some(super::overwrite::execute::StagedAudio {
+                private_path: private,
+                destination,
+            }))
+        }
+        Companion::Explicit(path) => {
+            let ext = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("mp3")
+                .to_ascii_lowercase();
+            let private = workdir.path().join(format!("audio.{ext}"));
+            fs::copy(path, &private).map_err(|error| {
+                ClipError::new(format!(
+                    "stage replacement audio {}: {error}",
+                    path.display()
+                ))
+            })?;
+            Ok(Some(super::overwrite::execute::StagedAudio {
+                private_path: private,
+                destination,
+            }))
+        }
+        Companion::None => Ok(None),
+    }
+}
+
 /// Plan an exact `--output` target, refusing library destinations outright:
 /// clip never overwrites an archived library PDF, even with `--force`.
 fn plan_exact_output_guarded(

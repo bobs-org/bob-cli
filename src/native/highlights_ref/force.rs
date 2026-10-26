@@ -262,10 +262,11 @@ pub(super) fn is_overwrite(force: Option<ForceMode>) -> bool {
 }
 
 /// Under `--force=overwrite`, triage a URL dedupe outcome before any
-/// fetch: filed references are unavailable (exit 2), a queued-only
-/// match keeps the old replacement permission, an existing exact-output
-/// file keeps the old replacement permission, and a fresh source
-/// refuses (exit 1) instead of capturing.
+/// fetch: a filed reference proceeds to the overwrite preflight (which
+/// refuses annotated or incompatible targets before any fetch), a
+/// queued-only match keeps the old replacement permission, an existing
+/// exact-output file keeps the old replacement permission, and a fresh
+/// source refuses (exit 1) instead of capturing.
 pub(super) fn triage_overwrite_url(
     recorded: &[sources_mod::RecordedSource],
     dedupe_key: &str,
@@ -281,7 +282,7 @@ pub(super) fn triage_overwrite_url(
     }
     let hits = sources_mod::refusing_hits(recorded, dedupe_key, None, false);
     if hits.iter().any(|hit| hit.is_ref_note) {
-        return Err(overwrite_filed_unavailable());
+        return Ok(());
     }
     if hits.is_empty() {
         return Err(nothing_to_overwrite(source));

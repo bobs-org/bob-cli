@@ -8125,10 +8125,12 @@ fn highlights_create_filed_url_refusal_names_next_reread() {
     );
 }
 
-/// `-f overwrite` on a filed URL exits 2 naming the reread it would
-/// take: in-place overwrite is not available yet.
+/// `-f overwrite` on a filed URL reaches the overwrite preflight: this
+/// degenerate bundle (a note without its PDF) refuses with a genuine
+/// eligibility reason instead of the old interim message, before any
+/// adapter work.
 #[test]
-fn highlights_create_overwrite_filed_url_is_unavailable() {
+fn highlights_create_overwrite_filed_url_reaches_preflight() {
     let temp = TempDir::new("bob-cli-highlights-create-filed-overwrite");
     let vault = temp.path().join("vault");
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
@@ -8166,14 +8168,17 @@ fn highlights_create_overwrite_filed_url_is_unavailable() {
         assert_eq!(
             output.status.code(),
             Some(2),
-            "filed overwrite must exit 2 ({argv:?}):\n{}",
+            "degenerate overwrite must exit 2 ({argv:?}):\n{}",
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains(
-                "-f overwrite is not available yet; -f reads it again as existing__v2"
-            ),
-            "{argv:?} must name the interim limit and the reread:\n{}",
+            !stderr(&output).contains("not available yet"),
+            "{argv:?} no longer names the interim limit:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("not_in_sync"),
+            "{argv:?} refuses with the bundle eligibility reason:\n{}",
             format_output(&output)
         );
     }

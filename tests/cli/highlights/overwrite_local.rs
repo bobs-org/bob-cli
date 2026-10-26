@@ -841,57 +841,6 @@ fn library_pdf_target_still_refuses_overwrite() {
     );
 }
 
-#[test]
-fn url_overwrite_stays_unavailable() {
-    let fixture =
-        filed_vault("bob-cli-overwrite-url-still", "ready", false, false);
-    write_file(
-        &fixture.vault.join("ref/blogs/existing.md"),
-        concat!(
-            "---\n",
-            "title: Existing\n",
-            "status: ready\n",
-            "source_url: https://example.com/essay\n",
-            "source_pdf: lib/blogs/existing.pdf\n",
-            "---\n",
-        ),
-    );
-    write_highlights_pdf(
-        &fixture.vault.join("lib/blogs/existing.pdf"),
-        concat!(
-            "- status: ready\n",
-            "- parent: sase\n",
-            "- title: Existing\n",
-            "- id: existing\n",
-            "- source_url: https://example.com/essay\n",
-        ),
-    );
-    let output = bob_command()
-        .args([
-            "ref",
-            "create",
-            "https://example.com/essay",
-            "-P",
-            "sase",
-            "-f",
-            "overwrite",
-            "-d",
-        ])
-        .arg("-b")
-        .arg(&fixture.vault)
-        .env("BOB_DIR", &fixture.vault)
-        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
-        .env("BOB_HIGHLIGHTS_CURL", "/definitely/missing/curl")
-        .output()
-        .expect("URL overwrite");
-    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("not available yet"),
-        "URL overwrite stays refused:\n{}",
-        format_output(&output)
-    );
-}
-
 fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, current: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(current).expect("read snapshot") {
