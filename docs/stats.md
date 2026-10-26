@@ -933,17 +933,41 @@ the separator above the badges. `## Pomodoros` carries no total; the
 strip repeats it, so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
-`review_closed`, in that order). Each fact stacks the report's metric
-label (small, uppercased, muted) over the D point value (large,
-tabular). Facts share the line's width in columns split by hairlines and
-fold into three columns below about 34em. In numeric displays, the unit
-letters are set smaller. Numeric and word values show bob's `display`
-exactly. Boolean facts paint a status mark chosen from the point: a
-green check for met, a red ✕ for missed, and the yellow In Progress
-half-ring while today's review is still open. Bob's `display` stays the
-accessible text and tooltip. When today's review flips from not yet to
-met on a live, non-stale repaint of the same day, the check draws itself
-once. The top lane row carries the meta and the switch: one
+`review_closed`, in that order). Each fact stacks three tiers: the
+report's metric label (small, uppercased, muted), the D point value
+(large, tabular), and a quiet sentence-case typical-day line that keeps
+its space on every fact, boolean and skeleton included. Facts share the
+line's width in columns split by hairlines and fold into three columns
+below about 34em. In numeric displays, the unit letters are set smaller.
+Numeric and word values show bob's `display` exactly. The typical line
+paints bob's `typical` object and calculates nothing: an SVG ▲, ▼, or
+`=` mark (when `relation` is `above`, `below`, or `equal` and D is not
+provisional), the fixed word `typical`, and bob's typical `display`.
+Today has no mark, so the text starts flush with the value. Short
+history paints `typical –`. Missing, not-tracked, boolean, skeleton, and
+older-bob facts keep a blank reserved line. The line is `aria-hidden`;
+bob's `words` go on the fact's `aria-label` (`<label> <display>[ so
+far], <words>` for ready and short facts) and `detail` is inserted into
+the tooltip right after the date line. Boolean facts paint a status mark
+chosen from the point: a green check for met, a red ✕ for missed, and
+the yellow In Progress half-ring while today's review is still open.
+Bob's `display` stays the accessible text and tooltip when there is no
+typical sentence. When today's review flips from not yet to met on a
+live, non-stale repaint of the same day, the check draws itself once.
+
+| Situation | Reference line | Fact aria-label |
+| --- | --- | --- |
+| Finished day, above | `▲ typical 4h 20m` | `Worked 5h 00m, 40m above the typical day of 4h 20m` |
+| Finished day, below | `▼ typical 4h 10m` | `Worked 3h 25m, 45m below the typical day of 4h 10m` |
+| Finished day, equal | `= typical 25` | `Done 25, the same as the typical day of 25` |
+| Today (provisional) | `typical 4h 10m` | `Worked 2h 10m so far, typical full day 4h 10m` |
+| Fewer than 4 usable days | `typical –` | `Reviewed 60, no typical day yet` |
+| D has no value | blank | unchanged (`Reviewed –`) |
+| Review closed (bool) | blank | unchanged |
+| Skeleton | blank | unchanged (`Worked, loading`) |
+| Older bob (no `typical`) | blank | unchanged |
+
+The top lane row carries the meta and the switch: one
 `span[role=link]` with as many roots as fit the line in bar order — each
 a hue dot, the legend label, and the value — then one `+N` counter in
 their place, with the timestamp (`so far · HH:MM`, the fetch time of the
@@ -1022,11 +1046,13 @@ name splits into two or more components, the title appends `Pomodoros
 with several themes are split evenly between them.` The group
 `aria-label` appends ` Time by theme: <label> <display>, ….`.
 
-Bob owns every value: labels, values, part displays, and definitions all
-come from the report. The strip derives its colours from the report's area
-hues, theme hues, plus status inks for boolean marks. The strip writes its own fixed copy only
-(`so far`, `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`,
-`Retry`) plus accessibility sentences and date words derived from D.
+Bob owns every value: labels, values, part displays, definitions, and
+the typical-day `display`, `words`, and `detail` all come from the
+report. The strip derives its colours from the report's area hues, theme
+hues, plus status inks for boolean marks. The typical line has no hue.
+The strip writes its own fixed copy only (`so far`, `typical`,
+`refresh failed`, `no Pomodoros`, `Day stats unavailable — …`, `Retry`)
+plus accessibility sentences and date words derived from D.
 
 Display states: today in progress shows provisional values with
 `so far · HH:MM`, and an unmet closeout shows the yellow In Progress
@@ -1087,13 +1113,18 @@ Layout: `.bob-day-strip` keeps `margin: .5rem 0 0` and
 takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. The top lane
 row sits `~.35em` below the facts, its bar `~.45em` below that row, and a
 following lane row `~.6em` below the bar, with no card, border, background, shadow, or button.
-The `.6em` gap follows a bar. Height budget at a 16 px base: at most 116 px when the facts fit on one
-line (540 and 700 px), at most 167 px when they wrap once (410 px); single-lane
-views hold at most 84 px one-line and 134 px wrapped.
+The `.6em` gap follows a bar. Height budget at a 16 px base: at most 132 px when the facts fit on one
+line (540 and 700 px), at most 198 px when they wrap once (410 px); single-lane
+views hold at most 100 px one-line and 166 px wrapped.
 
-Data: the strip reuses the cached default Stats report when its daily
-series covers every date D−7…D and D is before `report.today`, or D and
-`report.today` both equal today's date on the device.
+Data: the strip reuses the cached default Stats report when that report
+is day-grouped, its daily series covers every date D−7…D, and D is
+before `report.today`, or D and `report.today` both equal today's date
+on the device. Week- and month-grouped default reports (when
+`stats.range` is 92 days or longer) never cover D, because their
+`daily_points` do not carry `typical`; a cold-cache today fetch that
+settles with such a report re-selects at once and fetches the explicit
+`-g day` range.
 With no cached report, today's strip requests the default report; past
 days request `bob stats show -a -f json -g day -r <D-7>..<D>`.
 That explicit range is also used when the cached default lacks coverage.
