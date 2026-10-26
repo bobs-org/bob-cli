@@ -56,6 +56,43 @@ pub(crate) fn intent_path(state: &Path, vault: &Path) -> PathBuf {
     state.join("bob-cli/ref/overwrite-intents").join(name)
 }
 
+pub(crate) fn write_intent_v2(
+    state: &Path,
+    vault: &Path,
+    base: &str,
+    expected_head: Option<&str>,
+    touched: &[&str],
+    created: &[&str],
+    moves: serde_json::Value,
+    writes: serde_json::Value,
+) {
+    let canonical = fs::canonicalize(vault)
+        .expect("canonical vault")
+        .to_string_lossy()
+        .into_owned();
+    let path = intent_path(state, vault);
+    fs::create_dir_all(path.parent().expect("intent parent"))
+        .expect("intent dirs");
+    let document = serde_json::json!({
+        "schema_version": 2,
+        "vault": canonical,
+        "stem": STEM,
+        "ref_type": "blogs",
+        "base_head": base,
+        "expected_subject": SUBJECT,
+        "expected_head": expected_head,
+        "touched": touched,
+        "created": created,
+        "moves": moves,
+        "writes": writes,
+    });
+    fs::write(
+        &path,
+        serde_json::to_string(&document).expect("intent json"),
+    )
+    .expect("write intent");
+}
+
 pub(crate) fn write_intent(
     state: &Path,
     vault: &Path,
@@ -438,5 +475,110 @@ fn task_move_refuses_while_overwrite_intent_is_pending() {
             .expect("source")
             .contains("^move-me"),
         "the move must not apply"
+    );
+}
+
+#[test]
+fn overwrite_recovery_reverses_annotated_pdf_move_on_scan() {
+    let (temp, vault, state) = fixture("bob-cli-overwrite-recovery-annotated");
+    const FROZEN: &[u8] = b"frozen\n";
+    const LIVE_PDF: &str = "lib/blogs/half-written.pdf";
+    const ARCHIVE_PDF: &str =
+        "ref_history/blogs/half-written__2026-10-26__annotated.pdf";
+    const ARCHIVE_NOTE: &str = "ref_history/blogs/half-written__2026-10-26.md";
+    // The managed region lets the post-recovery scan parse the note.
+    write_file(
+        &vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nbody\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n",
+    );
+    // Valid PDFs so the post-recovery scan can parse the restored file.
+    let marker = "- status: ready\n- parent: sase\n- title: Half\n- id: half-written\n- captured: 2026-01-01\n";
+    let new_marker = marker.replace("title: Half", "title: Half v2");
+    write_highlights_pdf(&vault.join(LIVE_PDF), marker);
+    let old_pdf = fs::read(vault.join(LIVE_PDF)).expect("old pdf bytes");
+    write_highlights_pdf(&temp.path().join("new.pdf"), &new_marker);
+    let new_pdf = fs::read(temp.path().join("new.pdf")).expect("new pdf bytes");
+    let committed = git_in(&vault, ["add", "-A"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let committed = git_in(&vault, ["commit", "-q", "-m", "file reference"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let base = head(&vault);
+
+    let mut hasher = Sha256::new();
+    hasher.update(&old_pdf);
+    let old_hash = hex::encode(hasher.finalize_reset());
+    hasher.update(&new_pdf);
+    let new_hash = hex::encode(hasher.finalize_reset());
+    hasher.update(FROZEN);
+    let frozen_hash = hex::encode(hasher.finalize());
+    write_intent_v2(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md", LIVE_PDF],
+        &[ARCHIVE_NOTE],
+        serde_json::json!([{
+            "source": LIVE_PDF,
+            "dest": ARCHIVE_PDF,
+            "source_sha256": old_hash,
+            "replacement_sha256": new_hash,
+        }]),
+        serde_json::json!([{
+            "path": ARCHIVE_NOTE,
+            "sha256": frozen_hash,
+        }]),
+    );
+
+    // Crash after the rename and the replacement publication: the archive
+    // holds the only annotated copy and the live path holds new bytes.
+    fs::create_dir_all(vault.join("ref_history/blogs")).expect("archive dir");
+    fs::rename(vault.join(LIVE_PDF), vault.join(ARCHIVE_PDF))
+        .expect("move pdf");
+    fs::write(vault.join(LIVE_PDF), &new_pdf).expect("replacement");
+    fs::write(vault.join(ARCHIVE_NOTE), FROZEN).expect("archive note");
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("dirty note");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("NO_COLOR", "1")
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("writing scan with annotated intent");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a proved annotated rollback keeps the scan green:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains(
+            "recovered: rolled back an interrupted overwrite of half-written"
+        ),
+        "the rollback notice is exact:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read(vault.join(LIVE_PDF)).expect("live pdf"),
+        old_pdf,
+        "the only annotated copy returns to the live path"
+    );
+    assert!(
+        !vault.join(ARCHIVE_PDF).exists(),
+        "the proven rename reverses instead of copying"
+    );
+    assert!(
+        !vault.join(ARCHIVE_NOTE).exists(),
+        "the transaction-owned archive note is removed"
+    );
+    assert!(
+        !intent_path(&state, &vault).exists(),
+        "the intent is cleared after a proved rollback"
     );
 }
