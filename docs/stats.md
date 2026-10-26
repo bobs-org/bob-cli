@@ -437,8 +437,8 @@ Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
 `subarea`, `path`, `hue`, `root_parent`; `project_label` on area-kind
-entries, and every referenced root present even when only a leaf carries
-minutes),
+entries, `short_label` on review-bucket entries, and every referenced root
+present even when only a leaf carries minutes),
 and a top-level `sessions` array when the
 report includes at least one pomodoro metric. The catalog and `sessions`
 are omitted when empty. `sessions` lists every closed Pomodoro in the
@@ -460,7 +460,7 @@ bare catalog label. Points add an optional `apportioned` map,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`health.homes` lint lists, and `sessions`.
+`short_label`, `health.homes` lint lists, and `sessions`.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -875,14 +875,14 @@ tabular). Facts share the line's width in columns split by hairlines and
 fold into three columns below about 34em. In numeric displays, the unit
 letters are set smaller. The displayed text is always bob's `display`
 exactly. Line 2
-holds the legend plus the meta: one `span[role=link]` with the top three
-roots by minutes in bar order — each a hue dot, the bare label, and the
-value — then `+N`, with the timestamp (`so far · HH:MM`, the fetch time
-of the shown report, not the wall clock) right-aligned on today's note
-only. Line 3 is the full-width bar: a 4 px fully rounded `div`
-(`aria-hidden`) with one segment per root, `flex-grow` set to minutes and
-2 px gaps of note background between segments, never track colour. Each
-segment's `title` reads `<label> <display>`; the track
+holds the legend plus the meta: one `span[role=link]` with as many roots
+as fit the line in bar order — each a hue dot, the legend label, and the
+value — then one `+N` counter in their place, with the timestamp
+(`so far · HH:MM`, the fetch time of the shown report, not the wall clock)
+right-aligned on today's note only. Line 3 is the full-width bar: a 4 px
+fully rounded `div` (`aria-hidden`) with one segment per root, `flex-grow`
+set to minutes and 2 px gaps of note background between segments, never
+track colour. Each segment's `title` reads `<label> <display>`; the track
 (`--background-modifier-border`) shows only when the bar is empty or in
 the skeleton. There are no history marks, no collapse control, and no
 separate Stats link: every fact is itself the link to Stats, and the bar
@@ -897,12 +897,24 @@ colour: the biggest root of each area keeps the reported area hue, and the
 other same-hue roots take the next free palette hue. `unlinked` and `unfiled`
 stay gray. A report without `root_parent` parts, from an older
 bob, falls back to `parts.area`, and the copy then honestly says
-"Time by area". Labels never ellipsize: below about 30em a container
-query hides the rank-3 legend item and swaps in a second counter, `+N`
-with N = segments − 2; the painter renders both counters, and each one's
-`title` lists the roots it hides. The legend link's `aria-label` and
-`title` read `Time by root parent: <label> <display>, …`, listing every
-segment, and the group `aria-label` sentence uses the same phrase.
+"Time by area". The legend names as many roots as fit the line. It drops
+the lowest-minute roots first, keeps bar order, and puts one `+N` counter
+(whose `title` lists the hidden roots as `<label> <display>` in bar order)
+in their place. It switches to names-only when that names more roots.
+Legend items never shrink, so labels never ellipsize. The legend link's
+`aria-label` and `title` read `Time by root parent: <label> <display>, …`,
+listing every segment, and the group `aria-label` sentence uses the same
+phrase.
+
+Each legend item paints a `legendLabel`: the catalog entry's `short_label`
+when bob supplies a non-empty one (review buckets carry `GTD` for compact
+views), else the bare catalog `label` for the `root_parent` dimension (never
+`project_label`, so `gtd · area tasks` reads `gtd`), else the row label. When
+two or more of the day's segments share a `legendLabel` ignoring case, each
+of them paints its full `label` instead. Tooltips and accessible sentences
+keep full labels: each legend item's `title` reads `<label> <display>`, and
+bar segment titles, the `+N` title, and the legend and group `aria-label`
+sentences do too.
 
 Bob owns every value: labels, values, part displays, and definitions all
 come from the report. The strip derives its colours from the report's area

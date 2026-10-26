@@ -327,6 +327,10 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
     let path = (!home.key.starts_with('@')).then(|| home.key.clone());
     let project_label = (home.kind == HomeKind::Area)
         .then(|| format!("{} · area tasks", home.label));
+    let short_label = home
+        .key
+        .strip_prefix("@review:")
+        .map(|name| name.to_string());
     HomeCatalogEntry {
         label: home.label.clone(),
         kind: home.kind,
@@ -335,6 +339,7 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
         path,
         hue: home.hue,
         project_label,
+        short_label,
         root_parent: home.root_parent.clone(),
     }
 }
@@ -1337,5 +1342,34 @@ mod tests {
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "sase_blog.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "@review:GTD"), 2);
+    }
+
+    #[test]
+    fn review_bucket_carries_short_label_for_compact_views() {
+        let dir = TempDir::new().unwrap();
+        let report = compute(&homes_request(homes_vault(), write_config(&dir)))
+            .expect("homes fixture computes");
+        let review = report
+            .homes
+            .get("@review:GTD")
+            .expect("review bucket catalog entry");
+        assert_eq!(review.label, "GTD review");
+        assert_eq!(review.short_label.as_deref(), Some("GTD"));
+        for (key, entry) in &report.homes {
+            if key.starts_with("@review:") {
+                continue;
+            }
+            assert_eq!(
+                entry.short_label, None,
+                "only review buckets carry short_label ({key})"
+            );
+        }
+        let value = serde_json::to_value(&report).expect("report serializes");
+        let catalog = value["homes"].as_object().unwrap();
+        assert_eq!(catalog["@review:GTD"]["short_label"], "GTD");
+        assert!(
+            catalog["sase.md"].get("short_label").is_none(),
+            "non-review entries omit short_label"
+        );
     }
 }

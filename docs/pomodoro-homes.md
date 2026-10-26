@@ -160,7 +160,8 @@ with no links has no parts and an empty label.
 ## R7 — Labels, chips, and dots
 
 Use a lowercase note stem for project and area labels. Use `GTD review`,
-`unlinked`, and `unfiled` for reserved buckets. Sort labels by share, descending;
+`unlinked`, and `unfiled` for reserved buckets. Review buckets also carry
+`short_label` `<NAME>` for compact views. Sort labels by share, descending;
 show up to two joined by ` · `, then append ` +N` for additional homes. A
 session with no homes has an empty label.
 

@@ -1320,6 +1320,7 @@ mod tests {
                 path: None,
                 hue: Some(Hue::Orange),
                 project_label: None,
+                short_label: None,
                 root_parent: "@review:GTD".to_string(),
             },
         );
@@ -1333,6 +1334,7 @@ mod tests {
                 path: Some("sase.md".to_string()),
                 hue: Some(Hue::Blue),
                 project_label: None,
+                short_label: None,
                 root_parent: "sase.md".to_string(),
             },
         );
