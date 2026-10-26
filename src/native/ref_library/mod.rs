@@ -21,12 +21,14 @@ mod find;
 mod frontmatter;
 mod identity;
 pub(crate) mod lineage;
+pub(crate) mod links;
 pub(crate) mod list;
 pub(crate) mod output;
 mod resolve;
 mod row;
 pub(crate) mod show;
 mod status;
+mod store;
 pub(crate) mod today;
 
 #[cfg(test)]

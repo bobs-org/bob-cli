@@ -264,6 +264,22 @@ const TABLE: &[Entry] = &[
         arg: "page",
         kind: Kind::FreeText,
     },
+    // `bob ref links` resolves the same exact reference handles as `show`.
+    Entry {
+        path: &["ref", "links"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["ref", "links"],
+        arg: "number",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "links"],
+        arg: "page",
+        kind: Kind::FreeText,
+    },
     // `bob ref today` resolves the same exact note index, then links.
     Entry {
         path: &["ref", "today"],
@@ -647,6 +663,7 @@ pub(crate) fn choice_description(
         ("format", "csv") => Some("Tidy date-metric rows"),
         ("format", "table") => Some("Human-readable table"),
         ("format", "markdown") => Some("Rendered Markdown"),
+        ("format", "raw") => Some("Exact bytes with no trailing newline"),
         ("format", "paths") => Some("Matching note paths"),
         ("engine", "native") => Some("Dataview and Tasks"),
         ("engine", "obsidian") => Some("Live Dataview"),

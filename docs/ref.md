@@ -8,10 +8,12 @@ filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
 into their metadata, annotations, notes, and tasks. `bob ref code` reads
 the saved Markdown source and exact render-time code blocks without
-rerendering. `bob ref today`
+rerendering. `bob ref links` reads the recorded URI links from the same
+store. `bob ref today`
 links a reference's v2 reading task under today's Pomodoro. `find`,
-`list`, `show`, and `code` are read-only; `find -i` also reads intake PDF
-markers. `bob ref today --dry-run` plans without writing. `bob ref rename` renames
+`list`, `show`, `code`, and `links` are read-only; `find -i` also reads
+intake PDF markers. `bob ref today --dry-run` plans without writing.
+`bob ref rename` renames
 an unannotated modern reference's files and updates links (preview with `-d`).
 `bob ref migrate-zorg`
 plans copies of zorg-era `status::` reading records into legacy notes under
@@ -25,6 +27,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Copy or inspect a saved code block | `bob ref code <REF> [N]` | Read exact block bytes, a block catalog, or the saved Markdown source |
+| Copy or inspect a recorded link | `bob ref links <REF> [N]` | Read exact URL bytes, a link catalog, or Markdown forms |
 | Backfill saved sources for filed references | `bob ref attach-source -s <PATH> [-d] [REF]...` | Verify same-stem Markdown against library PDFs and record only verified sources |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
@@ -625,6 +628,47 @@ The `id` on each block is generation-scoped as `<source-hash12>/<N>`.
 The summary skips blank lines, simple rules, box-drawing lines, and
 lone brackets or braces. For Mermaid blocks, a leading frontmatter
 title becomes the caption and the diagram type becomes the summary.
+
+## `bob ref links`
+
+```bash
+bob ref links agent_image_generation_toolset
+bob ref links agent_image_generation_toolset 12 | pbcopy
+bob ref links agent_image_generation_toolset -p 7
+bob ref links agent_image_generation_toolset -f markdown
+bob ref links agent_image_generation_toolset -f json
+```
+
+Options: `-b/--bob-dir`, `-f/--format human|json|markdown|raw`,
+`-p/--page PAGE`, and `-r/--ref-dir`. Without a link number, the default
+format is a human list; with `N`, the default is `raw` and writes only
+that link's exact URL, with no added newline. `-f markdown` writes the
+Markdown form when `N` is present, or a titled, sectioned list when it
+is absent. `-p` keeps links whose rendered page equals that page.
+
+The command resolves `REF` with the same exact resolver as `bob ref
+show`, verifies the saved source digest, and never runs pandoc. JSON
+uses `schema_version: 1` and reports the reference, source, links, and
+one of these statuses: `available`, `no_links`, `not_recorded`,
+`no_catalog`, `no_source`, `source_missing`, or `source_invalid`. JSON
+status responses exit successfully so callers can branch on `status`;
+unknown or ambiguous references and a requested link number that does
+not exist exit 1. Human `no_links` prints `no links` and exits 0. Human
+output with `-p` and no match prints `no links on page N`.
+
+bob computes `label`, `label_kind`, `site`, and `markdown` for each
+link. Written links use the recorded text (`label_kind: text`).
+Autolinks use trimmed enclosing context (`context`) when that leaves
+something, otherwise the URL without its scheme (`url`). `site` is the
+lowercase host without a leading `www.` for `http`/`https`/`ftp`/`ftps`,
+`email` for `mailto`, and the scheme name otherwise. Markdown form is
+`<text>` for autolinks and `[text](url)` for written links, with `\`,
+`[`, and `]` escaped in the text and the destination wrapped in `<…>`
+when it contains whitespace or unbalanced parentheses.
+
+The `id` on each link is generation-scoped as `<source-hash12>/link-<N>`.
+A missing `links` array means the catalog predates link recording
+(`not_recorded`); an empty array is `no_links`.
 
 ## `bob ref attach-source`
 

@@ -6,6 +6,7 @@ Library:
   attach-source  Attach verified Markdown sources to filed references
   code           Read the saved Markdown or exact code blocks from a reference
   find           Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
+  links          Read the recorded URI links from a reference
   list           List notes by reading state, status, type, origin, or date
   migrate-tasks  Move open ref tasks into parent notes; dry run unless --write
   migrate-zorg   Migrate zorg-era records to ref/zorg/; dry run unless --write
@@ -29,6 +30,7 @@ Options:
 
 Examples:
   bob ref code ea_graph 2 | pbcopy              Copy one exact code block
+  bob ref links ea_graph 12 | pbcopy             Copy one recorded link URL
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days

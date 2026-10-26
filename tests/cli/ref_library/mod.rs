@@ -4,6 +4,7 @@
 mod attach;
 mod code;
 mod find;
+mod links;
 mod list;
 mod migrate_tasks;
 mod migrate_zorg;

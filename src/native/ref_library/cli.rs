@@ -24,6 +24,7 @@ use super::{
 
 pub(crate) use super::attach::run_attach_source;
 pub(crate) use super::code::run_code;
+pub(crate) use super::links::run_links;
 pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
@@ -333,6 +334,45 @@ pub(crate) fn code_command() -> ClapCommand {
         )
         .after_help(
             "Without N, the default is a sectioned human list. With N, the default is the exact raw block bytes. `--format markdown` emits fenced Markdown; `--format json` emits the versioned catalog and verified saved source. `--source` writes saved Markdown and conflicts with N, --page, and --format. This command is read-only and never runs pandoc.\n\nExamples:\n  bob ref code ace_refresh_loop\n  bob ref code ace_refresh_loop 2 | pbcopy\n  bob ref code ace_refresh_loop -p 7 -f json\n  bob ref code ace_refresh_loop --source > source.md",
+        )
+}
+
+/// The `bob ref links` read-only recorded-URI-link command.
+pub(crate) fn links_command() -> ClapCommand {
+    ClapCommand::new("links")
+        .about("Read the recorded URI links from a reference")
+        .arg(
+            Arg::new("ref")
+                .value_name("REF")
+                .required(true)
+                .help("Vault path, note stem or id, URL, arXiv ID, DOI, or exact title"),
+        )
+        .arg(
+            Arg::new("number")
+                .value_name("N")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .help("Select one 1-based link number"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .short('f')
+                .value_name("FORMAT")
+                .value_parser(["human", "json", "markdown", "raw"])
+                .help("Output format; defaults to human, or raw when N is given"),
+        )
+        .arg(
+            Arg::new("page")
+                .long("page")
+                .short('p')
+                .value_name("PAGE")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .help("Keep links whose rendered page equals PAGE"),
+        )
+        .arg(ref_dir_arg())
+        .after_help(
+            "Without N, the default is a sectioned human list. With N, the default is that link's exact URL bytes, with no added newline. `--format markdown` emits a Markdown link when N is present, or a titled, sectioned list when it is absent. `--format json` emits the versioned catalog. `-p` keeps links whose rendered page equals PAGE. This command is read-only and never runs pandoc.\n\nExamples:\n  bob ref links agent_image_generation_toolset\n  bob ref links agent_image_generation_toolset 12 | pbcopy\n  bob ref links agent_image_generation_toolset -p 7\n  bob ref links agent_image_generation_toolset -f markdown\n  bob ref links agent_image_generation_toolset -f json",
         )
 }
 

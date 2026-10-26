@@ -694,6 +694,17 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         slots: &[("REF", "ref"), ("ref", "ref")],
+        ..reads(
+            "ref-links",
+            &["ref", "links"],
+            "Reference links",
+            &["links", "url", "markdown", "catalog"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        slots: &[("REF", "ref"), ("ref", "ref")],
         invalidates: &["tasks"],
         ..writes(
             "ref-today",

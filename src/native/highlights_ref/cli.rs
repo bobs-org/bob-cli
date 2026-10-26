@@ -14,6 +14,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "attach-source",
             "code",
             "find",
+            "links",
             "list",
             "migrate-tasks",
             "migrate-zorg",
@@ -38,6 +39,7 @@ const REF_HELP_TEMPLATE: &str = "\
 const REF_AFTER_HELP: &str = "\
 Examples:
   bob ref code ea_graph 2 | pbcopy              Copy one exact code block
+  bob ref links ea_graph 12 | pbcopy             Copy one recorded link URL
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
@@ -93,6 +95,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
         crate::native::ref_library::cli::attach_source_command(),
         crate::native::ref_library::cli::code_command(),
         crate::native::ref_library::cli::find_command(),
+        crate::native::ref_library::cli::links_command(),
         crate::native::ref_library::cli::list_command(),
         crate::native::ref_library::migrate_tasks::migrate_tasks_command(),
         crate::native::ref_library::migrate_zorg::migrate_zorg_command(),
