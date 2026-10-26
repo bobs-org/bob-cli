@@ -507,7 +507,7 @@ pub(super) fn prepare(
     }
     if let Some(replacement_audio) = &request.replacement_audio_path {
         let relative = PathBuf::from(replacement_audio);
-        if let Err(error) = checked_vault_path(config, &relative) {
+        if let Err(error) = checked_vault_destination(config, &relative) {
             return Err(OverwriteRefusal::new(
                 "not_in_sync",
                 format!("invalid replacement audio path {replacement_audio}: {error}"),
@@ -734,6 +734,43 @@ fn checked_vault_path(
         return Err("path resolves outside the vault".to_string());
     }
     Ok(resolved)
+}
+
+/// Resolve a vault destination whose leaf may not exist yet. Existing
+/// leaves still use the strict path check, while a missing leaf is allowed
+/// only below an existing, nonsymlink vault directory.
+fn checked_vault_destination(
+    config: &Config,
+    relative: &Path,
+) -> Result<PathBuf, String> {
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("path must be a clean vault-relative path".to_string());
+    }
+    match fs::symlink_metadata(config.bob_dir.join(relative)) {
+        Ok(_) => checked_vault_path(config, relative),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+            let resolved_parent = checked_vault_path(config, parent)?;
+            if !resolved_parent.is_dir() {
+                return Err(format!(
+                    "destination parent is not a directory: {}",
+                    resolved_parent.display()
+                ));
+            }
+            let name = relative
+                .file_name()
+                .ok_or_else(|| "destination has no filename".to_string())?;
+            Ok(resolved_parent.join(name))
+        }
+        Err(error) => Err(format!(
+            "inspect {}: {error}",
+            config.bob_dir.join(relative).display()
+        )),
+    }
 }
 
 fn normalize_route(route: &str) -> String {

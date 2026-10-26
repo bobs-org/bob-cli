@@ -80,6 +80,7 @@ pub(super) enum NameSource {
     Folder,
     TitleFlag,
     Reread,
+    Overwrite,
 }
 
 impl NameSource {
@@ -92,6 +93,9 @@ impl NameSource {
             Self::TitleFlag => "from -T; -N overrides",
             Self::Reread => {
                 "reread of the exact URL set; -N selects the family"
+            }
+            Self::Overwrite => {
+                "overwrite of the exact URL set; -N selects the reading"
             }
         }
     }

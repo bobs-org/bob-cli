@@ -47,6 +47,18 @@ pub(in crate::native::highlights_ref) fn print_success(
     replaced_audio: Option<&str>,
     kept_closed: bool,
 ) {
+    print_success_report(plan, title, replaced_audio, kept_closed);
+    print_commit_result(result);
+}
+
+/// Shared success details without the final commit line, so collection
+/// output can include its part summary before printing the transaction result.
+pub(in crate::native::highlights_ref) fn print_success_report(
+    plan: &OverwritePreflight,
+    title: &str,
+    replaced_audio: Option<&str>,
+    kept_closed: bool,
+) {
     println!("ok replaced Highlights-ready PDF");
     println!("overwrite: {}/{}", plan.ref_type, plan.member.stem);
     println!("title: {title}");
@@ -60,6 +72,12 @@ pub(in crate::native::highlights_ref) fn print_success(
     if kept_closed {
         println!("pass -s ready to reopen");
     }
+}
+
+/// Shared final transaction status for all in-place overwrite routes.
+pub(in crate::native::highlights_ref) fn print_commit_result(
+    result: &OverwriteResult,
+) {
     if result.push_pending {
         println!(
             "overwritten; push pending (run bob vault-sync) {}",

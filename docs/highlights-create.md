@@ -534,9 +534,10 @@ reading a later overwrite recaptures in place; `-o` on a
 captured reread exits 2. A library PDF as TARGET refuses even with `-f`
 (copying highlights into the next reading is forbidden): reread from its
 recorded `source_url` or the original file instead, while `-L` without
-force still attaches to the newest reading. `-f overwrite` on a filed
-reference exits 2 naming the reread it would take (not available yet);
-without a filed match it exits 1. A URL recorded only by legacy notes without a
+force still attaches to the newest reading. `-f overwrite` replaces an
+eligible filed reference in place; authored prose moves to `ref_history/`.
+Incompatible options and annotated references refuse before fetching, and
+without a filed match overwrite exits 1. A URL recorded only by legacy notes without a
 Highlights PDF warns (`already in the library as <path>, a note without
 a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
 instead of refusing; with `--listen` it is a normal capture plus listen,
@@ -561,14 +562,21 @@ URL of a larger collection, refuses under every force mode before adapters
 or fetch, naming the overlapping members with
 `hint: -f recaptures only the exact URL set of <stem>`. Unrelated duplicate
 families sharing the set stay ambiguous: pass `-N <stem>` to choose one.
-`--force` applies to the queued collection only when it has exactly the same
-URL set, in any order. A legacy PDF-less note is reported as a warning and
+`-f overwrite` on an exact URL-set match replaces the selected reading in
+place, in any argument order; `-N` selects a reading or disambiguates
+unrelated families. Defaults come from that selected member. Authored prose
+moves to `ref_history/`, companion audio stays unless `-a` or `-L` replaces
+it, and `-L` narrates the replacement. `-o`, `-k`, a differing explicit
+`-P`, or a differing explicit `-t` refuses before fetching. `--force` applies
+to the queued collection only when it has exactly the same URL set, in any
+order. A legacy PDF-less note is reported as a warning and
 the collection may proceed. The collection marker stores the cleaned URLs in
 argument order as a YAML list; create writes that list to one ref note (or a
 later `bob ref scan -i` does so when intake is queued). A later create of an
 individual part is refused as already captured, and `bob ref find <part URL>`
 locates the collection. Queued rereads drain through `bob ref scan` with the
-same lineage and task semantics as inline intake.
+same lineage and task semantics as inline intake. Partial collection overlap
+continues to refuse under every force mode before fetching or adapter work.
 
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 (up to `<stem>_999`): a candidate is occupied when its matching PDF, sidecar,
@@ -801,9 +809,10 @@ saved HTML, PDF URL, arXiv) replaces that reading in place: the note
 path, stem, id, and reading task stay, companion audio is preserved
 unless `-a` or `-L` (which narrates the replacement) replaces it, and
 `--no-audio` leaves an existing episode in place. Clap's default `-s ready`
-is not an explicit reopen; pass `-s` to change the kept task. Collection
-overwrite still exits 2 naming the reread it would take (not available
-yet); without a filed match overwrite exits 1. No
+is not an explicit reopen; pass `-s` to change the kept task. Exact-set
+collection overwrite follows the same identity, audio, and task-preservation
+rules; partial overlaps refuse under every mode. Without a filed match
+overwrite exits 1. No
 force is needed for a URL recorded only by legacy notes
 without a Highlights PDF (it warns and captures a fresh copy) or for a
 new-day vault-note snapshot (an ordinary dated create).

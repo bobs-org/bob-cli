@@ -8666,6 +8666,208 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     );
 }
 
+/// Exact-set collection overwrite selects the existing reading in any URL
+/// order, stages narration with the replacement, and freezes authored prose.
+#[test]
+fn highlights_create_collection_overwrites_exact_set_with_listen() {
+    const NOW: &str = "2026-10-16 12:00:00";
+    let temp = TempDir::new("bob-cli-highlights-create-collection-overwrite");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_area_note(&vault.join("sase.md"), "SASE");
+    git_in(&vault, ["add", "sase.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "seed parent"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let fake = FakeClip::new(&temp, "adapter");
+    let curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
+    let log = temp.path().join("collection-overwrite-curl.log");
+    fs::write(&log, "").expect("init curl log");
+    for index in [1, 2, 4, 5] {
+        fake.respond_n(
+            index,
+            &article_capture(
+                "Tokio Internals, Part 1: The Scheduler",
+                "Jane Doe",
+                "2024-01-08",
+                2140,
+            ),
+        );
+    }
+
+    let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    capture.env("BOB_NOW", NOW);
+    collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
+    assert_success(&capture.output().expect("capture initial collection"));
+    let scan = || {
+        bob_command()
+            .arg("highlights")
+            .arg("--no-hooks")
+            .arg("scan")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_NOW", NOW)
+            .output()
+            .expect("file collection into library")
+    };
+    assert_success(&scan());
+
+    let note = vault.join("ref/blogs/tokio_internals.md");
+    let parent = vault.join("sase.md");
+    let pdf = vault.join("lib/blogs/tokio_internals.pdf");
+    let note_before = fs::read_to_string(&note).expect("read filed note");
+    let created_before = note_before
+        .lines()
+        .find(|line| line.starts_with("created:"))
+        .expect("filed note has creation date")
+        .to_string();
+    let task_before = fs::read_to_string(&parent)
+        .expect("read parent tasks")
+        .lines()
+        .find(|line| line.contains("^ref-tokio-internals"))
+        .expect("filed collection has a reading task")
+        .to_string();
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "file initial collection"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let mut note_with_prose = note_before;
+    note_with_prose.push_str("\nAuthored collection notes to freeze.\n");
+    fs::write(&note, note_with_prose).expect("add authored prose");
+    git_in(&vault, ["add", path_str(&note)]);
+    git_in(&vault, ["commit", "-q", "-m", "add collection notes"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let adapter_calls = fake.request_count();
+    let curl_before = fs::read_to_string(&log).expect("read curl log");
+    let mut dry = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    dry.args(["--force=overwrite", "-N", "tokio_internals", "-d"]);
+    dry.env("BOB_NOW", NOW);
+    collection_env(&mut dry, &curl, &curl_root, &log, &fake.path);
+    let dry_output = dry.output().expect("dry-run collection overwrite");
+    assert_success(&dry_output);
+    let dry_report = stdout(&dry_output);
+    assert!(
+        dry_report.contains("ok would replace Highlights-ready PDF")
+            && dry_report.contains("overwrite: blogs/tokio_internals")
+            && dry_report.contains("writes: none"),
+        "dry-run must describe the selected member:\n{dry_report}"
+    );
+    assert_eq!(
+        fake.request_count(),
+        adapter_calls,
+        "dry run called adapter"
+    );
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        curl_before,
+        "dry run fetched"
+    );
+
+    let listen_bin = temp.path().join("collection-overwrite-listen-bin");
+    fs::create_dir_all(&listen_bin).expect("create fake listen bin");
+    let listen_log = temp.path().join("collection-overwrite-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+audio_path=""
+for arg in "$@"; do
+  case "$arg" in *.mp3) audio_path="$arg" ;; esac
+done
+test -n "$audio_path" || exit 8
+printf 'ID3 replacement episode' > "$audio_path"
+"#,
+    );
+    let mut overwrite =
+        collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    overwrite.args(["--force=overwrite", "-N", "tokio_internals", "-L"]);
+    overwrite
+        .env("BOB_NOW", NOW)
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {pdf} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut overwrite, &curl, &curl_root, &log, &fake.path);
+    let output = overwrite.output().expect("overwrite collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok replaced Highlights-ready PDF")
+            && report.contains("overwrite: blogs/tokio_internals")
+            && report.contains(
+                "earlier: ref_history/blogs/tokio_internals__2026-10-16.md"
+            )
+            && report
+                .contains("task: kept sase.md ^ref-tokio-internals [ ] ready")
+            && report.contains("audio: replaced lib/blogs/tokio_internals.mp3")
+            && report.contains("committed "),
+        "overwrite report must use the shared transaction renderer:\n{report}"
+    );
+    assert!(
+        fs::read_to_string(&listen_log)
+            .expect("read listen log")
+            .contains("listen render"),
+        "-L must narrate the staged replacement"
+    );
+
+    let updated_note =
+        fs::read_to_string(&note).expect("read overwritten note");
+    assert!(
+        updated_note.contains(&created_before),
+        "created changed:\n{updated_note}"
+    );
+    assert!(
+        updated_note.contains("recaptured: 2026-10-16"),
+        "recaptured missing:\n{updated_note}"
+    );
+    assert!(
+        updated_note.contains("earlier:"),
+        "archive lineage missing:\n{updated_note}"
+    );
+    assert!(!updated_note.contains("Authored collection notes to freeze."));
+    let archive =
+        vault.join("ref_history/blogs/tokio_internals__2026-10-16.md");
+    assert!(
+        fs::read_to_string(&archive)
+            .expect("read frozen note")
+            .contains("Authored collection notes to freeze."),
+        "old prose must be frozen"
+    );
+    assert_eq!(
+        fs::read_to_string(&parent)
+            .expect("read updated parent")
+            .lines()
+            .find(|line| line.contains("^ref-tokio-internals"))
+            .expect("reading task stays present"),
+        task_before,
+        "overwrite must preserve the task line and address"
+    );
+    assert_eq!(
+        fs::read(vault.join("lib/blogs/tokio_internals.mp3"))
+            .expect("read replacement audio"),
+        b"ID3 replacement episode",
+    );
+    let marker = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect overwritten marker");
+    assert_success(&marker);
+    let marker_text = stdout(&marker);
+    assert!(
+        marker_text.contains(&format!(
+            "- source_url: [{TOKIO_PART_2}, {TOKIO_PART_1}]"
+        )) && marker_text.contains("- id: tokio_internals\n"),
+        "replacement marker should keep argument order and identity:\n{marker_text}"
+    );
+}
+
 /// Partial collection overlaps refuse under every force mode before any
 /// adapter or fetch work, naming the overlapping members and the exact
 /// set `-f` would recapture.
@@ -8907,8 +9109,8 @@ fn highlights_create_collection_queued_only_replacement_both_modes() {
 }
 
 /// Collection reread guards: `-o` and non-member `-N` exit 2 before any
-/// work, overwrite names the pending reread, and a reread without a
-/// resolvable parent still requires `-P`.
+/// work, overwrite runs strict eligibility before adapters, and a reread
+/// without a resolvable parent still requires `-P`.
 #[test]
 fn highlights_create_collection_reread_guards() {
     let (_temp, vault, fake, curl, curl_root, log) =
@@ -9005,10 +9207,8 @@ fn highlights_create_collection_reread_guards() {
             format_output(&output)
         );
         assert!(
-            stderr(&output).contains(
-                "-f overwrite is not available yet; -f reads it again as tokio_internals__v2"
-            ),
-            "{extra:?} overwrite must name the pending reread:\n{}",
+            !stderr(&output).contains("not available yet"),
+            "{extra:?} must use the shared overwrite preflight:\n{}",
             format_output(&output)
         );
     }

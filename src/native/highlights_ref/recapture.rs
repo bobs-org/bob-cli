@@ -753,7 +753,7 @@ pub(super) fn allocate_for_family(
 /// elsewhere. Returns `Ok(Some(preflight))` for a selected family under
 /// reread force, after `-N`/`-o` validation and whole-bundle allocation.
 /// Filed refusals carry the `-f` remedy with the computed next stem;
-/// overwrite force carries the interim unavailable message naming it.
+/// overwrite force selects the member for in-place replacement.
 pub(super) fn preflight_for_url(
     config: &Config,
     rows: &[RefRow],
@@ -800,7 +800,7 @@ pub(super) fn preflight_for_url(
 
 /// Resolve a single URL against the live library, selecting the filed
 /// member for in-place overwrite when `--force=overwrite` names one.
-/// Collections keep calling [`preflight_for_url`], which refuses overwrite.
+/// Exact-set collections use this route too, preserving their set match.
 pub(super) fn preflight_for_url_outcome(
     config: &Config,
     rows: &[RefRow],
@@ -1141,8 +1141,7 @@ fn url_reread_from_selection(
 
 /// Finish a selected family: validate `-N`/`-o`, then either allocate a
 /// reread stem, select the member for in-place overwrite, or refuse.
-/// No force carries the `-f` remedy; URL overwrite still names the
-/// interim unavailable message; local overwrite returns the selected
+/// No force carries reread and overwrite remedies; overwrite selects the
 /// member without allocating `__vN`.
 fn finish_selection(
     config: &Config,
@@ -1193,10 +1192,10 @@ fn finish_selection(
                 family,
             }))
         }
-        Some(super::force::ForceMode::Overwrite) => {
-            let next = allocate_for_family(config, &family)?;
-            Err(super::force::overwrite_filed_unavailable_for(&next))
-        }
+        Some(super::force::ForceMode::Overwrite) => Err(CommandError::new(
+            "in-place overwrite must use the overwrite capture route",
+        )
+        .with_exit_code(2)),
         Some(super::force::ForceMode::Reread) => {
             let next = allocate_for_family(config, &family)?;
             if output.is_some() {
@@ -1257,9 +1256,11 @@ fn filed_refusal(
             "add --listen to narrate it and attach the episode to the existing capture",
         ));
     }
+    let overwrite_target = family.selected_member().path.clone();
     let refusal =
         super::duplicate::AlreadyCaptured::new(title, copies, remedies)
-            .with_next_stem(next_stem);
+            .with_next_stem(next_stem)
+            .with_overwrite_target(overwrite_target);
     let styler = crate::native::style::Styler::detect();
     CommandError::new(refusal.render(&styler))
 }

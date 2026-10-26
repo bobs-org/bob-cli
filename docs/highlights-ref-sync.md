@@ -656,6 +656,28 @@ it so they are never absorbed into the key above on reparse. `bob ref
 rename` already rewrites frontmatter wikilinks, so renaming a family
 member updates the later readings' `earlier:` links.
 
+An eligible `bob ref create TARGET -f overwrite` keeps the live note path,
+stem, `id`, and reading task. It preserves the note-local `created` value and
+adds `recaptured: YYYY-MM-DD` for the replacement. Like `created` and
+`earlier`, `recaptured` stays out of the marker projection and its hash.
+
+When the old note has authored prose, overwrite freezes it at
+`ref_history/<type>/<stem>__<date>.md` (using `_2`, `_3`, and so on for
+same-day collisions), then adds a newest-first `earlier:` link to the live
+note. The archive preserves the old body apart from a replacement banner in
+place of the managed reading-task embed and neutralized legacy task tracker.
+Its frontmatter records the title, source URL, creation date, live-note parent,
+replacement date, prior status, and highlight count. It is an inert history
+note: it does not represent another library reference or reading task. With
+no authored prose, no archive is created and existing `earlier:` entries stay
+unchanged.
+
+Overwrite writes a durable intent under the host-local `bob_cli_state_dir()/ref/`
+before changing the vault. If the process stops mid-write, the next `bob ref
+create` or writing `bob ref scan` checks that intent before syncing: it keeps
+a fully committed replacement or restores the recorded preimages. A partial
+overwrite is never queued as an intake PDF.
+
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
 explicitly listed in `highlights_marker_fields`.

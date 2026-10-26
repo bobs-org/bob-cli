@@ -2,8 +2,8 @@
 //!
 //! Every duplicate route (URL dedupe, same-reference stem walk, library
 //! PDF as TARGET, collections) renders through [`AlreadyCaptured`] so all
-//! refusals list every copy and print aligned hint rows. Later phases
-//! append `-f` reread and `-f overwrite` remedies without touching layout.
+//! refusals list every copy and print aligned hint rows, including the
+//! selected in-place overwrite remedy.
 
 use std::path::Path;
 
@@ -91,6 +91,23 @@ impl AlreadyCaptured {
     /// the overwrite interim refusal.
     pub(crate) fn with_next_stem(mut self, stem: impl Into<String>) -> Self {
         self.next_stem = Some(stem.into());
+        self
+    }
+
+    /// Add the in-place overwrite remedy for the member the route would
+    /// select by default. The note is replaced at the same path, while
+    /// authored prose moves to `ref_history/`.
+    pub(crate) fn with_overwrite_target(
+        mut self,
+        path: impl AsRef<str>,
+    ) -> Self {
+        self.remedies.push(Remedy::new(
+            "-f overwrite",
+            format!(
+                "replace {} in place; authored notes move to ref_history/",
+                path.as_ref()
+            ),
+        ));
         self
     }
 

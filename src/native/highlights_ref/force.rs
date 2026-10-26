@@ -231,23 +231,6 @@ pub(super) fn stray_mode_message(word: &str) -> String {
     )
 }
 
-/// `-f overwrite` on a filed reference: parsed but not implemented
-/// (the later overwrite phase owns it), so refuse with exit 2.
-pub(super) fn overwrite_filed_unavailable() -> CommandError {
-    CommandError::new("-f overwrite is not available yet for filed references")
-        .with_exit_code(2)
-}
-
-/// `-f overwrite` on a filed reference that already has a reread plan:
-/// still refused (overwrite is not implemented yet), naming the reread
-/// `-f` would take instead.
-pub(super) fn overwrite_filed_unavailable_for(next_stem: &str) -> CommandError {
-    CommandError::new(format!(
-        "-f overwrite is not available yet; -f reads it again as {next_stem}"
-    ))
-    .with_exit_code(2)
-}
-
 /// `-f overwrite` with no existing reference to recapture in place:
 /// refuse with exit 1 and a hint to drop the mode.
 pub(super) fn nothing_to_overwrite(source: &str) -> CommandError {

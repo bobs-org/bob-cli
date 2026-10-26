@@ -60,6 +60,13 @@ struct PreparedCollection {
     resolved_name: collection_name::ResolvedName,
     plan: Option<TargetPlan>,
     overlap: OverlapCheck,
+    overwrite: Option<PreparedOverwrite>,
+}
+
+struct PreparedOverwrite {
+    preflight: super::overwrite::OverwritePreflight,
+    request: super::overwrite::OverwriteRequest,
+    replacing_audio: bool,
 }
 
 struct CapturedPart {
@@ -138,8 +145,7 @@ fn run_preflight(
     // attaching, so `-L` with reread force runs the shared recapture
     // preflight like every other mode.
     let listen_flag = matches.get_flag("listen");
-    let skip_for_attach =
-        listen_flag && force != Some(super::force::ForceMode::Reread);
+    let skip_for_attach = listen_flag && force.is_none();
     if skip_for_attach {
         if let Some(prepared) = attach_gate(
             matches,
@@ -151,17 +157,33 @@ fn run_preflight(
         )? {
             return Ok(prepared);
         }
-    } else if let Some(preflight) =
+    } else if let Some(outcome) =
         recapture_gate(config, &urls, targets, matches, force)?
     {
-        return plan_reread_collection(
-            config,
-            matches,
-            &urls,
-            keep_intake_reason,
-            force,
-            preflight,
-        );
+        return match outcome {
+            super::recapture::CaptureOutcome::Reread(preflight) => {
+                plan_reread_collection(
+                    config,
+                    matches,
+                    &urls,
+                    keep_intake_reason,
+                    force,
+                    preflight,
+                )
+            }
+            super::recapture::CaptureOutcome::Overwrite(selection) => {
+                plan_overwrite_collection(
+                    config,
+                    matches,
+                    &urls,
+                    keep_intake_reason,
+                    selection,
+                )
+            }
+            super::recapture::CaptureOutcome::Fresh => {
+                unreachable!("fresh capture does not have a recapture plan")
+            }
+        };
     }
     let options =
         options_from_matches(matches, config, keep_intake_reason, force)?;
@@ -249,6 +271,7 @@ fn run_preflight(
         resolved_name,
         plan,
         overlap: final_overlap,
+        overwrite: None,
     })
 }
 
@@ -343,6 +366,7 @@ fn attach_gate(
                 resolved_name,
                 plan: None,
                 overlap: OverlapCheck::Attach(hit),
+                overwrite: None,
             }));
         }
         Ok(OverlapCheck::Clear { .. }) => {}
@@ -363,7 +387,7 @@ fn recapture_gate(
     targets: &[OsString],
     matches: &ArgMatches,
     force: Option<super::force::ForceMode>,
-) -> Result<Option<RereadPreflight>, CommandError> {
+) -> Result<Option<super::recapture::CaptureOutcome>, CommandError> {
     let recorded = sources::collect_recorded_source_urls(config)
         .map_err(|error| CommandError::new(error.message))?;
     let rows = recapture::index_rows(config);
@@ -371,7 +395,7 @@ fn recapture_gate(
         urls.iter().map(|url| url.dedupe_key.clone()).collect();
     let name = matches.get_one::<String>("name").map(String::as_str);
     let output = matches.get_one::<OsString>("output").map(Path::new);
-    match recapture::preflight_for_url(
+    match recapture::preflight_for_url_outcome(
         config,
         &rows,
         &recorded,
@@ -384,8 +408,9 @@ fn recapture_gate(
             urls,
         ),
     )? {
-        Some(preflight) => Ok(Some(preflight)),
-        None => {
+        outcome @ (super::recapture::CaptureOutcome::Reread(_)
+        | super::recapture::CaptureOutcome::Overwrite(_)) => Ok(Some(outcome)),
+        super::recapture::CaptureOutcome::Fresh => {
             // No filed family claims the exact set: queued-only handling
             // keeps the old replacement permission, queued partial
             // overlaps refuse, and overwrite on a fresh set refuses,
@@ -546,6 +571,122 @@ fn plan_reread_collection(
         resolved_name,
         plan: Some(plan),
         overlap: OverlapCheck::Clear { legacy },
+        overwrite: None,
+    })
+}
+
+/// Plan an exact-set in-place overwrite before any fetch or adapter work.
+/// Defaults come from the selected member, while explicit parent/type
+/// values are resolved and checked by the shared overwrite preflight.
+fn plan_overwrite_collection(
+    config: &Config,
+    matches: &ArgMatches,
+    urls: &[WebUrl],
+    keep_intake_reason: Option<String>,
+    selection: super::recapture::OverwriteSelection,
+) -> Result<PreparedCollection, CommandError> {
+    let (parent, resolved_parent, parent_default_reason) =
+        match matches.get_one::<String>("parent").cloned() {
+            Some(input) => {
+                let resolved = crate::native::parent_notes::resolve_parent(
+                    &config.bob_dir,
+                    &input,
+                )
+                .map_err(|error| CommandError::new(error.message()))?;
+                (resolved.route.clone(), Some(resolved), None)
+            }
+            None => match &selection.defaults.parent {
+                Some(task_path) => {
+                    let resolved = crate::native::parent_notes::resolve_parent(
+                        &config.bob_dir,
+                        task_path,
+                    )
+                    .map_err(|_| super::create::missing_parent_error())?;
+                    (
+                        resolved.route.clone(),
+                        Some(resolved),
+                        Some(format!("selected reading's task in {task_path}")),
+                    )
+                }
+                None => return Err(super::create::missing_parent_error()),
+            },
+        };
+    let ref_type = matches
+        .get_one::<String>("ref-type")
+        .cloned()
+        .or_else(|| selection.defaults.ref_type.clone())
+        .unwrap_or_else(|| "blogs".to_string());
+    stamp::validate_ref_type(&ref_type)?;
+    let explicit_status = (matches.value_source("status")
+        == Some(clap::parser::ValueSource::CommandLine))
+    .then(|| {
+        matches
+            .get_one::<String>("status")
+            .expect("defaulted by clap")
+            .clone()
+    });
+    let options = CreateOptions {
+        audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
+        author: matches.get_one::<String>("author").cloned(),
+        closed: false,
+        dry_run: matches.get_flag("dry-run"),
+        force: Some(super::force::ForceMode::Overwrite),
+        html: matches.get_one::<OsString>("html").cloned(),
+        include_id: matches.get_flag("include-id"),
+        keep_intake_reason,
+        listen: matches.get_flag("listen"),
+        name: matches.get_one::<String>("name").cloned(),
+        no_audio: matches.get_flag("no-audio"),
+        output: matches.get_one::<OsString>("output").map(PathBuf::from),
+        plain: false,
+        parent,
+        parent_default_reason,
+        resolved_parent: Some(
+            resolved_parent.expect("resolved parent is present"),
+        ),
+        published: matches.get_one::<String>("published").cloned(),
+        sections: Vec::new(),
+        ref_type: Some(ref_type),
+        status: matches
+            .get_one::<String>("status")
+            .expect("defaulted by clap")
+            .clone(),
+        explicit_status,
+        title: matches.get_one::<String>("title").cloned(),
+        capture: super::recapture::CaptureOutcome::Overwrite(selection),
+        keep_intake: matches.get_flag("keep-intake"),
+    };
+    let selected = options
+        .overwrite()
+        .expect("overwrite outcome was just constructed");
+    let (preflight, request, replacing_audio) =
+        super::create::prepare_local_overwrite(config, &options, selected)?;
+    let target = config.bob_dir.join(&preflight.pdf_path);
+    let plan = TargetPlan {
+        sidecar: target.with_extension("md"),
+        workflow: TargetWorkflow::Library,
+        stem: preflight.member.stem.clone(),
+        target,
+        renamed_from: None,
+    };
+    if let Some(warning) = collection_name::part_order_warning(urls) {
+        eprintln!("{warning}");
+    }
+    let resolved_name = collection_name::ResolvedName {
+        name: preflight.member.stem.clone(),
+        source: collection_name::NameSource::Overwrite,
+    };
+    Ok(PreparedCollection {
+        urls: urls.to_vec(),
+        options,
+        resolved_name,
+        plan: Some(plan),
+        overlap: OverlapCheck::Clear { legacy: Vec::new() },
+        overwrite: Some(PreparedOverwrite {
+            preflight,
+            request,
+            replacing_audio,
+        }),
     })
 }
 
@@ -868,10 +1009,16 @@ fn capture_and_install(
         resolved_name,
         plan,
         overlap,
+        overwrite,
     } = prepared;
     let plan = plan.ok_or_else(|| {
         CommandError::new("internal: collection target was not planned")
     })?;
+    if let Some(overwrite) = overwrite {
+        return capture_and_install_overwrite(
+            config, urls, options, plan, overwrite, listen,
+        );
+    }
     let total = urls.len();
     let mut scratch = ScratchDir::create("collection")?;
     classify_parts(&urls, &scratch)?;
@@ -1132,6 +1279,220 @@ fn capture_and_install(
         page_count,
         listen_flow.as_ref(),
     )?;
+    Ok(())
+}
+
+fn capture_and_install_overwrite(
+    config: &Config,
+    urls: Vec<WebUrl>,
+    options: CreateOptions,
+    target_plan: TargetPlan,
+    overwrite: PreparedOverwrite,
+    listen: Option<&super::listen::ListenCommand>,
+) -> Result<(), CommandError> {
+    let PreparedOverwrite {
+        preflight,
+        request,
+        replacing_audio,
+    } = overwrite;
+    if options.dry_run {
+        let title =
+            options.title.as_deref().unwrap_or(preflight.title.as_str());
+        super::overwrite::local::print_dry_run(
+            &preflight,
+            title,
+            replacing_audio,
+        );
+        return Ok(());
+    }
+
+    let total = urls.len();
+    let mut scratch = ScratchDir::create("collection-overwrite")?;
+    classify_parts(&urls, &scratch)?;
+    let client = ClipAdapterClient::resolve()?;
+    let captured = super::current_local_date();
+    let parts =
+        capture_parts(&client, &urls, scratch.path(), false, &captured)?;
+    let selection = options
+        .overwrite()
+        .expect("overwrite options retain their selected family");
+    for part in &parts {
+        if let Some(final_url) = part.response.final_url.as_deref() {
+            recapture::refuse_redirected_overwrite(
+                config,
+                &part.url.dedupe_key,
+                final_url,
+                selection,
+            )?;
+        }
+    }
+    recheck_collection_overwrite(config, &urls, &options, &preflight)?;
+
+    if std::io::stderr().is_terminal() {
+        eprintln!("composing {total} articles…");
+    }
+    let compose_dir = scratch.path().join("compose");
+    fs::create_dir_all(&compose_dir).map_err(|error| {
+        CommandError::new(format!(
+            "create compose workdir {}: {error}",
+            compose_dir.display()
+        ))
+    })?;
+    let composed_pdf = scratch.path().join("collection.pdf");
+    let title_seed = &selection.family.root_stem;
+    let derived = derive_collection_meta(&parts, &options, title_seed);
+    let compose_request = ComposeRequest::new(
+        parts
+            .iter()
+            .map(|part| ComposePart {
+                article_json: article_json_path(part),
+            })
+            .collect(),
+        CollectionMeta {
+            title: derived.title.clone(),
+            author: derived.author.clone(),
+            published: derived.published.clone(),
+            captured: captured.clone(),
+        },
+        compose_dir.to_string_lossy().into_owned(),
+        composed_pdf.to_string_lossy().into_owned(),
+    );
+    let compose = client.compose(&compose_request).map_err(|failure| {
+        with_nothing_written(partless_adapter_error(failure))
+    })?;
+
+    let source_url = MarkerValue::List(
+        urls.iter()
+            .map(|url| MarkerValue::String(url.cleaned.clone()))
+            .collect(),
+    );
+    let info = PdfInfo {
+        title: Some(derived.title.clone()),
+        author: derived.author.clone(),
+    };
+    let staged_pdf = super::create::stamp_overwrite_source(
+        config,
+        &preflight,
+        &options,
+        &composed_pdf,
+        &mut scratch,
+        &derived.title,
+        vec![
+            ("source_url", source_url),
+            (
+                "author",
+                MarkerValue::String(derived.author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(
+                    derived.published.clone().unwrap_or_default(),
+                ),
+            ),
+        ],
+        &info,
+    )?;
+
+    // Narration consumes the staged replacement PDF and remains private
+    // until the same transaction publishes the PDF and episode together.
+    recheck_collection_overwrite(config, &urls, &options, &preflight)?;
+    let staged_audio = super::create::stage_overwrite_audio(
+        &options,
+        &preflight,
+        &request,
+        &mut scratch,
+        listen,
+        &staged_pdf.to_string_lossy(),
+        &staged_pdf,
+        &derived.title,
+    )?;
+    recheck_collection_overwrite(config, &urls, &options, &preflight)?;
+
+    let marker = super::overwrite::local::marker_from_pdf(&staged_pdf)?;
+    let result = super::overwrite::execute::execute(
+        config,
+        &preflight,
+        &request,
+        super::overwrite::execute::StagedOverwrite {
+            private_pdf: staged_pdf,
+            audio: staged_audio,
+            marker,
+        },
+    )?;
+    let replaced_audio = replacing_audio
+        .then_some(
+            request
+                .replacement_audio_path
+                .as_deref()
+                .or(preflight.audio_path.as_deref()),
+        )
+        .flatten();
+    super::overwrite::local::print_success_report(
+        &preflight,
+        &derived.title,
+        replaced_audio,
+        super::overwrite::local::kept_closed_task(
+            &preflight,
+            options.explicit_status.as_deref(),
+        ),
+    );
+    let styler = Styler::detect();
+    println!("parts:");
+    print_part_rows(&styler, &parts);
+    if let Some(author) = &derived.author {
+        println!("author: {author}");
+    }
+    if let Some(published) = published_line(&derived) {
+        println!("{published}");
+    }
+    let installed_bytes = fs::metadata(&target_plan.target)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    println!(
+        "images: {}/{} · size: {}",
+        compose.images.kept,
+        compose.images.total,
+        format_bytes(installed_bytes),
+    );
+    print_part_warnings(&styler, &parts);
+    print_warnings(&styler, &compose.warnings);
+    super::overwrite::local::print_commit_result(&result);
+    Ok(())
+}
+
+fn recheck_collection_overwrite(
+    config: &Config,
+    urls: &[WebUrl],
+    options: &CreateOptions,
+    initial: &super::overwrite::OverwritePreflight,
+) -> Result<(), CommandError> {
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    let rows = recapture::index_rows(config);
+    let wanted = urls
+        .iter()
+        .map(|url| url.dedupe_key.clone())
+        .collect::<BTreeSet<_>>();
+    let fresh = recapture::preflight_for_url_outcome(
+        config,
+        &rows,
+        &recorded,
+        &wanted,
+        options.name.as_deref(),
+        None,
+        options.force,
+        &reread_title_fallback(options.name.as_deref(), urls),
+    )?;
+    let same = matches!(
+        fresh,
+        super::recapture::CaptureOutcome::Overwrite(selection)
+            if selection.family.selected_member().path == initial.member.path
+    );
+    if !same {
+        return Err(CommandError::new(
+            "overwrite target changed while the collection was rendering; no files were written",
+        ));
+    }
     Ok(())
 }
 
@@ -1683,32 +2044,9 @@ fn check_collection_overlap(
             return Ok(OverlapCheck::Attach(hit.clone()));
         }
         if hit.is_ref_note {
-            if super::force::is_overwrite(force) {
-                // Reachable when the recapture gate was skipped (for
-                // example `-L` attach without reread force): name the
-                // reread it would take via the typed recapture result.
-                let rows = recapture::index_rows(config);
-                let title_fallback = urls
-                    .first()
-                    .map(|url| url.cleaned.as_str())
-                    .unwrap_or("collection");
-                if let Err(typed) = recapture::preflight_for_url(
-                    config,
-                    &rows,
-                    recorded,
-                    &wanted,
-                    None,
-                    None,
-                    force,
-                    title_fallback,
-                ) {
-                    return Err(typed);
-                }
-                return Err(super::force::overwrite_filed_unavailable());
-            }
             let copy = super::duplicate::copy_from_occupant(config, &hit.path);
             let title = copy.stem.clone();
-            let refusal = super::duplicate::AlreadyCaptured::new(
+            let mut refusal = super::duplicate::AlreadyCaptured::new(
                 title,
                 vec![copy],
                 vec![super::duplicate::Remedy::new(
@@ -1716,6 +2054,10 @@ fn check_collection_overlap(
                     "add --listen to narrate it and attach the episode to the existing capture",
                 )],
             );
+            if super::force::is_overwrite(force) {
+                refusal = refusal
+                    .with_overwrite_target(path_for_report(config, &hit.path));
+            }
             let styler = crate::native::style::Styler::detect();
             return Err(CommandError::new(refusal.render(&styler)));
         }
