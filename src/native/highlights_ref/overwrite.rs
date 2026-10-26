@@ -2068,8 +2068,6 @@ mod tests {
         let frozen = render_frozen_note(
             old,
             "ref/papers/paper.md",
-            "papers",
-            "paper",
             "2026-10-25",
             Some("2020-01-01"),
             "ready",
