@@ -865,8 +865,8 @@ In desktop Obsidian, a Day strip renders as the first child of the
 rendered `bob-plan` block in canonical daily notes (`YYYY/YYYYMMDD.md`),
 with the `.bob-plan` badges directly after it, in Live Preview and
 Reading view. It summarizes that note's date, called D below. Daily
-notes without a `bob-plan` block show no automatic strip. The full-width
-theme bar (else the roots bar) is the strip's last line, so it reads as
+notes without a `bob-plan` block show no automatic strip. The last painted
+bar is the strip's last line, so it reads as
 the separator above the badges. `## Pomodoros` carries no total; the
 strip repeats it, so the heading stays bare.
 
@@ -881,7 +881,7 @@ green check for met, a red ✕ for missed, and the yellow In Progress
 half-ring while today's review is still open. Bob's `display` stays the
 accessible text and tooltip. When today's review flips from not yet to
 met on a live, non-stale repaint of the same day, the check draws itself
-once. The roots legend plus the meta sit over the roots bar: one
+once. The top lane row carries the meta and the switch: one
 `span[role=link]` with as many roots as fit the line in bar order — each
 a hue dot, the legend label, and the value — then one `+N` counter in
 their place, with the timestamp (`so far · HH:MM`, the fetch time of the
@@ -891,12 +891,27 @@ segment per root, `flex-grow` set to minutes and 2 px gaps of note
 background between segments, never track colour. Each segment's `title`
 reads `<label> <display>`; the track (`--background-modifier-border`)
 shows only when the bar is empty or in the skeleton. Below it, the
-themes legend sits over the themes bar, which is the strip's last line
-when present. The themes legend has no meta, so it gets the full width.
-There are no history marks, no collapse control, and no separate Stats
+themes legend sits over the themes bar. The themes legend has no meta, so it gets the full width
+when both lanes show; in themes-only view the themes row takes the top-row
+position with the meta and the switch. There are no history marks, and no separate Stats
 link: every fact is itself the link to Stats, and each bar is a second
 mouse-only target for its legend's action. A metric hidden by
 `stats.hide` is omitted from the strip, not faked.
+
+A quiet switch at the right of the top lane cycles both bars → root
+parents only → themes only. It speaks the strip's own marks: a `●` dot for
+root parents and a `■` rounded square for themes, filled when shown and
+hollow when hidden. It never moves between presses, and its tooltip names
+the current view and the next one. The view is read from memory, never from
+disk, during a paint; every switch repaints from the cache without spawning
+`bob`. The switch paints only when both lanes are available; on a
+zero-Pomodoro day or a day with no theme parts it is absent, and the shown
+lane always matches the choice whenever the switch is visible. The skeleton
+paints the lanes of the current view plus an invisible inert placeholder;
+stale matches ready and the switch works. The group `aria-label` names only
+the shown lanes. When the view changes on the same day, the newly shown lane
+fades in softly over 160 ms; data repaints, day changes, first paints, and
+skeleton → ready never animate.
 
 Segments group D's `worked` minutes by root parent (see
 [pomodoro-homes.md](pomodoro-homes.md)), in the same order as
@@ -995,22 +1010,24 @@ focused; clicking the roots legend or the roots bar opens Stats with
 `worked` focused, D pinned, and "Where the time went" on the Root
 parents view revealed; clicking the themes legend or the themes bar
 opens the same pin on the Themes view (`openStatsForDay({ panel:
-"themes" })`). A plain click reuses an open Stats tab; Ctrl/Cmd-click and
+"themes" })`). The switch is a `span[role=button]` and never opens Stats;
+click, Enter, and Space advance the cycle once, and focus survives the
+repaint. A plain click reuses an open Stats tab; Ctrl/Cmd-click and
 middle-click always open a new tab. Enter and Space
-activate facts and the legends. `mousedown` never steals focus (each bar
-calls `preventDefault`), so vim keeps working.
-Facts and the legends are `span` links (`role="link"`,
-`tabindex="0"`); the bars have no tabindex: the strip contains no
+activate facts, the legends, and the switch. `mousedown` never steals focus (each bar
+and the switch call `preventDefault`), so vim keeps working.
+Facts, the legends, and the switch are keyboard stops
+(`tabindex="0"`); the bars have no tabindex: the strip contains no
 `<button>` elements.
 
 Layout: `.bob-day-strip` keeps `margin: .5rem 0 0` and
 `container-type: inline-size`. `.bob-plan-has-day-strip > .bob-plan`
-takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. The roots
-row sits `~.35em` below the facts, its bar `~.45em` below that row, the
-themes row `~.6em` below the roots bar, and the themes bar `~.45em`
-below its row, with no card, border, background, shadow, or button.
-Height budget at a 16 px base: at most 116 px when the facts fit on one
-line (540 and 700 px), at most 167 px when they wrap once (410 px).
+takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. The top lane
+row sits `~.35em` below the facts, its bar `~.45em` below that row, and a
+following lane row `~.6em` below the bar, with no card, border, background, shadow, or button.
+The `.6em` gap follows a bar. Height budget at a 16 px base: at most 116 px when the facts fit on one
+line (540 and 700 px), at most 167 px when they wrap once (410 px); single-lane
+views hold at most 84 px one-line and 134 px wrapped.
 
 Data: the strip reuses the cached default Stats report when its daily
 series covers every date D−7…D and D is before `report.today`, or D and
@@ -1032,7 +1049,10 @@ Stats page sharing a cache key share one running request.
 Controls: `stats.day_strip` in `~/.config/bob/config.yml` (`true` by
 default) is the durable on/off for the automatic host — explicit fences
 still render when it is `false`. The `Toggle Day stats` command toggles
-automatic strips for the current plugin session. Opening or refreshing a
+automatic strips for the current plugin session. The switch and the `Cycle
+Day stats bars` command set one view for every strip on the device; the view
+is remembered on this device, and `stats.day_strip` and `Toggle Day stats`
+still govern the whole strip. Opening or refreshing a
 strip never changes note bytes and never appends journal events.
 
 ### Browser preview and fixtures
