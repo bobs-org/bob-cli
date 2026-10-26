@@ -1,6 +1,7 @@
 # Development
 
 - [ ] #task Promote me [dependsOn:: dev__dep-one, dev__done-dep] ^promote
+  - ⛓️ **DEPENDS ON:** [[#^dep-one]] • [[#^done-dep]]
   - ![[#^dep-one]]
   - ![[#^done-dep]]
   - ![[#^ref]]
@@ -9,6 +10,7 @@
   - ![[#^fenced-dep]]
   ```
 - [ ] #task Same-file dependency [id:: dev__dep-one] [dependsOn:: Projects__Alpha__dep-two] ^dep-one
+  - ⛓️ **DEPENDS ON:** [[Projects/Alpha#^dep-two]]
   - ![[Projects/Alpha#^dep-two]]
 - [x] #task Completed dependency stays done [id:: dev__done-dep] ^done-dep
 - [ ] #task Plain link is not a dependency ^plain

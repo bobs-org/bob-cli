@@ -3,9 +3,8 @@
 //! A task's prerequisites live as plain task dependency links on one
 //! managed first-child line (`- ⛓️ **DEPENDS ON:** [[#^a]] • [[#^b]]`).
 //! This module owns the line parser ([`parse`]), the canonical formatter
-//! and link form ([`format`]), and the R8 legacy-child recogniser
-//! ([`legacy`]), plus the shared wikilink scanner every implementation
-//! builds on.
+//! and link form ([`format`]), plus the shared wikilink scanner every
+//! implementation builds on.
 
 use std::{
     ffi::OsStr,
@@ -16,13 +15,11 @@ use std::{
 
 pub(crate) mod blocks;
 pub(crate) mod format;
-pub(crate) mod legacy;
 pub(crate) mod parse;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use legacy::legacy_child_reference;
 pub(crate) use parse::{is_dependency_line, DependencyLine};
 
 /// Whether `line` is either machine-owned dependency child line. Keep

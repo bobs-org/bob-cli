@@ -176,15 +176,16 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["references"], 4);
     assert_eq!(json["dependency_references"], 3);
     assert_eq!(json["scanned_files"], 3);
+    assert_eq!(json["legacy_dependency_children"], 0);
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
     assert!(json["cleared"].as_array().unwrap().is_empty());
     assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 0);
     assert_eq!(json["kept_next"], 1);
     assert_eq!(json["kept_in_progress"], 1);
-    // The legacy-window fields above derive Blocked for the two open
-    // dependents while the field-covered legacy chain still promotes
-    // (`docs/task-dependencies.md` §§4.2 R8, 5).
+    // Managed Depends-On links derive Blocked for the two open
+    // dependents and promote the explicit dependency chain
+    // (`docs/task-dependencies.md` §§4.2, 5).
     assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 2);
     assert!(json["marked_blocked"]
         .as_array()
@@ -263,11 +264,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             {"path": "dev.md", "block_id": "promote"}
         ])
     );
-    assert_eq!(json["unresolved_references"].as_array().unwrap().len(), 1);
-    assert!(json["unresolved_references"][0]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("dependency from dev.md:7"));
+    assert!(json["unresolved_references"].as_array().unwrap().is_empty());
     let marked = json["marked_next"].as_array().unwrap();
     assert!(marked.iter().any(|item| {
         item["path"] == "Projects/Alpha.md"
@@ -1161,18 +1158,13 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     );
     let tasks_before = concat!(
         "- [ ] #task Next root [dependsOn:: next-ready, stronger] ^root-next\n",
-        "  - ![[#^next-ready]]\n",
-        "  - ![[#^stronger]]\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^next-ready]] • [[#^stronger]]\n",
         "- [ ] #task Next child ^next-ready\n",
         "- [/] #task Stronger intermediate [dependsOn:: stronger-child] ^stronger\n",
-        "  - ![[#^stronger-child]]\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^stronger-child]]\n",
         "- [ ] #task Stronger descendant ^stronger-child\n",
         "- [/] #task Working root [dependsOn:: working-ready, working-next, done, cancelled, custom] ^root-working\n",
-        "  - ![[#^working-ready]]\n",
-        "  - ![[#^working-next]]\n",
-        "  - ![[#^done]]\n",
-        "  - ![[#^cancelled]]\n",
-        "  - ![[#^custom]]\n",
+        "  - ⛓️ **DEPENDS ON:** [[#^working-ready]] • [[#^working-next]] • [[#^done]] • [[#^cancelled]] • [[#^custom]]\n",
         "- [ ] #task Working ready child ^working-ready\n",
         "- [*] #task Working next child ^working-next\n",
         "- [x] #task Done child ^done\n",
@@ -1182,6 +1174,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     );
     write_file(&daily, daily_before);
     write_file(&tasks, tasks_before);
+    write_blocked_tasks_settings(&vault);
 
     let dry_run = bob_command()
         .args(["task", "reconcile"])
@@ -1199,8 +1192,9 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     let json: serde_json::Value = serde_json::from_str(stdout(&dry_run).trim())
         .expect("ranked propagation dry-run JSON");
     assert_eq!(json["dependency_references"], 8);
-    assert_eq!(json["marked_next"].as_array().unwrap().len(), 2);
+    assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert_eq!(json["marked_in_progress"].as_array().unwrap().len(), 3);
+    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 3);
     assert!(json["cleared"].as_array().unwrap().is_empty());
     assert!(json["marked_in_progress"]
         .as_array()
@@ -1228,23 +1222,23 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         report.contains("marked in progress")
             && report.contains("[ ] or [*] -> [/]")
             && report.contains(
-                "Summary: 2 marked next, 3 marked in progress, 0 cleared"
+                "Summary: 1 marked next, 3 marked in progress, 0 cleared"
             ),
         "unexpected ranked propagation report:\n{}",
         format_output(&applied)
     );
     let contents = fs::read_to_string(&tasks).unwrap();
     for expected in [
-        "- [*] #task Next root [dependsOn:: next-ready, stronger] ^root-next",
-        "- [*] #task Next child ^next-ready",
-        "- [/] #task Stronger intermediate [dependsOn:: stronger-child] ^stronger",
-        "- [/] #task Stronger descendant ^stronger-child",
-        "- [/] #task Working root [dependsOn:: working-ready, working-next, done, cancelled, custom] ^root-working",
-        "- [/] #task Working ready child ^working-ready",
-        "- [/] #task Working next child ^working-next",
-        "- [x] #task Done child ^done",
-        "- [-] #task Cancelled child ^cancelled",
-        "- [!] #task Custom child ^custom",
+        "- [?] #task Next root [dependsOn:: tasks__next-ready, tasks__stronger] ^root-next",
+        "- [*] #task Next child [id:: tasks__next-ready] ^next-ready",
+        "- [?] #task Stronger intermediate [id:: tasks__stronger] [dependsOn:: tasks__stronger-child] ^stronger",
+        "- [/] #task Stronger descendant [id:: tasks__stronger-child] ^stronger-child",
+        "- [?] #task Working root [dependsOn:: tasks__working-ready, tasks__working-next, tasks__done, tasks__cancelled, tasks__custom] ^root-working",
+        "- [/] #task Working ready child [id:: tasks__working-ready] ^working-ready",
+        "- [/] #task Working next child [id:: tasks__working-next] ^working-next",
+        "- [x] #task Done child [id:: tasks__done] ^done",
+        "- [-] #task Cancelled child [id:: tasks__cancelled] ^cancelled",
+        "- [!] #task Custom child [id:: tasks__custom] ^custom",
         "- [*] #task Unreachable next ^orphan",
     ] {
         assert!(
@@ -1277,13 +1271,19 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     assert_success(&without_active_path);
     let contents = fs::read_to_string(&tasks).unwrap();
     assert!(contents.contains(
-        "- [*] #task Next root [dependsOn:: next-ready, stronger] ^root-next"
+        "- [?] #task Next root [dependsOn:: tasks__next-ready, tasks__stronger] ^root-next"
     ));
-    assert!(contents.contains("- [*] #task Next child ^next-ready"));
+    assert!(contents.contains(
+        "- [*] #task Next child [id:: tasks__next-ready] ^next-ready"
+    ));
     assert!(
-        contents.contains("- [/] #task Stronger descendant ^stronger-child")
+        contents.contains(
+            "- [/] #task Stronger descendant [id:: tasks__stronger-child] ^stronger-child"
+        )
     );
-    assert!(contents.contains("- [/] #task Working next child ^working-next"));
+    assert!(contents.contains(
+        "- [/] #task Working next child [id:: tasks__working-next] ^working-next"
+    ));
 }
 
 #[test]

@@ -294,6 +294,7 @@ pub(super) struct SyncResult {
     pub(super) adopted_dependency_lines: Vec<DependencyLineReport>,
     pub(super) healed_dependency_links: Vec<DependencyLineReport>,
     pub(super) canonicalized_dependency_lines: Vec<DependencyLineReport>,
+    /// Kept at zero for one release after retiring R8 child readers.
     pub(super) legacy_dependency_children: usize,
     pub(super) dependency_warnings: Vec<DependencyWarning>,
     pub(super) blocks_line_updates: Vec<BlocksLineUpdate>,

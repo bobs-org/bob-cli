@@ -237,7 +237,7 @@ fn reconcile_projects_line_into_field_and_stamps_target_id() {
 
 #[test]
 fn reconcile_drops_stale_field_id() {
-    // DR3: a field id no link or legacy child accounts for is dropped,
+    // DR3: a field id no managed line link accounts for is dropped,
     // reported in the projection detail, and warned about
     // (`dependency_field_ids_dropped`, `docs/task-dependencies.md` §4).
     let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-r1-drop");
@@ -289,9 +289,8 @@ fn reconcile_drops_stale_field_id() {
 
 #[test]
 fn reconcile_adopts_field_ids_into_canonical_line() {
-    // DR4/DR20: field ids not covered by legacy children gain a
-    // canonical first-child line; the covered legacy child is never
-    // rewritten.
+    // DR4: all adoptable field ids gain a canonical first-child line;
+    // an unrelated body link stays content.
     let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-r2");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -311,8 +310,11 @@ fn reconcile_adopts_field_ids_into_canonical_line() {
     let adopted = json["adopted_dependency_lines"].as_array().unwrap();
     assert_eq!(adopted.len(), 1);
     assert_eq!(adopted[0]["path"], "tasks.md");
-    assert_eq!(adopted[0]["detail"], "  - ⛓️ **DEPENDS ON:** [[#^one]]");
-    assert_eq!(json["legacy_dependency_children"], 1);
+    assert_eq!(
+        adopted[0]["detail"],
+        "  - ⛓️ **DEPENDS ON:** [[#^one]] • [[#^two]]"
+    );
+    assert_eq!(json["legacy_dependency_children"], 0);
 
     let applied = bob_command()
         .args(["task", "reconcile"])
@@ -326,7 +328,7 @@ fn reconcile_adopts_field_ids_into_canonical_line() {
         fs::read_to_string(&tasks).unwrap(),
         concat!(
             "- [?] #task Adopter [dependsOn:: tasks__one, tasks__two] ^adopt\n",
-            "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^one]] • [[#^two]]\n",
             "  - ![[#^two]]\n",
             "- [ ] #task One [id:: tasks__one] ^one\n",
             "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
@@ -953,10 +955,10 @@ fn reconcile_field_writer_handles_trailing_tags() {
 }
 
 #[test]
-fn reconcile_archive_legacy_children_follow_archive_rule() {
-    // Explicit `done/` legacy children follow §4.3 like any other
-    // legacy child: their ids are kept, never warned about, and never
-    // block — both for a line-owning and a field-only dependent.
+fn reconcile_ignores_archive_children_outside_the_depends_on_line() {
+    // Archive links outside the Depends-On line are content. A stale
+    // field id is dropped from a line owner; an unadoptable field-only
+    // id stays with a warning.
     let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-archleg");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -975,11 +977,10 @@ fn reconcile_archive_legacy_children_follow_archive_rule() {
     write_blocked_tasks_settings(&vault);
 
     let json = dry_run_json(&vault, &daily);
-    assert_eq!(json["legacy_dependency_children"], 2);
-    assert!(
-        warning_kinds(&json).is_empty(),
-        "{}",
-        json["dependency_warnings"]
+    assert_eq!(json["legacy_dependency_children"], 0);
+    assert_eq!(
+        warning_kinds(&json),
+        ["dependency_field_ids_dropped", "unadoptable_dependency_id"]
     );
     assert!(
         json["marked_blocked"]
@@ -1001,14 +1002,14 @@ fn reconcile_archive_legacy_children_follow_archive_rule() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("apply archive-legacy run");
+        .expect("apply archive-child run");
     assert_success(&applied);
     let after = fs::read_to_string(&tasks).unwrap();
     // Blocked checkbox plus the BLOCKS mirror on the open prerequisite.
     assert_eq!(
         after,
         concat!(
-            "- [?] #task Dep [dependsOn:: tasks__pre, done__old__gone] ^dep\n",
+            "- [?] #task Dep [dependsOn:: tasks__pre] ^dep\n",
             "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
             "  - ![[done/old#^gone]]\n",
             "- [ ] #task Pre [id:: tasks__pre] ^pre\n",
@@ -1020,7 +1021,7 @@ fn reconcile_archive_legacy_children_follow_archive_rule() {
 
     let second = dry_run_json(&vault, &daily);
     assert_reconciled_clean(&second);
-    assert!(warning_kinds(&second).is_empty());
+    assert_eq!(warning_kinds(&second), ["unadoptable_dependency_id"]);
 }
 
 #[test]
@@ -1298,18 +1299,21 @@ fn reconcile_stamps_cross_note_target_id() {
 }
 
 #[test]
-fn reconcile_legacy_window_with_line_and_children() {
-    // The legacy window (R8): a well-formed line plus a plain
-    // (un-embedded) legacy child project the field together. The child
-    // is never rewritten and counts toward the legacy window.
-    let temp = TempDir::new("bob-cli-task-status-hooks-reconcile-window");
+fn reconcile_does_not_read_child_links_as_dependencies() {
+    // Links outside the managed line remain content. Only the line link
+    // projects its id; child-only links do not create edges, and the
+    // extra field ids are dropped.
+    let temp = TempDir::new("bob-cli-task-status-hooks-child-content");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
     let tasks = vault.join("tasks.md");
     let before = concat!(
+        "- [ ] #task Child-only links stay content ^child-only\n",
+        "  - ![[#^two]]\n",
         "- [ ] #task Dep [dependsOn:: tasks__one, tasks__two] ^dep\n",
         "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
         "  - [[#^two]]\n",
+        "  - ![[#^one]]\n",
         "- [ ] #task One [id:: tasks__one] ^one\n",
         "- [ ] #task Two [id:: tasks__two] ^two\n",
     );
@@ -1317,8 +1321,8 @@ fn reconcile_legacy_window_with_line_and_children() {
     write_blocked_tasks_settings(&vault);
 
     let json = dry_run_json(&vault, &daily);
-    assert_eq!(json["legacy_dependency_children"], 1);
-    assert!(warning_kinds(&json).is_empty());
+    assert_eq!(json["legacy_dependency_children"], 0);
+    assert_eq!(warning_kinds(&json), ["dependency_field_ids_dropped"]);
 
     let applied = bob_command()
         .args(["task", "reconcile"])
@@ -1326,19 +1330,21 @@ fn reconcile_legacy_window_with_line_and_children() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("apply legacy-window run");
+        .expect("apply child-content run");
     assert_success(&applied);
     let after = fs::read_to_string(&tasks).unwrap();
     assert_eq!(
         after,
         concat!(
-            "- [?] #task Dep [dependsOn:: tasks__one, tasks__two] ^dep\n",
+            "- [ ] #task Child-only links stay content ^child-only\n",
+            "  - ![[#^two]]\n",
+            "- [?] #task Dep [dependsOn:: tasks__one] ^dep\n",
             "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
             "  - [[#^two]]\n",
+            "  - ![[#^one]]\n",
             "- [ ] #task One [id:: tasks__one] ^one\n",
             "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
             "- [ ] #task Two [id:: tasks__two] ^two\n",
-            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
         )
     );
     assert!(after.contains("  - [[#^two]]\n"), "{after}");

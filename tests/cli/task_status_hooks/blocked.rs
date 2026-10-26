@@ -321,8 +321,9 @@ fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
         concat!(
             "- [?] #task Return next [dependsOn:: done] [scheduled:: 2026-07-16] ^next\r\n",
             "- [/] #task Working seed [dependsOn:: working] ^seed\r\n",
-            "  - ![[#^working]]\r\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^working]]\r\n",
             "- [?] #task Return working (dependsOn:: missing) (scheduled:: 2026-07-16) ^working\r\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^missing]]\r\n",
             "- [?] #task Return ready [dependsOn:: done] [scheduled:: 2026-07-16] ^ready\r\n",
             "- [?] #task Return ready without metadata ^no-metadata\r\n",
             "- [x] #task Terminal done [dependsOn:: done] ^terminal-done\r\n",
@@ -402,9 +403,9 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
             "- [?] #task Previous direct reference [scheduled:: 2026-07-15] ^previous\n",
             "- [?] #task No recent reference ^ready\n",
             "- [?] #task Root [scheduled:: 2026-07-16] [dependsOn:: working] ^root\n",
-            "  - ![[#^working]]\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^working]]\n",
             "- [/] #task Stronger intermediate [dependsOn:: graph] ^working\n",
-            "  - ![[#^graph]]\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^graph]]\n",
             "- [?] #task Graph-derived recovery ^graph\n",
             "- [ ] #task Ordinary previous reference ^ordinary\n",
             "- [?] #task Future still blocks [scheduled:: 2026-07-17] ^future\n",
@@ -430,7 +431,7 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     assert_eq!(json["previous_daily_file"], "2026/20260710.md");
-    assert_eq!(json["unblocked"].as_array().unwrap().len(), 5);
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 4);
     assert!(json["marked_next"].as_array().unwrap().is_empty());
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
 
@@ -447,8 +448,11 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
     assert!(contents.contains("- [*] #task Current completed reference"));
     assert!(contents.contains("- [*] #task Previous direct reference"));
     assert!(contents.contains("- [ ] #task No recent reference"));
-    assert!(contents.contains("- [*] #task Root"));
-    assert!(contents.contains("- [/] #task Graph-derived recovery"));
+    assert!(contents.contains("- [?] #task Root"));
+    assert!(
+        contents.contains("- [/] #task Graph-derived recovery"),
+        "{contents}"
+    );
     assert!(contents.contains("- [ ] #task Ordinary previous reference"));
     assert!(contents.contains("- [?] #task Future still blocks"));
     assert!(contents.contains("- [?] #task Dependency still blocks"));
@@ -1448,7 +1452,7 @@ fn reconcile_keeps_field_only_internal_prj_ids_unprojected() {
 }
 
 #[test]
-fn reconcile_does_not_warn_for_an_unfielded_internal_legacy_child() {
+fn reconcile_does_not_warn_for_an_unfielded_internal_child_link() {
     let temp = TempDir::new("bob-cli-task-status-hooks-prj-internal-unfielded");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
@@ -1481,7 +1485,7 @@ fn reconcile_does_not_warn_for_an_unfielded_internal_legacy_child() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("dry-run unfielded internal legacy child");
+        .expect("dry-run unfielded internal child link");
     assert_success(&dry_run);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();

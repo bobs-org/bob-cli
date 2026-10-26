@@ -581,7 +581,7 @@ pub(super) fn archive_stayed_block_ids(
 ///
 /// Rewrites `[[#^x]]` (with optional alias and `!`) to
 /// `[[<source>#^x]]` when `x` stayed in the source note, so archived
-/// Depends-On lines and legacy children keep pointing at the target
+/// Depends-On lines and child links keep pointing at the target
 /// that did not move. Fenced code and inline code spans are untouched.
 pub(super) fn repair_pathless_archive_links(
     contents: &str,

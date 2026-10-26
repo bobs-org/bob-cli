@@ -5,7 +5,6 @@ use super::super::capture::parse_managed_task_log_marker;
 use super::super::task_dependencies::{
     blocks::{self, BlocksLine, BlocksLinePlan, BlocksUpdateKind},
     format::canonical_link,
-    legacy::legacy_child_reference,
     parse::{self as dep_parse, DependencyLine},
 };
 use super::super::vault_links::NoteIndex;
@@ -283,7 +282,6 @@ fn mc15_recognisers_never_claim_relation_lines() {
     let links = "- 🪢 **LINKS:** [[#^a]]";
     let linked_from = "- 🪢 **LINKED FROM:** [[#^b]] (see)";
     for line in [links, linked_from] {
-        assert_eq!(legacy_child_reference(line), None, "{line}");
         assert!(parse_managed_task_log_marker(line).is_none(), "{line}");
         assert!(!dep_parse::is_dependency_line(line), "{line}");
         assert!(!blocks::is_blocks_line(line), "{line}");

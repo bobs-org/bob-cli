@@ -28,7 +28,6 @@ pub(super) struct ReconcileOutcome {
     pub(super) adopted: Vec<DependencyLineReport>,
     pub(super) healed: Vec<DependencyLineReport>,
     pub(super) canonicalized: Vec<DependencyLineReport>,
-    pub(super) legacy_children: usize,
     pub(super) warnings: Vec<DependencyWarning>,
     /// Vault-wide ids of archive (`done/`) prerequisites: kept in the
     /// field, never warned about, never blocking.
@@ -154,7 +153,6 @@ impl ReconcileOutcome {
             adopted: Vec::new(),
             healed: Vec::new(),
             canonicalized: Vec::new(),
-            legacy_children: 0,
             warnings: Vec::new(),
             archive_closed_ids: BTreeSet::new(),
             original_contents: BTreeMap::new(),
@@ -437,7 +435,7 @@ impl<'a> ReconcileWorker<'a> {
         }
     }
 
-    /// Resolution of one Depends-On link or legacy child target.
+    /// Resolution of one Depends-On line link target.
     fn resolve_link_target(
         &mut self,
         source: &Path,
@@ -531,7 +529,7 @@ impl<'a> ReconcileWorker<'a> {
     }
 }
 
-/// What one Depends-On link (or legacy child) resolved to.
+/// What one Depends-On line link resolved to.
 #[derive(Debug, Clone)]
 enum LinkTarget {
     /// A scanned vault task.
@@ -584,12 +582,11 @@ impl ReconcileWorker<'_> {
             view.task.line_index,
         );
         let child_index = child.as_ref().map(|child| child.line_index);
-        let legacy = self.plan_legacy(view, child_index, inputs);
         match child.map(|child| child.parsed) {
             // `dependency_child_of` never returns `NotALine`, but the
             // type says it can; both mean "no managed line" (R2).
             None | Some(task_dependencies::DependencyLine::NotALine) => {
-                self.plan_adoption(view, &legacy, None);
+                self.plan_adoption(view);
             }
             Some(task_dependencies::DependencyLine::Malformed) => {
                 self.outcome
@@ -605,7 +602,7 @@ impl ReconcileWorker<'_> {
                 let Some(child_index) = child_index else {
                     return;
                 };
-                self.plan_empty(view, &legacy, child_index);
+                self.plan_empty(view, child_index);
             }
             Some(task_dependencies::DependencyLine::Accepted {
                 links,
@@ -618,7 +615,6 @@ impl ReconcileWorker<'_> {
                     view,
                     files,
                     inputs,
-                    &legacy,
                     child_index,
                     links,
                     canonical,
@@ -630,9 +626,9 @@ impl ReconcileWorker<'_> {
 
 impl ReconcileWorker<'_> {
     /// PDS8: skip projecting a `^prj` target in its own note or any
-    /// descendant note. Depends-On line links always warn; legacy-child
-    /// and field-adoption paths warn only when the target's `[id::]` value
-    /// is named in the field. Returns true for every internal target.
+    /// descendant note. Depends-On line links always warn; field-adoption
+    /// paths warn only when the target's `[id::]` value is named in the
+    /// field. Returns true for every internal target.
     fn warn_project_internal_target(
         &mut self,
         view: &TaskView<'_>,
@@ -715,180 +711,7 @@ impl LinkTarget {
     }
 }
 
-/// One R8 legacy child that counts as a dep link: its resolved target
-/// plus the vault-wide id the field matched.
-struct LegacyMember {
-    path: PathBuf,
-    block: String,
-    id: String,
-    archive: bool,
-}
-
 impl ReconcileWorker<'_> {
-    /// Collect the dependent's R8 legacy children: direct child
-    /// bullets whose only content is one block link and whose target
-    /// id is managed by the dependent's field. Never rewritten here;
-    /// the vault migration folds them into the line.
-    fn plan_legacy(
-        &mut self,
-        view: &TaskView<'_>,
-        dependency_line: Option<usize>,
-        inputs: &mut Vec<InputSnapshot>,
-    ) -> Vec<LegacyMember> {
-        let mut members = Vec::new();
-        if view.task.depends_on.is_empty() {
-            return members;
-        }
-        // Two passes: collect candidate child links while borrowing
-        // the snapshot, then resolve (which mutates the archive cache).
-        let candidates = {
-            let snap = &self.snapshots[view.file_index];
-            let refs: Vec<&str> =
-                snap.lines.iter().map(String::as_str).collect();
-            let source_indent =
-                leading_indentation_width(refs[view.task.line_index]);
-            let mut candidates = Vec::new();
-            for line_index in view.task.line_index + 1..refs.len() {
-                if dependency_line == Some(line_index) {
-                    continue;
-                }
-                let line = refs[line_index];
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if snap.fenced.contains(&line_index) {
-                    continue;
-                }
-                if leading_indentation_width(line) <= source_indent {
-                    break;
-                }
-                if nearest_parent_list_item(&refs, line_index)
-                    != Some(view.task.line_index)
-                {
-                    continue;
-                }
-                let Some(legacy) =
-                    task_dependencies::legacy_child_reference(line)
-                else {
-                    continue;
-                };
-                // Explicit `done/` targets resolve through the archive
-                // catalog below and follow §4.3 like any other legacy
-                // child; they are never skipped here.
-                candidates.push((legacy.target, legacy.block_id));
-            }
-            candidates
-        };
-        for (target, block_id) in candidates {
-            let resolved = self.resolve_link_target(
-                view.relative_path,
-                view.task.block_id.as_deref(),
-                &target,
-                &block_id,
-                inputs,
-            );
-            match resolved {
-                LinkTarget::Task {
-                    path, block, id, ..
-                } => {
-                    if self.warn_project_internal_target(
-                        view,
-                        &path,
-                        &block,
-                        id.as_deref(),
-                        false,
-                    ) {
-                        continue;
-                    }
-                    let Some(matched) =
-                        self.legacy_cover(view, &path, &block, id.as_deref())
-                    else {
-                        continue;
-                    };
-                    members.push(LegacyMember {
-                        path,
-                        block,
-                        id: matched,
-                        archive: false,
-                    });
-                }
-                LinkTarget::Archive { path, block, id } => {
-                    let matched = match id {
-                        Some(id)
-                            if view
-                                .task
-                                .depends_on
-                                .iter()
-                                .any(|dependency| dependency == &id) =>
-                        {
-                            Some(id)
-                        }
-                        _ => task_dependencies::dependency_id(&path, &block)
-                            .ok()
-                            .filter(|canonical| {
-                                view.task
-                                    .depends_on
-                                    .iter()
-                                    .any(|dependency| dependency == canonical)
-                            }),
-                    };
-                    let Some(matched) = matched else {
-                        continue;
-                    };
-                    members.push(LegacyMember {
-                        path,
-                        block,
-                        id: matched,
-                        archive: true,
-                    });
-                }
-                LinkTarget::NonTask { .. }
-                | LinkTarget::SelfTarget
-                | LinkTarget::Unresolved => continue,
-            }
-        }
-        members
-    }
-
-    /// The field id covering a scanned legacy target: its `[id::]`,
-    /// canonical id, or same-note bare block id — or `None` when the
-    /// field manages none of them and the child is content, not an
-    /// edge.
-    fn legacy_cover(
-        &self,
-        view: &TaskView<'_>,
-        target_path: &Path,
-        block_id: &str,
-        task_id: Option<&str>,
-    ) -> Option<String> {
-        if let Some(task_id) = task_id
-            && view
-                .task
-                .depends_on
-                .iter()
-                .any(|dependency| dependency == task_id)
-        {
-            return Some(task_id.to_string());
-        }
-        if let Ok(canonical) =
-            task_dependencies::dependency_id(target_path, block_id)
-            && view
-                .task
-                .depends_on
-                .iter()
-                .any(|dependency| dependency == &canonical)
-        {
-            return Some(canonical);
-        }
-        (target_path == view.relative_path
-            && view
-                .task
-                .depends_on
-                .iter()
-                .any(|dependency| dependency == block_id))
-        .then(|| block_id.to_string())
-    }
-
     /// R1 with healing and canonicalisation: resolve every line link,
     /// heal what R3 covers, project the field, and rewrite the line
     /// when it is healed or non-canonical.
@@ -898,7 +721,6 @@ impl ReconcileWorker<'_> {
         view: &TaskView<'_>,
         files: &[FileScan],
         inputs: &mut Vec<InputSnapshot>,
-        legacy: &[LegacyMember],
         child_index: usize,
         links: Vec<task_dependencies::parse::DependencyLink>,
         canonical: bool,
@@ -1060,21 +882,6 @@ impl ReconcileWorker<'_> {
             link.new_text = text.clone();
             line_links.push(text);
         }
-        for member in legacy {
-            let identity = (member.path.clone(), member.block.clone());
-            if seen.insert(identity.clone()) {
-                if member.archive {
-                    self.outcome.archive_closed_ids.insert(member.id.clone());
-                }
-                set.push((
-                    identity.0,
-                    identity.1,
-                    member.id.clone(),
-                    member.archive,
-                ));
-            }
-        }
-        self.outcome.legacy_children += legacy.len();
         self.record_graph(view, &set);
         self.project_field(view, &set, unresolved);
         let healed_any = planned.iter().any(|link| link.healed);
@@ -1357,23 +1164,10 @@ impl ReconcileWorker<'_> {
         self.write_dependent_field(view, next, detail);
     }
 
-    /// R9: a label-only line is the source of truth — with no legacy
-    /// children behind it the line is deleted and the field goes with
-    /// it, whatever the field holds. Adoptable ids are never
-    /// re-adopted onto the line (DW5/DR16). Legacy children are never
-    /// folded into the line here; they follow R8/R1 through the
-    /// adoption path below, and the vault migration owns that write.
-    fn plan_empty(
-        &mut self,
-        view: &TaskView<'_>,
-        legacy: &[LegacyMember],
-        child_index: usize,
-    ) {
-        if legacy.is_empty() {
-            self.remove_label_only_line(view, child_index);
-            return;
-        }
-        self.plan_adoption(view, legacy, Some(child_index));
+    /// R9: a label-only line is the source of truth — it is deleted and
+    /// the field goes with it, whatever the field holds.
+    fn plan_empty(&mut self, view: &TaskView<'_>, child_index: usize) {
+        self.remove_label_only_line(view, child_index);
     }
 
     /// Report a deleted label-only Depends-On line.
@@ -1479,49 +1273,12 @@ impl ReconcileWorker<'_> {
         }
     }
 
-    /// R2: without a line, adopt field ids not covered by legacy
-    /// children — write one canonical line for the adoptable ones. Ids
+    /// R2: without a line, adopt every field id that has a task with a
+    /// block id — write one canonical line for the adoptable ones. Ids
     /// with no `^block-id` anywhere stay in the field with a warning.
     /// Never infer a removal from a missing line.
-    fn plan_adoption(
-        &mut self,
-        view: &TaskView<'_>,
-        legacy: &[LegacyMember],
-        empty_line: Option<usize>,
-    ) {
-        self.outcome.legacy_children += legacy.len();
-        let covered: BTreeSet<&str> =
-            legacy.iter().map(|member| member.id.as_str()).collect();
-        let uncovered: Vec<String> = view
-            .task
-            .depends_on
-            .iter()
-            .filter(|id| !covered.contains(id.as_str()))
-            .cloned()
-            .collect();
-        if uncovered.is_empty() {
-            if let Some(child_index) = empty_line {
-                // Label-only line, nothing behind it: R9 deletes the
-                // line. Every field id is covered here, so a remaining
-                // field still covers legacy children and stays; an empty
-                // field needs no rewrite.
-                self.remove_line(view.file_index, child_index);
-                self.push_line_removed(view, child_index);
-            }
-            let set: Vec<(PathBuf, String, String, bool)> = legacy
-                .iter()
-                .map(|member| {
-                    (
-                        member.path.clone(),
-                        member.block.clone(),
-                        member.id.clone(),
-                        member.archive,
-                    )
-                })
-                .collect();
-            self.record_graph(view, &set);
-            return;
-        }
+    fn plan_adoption(&mut self, view: &TaskView<'_>) {
+        let uncovered = view.task.depends_on.clone();
         // Vault tasks carrying each uncovered id that have a block id.
         let mut by_id: BTreeMap<String, Vec<(PathBuf, String)>> =
             BTreeMap::new();
@@ -1580,22 +1337,12 @@ impl ReconcileWorker<'_> {
             }
             adopted.push((path, block, id.clone()));
         }
-        // Set order mirrors the line the adoption writes (adopted
-        // links first) followed by legacy children, per the §4.2 set
-        // definition.
+        // Set order mirrors the line the adoption writes.
         let set: Vec<(PathBuf, String, String, bool)> = adopted
             .iter()
             .map(|(path, block, id)| {
                 (path.clone(), block.clone(), id.clone(), false)
             })
-            .chain(legacy.iter().map(|member| {
-                (
-                    member.path.clone(),
-                    member.block.clone(),
-                    member.id.clone(),
-                    member.archive,
-                )
-            }))
             .collect();
         self.record_graph(view, &set);
         // Unadoptable ids stay in the field (R2); the projected field
@@ -1610,17 +1357,7 @@ impl ReconcileWorker<'_> {
             }
         }
         if adopted.is_empty() {
-            if let Some(child_index) = empty_line {
-                // Nothing adoptable behind a label-only line: R9 deletes
-                // the line (DW5/DR16), reported as `line_removed`.
-                // `plan_empty` already handled the no-legacy-children case
-                // (the field goes with the line there); legacy coverage
-                // here keeps the field (R2).
-                self.remove_line(view.file_index, child_index);
-                self.push_line_removed(view, child_index);
-            }
-            // R2 keep path: ids staying in the field warn here, since the
-            // R9 drop above reports its own removal instead.
+            // R2 keep path: ids staying in the field warn here.
             self.warn_kept_ids(view, &self_named, &unadoptable);
             if next != view.task.depends_on {
                 let detail = format!("dependsOn := {}", next.join(", "));
@@ -1637,24 +1374,15 @@ impl ReconcileWorker<'_> {
         // Adopted alongside ids that stay in the field (R2): those
         // warn here, since collection above no longer warns inline.
         self.warn_kept_ids(view, &self_named, &unadoptable);
-        let (position, indent) = self.child_slot(view, empty_line);
+        let (position, indent) = self.child_slot(view, None);
         let line =
             task_dependencies::format::format_dependency_line(&indent, &texts);
-        if let Some(child_index) = empty_line {
-            self.replace_line(view.file_index, child_index, &line);
-            self.outcome.adopted.push(DependencyLineReport {
-                path: display_path(view.relative_path),
-                line: child_index + 1,
-                detail: line,
-            });
-        } else {
-            self.insert_line(view.file_index, position, &line);
-            self.outcome.adopted.push(DependencyLineReport {
-                path: display_path(view.relative_path),
-                line: position + 1,
-                detail: line,
-            });
-        }
+        self.insert_line(view.file_index, position, &line);
+        self.outcome.adopted.push(DependencyLineReport {
+            path: display_path(view.relative_path),
+            line: position + 1,
+            detail: line,
+        });
         if next != view.task.depends_on {
             let detail = format!("dependsOn := {}", next.join(", "));
             self.write_dependent_field(view, next.clone(), detail);

@@ -164,8 +164,7 @@ pub(crate) fn blocking_open_dependency_ids(
 
 /// Drop ids that name a task in `file` itself. Internal `^prj` targets
 /// never project (PDR7), so they must not become project reasons even
-/// when a field-only adoption or legacy child left them in
-/// `[dependsOn::]`.
+/// when field-only adoption left them in `[dependsOn::]`.
 pub(crate) fn filter_internal_project_ids(
     file: &FileScan,
     open_ids: &[String],

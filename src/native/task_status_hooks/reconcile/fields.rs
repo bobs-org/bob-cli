@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn dr_field_projection_vectors() {
         // Table-driven DR coverage for the reconcile field writer: each
-        // row pins how a dependent's line links plus legacy children
+        // row pins how a dependent's line links
         // project into `[dependsOn::]` in set order. Full R1–R10 flow
         // (adopt/heal/canonicalize/warn) is pinned by the hooks' CLI
         // `dependency_lines` suite; this table pins the pure projection.

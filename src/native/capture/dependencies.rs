@@ -1080,10 +1080,10 @@ fn resolve_prerequisites(
     Ok((resolved, repeats, touches))
 }
 
-/// Vault-wide dependency edges from managed lines and covered legacy
-/// children, resolved against staged contents: `(note, block)` pairs
-/// with the prerequisite pairs their lines name. Unresolvable links
-/// contribute no edges (R4 keeps them verbatim; they never block).
+/// Vault-wide dependency edges from managed lines, resolved against
+/// staged contents: `(note, block)` pairs with the prerequisite pairs
+/// their lines name. Unresolvable links contribute no edges (R4 keeps
+/// them verbatim; they never block).
 pub(super) struct DependencyGraph {
     pub(super) edges: BTreeMap<(String, String), BTreeSet<(String, String)>>,
     /// Live openness per identity, from the same staged scans.
@@ -1428,69 +1428,6 @@ pub(super) fn managed_children(
         }
     }
     found
-}
-
-/// Direct-child legacy task links under `task_line`, in document order,
-/// with their line indices.
-fn legacy_children(
-    lines: &[&str],
-    fenced: &BTreeSet<usize>,
-    task_line: usize,
-    managed_at: Option<usize>,
-) -> Vec<(usize, task_dependencies::legacy::LegacyChildLink)> {
-    let mut found = Vec::new();
-    let Some(first) = lines.get(task_line) else {
-        return found;
-    };
-    let source_indent = task_status_hooks::leading_indentation_width(first);
-    for line_index in task_line + 1..lines.len() {
-        if Some(line_index) == managed_at {
-            continue;
-        }
-        let line = lines[line_index];
-        if line.trim().is_empty() {
-            continue;
-        }
-        if fenced.contains(&line_index) {
-            continue;
-        }
-        if task_status_hooks::leading_indentation_width(line) <= source_indent {
-            break;
-        }
-        if task_status_hooks::nearest_parent_list_item(lines, line_index)
-            != Some(task_line)
-        {
-            continue;
-        }
-        if let Some(legacy) = task_dependencies::legacy_child_reference(line) {
-            found.push((line_index, legacy));
-        }
-    }
-    found
-}
-
-/// Whether a legacy child's resolved target is already managed by the
-/// dependent's field: its `[id::]`, canonical id, or same-note bare
-/// block id (mirrors the hooks' R8 field gate).
-fn legacy_covered(
-    field_ids: &[String],
-    target_id: Option<&str>,
-    target_rel: &Path,
-    block_id: &str,
-    dependent_rel: &Path,
-) -> bool {
-    if let Some(task_id) = target_id
-        && field_ids.iter().any(|id| id == task_id)
-    {
-        return true;
-    }
-    if let Ok(canonical) =
-        task_dependencies::dependency_id(target_rel, block_id)
-        && field_ids.iter().any(|id| id == &canonical)
-    {
-        return true;
-    }
-    target_rel == dependent_rel && field_ids.iter().any(|id| id == block_id)
 }
 
 /// Reject any *new* edge that closes a dependency cycle, including
@@ -1951,12 +1888,12 @@ pub(super) fn verbatim_link(
 }
 
 /// Merge new prerequisites into an existing dependent's managed line:
-/// existing links keep order, covered legacy children fold, field-only
-/// dependencies adopt, and typed modifiers append. Returns the merged
+/// existing links keep order, field-only dependencies adopt, and typed
+/// modifiers append. Returns the merged
 /// members in line order, the pre-existing identity set (for cycle and
 /// already-present checks), whether an unresolvable link was kept
-/// verbatim, and the folded legacy line removals. Every side-effect
-/// stamp staged along the way is pushed to `touches`.
+/// verbatim. Every side-effect stamp staged along the way is pushed to
+/// `touches`.
 #[allow(clippy::too_many_arguments)]
 fn merge_existing_members(
     ctx: &DependencyContext,
@@ -1968,20 +1905,12 @@ fn merge_existing_members(
     dep_desc: &str,
     managed_text: Option<&str>,
     existing_links: &[task_dependencies::parse::DependencyLink],
-    legacy: &[(usize, task_dependencies::legacy::LegacyChildLink)],
     field_ids: &[String],
     prereqs: &[ResolvedPrerequisite],
     warnings: &mut Vec<CaptureWarning>,
     touches: &mut Vec<TargetTouch>,
-) -> Result<
-    (
-        Vec<MergedMember>,
-        BTreeSet<(String, String)>,
-        bool,
-        Vec<usize>,
-    ),
-    CaptureError,
-> {
+) -> Result<(Vec<MergedMember>, BTreeSet<(String, String)>, bool), CaptureError>
+{
     let mut merged: Vec<MergedMember> = Vec::new();
     let mut known: BTreeSet<(String, String)> = BTreeSet::new();
     let mut accounted_ids: BTreeSet<String> = BTreeSet::new();
@@ -2103,108 +2032,6 @@ fn merge_existing_members(
             }
         }
     }
-    // Covered legacy children fold into the line; uncovered ones are
-    // content and stay. Unresolvable legacy targets refuse rather than
-    // lose the relationship.
-    let mut remove_lines = Vec::new();
-    for (line_index, legacy) in legacy {
-        let target = legacy.target.trim();
-        let Some(target_rel) = index.resolve(Some(dep_rel), target) else {
-            return Err(CaptureError::usage(format!(
-                "cannot merge dependencies for {dep_desc}: legacy task link '{target}#^{block}' did not resolve uniquely; repair or remove that child line, then capture again",
-                block = legacy.block_id
-            )));
-        };
-        let absolute = absolute_note(bob_dir, &target_rel);
-        let identity = read_identity_for_link(
-            ctx,
-            planner,
-            &target_rel,
-            &absolute,
-            &legacy.block_id,
-            dependent,
-        );
-        let cover_id = match &identity {
-            LinkIdentity::Task { id } => id.clone().or_else(|| {
-                task_dependencies::dependency_id(&target_rel, &legacy.block_id)
-                    .ok()
-            }),
-            LinkIdentity::Archive { id } => id.clone().or_else(|| {
-                task_dependencies::dependency_id(&target_rel, &legacy.block_id)
-                    .ok()
-            }),
-            LinkIdentity::Unresolved
-            | LinkIdentity::NonTask
-            | LinkIdentity::SelfTarget => None,
-        };
-        if !legacy_covered(
-            field_ids,
-            cover_id.as_deref(),
-            &target_rel,
-            &legacy.block_id,
-            dep_rel,
-        ) {
-            continue;
-        }
-        let projected = match identity {
-            LinkIdentity::Task { id } => match id {
-                Some(id) => Some(id),
-                None => {
-                    let (stamped, line) = project_prerequisite_id(
-                        ctx,
-                        planner,
-                        &target_rel,
-                        &absolute,
-                        &legacy.block_id,
-                        dep_desc,
-                    )?;
-                    if let Some(line) = line {
-                        touches.push(TargetTouch {
-                            absolute: absolute.clone(),
-                            relative: target_rel.clone(),
-                            block_id: legacy.block_id.clone(),
-                            line,
-                        });
-                    }
-                    Some(stamped)
-                }
-            },
-            LinkIdentity::Archive { id } => match id {
-                Some(id) => Some(id),
-                None => archive_projected_id(
-                    ctx,
-                    planner,
-                    &target_rel,
-                    &absolute,
-                    &legacy.block_id,
-                ),
-            },
-            LinkIdentity::Unresolved
-            | LinkIdentity::NonTask
-            | LinkIdentity::SelfTarget => None,
-        };
-        let Some(id) = projected else {
-            return Err(CaptureError::usage(format!(
-                "cannot merge dependencies for {dep_desc}: legacy task link '{target}#^{block}' has no usable [id::]; add one to that task, then capture again",
-                block = legacy.block_id
-            )));
-        };
-        let identity = (display_relative(&target_rel), legacy.block_id.clone());
-        if known.insert(identity.clone()) {
-            accounted_ids.insert(id.clone());
-            merged.push(MergedMember {
-                identity,
-                link_text: prerequisite_link_text(
-                    index,
-                    dep_rel,
-                    &target_rel,
-                    &legacy.block_id,
-                ),
-                projected_id: Some(id),
-            });
-        }
-        remove_lines.push(*line_index);
-    }
     // Field-only dependencies adopt before typed modifiers are added:
     // unaccounted field ids resolve vault-wide, staying in field order.
     let mut stale_ids = Vec::new();
@@ -2269,7 +2096,7 @@ fn merge_existing_members(
                 .into(),
         );
     }
-    Ok((merged, pre_existing, kept_unresolved, remove_lines))
+    Ok((merged, pre_existing, kept_unresolved))
 }
 
 /// Apply a dependency-only capture to an explicitly selected existing
@@ -2394,25 +2221,21 @@ pub(super) fn plan_existing_task_dependencies(
             }
         },
     };
-    let legacy_all =
-        legacy_children(&lines, &fenced, dependent_line_index, managed_at);
-    let (mut merged, pre_existing, kept_unresolved, remove_lines) =
-        merge_existing_members(
-            ctx,
-            planner,
-            bob_dir,
-            &index,
-            &dep_rel,
-            &dependent,
-            &dep_desc,
-            managed_text,
-            &existing_links,
-            &legacy_all,
-            &metadata.depends_on,
-            &prereqs,
-            warnings,
-            &mut touches,
-        )?;
+    let (mut merged, pre_existing, kept_unresolved) = merge_existing_members(
+        ctx,
+        planner,
+        bob_dir,
+        &index,
+        &dep_rel,
+        &dependent,
+        &dep_desc,
+        managed_text,
+        &existing_links,
+        &metadata.depends_on,
+        &prereqs,
+        warnings,
+        &mut touches,
+    )?;
     // Hand-authored same-note and descendant links on a `^prj` line stay
     // on the line but are never projected into `[dependsOn::]` (§13.6).
     if prj_project.is_some() {
@@ -2505,15 +2328,6 @@ pub(super) fn plan_existing_task_dependencies(
         if child_changed {
             note.lines[managed_idx] = rebuilt;
         }
-        let mut folded = remove_lines.clone();
-        folded.sort();
-        folded.dedup();
-        folded.reverse();
-        for line_index in folded {
-            if line_index < note.lines.len() {
-                note.lines.remove(line_index);
-            }
-        }
     } else {
         let slot = cancel_log_aware_slot(&note, fresh_at);
         let indent = first_child_indent(&note, fresh_at);
@@ -2521,18 +2335,6 @@ pub(super) fn plan_existing_task_dependencies(
             dependency_format::format_dependency_line(&indent, &link_texts);
         note.lines.insert(slot, new_child);
         child_changed = true;
-        let mut folded = remove_lines.clone();
-        folded.sort();
-        folded.dedup();
-        folded.reverse();
-        for mut line_index in folded {
-            if line_index >= slot {
-                line_index += 1;
-            }
-            if line_index < note.lines.len() {
-                note.lines.remove(line_index);
-            }
-        }
     }
     // Derive fields and status on the dependent line. Freshness stamps
     // only when this gesture actually edits the dependent; the stamp

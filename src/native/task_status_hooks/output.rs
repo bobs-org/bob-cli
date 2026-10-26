@@ -169,12 +169,11 @@ pub(super) fn print_human_result(result: &SyncResult) {
         println!("  recovery copies: {recovery}");
     }
     println!(
-        "Dependencies: {} projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted",
+        "Dependencies: {} projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted",
         result.dependency_projection_updates.len(),
         result.adopted_dependency_lines.len(),
         result.healed_dependency_links.len(),
         result.canonicalized_dependency_lines.len(),
-        result.legacy_dependency_children,
         result.dependency_warnings.len(),
         result.blocks_line_updates.len(),
         result.minted_dependent_block_ids.len()
@@ -186,7 +185,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.relation_warnings.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -205,7 +204,6 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.adopted_dependency_lines.len(),
         result.healed_dependency_links.len(),
         result.canonicalized_dependency_lines.len(),
-        result.legacy_dependency_children,
         result.dependency_warnings.len(),
         result.blocks_line_updates.len(),
         result.minted_dependent_block_ids.len(),
@@ -379,18 +377,6 @@ pub(super) fn print_dependency_projection_sections(
                 entry.detail
             );
         }
-    }
-    if result.legacy_dependency_children > 0 {
-        println!();
-        println!(
-            "  {} legacy dependency {} (counted for the legacy-window retirement decision)",
-            result.legacy_dependency_children,
-            if result.legacy_dependency_children == 1 {
-                "child"
-            } else {
-                "children"
-            }
-        );
     }
 }
 

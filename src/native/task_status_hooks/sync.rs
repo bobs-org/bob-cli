@@ -567,13 +567,8 @@ pub(super) fn sync_task_statuses(
     dependency_warnings.extend(blocks.warnings);
     let task_blocks = task_blocks(&files);
     let mut unresolved = Vec::new();
-    let dependency_edges = dependency_edges(
-        &files,
-        &note_index,
-        &task_blocks,
-        &project_tree,
-        &mut unresolved,
-    );
+    let dependency_edges =
+        dependency_edges(&files, &note_index, &task_blocks, &project_tree);
     let reference_resolver = TaskReferenceResolver {
         note_index: &note_index,
         task_blocks: &task_blocks,
@@ -993,7 +988,8 @@ pub(super) fn sync_task_statuses(
         adopted_dependency_lines: reconcile.adopted,
         healed_dependency_links: reconcile.healed,
         canonicalized_dependency_lines: reconcile.canonicalized,
-        legacy_dependency_children: reconcile.legacy_children,
+        // Kept at zero for one release to preserve the hooks JSON contract.
+        legacy_dependency_children: 0,
         dependency_warnings,
         blocks_line_updates: blocks.updates,
         minted_dependent_block_ids: blocks.mints,

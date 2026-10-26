@@ -20,10 +20,9 @@ In practice it:
   Progress, and reconcile keeps both.)
   The single exception is a Next task that lives in a canonical daily note
   or the selected current ledger, which still clears once unlinked and stale
-- Follows task dependency links on each task's managed Depends-On line
-  (`⛓️ **DEPENDS ON:**`, see the
-  [task dependency contract](task-dependencies.md)) plus R8 legacy
-  dependency children, and promotes those too
+- Follows task dependency links only on each task's managed Depends-On
+  line (`⛓️ **DEPENDS ON:**`, see the
+  [task dependency contract](task-dependencies.md)) and promotes those
 - Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
   future `[scheduled:: YYYY-MM-DD]` date
 - Cleans the ledger: de-duplicates links across open Pomodoros, retires
@@ -242,9 +241,9 @@ dependency chain stop contributing desired Next or In-Progress state in that
 same run.
 
 After resolving the surviving direct Pomodoro links, the command reads
-dependency edges from the linked tasks' Depends-On lines plus their R8
-legacy children, per the
-[task dependency contract](task-dependencies.md). A Depends-On line is the
+dependency edges only from the linked tasks' Depends-On lines, per the
+[task dependency contract](task-dependencies.md). Other child links are
+content and do not affect dependency promotion. A Depends-On line is the
 single managed first-child line holding a task's plain dependency links:
 
 ```markdown
@@ -254,15 +253,12 @@ single managed first-child line holding a task's plain dependency links:
 ```
 
 Same-note and cross-note targets use the same resolver as Pomodoro links.
-Every resolved line link to a scanned Tasks task is an edge. A legacy
-child — a direct child bullet whose only content is one block link
-(plain, `![[…]]`, `~~[[…]]~~`, or `~~![[…]]~~`) — is an edge only when
-its resolved target's id (its `[id::]`, canonical id, or same-note bare
-block id) is in the dependent's `[dependsOn::]` field. Sole embeds that
-are not field-managed (for example `#^ref` reading embeds), links into
-`done/`, fenced examples, and targets without a matching task block are
-never edges; archive targets never warn. Other unresolvable candidates
-emit a warning naming the referencing task's file and line.
+Every resolved line link to a scanned Tasks task is an edge. Links in
+other child bullets, including plain links, embeds, and struck links,
+are content and never edges. Links into `done/`, fenced examples, and
+targets without a matching task block are never edges; archive targets
+never warn. Other unresolvable line links emit a warning naming the
+referencing task's file and line.
 
 Block fragments are file-scoped: `Alpha.md#^review` and `Beta.md#^review` are
 distinct graph nodes, and an explicit note path selects only its named
@@ -331,9 +327,9 @@ dependents (`TODO`, `IN_PROGRESS`, `ON_HOLD`, including `[?]`) are
 reconciled; closed tasks are never touched, and the previous daily
 note snapshot is never written.
 
-Reconciliation (contract §4.2) projects each dependent's line links
-plus its R8 legacy children into `[dependsOn::]` in set order (R1),
-adopting field ids into a new canonical line when no line exists (R2),
+Reconciliation (contract §4.2) projects each dependent's managed line
+links into `[dependsOn::]` in line order (R1), adopting field ids into
+a new canonical line when no line exists (R2),
 healing a moved link when exactly one scanned task carries its block
 id and an unaccounted field id (R3), and rewriting non-canonical
 lines to the writer form. Targets without `[id::]` gain one; archive
@@ -344,8 +340,9 @@ Unresolvable links stay verbatim with an `unresolved_dependency_link`
 warning and never block, while their unaccounted field ids stay on as
 heal breadcrumbs (R4). Non-task targets (R5), self links (R6), and
 cycles (R7, every member stays Blocked) warn and are never projected.
-Label-only lines with no legacy children are deleted with the field
-(R9); malformed lines warn and are left alone (R10). A removal is
+Links in other task-body children are content (R8). Label-only lines
+are deleted with the field (R9); malformed lines warn and are left
+alone (R10). A removal is
 never inferred from a missing line — only a present line drops ids —
 and lines are never moved or reordered. Projection-only notes flow
 through the same guarded snapshot, recovery, and retry path as status
@@ -355,8 +352,8 @@ notes modified less than 2 s ago.
 Every run reports `dependency_projection_updates` (kinds
 `dependent_field`, `target_id`, `line_removed`),
 `adopted_dependency_lines`, `healed_dependency_links`,
-`canonicalized_dependency_lines`, `legacy_dependency_children` (a
-count for the legacy-window retirement decision), and
+`canonicalized_dependency_lines`, JSON `legacy_dependency_children`
+(pinned to zero for one release after reader retirement), and
 `dependency_warnings` (`{kind, path, line, detail}`) in JSON, with
 matching human sections, a `Dependencies:` summary line, dependency
 counts appended to the `Summary:` line, and stderr warnings. A second
@@ -1345,8 +1342,8 @@ not by themselves make `ok` false.
 line-removal edit with its `kind`, `path`, one-based `line`, and `detail`;
 `adopted_dependency_lines`, `healed_dependency_links`, and
 `canonicalized_dependency_lines` list the adopted, healed, and canonicalized
-lines in the same shape, `legacy_dependency_children` counts legacy children
-for the legacy-window retirement decision, and `dependency_warnings` lists
+lines in the same shape, JSON `legacy_dependency_children` stays zero for one
+release for compatibility, and `dependency_warnings` lists
 `{kind, path, line, detail}` rows (for example `unresolved_dependency_link`,
 `previous_daily_target`, `unencodable_dependency_target`,
 `dependency_field_ids_dropped`, `malformed_blocks_line`).

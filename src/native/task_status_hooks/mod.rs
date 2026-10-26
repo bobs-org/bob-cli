@@ -88,7 +88,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 Tasks block-linked from child bullets of open Pomodoro entries have a minimum \
 desired status of Next [*]; tasks already In Progress [/] keep that stronger \
 status. Dependency tasks are discovered recursively from Depends-On line \
-links plus R8 legacy dependency children (see docs/task-dependencies.md) and \
+Depends-On line links (see docs/task-dependencies.md) and \
 inherit the strongest effective parent status, \
 promoting Ready [ ] tasks to Next or In Progress and Next tasks to In Progress. \
 Depends-On lines are reconciled into [dependsOn::] / [id::] fields first \

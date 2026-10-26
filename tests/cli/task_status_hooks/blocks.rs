@@ -795,7 +795,7 @@ fn br20_internal_prj_target_is_not_listed() {
 }
 
 #[test]
-fn br21_legacy_child_edge_is_listed() {
+fn br21_field_only_dependency_is_adopted_and_listed() {
     let temp = TempDir::new("bob-cli-blocks-br21");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -812,6 +812,11 @@ fn br21_legacy_child_edge_is_listed() {
 
     apply_reconcile(&vault, &daily);
     let after = fs::read_to_string(&tasks).unwrap();
+    assert!(
+        after.contains("  - ⛓️ **DEPENDS ON:** [[#^t]]\n"),
+        "R2 must adopt the field id into the managed line: {after}"
+    );
+    assert!(after.contains("  - [[#^t]]\n"), "{after}");
     assert!(has_blocks_entry(&after, "[[#^d]]"), "{after}");
 }
 

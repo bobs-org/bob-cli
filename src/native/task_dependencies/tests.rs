@@ -10,7 +10,6 @@ use super::format::{
     canonical_link, child_indent_for_parent, format_dependency_line,
     has_final_newline, note_line_ending,
 };
-use super::legacy::legacy_child_reference;
 use super::parse::{dependency_child_of, DependencyLine};
 
 fn accept_count(line: &str) -> Option<(usize, bool)> {
@@ -277,46 +276,6 @@ fn dw_indent_and_ending_vectors() {
     // DW11: no final newline preserved.
     assert!(!has_final_newline("a\nb"));
     assert!(has_final_newline("a\nb\n"));
-}
-
-// R8 legacy-child shapes: plain, embedded, struck, and exactly-struck
-// sole links are candidates; prose, aliases, bare headings, code, and
-// bare note links are not.
-#[test]
-fn legacy_child_shapes() {
-    for (line, expected) in [
-        ("  - [[#^dep]]", Some(("", "dep"))),
-        ("  - ![[Projects/A#^dep]]", Some(("Projects/A", "dep"))),
-        ("  - ~~[[#^dep]]~~", Some(("", "dep"))),
-        ("  - ~~![[#^dep]]~~", Some(("", "dep"))),
-        (
-            "  - ![[cash#^unemployment]]",
-            Some(("cash", "unemployment")),
-        ),
-        ("  - [[#^plain]]", Some(("", "plain"))),
-        ("  - ![[#^ref]]", Some(("", "ref"))),
-    ] {
-        let link = legacy_child_reference(line);
-        assert_eq!(
-            link.map(|link| (link.target, link.block_id)),
-            expected
-                .map(|(target, block)| (target.to_string(), block.to_string())),
-            "{line}"
-        );
-    }
-    for line in [
-        "  - [[#^dep|alias]]",
-        "  - ![[#^dep|alias]]",
-        "  - text ![[#^dep]]",
-        "  - ![[#^dep]] trailing",
-        "  - ![[#heading]]",
-        "  - [[note]]",
-        "  - `[[#^dep]]`",
-        "  - ![[#^dep]] and [[#^other]]",
-        "- ⛓️ **DEPENDS ON:** [[#^dep]]",
-    ] {
-        assert_eq!(legacy_child_reference(line), None, "{line}");
-    }
 }
 
 #[test]

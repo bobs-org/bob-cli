@@ -171,7 +171,7 @@ fn reconcile_dw5_label_only_line_deletes_line_and_field() {
 #[test]
 fn reconcile_dw5_label_only_line_with_adoptable_id_deletes_line_and_field() {
     // DW5/R9/DR16 (`docs/task-dependencies.md` §§4.2, 11.2): a label-only
-    // line is the source of truth — with no legacy children the line is
+    // line is the source of truth — the empty line is
     // deleted with the field even when the field id is adoptable (a `^a`
     // task exists). The hooks must not re-adopt onto the line.
     let temp =
@@ -333,13 +333,13 @@ fn summary_reports_dependency_counts() {
     let report = stdout(&applied);
     assert!(
         report.contains(
-            "Dependencies: 2 projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
+            "Dependencies: 2 projected, 1 adopted, 0 healed, 0 canonicalized, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
         ),
         "unexpected Dependencies line:\n{report}"
     );
     assert!(
         report.contains(
-            "2 dependency projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
+            "2 dependency projected, 1 adopted, 0 healed, 0 canonicalized, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
         ),
         "unexpected Summary line:\n{report}"
     );

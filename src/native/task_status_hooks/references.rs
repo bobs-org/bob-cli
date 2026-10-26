@@ -305,32 +305,17 @@ pub(super) fn resolve_task_reference(
     Some(ResolvedReference { path, statuses })
 }
 
-/// Promotion edges (`docs/task-dependencies.md` §5): the resolved
-/// Depends-On line links plus the R8 legacy children whose target id is
-/// managed by the dependent's field. Sole embeds that are not field
-/// managed (for example `#^ref` reading embeds), links into `done/`,
-/// and non-task targets are never edges.
+/// Promotion edges (`docs/task-dependencies.md` §5) come only from
+/// resolved Depends-On line links. Links elsewhere in a task block,
+/// links into `done/`, and non-task targets are never edges.
 pub(super) fn dependency_edges(
     files: &[FileScan],
     note_index: &NoteIndex,
     task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
     project_tree: &ProjectTree,
-    unresolved: &mut Vec<UnresolvedReference>,
 ) -> BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> {
     let mut edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> =
         BTreeMap::new();
-    let mut task_ids: BTreeMap<(PathBuf, String), Option<String>> =
-        BTreeMap::new();
-    for file in files {
-        for task in &file.tasks {
-            if let Some(block_id) = &task.block_id {
-                task_ids.insert(
-                    (file.relative_path.clone(), block_id.clone()),
-                    task.task_id.clone(),
-                );
-            }
-        }
-    }
     for file in files {
         if !file.tasks.iter().any(|task| task.block_id.is_some()) {
             continue;
@@ -342,8 +327,6 @@ pub(super) fn dependency_edges(
                 continue;
             };
             let source = (file.relative_path.clone(), source_block_id.clone());
-            let source_indent =
-                leading_indentation_width(lines[task.line_index]);
             let dependency_child =
                 task_dependencies::parse::dependency_child_of(
                     &lines,
@@ -379,78 +362,6 @@ pub(super) fn dependency_edges(
                     }
                     edges.entry(source.clone()).or_default().insert(target);
                 }
-            }
-            for line_index in task.line_index + 1..lines.len() {
-                if dependency_child
-                    .as_ref()
-                    .is_some_and(|child| child.line_index == line_index)
-                {
-                    continue;
-                }
-                let line = lines[line_index];
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if fenced.contains(&line_index) {
-                    continue;
-                }
-                let indentation = leading_indentation_width(line);
-                if indentation <= source_indent {
-                    break;
-                }
-                if nearest_parent_list_item(&lines, line_index)
-                    != Some(task.line_index)
-                {
-                    continue;
-                }
-                let Some(legacy) =
-                    task_dependencies::legacy_child_reference(line)
-                else {
-                    continue;
-                };
-                if explicit_archive_reference_path(legacy.target.trim())
-                    .is_some()
-                {
-                    continue;
-                }
-                let Some(target_path) = note_index
-                    .resolve(Some(&file.relative_path), legacy.target.trim())
-                else {
-                    push_unresolved(
-                        unresolved,
-                        &file.relative_path,
-                        task.line_index,
-                        legacy.target,
-                        legacy.block_id,
-                        None,
-                    );
-                    continue;
-                };
-                if task_dependencies::is_archive_path(&target_path) {
-                    continue;
-                }
-                let target = (target_path.clone(), legacy.block_id.clone());
-                if !task_blocks.contains_key(&target) {
-                    push_unresolved(
-                        unresolved,
-                        &file.relative_path,
-                        task.line_index,
-                        legacy.target,
-                        legacy.block_id,
-                        Some(&target_path),
-                    );
-                    continue;
-                }
-                if !legacy_child_covered(
-                    task,
-                    &file.relative_path,
-                    &target_path,
-                    &target.1,
-                    &task_ids,
-                ) {
-                    continue;
-                }
-                edges.entry(source.clone()).or_default().insert(target);
             }
         }
     }
@@ -547,74 +458,6 @@ fn add_resident_implicit_edges(
             }
         }
     }
-}
-
-fn push_unresolved(
-    unresolved: &mut Vec<UnresolvedReference>,
-    source_path: &Path,
-    task_line_index: usize,
-    target: String,
-    block_id: String,
-    resolved_path: Option<&Path>,
-) {
-    let reason = match resolved_path {
-        None => format!(
-            "dependency from {}:{} did not resolve uniquely",
-            display_path(source_path),
-            task_line_index + 1
-        ),
-        Some(target_path) => format!(
-            "dependency from {}:{} resolved to {}, which has no matching task block",
-            display_path(source_path),
-            task_line_index + 1,
-            display_path(target_path)
-        ),
-    };
-    unresolved.push(UnresolvedReference {
-        target,
-        block_id,
-        reason,
-    });
-}
-
-/// R8 field gate: the legacy child's resolved target id (its `[id::]`,
-/// canonical id, or same-note bare block id) is in the dependent's
-/// field.
-fn legacy_child_covered(
-    task: &TaskLine,
-    source_path: &Path,
-    target_path: &Path,
-    block_id: &str,
-    task_ids: &BTreeMap<(PathBuf, String), Option<String>>,
-) -> bool {
-    if task.depends_on.is_empty() {
-        return false;
-    }
-    if let Some(Some(task_id)) =
-        task_ids.get(&(target_path.to_path_buf(), block_id.to_string()))
-    {
-        if task
-            .depends_on
-            .iter()
-            .any(|dependency| dependency == task_id)
-        {
-            return true;
-        }
-    }
-    if let Ok(canonical) =
-        task_dependencies::dependency_id(target_path, block_id)
-        && task
-            .depends_on
-            .iter()
-            .any(|dependency| dependency == &canonical)
-    {
-        return true;
-    }
-    target_path == source_path
-        && task
-            .depends_on
-            .iter()
-            .any(|dependency| dependency == block_id)
 }
 
 pub(super) fn resolve_recent_references(

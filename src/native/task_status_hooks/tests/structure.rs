@@ -274,16 +274,13 @@ fn parses_and_normalizes_pomodoro_marker_prefixes_per_link() {
 }
 
 #[test]
-fn dependency_lines_are_not_legacy_children() {
-    // Depends-On lines route through the line parser, never the R8
-    // legacy-child recogniser (`docs/task-dependencies.md` §§2, 4.2).
+fn dependency_line_forms_are_managed() {
     for line in [
         "  - ⛓️ **DEPENDS ON:** [[#^dep]]",
         "  - 🔗 **DEPENDENCIES:** ![[#^dep]]",
         "  - **DEPENDS ON:**",
         "  - ⛓️ **DEPENDS ON:** [[#^a",
     ] {
-        assert_eq!(task_dependencies::legacy_child_reference(line), None);
         assert!(task_dependencies::is_dependency_line(line));
     }
 }
@@ -306,13 +303,12 @@ fn both_managed_dependency_lines_are_not_pomodoro_task_links() {
 }
 
 #[test]
-fn blocks_lines_are_recognized_as_managed_not_legacy_children() {
+fn blocks_lines_are_recognized_as_managed() {
     for line in [
         "  - 🧱 **BLOCKS:** [[#^dependent]]",
         "  - **BLOCKING:** ![[#^dependent]]",
         "  - 🧱 **BLOCKS:** [[#^dependent",
     ] {
-        assert_eq!(task_dependencies::legacy_child_reference(line), None);
         assert!(task_dependencies::blocks::is_blocks_line(line));
         assert!(task_dependencies::is_managed_dependency_line(line));
         assert!(task_dependencies::is_managed_link_line(line));
@@ -327,7 +323,6 @@ fn relation_lines_are_managed_link_lines_not_dependency_lines() {
         "  - **BACKLINKS:** [[#^source]]",
         "  - 🪢 **LINKS:** [[#^a]] extra",
     ] {
-        assert_eq!(task_dependencies::legacy_child_reference(line), None);
         assert!(
             !task_dependencies::is_managed_dependency_line(line),
             "{line}"

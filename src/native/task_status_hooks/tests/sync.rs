@@ -229,8 +229,7 @@ fn fenced_column_zero_content_does_not_end_dependency_scan() {
     );
     let blocks = task_blocks(&files);
     let tree = project_tree_for(&files, &index);
-    let edges =
-        dependency_edges(&files, &index, &blocks, &tree, &mut Vec::new());
+    let edges = dependency_edges(&files, &index, &blocks, &tree);
     assert!(edges[&(PathBuf::from("A.md"), "a".to_string())]
         .contains(&(PathBuf::from("B.md"), "b".to_string())));
 }
@@ -643,11 +642,9 @@ fn edge_scan(entries: &[(&str, &str)]) -> ScannedEdges {
         files.iter().map(|file| file.relative_path.clone()),
     );
     let blocks = task_blocks(&files);
-    let mut unresolved = Vec::new();
     let tree = project_tree_for(&files, &index);
-    let edges =
-        dependency_edges(&files, &index, &blocks, &tree, &mut unresolved);
-    ScannedEdges { edges, unresolved }
+    let edges = dependency_edges(&files, &index, &blocks, &tree);
+    ScannedEdges { edges }
 }
 
 fn project_tree_for(files: &[FileScan], index: &NoteIndex) -> ProjectTree {
@@ -661,7 +658,6 @@ fn project_tree_for(files: &[FileScan], index: &NoteIndex) -> ProjectTree {
 
 struct ScannedEdges {
     edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
-    unresolved: Vec<UnresolvedReference>,
 }
 
 fn edge(source: &str, block: &str) -> (PathBuf, String) {
@@ -679,18 +675,16 @@ fn dependency_line_links_are_promotion_edges() {
         ),
         ("b.md", "- [ ] #task Two [id:: b__two] ^two\n"),
     ]);
-    assert!(scanned.unresolved.is_empty());
     assert_eq!(
         scanned.edges.get(&edge("a.md", "dep")),
         Some(&BTreeSet::from([edge("a.md", "one"), edge("b.md", "two"),]))
     );
 }
 
-// R8 legacy children (`docs/task-dependencies.md` §4.2): plain,
-// embedded, and struck sole block links count when the resolved
-// target's id is in the dependent's field.
+// Sole block links outside the Depends-On line are content, even when
+// their targets' ids remain in the dependent's field.
 #[test]
-fn legacy_plain_embedded_and_struck_children_are_edges_with_field_coverage() {
+fn child_links_are_not_dependency_edges() {
     let scanned = edge_scan(&[
         (
             "a.md",
@@ -701,37 +695,11 @@ fn legacy_plain_embedded_and_struck_children_are_edges_with_field_coverage() {
             "- [ ] #task E [id:: x__e] ^e\n- [ ] #task P [id:: x__p] ^p\n- [ ] #task S [id:: x__s] ^s\n",
         ),
     ]);
-    assert!(scanned.unresolved.is_empty());
-    assert_eq!(
-        scanned.edges.get(&edge("a.md", "dep")),
-        Some(&BTreeSet::from([
-            edge("x.md", "e"),
-            edge("x.md", "p"),
-            edge("x.md", "s"),
-        ]))
-    );
-}
-
-// R8 field gate: the same shapes without field coverage are content,
-// not edges, and resolve quietly.
-#[test]
-fn legacy_children_without_field_coverage_are_not_edges() {
-    let scanned = edge_scan(&[
-        (
-            "a.md",
-            "- [ ] #task Dependent ^dep\n  - ![[x#^e]]\n  - [[x#^p]]\n  - ~~[[x#^s]]~~\n",
-        ),
-        (
-            "x.md",
-            "- [ ] #task E [id:: x__e] ^e\n- [ ] #task P [id:: x__p] ^p\n- [ ] #task S [id:: x__s] ^s\n",
-        ),
-    ]);
     assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
-    assert!(scanned.unresolved.is_empty());
 }
 
 // A `#^ref` reading embed is content, not an edge
-// (`docs/task-dependencies.md` §§4.2 R8, 5).
+// (`docs/task-dependencies.md` §5).
 #[test]
 fn reading_embeds_are_not_promotion_edges() {
     let scanned = edge_scan(&[(
@@ -739,7 +707,7 @@ fn reading_embeds_are_not_promotion_edges() {
         "- [ ] #task Dependent ^dep\n  - ![[#^ref]]\n\nReference block only. ^ref\n",
     )]);
     assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
-    assert_eq!(scanned.unresolved.len(), 1);
+    assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
 }
 
 // Archive targets are history, never edges
@@ -751,7 +719,6 @@ fn archive_targets_are_not_promotion_edges() {
         "- [ ] #task Dependent [dependsOn:: done__Archive__old] ^dep\n  - ⛓️ **DEPENDS ON:** [[done/Archive#^old]]\n  - ![[done/Archive#^old]]\n",
     )]);
     assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
-    assert!(scanned.unresolved.is_empty());
 }
 
 // ---- cli-reconcile-block (`docs/task-dependencies.md` §13) ----
@@ -841,7 +808,6 @@ fn residents_inherit_prj_links_as_implicit_edges() {
         ("proj.md", proj.as_str()),
         ("t.md", "- [ ] #task Prerequisite [id:: t__pre] ^pre\n"),
     ]);
-    assert!(scanned.unresolved.is_empty());
     assert_eq!(
         scanned.edges.get(&edge("proj.md", "r1")),
         Some(&BTreeSet::from([edge("t.md", "pre")])),
