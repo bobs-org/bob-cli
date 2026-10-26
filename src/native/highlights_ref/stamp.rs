@@ -42,6 +42,10 @@ pub(super) enum DefaultTargetIdentity<'a> {
         recorded: &'a [super::sources::RecordedSource],
     },
     Title(String),
+    SourceNote {
+        source_note: String,
+        title: String,
+    },
     AlwaysDifferent,
 }
 
@@ -425,6 +429,9 @@ pub(super) fn plan_default_target(
             let copy = super::duplicate::copy_from_occupant(config, &primary);
             let title = match identity {
                 DefaultTargetIdentity::Title(title) => title.clone(),
+                DefaultTargetIdentity::SourceNote { title, .. } => {
+                    title.clone()
+                }
                 DefaultTargetIdentity::Url { keys, .. } => {
                     keys.first().cloned().unwrap_or_else(|| copy.stem.clone())
                 }
@@ -454,6 +461,9 @@ pub(super) fn plan_default_target(
             let copy = super::duplicate::copy_from_occupant(config, &target);
             let title = match identity {
                 DefaultTargetIdentity::Title(title) => title.clone(),
+                DefaultTargetIdentity::SourceNote { title, .. } => {
+                    title.clone()
+                }
                 DefaultTargetIdentity::Url { keys, .. } => {
                     keys.first().cloned().unwrap_or_else(|| copy.stem.clone())
                 }
@@ -512,6 +522,9 @@ fn normalize_title_for_report(identity: &DefaultTargetIdentity<'_>) -> String {
         DefaultTargetIdentity::Title(title) => {
             format!("title {}", title.trim())
         }
+        DefaultTargetIdentity::SourceNote { title, .. } => {
+            format!("title {}", title.trim())
+        }
         DefaultTargetIdentity::Url { keys, .. } => {
             keys.first().cloned().unwrap_or_else(|| "url".to_string())
         }
@@ -535,6 +548,11 @@ fn candidate_is_same_reference(
             title_matches_pdf(planned, intake_pdf)
                 || title_matches_pdf(planned, library_pdf)
         }
+        DefaultTargetIdentity::SourceNote { source_note, .. } => {
+            source_note_matches_note(source_note, ref_note)
+                || source_note_matches_pdf(source_note, intake_pdf)
+                || source_note_matches_pdf(source_note, library_pdf)
+        }
         DefaultTargetIdentity::Url { keys, recorded } => {
             recorded.iter().any(|hit| {
                 keys.contains(&hit.dedupe_key)
@@ -549,6 +567,45 @@ fn candidate_is_same_reference(
     }
 }
 
+fn source_note_matches_note(planned: &str, path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Some((frontmatter, _)) =
+        super::frontmatter::split_frontmatter(&contents)
+    else {
+        return false;
+    };
+    let parsed =
+        crate::native::ref_library::ParsedFrontmatter::parse(&frontmatter);
+    parsed.get_str("source_note").is_some_and(|candidate| {
+        super::birth::normalize_source_note(candidate)
+            == super::birth::normalize_source_note(planned)
+    })
+}
+
+fn source_note_matches_pdf(planned: &str, path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(marker) = super::marker::read_pdf_marker(path) else {
+        return false;
+    };
+    let Ok(projection) = super::marker::parse_marker(&marker.contents) else {
+        return false;
+    };
+    projection
+        .get("source_note")
+        .and_then(MarkerValue::as_string)
+        .is_some_and(|candidate| {
+            super::birth::normalize_source_note(candidate)
+                == super::birth::normalize_source_note(planned)
+        })
+}
+
 /// Trim, collapse whitespace, and lowercase for title comparisons.
 pub(super) fn normalize_title(raw: &str) -> String {
     raw.split_whitespace()
@@ -559,7 +616,7 @@ pub(super) fn normalize_title(raw: &str) -> String {
 
 /// True when the PDF at `path` carries the planned title as its page-1
 /// marker `title` or its raw Info `Title`.
-fn title_matches_pdf(planned: &str, path: &Path) -> bool {
+pub(super) fn title_matches_pdf(planned: &str, path: &Path) -> bool {
     let wanted = normalize_title(planned);
     if wanted.is_empty() || !path.is_file() {
         return false;

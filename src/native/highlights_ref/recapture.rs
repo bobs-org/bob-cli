@@ -172,6 +172,15 @@ pub(super) struct FamilyDefaults {
     pub ref_type: Option<String>,
 }
 
+/// Route-specific identity used when a planned title-route stem is already
+/// occupied. Local Markdown/PDF captures compare PDF titles; same-day vault
+/// snapshots compare their canonical `source_note` routes.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum StemIdentity<'a> {
+    Title(&'a str),
+    SourceNote(&'a str),
+}
+
 /// Best-effort library rows for reread planning: an unreadable index
 /// behaves like an empty library, and the legacy duplicate checks keep
 /// refusing truthfully.
@@ -211,6 +220,134 @@ pub(super) fn family_readings_for(config: &Config) -> BTreeMap<String, u32> {
         .iter()
         .filter_map(|row| row.reading.map(|number| (row.path.clone(), number)))
         .collect()
+}
+
+/// Follow a single-source attach hit to the newest reading in its family.
+/// Unindexed notes and queued PDFs keep the path selected by the original
+/// refusal scan.
+pub(super) fn newest_reading_hit(
+    config: &Config,
+    recorded: &[RecordedSource],
+    hit: &RecordedSource,
+) -> RecordedSource {
+    if !hit.is_ref_note {
+        return hit.clone();
+    }
+    let relative = vault_relative(&hit.path, &config.bob_dir);
+    let rows = index_rows(config);
+    let Some(selected) = rows.iter().find(|row| row.path == relative) else {
+        return hit.clone();
+    };
+    if selected.superseded_by.is_some() {
+        return hit.clone();
+    }
+    let Some(newest) = rows
+        .iter()
+        .filter(|row| {
+            row.family == selected.family && row.superseded_by.is_none()
+        })
+        .max_by(|left, right| {
+            left.reading
+                .unwrap_or(1)
+                .cmp(&right.reading.unwrap_or(1))
+                .then_with(|| right.path.cmp(&left.path))
+        })
+    else {
+        return hit.clone();
+    };
+    recorded
+        .iter()
+        .find(|source| {
+            source.is_ref_note
+                && source.dedupe_key == hit.dedupe_key
+                && vault_relative(&source.path, &config.bob_dir) == newest.path
+        })
+        .cloned()
+        .unwrap_or_else(|| hit.clone())
+}
+
+/// Exact collection identity at family granularity. All live readings in
+/// one family must carry the complete wanted key set; the selected attach
+/// target is that family's newest note. Multiple unrelated exact families
+/// remain ambiguous and do not attach implicitly.
+pub(super) fn newest_exact_family_hit(
+    config: &Config,
+    recorded: &[RecordedSource],
+    wanted: &BTreeSet<String>,
+) -> Option<RecordedSource> {
+    let rows = index_rows(config);
+    let by_path: BTreeMap<&str, &RefRow> =
+        rows.iter().map(|row| (row.path.as_str(), row)).collect();
+    let mut path_keys = BTreeMap::<String, BTreeSet<String>>::new();
+    for source in recorded.iter().filter(|source| {
+        source.is_ref_note
+            && source.source_pdf.is_some()
+            && wanted.contains(&source.dedupe_key)
+    }) {
+        path_keys
+            .entry(vault_relative(&source.path, &config.bob_dir))
+            .or_default()
+            .insert(source.dedupe_key.clone());
+    }
+
+    let mut family_keys = BTreeSet::new();
+    let mut unindexed_paths = BTreeSet::new();
+    for (path, keys) in &path_keys {
+        if let Some(row) = by_path.get(path.as_str()) {
+            if row.superseded_by.is_none() {
+                family_keys.insert(row.family.clone());
+            }
+        } else if keys == wanted {
+            unindexed_paths.insert(path.clone());
+        }
+    }
+
+    let mut exact_families = Vec::<(String, &RefRow)>::new();
+    for family_key in family_keys {
+        let mut members = rows.iter().filter(|row| {
+            row.family == family_key && row.superseded_by.is_none()
+        });
+        let Some(first) = members.next() else {
+            continue;
+        };
+        if comparison_keys(first).into_iter().collect::<BTreeSet<_>>()
+            != *wanted
+            || members.any(|row| {
+                comparison_keys(row).into_iter().collect::<BTreeSet<_>>()
+                    != *wanted
+            })
+        {
+            continue;
+        }
+        let newest = rows
+            .iter()
+            .filter(|row| {
+                row.family == family_key && row.superseded_by.is_none()
+            })
+            .max_by(|left, right| {
+                left.reading
+                    .unwrap_or(1)
+                    .cmp(&right.reading.unwrap_or(1))
+                    .then_with(|| right.path.cmp(&left.path))
+            })?;
+        exact_families.push((family_key, newest));
+    }
+
+    if exact_families.len() + unindexed_paths.len() != 1 {
+        return None;
+    }
+    let newest_path = exact_families
+        .first()
+        .map(|(_, row)| row.path.as_str())
+        .or_else(|| unindexed_paths.first().map(String::as_str))?;
+    recorded
+        .iter()
+        .find(|source| {
+            source.is_ref_note
+                && wanted.contains(&source.dedupe_key)
+                && vault_relative(&source.path, &config.bob_dir) == newest_path
+        })
+        .cloned()
 }
 
 /// Resolve URL-dedupe keys against the live library: complete normalized
@@ -279,21 +416,42 @@ pub(super) fn resolve_for_url_keys(
     }
     let mut families: Vec<SelectedFamily> = families
         .into_iter()
-        .map(|(root_path, members)| select_family(&root_path, members))
+        .map(|(root_path, members)| {
+            select_family(
+                &root_path,
+                family_root_stem(rows, &root_path),
+                members,
+            )
+        })
         .collect();
     families.sort_by(|left, right| left.root_path.cmp(&right.root_path));
-    if families.len() == 1 {
-        let family = families.pop().expect("one family");
-        if family.source_keys == *wanted {
-            return RecaptureMatch::Selected { family };
+
+    let mut exact: Vec<SelectedFamily> = families
+        .iter()
+        .filter(|family| family_has_exact_keys(family, wanted))
+        .cloned()
+        .collect();
+    if !exact.is_empty() {
+        if exact.len() == 1 {
+            return RecaptureMatch::Selected {
+                family: exact.pop().expect("one exact family"),
+            };
         }
-        let overlapping = vec![overlap_group(&family, false)];
+        return RecaptureMatch::Ambiguous { families: exact };
+    }
+
+    let overlapping: Vec<OverlapGroup> = families
+        .iter()
+        .filter(|family| !family.source_keys.is_disjoint(wanted))
+        .map(|family| overlap_group(family, false))
+        .collect();
+    if !overlapping.is_empty() {
         return RecaptureMatch::PartialOverlap {
             wanted: wanted.iter().cloned().collect(),
             overlapping,
         };
     }
-    RecaptureMatch::Ambiguous { families }
+    RecaptureMatch::NoMatch
 }
 
 /// Every live family holding `stem` as a member stem: empty when the name
@@ -330,11 +488,80 @@ pub(super) fn families_for_stem(
                 })
                 .map(|row| member_from_row(row, bob_dir))
                 .collect();
-            select_family(&family_key, members)
+            select_family(
+                &family_key,
+                family_root_stem(rows, &family_key),
+                members,
+            )
         })
         .collect();
     families.sort_by(|left, right| left.root_path.cmp(&right.root_path));
     families
+}
+
+/// Keep only families whose member at the probed stem is the same
+/// reference under the identity rules of the input route.
+fn families_for_stem_identity(
+    config: &Config,
+    rows: &[RefRow],
+    stem: &str,
+    identity: StemIdentity<'_>,
+) -> Vec<SelectedFamily> {
+    families_for_stem(rows, stem, &config.bob_dir)
+        .into_iter()
+        .filter(|family| {
+            rows.iter().any(|row| {
+                row.family == family.root_path
+                    && row.superseded_by.is_none()
+                    && stem_of_path(&row.path) == stem
+                    && row_matches_identity(row, config, identity)
+            })
+        })
+        .collect()
+}
+
+fn row_matches_identity(
+    row: &RefRow,
+    config: &Config,
+    identity: StemIdentity<'_>,
+) -> bool {
+    match identity {
+        StemIdentity::Title(title) => {
+            let stem = stem_of_path(&row.path);
+            let mut candidates = Vec::new();
+            if let Some(source_pdf) = &row.source_pdf {
+                candidates.push(config.bob_dir.join(source_pdf));
+            }
+            if let Some(ref_type) = &row.ref_type {
+                let filename = format!("{stem}.pdf");
+                candidates.push(config.lib_dir.join(ref_type).join(&filename));
+                candidates.push(config.xlib_dir.join(ref_type).join(filename));
+            }
+            candidates
+                .iter()
+                .any(|path| super::stamp::title_matches_pdf(title, path))
+        }
+        StemIdentity::SourceNote(source_note) => {
+            super::birth::candidate_source_note(row, config).is_some_and(
+                |candidate| {
+                    super::birth::normalize_source_note(&candidate)
+                        == super::birth::normalize_source_note(source_note)
+                },
+            )
+        }
+    }
+}
+
+fn family_root_stem(rows: &[RefRow], family_key: &str) -> String {
+    rows.iter()
+        .find(|row| row.path == family_key)
+        .map(|row| {
+            crate::native::ref_library::lineage::family_root_stem(
+                &row.path,
+                &row.earlier,
+            )
+        })
+        .unwrap_or_else(|| stem_of_path(family_key))
 }
 
 /// Pick one family out of candidates, honoring an explicit `-N`: with no
@@ -498,6 +725,9 @@ pub(super) fn preflight_for_url(
             output,
             force,
             title_fallback,
+            Some(wanted),
+            false,
+            true,
         ),
         RecaptureMatch::Ambiguous { families } => {
             let family = disambiguate(families, name)?;
@@ -508,6 +738,9 @@ pub(super) fn preflight_for_url(
                 output,
                 force,
                 title_fallback,
+                Some(wanted),
+                false,
+                true,
             )
         }
         RecaptureMatch::PartialOverlap {
@@ -531,14 +764,18 @@ pub(super) fn preflight_for_stem(
     output: Option<&Path>,
     force: Option<super::force::ForceMode>,
     title_fallback: &str,
+    identity: StemIdentity<'_>,
 ) -> Result<Option<RereadPreflight>, CommandError> {
     if let Some(name) = name {
-        let mut named = families_for_stem(rows, name, &config.bob_dir);
+        let mut named =
+            families_for_stem_identity(config, rows, name, identity);
         if !named.is_empty() {
             // `-N` names a family member: include the stem's families so
             // an ambiguous name across families still asks, then select.
             if name != stem {
-                for family in families_for_stem(rows, stem, &config.bob_dir) {
+                for family in
+                    families_for_stem_identity(config, rows, stem, identity)
+                {
                     if !named
                         .iter()
                         .any(|known| known.root_path == family.root_path)
@@ -555,6 +792,9 @@ pub(super) fn preflight_for_stem(
                 output,
                 force,
                 title_fallback,
+                None,
+                true,
+                false,
             );
         }
         // A free explicit `-N` is an ordinary new capture.
@@ -562,12 +802,22 @@ pub(super) fn preflight_for_stem(
             return Ok(None);
         }
     }
-    let families = families_for_stem(rows, stem, &config.bob_dir);
+    let families = families_for_stem_identity(config, rows, stem, identity);
     if families.is_empty() {
         return Ok(None);
     }
     let family = disambiguate(families, name)?;
-    finish_selection(config, family, name, output, force, title_fallback)
+    finish_selection(
+        config,
+        family,
+        name,
+        output,
+        force,
+        title_fallback,
+        None,
+        true,
+        false,
+    )
 }
 
 /// Finish a selected family: validate `-N`/`-o`, allocate the next stem,
@@ -581,20 +831,43 @@ fn finish_selection(
     output: Option<&Path>,
     force: Option<super::force::ForceMode>,
     title_fallback: &str,
+    expected_keys: Option<&BTreeSet<String>>,
+    title_route: bool,
+    attach_available: bool,
 ) -> Result<Option<RereadPreflight>, CommandError> {
+    if expected_keys
+        .is_some_and(|wanted| !family_has_exact_keys(&family, wanted))
+    {
+        let wanted = expected_keys
+            .expect("checked expected keys")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(partial_overlap_single_error(
+            &wanted,
+            &[overlap_group(&family, false)],
+        ));
+    }
     if let Some(name) = name {
         validate_reread_name(&family, name)?;
     }
     let next = allocate_for_family(config, &family)?;
-    if output.is_some() {
-        return Err(reread_output_error(&next));
-    }
     match force {
-        None => Err(filed_refusal(config, &family, &next, title_fallback)),
+        None => Err(filed_refusal(
+            config,
+            &family,
+            &next,
+            title_fallback,
+            title_route,
+            attach_available,
+        )),
         Some(super::force::ForceMode::Overwrite) => {
             Err(super::force::overwrite_filed_unavailable_for(&next))
         }
         Some(super::force::ForceMode::Reread) => {
+            if output.is_some() {
+                return Err(reread_output_error(&next));
+            }
             let defaults = family_defaults(family.newest());
             Ok(Some(RereadPreflight {
                 plan: RereadPlan { family, stem: next },
@@ -611,6 +884,8 @@ fn filed_refusal(
     family: &SelectedFamily,
     next_stem: &str,
     title_fallback: &str,
+    title_route: bool,
+    attach_available: bool,
 ) -> CommandError {
     let title = family
         .members
@@ -620,23 +895,30 @@ fn filed_refusal(
     let mut copies = Vec::new();
     for member in &family.members {
         let path = config.bob_dir.join(&member.path);
-        copies.push(super::duplicate::copy_from_occupant(config, &path));
+        let mut copy = super::duplicate::copy_from_occupant(config, &path);
+        copy.reading = member.reading;
+        copies.push(copy);
     }
-    let refusal = super::duplicate::AlreadyCaptured::new(
-        title,
-        copies,
-        vec![
-            super::duplicate::Remedy::new(
-                "-f",
-                format!("read it again as {next_stem}"),
-            ),
-            super::duplicate::Remedy::new(
-                "-L",
-                "add --listen to narrate it and attach the episode to the existing capture",
-            ),
-        ],
-    )
-    .with_next_stem(next_stem);
+    let mut remedies = Vec::new();
+    if title_route {
+        remedies.push(super::duplicate::Remedy::new(
+            "-N <name>",
+            "capture under a different name",
+        ));
+    }
+    remedies.push(super::duplicate::Remedy::new(
+        "-f",
+        format!("read it again as {next_stem}"),
+    ));
+    if attach_available {
+        remedies.push(super::duplicate::Remedy::new(
+            "-L",
+            "add --listen to narrate it and attach the episode to the existing capture",
+        ));
+    }
+    let refusal =
+        super::duplicate::AlreadyCaptured::new(title, copies, remedies)
+            .with_next_stem(next_stem);
     let styler = crate::native::style::Styler::detect();
     CommandError::new(refusal.render(&styler))
 }
@@ -648,9 +930,16 @@ fn partial_overlap_single_error(
     wanted: &[String],
     overlapping: &[OverlapGroup],
 ) -> CommandError {
+    let wanted_set: BTreeSet<&str> =
+        wanted.iter().map(String::as_str).collect();
+    let overlapping_keys: BTreeSet<&str> = overlapping
+        .iter()
+        .flat_map(|group| group.keys.iter().map(String::as_str))
+        .filter(|key| wanted_set.contains(key))
+        .collect();
     let mut lines = vec![format!(
         "{} of {} URLs are already in the library",
-        overlapping.len().min(wanted.len()),
+        overlapping_keys.len(),
         wanted.len(),
     )];
     let mut groups = overlapping.to_vec();
@@ -781,6 +1070,7 @@ pub(super) fn reread_report_line(
 /// a filename), so a later stem never becomes the next root.
 fn select_family(
     root_path: &str,
+    root_stem: String,
     members: Vec<FamilyMember>,
 ) -> SelectedFamily {
     let mut members = members;
@@ -801,7 +1091,7 @@ fn select_family(
         .max()
         .unwrap_or(1);
     SelectedFamily {
-        root_stem: stem_of_path(root_path),
+        root_stem,
         root_path: root_path.to_string(),
         members,
         selected: 0,
@@ -841,6 +1131,17 @@ fn overlap_group(family: &SelectedFamily, is_legacy: bool) -> OverlapGroup {
         keys: family.source_keys.iter().cloned().collect(),
         is_legacy,
     }
+}
+
+fn family_has_exact_keys(
+    family: &SelectedFamily,
+    wanted: &BTreeSet<String>,
+) -> bool {
+    family.source_keys == *wanted
+        && family.members.iter().all(|member| {
+            member.source_keys.iter().cloned().collect::<BTreeSet<_>>()
+                == *wanted
+        })
 }
 
 fn member_from_row(row: &RefRow, bob_dir: &Path) -> FamilyMember {
@@ -1490,6 +1791,231 @@ mod tests {
         };
         assert_eq!(family.members.len(), 2);
         assert_eq!(family.max_reading, 2);
+    }
+
+    #[test]
+    fn exact_family_wins_over_a_larger_overlapping_collection() {
+        let root = unique_root("exact-wins-overlap");
+        let config = test_config(&root);
+        let one = "https://example.com/one";
+        let two = "https://example.com/two";
+        write_note(
+            &root,
+            "ref/papers/exact.md",
+            &note(
+                &[
+                    "title: Exact",
+                    &format!("source_url: {one}"),
+                    "source_pdf: lib/papers/exact.pdf",
+                ],
+                "# Exact\n",
+            ),
+        );
+        write_note(
+            &root,
+            "ref/blogs/collection.md",
+            &note(
+                &[
+                    "title: Collection",
+                    &format!("source_url: [{one}, {two}]"),
+                    "source_pdf: lib/blogs/collection.pdf",
+                ],
+                "# Collection\n",
+            ),
+        );
+        let rows = index_rows(&config);
+        let recorded = [
+            filed_hit(&root, "ref/papers/exact.md", one),
+            filed_hit(&root, "ref/blogs/collection.md", one),
+            filed_hit(&root, "ref/blogs/collection.md", two),
+        ];
+
+        let matched = resolve(&rows, &recorded, &[one], &root);
+        let RecaptureMatch::Selected { family } = matched else {
+            panic!(
+                "the exact family must win over a larger overlap: {matched:?}"
+            );
+        };
+        assert_eq!(family.root_stem, "exact");
+    }
+
+    #[test]
+    fn partial_overlap_count_is_distinct_urls_not_families() {
+        let root = unique_root("partial-count");
+        let config = test_config(&root);
+        let one = "https://example.com/one";
+        let two = "https://example.com/two";
+        let three = "https://example.com/three";
+        for (path, title) in [
+            ("ref/papers/first.md", "First"),
+            ("ref/blogs/second.md", "Second"),
+        ] {
+            write_note(
+                &root,
+                path,
+                &note(
+                    &[
+                        &format!("title: {title}"),
+                        &format!("source_url: {one}"),
+                        "source_pdf: lib/papers/backing.pdf",
+                    ],
+                    "# Overlap\n",
+                ),
+            );
+        }
+        let rows = index_rows(&config);
+        let recorded = [
+            filed_hit(&root, "ref/papers/first.md", one),
+            filed_hit(&root, "ref/blogs/second.md", one),
+        ];
+        let matched = resolve(&rows, &recorded, &[one, two, three], &root);
+        let RecaptureMatch::PartialOverlap {
+            wanted,
+            overlapping,
+        } = matched
+        else {
+            panic!("expected partial overlap: {matched:?}");
+        };
+
+        let error = partial_overlap_single_error(&wanted, &overlapping);
+        assert!(
+            error.message.starts_with("1 of 3 URLs are already"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn deleted_family_root_is_recovered_from_the_oldest_lineage_entry() {
+        let root = unique_root("deleted-root");
+        let config = test_config(&root);
+        let url = "https://example.com/deleted-root";
+        write_note(
+            &root,
+            "ref/papers/foo__v2.md",
+            &note(
+                &[
+                    "title: Foo",
+                    &format!("source_url: {url}"),
+                    "source_pdf: lib/papers/foo__v2.pdf",
+                    "earlier:",
+                    "  - \"[[ref/papers/foo|v1 · 2026-01-01]]\"",
+                ],
+                "# Foo\n",
+            ),
+        );
+        write_note(
+            &root,
+            "ref/papers/foo__v3.md",
+            &note(
+                &[
+                    "title: Foo",
+                    &format!("source_url: {url}"),
+                    "source_pdf: lib/papers/foo__v3.pdf",
+                    "earlier:",
+                    "  - \"[[ref/papers/foo__v2|v2 · 2026-02-01]]\"",
+                    "  - \"[[ref/papers/foo|v1 · 2026-01-01]]\"",
+                ],
+                "# Foo\n",
+            ),
+        );
+
+        let rows = index_rows(&config);
+        let family = families_for_stem(&rows, "foo__v3", &root)
+            .pop()
+            .expect("family");
+        assert_eq!(family.root_stem, "foo");
+        assert_eq!(family.max_reading, 3);
+        assert_eq!(
+            allocate_for_family(&config, &family).expect("next reading"),
+            "foo__v4",
+        );
+    }
+
+    #[test]
+    fn attach_hit_follows_the_family_to_its_newest_reading() {
+        let root = unique_root("newest-attach");
+        let config = test_config(&root);
+        let url = "https://example.com/attach";
+        write_note(
+            &root,
+            "ref/papers/attach.md",
+            &note(
+                &[
+                    "title: Attach",
+                    &format!("source_url: {url}"),
+                    "source_pdf: lib/papers/attach.pdf",
+                ],
+                "# Attach\n",
+            ),
+        );
+        write_note(
+            &root,
+            "ref/papers/attach__v2.md",
+            &note(
+                &[
+                    "title: Attach",
+                    &format!("source_url: {url}"),
+                    "source_pdf: lib/papers/attach__v2.pdf",
+                    "earlier:",
+                    "  - \"[[ref/papers/attach|v1 · 2026-01-01]]\"",
+                ],
+                "# Attach\n",
+            ),
+        );
+        let recorded = [
+            filed_hit(&root, "ref/papers/attach.md", url),
+            filed_hit(&root, "ref/papers/attach__v2.md", url),
+        ];
+
+        let newest = newest_reading_hit(&config, &recorded, &recorded[0]);
+        assert_eq!(
+            vault_relative(&newest.path, &root),
+            "ref/papers/attach__v2.md",
+        );
+    }
+
+    #[test]
+    fn no_force_output_keeps_the_normal_family_refusal() {
+        let root = unique_root("output-refusal");
+        let config = test_config(&root);
+        let url = "https://example.com/output-refusal";
+        write_note(&root, "ref/papers/alpha.md", &alpha_note());
+        write_note(
+            &root,
+            "ref/papers/alpha__v2.md",
+            &note(
+                &[
+                    "title: Alpha",
+                    &format!("source_url: {url}"),
+                    "source_pdf: lib/papers/alpha__v2.pdf",
+                    "earlier:",
+                    "  - \"[[ref/papers/alpha|v1 · 2026-01-01]]\"",
+                ],
+                "# Alpha\n",
+            ),
+        );
+        let rows = index_rows(&config);
+        let family = families_for_stem(&rows, "alpha", &root)
+            .pop()
+            .expect("family");
+        let error = finish_selection(
+            &config,
+            family,
+            None,
+            Some(Path::new("out.pdf")),
+            None,
+            "Alpha",
+            None,
+            true,
+            false,
+        )
+        .expect_err("no force keeps the captured refusal");
+        assert!(error.message.contains("already captured"), "{error:?}");
+        assert!(error.message.contains("reading v2"), "{error:?}");
+        assert!(error.message.contains("reading v1"), "{error:?}");
+        assert!(error.message.contains("-N <name>"), "{error:?}");
+        assert!(!error.message.contains("-L"), "{error:?}");
+        assert!(!error.message.contains("a reread is named"), "{error:?}");
     }
 
     #[test]

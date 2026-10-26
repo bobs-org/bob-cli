@@ -912,7 +912,6 @@ fn highlights_create_collection_listen_attaches_to_same_set() {
     assert_success(&output);
     let intake_pdf = vault.join("xlib/blogs/tokio_internals.pdf");
     assert!(intake_pdf.is_file(), "{}", format_output(&output));
-    let adapter_calls = fake.request_count();
 
     let scan = bob_command()
         .arg("highlights")
@@ -930,6 +929,35 @@ fn highlights_create_collection_listen_attaches_to_same_set() {
         format_output(&scan)
     );
     assert!(vault.join("ref/blogs/tokio_internals.md").is_file());
+
+    let earlier_bytes = std::fs::read(&pdf).expect("read first reading PDF");
+    let mut reread = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    reread.arg("-f");
+    collection_env(&mut reread, &curl, &curl_root, &log, &fake.path);
+    let output = reread.output().expect("reread the exact collection");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("tokio_internals__v2"),
+        "the second reading is staged:\n{}",
+        format_output(&output)
+    );
+    let scan = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("scan the second collection reading");
+    assert_success(&scan);
+    let newest_pdf = vault.join("lib/blogs/tokio_internals__v2.pdf");
+    assert!(newest_pdf.is_file(), "{}", format_output(&scan));
+    assert_eq!(
+        std::fs::read(&pdf).expect("reread first PDF"),
+        earlier_bytes,
+        "reread intake must preserve the earlier reading's bytes"
+    );
+    let adapter_calls = fake.request_count();
 
     let listen_bin = temp.path().join("fake-attach-listen-bin");
     std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
@@ -969,23 +997,124 @@ done
         adapter_calls,
         "attach must not recapture"
     );
-    let audio = vault.join("xlib/blogs/tokio_internals.mp3");
+    let audio = vault.join("xlib/blogs/tokio_internals__v2.mp3");
     assert!(audio.is_file(), "{}", format_output(&output));
     assert!(
-        pdf.is_file(),
+        newest_pdf.is_file(),
         "attach must leave the collection PDF in place"
     );
     let listen_args = std::fs::read_to_string(&listen_log)
         .expect("attach listen command should run");
     assert!(
-        listen_args.contains(&pdf.display().to_string()),
+        listen_args.contains(&newest_pdf.display().to_string()),
         "{listen_args}"
     );
     assert!(
-        stdout(&output).contains(&pdf.display().to_string()),
+        stdout(&output).contains(&newest_pdf.display().to_string()),
         "{}",
         format_output(&output)
     );
+}
+
+#[test]
+fn highlights_create_and_clip_attach_listen_to_the_newest_reading() {
+    let temp = TempDir::new("bob-cli-highlights-newest-listen-attach");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let listen_bin = temp.path().join("newest-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
+    let listen_script = listen_bin.join("sase");
+    write_executable(
+        &listen_script,
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 new attached episode' > "$arg" ;;
+  esac
+done
+"#,
+    );
+
+    for subcommand in ["create", "clip"] {
+        let vault = temp.path().join(format!("vault-{subcommand}"));
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+        let first_pdf = vault.join("lib/blogs/existing.pdf");
+        let newest_pdf = vault.join("lib/blogs/existing__v2.pdf");
+        write_highlights_pdf(
+            &first_pdf,
+            &format!(
+                "- status: ready\n- parent: sase\n- title: Existing\n- source_url: {FOLDED_URL}\n"
+            ),
+        );
+        write_highlights_pdf(
+            &newest_pdf,
+            &format!(
+                "- status: ready\n- parent: sase\n- title: Existing\n- source_url: {FOLDED_URL}\n"
+            ),
+        );
+        write_file(
+            &vault.join("ref/blogs/existing.md"),
+            &format!(
+                "---\ntitle: Existing\nstatus: ready\nsource_url: {FOLDED_URL}\nsource_pdf: lib/blogs/existing.pdf\naudio: \"[[lib/blogs/existing.mp3]]\"\n---\n# Existing\n"
+            ),
+        );
+        write_file(
+            &vault.join("ref/blogs/existing__v2.md"),
+            &format!(
+                "---\ntitle: Existing\nstatus: ready\nsource_url: {FOLDED_URL}\nsource_pdf: lib/blogs/existing__v2.pdf\nearlier:\n  - \"[[ref/blogs/existing|v1 · 2026-01-01]]\"\n---\n# Existing\n"
+            ),
+        );
+        let earlier_audio = vault.join("lib/blogs/existing.mp3");
+        std::fs::write(&earlier_audio, b"ID3 earlier episode")
+            .expect("write earlier audio");
+
+        let fake = FakeClip::new(&temp, &format!("adapter-{subcommand}"));
+        let listen_log = temp.path().join(format!("{subcommand}-listen.log"));
+        let output = bob_command()
+            .arg("ref")
+            .arg(subcommand)
+            .arg(FOLDED_URL)
+            .arg("-L")
+            .arg("-b")
+            .arg(&vault)
+            .env(
+                "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+                "sase listen render {target} -e full -o {audio} --title {title}",
+            )
+            .env("FAKE_LISTEN_LOG", &listen_log)
+            .env("PATH", path_with_prefix(&listen_bin))
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("attach listen to latest reading");
+        assert_success(&output);
+        let listen_args =
+            std::fs::read_to_string(&listen_log).expect("listen must run");
+        assert!(
+            listen_args.contains("existing__v2.mp3"),
+            "{subcommand} must follow the family to v2:\n{listen_args}"
+        );
+        assert!(
+            vault.join("xlib/blogs/existing__v2.mp3").is_file(),
+            "{subcommand} must attach audio beside v2"
+        );
+        assert_eq!(
+            std::fs::read(&earlier_audio).expect("reread earlier audio"),
+            b"ID3 earlier episode",
+            "{subcommand} must leave v1 audio bytes alone"
+        );
+        assert_eq!(fake.request_count(), 0, "attach must not call the adapter");
+        assert!(
+            std::fs::read_to_string(&curl_log)
+                .expect("read curl log")
+                .is_empty(),
+            "attach must not fetch"
+        );
+    }
 }
 
 #[test]
@@ -1763,7 +1892,10 @@ fn highlights_create_same_title_library_rereads_from_original_source() {
     let diagnostic = stderr(&refused);
     assert!(
         diagnostic.contains("already captured")
-            && diagnostic.contains("read it again as report__v2"),
+            && diagnostic.contains("read it again as report__v2")
+            && diagnostic.contains("-N <name>")
+            && diagnostic.contains("capture under a different name")
+            && !diagnostic.contains("hint: -L"),
         "refusal must name the reread:\n{diagnostic}"
     );
 
@@ -1792,6 +1924,57 @@ fn highlights_create_same_title_library_rereads_from_original_source() {
             && !vault.join("xlib/chat/report__v2.pdf").exists(),
         "a dry-run reread must not write an intake PDF"
     );
+}
+
+#[test]
+fn highlights_create_same_stem_different_title_remains_a_new_capture() {
+    let temp = TempDir::new("bob-cli-highlights-create-stem-title-identity");
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Report\n");
+
+    for (label, force) in [("plain", false), ("force", true)] {
+        let vault = temp.path().join(format!("vault-{label}"));
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+        let library_pdf = vault.join("lib/chat/report.pdf");
+        write_highlights_pdf(
+            &library_pdf,
+            "- status: ready\n- parent: sase\n- title: Archived Report\n",
+        );
+        write_file(
+            &vault.join("ref/chat/report.md"),
+            "---\ntitle: Archived Report\nstatus: ready\nsource_pdf: lib/chat/report.pdf\n---\n\n# Archived Report\n",
+        );
+
+        let mut command = bob_command();
+        command
+            .arg("ref")
+            .arg("create")
+            .arg("-P")
+            .arg("sase")
+            .arg(&source)
+            .arg("-b")
+            .arg(&vault)
+            .arg("-d");
+        if force {
+            command.arg("-f");
+        }
+        let output = command
+            .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+            .output()
+            .expect("run same-stem different-title create");
+        assert_success(&output);
+        let report = stdout(&output);
+        assert!(
+            report.contains("xlib/chat/report_2.pdf")
+                && report.contains("renamed: report.pdf is taken by")
+                && !report.contains("reread:"),
+            "{label} mode must treat a different page title as a new reference:\n{report}"
+        );
+        assert!(
+            !vault.join("xlib/chat/report_2.pdf").exists(),
+            "dry run must not write an intake PDF"
+        );
+    }
 }
 
 #[test]
@@ -6851,6 +7034,29 @@ fn highlights_create_vault_note_same_day_rereads() {
         report.contains("xlib/notes/harbor_cranes_261017.pdf"),
         "the new day plans its own dated target:\n{report}"
     );
+
+    write_file(
+        &vault.join("other/harbor_cranes.md"),
+        "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA different source note.\n",
+    );
+    let different_source = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("[[other/harbor_cranes]]")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run a same-stem snapshot from a different source note");
+    assert_success(&different_source);
+    let report = stdout(&different_source);
+    assert!(
+        !report.contains("reread:")
+            && report.contains("xlib/notes/harbor_cranes_261016_2.pdf"),
+        "source_note identity must keep a different note as a new capture:\n{report}"
+    );
 }
 
 #[test]
@@ -8490,6 +8696,23 @@ fn highlights_create_collection_reread_guards() {
     assert!(
         stderr(&output).contains("read it again as tokio_internals__v2"),
         "no force must name the reread:\n{}",
+        format_output(&output)
+    );
+
+    let output = attempt(
+        &[TOKIO_PART_1, TOKIO_PART_2],
+        &["-P", "sase", "-o", "out.pdf"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "without force the normal captured refusal must win over -o:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already captured")
+            && !stderr(&output).contains("a reread is named"),
+        "-o without reread force must keep the normal refusal:\n{}",
         format_output(&output)
     );
 

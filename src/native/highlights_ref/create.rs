@@ -998,7 +998,14 @@ fn preflight_before_parent(
             };
             let rows = super::recapture::index_rows(config);
             super::recapture::preflight_for_stem(
-                config, &rows, &stem, name, output, force, &title,
+                config,
+                &rows,
+                &stem,
+                name,
+                output,
+                force,
+                &title,
+                super::recapture::StemIdentity::Title(&title),
             )
         }
         PreparedTarget::Pdf(path) => {
@@ -1045,6 +1052,7 @@ fn preflight_before_parent(
                 output,
                 force,
                 &pdf_plan.title,
+                super::recapture::StemIdentity::Title(&pdf_plan.title),
             )
         }
         PreparedTarget::VaultNote { .. } => Ok(None),
@@ -1093,6 +1101,9 @@ fn check_duplicate_before_parent(
                     None,
                     force_flag,
                 ) {
+                    let hit = super::recapture::newest_reading_hit(
+                        config, &recorded, &hit,
+                    );
                     let command = match super::listen::require_validated() {
                         Ok(command) => command,
                         Err(error) => {
@@ -1368,6 +1379,8 @@ fn create_pdf(
                 options.force.is_some(),
             )
         {
+            let hit =
+                super::recapture::newest_reading_hit(config, &recorded, &hit);
             let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
             let (source_line, target_value) = url_attach_lines(&url, &arxiv);
             return attach_mod::run_attach(
@@ -1783,6 +1796,7 @@ fn create_vault_note_route(
         Some(name) => super::clip_url::validate_name(name)?,
         None => snapshot.dated_stem.clone(),
     };
+    let source_note = snapshot.note.identity.route.clone();
     // Same-day duplicates reread as `<dated-root>__vN`; a new day keeps
     // its ordinary dated create. The dated stem is known only after
     // snapshot planning, so the vault route preflights here.
@@ -1795,6 +1809,7 @@ fn create_vault_note_route(
         options.output.as_deref(),
         options.force,
         &snapshot.identity_title,
+        super::recapture::StemIdentity::SourceNote(&source_note),
     )?;
     // Family defaults lose to explicit flags: the newest reading's type
     // fills in `-t` only when it is absent.
@@ -1812,8 +1827,10 @@ fn create_vault_note_route(
         }
         (None, _) => default_ref_type_for_kind("note", None)?,
     };
-    let identity =
-        DefaultTargetIdentity::Title(snapshot.identity_title.clone());
+    let identity = DefaultTargetIdentity::SourceNote {
+        source_note: source_note.clone(),
+        title: snapshot.identity_title.clone(),
+    };
     // A reread plans its allocated `<root>__vN` stem with no suffix
     // fallback and always stamps `id`; `-o` on a captured reread was
     // refused at preflight.
@@ -1847,7 +1864,6 @@ fn create_vault_note_route(
         ..options.clone()
     };
     let options = &owned;
-    let source_note = snapshot.note.identity.route.clone();
     let author = options.author.clone().filter(|value| !value.is_empty());
     let published = options.published.clone().filter(|value| !value.is_empty());
     let marker = compose_markdown_marker(
@@ -3034,6 +3050,7 @@ fn create_pdf_url_route(
             options.force.is_some(),
         )
     {
+        let hit = super::recapture::newest_reading_hit(config, recorded, &hit);
         let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
         return attach_mod::run_attach(
             config,
@@ -3318,6 +3335,8 @@ fn create_arxiv_route(
             )
         });
         if let Some(hit) = hit {
+            let hit =
+                super::recapture::newest_reading_hit(config, recorded, &hit);
             let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
             return attach_mod::run_attach(
                 config,

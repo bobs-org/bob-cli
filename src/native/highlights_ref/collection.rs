@@ -1641,9 +1641,18 @@ fn check_collection_overlap(
         });
     }
 
-    let exact = refusing.len() == 1 && refusing[0].keys == wanted;
+    // Reading versions of one exact family count as one identity. Attach
+    // to its newest reading; an unrelated family with only a partial URL
+    // overlap does not displace that exact match.
+    let newest_exact_family =
+        recapture::newest_exact_family_hit(config, recorded, &wanted);
+    let exact_single_path = refusing.len() == 1 && refusing[0].keys == wanted;
+    let exact = newest_exact_family.is_some() || exact_single_path;
     if exact {
-        let hit = &refusing[0].first;
+        let hit = newest_exact_family
+            .as_ref()
+            .or_else(|| refusing.first().map(|group| &group.first))
+            .expect("an exact overlap has a source");
         if listen {
             return Ok(OverlapCheck::Attach(hit.clone()));
         }
@@ -1958,6 +1967,78 @@ mod tests {
         )
         .expect("same set with listen is an attach candidate");
         assert!(matches!(attach, OverlapCheck::Attach(_)));
+    }
+
+    #[test]
+    fn collection_attach_uses_the_newest_reading_in_an_exact_family() {
+        let root = std::env::temp_dir().join(format!(
+            "bob-collection-newest-attach-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos(),
+        ));
+        std::fs::create_dir_all(root.join("ref/blogs")).expect("ref directory");
+        let first = "https://example.com/series-part-1";
+        let second = "https://example.com/series-part-2";
+        std::fs::write(
+            root.join("ref/blogs/series.md"),
+            format!(
+                "---\ntitle: Series\nsource_url: [{first}, {second}]\nsource_pdf: lib/blogs/series.pdf\n---\n# Series\n"
+            ),
+        )
+        .expect("write first reading");
+        std::fs::write(
+            root.join("ref/blogs/series__v2.md"),
+            format!(
+                "---\ntitle: Series\nsource_url: [{first}, {second}]\nsource_pdf: lib/blogs/series__v2.pdf\nearlier:\n  - \"[[ref/blogs/series|v1]]\"\n---\n# Series\n"
+            ),
+        )
+        .expect("write newest reading");
+        let config = Config {
+            bob_dir: root.clone(),
+            lib_dir: root.join("lib"),
+            ref_dir: root.join("ref"),
+            xlib_dir: root.join("xlib"),
+        };
+        let recorded = [
+            source(
+                first,
+                root.join("ref/blogs/series.md").to_str().unwrap(),
+                true,
+            ),
+            source(
+                second,
+                root.join("ref/blogs/series.md").to_str().unwrap(),
+                true,
+            ),
+            source(
+                first,
+                root.join("ref/blogs/series__v2.md").to_str().unwrap(),
+                true,
+            ),
+            source(
+                second,
+                root.join("ref/blogs/series__v2.md").to_str().unwrap(),
+                true,
+            ),
+        ];
+        let urls = [url(first), url(second)];
+
+        let outcome = check_collection_overlap(
+            &config, &recorded, &urls, None, None, true,
+        )
+        .expect("exact set attaches");
+        let OverlapCheck::Attach(hit) = outcome else {
+            panic!("expected attach outcome");
+        };
+        assert_eq!(
+            hit.path,
+            root.join("ref/blogs/series__v2.md"),
+            "the attachment must follow the family to its newest reading"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

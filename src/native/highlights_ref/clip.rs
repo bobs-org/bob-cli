@@ -134,7 +134,9 @@ fn check_dedupe_for_clip(
                     force,
                 )
             {
-                return Ok(Some(hit));
+                return Ok(Some(super::recapture::newest_reading_hit(
+                    config, recorded, &hit,
+                )));
             }
             Err(ClipError {
                 message: error.message,

@@ -153,8 +153,12 @@ pub(super) fn derive_birth_lineage(
             label: entry.label,
         })
         .collect();
+    let family_key = index.rows.iter().find(|row| row.path == family)?;
     Some(BirthLineage {
-        root_stem: path_stem(&family),
+        root_stem: super::super::ref_library::lineage::family_root_stem(
+            &family_key.path,
+            &family_key.earlier,
+        ),
         reading,
         entries,
     })
@@ -225,7 +229,8 @@ fn identities_match(
     }
     match (candidate_title(candidate), marker_title) {
         (Some(row_title), Some(marker)) => {
-            normalize_title(&row_title) == normalize_title(marker)
+            super::stamp::normalize_title(&row_title)
+                == super::stamp::normalize_title(marker)
         }
         _ => false,
     }
@@ -265,7 +270,7 @@ fn push_unique_key(keys: &mut Vec<String>, key: String) {
 /// The candidate note's frontmatter `source_note`, read directly: the
 /// library row carries no `source_note` field, and only base/lower-`__vM`
 /// candidates are ever read.
-fn candidate_source_note(
+pub(super) fn candidate_source_note(
     candidate: &RefRow,
     config: &Config,
 ) -> Option<String> {
@@ -279,7 +284,7 @@ fn candidate_source_note(
 
 /// Mirror `create`'s snapshot comparison: bare routes, aliases stripped,
 /// lowercased.
-fn normalize_source_note(value: &str) -> String {
+pub(super) fn normalize_source_note(value: &str) -> String {
     let value = value.trim().trim_start_matches("[[").trim_end_matches("]]");
     value
         .split_once('|')
@@ -291,14 +296,6 @@ fn normalize_source_note(value: &str) -> String {
 fn candidate_title(candidate: &RefRow) -> Option<String> {
     let title = candidate.title.trim();
     (!title.is_empty()).then(|| title.to_string())
-}
-
-fn normalize_title(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
 }
 
 /// `vM · <captured date>` for a live family member, or bare `vM` when no
@@ -367,11 +364,8 @@ pub(super) fn reading_from_note_frontmatter(
     if number < 2 {
         return None;
     }
-    let root = entries
-        .iter()
-        .rev()
-        .find(|entry| entry.kind == EarlierKind::Reading)
-        .map(|entry| path_stem(&entry.target))?;
+    let root =
+        super::super::ref_library::lineage::family_root_stem("", &entries);
     Some(ReadingIdentity {
         root_stem: root,
         number,
@@ -548,6 +542,54 @@ mod tests {
             lineage.entries[0].label.as_deref(),
             Some("v3 · 2026-09-01")
         );
+    }
+
+    #[test]
+    fn deleted_root_keeps_the_original_stem_for_birth_and_reopen() {
+        let root = temp_root("deleted-root");
+        let config = test_config(&root);
+        let url = "https://example.com/deleted-root";
+        write_note(
+            &root,
+            "ref/papers/foo__v2.md",
+            &filed_note(
+                url,
+                "Foo",
+                &["earlier:", "  - \"[[ref/papers/foo|v1 · 2026-01-01]]\""],
+            ),
+        );
+        write_note(
+            &root,
+            "ref/papers/foo__v3.md",
+            &filed_note(
+                url,
+                "Foo",
+                &[
+                    "earlier:",
+                    "  - \"[[ref/papers/foo__v2|v2 · 2026-02-01]]\"",
+                    "  - \"[[ref/papers/foo|v1 · 2026-01-01]]\"",
+                ],
+            ),
+        );
+
+        let lineage = derive_birth_lineage(
+            &config,
+            &root.join("ref/papers/foo__v4.md"),
+            &marker(Some(url), "Foo"),
+        )
+        .expect("the new reading belongs to the family");
+        assert_eq!(lineage.root_stem, "foo");
+        assert_eq!(lineage.reading, 4);
+
+        let raw = vec![
+            "earlier:".to_string(),
+            "  - \"[[ref/papers/foo__v3|v3]]\"".to_string(),
+            "  - \"[[ref/papers/foo__v2|v2]]\"".to_string(),
+            "  - \"[[ref/papers/foo|v1]]\"".to_string(),
+        ];
+        let reopened = reading_from_note_frontmatter(&raw).expect("reopen");
+        assert_eq!(reopened.root_stem, lineage.root_stem);
+        assert_eq!(reopened.number, lineage.reading);
     }
 
     #[test]

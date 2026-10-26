@@ -17,6 +17,7 @@
 //! and a date, plus a highlight count for frozen notes) and is never
 //! parsed for identity.
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use super::frontmatter::ParsedFrontmatter;
 use super::row::{Diagnostic, RefRow};
@@ -105,6 +106,31 @@ pub(crate) fn reading_number(entries: &[EarlierEntry]) -> u32 {
         .iter()
         .filter(|entry| entry.kind == EarlierKind::Reading)
         .count() as u32
+}
+
+/// Stable family stem from a family-key row's own lineage. When the
+/// original reading has been deleted, the index key can fall back to a
+/// later live row; its oldest `Reading` entry still names the original
+/// root. A row without reading lineage keeps the stem of its own path,
+/// including natural version-looking names.
+pub(crate) fn family_root_stem(
+    fallback_path: &str,
+    entries: &[EarlierEntry],
+) -> String {
+    entries
+        .iter()
+        .rev()
+        .find(|entry| entry.kind == EarlierKind::Reading)
+        .map(|entry| path_stem(&entry.target))
+        .unwrap_or_else(|| path_stem(fallback_path))
+}
+
+fn path_stem(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// Resolve a normalized `Reading` target to a live row index by
