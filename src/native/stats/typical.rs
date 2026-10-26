@@ -11,8 +11,8 @@ use chrono::{Days, NaiveDate};
 use super::registry::MetricUnit;
 use super::report::{GroupName, SeriesPoint, TypicalDay, TypicalRelation};
 use super::series::{
-    format_date_span, format_minutes, format_value, median, DateSpan,
-    DAY_WINDOW, DAY_WINDOW_MIN,
+    format_date_span, format_minutes, format_value, is_usable_value, median,
+    DateSpan, DAY_WINDOW, DAY_WINDOW_MIN,
 };
 
 /// Add the optional `typical` object to day-grouped count/minutes points.
@@ -32,9 +32,10 @@ pub(crate) fn add_typical_days(
     if !matches!(unit, MetricUnit::Count | MetricUnit::Minutes) {
         return;
     }
-    let by_date: BTreeMap<NaiveDate, (Option<i64>, bool)> = points
+    let by_date: BTreeMap<NaiveDate, i64> = points
         .iter()
-        .map(|point| (point.date, (point.value, point.provisional)))
+        .filter(|point| is_usable_value(point))
+        .filter_map(|point| Some((point.date, point.value?)))
         .collect();
     let computed: Vec<Option<TypicalDay>> = points
         .iter()
@@ -45,7 +46,7 @@ pub(crate) fn add_typical_days(
             let mut usable = Vec::new();
             let mut day = start;
             loop {
-                if let Some((Some(value), false)) = by_date.get(&day) {
+                if let Some(value) = by_date.get(&day) {
                     usable.push(*value);
                 }
                 if day == end {

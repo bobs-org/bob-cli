@@ -2831,6 +2831,45 @@ mod tests {
     }
 
     #[test]
+    fn typical_day_skips_out_of_window_and_provisional_history() {
+        let day = date(2026, 1, 15);
+        let mut historical_outlier = daily(date(2026, 1, 10), Some(8888));
+        historical_outlier.provisional = true;
+        let mut values = vec![
+            // D−8 is a finished outlier: calendar selection must ignore it.
+            daily(date(2026, 1, 7), Some(9999)),
+            daily(date(2026, 1, 8), Some(0)),
+            // 2026-01-09 is absent from the series: a missing calendar date.
+            historical_outlier,
+            partial_day(date(2026, 1, 11), 10),
+            daily(date(2026, 1, 12), Some(20)),
+            daily(date(2026, 1, 13), Some(30)),
+            daily(date(2026, 1, 14), Some(40)),
+            daily(day, Some(1000)),
+        ];
+        values.last_mut().unwrap().provisional = false;
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        // Usable D−7…D−1: 0, 10, 20, 30, 40. Median 20. D−8 and the
+        // provisional 8888 stay out; including either would add a sixth
+        // value and move the even-count median to 25.
+        assert_eq!(tip.start, date(2026, 1, 8));
+        assert_eq!(tip.end, date(2026, 1, 14));
+        assert_eq!(tip.days, 5);
+        assert_eq!(tip.value, Some(20));
+        assert_eq!(tip.display, "20");
+        assert_eq!(tip.relation, Some(TypicalRelation::Above));
+        assert_eq!(tip.words, "980 above the typical day of 20");
+    }
+
+    #[test]
     fn typical_day_needs_four_usable_days() {
         // Three usable days: short, plural "have".
         let day = date(2026, 2, 10);
