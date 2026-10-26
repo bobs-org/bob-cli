@@ -731,6 +731,13 @@ pub(super) fn resolve_exact_output_path(path: &Path) -> Result<PathBuf> {
     Ok(resolve_exact_output_path_from(path, &cwd))
 }
 
+/// Check presence at the same expanded, absolute path used by the exact
+/// output planner. Callers use this only to preserve the old overwrite
+/// permission; the planner remains responsible for validating the path.
+pub(super) fn exact_output_exists(path: &Path) -> Result<bool> {
+    Ok(resolve_exact_output_path(path)?.exists())
+}
+
 pub(super) fn resolve_exact_output_path_from(
     path: &Path,
     cwd: &Path,

@@ -1040,16 +1040,21 @@ pub(super) fn print_reread_listen_hint(preflight: &RereadPreflight) {
     }
 }
 
-/// On a plain reread (no `-L` or `-a`) when the newest reading is
-/// narrated, point at it: earlier audio is never inherited, so the new
-/// reading needs `-L` to be narrated too.
+/// On a plain reread (no `-L` or `-a`) when any earlier reading is
+/// narrated, point at the first (newest) narrated member: earlier audio
+/// is never inherited, so the new reading needs `-L` to be narrated too.
 pub(super) fn print_reread_narrated_hint(preflight: &RereadPreflight) {
-    let newest = preflight.plan.family.newest();
-    if !newest.has_audio {
+    let Some(narrated) = preflight
+        .plan
+        .family
+        .members
+        .iter()
+        .find(|member| member.has_audio)
+    else {
         return;
-    }
-    let reading = newest.reading.unwrap_or(1);
-    match &newest.audio_path {
+    };
+    let reading = narrated.reading.unwrap_or(1);
+    match &narrated.audio_path {
         Some(path) => println!(
             "hint: v{reading} is narrated ({path}); add -L to narrate this reading"
         ),

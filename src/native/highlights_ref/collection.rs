@@ -290,7 +290,9 @@ fn attach_gate(
     // permission under overwrite, like an exact queued set.
     let output_exists = matches
         .get_one::<OsString>("output")
-        .is_some_and(|output| Path::new(output).exists());
+        .map(|output| stamp::exact_output_exists(Path::new(output)))
+        .transpose()?
+        .unwrap_or(false);
     match &overlap {
         Err(_) => return overlap.map(|_| None),
         Ok(OverlapCheck::Clear { .. })
@@ -391,7 +393,9 @@ fn recapture_gate(
             // file keeps the old replacement permission.
             let output_exists = matches
                 .get_one::<OsString>("output")
-                .is_some_and(|output| Path::new(output).exists());
+                .map(|output| stamp::exact_output_exists(Path::new(output)))
+                .transpose()?
+                .unwrap_or(false);
             if !(super::force::is_overwrite(force) && output_exists) {
                 fresh_queued_gate(config, &recorded, urls, targets, force)?;
             }

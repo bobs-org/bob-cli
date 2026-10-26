@@ -272,7 +272,11 @@ pub(super) fn triage_overwrite_url(
     source: &str,
     output: Option<&std::path::Path>,
 ) -> Result<()> {
-    if output.is_some_and(|path| path.exists()) {
+    if output
+        .map(super::stamp::exact_output_exists)
+        .transpose()?
+        .unwrap_or(false)
+    {
         return Ok(());
     }
     let hits = sources_mod::refusing_hits(recorded, dedupe_key, None, false);

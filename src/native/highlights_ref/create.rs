@@ -1257,12 +1257,16 @@ fn check_markdown_stamp_before_parent(
     // An existing exact-output file keeps the old replacement permission
     // under overwrite: skip the default-target duplicate probe and let
     // the exact-output planner decide.
-    if is_overwrite(force)
-        && matches
+    if is_overwrite(force) {
+        match matches
             .get_one::<OsString>("output")
-            .is_some_and(|output| Path::new(output).exists())
-    {
-        return None;
+            .map(|output| super::stamp::exact_output_exists(Path::new(output)))
+            .transpose()
+        {
+            Ok(Some(true)) => return None,
+            Ok(_) => {}
+            Err(error) => return Some(report_create_error(error)),
+        }
     }
     let canonical = fs::canonicalize(source).ok()?;
     let markdown = fs::read_to_string(&canonical).ok()?;
@@ -1322,12 +1326,16 @@ fn check_pdf_stamp_before_parent(
     // An existing exact-output file keeps the old replacement permission
     // under overwrite: skip the default-target duplicate probe and let
     // the exact-output planner decide.
-    if is_overwrite(force)
-        && matches
+    if is_overwrite(force) {
+        match matches
             .get_one::<OsString>("output")
-            .is_some_and(|output| Path::new(output).exists())
-    {
-        return None;
+            .map(|output| super::stamp::exact_output_exists(Path::new(output)))
+            .transpose()
+        {
+            Ok(Some(true)) => return None,
+            Ok(_) => {}
+            Err(error) => return Some(report_create_error(error)),
+        }
     }
     if let Err(error) = pdf_target_mod::check_local_pdf_identity(config, source)
     {

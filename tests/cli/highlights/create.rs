@@ -7812,12 +7812,46 @@ fn highlights_create_overwrite_fresh_url_refuses_before_fetch() {
             format_output(&output)
         );
     }
+    let absent_output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(FOLDED_URL)
+        .arg("-f")
+        .arg("overwrite")
+        .arg("-o")
+        .arg("~/absent.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .env("HOME", temp.path())
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run overwrite with absent tilde output");
+    assert_eq!(
+        absent_output.status.code(),
+        Some(1),
+        "absent tilde output must not grant overwrite permission:\n{}",
+        format_output(&absent_output)
+    );
+    assert!(
+        stderr(&absent_output).contains("nothing to overwrite"),
+        "absent tilde output must refuse as fresh:\n{}",
+        format_output(&absent_output)
+    );
     assert!(!fake.called(), "fresh overwrite must not run the adapter");
     assert!(
         std::fs::read_to_string(&curl_log)
             .expect("read curl log")
             .is_empty(),
         "fresh overwrite must not fetch"
+    );
+    assert!(
+        !temp.path().join("absent.pdf").exists(),
+        "fresh overwrite must not create the resolved output"
     );
     vault_holds_only(&vault, &["sase.md"]);
 }
@@ -9164,8 +9198,8 @@ fn route_guards_overwrite_url_exact_output_replaces() {
     let fake_curl = write_fake_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let output_path = temp.path().join("custom.pdf");
-    std::fs::write(&output_path, b"%PDF-1.4 old\n").expect("seed output");
+    std::fs::write(temp.path().join("custom.pdf"), b"%PDF-1.4 old\n")
+        .expect("seed output");
 
     let output = bob_command()
         .arg("ref")
@@ -9174,7 +9208,7 @@ fn route_guards_overwrite_url_exact_output_replaces() {
         .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-o")
-        .arg(&output_path)
+        .arg("~/custom.pdf")
         .arg("-f")
         .arg("overwrite")
         .arg("-d")
@@ -9183,6 +9217,7 @@ fn route_guards_overwrite_url_exact_output_replaces() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
+        .env("HOME", temp.path())
         .output()
         .expect("run overwrite URL with existing -o");
     assert_eq!(
@@ -9210,8 +9245,8 @@ fn route_guards_overwrite_collection_exact_output_replaces() {
     let curl_root = temp.path().join("collection-curl-root");
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let output_path = temp.path().join("custom.pdf");
-    std::fs::write(&output_path, b"%PDF-1.4 old\n").expect("seed output");
+    std::fs::write(temp.path().join("custom.pdf"), b"%PDF-1.4 old\n")
+        .expect("seed output");
 
     let output = bob_command()
         .arg("ref")
@@ -9221,7 +9256,7 @@ fn route_guards_overwrite_collection_exact_output_replaces() {
         .arg("https://example.com/2024/01/tokio-internals-part-1")
         .arg("https://example.com/2024/02/tokio-internals-part-2")
         .arg("-o")
-        .arg(&output_path)
+        .arg("~/custom.pdf")
         .arg("-f")
         .arg("overwrite")
         .arg("-d")
@@ -9231,6 +9266,7 @@ fn route_guards_overwrite_collection_exact_output_replaces() {
         .env("BOB_HIGHLIGHTS_CURL", &html_curl)
         .env("FAKE_CURL_ROOT", &curl_root)
         .env("FAKE_CURL_LOG", &curl_log)
+        .env("HOME", temp.path())
         .output()
         .expect("run overwrite collection with existing -o");
     assert_eq!(
@@ -9246,42 +9282,82 @@ fn route_guards_overwrite_collection_exact_output_replaces() {
     );
 }
 
-/// Exact-output `-o` keeps the overwrite replacement permission for
-/// Markdown: an existing file is replaced instead of refusing as fresh.
+/// Exact-output `-o` passes the Markdown duplicate probe before the
+/// missing-parent diagnostic.
 #[test]
-fn route_guards_overwrite_markdown_exact_output_replaces() {
+fn route_guards_overwrite_markdown_exact_output_preparent_probe() {
     let temp = TempDir::new("bob-cli-route-guards-markdown-output");
     let vault = temp.path().join("vault");
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("report.md");
     write_file(&source, "# Report\n\nBody.\n");
-    let output_path = temp.path().join("custom.pdf");
-    std::fs::write(&output_path, b"%PDF-1.4 old\n").expect("seed output");
+    std::fs::write(temp.path().join("custom.pdf"), b"%PDF-1.4 old\n")
+        .expect("seed output");
 
     let output = bob_command()
         .arg("ref")
         .arg("create")
-        .arg("-P")
-        .arg("sase")
         .arg(&source)
         .arg("-o")
-        .arg(&output_path)
+        .arg("~/custom.pdf")
         .arg("-f")
         .arg("overwrite")
         .arg("-d")
         .arg("-b")
         .arg(&vault)
+        .env("HOME", temp.path())
         .output()
         .expect("run overwrite Markdown with existing -o");
     assert_eq!(
         output.status.code(),
-        Some(0),
-        "existing -o must keep overwrite permission:\n{}",
+        Some(2),
+        "the resolved output should pass the duplicate probe before parent validation:\n{}",
         format_output(&output)
     );
     assert!(
-        !stderr(&output).contains("nothing to overwrite"),
-        "must not refuse as fresh:\n{}",
+        stderr(&output).contains("--parent is required")
+            && !stderr(&output).contains("nothing to overwrite"),
+        "the missing-parent diagnostic should follow the pre-parent probe:\n{}",
+        format_output(&output)
+    );
+}
+
+/// The PDF title-route pre-parent probe uses the same tilde-expanded output
+/// identity as the exact-output planner.
+#[test]
+fn route_guards_overwrite_pdf_exact_output_tilde_preparent_probe() {
+    let temp = TempDir::new("bob-cli-route-guards-pdf-output-tilde");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let source = temp.path().join("report.pdf");
+    write_bare_pdf(&source, Some("Report"), None);
+    std::fs::write(temp.path().join("custom.pdf"), b"%PDF-1.4 old\n")
+        .expect("seed output");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg(&source)
+        .arg("-o")
+        .arg("~/custom.pdf")
+        .arg("-f")
+        .arg("overwrite")
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("HOME", temp.path())
+        .output()
+        .expect("run overwrite PDF with tilde output");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the resolved output should pass the duplicate probe before parent validation:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("--parent is required")
+            && !stderr(&output).contains("nothing to overwrite"),
+        "the missing-parent diagnostic should follow the pre-parent probe:\n{}",
         format_output(&output)
     );
 }
@@ -9292,18 +9368,43 @@ fn route_guards_overwrite_markdown_exact_output_replaces() {
 fn route_guards_plain_reread_names_narrated_reading_without_inheriting() {
     let temp = TempDir::new("bob-cli-route-guards-narrated-hint");
     let vault = temp.path().join("vault");
-    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\n---\n\n- [ ] #task #ref [[ref/blogs/existing|Existing]] [created:: 2026-01-01] ^ref-existing\n- [ ] #task #ref [[ref/blogs/existing__v2|Existing (v2)]] [created:: 2026-01-02] ^ref-existing-v2\n- [ ] #task #ref [[ref/blogs/existing__v3|Existing (v3)]] [created:: 2026-01-03] ^ref-existing-v3\n",
+    );
     write_file(
         &vault.join("ref/blogs/existing.md"),
         "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\nstatus: ready\naudio: \"[[lib/blogs/existing.mp3]]\"\n---\n\n# Existing\n",
     );
+    write_file(
+        &vault.join("ref/blogs/existing__v2.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing__v2.pdf\ntitle: Existing\nstatus: ready\naudio: \"[[lib/blogs/existing__v2.mp3]]\"\nearlier:\n  - \"[[ref/blogs/existing|v1 · 2026-01-01]]\"\n---\n\n# Existing\n",
+    );
+    write_file(
+        &vault.join("ref/blogs/existing__v3.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing__v3.pdf\ntitle: Existing\nstatus: ready\nearlier:\n  - \"[[ref/blogs/existing__v2|v2 · 2026-01-02]]\"\n  - \"[[ref/blogs/existing|v1 · 2026-01-01]]\"\n---\n\n# Existing\n",
+    );
     std::fs::create_dir_all(vault.join("lib/blogs")).expect("lib dir");
     std::fs::write(vault.join("lib/blogs/existing.mp3"), "ID3 old episode")
         .expect("write earlier episode");
+    std::fs::write(vault.join("lib/blogs/existing__v2.mp3"), "ID3 v2 episode")
+        .expect("write v2 episode");
+    for stem in ["existing", "existing__v2", "existing__v3"] {
+        write_bare_pdf(
+            &vault.join(format!("lib/blogs/{stem}.pdf")),
+            Some("Existing"),
+            None,
+        );
+    }
+    let earlier_v2_note =
+        std::fs::read(vault.join("ref/blogs/existing__v2.md"))
+            .expect("snapshot earlier v2 note");
+    let earlier_v2_audio =
+        std::fs::read(vault.join("lib/blogs/existing__v2.mp3"))
+            .expect("snapshot earlier v2 audio");
     let fake = FakeClip::new(&temp, "fake");
-    let curl_root = temp.path().join("curl-root");
-    std::fs::create_dir_all(&curl_root).expect("create curl root");
-    let fake_curl = write_fake_curl(temp.path());
+    let html_curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
 
@@ -9318,7 +9419,7 @@ fn route_guards_plain_reread_names_narrated_reading_without_inheriting() {
         .arg("-b")
         .arg(&vault)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("BOB_HIGHLIGHTS_CURL", &html_curl)
         .env("FAKE_CURL_ROOT", &curl_root)
         .env("FAKE_CURL_LOG", &curl_log)
         .output()
@@ -9326,7 +9427,7 @@ fn route_guards_plain_reread_names_narrated_reading_without_inheriting() {
     assert_success(&reread);
     let report = stdout(&reread);
     assert!(
-        report.contains("reread: existing → existing__v2"),
+        report.contains("reread: existing__v3 → existing__v4"),
         "plain reread must report the new reading:\n{report}"
     );
     assert!(
@@ -9334,12 +9435,101 @@ fn route_guards_plain_reread_names_narrated_reading_without_inheriting() {
         "plain reread must hint at the narrated earlier reading:\n{report}"
     );
     assert!(
-        report.contains("lib/blogs/existing.mp3"),
+        report.contains("v2 is narrated (lib/blogs/existing__v2.mp3)"),
         "hint must name the newest narrated reading:\n{report}"
     );
     assert!(
-        !report.contains("existing__v2.mp3"),
+        !report.contains("existing__v4.mp3"),
         "earlier audio must never be inherited as the new reading's audio:\n{report}"
+    );
+
+    let captured = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(FOLDED_URL)
+        .arg("-f")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &html_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("capture plain reread");
+    assert_success(&captured);
+    let captured_report = stdout(&captured);
+    assert!(
+        captured_report.contains("reread: existing__v3 → existing__v4")
+            && captured_report
+                .contains("v2 is narrated (lib/blogs/existing__v2.mp3)"),
+        "actual capture must use the same narrated hint:\n{captured_report}"
+    );
+    assert!(
+        !captured_report
+            .lines()
+            .any(|line| line.starts_with("audio:")),
+        "plain reread must not inherit earlier audio:\n{captured_report}"
+    );
+    assert!(
+        !vault.join("xlib/blogs/existing__v4.mp3").exists(),
+        "plain reread must not stage an earlier reading's audio"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("ref/blogs/existing__v2.md"))
+            .expect("read earlier v2 note after capture"),
+        earlier_v2_note,
+        "rereading must leave the earlier note bytes unchanged"
+    );
+    assert_eq!(
+        std::fs::read(vault.join("lib/blogs/existing__v2.mp3"))
+            .expect("read earlier v2 audio after capture"),
+        earlier_v2_audio,
+        "rereading must leave the earlier audio bytes unchanged"
+    );
+}
+
+/// A plain reread of a family with no audio does not print an audio hint.
+#[test]
+fn route_guards_plain_reread_without_audio_has_no_narrated_hint() {
+    let temp = TempDir::new("bob-cli-route-guards-no-narrated-hint");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\nstatus: ready\n---\n\n# Existing\n",
+    );
+    let fake = FakeClip::new(&temp, "fake");
+    let html_curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(FOLDED_URL)
+        .arg("-f")
+        .arg("-d")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &html_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("dry-run plain reread without audio");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("reread: existing → existing__v2"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("is narrated") && !report.contains("add -L"),
+        "a family without audio has no narrated hint:\n{report}"
     );
 }
 
