@@ -8,6 +8,7 @@
 use crate::highlights::fake_clip::{failure_response, FakeClip};
 use crate::support::*;
 use sha2::Digest;
+use std::collections::BTreeSet;
 use std::fs;
 use std::time::Instant;
 
@@ -53,6 +54,18 @@ fn queued_files(temp: &TempDir) -> Vec<std::path::PathBuf> {
         );
     }
     files
+}
+
+/// Pending plus running job identities. A claimed job may briefly be
+/// present in both directories, so physical paths are not queue entries.
+fn queued_job_ids(temp: &TempDir) -> BTreeSet<String> {
+    queued_files(temp)
+        .into_iter()
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect()
 }
 
 fn capture(
@@ -1081,6 +1094,38 @@ fn capture_end_to_end_falls_back_on_blocked() {
 }
 
 #[test]
+fn queued_job_ids_deduplicate_a_claim_overlap_and_keep_extra_jobs() {
+    let temp = TempDir::new("bob-cli-capture-ref-claim-overlap");
+    let pending = pending_dir(&temp);
+    let running = state_dir(&temp).join("bob-cli/ref/jobs/running");
+    fs::create_dir_all(&pending).expect("create pending directory");
+    fs::create_dir_all(&running).expect("create running directory");
+
+    let claimed_id = "claimed-job";
+    fs::write(pending.join(format!("{claimed_id}.json")), "{}")
+        .expect("write pending copy");
+    fs::write(running.join(format!("{claimed_id}.json")), "{}")
+        .expect("write running copy");
+
+    // This is the valid overlap during move_job's install-before-remove
+    // transition. The old physical-path count reports two for one job.
+    assert_eq!(queued_files(&temp).len(), 2);
+    assert_eq!(
+        queued_job_ids(&temp),
+        BTreeSet::from([claimed_id.to_string()])
+    );
+
+    let extra_id = "unexpected-job";
+    fs::write(running.join(format!("{extra_id}.json")), "{}")
+        .expect("write distinct running job");
+    assert_eq!(
+        queued_job_ids(&temp),
+        BTreeSet::from([claimed_id.to_string(), extra_id.to_string()]),
+        "deduplicating a claim overlap must preserve distinct jobs"
+    );
+}
+
+#[test]
 fn capture_with_kick_returns_before_the_clip_finishes() {
     let temp = TempDir::new("bob-cli-capture-ref-kick");
     let vault = temp.path().join("vault");
@@ -1100,12 +1145,20 @@ fn capture_with_kick_returns_before_the_clip_finishes() {
         .expect("run kicking capture");
     let elapsed = started.elapsed();
     assert_success(&output);
-    assert_eq!(parse_json(&output)["placement"], "queued");
+    let json = parse_json(&output);
+    assert_eq!(json["placement"], "queued", "{json}");
+    let job_id = json["ref"]["job"]["id"]
+        .as_str()
+        .expect("capture reports queued job id");
     assert!(
         elapsed.as_secs() < 10,
         "capture must return before the 20s clip finishes (took {elapsed:?})"
     );
-    assert_eq!(queued_files(&temp).len(), 1);
+    assert_eq!(
+        queued_job_ids(&temp),
+        BTreeSet::from([job_id.to_string()]),
+        "pending/running jobs must contain exactly the capture's queued id; {json}"
+    );
 }
 
 #[test]
