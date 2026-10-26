@@ -25,13 +25,15 @@ pub(crate) use embed::find_managed_embed;
 pub(crate) use insert::{insert_ref_task, insert_ref_task_with_preferred_id};
 pub(crate) use line::{
     allocate_birth_block_id, allocate_ref_block_id, allocate_unique_block_id,
-    birth_preview_id, managed_embed_line, render_ref_task_line,
-    sanitize_title_alias, slug_ref_stem, strip_blockquote_prefix, task_mark,
-    ReadingIdentity,
+    birth_preview_id, is_embed_task_line, managed_embed_line,
+    render_ref_task_line, sanitize_title_alias, slug_ref_stem,
+    strip_blockquote_prefix, task_mark, ReadingIdentity,
 };
 pub(crate) use select::{
     is_open_mark, select_for_ref, RefTaskDiagnostic, RefTaskSelection,
     Selected, REF_TASK_DIAGNOSTIC_CODES,
 };
-pub(crate) use v1::{find_trackers, parse_tracker_line, TrackerHit};
+pub(crate) use v1::{
+    find_trackers, managed_region_line_range, parse_tracker_line, TrackerHit,
+};
 pub(crate) use walk::{is_conflict_copy_name, LocatedRefTask, RefTaskIndex};

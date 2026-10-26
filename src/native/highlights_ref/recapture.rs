@@ -750,6 +750,110 @@ pub(super) fn preflight_for_url(
     }
 }
 
+/// Resolve a destructive in-place overwrite without allocating a reread
+/// stem. Unlike [`preflight_for_url`], the explicit `-N` selection names
+/// the member to replace and `__v999` exhaustion is irrelevant.
+pub(super) fn select_overwrite_for_url(
+    rows: &[RefRow],
+    recorded: &[RecordedSource],
+    wanted: &BTreeSet<String>,
+    bob_dir: &Path,
+    name: Option<&str>,
+) -> Result<Option<SelectedFamily>, CommandError> {
+    let family = match resolve_for_url_keys(rows, recorded, wanted, bob_dir) {
+        RecaptureMatch::NoMatch | RecaptureMatch::QueuedOnly { .. } => {
+            return Ok(None);
+        }
+        RecaptureMatch::Selected { family } => family,
+        RecaptureMatch::Ambiguous { families } => {
+            select_overwrite_family(families, name)?
+        }
+        RecaptureMatch::PartialOverlap {
+            wanted,
+            overlapping,
+        } => return Err(partial_overlap_single_error(&wanted, &overlapping)),
+    };
+    if let Some(name) = name {
+        validate_reread_name(&family, name)?;
+        let selected = family
+            .member_named(name)
+            .expect("validated overwrite member");
+        let mut family = family;
+        family.selected = selected;
+        return Ok(Some(family));
+    }
+    Ok(Some(family))
+}
+
+fn select_overwrite_family(
+    families: Vec<SelectedFamily>,
+    name: Option<&str>,
+) -> Result<SelectedFamily, CommandError> {
+    if let Some(name) = name
+        && !families
+            .iter()
+            .any(|family| family.member_named(name).is_some())
+    {
+        let choices = families
+            .iter()
+            .flat_map(|family| {
+                family.members.iter().map(|member| member.stem.clone())
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        return Err(CommandError::new(format!(
+            "-N {name} is not a reading of this source; choose one of {}",
+            choices.join(", "),
+        ))
+        .with_exit_code(2));
+    }
+    disambiguate(families, name)
+}
+
+/// Resolve a title-identity overwrite. A free `-N` remains a fresh
+/// capture; a name held by a family selects that member for replacement.
+pub(super) fn select_overwrite_for_stem(
+    config: &Config,
+    rows: &[RefRow],
+    stem: &str,
+    name: Option<&str>,
+    identity: StemIdentity<'_>,
+) -> Result<Option<SelectedFamily>, CommandError> {
+    if let Some(name) = name {
+        let mut named =
+            families_for_stem_identity(config, rows, name, identity);
+        if named.is_empty() {
+            if name != stem {
+                return Ok(None);
+            }
+        } else {
+            if name != stem {
+                for family in
+                    families_for_stem_identity(config, rows, stem, identity)
+                {
+                    if !named
+                        .iter()
+                        .any(|known| known.root_path == family.root_path)
+                    {
+                        named.push(family);
+                    }
+                }
+            }
+            let mut family = disambiguate(named, Some(name))?;
+            family.selected = family
+                .member_named(name)
+                .expect("disambiguation selected the named member");
+            return Ok(Some(family));
+        }
+    }
+    let families = families_for_stem_identity(config, rows, stem, identity);
+    if families.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(disambiguate(families, name)?))
+}
+
 /// Resolve a title-route reread by stem: Markdown, local PDF, and
 /// same-day vault snapshots probe their planned stem against live
 /// families. A free stem is an ordinary capture (`Ok(None)`); a claimed
@@ -1550,6 +1654,44 @@ mod tests {
             allocate_for_family(&config, &family).expect("allocates"),
             "beta__v4",
         );
+
+        let default_overwrite = select_overwrite_for_url(
+            &rows,
+            &recorded,
+            &wanted(&[url]),
+            &root,
+            None,
+        )
+        .expect("default overwrite selection");
+        assert_eq!(
+            default_overwrite
+                .as_ref()
+                .expect("filed family")
+                .selected_member()
+                .stem,
+            "beta__v3"
+        );
+        let older_overwrite = select_overwrite_for_url(
+            &rows,
+            &recorded,
+            &wanted(&[url]),
+            &root,
+            Some("beta"),
+        )
+        .expect("explicit overwrite selection");
+        assert_eq!(
+            older_overwrite
+                .as_ref()
+                .expect("filed family")
+                .selected_member()
+                .stem,
+            "beta"
+        );
+        assert_eq!(
+            older_overwrite.expect("filed family").max_reading,
+            3,
+            "selecting an older reading does not allocate a new version"
+        );
     }
 
     #[test]
@@ -1718,6 +1860,40 @@ mod tests {
         assert!(error.message.contains("pass -N <stem>"), "{error:?}",);
         assert!(error.message.contains("hint: -N <stem>"), "{error:?}");
         assert_eq!(error.exit_code, None);
+
+        let overwrite_error = select_overwrite_for_url(
+            &rows,
+            &recorded,
+            &wanted(&[url]),
+            &root,
+            None,
+        )
+        .expect_err("unselected unrelated families remain ambiguous");
+        assert_eq!(overwrite_error.exit_code, None);
+        let invalid_overwrite_name = select_overwrite_for_url(
+            &rows,
+            &recorded,
+            &wanted(&[url]),
+            &root,
+            Some("not-a-reading"),
+        )
+        .expect_err("a nonmember -N is refused");
+        assert_eq!(invalid_overwrite_name.exit_code, Some(2));
+        let overwrite_selected = select_overwrite_for_url(
+            &rows,
+            &recorded,
+            &wanted(&[url]),
+            &root,
+            Some("delta"),
+        )
+        .expect("explicit member selector disambiguates overwrite");
+        assert_eq!(
+            overwrite_selected
+                .expect("filed family")
+                .selected_member()
+                .stem,
+            "delta"
+        );
 
         // A valid member selector disambiguates without joining families.
         let selected =
