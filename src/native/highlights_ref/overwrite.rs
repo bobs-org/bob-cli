@@ -6,6 +6,7 @@
 //! transaction consumes the fingerprints and prepared note bytes while it
 //! holds the mutation locks.
 
+pub(crate) mod archive;
 pub(super) mod execute;
 pub(super) mod local;
 pub(crate) mod recovery;
@@ -80,6 +81,75 @@ pub(super) struct TaskFingerprint {
 pub(super) struct FrozenNote {
     pub(super) path: String,
     pub(super) contents: String,
+}
+
+/// Read-only annotated archive and inbound-highlight rewrite plan.
+/// Execution still refuses until the execute phase consumes this contract.
+#[derive(Debug, Clone)]
+struct AnnotatedArchivePlan {
+    bundle: archive::ArchiveBundle,
+    frozen: FrozenNote,
+    inbound: super::rename::links::LinkRewritePlan,
+    preimages: Vec<FilePreimage>,
+    history: Vec<archive::ArchiveRecord>,
+    highlights: u64,
+}
+
+impl AnnotatedArchivePlan {
+    fn integrity_fingerprint(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(self.bundle.stem.as_bytes());
+        hasher.update(self.bundle.note_path.as_bytes());
+        hasher.update(self.bundle.annotated_pdf_path.as_bytes());
+        hasher.update(self.bundle.assets_path.as_bytes());
+        hasher.update(self.frozen.path.as_bytes());
+        hasher.update(self.frozen.contents.as_bytes());
+        hasher.update(self.highlights.to_le_bytes());
+        hasher.update(self.inbound.rewritten.to_le_bytes());
+        for file in &self.inbound.files {
+            hasher.update(vault_slash_path(&file.path).as_bytes());
+            hasher.update(file.contents.as_bytes());
+            for edit in &file.edits {
+                hasher.update(edit.line.to_le_bytes());
+                hasher.update(edit.before.as_bytes());
+                hasher.update(edit.after.as_bytes());
+            }
+        }
+        for finding in &self.inbound.highlight_fragments {
+            hasher.update(vault_slash_path(&finding.file).as_bytes());
+            hasher.update(finding.target.as_bytes());
+        }
+        for finding in &self.inbound.highlight_follow_ups {
+            hasher.update(vault_slash_path(&finding.file).as_bytes());
+            hasher.update(finding.target.as_bytes());
+        }
+        for ambiguous in &self.inbound.skipped_ambiguous {
+            hasher.update(vault_slash_path(&ambiguous.file).as_bytes());
+            hasher.update(ambiguous.target.as_bytes());
+        }
+        for preimage in &self.preimages {
+            hasher.update(preimage.path.as_bytes());
+            hasher.update(
+                preimage.sha256.as_deref().unwrap_or("<absent>").as_bytes(),
+            );
+        }
+        for record in &self.history {
+            hasher.update(record.note_path.as_bytes());
+            hasher.update(record.parent.as_bytes());
+            if let Some(pdf) = &record.annotated_pdf {
+                hasher.update(pdf.path.as_bytes());
+                hasher.update(pdf.sha256.as_bytes());
+            }
+            if let Some(assets) = &record.assets_path {
+                hasher.update(assets.as_bytes());
+            }
+        }
+        hex::encode(hasher.finalize())
+    }
+}
+
+fn vault_slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// All read-only evidence needed before overwrite can render new material.
@@ -391,6 +461,25 @@ pub(super) fn prepare(
             )
         })?;
     let note_parsed = super::parse_note(&note_contents);
+    let projection = note_parsed
+        .synced_projection_with_normalization()
+        .map_err(|error| {
+            OverwriteRefusal::new(
+                "not_in_sync",
+                error.to_string(),
+                Some("run bob ref scan -w on the Mac first"),
+                2,
+            )
+        })?
+        .projection;
+    let status = task_status(task_view.mark).unwrap_or_else(|| {
+        row.status.clone().unwrap_or_else(|| "legacy".to_string())
+    });
+    let title = projection
+        .get("title")
+        .and_then(super::MarkerValue::as_string)
+        .unwrap_or(&row.title)
+        .to_string();
     let task = locate_task_fingerprint(
         config,
         row,
@@ -489,6 +578,42 @@ pub(super) fn prepare(
         || !inbound.highlight_fragments.is_empty()
         || !inbound.highlight_follow_ups.is_empty()
     {
+        let pdf_bytes = fs::read(&pdf_path).map_err(|error| {
+            OverwriteRefusal::new(
+                "not_in_sync",
+                format!("could not read {}: {error}", pdf_path.display()),
+                Some("run bob ref scan -w on the Mac first"),
+                2,
+            )
+        })?;
+        let assets_relative = assets_path
+            .strip_prefix(&config.bob_dir)
+            .ok()
+            .filter(|_| assets_path.exists())
+            .map(Path::to_path_buf);
+        let plan = plan_annotated_archive(
+            config,
+            &row.path,
+            &ref_type,
+            stem,
+            date,
+            row.captured.as_deref(),
+            &status,
+            &title,
+            member.highlights.unwrap_or(0),
+            &note_contents,
+            &pdf_relative,
+            &sha256(&pdf_bytes),
+            assets_relative.as_deref(),
+        )?;
+        if plan.integrity_fingerprint().len() != 64 {
+            return Err(OverwriteRefusal::new(
+                "not_in_sync",
+                "annotated archive plan is incomplete",
+                Some("run bob ref scan -w on the Mac first"),
+                2,
+            ));
+        }
         return Err(annotated_refusal(
             row,
             &assets_path,
@@ -545,17 +670,6 @@ pub(super) fn prepare(
         }
         touched.insert(relative);
     }
-    let projection = note_parsed
-        .synced_projection_with_normalization()
-        .map_err(|error| {
-            OverwriteRefusal::new(
-                "not_in_sync",
-                error.to_string(),
-                Some("run bob ref scan -w on the Mac first"),
-                2,
-            )
-        })?
-        .projection;
     let user_fields = ["aliases", "topics", "research"]
         .into_iter()
         .filter_map(|key| {
@@ -580,14 +694,6 @@ pub(super) fn prepare(
                 .map(|value| (key.to_string(), value.clone()))
         })
         .collect::<Vec<_>>();
-    let status = task_status(task_view.mark).unwrap_or_else(|| {
-        row.status.clone().unwrap_or_else(|| "legacy".to_string())
-    });
-    let title = projection
-        .get("title")
-        .and_then(super::MarkerValue::as_string)
-        .unwrap_or(&row.title)
-        .to_string();
     let fresh_body = render_fresh_skeleton(
         config,
         &row.path,
@@ -622,6 +728,8 @@ pub(super) fn prepare(
             row.captured.as_deref(),
             &status,
             &title,
+            member.highlights.unwrap_or(0),
+            None,
         )
         .map_err(|error| {
             OverwriteRefusal::new(
@@ -1035,16 +1143,11 @@ fn open_note_tasks(
         )
         .collect::<Vec<_>>();
     let comments = markdown::multiline_comment_lines(&comment_input);
-    let managed_region = ref_tasks::managed_region_line_range(&lines);
     let selected_tracker =
         selected.filter(|task| task.block_id.as_deref() == Some("ref"));
     let mut open = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        if fenced.contains(&index)
-            || comments.contains(&index)
-            || managed_region
-                .is_some_and(|(begin, end)| (begin..=end).contains(&index))
-        {
+        if fenced.contains(&index) || comments.contains(&index) {
             continue;
         }
         let stripped = ref_tasks::strip_blockquote_prefix(line);
@@ -1255,6 +1358,14 @@ fn audio_frontmatter_path(note: &super::ParsedNote) -> Option<String> {
     super::sidecar::simple_wikilink_target(raw).map(str::to_string)
 }
 
+struct FrozenAnnotated<'a> {
+    note_path: &'a str,
+    pdf_path: &'a str,
+    pdf_sha256: &'a str,
+    asset_map: &'a BTreeMap<PathBuf, PathBuf>,
+    highlight_map: &'a BTreeMap<PathBuf, PathBuf>,
+}
+
 fn render_frozen_note(
     old_contents: &str,
     live_note: &str,
@@ -1264,6 +1375,8 @@ fn render_frozen_note(
     captured: Option<&str>,
     status: &str,
     title: &str,
+    highlights: u64,
+    annotated: Option<FrozenAnnotated<'_>>,
 ) -> Result<String, String> {
     let (front_lines, body) = super::split_frontmatter(old_contents)
         .ok_or_else(|| {
@@ -1297,8 +1410,18 @@ fn render_frozen_note(
     );
     archive_front.insert(
         YamlValue::String("highlights_count".to_string()),
-        YamlValue::Number(0.into()),
+        YamlValue::Number(highlights.into()),
     );
+    if let Some(annotated) = &annotated {
+        archive_front.insert(
+            YamlValue::String("annotated_pdf".to_string()),
+            YamlValue::String(format!("[[{}]]", annotated.pdf_path)),
+        );
+        archive_front.insert(
+            YamlValue::String("annotated_pdf_sha256".to_string()),
+            YamlValue::String(annotated.pdf_sha256.to_string()),
+        );
+    }
     let yaml = serde_yaml::to_string(&YamlValue::Mapping(archive_front))
         .map_err(|error| format!("render archive frontmatter: {error}"))?;
     let body = frozen_body(
@@ -1308,8 +1431,30 @@ fn render_frozen_note(
         date,
         captured.unwrap_or("unknown"),
         status,
+        highlights,
+        annotated.as_ref().map(|annotated| annotated.pdf_path),
     );
-    Ok(format!("---\n{yaml}---\n{body}"))
+    let mut frozen = format!("---\n{yaml}---\n{body}");
+    if let Some(annotated) = annotated {
+        let archive_note = Path::new(annotated.note_path);
+        if !annotated.asset_map.is_empty() {
+            frozen = super::rename::links::rewrite_contents(
+                &frozen,
+                annotated.asset_map,
+                super::rename::links::LinkSelector::All,
+                archive_note,
+            );
+        }
+        if !annotated.highlight_map.is_empty() {
+            frozen = super::rename::links::rewrite_contents(
+                &frozen,
+                annotated.highlight_map,
+                super::rename::links::LinkSelector::HighlightFragments,
+                archive_note,
+            );
+        }
+    }
+    Ok(frozen)
 }
 
 fn copy_yaml_key(source: &Mapping, target: &mut Mapping, key: &str) {
@@ -1326,15 +1471,25 @@ fn frozen_body(
     date: &str,
     captured: &str,
     status: &str,
+    highlights: u64,
+    annotated_pdf: Option<&str>,
 ) -> String {
     let live_target = live_note.strip_suffix(".md").unwrap_or(live_note);
     let link =
         format!("[[{live_target}|{}]]", title.replace(['[', ']', '|'], ""));
-    let banner = vec![
+    let count = if highlights == 1 {
+        "1 highlight".to_string()
+    } else {
+        format!("{highlights} highlights")
+    };
+    let mut banner = vec![
         format!("> [!info] Earlier capture · replaced {date}"),
-        format!("> Captured {captured} · {status} · 0 highlights · current:"),
+        format!("> Captured {captured} · {status} · {count} · current:"),
         format!("> {link}"),
     ];
+    if let Some(pdf) = annotated_pdf {
+        banner.push(format!("> annotated PDF: [[{pdf}]]"));
+    }
     let mut lines = body.lines().map(str::to_string).collect::<Vec<_>>();
     if let Some(embed) = ref_tasks::find_managed_embed(body)
         && embed.line_index < lines.len()
@@ -1399,19 +1554,204 @@ fn allocate_archive_path(
     stem: &str,
     date: &str,
 ) -> String {
-    let parent = format!("ref_history/{ref_type}");
-    let base = format!("{parent}/{stem}__{date}");
-    for suffix in 1u32.. {
-        let candidate = if suffix == 1 {
-            format!("{base}.md")
-        } else {
-            format!("{base}_{suffix}.md")
-        };
-        if !config.bob_dir.join(&candidate).exists() {
-            return candidate;
+    archive::allocate_bundle(&config.bob_dir, ref_type, stem, date).note_path
+}
+
+fn plan_annotated_archive(
+    config: &Config,
+    live_note: &str,
+    ref_type: &str,
+    stem: &str,
+    date: &str,
+    captured: Option<&str>,
+    status: &str,
+    title: &str,
+    highlights: u64,
+    note_contents: &str,
+    pdf_relative: &Path,
+    pdf_sha256: &str,
+    assets_relative: Option<&Path>,
+) -> Result<AnnotatedArchivePlan, OverwriteRefusal> {
+    let refuse = |error: String| {
+        OverwriteRefusal::new(
+            "not_in_sync",
+            error,
+            Some("run bob ref scan -w on the Mac first"),
+            2,
+        )
+    };
+    let bundle =
+        archive::allocate_bundle(&config.bob_dir, ref_type, stem, date);
+    let history = archive::records_for_live_note(&config.bob_dir, live_note)
+        .map_err(|error| refuse(error.message))?;
+    let highlight_map = BTreeMap::from([(
+        PathBuf::from(live_note),
+        PathBuf::from(&bundle.note_path),
+    )]);
+    let inbound = super::rename::links::plan_vault_links_with(
+        &config.bob_dir,
+        &highlight_map,
+        super::rename::links::LinkSelector::HighlightFragments,
+    )
+    .map_err(|error| refuse(error.to_string()))?;
+    let asset_map =
+        collect_asset_rewrites(config, assets_relative, &bundle.assets_path)
+            .map_err(refuse)?;
+    let annotated = FrozenAnnotated {
+        note_path: &bundle.note_path,
+        pdf_path: &bundle.annotated_pdf_path,
+        pdf_sha256,
+        asset_map: &asset_map,
+        highlight_map: &highlight_map,
+    };
+    let contents = render_frozen_note(
+        note_contents,
+        live_note,
+        ref_type,
+        stem,
+        date,
+        captured,
+        status,
+        title,
+        highlights,
+        Some(annotated),
+    )
+    .map_err(refuse)?;
+    let frozen = FrozenNote {
+        path: bundle.note_path.clone(),
+        contents,
+    };
+    let mut touched = BTreeSet::from([
+        PathBuf::from(live_note),
+        pdf_relative.to_path_buf(),
+        PathBuf::from(&bundle.note_path),
+        PathBuf::from(&bundle.annotated_pdf_path),
+    ]);
+    if let Some(assets) = assets_relative {
+        touched.insert(assets.to_path_buf());
+        touched.insert(PathBuf::from(&bundle.assets_path));
+    }
+    for file in &inbound.files {
+        if vault_slash_path(&file.path) != live_note {
+            touched.insert(file.path.clone());
         }
     }
-    unreachable!("archive suffix space is unbounded")
+    for record in &history {
+        touched.insert(PathBuf::from(&record.note_path));
+        if let Some(pdf) = &record.annotated_pdf {
+            touched.insert(PathBuf::from(&pdf.path));
+        }
+        if let Some(assets) = &record.assets_path {
+            touched.insert(PathBuf::from(assets));
+        }
+    }
+    let mut preimages = collect_preimages(config, &touched).map_err(refuse)?;
+    for created in [
+        Some(bundle.note_path.as_str()),
+        Some(bundle.annotated_pdf_path.as_str()),
+        assets_relative.map(|_| bundle.assets_path.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !preimages.iter().any(|preimage| preimage.path == created) {
+            preimages.push(FilePreimage {
+                path: created.to_string(),
+                sha256: None,
+            });
+        }
+    }
+    for preimage in &mut preimages {
+        if preimage.path == bundle.note_path
+            || preimage.path == bundle.annotated_pdf_path
+            || assets_relative
+                .is_some_and(|_| preimage.path == bundle.assets_path)
+        {
+            preimage.sha256 = None;
+        }
+    }
+    preimages.sort_by(|left, right| left.path.cmp(&right.path));
+    preimages.dedup_by(|left, right| left.path == right.path);
+    Ok(AnnotatedArchivePlan {
+        bundle,
+        frozen,
+        inbound,
+        preimages,
+        history,
+        highlights,
+    })
+}
+
+fn collect_asset_rewrites(
+    config: &Config,
+    live_assets: Option<&Path>,
+    archive_assets: &str,
+) -> Result<BTreeMap<PathBuf, PathBuf>, String> {
+    let Some(live_assets) = live_assets else {
+        return Ok(BTreeMap::new());
+    };
+    let mut map = BTreeMap::new();
+    collect_asset_files(
+        live_assets,
+        live_assets,
+        &config.bob_dir.join(live_assets),
+        archive_assets,
+        &mut map,
+    )?;
+    Ok(map)
+}
+
+fn collect_asset_files(
+    live_root: &Path,
+    relative: &Path,
+    absolute: &Path,
+    archive_assets: &str,
+    map: &mut BTreeMap<PathBuf, PathBuf>,
+) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(absolute) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!("stat {}: {error}", absolute.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to fingerprint symlink {}",
+            absolute.display()
+        ));
+    }
+    if metadata.file_type().is_file() {
+        let live = reference_mutation::vault_path(relative);
+        let rest = relative.strip_prefix(live_root).unwrap_or(relative);
+        let archive = Path::new(archive_assets).join(rest);
+        map.insert(PathBuf::from(live), archive);
+        return Ok(());
+    }
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(absolute)
+        .map_err(|error| format!("scan {}: {error}", absolute.display()))?
+        .map(|entry| {
+            entry.map_err(|error| {
+                format!("scan {}: {error}", absolute.display())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        collect_asset_files(
+            live_root,
+            &relative.join(entry.file_name()),
+            &entry.path(),
+            archive_assets,
+            map,
+        )?;
+    }
+    Ok(())
 }
 
 fn has_user_pdf_annotations(pdf: &Path) -> Result<bool, String> {
@@ -1649,6 +1989,8 @@ mod tests {
             Some("2020-01-01"),
             "ready",
             "Paper",
+            0,
+            None,
         )
         .expect("frozen note");
         let (front, _) =
@@ -1674,6 +2016,8 @@ mod tests {
             "2026-10-25",
             "2020-01-01",
             "ready",
+            0,
+            None,
         );
         assert!(frozen.contains("Earlier capture · replaced 2026-10-25"));
         assert!(frozen.contains("Captured 2020-01-01 · ready · 0 highlights"));
@@ -1695,13 +2039,17 @@ mod tests {
             &first,
             "ref_history/papers/paper__2026-10-25.md",
             "2026-10-25",
-            0,
+            41,
         )
         .unwrap();
         let (front, _) = super::super::split_frontmatter(&second).unwrap();
         let parsed = ParsedFrontmatter::parse(&front);
         let entries = lineage::parse_earlier(&parsed);
         assert_eq!(entries[0].target, "ref_history/papers/paper__2026-10-25");
+        assert_eq!(
+            entries[0].label.as_deref(),
+            Some("replaced 2026-10-25 · 41 highlights")
+        );
         assert_eq!(entries[1].target, "ref_history/papers/paper__2026-10-24");
         assert_eq!(entries[2].target, "ref/papers/paper__v2");
     }
@@ -1745,6 +2093,8 @@ mod tests {
             "2026-10-25",
             "2020-01-01",
             "read",
+            0,
+            None,
         );
         assert!(!frozen.contains("#task"));
         assert!(!frozen.contains("#ref"));
@@ -1773,5 +2123,183 @@ mod tests {
             "ref_history/papers/paper__2026-10-25_2.md"
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn open_annotation_task_in_highlights_region_is_refused() {
+        let body = "# Paper\n\n<!-- highlights:begin -->\n- [ ] follow up [h:: abc] #task\n<!-- highlights:end -->\n";
+        assert_eq!(
+            open_note_tasks(body, None),
+            vec!["4:- [ ] follow up [h:: abc] #task".to_string()]
+        );
+    }
+
+    #[test]
+    fn frozen_annotated_note_keeps_anchors_rewrites_assets_and_records_pdf() {
+        let hash = "ab".repeat(32);
+        let old = concat!(
+            "---\ntitle: Paper\nsource_url: https://example.test\ncreated: 2020-01-01\n---\n",
+            "# Paper\n\n![[area#^ref-paper]]\n\n",
+            "Quote stays ^h-abc\n\nSection stays ^s-memory\n\n",
+            "![[ref/papers/paper.assets/shot.png|420]]\n",
+            "See [[paper#^h-abc]] and [[paper#^s-memory]].\n"
+        );
+        let asset_map = BTreeMap::from([(
+            PathBuf::from("ref/papers/paper.assets/shot.png"),
+            PathBuf::from(
+                "ref_history/papers/paper__2026-10-25.assets/shot.png",
+            ),
+        )]);
+        let highlight_map = BTreeMap::from([(
+            PathBuf::from("ref/papers/paper.md"),
+            PathBuf::from("ref_history/papers/paper__2026-10-25.md"),
+        )]);
+        let annotated = FrozenAnnotated {
+            note_path: "ref_history/papers/paper__2026-10-25.md",
+            pdf_path: "ref_history/papers/paper__2026-10-25__annotated.pdf",
+            pdf_sha256: &hash,
+            asset_map: &asset_map,
+            highlight_map: &highlight_map,
+        };
+        let frozen = render_frozen_note(
+            old,
+            "ref/papers/paper.md",
+            "papers",
+            "paper",
+            "2026-10-25",
+            Some("2020-01-01"),
+            "read",
+            "Paper",
+            2,
+            Some(annotated),
+        )
+        .expect("frozen note");
+        let (front, body) =
+            super::super::split_frontmatter(&frozen).expect("frontmatter");
+        let yaml = serde_yaml::from_str::<YamlValue>(&front.join("\n"))
+            .expect("valid YAML");
+        let map = yaml.as_mapping().unwrap();
+        assert_eq!(
+            map.get("highlights_count").and_then(YamlValue::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            map.get("annotated_pdf").and_then(YamlValue::as_str),
+            Some("[[ref_history/papers/paper__2026-10-25__annotated.pdf]]")
+        );
+        assert_eq!(
+            map.get("annotated_pdf_sha256").and_then(YamlValue::as_str),
+            Some(hash.as_str())
+        );
+        assert!(body.contains("Quote stays ^h-abc"));
+        assert!(body.contains("Section stays ^s-memory"));
+        assert!(body.contains(
+            "![[ref_history/papers/paper__2026-10-25.assets/shot.png|420]]"
+        ));
+        assert!(
+            body.contains("[[ref_history/papers/paper__2026-10-25#^h-abc]]")
+        );
+        assert!(body.contains("[[paper#^s-memory]]"));
+        assert!(body.contains(
+            "annotated PDF: [[ref_history/papers/paper__2026-10-25__annotated.pdf]]"
+        ));
+        assert!(body.contains("Captured 2020-01-01 · read · 2 highlights"));
+        assert!(!body.contains("![[area#^ref-paper]]"));
+        assert!(body
+            .lines()
+            .all(|line| ref_tasks::task_mark(line).is_none()));
+    }
+
+    #[test]
+    fn annotated_plan_fingerprints_rewrites_assets_and_archive_destinations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let config = Config {
+            bob_dir: root.to_path_buf(),
+            ref_dir: root.join("ref"),
+            lib_dir: root.join("lib"),
+            xlib_dir: root.join("xlib"),
+        };
+        fs::create_dir_all(root.join("ref/papers/paper.assets")).unwrap();
+        fs::create_dir_all(root.join("lib/papers")).unwrap();
+        fs::write(
+            root.join("ref/papers/paper.md"),
+            "---\ntitle: Paper\nparent: \"[[area]]\"\n---\n# Paper\n\n![[area#^ref-paper]]\n\nQuote ^h-abc\n\n![[ref/papers/paper.assets/shot.png]]\n",
+        )
+        .unwrap();
+        fs::write(root.join("lib/papers/paper.pdf"), b"%PDF-fake").unwrap();
+        fs::write(root.join("ref/papers/paper.assets/shot.png"), b"img")
+            .unwrap();
+        fs::write(
+            root.join("area.md"),
+            "- [x] #task #ref [[ref/papers/paper]] ^ref-paper\nSee [[ref/papers/paper#^h-abc]] and [[ref/papers/paper]].\n",
+        )
+        .unwrap();
+        let hash = sha256(b"%PDF-fake");
+        let plan = plan_annotated_archive(
+            &config,
+            "ref/papers/paper.md",
+            "papers",
+            "paper",
+            "2026-10-25",
+            Some("2020-01-01"),
+            "read",
+            "Paper",
+            1,
+            &fs::read_to_string(root.join("ref/papers/paper.md")).unwrap(),
+            Path::new("lib/papers/paper.pdf"),
+            &hash,
+            Some(Path::new("ref/papers/paper.assets")),
+        )
+        .expect("annotated plan");
+        assert_eq!(
+            plan.bundle.note_path,
+            "ref_history/papers/paper__2026-10-25.md"
+        );
+        assert_eq!(plan.highlights, 1);
+        assert!(plan.frozen.contents.contains("Quote ^h-abc"));
+        assert!(plan.frozen.contents.contains(
+            "![[ref_history/papers/paper__2026-10-25.assets/shot.png]]"
+        ));
+        let inbound = plan
+            .inbound
+            .files
+            .iter()
+            .find(|file| vault_slash_path(&file.path) == "area.md")
+            .expect("inbound rewrite");
+        assert!(inbound
+            .contents
+            .contains("[[ref_history/papers/paper__2026-10-25#^h-abc]]"));
+        assert!(inbound.contents.contains("[[ref/papers/paper]]"));
+        let paths = plan
+            .preimages
+            .iter()
+            .map(|preimage| preimage.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"ref_history/papers/paper__2026-10-25.md"));
+        assert!(paths
+            .contains(&"ref_history/papers/paper__2026-10-25__annotated.pdf"));
+        assert!(paths.contains(&"ref_history/papers/paper__2026-10-25.assets"));
+        assert!(paths.contains(&"area.md"));
+        assert!(paths.contains(&"ref/papers/paper.assets/shot.png"));
+        let created = plan
+            .preimages
+            .iter()
+            .filter(|preimage| preimage.sha256.is_none())
+            .map(|preimage| preimage.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(created.contains(&"ref_history/papers/paper__2026-10-25.md"));
+        assert!(created
+            .contains(&"ref_history/papers/paper__2026-10-25__annotated.pdf"));
+        assert!(
+            created.contains(&"ref_history/papers/paper__2026-10-25.assets")
+        );
+        let live_pdf = plan
+            .preimages
+            .iter()
+            .find(|preimage| preimage.path == "lib/papers/paper.pdf")
+            .unwrap();
+        assert_eq!(live_pdf.sha256.as_deref(), Some(hash.as_str()));
+        assert!(!plan.integrity_fingerprint().is_empty());
     }
 }

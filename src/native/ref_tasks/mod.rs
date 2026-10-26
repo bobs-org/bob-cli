@@ -33,7 +33,5 @@ pub(crate) use select::{
     is_open_mark, select_for_ref, RefTaskDiagnostic, RefTaskSelection,
     Selected, REF_TASK_DIAGNOSTIC_CODES,
 };
-pub(crate) use v1::{
-    find_trackers, managed_region_line_range, parse_tracker_line, TrackerHit,
-};
+pub(crate) use v1::{find_trackers, parse_tracker_line, TrackerHit};
 pub(crate) use walk::{is_conflict_copy_name, LocatedRefTask, RefTaskIndex};

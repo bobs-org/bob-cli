@@ -59,6 +59,17 @@ pub(crate) struct LinkRewritePlan {
     pub(crate) highlight_follow_ups: Vec<LinkFinding>,
 }
 
+/// Which inbound links a rewrite plan is allowed to change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkSelector {
+    /// Every resolvable mapped path, including companions. Rename uses this.
+    All,
+    /// Only resolvable note links whose fragment is `#^h-…`, rewritten to a
+    /// path-qualified frozen-note target. Note, heading, and `#^s-` links
+    /// stay put; an `[h::]` field alone is not permission to move them.
+    HighlightFragments,
+}
+
 #[derive(Debug)]
 pub(crate) enum LinkScanError {
     ReadDir {
@@ -221,6 +232,15 @@ pub(crate) fn plan_vault_links(
     vault_root: &Path,
     bundle: &BTreeMap<PathBuf, PathBuf>,
 ) -> Result<LinkRewritePlan, LinkScanError> {
+    plan_vault_links_with(vault_root, bundle, LinkSelector::All)
+}
+
+/// Scan eligible Markdown files and rewrite only the links `selector` owns.
+pub(crate) fn plan_vault_links_with(
+    vault_root: &Path,
+    bundle: &BTreeMap<PathBuf, PathBuf>,
+    selector: LinkSelector,
+) -> Result<LinkRewritePlan, LinkScanError> {
     let mut all_markdown = Vec::new();
     collect_markdown_paths(vault_root, vault_root, &mut all_markdown)?;
     all_markdown.sort();
@@ -239,8 +259,13 @@ pub(crate) fn plan_vault_links(
                 path: absolute.clone(),
             }
         })?;
-        let result =
-            rewrite_text(&contents, &bundle_paths, &all_markdown, relative);
+        let result = rewrite_text(
+            &contents,
+            &bundle_paths,
+            &all_markdown,
+            relative,
+            selector,
+        );
         if !result.edits.is_empty() {
             plan.files.push(FileRewrite {
                 path: relative.clone(),
@@ -261,6 +286,19 @@ pub(crate) fn plan_vault_links(
     Ok(plan)
 }
 
+/// Rewrite one Markdown document in memory with the same rules as the
+/// vault-wide planner. Asset and highlight rewrites of a frozen note share
+/// this path so overlapping edits land in one contents snapshot.
+pub(crate) fn rewrite_contents(
+    contents: &str,
+    bundle: &BTreeMap<PathBuf, PathBuf>,
+    selector: LinkSelector,
+    current_file: &Path,
+) -> String {
+    let bundle_paths = BundlePaths::new(bundle);
+    rewrite_text(contents, &bundle_paths, &[], current_file, selector).contents
+}
+
 #[derive(Debug, Default)]
 struct TextRewrite {
     contents: String,
@@ -276,6 +314,7 @@ fn rewrite_text(
     bundle: &BundlePaths,
     markdown_paths: &[PathBuf],
     current_file: &Path,
+    selector: LinkSelector,
 ) -> TextRewrite {
     let raw_lines = contents.split_inclusive('\n').collect::<Vec<_>>();
     let logical_lines = raw_lines
@@ -294,8 +333,14 @@ fn rewrite_text(
             continue;
         }
 
-        let line_result =
-            rewrite_line(line, bundle, markdown_paths, &file, index + 1);
+        let line_result = rewrite_line(
+            line,
+            bundle,
+            markdown_paths,
+            &file,
+            index + 1,
+            selector,
+        );
         output.push_str(&line_result.after);
         if raw_line.ends_with('\n') {
             output.push('\n');
@@ -344,6 +389,7 @@ struct FoundLink {
     path_end: usize,
     original_target: String,
     replacement: Option<String>,
+    qualified_replacement: Option<String>,
     ambiguous: bool,
     is_note: bool,
     highlight_fragment: bool,
@@ -355,6 +401,7 @@ fn rewrite_line(
     markdown_paths: &[PathBuf],
     file: &Path,
     line_number: usize,
+    selector: LinkSelector,
 ) -> LineRewrite {
     let mut result = LineRewrite {
         after: line.to_string(),
@@ -380,11 +427,14 @@ fn rewrite_line(
             || (!path.contains('/')
                 && !bundle.bare_note_candidates(path).is_empty());
         let highlight_fragment = is_note && suffix.starts_with("#^h-");
+        let qualified_replacement =
+            mapped.map(|mapped| qualified_note_path(mapped, path, bundle));
         links.push(FoundLink {
             path_start,
             path_end,
             original_target: target.to_string(),
             replacement: mapped.map(|mapped| mapped.new.clone()),
+            qualified_replacement,
             ambiguous,
             is_note,
             highlight_fragment,
@@ -410,12 +460,20 @@ fn rewrite_line(
                 encode_path_like(mapped.new.as_str(), raw_decoded_path);
             format!("{new_path}{suffix}")
         });
+        let qualified_replacement = mapped.map(|mapped| {
+            let new_path = encode_path_like(
+                &qualified_note_path(mapped, &decoded_path, bundle),
+                raw_decoded_path,
+            );
+            format!("{new_path}{suffix}")
+        });
         let highlight_fragment = is_note && suffix.starts_with("#^h-");
         links.push(FoundLink {
             path_start: markdown.path_start,
             path_end: markdown.path_end,
             original_target: raw_path.to_string(),
             replacement,
+            qualified_replacement,
             ambiguous,
             is_note,
             highlight_fragment,
@@ -446,7 +504,14 @@ fn rewrite_line(
                 target: link.original_target.clone(),
             });
         }
-        if let Some(replacement) = link.replacement {
+        let replacement = match selector {
+            LinkSelector::All => link.replacement,
+            LinkSelector::HighlightFragments if link.highlight_fragment => {
+                link.qualified_replacement.or(link.replacement)
+            }
+            LinkSelector::HighlightFragments => None,
+        };
+        if let Some(replacement) = replacement {
             let old_path = &line[link.path_start..link.path_end];
             if replacement != old_path {
                 result.rewritten += 1;
@@ -467,6 +532,37 @@ fn rewrite_line(
         );
     }
     result
+}
+
+fn qualified_note_path(
+    mapped: &MappedPath,
+    original_path: &str,
+    bundle: &BundlePaths,
+) -> String {
+    let full = bundle
+        .notes
+        .iter()
+        .find(|note| {
+            let note_stem = path_stem(&note.old).unwrap_or_default();
+            let mapped_stem = bare_stem(&mapped.old);
+            note.old.eq_ignore_ascii_case(&mapped.old)
+                || note_stem.eq_ignore_ascii_case(mapped_stem)
+        })
+        .map(|note| note.new.as_str())
+        .unwrap_or(mapped.new.as_str());
+    match_original_markdown_suffix(full, original_path)
+}
+
+fn match_original_markdown_suffix(path: &str, original_path: &str) -> String {
+    let without_ext = path
+        .strip_suffix(".md")
+        .or_else(|| path.strip_suffix(".MD"))
+        .unwrap_or(path);
+    if original_path.ends_with(".md") || original_path.ends_with(".MD") {
+        format!("{without_ext}.md")
+    } else {
+        without_ext.to_string()
+    }
 }
 
 fn resolve_wikilink_path<'a>(
@@ -821,9 +917,24 @@ mod tests {
         moves: &BTreeMap<PathBuf, PathBuf>,
         notes: &[&str],
     ) -> TextRewrite {
+        rewrite_with(input, moves, notes, LinkSelector::All)
+    }
+
+    fn rewrite_with(
+        input: &str,
+        moves: &BTreeMap<PathBuf, PathBuf>,
+        notes: &[&str],
+        selector: LinkSelector,
+    ) -> TextRewrite {
         let bundle = BundlePaths::new(moves);
         let note_paths = notes.iter().map(PathBuf::from).collect::<Vec<_>>();
-        rewrite_text(input, &bundle, &note_paths, Path::new("sase.md"))
+        rewrite_text(
+            input,
+            &bundle,
+            &note_paths,
+            Path::new("sase.md"),
+            selector,
+        )
     }
 
     #[test]
@@ -1000,5 +1111,57 @@ mod tests {
             "[highlight](ref/blogs/new.md#^h-abc) `[code](ref/blogs/old.md)`\n"
         );
         assert_eq!(result.highlight_fragments.len(), 1);
+    }
+
+    #[test]
+    fn highlight_fragments_rewrite_only_h_anchors_and_qualify_bare_targets() {
+        let moves = BTreeMap::from([(
+            PathBuf::from("ref/blogs/old.md"),
+            PathBuf::from("ref_history/blogs/old__2026-10-25.md"),
+        )]);
+        let input = concat!(
+            "[[old#^h-one]] [[ref/blogs/old#^h-two|alias]] ",
+            "[[old]] [[old#Heading]] [[old#^s-memory]] ",
+            "[md](old.md#^h-three) `[code](old.md#^h-one)`\n",
+            "[h:: keep] [[ref/blogs/old]]\n"
+        );
+        let result = rewrite_with(
+            input,
+            &moves,
+            &["ref/blogs/old.md"],
+            LinkSelector::HighlightFragments,
+        );
+        assert_eq!(
+            result.contents,
+            concat!(
+                "[[ref_history/blogs/old__2026-10-25#^h-one]] ",
+                "[[ref_history/blogs/old__2026-10-25#^h-two|alias]] ",
+                "[[old]] [[old#Heading]] [[old#^s-memory]] ",
+                "[md](ref_history/blogs/old__2026-10-25.md#^h-three) ",
+                "`[code](old.md#^h-one)`\n",
+                "[h:: keep] [[ref/blogs/old]]\n"
+            )
+        );
+        assert_eq!(result.highlight_fragments.len(), 3);
+        assert_eq!(result.highlight_follow_ups.len(), 1);
+        assert_eq!(result.rewritten, 3);
+    }
+
+    #[test]
+    fn highlight_fragments_leave_ambiguous_bare_targets_unresolved() {
+        let moves = BTreeMap::from([(
+            PathBuf::from("ref/blogs/old.md"),
+            PathBuf::from("ref_history/blogs/old__2026-10-25.md"),
+        )]);
+        let result = rewrite_with(
+            "[[old#^h-one]]",
+            &moves,
+            &["ref/blogs/old.md", "Archive/old.md"],
+            LinkSelector::HighlightFragments,
+        );
+        assert_eq!(result.contents, "[[old#^h-one]]");
+        assert_eq!(result.skipped_ambiguous.len(), 1);
+        assert_eq!(result.highlight_fragments.len(), 1);
+        assert_eq!(result.rewritten, 0);
     }
 }
