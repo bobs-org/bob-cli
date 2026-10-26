@@ -3524,4 +3524,290 @@ mod tests {
             .expect("load intent")
             .is_none());
     }
+
+    const IDENTITY_SIDECAR: &str = "\
+## Page 1
+
+> Stable quote for identity.
+
+- #task Follow up on the quote.
+";
+
+    const SECOND_STAGED_MARKER: &str = concat!(
+        "- status: next\n",
+        "- parent: sase\n",
+        "- title: A Better Report\n",
+        "- id: report\n",
+        "- captured: 2026-10-17\n",
+    );
+
+    fn plant_identity_sidecar(fixture: &ExecuteFixture) {
+        fs::write(fixture.vault.join("lib/papers/report.md"), IDENTITY_SIDECAR)
+            .expect("identity sidecar");
+    }
+
+    fn sync_fixture_pdf(fixture: &ExecuteFixture) {
+        super::super::super::sync::sync_pdf(
+            &fixture.config,
+            &fixture.pdf,
+            SyncOptions {
+                dry_run: false,
+                write_pdf: false,
+                prefer: None,
+                ignore_unannotated_sidecar: false,
+            },
+        )
+        .unwrap_or_else(|error| panic!("sync identity sidecar: {error}"));
+    }
+
+    fn highlights_count_from_note(note: &Path) -> Option<u64> {
+        fs::read_to_string(note).ok().and_then(|contents| {
+            contents.lines().find_map(|line| {
+                line.strip_prefix("highlights_count:")
+                    .and_then(|value| value.trim().parse().ok())
+            })
+        })
+    }
+
+    fn first_highlight_id(contents: &str) -> String {
+        contents
+            .split_whitespace()
+            .find_map(|token| {
+                token.strip_prefix('^').and_then(|id| {
+                    (id.starts_with("h-") && id.len() == 14)
+                        .then(|| id.to_string())
+                })
+            })
+            .expect("highlight block id")
+    }
+
+    fn follow_up_lines(parent: &str) -> Vec<String> {
+        parent
+            .lines()
+            .filter(|line| line.contains("Follow up on the quote"))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn processed_id(line: &str) -> String {
+        line.split("[h::")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .expect("processed id")
+            .to_string()
+    }
+
+    fn library_row_paths(fixture: &ExecuteFixture) -> Vec<String> {
+        crate::native::ref_library::build_index(
+            &crate::native::ref_library::LibraryConfig {
+                bob_dir: fixture.config.bob_dir.clone(),
+                ref_dir: fixture.config.ref_dir.clone(),
+                xlib_dir: fixture.config.xlib_dir.clone(),
+            },
+        )
+        .expect("index")
+        .rows
+        .into_iter()
+        .map(|row| row.path)
+        .collect()
+    }
+
+    fn processed_annotation_execute_fixture(tag: &str) -> ExecuteFixture {
+        let mut fixture = filed_execute_fixture(tag);
+        fixture.request.replacement_audio_path = None;
+        fixture.staged.audio = None;
+        plant_identity_sidecar(&fixture);
+        sync_fixture_pdf(&fixture);
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "plant processed annotation"],
+        );
+        fixture.plan.member.highlights =
+            highlights_count_from_note(&fixture.note);
+        refresh_fixture_plan(&mut fixture);
+        assert!(fixture.plan.annotated.is_some());
+        assert!(
+            fixture.plan.highlights >= 1,
+            "processed annotation must report a real highlight count, got {}",
+            fixture.plan.highlights
+        );
+        fixture
+    }
+
+    fn grant_and_overwrite(fixture: &ExecuteFixture) -> OverwriteResult {
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, observed) = run_annotated_execute(fixture, fake);
+        let result = result.unwrap_or_else(|error| panic!("execute: {error}"));
+        assert_eq!(observed.call_count(), 1, "one outer PDF accessor");
+        result
+    }
+
+    #[test]
+    fn processed_highlight_identity_survives_overwrite_and_rescan() {
+        let fixture = processed_annotation_execute_fixture(
+            "bob-cli-overwrite-h-identity",
+        );
+        let live_before = fs::read_to_string(&fixture.note).expect("live note");
+        let highlight_id = first_highlight_id(&live_before);
+        let parent_before =
+            fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+        let follows = follow_up_lines(&parent_before);
+        assert_eq!(follows.len(), 1, "one follow-up before overwrite");
+        let processed = processed_id(&follows[0]);
+        let task_before =
+            fs::read_to_string(fixture.vault.join(&fixture.plan.task.path))
+                .expect("reading task");
+        let block = fixture
+            .plan
+            .task
+            .block_id
+            .clone()
+            .expect("reading-task block id");
+
+        let result = grant_and_overwrite(&fixture);
+        let archive = fixture
+            .plan
+            .annotated
+            .as_ref()
+            .expect("annotated")
+            .bundle
+            .note_path
+            .clone();
+        let frozen =
+            fs::read_to_string(fixture.vault.join(&archive)).expect("archive");
+        assert!(
+            frozen.contains(&format!("^{highlight_id}")),
+            "frozen note keeps the processed highlight id:\n{frozen}"
+        );
+        assert!(
+            !frozen.contains("#task #ref") && !frozen.contains("^ref"),
+            "archive must not grow a reading tracker:\n{frozen}"
+        );
+        assert!(
+            frozen
+                .lines()
+                .all(|line| ref_tasks::task_mark(line).is_none()
+                    || line.contains("[h::")),
+            "archive must not introduce open annotation tasks:\n{frozen}"
+        );
+        let count = fixture.plan.highlights;
+        let count_label = if count == 1 {
+            "1 highlight".to_string()
+        } else {
+            format!("{count} highlights")
+        };
+        let live = fs::read_to_string(&fixture.note).expect("live after");
+        assert!(
+            live.contains(&format!("replaced 2026-10-16 · {count_label}")),
+            "live lineage must use the real highlight count:\n{live}"
+        );
+        assert_eq!(result.highlights, count);
+        let paths = library_row_paths(&fixture);
+        assert!(
+            paths.iter().all(|path| !path.contains("ref_history/")),
+            "archives must not appear as library rows:\n{paths:?}"
+        );
+
+        plant_identity_sidecar(&fixture);
+        sync_fixture_pdf(&fixture);
+        let live_again = fs::read_to_string(&fixture.note).expect("rescan");
+        assert_eq!(
+            first_highlight_id(&live_again),
+            highlight_id,
+            "re-highlighting the same passage must keep ^{highlight_id}:\n{live_again}"
+        );
+        let parent_after =
+            fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+        let follows_after = follow_up_lines(&parent_after);
+        assert_eq!(
+            follows_after.len(),
+            1,
+            "rescan must not mint a duplicate follow-up:\n{parent_after}"
+        );
+        assert_eq!(
+            processed_id(&follows_after[0]),
+            processed,
+            "processed [h::] id must survive:\n{}",
+            follows_after[0]
+        );
+        let task_after =
+            fs::read_to_string(fixture.vault.join(&fixture.plan.task.path))
+                .expect("reading task after");
+        assert!(
+            task_after.contains(&format!("^{block}")),
+            "reading-task identity must stay:\n{task_after}"
+        );
+        assert_eq!(
+            task_after
+                .lines()
+                .filter(|line| line.contains(&format!("^{block}")))
+                .count(),
+            task_before
+                .lines()
+                .filter(|line| line.contains(&format!("^{block}")))
+                .count()
+        );
+    }
+
+    #[test]
+    fn two_annotated_overwrites_keep_newest_first_archives_and_task() {
+        let mut fixture =
+            processed_annotation_execute_fixture("bob-cli-overwrite-ann-twice");
+        let block = fixture
+            .plan
+            .task
+            .block_id
+            .clone()
+            .expect("reading-task block id");
+        let first = grant_and_overwrite(&fixture);
+        let first_archive = first.archive.clone().expect("first archive");
+
+        plant_identity_sidecar(&fixture);
+        sync_fixture_pdf(&fixture);
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "re-annotate for second overwrite"],
+        );
+        write_marker_pdf(&fixture.staged.private_pdf, SECOND_STAGED_MARKER);
+        fixture.staged.marker.captured = Some("2026-10-17".into());
+        fixture.plan.member.highlights =
+            highlights_count_from_note(&fixture.note);
+        refresh_fixture_plan(&mut fixture);
+        assert!(fixture.plan.annotated.is_some());
+        let second = grant_and_overwrite(&fixture);
+        let second_archive = second.archive.clone().expect("second archive");
+        assert_ne!(first_archive, second_archive);
+        assert!(
+            fixture.vault.join(&first_archive).is_file()
+                && fixture.vault.join(&second_archive).is_file(),
+            "both annotated archives remain"
+        );
+        let live = fs::read_to_string(&fixture.note).expect("live");
+        let newest = format!("{}|", second_archive.trim_end_matches(".md"));
+        let older = format!("{}|", first_archive.trim_end_matches(".md"));
+        let first_pos = live.find(&newest).expect("newest archive");
+        let second_pos = live.find(&older).expect("older archive");
+        assert!(first_pos < second_pos, "newest archive is first:\n{live}");
+        let parent =
+            fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+        assert_eq!(
+            parent
+                .lines()
+                .filter(|line| line.contains(&format!("^{block}")))
+                .count(),
+            1,
+            "exactly one reading task remains:\n{parent}"
+        );
+        let paths = library_row_paths(&fixture);
+        assert!(
+            paths.iter().all(|path| !path.contains("ref_history/")),
+            "neither archive is a library row:\n{paths:?}"
+        );
+    }
 }

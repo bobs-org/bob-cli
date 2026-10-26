@@ -649,13 +649,6 @@ pub(super) fn prepare(
                 2,
             ));
         }
-        if !request.dry_run {
-            if let Some(refusal) =
-                annotated_execution_refusal(member.highlights.unwrap_or(0))?
-            {
-                return Err(refusal);
-            }
-        }
         Some(plan)
     } else {
         None
@@ -855,6 +848,15 @@ pub(super) fn prepare(
     bundle_preimages.sort_by(|left, right| left.path.cmp(&right.path));
     bundle_preimages.dedup_by(|left, right| left.path == right.path);
     let bundle_sha256 = fingerprint_preimages(&bundle_preimages);
+    // Host/coordination gating is last so more-specific preconditions
+    // (open note tasks, dirty inbound files, incompatible flags) win.
+    if !request.dry_run
+        && annotated.is_some()
+        && let Some(refusal) =
+            annotated_execution_refusal(member.highlights.unwrap_or(0))?
+    {
+        return Err(refusal);
+    }
     Ok(OverwritePreflight {
         member: member.clone(),
         note_path: row.path.clone(),

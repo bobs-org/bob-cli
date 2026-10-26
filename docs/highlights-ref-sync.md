@@ -675,11 +675,32 @@ note: it does not represent another library reference or reading task.
 With no authored prose, no archive is created and existing `earlier:` entries stay
 unchanged.
 
+An annotated overwrite always freezes the old note, even without authored
+prose, and consumes that same stem for the retained PDF and assets:
+`<archive>.md`, `<archive>__annotated.pdf`, `<archive>.assets/`. The extra
+`__annotated` suffix keeps a later Highlights Markdown export from replacing
+the frozen note. The frozen frontmatter adds note-local archive evidence:
+
+```yaml
+annotated_pdf: "[[ref_history/papers/example__2026-10-26__annotated.pdf]]"
+annotated_pdf_sha256: "<64 lowercase hex digits of the archived PDF bytes>"
+```
+
+The hash is never projected onto the live PDF marker. If a later scan sees
+those exact bytes at the live path, it holds with `replaced_capture` (see
+[Holds](#holds)). Inbound `#^h-` links are rewritten onto the frozen note;
+`[h::]` processed IDs stay, so highlighting the same passage again does not
+create a duplicate follow-up.
+
 Overwrite writes a durable intent under the host-local `bob_cli_state_dir()/ref/`
 before changing the vault. If the process stops mid-write, the next `bob ref
 create` or writing `bob ref scan` checks that intent before syncing: it keeps
 a fully committed replacement or restores the recorded preimages. A partial
-overwrite is never queued as an intake PDF.
+overwrite is never queued as an intake PDF. Version-2 intents also record
+annotated PDF and asset moves: recovery reverses those moves before generic
+cleanup so the only annotated copy is never deleted, and a late editor save
+that no longer matches the recorded hashes is kept with the intent rather
+than discarded.
 
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
@@ -837,8 +858,21 @@ above when steps 2, 3, 5, and 6 pass; it keeps the key off and flags
 Plan B if annotations are lost or a dialog appears.
 
 `--self-test` runs the non-GUI plumbing anywhere without Highlights
-(scratch vault, coordinated write, receipt, hold, `-a`, dry-run rule)
-and is wired into `just check-scripts`.
+(scratch vault, coordinated write, receipt, hold, `-a`, dry-run rule,
+annotated overwrite refusal or dry-run preview, and a simulated
+`replaced_capture` hold) and is wired into `just check-scripts`.
+
+The same kit then walks annotated overwrite as a second, separate
+checklist. Those steps do not certify the original enablement verdict.
+They cover: a modern annotated scratch reference with a closed reading
+task, an image selection, and an inbound highlight follow-up, using a
+clean replacement source (never the library PDF as `TARGET`); an unsaved
+annotation that must save-then-refuse-or-complete; the archived open
+document following the rename; a coordination hold with no bob-authored
+mutations; a late save into the still-open archived PDF; and scan holding
+when the exact old bytes reappear at the live path. Record outcomes in
+the scratch `results.md`. Bryan performs the real Highlights steps on the
+Mac; Linux self-test covers only the offline plumbing.
 
 ### Mac notification
 
@@ -2361,7 +2395,10 @@ command fails before guessing where generated content belongs.
 The next writing `bob ref create` or `bob ref scan` on that host recovers under
 `bob_sync.lock` then `scan.lock` before any pre-sync can commit half-applied
 files: a proved overwrite commit is kept; otherwise the recorded base HEAD is
-restored and the intent is cleared. Standalone `bob vault-sync` does the same
+restored and the intent is cleared. Annotated version-2 intents reverse
+proven PDF and asset moves first, so generic cleanup cannot delete the
+only annotated copy, and a late editor save that no longer matches the
+recorded hashes stays on disk with the intent. Standalone `bob vault-sync` does the same
 recovery (it takes `scan.lock` when an intent is pending) and refuses the cycle
 if the lock is busy or recovery fails. Other pre-syncs (`bob task move`,
 `bob randomize`, migrations, `vault_rewrite`) refuse to stage or commit while

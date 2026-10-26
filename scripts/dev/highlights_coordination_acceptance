@@ -6,12 +6,15 @@
 # real config), copies library PDFs you pick into the scratch vault, flips the
 # scratch note's `status:`, runs `bob ref sync -w` / `bob ref scan -w` with
 # verbose detail, records each outcome in results.md, and prints a verdict
-# with the exact line to enable on the Mac.
+# with the exact line to enable on the Mac. A second, separate checklist
+# then walks annotated overwrite; those steps never certify the original
+# enablement verdict.
 #
 # `--self-test` exercises the non-GUI plumbing on any OS against the real
 # `bob` from this checkout (override with BOB_BIN): scratch setup, a
-# coordinated marker write, the scan receipt, the reading hold, `-a`, and
-# the dry-run receipt rule. `just check-scripts` runs it.
+# coordinated marker write, the scan receipt, the reading hold, `-a`, the
+# dry-run receipt rule, annotated overwrite refusal/preview, and a
+# simulated replaced-capture hold. `just check-scripts` runs it.
 #
 # Usage: scripts/dev/highlights_coordination_acceptance [--self-test]
 
@@ -32,6 +35,8 @@ Usage: scripts/dev/highlights_coordination_acceptance [--self-test]
 
 No arguments: interactive guided run on the Mac (needs Highlights and two
 library PDFs you pick to copy; nothing is ever written outside $TMPDIR).
+After the original enablement verdict, a separate annotated-overwrite
+checklist records its own outcomes and never enables the key.
 
 --self-test: non-interactive plumbing check on any OS using the bob from
 this checkout (set BOB_BIN to use an installed bob instead).
@@ -217,6 +222,121 @@ with open(sys.argv[1], "wb") as handle:
 EOF
 }
 
+# Minimal PDF with an Info /Title, so local overwrite identity matches a
+# filed note. ASCII titles use a PDF literal; anything else is UTF-16BE.
+write_titled_pdf() {
+    local dest=$1 title=$2
+    [[ -n $title ]] || fail "replacement PDF needs a title"
+    python3 -I - "$dest" "$title" <<'EOF' || fail "cannot write titled PDF"
+import sys
+
+dest, title = sys.argv[1], sys.argv[2]
+try:
+    title.encode("ascii")
+    escaped = (
+        title.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    )
+    title_obj = b"(%s)" % escaped.encode("ascii")
+except UnicodeEncodeError:
+    payload = b"\xfe\xff" + title.encode("utf-16-be")
+    title_obj = b"<%s>" % payload.hex().encode("ascii")
+info = b"<< /Title %s >>" % title_obj
+stream = b"BT /F1 24 Tf 72 720 Td (Replacement capture) Tj ET"
+objects = [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+    b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    info,
+]
+out = bytearray(b"%PDF-1.4\n")
+offsets = []
+for number, body in enumerate(objects, start=1):
+    offsets.append(len(out))
+    out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+xref = len(out)
+info_num = len(objects)
+out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+for offset in offsets:
+    out += b"%010d 00000 n \n" % offset
+out += (
+    b"trailer\n<< /Size %d /Root 1 0 R /Info %d 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+    % (len(objects) + 1, info_num, xref)
+)
+with open(dest, "wb") as handle:
+    handle.write(out)
+EOF
+}
+
+front_field() {
+    # $1 = note, $2 = yaml key. Strips surrounding quotes.
+    python3 -I - "$1" "$2" <<'EOF'
+import sys
+path, key = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+if not text.startswith("---"):
+    raise SystemExit(0)
+front = text.split("---", 2)[1]
+prefix = key + ":"
+for line in front.splitlines():
+    if line.startswith(prefix):
+        value = line.split(":", 1)[1].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        print(value)
+        break
+EOF
+}
+
+plant_replaced_capture() {
+    # $1 = live PDF, $2 = live note. Plants one annotated archive whose
+    # digest matches the live bytes so the next scan must hold.
+    local live_pdf=$1 live_note=$2
+    python3 -I - "$vault" "$live_pdf" "$live_note" <<'EOF' || fail "cannot plant replaced_capture archive"
+import hashlib, pathlib, sys
+from datetime import date
+
+vault = pathlib.Path(sys.argv[1])
+live_pdf = pathlib.Path(sys.argv[2])
+live_note = pathlib.Path(sys.argv[3])
+rel_note = live_note.relative_to(vault).as_posix()
+if not rel_note.endswith(".md"):
+    raise SystemExit("live note must be markdown")
+live_identity = rel_note[:-3]
+stem = pathlib.Path(live_identity).name
+rtype = pathlib.Path(live_identity).parent.name
+day = date.today().isoformat()
+archive_rel = f"ref_history/{rtype}/{stem}__{day}"
+archive_pdf_rel = f"{archive_rel}__annotated.pdf"
+digest = hashlib.sha256(live_pdf.read_bytes()).hexdigest()
+archive_pdf = vault / archive_pdf_rel
+archive_pdf.parent.mkdir(parents=True, exist_ok=True)
+archive_pdf.write_bytes(live_pdf.read_bytes())
+(vault / f"{archive_rel}.md").write_text(
+    f"""---
+parent: "[[{live_identity}]]"
+annotated_pdf: "[[{archive_pdf_rel}]]"
+annotated_pdf_sha256: "{digest}"
+---
+
+# Archived capture
+""",
+    encoding="utf-8",
+)
+text = live_note.read_text(encoding="utf-8")
+front, body = text.split("\n---\n", 1)
+entry = f"[[{archive_rel}|replaced {day} · 1 highlight]]"
+if "\nearlier:" in front or front.startswith("earlier:"):
+    front = front.rstrip() + f"\n  - \"{entry}\"\n"
+else:
+    front = front.rstrip() + f"\nearlier:\n  - \"{entry}\"\n"
+live_note.write_text(front + "\n---\n" + body, encoding="utf-8")
+print(archive_pdf_rel)
+EOF
+}
+
 self_test_ok() {
     paint 32 "  ok $1"
     printf '\n'
@@ -344,6 +464,100 @@ EOF
     [[ -e $root/state2/bob-cli/ref/last-scan.json ]] \
         && self_test_fail "dry run wrote a receipt"
     checks=$((checks + 1)); self_test_ok "dry run writes no receipt"
+    commit_vault "self-test before annotated overwrite"
+
+    # 8. Annotated overwrite refuses on Linux / with the coordination key
+    # off, before any render, and leaves the scratch vault unchanged.
+    cat >"$vault/lib/chat/seed.md" <<'EOF'
+## Page 1
+
+> Stable quote for identity.
+EOF
+    commit_vault "self-test plant sidecar"
+    bobr ref sync "$pdf" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "sidecar sync failed (see $log)"
+    mkdir -p "$vault/zk" || self_test_fail "cannot create zk"
+    local hid
+    hid=$(grep -oE '\^h-[0-9a-f]{12}' "$note" | head -n 1 || true)
+    printf '# Pointer\n\nSee [[ref/chat/seed#%s]].\n' "${hid:-^h-test}" \
+        >"$vault/zk/pointer.md" \
+        || self_test_fail "cannot plant inbound highlight link"
+    commit_vault "self-test import annotated sidecar"
+    # Local overwrite identity is the source filename stem plus PDF title.
+    write_titled_pdf "$root/seed.pdf" "Acceptance Self-Test"
+    local before_head before_status before_pdf
+    before_head=$(git -C "$vault" rev-parse HEAD)
+    before_status=$(git -C "$vault" status --porcelain=v1 --untracked-files=all)
+    before_pdf=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    BOB_CONFIG_FILE=$config_off bobr ref create "$root/seed.pdf" \
+        -f overwrite --no-audio --ref-type chat -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/ann-refuse.out" 2>"$root/ann-refuse.err" \
+        && self_test_fail "annotated overwrite should refuse (see $root/ann-refuse.err)"
+    {
+        printf -- '--- annotated overwrite refusal ---\n'
+        cat "$root/ann-refuse.out" "$root/ann-refuse.err"
+    } >>"$log"
+    grep -q annotated_reference "$root/ann-refuse.err" "$root/ann-refuse.out" \
+        || self_test_fail "refusal missing annotated_reference (see $log)"
+    if [[ $(uname) == Darwin ]]; then
+        grep -q 'annotated overwrite requires highlights.coordinate_pdf_writes: true' \
+            "$root/ann-refuse.err" "$root/ann-refuse.out" \
+            || self_test_fail "Mac key-off refusal missing (see $root/ann-refuse.err)"
+    else
+        grep -q 'which Highlights holds on the Mac' \
+            "$root/ann-refuse.err" "$root/ann-refuse.out" \
+            || self_test_fail "Linux host refusal missing (see $root/ann-refuse.err)"
+        grep -q -- '-f starts a new reading from any host' \
+            "$root/ann-refuse.err" "$root/ann-refuse.out" \
+            || self_test_fail "Linux host hint missing (see $root/ann-refuse.err)"
+    fi
+    [[ $(git -C "$vault" rev-parse HEAD) == "$before_head" ]] \
+        || self_test_fail "annotated refusal moved HEAD"
+    [[ $(git -C "$vault" status --porcelain=v1 --untracked-files=all) == "$before_status" ]] \
+        || self_test_fail "annotated refusal dirtied the vault"
+    [[ $(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf") == "$before_pdf" ]] \
+        || self_test_fail "annotated refusal rewrote the PDF"
+    checks=$((checks + 1)); self_test_ok "annotated overwrite refuses off Mac / key off"
+
+    # 9. Dry-run previews the annotated archive on any host and writes nothing.
+    bobr ref create "$root/seed.pdf" \
+        -f overwrite -d --no-audio --ref-type chat -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/ann-dry.out" 2>>"$log" \
+        || self_test_fail "annotated dry-run failed (see $log)"
+    grep -q 'ok would replace Highlights-ready PDF' "$root/ann-dry.out" \
+        || self_test_fail "dry-run missing would-replace line (see $root/ann-dry.out)"
+    grep -q 'writes: none' "$root/ann-dry.out" \
+        || self_test_fail "dry-run missing writes: none (see $root/ann-dry.out)"
+    grep -q 'annotated PDF retained:' "$root/ann-dry.out" \
+        || self_test_fail "dry-run missing annotated PDF retained (see $root/ann-dry.out)"
+    [[ $(git -C "$vault" rev-parse HEAD) == "$before_head" ]] \
+        || self_test_fail "annotated dry-run moved HEAD"
+    [[ $(git -C "$vault" status --porcelain=v1 --untracked-files=all) == "$before_status" ]] \
+        || self_test_fail "annotated dry-run dirtied the vault"
+    checks=$((checks + 1)); self_test_ok "annotated dry-run previews archive, writes none"
+
+    # 10. Simulated replaced_capture: live bytes match an archived digest.
+    plant_replaced_capture "$pdf" "$note"
+    commit_vault "self-test plant replaced_capture"
+    local after_restore
+    after_restore=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    [[ $after_restore == "$before_pdf" ]] \
+        || self_test_fail "replaced_capture plant rewrote the live PDF"
+    bobr ref scan --write-pdfs \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/replaced.out" 2>>"$log" \
+        || self_test_fail "replaced_capture scan exited non-zero (see $log)"
+    grep -q 'Highlights wrote the replaced capture back' "$root/replaced.out" \
+        || self_test_fail "scan missing replaced_capture message (see $root/replaced.out)"
+    grep -q '1 held' "$root/replaced.out" \
+        || self_test_fail "scan summary counts no replaced_capture hold (see $root/replaced.out)"
+    [[ $(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf") == "$before_pdf" ]] \
+        || self_test_fail "replaced_capture hold wrote the PDF"
+    checks=$((checks + 1)); self_test_ok "scan holds replaced_capture, writes nothing"
 
     banner 32 "✓" "SELF-TEST: $checks checks passed"
 }
@@ -472,8 +686,12 @@ guided() {
     printf 'Outcomes append to %s.\n' "$results"
 
     # Steps 1-6, 8-9 share one small PDF; step 7 adds a ~20 MB one.
+    # Annotated overwrite later returns to this small PDF so the original
+    # enablement verdict never certifies those extra checks.
     pick_pdf "small PDF that already carries a page-1 marker"
     drain_pick chat
+    small_pdf=$pdf
+    small_note=$note
 
     # -- Step 1: uncoordinated control -------------------------------------
     banner 33 "1" "Step 1 — Uncoordinated control (key off)"
@@ -664,6 +882,173 @@ EOF
         printf '\nFull log: %s\n' "$root"
     } | tee -a "$results"
     banner 32 "✓" "Acceptance complete — results in $results"
+
+    guided_annotated_overwrite
+}
+
+guided_annotated_overwrite() {
+    # Second checklist: never changes the enablement verdict above.
+    pdf=$small_pdf
+    note=$small_note
+    [[ -f $pdf && -f $note ]] \
+        || fail "small scratch PDF from steps 1–6 is missing"
+
+    banner 35 "◈" "Annotated overwrite checks (separate from enablement)"
+    cat <<'EOF'
+These steps do not certify the enablement verdict above. They walk
+annotated overwrite on the small scratch PDF from steps 1–6, using a
+fresh replacement PDF (never a library PDF as TARGET). Record pass,
+fail, or skip for each; results append to the same scratch results.md.
+EOF
+
+    {
+        printf '\n## Annotated overwrite\n\n'
+        printf 'Scratch PDF: %s\nScratch note: %s\n' "$pdf" "$note"
+    } >>"$results"
+
+    local title parent rtype rel hid stem replacement
+    title=$(front_field "$note" title)
+    parent=$(front_field "$note" parent)
+    parent=${parent#\[\[}
+    parent=${parent%\]\]}
+    [[ -n $parent ]] || parent=obsidian
+    rtype=$(basename "$(dirname "$note")")
+    rel=${note#"$vault"/}
+    rel=${rel%.md}
+    stem=$(basename "$rel")
+    replacement=$root/$stem.pdf
+    [[ -n $title ]] || fail "scratch note has no title: $note"
+
+    # -- Step 11: prepare annotated scratch reference ----------------------
+    banner 33 "11" "Step 11 — Prepare a modern annotated scratch reference"
+    cat <<EOF
+1. Open the SMALL scratch PDF in Highlights (the copy under the scratch
+   root from steps 1–6, not the ~20 MB papers PDF and not your library
+   original):
+   $pdf
+2. Add one image selection and one highlight follow-up. SAVE (Cmd+S).
+3. This kit will then import the sidecar, close the reading to status
+   \`read\`, and plant an inbound highlight link in zk/pointer.md.
+EOF
+    pause_enter
+    printf '\n%s\n' "$(paint 36 '$ bob ref scan -w (import sidecar, close reading)')"
+    flip_note_status "$note" read
+    bobr ref scan --write-pdfs \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        || fail "annotated prepare scan failed"
+    hid=$(grep -oE '\^h-[0-9a-f]{12}' "$note" | head -n 1 || true)
+    mkdir -p "$vault/zk" || fail "cannot create zk"
+    printf '# Pointer\n\nSee [[%s#%s]].\n' "$rel" "${hid:-^h-test}" \
+        >"$vault/zk/pointer.md" \
+        || fail "cannot plant inbound highlight link"
+    commit_vault "acceptance annotated prepare"
+    write_titled_pdf "$replacement" "$title"
+    printf 'Replacement source: %s (title %s, never a library PDF)\n' \
+        "$replacement" "$title"
+    printf 'Inbound link: [[%s#%s]]\n' "$rel" "${hid:-^h-test}"
+    ask_outcome 11 prepare-annotated || true
+
+    # -- Step 12: unsaved annotation then overwrite -----------------------
+    banner 33 "12" "Step 12 — Unsaved annotation, then overwrite"
+    cat <<EOF
+1. Keep the SMALL scratch PDF open in Highlights.
+2. Make one more annotation. Do NOT save. Switch to this terminal.
+3. The overwrite below uses the clean replacement PDF, not your library
+   file. Coordination should request a save. Pass when either the
+   overwrite completes after saving, or it refuses because bytes changed
+   after preflight (those bytes stay, then scan/commit and retry).
+EOF
+    pause_enter
+    printf '\n%s\n' "$(paint 36 "$ bob ref create $stem.pdf -f overwrite --ref-type $rtype -P $parent")"
+    bobr ref create "$replacement" \
+        -f overwrite --no-audio --ref-type "$rtype" -P "$parent" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        || true
+    printf 'Live PDF now: %s bytes, marker %s\n' \
+        "$(wc -c <"$pdf" | tr -d ' ')" "$(marker_status "$pdf")"
+    ask_outcome 12 unsaved-overwrite || true
+    commit_vault "acceptance annotated overwrite attempt" || true
+
+    # -- Step 13: archive rename, live material, frozen anchors ------------
+    banner 33 "13" "Step 13 — Archive rename and preserved identity"
+    cat <<'EOF'
+Pass when: the still-open Highlights document followed the archive
+rename (`ref_history/...__annotated.pdf`); the live PDF has the
+replacement material; frozen ^h- anchors, image embeds, and the inbound
+highlight link resolve on the archive; the reading-task identity and
+closed status are unchanged.
+EOF
+    if [[ -d $vault/ref_history ]]; then
+        printf 'Archives now:\n'
+        find "$vault/ref_history" -type f | sort
+    else
+        printf 'No ref_history/ yet — overwrite may have refused; skip or retry.\n'
+    fi
+    printf 'Scratch note earlier:/highlights now:\n'
+    grep -E '^(earlier:|highlights_count:)|ref_history/|\^h-' "$note" | head -n 20 \
+        || true
+    ask_outcome 13 archive-identity || true
+
+    # -- Step 14: coordination hold, no bob-authored mutations -------------
+    banner 33 "14" "Step 14 — Coordination hold writes nothing"
+    cat <<'EOF'
+1. Open a modal sheet in Highlights (Preferences, or File > Print left
+   open) while the scratch PDF (or its archived tab) is the target.
+2. Run the overwrite below. Pass when bob HOLDS, writes no archive/live
+   /link mutations, hints to close Highlights and retry, and a retry
+   after closing the sheet can proceed.
+EOF
+    pause_enter
+    local hold_head hold_status
+    hold_head=$(git -C "$vault" rev-parse HEAD)
+    hold_status=$(git -C "$vault" status --porcelain=v1 --untracked-files=all)
+    printf '\n%s\n' "$(paint 36 "$ bob ref create $stem.pdf -f overwrite (modal open)")"
+    bobr ref create "$replacement" \
+        -f overwrite --no-audio --ref-type "$rtype" -P "$parent" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        || true
+    printf 'HEAD before/after: %s / %s\n' \
+        "$hold_head" "$(git -C "$vault" rev-parse HEAD)"
+    printf 'Porcelain before:\n%s\nPorcelain after:\n%s\n' \
+        "$hold_status" \
+        "$(git -C "$vault" status --porcelain=v1 --untracked-files=all)"
+    ask_outcome 14 overwrite-hold || true
+
+    # -- Step 15: late archive save + simulated replaced_capture -----------
+    banner 33 "15" "Step 15 — Late archive save and replaced-capture hold"
+    cat <<'EOF'
+1. If overwrite succeeded, the archived PDF may still be open. Save
+   (Cmd+S) in that tab: the save must land in the archive, leaving the
+   new live capture unchanged.
+2. This kit then simulates the exact old bytes reappearing at the live
+   path and runs a scan. Pass when scan holds with
+   "Highlights wrote the replaced capture back" and writes nothing.
+EOF
+    pause_enter
+    local live_before archive_pdf
+    live_before=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    archive_pdf=$(find "$vault/ref_history" -name '*__annotated.pdf' 2>/dev/null | sort | tail -n 1 || true)
+    if [[ -n ${archive_pdf-} && -f $archive_pdf ]]; then
+        cp -- "$archive_pdf" "$pdf" \
+            || fail "cannot restore archived bytes to the live path"
+        commit_vault "acceptance restore archived bytes onto live PDF"
+    else
+        plant_replaced_capture "$pdf" "$note"
+        commit_vault "acceptance plant replaced_capture"
+    fi
+    printf '\n%s\n' "$(paint 36 '$ bob ref scan -w (live bytes match archived digest)')"
+    bobr ref scan --write-pdfs \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        || true
+    printf 'Live PDF digest before/after plant+scan: %s / %s\n' \
+        "$live_before" "$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")"
+    ask_outcome 15 replaced-capture || true
+
+    {
+        printf '\nAnnotated overwrite checks recorded. They do not change the enablement verdict above.\n'
+        printf 'Full log: %s\n' "$root"
+    } | tee -a "$results"
+    banner 32 "✓" "Annotated overwrite checks complete — results in $results"
 }
 
 if [[ ${1-} == --self-test ]]; then

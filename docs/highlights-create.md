@@ -557,7 +557,8 @@ captured reread exits 2. A library PDF as TARGET refuses even with `-f`
 recorded `source_url` or the original file instead, while `-L` without
 force still attaches to the newest reading. `-f overwrite` replaces an
 eligible filed reference in place; authored prose moves to `ref_history/`.
-Incompatible options and annotated references refuse before fetching, and
+Incompatible options and annotated references refuse before fetching
+(annotated overwrite runs on the Mac; see Recapture), and
 without a filed match overwrite exits 1. A URL recorded only by legacy notes without a
 Highlights PDF warns (`already in the library as <path>, a note without
 a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
@@ -840,12 +841,19 @@ open status cannot reopen a task archived in `done/`; reopen it where it lives
 first. Any status overwrite cannot stamp is rejected before rendering. Exact-set
 collection overwrite follows the same identity, audio, and task-preservation
 rules; partial overlaps refuse under every mode. Without a filed match
-overwrite exits 1. Annotated references refuse with
-`overwriting an annotated reference is not available yet; -f starts a new reading`.
-No
-force is needed for a URL recorded only by legacy notes
-without a Highlights PDF (it warns and captures a fresh copy) or for a
-new-day vault-note snapshot (an ordinary dated create).
+overwrite exits 1. Annotated references — text highlights, image-only
+sidecars, `.assets`, or inbound `#^h-` links — overwrite only on macOS
+with `highlights.coordinate_pdf_writes: true`, enabled after the guided
+Highlights acceptance run. Other hosts refuse before fetch or adapter
+work with `this reference has N highlights, which Highlights holds on
+the Mac; run the overwrite there` and
+`hint: -f starts a new reading from any host`. With the key off on the
+Mac, the refusal names the key and says to enable it only after that
+run. A dry run on any host previews the archive path, highlight and
+inbound-link counts, and `annotated PDF retained: <path>`, then
+`writes: none`. No force is needed for a URL recorded only by legacy
+notes without a Highlights PDF (it warns and captures a fresh copy) or
+for a new-day vault-note snapshot (an ordinary dated create).
 
 A filed overwrite reports the same plan on dry runs and real runs, ending
 dry runs with `writes: none`:
@@ -860,12 +868,37 @@ audio: kept lib/papers/report.mp3 (narrates the replaced capture; add -L to re-n
 sync: committed abc1234
 ```
 
+An annotated overwrite keeps that shape and expands `earlier:` with the
+real highlight count, inbound `#^h-` rewrite count, and retained PDF:
+
+```text
+earlier: ref_history/papers/report__2026-10-16.md (3 highlights · 1 highlight link · annotated PDF retained: ref_history/papers/report__2026-10-16__annotated.pdf)
+```
+
+The old PDF is renamed (not copied) to
+`<archive>__annotated.pdf` and assets to `<archive>.assets/` under one
+bounded `.forMerging` accessor. The frozen note keeps `^h-`/`^s-` anchors,
+records `annotated_pdf` and `annotated_pdf_sha256`, and does not become a
+library row, dedupe hit, or reading-task source. Only resolvable inbound
+`#^h-` links move onto the frozen note; note links, heading links, `#^s-`
+links, and code examples stay on the live note. The reading-task identity,
+checkbox, residence, dependencies, relations, freshness, and logs stay
+except explicit `-s` and title-alias edits. `[h::]` processed IDs survive
+so highlighting the same passage again does not mint a duplicate follow-up.
+
+Coordination holds (`editor_active`, timeout, `marker_changed`) write
+nothing and hint to close Highlights and retry. If Highlights saves new
+annotations during the grant, overwrite aborts before intent or apply,
+keeps those bytes, and asks for `bob ref scan -w` then retry. A later
+scan that sees the archived PDF bytes back at the live path holds with
+`replaced_capture` (`Highlights wrote the replaced capture back`).
+
 `overwrite:` names the replaced reading with its final status and highlight
 count. `task:` prints the final mark and status (`· pass -s ready to reopen`
 is appended for a kept closed, non-archived task). A replacement episode
 prints `audio: replaced <path>`; a kept episode keeps the note embed and the
-Play link of the replaced capture. With no authored prose there is no
-archive: `earlier: nothing to archive (0 highlights, no notes); git keeps
+Play link of the replaced capture. With no authored prose and no annotations
+there is no archive: `earlier: nothing to archive (0 highlights, no notes); git keeps
 the old capture`. The commit prints `sync: committed <sha7>` like an
 ordinary create; when the post-sync cannot publish, bob keeps the commit and
 prints `overwritten; push pending (run bob vault-sync)`. A verification

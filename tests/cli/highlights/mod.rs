@@ -13,6 +13,7 @@ mod listen;
 mod marker;
 mod marker_write;
 mod overwrite;
+mod overwrite_annotated;
 mod overwrite_local;
 mod overwrite_recovery;
 mod overwrite_web;
