@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 
+pub(crate) mod attach;
 mod blocked_by;
 pub(crate) mod cli;
 pub(crate) mod code;

@@ -237,6 +237,17 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref attach-source` takes optional REFs plus search paths.
+    Entry {
+        path: &["ref", "attach-source"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
+    Entry {
+        path: &["ref", "attach-source"],
+        arg: "search",
+        kind: Kind::Files(None),
+    },
     // `bob ref code` resolves the same exact reference handles as `show`.
     Entry {
         path: &["ref", "code"],

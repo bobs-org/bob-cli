@@ -103,7 +103,7 @@ mod sync;
 mod target;
 #[cfg(test)]
 mod tests;
-mod text;
+pub(crate) mod text;
 mod underline;
 mod workdir;
 
@@ -345,6 +345,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             crate::native::ref_library::cli::run_list(sub_matches)
         }
         Some(("rename", sub_matches)) => rename::run(sub_matches),
+        Some(("attach-source", sub_matches)) => {
+            crate::native::ref_library::cli::run_attach_source(sub_matches)
+        }
         Some(("code", sub_matches)) => {
             crate::native::ref_library::cli::run_code(sub_matches)
         }

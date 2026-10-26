@@ -25,6 +25,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Copy or inspect a saved code block | `bob ref code <REF> [N]` | Read exact block bytes, a block catalog, or the saved Markdown source |
+| Backfill saved sources for filed references | `bob ref attach-source -s <PATH> [-d] [REF]...` | Verify same-stem Markdown against library PDFs and record only verified sources |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
@@ -624,6 +625,52 @@ The `id` on each block is generation-scoped as `<source-hash12>/<N>`.
 The summary skips blank lines, simple rules, box-drawing lines, and
 lone brackets or braces. For Mermaid blocks, a leading frontmatter
 title becomes the caption and the diagram type becomes the summary.
+
+## `bob ref attach-source`
+
+```bash
+bob ref attach-source -s ~/projects/bob-cli--research -d
+bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d
+bob ref attach-source -s ./sidecar-a -s ./sidecar-b
+```
+
+Eligible references are PDF-backed, with no saved source and no live
+source note: snapshots are never attached from a live note, because the
+note has changed since. With no `REF`, every eligible reference is
+considered; named references resolve exactly like `bob ref show`, and an
+unknown or ambiguous name exits 1.
+
+Each `--search` path is either a directory, searched recursively for
+`<stem>.md` files while skipping dot-directories, or a single file,
+which is the candidate for one named `REF`. Two candidates for one stem
+skip as `ambiguous`. Each candidate is verified against its library PDF
+text (no XeLaTeX): the candidate title (frontmatter `title`, else the
+first H1 outside fenced blocks) must match the note title, and at least
+80% of matchable code blocks (12 or more normalized characters, never
+Mermaid) must match in order at 85% or better similarity. A candidate
+with no matchable blocks must instead match its five longest content
+paragraphs (listen-card divs, standalone images, and audio embeds are
+not content) in document order the same way. Both sides drop
+whitespace, fvextra wrap glyphs, return-link tag glyphs, and `↩ p. N`
+pills before matching, fold compatibility punctuation to ASCII, and
+the candidate's prose sheds Markdown formatting (code spans, emphasis,
+headings, list markers, table pipes, links, tags) so typeset words
+compare; code-block bodies compare verbatim.
+
+A verified source is written to
+`.bob/ref-sources/<type>/<stem>--<hash>/` with route `attached`, the
+`verified` match counts, the current library PDF digest, and per-block
+pages from the match position (`page_source: text_match`). The note
+gains a `source_markdown` pointer. Every 100 references commit as one
+scoped, revertable `bob ref attach-source: N references` batch, under
+the reference-mutation session (`bob_sync.lock` then `scan.lock`).
+
+One line prints per reference, `attached` or `skipped (<reason>)`, where
+the reason is `no candidate`, `ambiguous`, `title mismatch`,
+`low match 3/8 blocks`, `already attached`, or `snapshot`. A summary
+ends the run, and a dry run (`-d`) verifies and reports but writes
+nothing: stores, notes, and commits are untouched and the run ends with
+`writes: none`.
 
 ## `bob ref today`
 

@@ -22,6 +22,7 @@ use super::{
     LIST_STATE_ORDER,
 };
 
+pub(crate) use super::attach::run_attach_source;
 pub(crate) use super::code::run_code;
 pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
@@ -250,6 +251,39 @@ pub(crate) fn show_command() -> ClapCommand {
             bob ref show ea_graph\n  \
             bob ref show ea_graph -c\n  \
             bob ref show ref/papers/ea_graph.md -f json",
+        )
+}
+
+/// The `bob ref attach-source` verified source-backfill command.
+pub(crate) fn attach_source_command() -> ClapCommand {
+    ClapCommand::new("attach-source")
+        .about("Attach verified Markdown sources to filed references")
+        .arg(
+            Arg::new("ref")
+                .value_name("REF")
+                .num_args(0..)
+                .help("Vault path, note stem or id, URL, arXiv ID, DOI, or exact title; the default is every eligible reference"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("dry-run")
+                .long("dry-run")
+                .short('d')
+                .action(ArgAction::SetTrue)
+                .help("Verify candidates and report, without writing stores, notes, or commits"),
+        )
+        .arg(ref_dir_arg())
+        .arg(
+            Arg::new("search")
+                .long("search")
+                .short('s')
+                .value_name("PATH")
+                .action(ArgAction::Append)
+                .required(true)
+                .help("Directory searched recursively for <stem>.md candidates (dot-directories skipped), or one file for one named REF; repeat for several roots"),
+        )
+        .after_help(
+            "Eligible references are PDF-backed, with no saved source and no live source note. Each candidate is verified against its library PDF text: the title must match, and at least 80% of matchable code blocks (12 or more normalized characters, never Mermaid) must match in order at 85% or better similarity, or else the five longest paragraphs must. Verified sources are written to .bob/ref-sources/<type>/<stem>--<hash>/ with route \"attached\" plus the match counts, the note gains a source_markdown pointer, and every 100 references commit as one revertable batch. A dry run verifies and reports but ends with `writes: none`.\n\nExamples:\n  bob ref attach-source -s ~/projects/bob-cli--research -d\n  bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b",
         )
 }
 

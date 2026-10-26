@@ -76,6 +76,52 @@ struct ReportBlock {
     section: Option<CodeSection>,
 }
 
+/// Read the report written by the final Lua filter without mapping pages:
+/// for sources verified against an existing PDF (attach), page ranges come
+/// from text matching instead of anchors, so every block starts pageless.
+pub(crate) fn read_report_catalog(
+    report_path: &Path,
+) -> Result<CodeCatalog, String> {
+    let raw = fs::read_to_string(report_path).map_err(|error| {
+        format!(
+            "read code catalog report {}: {error}",
+            report_path.display()
+        )
+    })?;
+    let report: CatalogReport =
+        serde_json::from_str(&raw).map_err(|error| {
+            format!(
+                "parse code catalog report {}: {error}",
+                report_path.display()
+            )
+        })?;
+    if report.version != 1 {
+        return Err(format!(
+            "unsupported code catalog report version {}",
+            report.version
+        ));
+    }
+    Ok(CodeCatalog {
+        version: report.version,
+        blocks: report
+            .blocks
+            .into_iter()
+            .map(|block| CodeBlock {
+                n: block.n,
+                kind: block.kind,
+                lang: block.lang,
+                classes: block.classes,
+                attrs: block.attrs,
+                text: block.text,
+                section: block.section,
+                page: None,
+                page_end: None,
+                page_source: None,
+            })
+            .collect(),
+    })
+}
+
 /// Attach PDF page ranges to the report written by the final Lua filter.
 pub(crate) fn build(report_path: &Path, rendered_pdf: &Path) -> CatalogOutcome {
     let raw = match fs::read_to_string(report_path) {

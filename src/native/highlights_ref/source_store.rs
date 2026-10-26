@@ -118,6 +118,12 @@ impl From<&CodeBlock> for StoredBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StoredVerified {
+    pub(crate) matched: usize,
+    pub(crate) total: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StoredCatalog {
     pub(crate) version: u32,
     pub(crate) captured_at: String,
@@ -127,6 +133,8 @@ pub(crate) struct StoredCatalog {
     pub(crate) renderer: StoredRenderer,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) catalog_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) verified: Option<StoredVerified>,
     #[serde(default)]
     pub(crate) blocks: Vec<StoredBlock>,
 }
@@ -157,6 +165,7 @@ pub(crate) struct StoreWriteParams<'a> {
     pub(crate) pdf_rel: String,
     pub(crate) pdf_sha256: String,
     pub(crate) catalog: &'a CatalogOutcome,
+    pub(crate) verified: Option<StoredVerified>,
 }
 
 fn vault_rel_forward(bob_dir: &Path, path: &Path) -> String {
@@ -356,6 +365,7 @@ fn build_stored_catalog(
             pandoc: pandoc_version_string(),
         },
         catalog_error,
+        verified: params.verified.clone(),
         blocks,
     })
 }
@@ -1043,6 +1053,7 @@ pub(super) fn write_for_create(
         pdf_rel,
         pdf_sha256,
         catalog,
+        verified: None,
     };
     match write_store(&config.bob_dir, params) {
         Ok(outcome) => {
@@ -1158,6 +1169,7 @@ mod tests {
             pdf_rel: "lib/chat/report.pdf".to_string(),
             pdf_sha256: "0123456789abcdef".repeat(4)[..64].to_string(),
             catalog: &catalog,
+            verified: None,
         };
         let first = write_store(&bob_dir, params.clone()).expect("first write");
         assert!(!first.reused);
@@ -1191,6 +1203,7 @@ mod tests {
                 pdf_rel: "lib/chat/report.pdf".to_string(),
                 pdf_sha256: "0123456789abcdef".repeat(4)[..64].to_string(),
                 catalog: &refusal_catalog,
+                verified: None,
             },
         )
         .expect("refusal is Ok");

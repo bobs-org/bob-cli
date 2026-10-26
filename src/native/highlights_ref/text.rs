@@ -194,7 +194,7 @@ fn is_tag_glyph(character: char) -> bool {
 /// then maximal modifier-letter tag runs that directly follow a
 /// non-whitespace character or start the text. Everything else is left for
 /// [`beautify_annotation_text`].
-pub(super) fn strip_return_link_glyphs(text: &str) -> String {
+pub(crate) fn strip_return_link_glyphs(text: &str) -> String {
     strip_tag_runs(&strip_pill_fragments(text))
 }
 

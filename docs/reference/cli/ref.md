@@ -14,6 +14,7 @@ Find, list, read, rename, and plan Bob reference notes for today, and sync Highl
 Usage: bob ref [OPTIONS] <COMMAND>
 
 Library:
+  attach-source  Attach verified Markdown sources to filed references
   code           Read the saved Markdown or exact code blocks from a reference
   find           Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
   list           List notes by reading state, status, type, origin, or date

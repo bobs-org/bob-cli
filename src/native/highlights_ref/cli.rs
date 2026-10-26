@@ -11,6 +11,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Library",
         &[
+            "attach-source",
             "code",
             "find",
             "list",
@@ -89,6 +90,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 /// Every `bob ref` subcommand builder, in `HELP_GROUPS` order.
 fn all_subcommands() -> Vec<ClapCommand> {
     vec![
+        crate::native::ref_library::cli::attach_source_command(),
         crate::native::ref_library::cli::code_command(),
         crate::native::ref_library::cli::find_command(),
         crate::native::ref_library::cli::list_command(),

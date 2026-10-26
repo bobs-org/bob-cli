@@ -145,6 +145,58 @@ pub(crate) fn committed_despite_error(
         .then_some((sha, subject))
 }
 
+/// Acquire `bob_sync.lock` then `scan.lock` for callers outside the
+/// Highlights modules (which cannot name the shared child environment).
+pub(crate) fn acquire_session(
+    vault: &Path,
+    on_maintenance_wait: impl FnOnce(),
+) -> std::result::Result<MutationLocks, MutationSessionError> {
+    acquire_mutation_session(vault, &ob::child_env(), on_maintenance_wait)
+}
+
+/// Commit exactly `paths` with `message` for callers outside the
+/// Highlights modules (which cannot name the shared child environment).
+/// Stages with `git add`, commits the scoped cached diff, and returns the
+/// new `HEAD` sha, or `None` when the paths hold no staged change.
+pub(crate) fn commit_paths(
+    vault: &Path,
+    message: &str,
+    paths: &[PathBuf],
+) -> std::result::Result<Option<String>, String> {
+    let child_env = ob::child_env();
+    ob::commit_paths(vault, &child_env, message, paths)
+}
+
+/// Split absolute `paths` (under `vault`) into included and gitignored
+/// lists, mirroring the intake pre-commit filter for callers outside the
+/// Highlights modules.
+pub(crate) fn partition_ignored(
+    vault: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    use std::process::Stdio;
+    let child_env = ob::child_env();
+    let mut included = Vec::new();
+    let mut ignored = Vec::new();
+    for path in paths {
+        let relative = path.strip_prefix(vault).unwrap_or(path);
+        let result = ob::git_command(vault, &child_env)
+            .arg("check-ignore")
+            .arg("-q")
+            .arg("--")
+            .arg(relative)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if result.is_ok_and(|status| status.success()) {
+            ignored.push(path.clone());
+        } else {
+            included.push(relative.to_path_buf());
+        }
+    }
+    (included, ignored)
+}
+
 /// Dirty Git paths that overlap `touched_paths`.
 ///
 /// Exact matching (rename) requires a porcelain path to equal a touched
