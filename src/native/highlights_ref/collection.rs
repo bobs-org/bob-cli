@@ -5,7 +5,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs,
-    io::IsTerminal,
     path::{Path, PathBuf},
 };
 
@@ -1089,9 +1088,9 @@ fn capture_and_install(
         return Ok(());
     }
 
-    if std::io::stderr().is_terminal() {
-        eprintln!("composing {total} articles…");
-    }
+    crate::native::style::stderr_progress_line(&format!(
+        "composing {total} articles…"
+    ));
     let compose_dir = scratch.path().join("compose");
     fs::create_dir_all(&compose_dir).map_err(|error| {
         CommandError::new(format!(
@@ -1330,9 +1329,9 @@ fn capture_and_install_overwrite(
     }
     recheck_collection_overwrite(config, &urls, &options, &preflight)?;
 
-    if std::io::stderr().is_terminal() {
-        eprintln!("composing {total} articles…");
-    }
+    crate::native::style::stderr_progress_line(&format!(
+        "composing {total} articles…"
+    ));
     let compose_dir = scratch.path().join("compose");
     fs::create_dir_all(&compose_dir).map_err(|error| {
         CommandError::new(format!(
@@ -1540,9 +1539,7 @@ fn classify_parts(
 ) -> Result<(), CommandError> {
     let total = urls.len();
     let progress = |line: &str| {
-        if std::io::stderr().is_terminal() {
-            eprintln!("{line}");
-        }
+        crate::native::style::stderr_progress_line(line);
     };
     for (index, url) in urls.iter().enumerate() {
         let part = index + 1;
@@ -1586,9 +1583,10 @@ fn capture_parts(
                 workdir.display()
             ))
         })?;
-        if std::io::stderr().is_terminal() {
-            eprintln!("capturing {part}/{total} {}…", url.host);
-        }
+        crate::native::style::stderr_progress_line(&format!(
+            "capturing {part}/{total} {}…",
+            url.host
+        ));
         let request = CaptureRequest::for_collection_part(
             url.cleaned.clone(),
             workdir.to_string_lossy().into_owned(),

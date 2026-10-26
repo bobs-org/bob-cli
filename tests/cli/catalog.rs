@@ -34,7 +34,10 @@ fn protocol_1_parses_with_schema_version_one() {
     assert_eq!(json["ok"], true);
     assert_eq!(json["protocol"], 1);
     assert_eq!(json["bob_version"], env!("CARGO_PKG_VERSION"));
-    assert!(json["features"].as_array().expect("features").is_empty());
+    assert_eq!(
+        json["features"],
+        serde_json::json!(["clicolor-force", "progress-env", "run-receipt"])
+    );
     let entries = json["entries"].as_array().expect("entries");
     assert_eq!(entries.len(), 52);
 }

@@ -79,7 +79,7 @@ pub(crate) mod ref_library;
 pub(crate) mod ref_tasks;
 mod relation_labels;
 mod stats;
-mod style;
+pub(crate) mod style;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;

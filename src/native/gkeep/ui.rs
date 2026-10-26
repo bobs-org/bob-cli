@@ -25,9 +25,11 @@ const SPINNER_FRAMES: &[&str] =
 
 /// A stderr progress spinner, stopped by clearing the line on drop.
 ///
-/// `Spinner::start` is a no-op returning an idle spinner when stderr is
-/// not a TTY. Callers pass no label at all in JSON mode or with
-/// `--quiet`, so construction itself stays unconditional here.
+/// On a TTY, `Spinner::start` animates with `\r` redraws. Without a TTY,
+/// `BOB_PROGRESS=1` prints one line-oriented `{label}…` line and never
+/// uses `\r`. Otherwise construction is a no-op. Callers pass no label
+/// at all in JSON mode or with `--quiet`, so construction itself stays
+/// unconditional here.
 pub(crate) struct Spinner {
     running: Option<RunningSpinner>,
 }
@@ -38,9 +40,11 @@ struct RunningSpinner {
 }
 
 impl Spinner {
-    /// Start spinning `label` on stderr, unless stderr is not a TTY.
+    /// Start spinning `label` on stderr, or print a single progress line
+    /// when `BOB_PROGRESS=1` and stderr is not a TTY.
     pub(crate) fn start(label: &str) -> Self {
         if !std::io::stderr().is_terminal() {
+            crate::native::style::stderr_progress_line(&format!("{label}…"));
             return Self { running: None };
         }
         let stop = Arc::new(AtomicBool::new(false));

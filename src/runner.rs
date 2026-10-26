@@ -15,7 +15,7 @@ use clap::{
         OsStringValueParser, StyledStr,
     },
     error::ErrorKind,
-    Arg, Command as ClapCommand,
+    Arg, ColorChoice, Command as ClapCommand,
 };
 
 use crate::native::{self, NativeCommand};
@@ -870,7 +870,70 @@ pub fn run_bob() -> i32 {
     // panic at this boundary and map it to a quiet exit 0. SIGPIPE
     // disposition is unchanged: bob writes to child stdin in production,
     // where the default disposition would kill bob mid-operation.
-    run_with_quiet_epipe(run_bob_inner)
+    let exit_code = run_with_quiet_epipe(run_bob_inner);
+    write_run_receipt(exit_code);
+    exit_code
+}
+
+/// When `BOB_RUN_RECEIPT` is set, write
+/// `{"schema_version":1,"exit_code":N,"finished_at":"<RFC3339>"}`
+/// atomically after the process chooses an exit code, including the
+/// quiet-EPIPE 0. A failed write warns on stderr and leaves the exit
+/// code unchanged. Panic and signal paths never reach here.
+fn write_run_receipt(exit_code: i32) {
+    use std::io::Write;
+    let Some(raw) =
+        bob_env::var_os("BOB_RUN_RECEIPT").filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let path = PathBuf::from(raw);
+    if let Err(error) = write_run_receipt_file(&path, exit_code) {
+        let _ = writeln!(
+            io::stderr(),
+            "warning: could not write BOB_RUN_RECEIPT {}: {error}",
+            path.display()
+        );
+    }
+}
+
+fn write_run_receipt_file(path: &Path, exit_code: i32) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let Some(parent) = parent else {
+        return Err("path has no parent directory".to_string());
+    };
+    if !parent.is_dir() {
+        return Err(format!("parent is not a directory: {}", parent.display()));
+    }
+    let body = serde_json::json!({
+        "schema_version": 1,
+        "exit_code": exit_code,
+        "finished_at": chrono::Utc::now()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    });
+    let bytes = serde_json::to_vec(&body)
+        .map_err(|error| format!("encode receipt: {error}"))?;
+    let temp = parent.join(format!(
+        ".bob-receipt-{}-{}.tmp",
+        std::process::id(),
+        nanos_suffix()
+    ));
+    fs::write(&temp, &bytes)
+        .map_err(|error| format!("write {}: {error}", temp.display()))?;
+    fs::rename(&temp, path).map_err(|error| {
+        let _ = fs::remove_file(&temp);
+        format!("move into {}: {error}", path.display())
+    })?;
+    Ok(())
+}
+
+fn nanos_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos() as u128)
+        .unwrap_or(0)
 }
 
 fn run_with_quiet_epipe(run: impl FnOnce() -> i32) -> i32 {
@@ -1239,8 +1302,7 @@ Run 'bob <command> --help' or 'bob help <command>' for more on a command.";
 
 fn sectioned_help(long: bool) -> StyledStr {
     let mut help = StyledStr::new();
-    let color =
-        io::stdout().is_terminal() && bob_env::var_os("NO_COLOR").is_none();
+    let color = native::style::color_enabled(io::stdout().is_terminal());
     let styles = cli_styles();
     let name_width = SUBCOMMANDS
         .iter()
@@ -1403,6 +1465,13 @@ fn build_cli() -> ClapCommand {
         .about(ABOUT)
         .long_about(LONG_ABOUT)
         .styles(cli_styles())
+        .color(
+            if native::style::color_enabled(io::stdout().is_terminal()) {
+                ColorChoice::Always
+            } else {
+                ColorChoice::Never
+            },
+        )
         .help_template(HELP_TEMPLATE)
         .override_usage("bob <COMMAND>")
         .after_help(AFTER_HELP)

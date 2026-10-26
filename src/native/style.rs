@@ -1,6 +1,45 @@
 use crate::native::env as bob_env;
 use std::io::{self, IsTerminal};
 
+/// Whether ANSI color is allowed on a stream.
+///
+/// `NO_COLOR` (any set value) disables color. A non-empty `CLICOLOR_FORCE`
+/// other than `0` enables color without a TTY. Otherwise color follows
+/// whether the stream is a terminal.
+pub(crate) fn color_enabled(stream_is_terminal: bool) -> bool {
+    if bob_env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    if clicolor_force() {
+        return true;
+    }
+    stream_is_terminal
+}
+
+fn clicolor_force() -> bool {
+    match bob_env::var_os("CLICOLOR_FORCE") {
+        Some(value) if !value.is_empty() && value != "0" => true,
+        _ => false,
+    }
+}
+
+/// Progress lines print on a TTY stderr, or on any stderr when
+/// `BOB_PROGRESS=1`. Non-TTY progress is line-oriented (no `\r` redraws).
+pub(crate) fn stderr_progress_enabled() -> bool {
+    io::stderr().is_terminal() || bob_progress_requested()
+}
+
+fn bob_progress_requested() -> bool {
+    bob_env::var("BOB_PROGRESS").ok().as_deref() == Some("1")
+}
+
+/// Print `line` to stderr when [`stderr_progress_enabled`] is true.
+pub(crate) fn stderr_progress_line(line: &str) {
+    if stderr_progress_enabled() {
+        eprintln!("{line}");
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Styler {
     color: bool,
@@ -9,8 +48,7 @@ pub(crate) struct Styler {
 impl Styler {
     pub(crate) fn detect() -> Self {
         Self {
-            color: io::stdout().is_terminal()
-                && bob_env::var_os("NO_COLOR").is_none(),
+            color: color_enabled(io::stdout().is_terminal()),
         }
     }
 
@@ -171,5 +209,63 @@ impl Styler {
             _ => return text.to_string(),
         };
         self.paint(code, text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::env::TestEnvGuard;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn no_color_wins_over_tty_and_clicolor_force() {
+        let _guard = TestEnvGuard::set(&[
+            ("NO_COLOR", Some(OsStr::new("1"))),
+            ("CLICOLOR_FORCE", Some(OsStr::new("1"))),
+        ]);
+        assert!(!color_enabled(true));
+        assert!(!color_enabled(false));
+    }
+
+    #[test]
+    fn clicolor_force_enables_color_without_a_tty() {
+        let _guard = TestEnvGuard::set(&[
+            ("NO_COLOR", None),
+            ("CLICOLOR_FORCE", Some(OsStr::new("1"))),
+        ]);
+        assert!(color_enabled(false));
+        assert!(color_enabled(true));
+    }
+
+    #[test]
+    fn clicolor_force_zero_does_not_force_color() {
+        let _guard = TestEnvGuard::set(&[
+            ("NO_COLOR", None),
+            ("CLICOLOR_FORCE", Some(OsStr::new("0"))),
+        ]);
+        assert!(!color_enabled(false));
+        assert!(color_enabled(true));
+    }
+
+    #[test]
+    fn empty_clicolor_force_does_not_force_color() {
+        let _guard = TestEnvGuard::set(&[
+            ("NO_COLOR", None),
+            ("CLICOLOR_FORCE", Some(OsStr::new(""))),
+        ]);
+        assert!(!color_enabled(false));
+        assert!(color_enabled(true));
+    }
+
+    #[test]
+    fn bob_progress_one_is_the_only_progress_env_value() {
+        let _one =
+            TestEnvGuard::set(&[("BOB_PROGRESS", Some(OsStr::new("1")))]);
+        assert!(bob_progress_requested());
+        drop(_one);
+        let _true =
+            TestEnvGuard::set(&[("BOB_PROGRESS", Some(OsStr::new("true")))]);
+        assert!(!bob_progress_requested());
     }
 }

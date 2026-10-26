@@ -371,7 +371,10 @@ fn document_shape() {
     assert!(catalog.ok);
     assert_eq!(catalog.protocol, 1);
     assert_eq!(catalog.bob_version, env!("CARGO_PKG_VERSION"));
-    assert!(catalog.features.is_empty());
+    assert_eq!(
+        catalog.features,
+        vec!["clicolor-force", "progress-env", "run-receipt"]
+    );
     assert_eq!(
         catalog
             .sections

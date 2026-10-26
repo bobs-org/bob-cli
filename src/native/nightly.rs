@@ -299,9 +299,10 @@ fn timestamp() -> String {
     Local::now().format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
-/// Tiny ANSI helper. Color is auto-disabled when stdout is not a TTY (cron log)
-/// and when `NO_COLOR` is set, so logs stay clean while live terminals get
-/// color. Structure always comes from the box-drawing glyphs and ✓/✗ markers,
+/// Tiny ANSI helper. Color follows [`crate::native::style::color_enabled`]:
+/// auto-disabled without a TTY (cron log) unless `CLICOLOR_FORCE` is a
+/// non-empty value other than `0`, and always off when `NO_COLOR` is set.
+/// Structure always comes from the box-drawing glyphs and ✓/✗ markers,
 /// never color alone.
 struct Styler {
     color: bool,
@@ -309,8 +310,9 @@ struct Styler {
 
 impl Styler {
     fn detect() -> Self {
-        let color = std::io::stdout().is_terminal()
-            && bob_env::var_os("NO_COLOR").is_none();
+        let color = crate::native::style::color_enabled(
+            std::io::stdout().is_terminal(),
+        );
         Self { color }
     }
 

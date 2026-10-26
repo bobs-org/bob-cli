@@ -107,7 +107,11 @@ pub(crate) fn document() -> Catalog {
         ok: true,
         protocol: 1,
         bob_version: env!("CARGO_PKG_VERSION").to_string(),
-        features: Vec::new(),
+        features: vec![
+            "clicolor-force".to_string(),
+            "progress-env".to_string(),
+            "run-receipt".to_string(),
+        ],
         sections: catalog_sections(),
         roots: catalog_roots(),
         aliases: catalog_aliases(),

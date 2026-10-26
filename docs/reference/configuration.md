@@ -229,6 +229,8 @@ interpret shell quotes unless their contract says otherwise.
 | `BOB_VAULT_SYNC_LOCK_FILE` | `$XDG_RUNTIME_DIR/bob_sync.lock` when that directory exists, otherwise `/tmp/bob_sync.lock` | Shared maintenance lock path for vault sync, nightly maintenance, task reconcile, task reroll, and theme/relation-label journal writes and renames. |
 | `BOB_VAULT_SYNC_STATE_FILE` | `$XDG_STATE_HOME/bob-cli/vault-sync.json`, else `$HOME/.local/state/bob-cli/vault-sync.json` | Vault-sync status JSON path. |
 | `BOB_CLI_USE_SCRIPT` | Native Rust path | Exact value `1` selects an embedded shell compatibility implementation where supported. See [compatibility shims](compatibility.md#compatibility-shims). |
+| `BOB_PROGRESS` | Progress only on a TTY stderr | Exact value `1` prints line-oriented progress on stderr even when it is not a TTY. Progress never uses `\r` redraws on a non-TTY. Native sites: `bob ref create` fetch/capture/compose lines and `bob gkeep` spinner labels. Compatibility shims have no progress redraws to adapt. |
+| `BOB_RUN_RECEIPT` | No receipt | Path of a JSON file bob writes after it chooses an exit code, including the quiet-EPIPE 0: `{"schema_version":1,"exit_code":N,"finished_at":"<RFC3339>"}`. The write is a temp file in the same directory, then a rename. A failed write prints one stderr warning and leaves the exit code unchanged. Panic and signal paths write no receipt. Every command is covered, including script-backed ones, because the write lives in the top-level runner. |
 
 ### Capture and query adapters
 
@@ -316,7 +318,8 @@ deploy from this documentation.
 | `XDG_RUNTIME_DIR` | Runtime location for the shared vault-sync lock when it exists; otherwise Bob uses `/tmp`. |
 | `DATE` | Optional clock fallback after `BOB_NOW`: an ISO date/time, or a command whose output accepts Bob's date-time format. A command runs in the configured `timezone` when one is set. |
 | `TZ` | Time zone used by the operating system's local clock and calendar formatting. |
-| `NO_COLOR` | Any set value disables ANSI colors in terminal output. |
+| `NO_COLOR` | Any set value disables ANSI colors in terminal output. Wins over `CLICOLOR_FORCE`. |
+| `CLICOLOR_FORCE` | A non-empty value other than `0` enables ANSI color even when stdout is not a TTY. Native help and `Styler::detect` honor it; `NO_COLOR` still wins. Compatibility shims (`BOB_CLI_USE_SCRIPT=1`) print plain text and have no separate color path. |
 | `COLUMNS` | Positive integer width for `bob plugins list` and `bob gkeep`; otherwise those tables use 100 columns. |
 | `PATH` | Discovery for `git`, `curl`, `pandoc`, `xelatex`, `uv`, browser tools, and configured command names. |
 | `TMPDIR` | Temporary-directory base for reference rendering scratch files. |

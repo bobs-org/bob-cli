@@ -37,7 +37,7 @@ bob __catalog --protocol <N>
   "ok": true,
   "protocol": 1,
   "bob_version": "0.3.1",
-  "features": [],
+  "features": ["clicolor-force", "progress-env", "run-receipt"],
   "sections": [{"id": "daily", "title": "Daily workflow"}],
   "roots": ["articles", "capture"],
   "aliases": [{"from": ["task-status-hooks"], "to": ["task", "reconcile"]}],
@@ -46,10 +46,17 @@ bob __catalog --protocol <N>
 }
 ```
 
-`bob_version` is this binary's crate version. `features` is reserved
-for environment knobs a later bob can advertise (`clicolor-force`,
-`progress-env`, `run-receipt`); protocol 1 currently sends `[]`.
-Clients ignore unknown feature names.
+`bob_version` is this binary's crate version. `features` advertises
+environment knobs this binary honors without a TTY:
+
+| Feature | Variable | Meaning |
+| --- | --- | --- |
+| `clicolor-force` | `CLICOLOR_FORCE` | A non-empty value other than `0` enables ANSI color without a TTY. `NO_COLOR` still wins. |
+| `progress-env` | `BOB_PROGRESS` | Exact value `1` prints line-oriented progress on stderr without a TTY. Progress never uses `\r` redraws when stderr is not a TTY. |
+| `run-receipt` | `BOB_RUN_RECEIPT` | Path of an atomic JSON exit receipt written after the process chooses an exit code. |
+
+Clients ignore unknown feature names. See
+[Configuration](reference/configuration.md) for the variables.
 
 `sections` are `daily`, `tasks`, `vault`, `integrations`, and `setup`,
 matching root help without the Capture protocol group. `roots` are

@@ -8,7 +8,7 @@
 use std::{
     ffi::OsString,
     fs,
-    io::{IsTerminal, Read},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -365,9 +365,10 @@ pub(super) fn capture_article(
     );
 
     let client = ClipAdapterClient::resolve()?;
-    if std::io::stderr().is_terminal() {
-        eprintln!("capturing {}…", web_url.host);
-    }
+    crate::native::style::stderr_progress_line(&format!(
+        "capturing {}…",
+        web_url.host
+    ));
     let response = client.capture(&request)?;
 
     // Finalize the metadata: overrides win, then the adapter extraction.
@@ -866,9 +867,10 @@ pub(super) fn capture_article_overwrite(
         overrides,
     );
     let client = ClipAdapterClient::resolve()?;
-    if std::io::stderr().is_terminal() {
-        eprintln!("capturing {}…", url.host);
-    }
+    crate::native::style::stderr_progress_line(&format!(
+        "capturing {}…",
+        url.host
+    ));
     let response = client.capture(&adapter_request)?;
     // The fetched identity is guarded before publication: a redirect that
     // now claims another family refuses instead of retargeting the

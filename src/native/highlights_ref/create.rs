@@ -4,17 +4,14 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs,
-    io::IsTerminal,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-/// TTY-gated `fetching …` reporter preserving the pre-ingest output:
-/// prints only on a terminal, exactly as `fetch` used to.
+/// TTY-gated `fetching …` reporter; `BOB_PROGRESS=1` also prints on a
+/// non-TTY stderr.
 fn fetch_progress(line: &str) {
-    if std::io::stderr().is_terminal() {
-        eprintln!("{line}");
-    }
+    crate::native::style::stderr_progress_line(line);
 }
 
 /// Unconditional warning reporter preserving the pre-ingest PDF warning.
