@@ -3631,6 +3631,7 @@ fn persist_markdown_store(
         Some(outcome) => {
             println!("source_markdown: {}", outcome.pointer);
             println!("code: {}", super::source_store::code_summary(catalog));
+            println!("links: {}", super::source_store::link_summary(catalog));
         }
         None => {
             // Warning already printed; keep the pointer line honest.
@@ -3682,6 +3683,7 @@ fn persist_snapshot_store(
         Some(outcome) => {
             println!("source_markdown: {}", outcome.pointer);
             println!("code: {}", super::source_store::code_summary(catalog));
+            println!("links: {}", super::source_store::link_summary(catalog));
         }
         None => {
             if let Some((ref_type, _, _)) =
@@ -5683,6 +5685,8 @@ fn render_temp_pdf_from(
         .arg("-o")
         .arg(render_path)
         .arg("--standalone")
+        .arg("-f")
+        .arg(super::code_catalog::MARKDOWN_PANDOC_READER)
         .arg("--toc")
         .arg("--toc-depth=3")
         .arg("--number-sections")
@@ -7492,6 +7496,320 @@ END_LONG_BLOCK
             "long block spans pages: {:?}",
             catalog.blocks[5]
         );
+    }
+
+    fn link_annotation_uris(pdf: &Path) -> Vec<(u32, String)> {
+        let document =
+            lopdf::Document::load(pdf).expect("load rendered PDF for links");
+        let mut out = Vec::new();
+        let pages = document.get_pages();
+        let mut ordered: Vec<(u32, lopdf::ObjectId)> =
+            pages.into_iter().collect();
+        ordered.sort_by_key(|(number, _)| *number);
+        for (number, id) in ordered {
+            let annots = document
+                .get_object(id)
+                .ok()
+                .and_then(|object| match object {
+                    lopdf::Object::Dictionary(dict) => {
+                        dict.get(b"Annots").ok().cloned()
+                    }
+                    _ => None,
+                })
+                .and_then(|object| match object {
+                    lopdf::Object::Reference(id) => {
+                        document.get_object(id).ok().cloned()
+                    }
+                    other => Some(other),
+                });
+            let lopdf::Object::Array(items) =
+                annots.unwrap_or(lopdf::Object::Null)
+            else {
+                continue;
+            };
+            for item in items {
+                let object = match item {
+                    lopdf::Object::Reference(id) => document
+                        .get_object(id)
+                        .ok()
+                        .cloned()
+                        .unwrap_or(lopdf::Object::Null),
+                    other => other,
+                };
+                let lopdf::Object::Dictionary(dict) = object else {
+                    continue;
+                };
+                let subtype = dict
+                    .get(b"Subtype")
+                    .ok()
+                    .and_then(|object| match object {
+                        lopdf::Object::Name(name) => {
+                            String::from_utf8_lossy(name).into_owned().into()
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if subtype != "Link" {
+                    continue;
+                }
+                let action =
+                    dict.get(b"A").ok().and_then(|object| match object {
+                        lopdf::Object::Reference(id) => {
+                            document.get_object(*id).ok().cloned()
+                        }
+                        other => Some(other.clone()),
+                    });
+                let lopdf::Object::Dictionary(action) =
+                    action.unwrap_or(lopdf::Object::Null)
+                else {
+                    continue;
+                };
+                let is_uri = action
+                    .get(b"S")
+                    .ok()
+                    .is_some_and(|object| {
+                        matches!(object, lopdf::Object::Name(name) if name.as_slice() == b"URI")
+                    });
+                if !is_uri {
+                    continue;
+                }
+                let uri =
+                    action.get(b"URI").ok().and_then(|object| match object {
+                        lopdf::Object::String(bytes, _) => {
+                            String::from_utf8(bytes.clone()).ok()
+                        }
+                        lopdf::Object::Reference(id) => document
+                            .get_object(*id)
+                            .ok()
+                            .and_then(|object| match object {
+                                lopdf::Object::String(bytes, _) => {
+                                    String::from_utf8(bytes.clone()).ok()
+                                }
+                                _ => None,
+                            }),
+                        _ => None,
+                    });
+                if let Some(uri) = uri {
+                    out.push((number, uri));
+                }
+            }
+        }
+        out
+    }
+
+    fn percent_decode(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let bytes = text.as_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] == b'%'
+                && index + 2 < bytes.len()
+                && let Ok(hex) =
+                    std::str::from_utf8(&bytes[index + 1..index + 3])
+                && let Ok(byte) = u8::from_str_radix(hex, 16)
+            {
+                out.push(byte as char);
+                index += 3;
+            } else {
+                out.push(bytes[index] as char);
+                index += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn link_catalog_records_uris_with_anchor_pages() {
+        if skip_pandoc_xelatex("link catalog render") {
+            return;
+        }
+        let temp = TempDir::new("link-catalog-render");
+        let blank_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/native/highlights_ref/diagrams_blank.pdf");
+        let blank = temp.path.join("blank.pdf");
+        fs::copy(&blank_src, &blank).expect("stage local image");
+        let source = temp.path.join("links.md");
+        fs::write(&source, "# placeholder\n").expect("write source");
+        let markdown = r##"# Links with [head link](https://example.com/inhead)
+
+See [written](https://example.com/a) and [ref-style][myref] and
+[titled](https://example.com/t "My Title") and <https://example.com/auto>
+and <me@example.com> and bare https://example.com/bare?q=1).
+
+[myref]: https://example.com/refstyle
+
+[internal](#links-with-head-link) and [rel](sources/gem.md) stay out.
+
+[![badge alt](blank.pdf)](https://example.com/target) is a linked image.
+
+- nested list [list link](https://example.com/list)
+- second item repeats https://example.com/a
+
+> blockquote [quote link](https://example.com/quote) here
+
+| Head [head cell](https://example.com/headcell) | Other |
+|---|---|
+| [body cell](https://example.com/bodycell) | text |
+
+Footnote ref[^1] and [after](https://example.com/after).
+
+[^1]: Footnote with [foot link](https://example.com/foot).
+
+## Build
+
+Body [special](<https://example.com/a%20b?x=1&y=2#frag~tilde(paren)>) here.
+
+```rust
+fn main() {}
+```
+"##
+        .to_string();
+        fs::write(&source, "# Changed on disk\n").expect("change source");
+        let mut plan = mermaid_plan(&temp, &source);
+        plan.title = "Links".to_string();
+        plan.source_markdown = Some(markdown.clone());
+        let frozen = temp.path.join("frozen").join("links.md");
+        fs::create_dir_all(frozen.parent().expect("frozen parent"))
+            .expect("frozen dir");
+        fs::write(&frozen, &markdown).expect("write frozen links");
+        // Stage the local image beside the frozen source so the
+        // linked-image figure resolves without network access.
+        fs::copy(
+            &blank_src,
+            frozen.parent().expect("frozen parent").join("blank.pdf"),
+        )
+        .expect("stage frozen image");
+
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let mut filters =
+            write_render_filters(&temp.path).expect("write filters");
+        let diagram_pass = super::super::diagrams::prepare(
+            Some(pandoc.as_os_str()),
+            super::super::diagrams::DiagramSource::Path(&frozen),
+            super::super::diagrams::DiagramRoute {
+                reader: super::super::diagrams::DiagramReader::Inferred,
+                text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
+                text_height_pt: GENERIC_DIAGRAM_TEXT_HEIGHT_PT,
+            },
+            &temp.path.join("diagrams"),
+        );
+        filters.diagrams = diagram_pass.filter.clone();
+        let render_path = temp.path.join("links.pdf");
+        let reports = render_temp_pdf_from(
+            &pandoc,
+            &plan,
+            &render_path,
+            &filters,
+            None,
+            Some(&frozen),
+        )
+        .expect("render links catalog");
+        let super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &reports.code_catalog
+        else {
+            panic!("render should produce a link catalog: {reports:?}");
+        };
+        assert_eq!(catalog.version, 1);
+        // Code blocks keep working when links are recorded.
+        assert_eq!(catalog.blocks.len(), 1);
+        assert_eq!(catalog.blocks[0].lang.as_deref(), Some("rust"));
+        assert_eq!(catalog.blocks[0].page_source.as_deref(), Some("anchor"));
+        let links = catalog.links.as_deref().expect("links recorded");
+        // inhead, written, ref-style, titled, autolink, email, bare, linked
+        // image, list, repeat, quote, head cell, body cell, foot, after,
+        // special = 16 recorded; internal, relative stay out.
+        assert_eq!(links.len(), 16, "recorded links: {links:?}");
+        let by_url = |url: &str| {
+            links
+                .iter()
+                .filter(|link| link.url == url)
+                .collect::<Vec<_>>()
+        };
+        assert!(by_url("#links-with-head-link").is_empty());
+        assert!(by_url("sources/gem.md").is_empty());
+        assert_eq!(by_url("https://example.com/a").len(), 2, "repeats stay");
+        let bare = by_url("https://example.com/bare?q=1");
+        assert_eq!(bare.len(), 1, "bare URL excludes trailing punctuation");
+        assert!(bare[0].autolink);
+        let auto = by_url("https://example.com/auto");
+        assert_eq!(auto.len(), 1);
+        assert!(auto[0].autolink);
+        let email = by_url("mailto:me@example.com");
+        assert_eq!(email.len(), 1);
+        assert!(email[0].autolink);
+        assert_eq!(email[0].text, "me@example.com");
+        let written = by_url("https://example.com/a");
+        assert!(!written[0].autolink);
+        assert_eq!(written[0].text, "written");
+        assert_eq!(written[0].title, None);
+        let titled = by_url("https://example.com/t");
+        assert_eq!(titled.len(), 1);
+        assert_eq!(titled[0].title.as_deref(), Some("My Title"));
+        let target = by_url("https://example.com/target");
+        assert_eq!(target.len(), 1, "linked image recorded");
+        assert_eq!(target[0].text, "badge alt");
+        // Moving arguments record a null page with no anchor.
+        for url in
+            ["https://example.com/inhead", "https://example.com/headcell"]
+        {
+            let found = by_url(url);
+            assert_eq!(found.len(), 1, "{url}");
+            assert_eq!(found[0].page, None, "{url}");
+            assert_eq!(found[0].page_source, None, "{url}");
+        }
+        // Footnote links count at their reference position.
+        let foot_index = links
+            .iter()
+            .position(|link| link.url == "https://example.com/foot")
+            .expect("foot");
+        let after_index = links
+            .iter()
+            .position(|link| link.url == "https://example.com/after")
+            .expect("after");
+        assert!(foot_index < after_index, "footnote at reference position");
+        // Sections follow the nearest preceding heading.
+        let body = by_url("https://example.com/bodycell");
+        assert_eq!(body.len(), 1);
+        assert_eq!(
+            body[0]
+                .section
+                .as_ref()
+                .map(|section| section.title.as_str()),
+            Some("Links with head link")
+        );
+        let special =
+            by_url("https://example.com/a%20b?x=1&y=2#frag~tilde(paren)");
+        assert_eq!(special.len(), 1, "special characters preserved");
+        // Every anchored page matches the page where pdftotext finds text.
+        let pages = page_count(&render_path);
+        let annotations = link_annotation_uris(&render_path);
+        assert!(!annotations.is_empty(), "PDF carries link annotations");
+        for link in links.iter().filter(|link| link.page.is_some()) {
+            assert_eq!(link.page_source.as_deref(), Some("anchor"));
+            let page = link.page.expect("anchored page");
+            let uris: Vec<&str> = annotations
+                .iter()
+                .filter(|(number, _)| *number == page)
+                .map(|(_, uri)| uri.as_str())
+                .collect();
+            let matches = uris.iter().any(|uri| {
+                **uri == link.url
+                    || percent_decode(uri) == percent_decode(&link.url)
+            });
+            assert!(
+                matches,
+                "link {} {} has clickable annotation on page {page}: {uris:?}",
+                link.n, link.url
+            );
+            if link.url != "https://example.com/target" {
+                let needle =
+                    link.text.split_whitespace().next().unwrap_or(&link.text);
+                let found = (1..=pages).find(|number| {
+                    page_text(&render_path, *number).contains(needle)
+                });
+                assert_eq!(found, Some(page), "link {} {}", link.n, link.url);
+            }
+        }
     }
 
     fn is_body_empty(text: &str) -> bool {

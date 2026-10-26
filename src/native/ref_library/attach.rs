@@ -24,7 +24,7 @@ use super::{
     RefRow,
 };
 use crate::native::highlights_ref::{
-    code_catalog::{self, CodeBlock},
+    code_catalog::{self, CatalogLink, CodeBlock},
     reference_mutation,
     source_store::{self, StoredVerified},
     split_frontmatter, COMMAND_NAME,
@@ -45,6 +45,7 @@ const PARAGRAPH_FALLBACK_COUNT: usize = 5;
 struct VerifiedCandidate {
     bytes: Vec<u8>,
     blocks: Vec<CodeBlock>,
+    links: Vec<CatalogLink>,
     matched: usize,
     total: usize,
 }
@@ -419,6 +420,8 @@ fn extract_candidate_blocks(
         let rendered = scratch.join("native.txt");
         let status = Command::new(&pandoc)
             .arg(candidate)
+            .arg("-f")
+            .arg(code_catalog::MARKDOWN_PANDOC_READER)
             .arg("--preserve-tabs")
             .arg("--lua-filter")
             .arg(&record)
@@ -591,7 +594,9 @@ fn verify_candidate(
     let code_catalog::CodeCatalog {
         version: _,
         mut blocks,
+        links,
     } = catalog;
+    let links = links.unwrap_or_default();
     let matchable: Vec<usize> = blocks
         .iter()
         .enumerate()
@@ -623,6 +628,7 @@ fn verify_candidate(
         return Ok(VerifiedCandidate {
             bytes: bytes.to_vec(),
             blocks,
+            links,
             matched: matched_units,
             total,
         });
@@ -653,6 +659,7 @@ fn verify_candidate(
     Ok(VerifiedCandidate {
         bytes: bytes.to_vec(),
         blocks,
+        links,
         matched: matched_units,
         total,
     })
@@ -824,6 +831,7 @@ fn attach_verified(
         code_catalog::CatalogOutcome::Catalog(code_catalog::CodeCatalog {
             version: 1,
             blocks: verified.blocks.clone(),
+            links: Some(verified.links.clone()),
         });
     // The caller holds the reference-mutation session (bob_sync.lock then
     // scan.lock) across every store write, so no concurrent sync can

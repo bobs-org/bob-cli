@@ -495,7 +495,7 @@ carries a Highlights marker is refused before any write:
 `PDF already carries a Highlights marker: <path>` with a
 `bob ref sync` / `create <library PDF> --listen` hint.
 
-## Code catalog
+## Code and link catalog
 
 Markdown, `-M` vault-note renders, and note snapshots record each code block
 from the Markdown AST before Mermaid diagrams are swapped for images. The
@@ -504,7 +504,24 @@ and the PDF pages marked by invisible destinations; it does not change the
 PDF's visible or selectable text. Mermaid source remains in the catalog when
 its rendered block becomes an image.
 
-Pandoc reads these sources with `--preserve-tabs`. A render filter expands tabs
+The same render records every URI link in document order: written links,
+reference-style and titled links, `<…>` autolinks, `mailto:` autolinks, bare
+URLs, and linked images (text is the alt text). Internal `#` links, relative
+paths, standalone images, URLs inside code, and raw HTML `<a href>` are not
+recorded. Each record keeps the exact target pandoc hands to hyperref, the
+link text, title, an autolink flag, the lead-in context (last 160 characters
+of the enclosing block, cut on a word boundary with a leading `…`), and the
+section. An invisible `\BobLinkAnchor{bob-link-N}` sits just before each
+anchorable link so copy equals click; links in headings, figure and table
+captions, and table header rows are recorded with a null page and no anchor,
+since an anchor there would leak into the TOC, bookmarks, or repeated heads.
+Footnote links count at their reference position.
+
+Pandoc reads these sources with `--preserve-tabs` plus
+`markdown+autolink_bare_uris` for the plain `.md` and `-M` routes and
+`commonmark_x-tex_math_dollars-emoji+autolink_bare_uris` for snapshots, so
+bare URLs render as clickable `BobLinkInk` links, breakable at slashes,
+instead of unbreakable plain text. A render filter expands tabs
 to four-column stops in code blocks and inline code, preserving the current
 layout while the catalog retains the original tab characters. A tab at the
 start of a blockquote code line therefore expands to four columns, where the
@@ -528,6 +545,11 @@ atomically. Writes hold `bob_sync.lock`, and readers treat a missing
 | `-M` vault note | `plain_note` | Original note bytes | Note route + digest |
 | Snapshot | `note_snapshot` | Projected Markdown bytes | Note route + digest |
 
+`code.json` keeps `"version": 1` with `blocks` and an additive `links` array
+(`n`, `url`, `text`, `title`, `autolink`, `context`, `section`, `page`,
+`page_source`). A missing `links` array means the catalog predates link
+recording; an empty array means no links. Older bobs ignore the new field.
+
 Hidden content such as HTML comments and frontmatter is preserved verbatim
 and synced through vault git (`source.md` via `!*.md`, `code.json` via
 `!/.bob/ref-sources/**/*.json`). `rename` never moves a store; a reread
@@ -535,7 +557,8 @@ makes a new store and an in-place overwrite makes a new store when the
 bytes changed, keeping the old one as history. The note frontmatter
 `source_markdown` points at `source.md` (for example
 `.bob/ref-sources/chat/ace--5d3be944e47e/source.md`). `create` prints
-`source_markdown:` and `code:` lines, and `bob ref show` carries the
+`source_markdown:`, `code:`, and `links:` lines (`links: 14 (github.com,
+...)` or `links: none`), and `bob ref show` carries the
 pointer in JSON and in its `markdown` row.
 
 ## arXiv

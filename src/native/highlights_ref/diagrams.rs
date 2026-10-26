@@ -325,9 +325,15 @@ pub(crate) fn collect(
     let throwaway = workdir.join("collect.out");
     let mut cmd = Command::new(pandoc);
     cmd.arg(source).arg("--preserve-tabs");
-    if let DiagramReader::Snapshot = reader {
-        cmd.arg("-f")
-            .arg(super::note_snapshot::profile::SNAPSHOT_PANDOC_READER);
+    match reader {
+        DiagramReader::Snapshot => {
+            cmd.arg("-f")
+                .arg(super::note_snapshot::profile::SNAPSHOT_PANDOC_READER);
+        }
+        DiagramReader::Inferred => {
+            cmd.arg("-f")
+                .arg(super::code_catalog::MARKDOWN_PANDOC_READER);
+        }
     }
     let output = cmd
         .arg("-o")

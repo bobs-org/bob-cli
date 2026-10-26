@@ -1,5 +1,8 @@
 % Invisible destinations used to map each source code block to PDF pages.
+% BobLinkAnchor maps each recorded URI link to its page. It is a bare
+% whatsit: no \par, no penalty, and it takes no space.
 \makeatletter
 \newcommand{\BobCodeAnchor}[1]{\par\special{pdf:dest (#1) [@thispage /XYZ null @ypos null]}\nopagebreak[4]\@nobreaktrue}
 \newcommand{\BobCodeEndAnchor}[1]{\par\special{pdf:dest (#1) [@thispage /XYZ null @ypos null]}\nopagebreak[4]}
+\newcommand{\BobLinkAnchor}[1]{\special{pdf:dest (#1) [@thispage /XYZ @xpos @ypos null]}}
 \makeatother

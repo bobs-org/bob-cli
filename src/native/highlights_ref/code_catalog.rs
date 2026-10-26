@@ -18,6 +18,10 @@ pub(crate) const REPORT_FILTER: &str = include_str!("code_catalog_report.lua");
 pub(crate) const HEADER_INCLUDES: &str = include_str!("code_catalog.tex");
 
 pub(crate) const REPORT_METADATA_KEY: &str = "bob-code-report";
+/// Explicit Markdown reader for the plain `.md` and `-M` vault-note routes.
+/// Pandoc infers `markdown` from the file extension today; the explicit flag
+/// also enables bare-URL autolinks so new PDFs make them clickable.
+pub(crate) const MARKDOWN_PANDOC_READER: &str = "markdown+autolink_bare_uris";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CodeSection {
@@ -42,9 +46,26 @@ pub(crate) struct CodeBlock {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CatalogLink {
+    pub(crate) n: u32,
+    pub(crate) url: String,
+    pub(crate) text: String,
+    pub(crate) title: Option<String>,
+    #[serde(default)]
+    pub(crate) autolink: bool,
+    pub(crate) context: Option<String>,
+    pub(crate) section: Option<CodeSection>,
+    pub(crate) page: Option<u32>,
+    pub(crate) page_source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CodeCatalog {
     pub(crate) version: u32,
+    #[serde(default)]
     pub(crate) blocks: Vec<CodeBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) links: Option<Vec<CatalogLink>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +80,8 @@ struct CatalogReport {
     version: u32,
     #[serde(default)]
     blocks: Vec<ReportBlock>,
+    #[serde(default)]
+    links: Vec<ReportLink>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,6 +95,22 @@ struct ReportBlock {
     #[serde(default)]
     attrs: BTreeMap<String, String>,
     text: String,
+    #[serde(default)]
+    section: Option<CodeSection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReportLink {
+    n: u32,
+    url: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    autolink: bool,
+    #[serde(default)]
+    context: Option<String>,
     #[serde(default)]
     section: Option<CodeSection>,
 }
@@ -119,6 +158,23 @@ pub(crate) fn read_report_catalog(
                 page_source: None,
             })
             .collect(),
+        links: Some(
+            report
+                .links
+                .into_iter()
+                .map(|link| CatalogLink {
+                    n: link.n,
+                    url: link.url,
+                    text: link.text,
+                    title: link.title,
+                    autolink: link.autolink,
+                    context: link.context,
+                    section: link.section,
+                    page: None,
+                    page_source: None,
+                })
+                .collect(),
+        ),
     })
 }
 
@@ -186,9 +242,30 @@ pub(crate) fn build(report_path: &Path, rendered_pdf: &Path) -> CatalogOutcome {
             }
         })
         .collect();
+    let links = report
+        .links
+        .into_iter()
+        .map(|link| {
+            let page =
+                destinations.get(&format!("bob-link-{}", link.n)).copied();
+            let page_source = page.map(|_| "anchor".to_string());
+            CatalogLink {
+                n: link.n,
+                url: link.url,
+                text: link.text,
+                title: link.title,
+                autolink: link.autolink,
+                context: link.context,
+                section: link.section,
+                page,
+                page_source,
+            }
+        })
+        .collect();
     CatalogOutcome::Catalog(CodeCatalog {
         version: report.version,
         blocks,
+        links: Some(links),
     })
 }
 

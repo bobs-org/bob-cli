@@ -18,7 +18,9 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::code_catalog::{CatalogOutcome, CodeBlock, CodeSection};
+use super::code_catalog::{
+    CatalogLink, CatalogOutcome, CodeBlock, CodeSection,
+};
 use super::model::{CommandError, Result};
 
 pub(crate) const STORE_ROOT: &str = ".bob/ref-sources";
@@ -124,6 +126,41 @@ pub(crate) struct StoredVerified {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct StoredLink {
+    pub(crate) n: u32,
+    pub(crate) url: String,
+    pub(crate) text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) title: Option<String>,
+    #[serde(default)]
+    pub(crate) autolink: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) section: Option<CodeSection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) page_source: Option<String>,
+}
+
+impl From<&CatalogLink> for StoredLink {
+    fn from(link: &CatalogLink) -> Self {
+        Self {
+            n: link.n,
+            url: link.url.clone(),
+            text: link.text.clone(),
+            title: link.title.clone(),
+            autolink: link.autolink,
+            context: link.context.clone(),
+            section: link.section.clone(),
+            page: link.page,
+            page_source: link.page_source.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StoredCatalog {
     pub(crate) version: u32,
     pub(crate) captured_at: String,
@@ -137,6 +174,8 @@ pub(crate) struct StoredCatalog {
     pub(crate) verified: Option<StoredVerified>,
     #[serde(default)]
     pub(crate) blocks: Vec<StoredBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) links: Option<Vec<StoredLink>>,
 }
 
 /// Outcome of [`write_store`]: the vault-relative directory and pointer,
@@ -331,14 +370,28 @@ fn build_stored_catalog(
     params: &StoreWriteParams<'_>,
     digest: &str,
 ) -> Result<StoredCatalog> {
-    let (blocks, catalog_error) = match params.catalog {
-        CatalogOutcome::Catalog(catalog) => {
-            (catalog.blocks.iter().map(StoredBlock::from).collect(), None)
+    let (blocks, links, catalog_error) = match params.catalog {
+        CatalogOutcome::Catalog(catalog) => (
+            catalog.blocks.iter().map(StoredBlock::from).collect(),
+            Some(
+                catalog
+                    .links
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(StoredLink::from)
+                    .collect(),
+            ),
+            None,
+        ),
+        CatalogOutcome::Missing => (
+            Vec::new(),
+            None,
+            Some("code catalog report missing".to_string()),
+        ),
+        CatalogOutcome::Invalid(reason) => {
+            (Vec::new(), None, Some(reason.clone()))
         }
-        CatalogOutcome::Missing => {
-            (Vec::new(), Some("code catalog report missing".to_string()))
-        }
-        CatalogOutcome::Invalid(reason) => (Vec::new(), Some(reason.clone())),
     };
     Ok(StoredCatalog {
         version: STORE_VERSION,
@@ -362,6 +415,7 @@ fn build_stored_catalog(
         catalog_error,
         verified: params.verified.clone(),
         blocks,
+        links,
     })
 }
 
@@ -948,6 +1002,78 @@ pub(crate) fn code_summary(catalog: &CatalogOutcome) -> String {
     }
 }
 
+/// Site label for one link URL: lowercase host without a leading `www.`
+/// for web schemes, `email` for `mailto:`, else the scheme name.
+pub(crate) fn link_site(url: &str) -> String {
+    if url.len() >= 7 && url[..7].eq_ignore_ascii_case("mailto:") {
+        return "email".to_string();
+    }
+    let Some(colon) = url.find(':') else {
+        return url.to_string();
+    };
+    let scheme = url[..colon].to_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "ftp" | "ftps") {
+        return scheme;
+    }
+    let mut rest = &url[colon + 1..];
+    if let Some(stripped) = rest.strip_prefix("//") {
+        rest = stripped;
+    }
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let mut host = rest[..end].to_lowercase();
+    if let Some(at) = host.rfind('@') {
+        host = host[at + 1..].to_string();
+    }
+    if let Some(port) = host.find(':') {
+        host = host[..port].to_string();
+    }
+    if let Some(stripped) = host.strip_prefix("www.") {
+        host = stripped.to_string();
+    }
+    if host.is_empty() {
+        scheme
+    } else {
+        host
+    }
+}
+
+/// Human `links:` summary for create output: `14 (github.com, ...)` or
+/// `none`. Counts every recorded occurrence; sites rank by frequency with
+/// ties in first-appearance order.
+pub(crate) fn link_summary(catalog: &CatalogOutcome) -> String {
+    match catalog {
+        CatalogOutcome::Catalog(catalog) => {
+            let links = catalog.links.as_deref().unwrap_or(&[]);
+            if links.is_empty() {
+                return "none".to_string();
+            }
+            let mut counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut order: Vec<String> = Vec::new();
+            for link in links {
+                let site = link_site(&link.url);
+                if !counts.contains_key(&site) {
+                    order.push(site.clone());
+                }
+                *counts.entry(site).or_insert(0) += 1;
+            }
+            order.sort_by(|left, right| {
+                let left_count = counts.get(left).copied().unwrap_or(0);
+                let right_count = counts.get(right).copied().unwrap_or(0);
+                right_count.cmp(&left_count)
+            });
+            let count = links.len();
+            let noun = if count == 1 { "link" } else { "links" };
+            let shown: Vec<String> = order.into_iter().take(3).collect();
+            format!("{count} {noun} ({})", shown.join(", "))
+        }
+        CatalogOutcome::Missing => "not recorded (missing report)".to_string(),
+        CatalogOutcome::Invalid(reason) => {
+            format!("not recorded ({reason})")
+        }
+    }
+}
+
 /// Planned pointer without writing, for dry runs.
 pub(crate) fn planned_pointer(
     ref_type: &str,
@@ -1087,7 +1213,11 @@ mod tests {
                 page_source: Some("anchor".to_string()),
             })
             .collect();
-        CatalogOutcome::Catalog(CodeCatalog { version: 1, blocks })
+        CatalogOutcome::Catalog(CodeCatalog {
+            version: 1,
+            blocks,
+            links: None,
+        })
     }
 
     #[test]
@@ -1121,6 +1251,7 @@ mod tests {
             code_summary(&CatalogOutcome::Catalog(CodeCatalog {
                 version: 1,
                 blocks: vec![],
+                links: None,
             })),
             "none"
         );
@@ -1128,6 +1259,94 @@ mod tests {
             code_summary(&CatalogOutcome::Missing),
             "not recorded (missing report)"
         );
+    }
+
+    #[test]
+    fn link_summary_ranks_sites_by_frequency() {
+        use super::super::code_catalog::{CatalogLink, CodeCatalog};
+        let catalog = CatalogOutcome::Catalog(CodeCatalog {
+            version: 1,
+            blocks: vec![],
+            links: Some(vec![
+                CatalogLink {
+                    n: 1,
+                    url: "https://github.com/a".to_string(),
+                    text: "a".to_string(),
+                    title: None,
+                    autolink: false,
+                    context: None,
+                    section: None,
+                    page: Some(1),
+                    page_source: Some("anchor".to_string()),
+                },
+                CatalogLink {
+                    n: 2,
+                    url: "https://arxiv.org/abs/1".to_string(),
+                    text: "b".to_string(),
+                    title: None,
+                    autolink: false,
+                    context: None,
+                    section: None,
+                    page: Some(1),
+                    page_source: Some("anchor".to_string()),
+                },
+                CatalogLink {
+                    n: 3,
+                    url: "https://github.com/b".to_string(),
+                    text: "c".to_string(),
+                    title: None,
+                    autolink: false,
+                    context: None,
+                    section: None,
+                    page: Some(2),
+                    page_source: Some("anchor".to_string()),
+                },
+                CatalogLink {
+                    n: 4,
+                    url: "mailto:me@example.com".to_string(),
+                    text: "me@example.com".to_string(),
+                    title: None,
+                    autolink: true,
+                    context: None,
+                    section: None,
+                    page: Some(2),
+                    page_source: Some("anchor".to_string()),
+                },
+            ]),
+        });
+        assert_eq!(
+            link_summary(&catalog),
+            "4 links (github.com, arxiv.org, email)"
+        );
+        assert_eq!(
+            link_summary(&CatalogOutcome::Catalog(CodeCatalog {
+                version: 1,
+                blocks: vec![],
+                links: Some(vec![]),
+            })),
+            "none"
+        );
+        assert_eq!(link_site("https://WWW.Example.COM/x"), "example.com");
+        assert_eq!(link_site("mailto:me@example.com"), "email");
+        assert_eq!(link_site("obsidian://open?vault=x"), "obsidian");
+    }
+
+    #[test]
+    fn stored_catalog_tolerates_missing_links_array() {
+        // Stores written before link recording have no `links` field;
+        // `bob ref code` must read them identically to new stores.
+        let without: StoredCatalog = serde_json::from_str(
+            r#"{"version":1,"captured_at":"2026-01-01T00:00:00Z","route":"markdown","source":{"sha256":"abc","bytes":3,"origin":"x"},"pdf":{"path":"p.pdf","sha256":"def"},"renderer":{"bob":"0","pandoc":"p"},"blocks":[]}"#,
+        )
+        .expect("parse old store");
+        assert_eq!(without.links, None);
+        assert_eq!(without.blocks.len(), 0);
+        let with_links: StoredCatalog = serde_json::from_str(
+            r#"{"version":1,"captured_at":"2026-01-01T00:00:00Z","route":"markdown","source":{"sha256":"abc","bytes":3,"origin":"x"},"pdf":{"path":"p.pdf","sha256":"def"},"renderer":{"bob":"0","pandoc":"p"},"blocks":[],"links":[]}"#,
+        )
+        .expect("parse new store");
+        assert_eq!(with_links.links, Some(vec![]));
+        assert_eq!(with_links.blocks, without.blocks);
     }
 
     fn temp_bob_dir(case: &str) -> PathBuf {

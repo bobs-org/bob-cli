@@ -2359,8 +2359,14 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
         "{report}"
     );
     assert!(
-        !report.contains("links:"),
+        !report.contains("paired")
+            && !report.contains("links: none")
+            && !report.contains("links: off"),
         "fake pandoc writes no return-link report: {report}"
+    );
+    assert!(
+        report.contains("links: not recorded (missing report)"),
+        "fake pandoc writes no code catalog report: {report}"
     );
     assert!(
         !stderr(&output).contains("warning:"),

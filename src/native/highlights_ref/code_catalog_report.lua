@@ -2,6 +2,7 @@
 -- (after Bob's top-level shift and return-link edits) and writes the report
 -- that Rust combines with the rendered PDF's named destinations.
 local RECORDS_KEY = "bob-code-records"
+local LINK_RECORDS_KEY = "bob-link-records"
 local REPORT_KEY = "bob-code-report"
 
 local function section_numbers(doc)
@@ -38,6 +39,13 @@ local function write_report(doc)
   local raw_records = doc.meta[RECORDS_KEY]
   if raw_records == nil then return end
   local records = pandoc.json.decode(pandoc.utils.stringify(raw_records))
+  local raw_links = doc.meta[LINK_RECORDS_KEY]
+  local link_records = {}
+  if raw_links ~= nil then
+    local ok, decoded =
+      pcall(pandoc.json.decode, pandoc.utils.stringify(raw_links))
+    if ok and type(decoded) == "table" then link_records = decoded end
+  end
   local headings = section_numbers(doc)
   local blocks = {}
   for _, record in ipairs(records) do
@@ -59,11 +67,34 @@ local function write_report(doc)
       section = section,
     }
   end
-  local encoded = pandoc.json.encode({version = 1, blocks = blocks})
+  local links = {}
+  for _, record in ipairs(link_records) do
+    local section = pandoc.json.null
+    local header = record.section_header or 0
+    if header > 0 then
+      section = {
+        title = record.section_title or "",
+        number = headings[header] or pandoc.json.null,
+      }
+    end
+    links[#links + 1] = {
+      n = record.n,
+      url = record.url,
+      text = record.text or "",
+      title = record.title or pandoc.json.null,
+      autolink = record.autolink or false,
+      context = record.context or pandoc.json.null,
+      section = section,
+    }
+  end
+  local encoded = pandoc.json.encode(
+    {version = 1, blocks = blocks, links = links}
+  )
   -- Pandoc's JSON encoder represents an empty Lua table as an object. The
-  -- contract uses arrays for these two fields even when they have no items.
+  -- contract uses arrays for these fields even when they have no items.
   encoded = encoded:gsub('"classes":{}', '"classes":[]')
   encoded = encoded:gsub('"blocks":{}', '"blocks":[]')
+  encoded = encoded:gsub('"links":{}', '"links":[]')
   local file = io.open(report_path, "w")
   if file then
     file:write(encoded)

@@ -27,9 +27,10 @@ pub(crate) const NOTE_HEADER: &str = include_str!("note.tex");
 pub(crate) const NOTE_FILTER: &str = include_str!("note.lua");
 
 /// Snapshot-route pandoc reader. Shared with the diagrams collect pass
-/// so those two invocations cannot drift.
+/// so those two invocations cannot drift. `autolink_bare_uris` makes bare
+/// URLs clickable links so `L` lists them too.
 pub(crate) const SNAPSHOT_PANDOC_READER: &str =
-    "commonmark_x-tex_math_dollars-emoji";
+    "commonmark_x-tex_math_dollars-emoji+autolink_bare_uris";
 /// Text box for budgeted scale warnings. Matches
 /// `-V geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper`
 /// in [`render_note_pdf`]: `612 - 2×1.1×72` by `792 - (0.9+1)×72`.
@@ -944,7 +945,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let scheduled_run = std::process::Command::new(&pandoc)
             .arg(&scheduled_source)
             .arg("-f")
-            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg(SNAPSHOT_PANDOC_READER)
             .arg("-t")
             .arg("latex")
             .arg("-s")
