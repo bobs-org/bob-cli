@@ -278,11 +278,39 @@ pub(crate) fn reading_task_alias(
     let Some(number) = reading else {
         return base;
     };
-    let suffix = format!(" (v{number})");
+    fit_alias_with_suffix(&base, &format!(" (v{number})"))
+}
+
+/// Render the task-line alias for an in-place overwrite title change:
+/// the sanitized new title plus the old alias's ` (vN)` suffix when it
+/// had one, and no added suffix otherwise. A custom alias is therefore
+/// kept verbatim while the title is unchanged (the caller skips the
+/// rewrite entirely then), and a real title change never invents a
+/// reading number the old alias did not carry.
+pub(crate) fn overwrite_task_alias(title_raw: &str, old_alias: &str) -> String {
+    let base = sanitize_title_alias(title_raw);
+    let Some(suffix) = preserved_version_suffix(old_alias) else {
+        return base;
+    };
+    fit_alias_with_suffix(&base, &suffix)
+}
+
+/// The trailing ` (vN)` version suffix of a task-line alias, when the
+/// alias carries one.
+fn preserved_version_suffix(old_alias: &str) -> Option<String> {
+    let stripped = old_alias.strip_suffix(')')?;
+    let (_, number) = stripped.rsplit_once(" (v")?;
+    if number.is_empty() || !number.chars().all(|cell| cell.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(" (v{number})"))
+}
+
+fn fit_alias_with_suffix(base: &str, suffix: &str) -> String {
     if base.chars().count() + suffix.chars().count() <= REF_TITLE_MAX_LEN {
         return format!("{base}{suffix}");
     }
-    let stripped = base.strip_suffix('…').unwrap_or(&base);
+    let stripped = base.strip_suffix('…').unwrap_or(base);
     let max_base = REF_TITLE_MAX_LEN.saturating_sub(suffix.chars().count());
     let mut end = 0usize;
     let mut last_space: Option<usize> = None;

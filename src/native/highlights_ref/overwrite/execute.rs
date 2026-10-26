@@ -62,6 +62,11 @@ pub(in crate::native::highlights_ref) struct OverwriteResult {
     pub(crate) task_path: String,
     pub(crate) task_block_id: Option<String>,
     pub(crate) task_mark: char,
+    /// Final task status after applying an explicit `-s`, else the
+    /// preserved pre-overwrite status.
+    pub(crate) task_status: String,
+    /// Highlight count of the replaced reading, for the success line.
+    pub(crate) highlights: u64,
     pub(crate) commit_sha: String,
     pub(crate) push_pending: bool,
 }
@@ -332,6 +337,11 @@ fn execute_with_sync(
                 task_path: locked.task.path.clone(),
                 task_block_id: locked.task.block_id.clone(),
                 task_mark,
+                task_status: request
+                    .explicit_status
+                    .clone()
+                    .unwrap_or_else(|| locked.status.clone()),
+                highlights: locked.member.highlights.unwrap_or(0),
                 commit_sha: sha,
                 push_pending,
             })
@@ -633,7 +643,6 @@ fn apply_and_verify(
         &plan.note_path,
         &plan.pdf_path,
         &staged.marker.title,
-        plan.member.reading,
         expected_mark,
         request.explicit_status.is_some(),
         staged.marker.title != plan.title,
@@ -1195,7 +1204,6 @@ fn rewrite_task_subtree(
     note_path: &str,
     pdf_path: &str,
     title: &str,
-    reading: Option<u32>,
     target_mark: char,
     change_status: bool,
     require_title_link: bool,
@@ -1203,8 +1211,13 @@ fn rewrite_task_subtree(
     let (line, rest) = subtree.split_once('\n').unwrap_or((subtree, ""));
     let carriage_return = line.ends_with('\r');
     let line = line.strip_suffix('\r').unwrap_or(line);
-    let (mut updated, title_link_found) =
-        rewrite_task_alias(line, note_path, pdf_path, title, reading);
+    // The alias is rewritten only on a real title change; an unchanged
+    // title keeps the task line (and any custom alias) byte-identical.
+    let (mut updated, title_link_found) = if require_title_link {
+        rewrite_task_alias(line, note_path, pdf_path, title)
+    } else {
+        (line.to_string(), true)
+    };
     if require_title_link && !title_link_found {
         return Err(CommandError::new(
             "selected reading task has no link to the reference whose title changed",
@@ -1242,14 +1255,12 @@ fn rewrite_task_alias(
     note_path: &str,
     pdf_path: &str,
     title: &str,
-    reading: Option<u32>,
 ) -> (String, bool) {
     let wanted = [note_path, pdf_path]
         .iter()
         .map(|path| normalize_route(path))
         .collect::<HashSet<_>>();
-    let alias = ref_tasks::reading_task_alias(title, reading);
-    let mut output = String::with_capacity(line.len() + alias.len());
+    let mut output = String::with_capacity(line.len() + title.len());
     let mut cursor = 0usize;
     let mut found = false;
     while let Some(start_rel) = line[cursor..].find("[[") {
@@ -1262,13 +1273,13 @@ fn rewrite_task_alias(
         };
         let end = content_start + end_rel;
         let inner = &line[content_start..end];
-        let (target, _old_alias) = inner.split_once('|').unwrap_or((inner, ""));
+        let (target, old_alias) = inner.split_once('|').unwrap_or((inner, ""));
         if wanted.contains(&normalize_route(target)) {
             found = true;
             output.push_str("[[");
             output.push_str(target);
             output.push('|');
-            output.push_str(&alias);
+            output.push_str(&ref_tasks::overwrite_task_alias(title, old_alias));
             output.push_str("]]");
         } else {
             output.push_str(&line[start..end + 2]);
@@ -1556,7 +1567,9 @@ fn ensure_sync_writes_are_scoped(
     }
 }
 
-fn status_to_mark(status: &str) -> Result<char, CommandError> {
+pub(in crate::native::highlights_ref) fn status_to_mark(
+    status: &str,
+) -> Result<char, CommandError> {
     match status {
         "ready" => Ok(' '),
         "next" => Ok('*'),
@@ -1616,13 +1629,12 @@ mod tests {
 
     #[test]
     fn task_title_and_status_edits_preserve_other_task_content() {
-        let before = "- [ ] #task #ref [[ref/papers/old|Old title]] [created::2026-01-01] ^ref-old\n  child with [priority:: high]\n";
+        let before = "- [ ] #task #ref [[ref/papers/old|Old title (v2)]] [created::2026-01-01] ^ref-old\n  child with [priority:: high]\n";
         let after = rewrite_task_subtree(
             before,
             "ref/papers/old.md",
             "lib/papers/old.pdf",
             "A Better Title",
-            Some(2),
             'x',
             true,
             true,
@@ -1633,6 +1645,40 @@ mod tests {
         ));
         assert!(after.contains("[completion::"));
         assert!(after.ends_with("  child with [priority:: high]\n"));
+    }
+
+    #[test]
+    fn unchanged_title_keeps_task_subtree_byte_identical() {
+        let before = "- [ ] #task #ref [[ref/papers/old|My custom alias]] [created::2026-01-01] ^ref-old\n  child with [priority:: high]\n";
+        let after = rewrite_task_subtree(
+            before,
+            "ref/papers/old.md",
+            "lib/papers/old.pdf",
+            "Old title",
+            ' ',
+            false,
+            false,
+        )
+        .expect("rewrite task");
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn changed_title_without_old_suffix_adds_none() {
+        let before = "- [ ] #task #ref [[ref/papers/old|Old title]] [created::2026-01-01] ^ref-old\n";
+        let after = rewrite_task_subtree(
+            before,
+            "ref/papers/old.md",
+            "lib/papers/old.pdf",
+            "A Better Title",
+            ' ',
+            false,
+            true,
+        )
+        .expect("rewrite task");
+        assert!(after.starts_with(
+            "- [ ] #task #ref [[ref/papers/old|A Better Title]] [created::2026-01-01]"
+        ));
     }
 
     #[test]

@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     audio, note, reading_plan, recapture, reference_mutation, sidecar,
-    CommandError, Config,
+    CommandError, Config, MarkerValue,
 };
 use crate::native::{
     markdown, ob,
@@ -103,6 +103,12 @@ pub(super) struct OverwritePreflight {
     pub(super) title: String,
     pub(super) ref_type: String,
     pub(super) audio_path: Option<String>,
+    /// Highlight count of the selected reading, for the success line.
+    pub(super) highlights: u64,
+    /// `aliases`, `topics`, and `research` carried from the selected
+    /// reference's current projection when the new capture omits them
+    /// (`keep_user_fields = keep`).
+    pub(super) user_fields: Vec<(String, MarkerValue)>,
     pub(super) planned_date: String,
 }
 
@@ -576,6 +582,30 @@ pub(super) fn prepare(
             )
         })?
         .projection;
+    let user_fields = ["aliases", "topics", "research"]
+        .into_iter()
+        .filter_map(|key| {
+            projection
+                .get(key)
+                .filter(|value| {
+                    !matches!(
+                        value,
+                        MarkerValue::Null
+                            | MarkerValue::String(_)
+                            | MarkerValue::List(_)
+                    ) || matches!(
+                        value,
+                        MarkerValue::String(text)
+                            if !text.trim().is_empty()
+                    ) || matches!(
+                        value,
+                        MarkerValue::List(items)
+                            if !items.is_empty()
+                    )
+                })
+                .map(|value| (key.to_string(), value.clone()))
+        })
+        .collect::<Vec<_>>();
     let status = task_status(task_view.mark).unwrap_or_else(|| {
         row.status.clone().unwrap_or_else(|| "legacy".to_string())
     });
@@ -706,6 +736,8 @@ pub(super) fn prepare(
                 path.strip_prefix(&config.bob_dir).unwrap_or(&path),
             )
         }),
+        highlights: member.highlights.unwrap_or(0),
+        user_fields,
         planned_date: date.to_string(),
     })
 }

@@ -1574,6 +1574,7 @@ fn create_pdf(
                     &plan,
                     &plan.title,
                     replacing,
+                    options.explicit_status.as_deref(),
                 );
                 return Ok(());
             }
@@ -1832,19 +1833,27 @@ fn overwrite_audio_destination(
     plan: &OverwritePreflight,
     options: &CreateOptions,
 ) -> String {
-    if let Some(existing) = &plan.audio_path {
-        return existing.clone();
-    }
-    if let Some(source) = &options.audio
-        && let Some(ext) = source
-            .extension()
-            .and_then(OsStr::to_str)
-            .filter(|ext| !ext.is_empty())
-    {
+    // A replacement lands at the library stem with its own extension, so
+    // `-a clip.m4a` publishes `report.m4a` instead of landing in the old
+    // `report.mp3`. The old companion is deleted in the same transaction.
+    // `--listen` always renders MP3; an explicit `--audio` keeps its
+    // (lowercased) extension.
+    let replacement_ext = options
+        .audio
+        .as_ref()
+        .and_then(|source| source.extension())
+        .and_then(OsStr::to_str)
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| ext.to_ascii_lowercase())
+        .or_else(|| options.listen.then(|| "mp3".to_string()));
+    if let Some(ext) = replacement_ext {
         return Path::new(&plan.pdf_path)
-            .with_extension(ext.to_ascii_lowercase())
+            .with_extension(ext)
             .to_string_lossy()
             .replace('\\', "/");
+    }
+    if let Some(existing) = &plan.audio_path {
+        return existing.clone();
     }
     super::overwrite::local::replacement_audio_destination(plan)
 }
@@ -1870,6 +1879,14 @@ pub(super) fn stamp_overwrite_source(
     );
     let captured = super::current_local_date();
     let mut extras = extra_fields;
+    // `keep_user_fields = keep`: carry the old aliases, topics, and
+    // research into the replacement marker whenever the new capture does
+    // not supply them. An explicit capture-supplied value wins.
+    for (key, value) in &plan.user_fields {
+        if !extras.iter().any(|(present, _)| *present == key.as_str()) {
+            extras.push((key.as_str(), value.clone()));
+        }
+    }
     extras.push((FIELD_CAPTURED, MarkerValue::String(captured)));
     let marker = compose_marker(
         &status,
@@ -1933,6 +1950,7 @@ pub(super) fn stage_overwrite_audio(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_local_overwrite(
     config: &Config,
     options: &CreateOptions,
@@ -1942,8 +1960,16 @@ fn finish_local_overwrite(
     audio: Option<StagedAudio>,
     title: &str,
     replacing: bool,
+    scratch: &mut super::ScratchDir,
+    rebind_source: &str,
 ) -> Result<()> {
     let marker = super::overwrite::local::marker_from_pdf(&staged_pdf)?;
+    // A finished narration survives a later failure: when listen produced
+    // the staged audio, keep the scratch episode and report it instead of
+    // dropping it with the workdir, as ordinary create does.
+    let listen_audio = (options.listen && audio.is_some())
+        .then(|| audio.as_ref().map(|staged| staged.private_path.clone()))
+        .flatten();
     let result = super::overwrite::execute::execute(
         config,
         plan,
@@ -1953,7 +1979,21 @@ fn finish_local_overwrite(
             audio,
             marker,
         },
-    )?;
+    );
+    let result = match (result, listen_audio) {
+        (Err(error), Some(kept)) => {
+            return Err(super::listen::post_listen_error(
+                scratch,
+                &kept,
+                error.to_string(),
+                bind_create_hint(
+                    &format!("{rebind_source} -f overwrite"),
+                    &kept,
+                ),
+            ));
+        }
+        (result, _) => result?,
+    };
     super::overwrite::local::print_success(
         plan,
         &result,
@@ -1989,7 +2029,12 @@ fn overwrite_local_pdf(
     pdf_target_mod::refuse_marked_pdf(canonical, Some(&library_pdf))?;
     let title = pdf_plan.title.as_str();
     if options.dry_run {
-        super::overwrite::local::print_dry_run(&plan, title, replacing);
+        super::overwrite::local::print_dry_run(
+            &plan,
+            title,
+            replacing,
+            options.explicit_status.as_deref(),
+        );
         return Ok(());
     }
     let mut extras = Vec::new();
@@ -2017,7 +2062,16 @@ fn overwrite_local_pdf(
         title,
     )?;
     finish_local_overwrite(
-        config, options, &plan, &request, stamped, audio, title, replacing,
+        config,
+        options,
+        &plan,
+        &request,
+        stamped,
+        audio,
+        title,
+        replacing,
+        scratch,
+        &canonical.display().to_string(),
     )
 }
 
@@ -2051,7 +2105,12 @@ fn overwrite_markdown(
     let (plan, request, replacing) =
         prepare_local_overwrite(config, options, selection)?;
     if options.dry_run {
-        super::overwrite::local::print_dry_run(&plan, &title, replacing);
+        super::overwrite::local::print_dry_run(
+            &plan,
+            &title,
+            replacing,
+            options.explicit_status.as_deref(),
+        );
         return Ok(());
     }
     let author = options.author.clone().filter(|value| !value.is_empty());
@@ -2083,6 +2142,7 @@ fn overwrite_markdown(
             "pandoc command not found; install pandoc or set {ENV_PANDOC_COMMAND}"
         ))
     })?;
+    let audio_uri = overwrite_play_uri(config, &plan, &request)?;
     let render_path = scratch.path().join("render.pdf");
     let mut filters = write_render_filters(scratch.path())?;
     let diagram_pass = super::diagrams::prepare(
@@ -2096,8 +2156,13 @@ fn overwrite_markdown(
         scratch.path(),
     );
     filters.diagrams = diagram_pass.filter.clone();
-    let _ =
-        render_temp_pdf(&pandoc, &create_plan, &render_path, &filters, None)?;
+    let _ = render_temp_pdf(
+        &pandoc,
+        &create_plan,
+        &render_path,
+        &filters,
+        audio_uri.as_deref(),
+    )?;
     let mut extras = Vec::new();
     if let Some(author) = &author {
         extras.push(("author", MarkerValue::String(author.clone())));
@@ -2115,6 +2180,7 @@ fn overwrite_markdown(
         extras,
         &PdfInfo::default(),
     )?;
+    let rebind_source = canonical.display().to_string();
     let audio = stage_overwrite_audio(
         options,
         &plan,
@@ -2126,7 +2192,16 @@ fn overwrite_markdown(
         &title,
     )?;
     finish_local_overwrite(
-        config, options, &plan, &request, stamped, audio, &title, replacing,
+        config,
+        options,
+        &plan,
+        &request,
+        stamped,
+        audio,
+        &title,
+        replacing,
+        scratch,
+        &rebind_source,
     )
 }
 
@@ -2143,7 +2218,12 @@ fn overwrite_vault_note(
     let (plan, request, replacing) =
         prepare_local_overwrite(config, options, selection)?;
     if options.dry_run {
-        super::overwrite::local::print_dry_run(&plan, &title, replacing);
+        super::overwrite::local::print_dry_run(
+            &plan,
+            &title,
+            replacing,
+            options.explicit_status.as_deref(),
+        );
         return Ok(());
     }
     let author = options.author.clone().filter(|value| !value.is_empty());
@@ -2160,6 +2240,9 @@ fn overwrite_vault_note(
         title: Some(title.clone()),
         author: author.clone(),
     };
+    // The replacement keeps the Play link ordinary create would render,
+    // bound to the replacement companion when one is staged.
+    let audio_uri = overwrite_play_uri(config, &plan, &request)?;
     let render_path = if options.plain {
         let dummy_target = scratch.path().join("overwrite.pdf");
         let create_plan = CreatePlan {
@@ -2175,7 +2258,7 @@ fn overwrite_vault_note(
             author: author.clone(),
             published: published.clone(),
             source_url: None,
-            source_note: Some(source_note),
+            source_note: Some(source_note.clone()),
             source_markdown: Some(snapshot.source_markdown.clone()),
             captured: Some(super::current_local_date()),
             id: Some(plan.member.stem.clone()),
@@ -2206,7 +2289,7 @@ fn overwrite_vault_note(
             &create_plan,
             &render_path,
             &filters,
-            None,
+            audio_uri.as_deref(),
         )?;
         render_path
     } else {
@@ -2236,7 +2319,7 @@ fn overwrite_vault_note(
                 identity_title: snapshot.identity_title.clone(),
                 source_path: snapshot.note.identity.vault_relative_path.clone(),
                 kind: snapshot.source_kind.to_string(),
-                listen_uri: None,
+                listen_uri: audio_uri,
             },
         )?;
         let _ = diagram_pass;
@@ -2268,7 +2351,16 @@ fn overwrite_vault_note(
         &title,
     )?;
     finish_local_overwrite(
-        config, options, &plan, &request, stamped, audio, &title, replacing,
+        config,
+        options,
+        &plan,
+        &request,
+        stamped,
+        audio,
+        &title,
+        replacing,
+        scratch,
+        &source_note,
     )
 }
 
@@ -2327,6 +2419,7 @@ fn create_article_route(
                 &plan,
                 &plan.title,
                 replacing,
+                options.explicit_status.as_deref(),
             );
             return Ok(());
         }
@@ -3782,7 +3875,16 @@ fn overwrite_pdf_url(
         &title,
     )?;
     finish_local_overwrite(
-        config, options, &plan, &request, stamped, audio, &title, replacing,
+        config,
+        options,
+        &plan,
+        &request,
+        stamped,
+        audio,
+        &title,
+        replacing,
+        scratch,
+        &url.cleaned,
     )
 }
 
@@ -4057,7 +4159,12 @@ fn overwrite_arxiv(
     let (plan, request, replacing) =
         prepare_web_overwrite(config, options, selection)?;
     if options.dry_run {
-        super::overwrite::local::print_dry_run(&plan, &plan.title, replacing);
+        super::overwrite::local::print_dry_run(
+            &plan,
+            &plan.title,
+            replacing,
+            options.explicit_status.as_deref(),
+        );
         return Ok(());
     }
     let captured = super::current_local_date();
@@ -4142,7 +4249,16 @@ fn overwrite_arxiv(
         &title,
     )?;
     finish_local_overwrite(
-        config, options, &plan, &request, stamped, audio, &title, replacing,
+        config,
+        options,
+        &plan,
+        &request,
+        stamped,
+        audio,
+        &title,
+        replacing,
+        scratch,
+        &url.cleaned,
     )
 }
 
@@ -4979,6 +5095,50 @@ fn bound_audio_path(plan: &CreatePlan) -> Option<PathBuf> {
         TargetWorkflow::Library => Some(audio.dest.clone()),
         TargetWorkflow::External => None,
     }
+}
+
+/// The Play-link URI for an in-place overwrite render: the same template
+/// ordinary create uses, bound to the replacement companion when one is
+/// staged, else the kept episode. Rendered Markdown and vault-note
+/// snapshots use it so the replacement keeps the Play link ordinary
+/// create would render.
+fn overwrite_play_uri(
+    config: &Config,
+    plan: &OverwritePreflight,
+    request: &OverwriteRequest,
+) -> Result<Option<String>> {
+    let relative = request
+        .replacement_audio_path
+        .as_deref()
+        .or(plan.audio_path.as_deref());
+    let Some(relative) = relative else {
+        return Ok(None);
+    };
+    let highlights = super::bob_config::load_highlights_config(
+        &super::bob_config::config_path(),
+    )
+    .map_err(super::config_error)?;
+    let template = super::note_snapshot::resolve_uri_template(
+        bob_env::var_os(ENV_AUDIO_LINK_TEMPLATE).as_deref(),
+        highlights.audio_link_template(),
+        DEFAULT_AUDIO_LINK_TEMPLATE,
+    );
+    if template.is_empty() {
+        return Ok(None);
+    }
+    let vault = config
+        .bob_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            CommandError::new(format!(
+                "bob directory has no UTF-8 basename: {}",
+                config.bob_dir.display()
+            ))
+        })?;
+    Ok(Some(super::note_snapshot::render_uri_template(
+        &template, vault, relative,
+    )))
 }
 
 fn plan_audio_copy(

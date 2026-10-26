@@ -20,19 +20,32 @@ pub(in crate::native::highlights_ref) fn print_dry_run(
     plan: &OverwritePreflight,
     title: &str,
     replacing_audio: bool,
+    explicit_status: Option<&str>,
 ) {
     println!("ok would replace Highlights-ready PDF");
-    println!("overwrite: {}/{}", plan.ref_type, plan.member.stem);
+    print_overwrite_line(
+        &plan.ref_type,
+        &plan.member.stem,
+        &final_status(plan, explicit_status),
+        plan.highlights,
+    );
     println!("title: {title}");
     print_archive_line(plan);
-    print_task_line(plan);
+    print_task_line(
+        plan,
+        predicted_mark(plan, explicit_status),
+        &final_status(plan, explicit_status),
+        kept_closed_task(plan, explicit_status),
+    );
     if replacing_audio {
         println!(
             "audio: replace {}",
             plan.audio_path.as_deref().unwrap_or("companion")
         );
     } else if let Some(audio) = &plan.audio_path {
-        println!("audio: keep {audio}");
+        println!(
+            "audio: keep {audio} (narrates the replaced capture; add -L to re-narrate)"
+        );
     } else {
         println!("audio: none");
     }
@@ -47,7 +60,7 @@ pub(in crate::native::highlights_ref) fn print_success(
     replaced_audio: Option<&str>,
     kept_closed: bool,
 ) {
-    print_success_report(plan, title, replaced_audio, kept_closed);
+    print_success_report(plan, result, title, replaced_audio, kept_closed);
     print_commit_result(result);
 }
 
@@ -55,22 +68,27 @@ pub(in crate::native::highlights_ref) fn print_success(
 /// output can include its part summary before printing the transaction result.
 pub(in crate::native::highlights_ref) fn print_success_report(
     plan: &OverwritePreflight,
+    result: &OverwriteResult,
     title: &str,
     replaced_audio: Option<&str>,
     kept_closed: bool,
 ) {
     println!("ok replaced Highlights-ready PDF");
-    println!("overwrite: {}/{}", plan.ref_type, plan.member.stem);
+    print_overwrite_line(
+        &plan.ref_type,
+        &plan.member.stem,
+        &result.task_status,
+        result.highlights,
+    );
     println!("title: {title}");
     print_archive_line(plan);
-    print_task_line(plan);
+    print_task_line(plan, result.task_mark, &result.task_status, kept_closed);
     if let Some(audio) = replaced_audio {
         println!("audio: replaced {audio}");
     } else if let Some(audio) = &plan.audio_path {
-        println!("audio: kept {audio}");
-    }
-    if kept_closed {
-        println!("pass -s ready to reopen");
+        println!(
+            "audio: kept {audio} (narrates the replaced capture; add -L to re-narrate)"
+        );
     }
 }
 
@@ -84,8 +102,47 @@ pub(in crate::native::highlights_ref) fn print_commit_result(
             result.commit_sha
         );
     } else {
-        println!("committed {}", result.commit_sha);
+        println!(
+            "sync: committed {}",
+            &result.commit_sha[..result.commit_sha.len().min(7)]
+        );
     }
+}
+
+/// The selected reading plus its final status and highlight count.
+fn print_overwrite_line(
+    ref_type: &str,
+    stem: &str,
+    status: &str,
+    highlights: u64,
+) {
+    let count = if highlights == 1 {
+        "1 highlight".to_string()
+    } else {
+        format!("{highlights} highlights")
+    };
+    println!("overwrite: {ref_type}/{stem} ({status} · {count})");
+}
+
+/// The status the overwrite leaves behind: an explicit `-s` wins,
+/// otherwise the preserved pre-overwrite status.
+fn final_status(
+    plan: &OverwritePreflight,
+    explicit_status: Option<&str>,
+) -> String {
+    explicit_status
+        .map(str::to_string)
+        .unwrap_or_else(|| plan.status.clone())
+}
+
+/// The task mark the overwrite leaves behind, for dry-run plans.
+fn predicted_mark(
+    plan: &OverwritePreflight,
+    explicit_status: Option<&str>,
+) -> char {
+    explicit_status
+        .and_then(|status| super::execute::status_to_mark(status).ok())
+        .unwrap_or(plan.task.mark)
 }
 
 fn print_archive_line(plan: &OverwritePreflight) {
@@ -97,12 +154,21 @@ fn print_archive_line(plan: &OverwritePreflight) {
     }
 }
 
-fn print_task_line(plan: &OverwritePreflight) {
+fn print_task_line(
+    plan: &OverwritePreflight,
+    mark: char,
+    status: &str,
+    kept_closed: bool,
+) {
     let block = plan.task.block_id.as_deref().unwrap_or("ref");
-    println!(
-        "task: kept {} ^{block} [{}] {}",
-        plan.task.path, plan.task.mark, plan.status
-    );
+    if kept_closed {
+        println!(
+            "task: kept {} ^{block} [{mark}] {status} · pass -s ready to reopen",
+            plan.task.path,
+        );
+    } else {
+        println!("task: kept {} ^{block} [{mark}] {status}", plan.task.path,);
+    }
 }
 
 /// Read final marker identity from a privately stamped overwrite PDF.

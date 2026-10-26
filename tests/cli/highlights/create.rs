@@ -8806,9 +8806,9 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
     let dry_report = stdout(&dry_output);
     assert!(
         dry_report.contains("ok would replace Highlights-ready PDF")
-            && dry_report
-                .lines()
-                .any(|line| { line == "overwrite: blogs/tokio_internals" })
+            && dry_report.lines().any(|line| {
+                line == "overwrite: blogs/tokio_internals (ready · 0 highlights)"
+            })
             && dry_report.contains("writes: none"),
         "dry-run must describe the selected member:\n{dry_report}"
     );
@@ -8855,16 +8855,19 @@ printf 'ID3 replacement episode' > "$audio_path"
     let report = stdout(&output);
     assert!(
         report.contains("ok replaced Highlights-ready PDF")
-            && report
-                .lines()
-                .any(|line| { line == "overwrite: blogs/tokio_internals" })
+            && report.lines().any(|line| {
+                line == "overwrite: blogs/tokio_internals (ready · 0 highlights)"
+            })
             && report.contains(
                 "earlier: ref_history/blogs/tokio_internals__2026-10-16.md"
             )
-            && report
-                .contains("task: kept sase.md ^ref-tokio-internals [ ] ready")
+            && report.lines().any(|line| {
+                line == "task: kept sase.md ^ref-tokio-internals [ ] ready"
+            })
             && report.contains("audio: replaced lib/blogs/tokio_internals.mp3")
-            && report.contains("committed "),
+            && report
+                .lines()
+                .any(|line| line.starts_with("sync: committed ")),
         "overwrite report must use the shared transaction renderer:\n{report}"
     );
     assert!(

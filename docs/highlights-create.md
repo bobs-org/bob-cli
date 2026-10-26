@@ -609,8 +609,9 @@ exact path cannot be collision-suffixed. On default targets, the collision walk
 also reserves ids case-insensitively across all of `ref/`.
 When the walk skips at least one candidate, dry-run and success output print
 `renamed: <base>.pdf is taken by <first occupant>; using <final>.pdf` just
-before `pdf:`. `--force` only overwrites the same reference's intake PDF,
-never a different reference. If all 999 candidates are taken, the command
+before `pdf:`. Bare `--force` only overwrites the same reference's intake PDF,
+never a different reference; `-f overwrite` instead replaces an eligible filed
+reference in place (see Recapture). If all 999 candidates are taken, the command
 fails with `no free default filename for <stem>; pass -N/--name or -o/--output`.
 
 ## Ingest boundary
@@ -830,6 +831,35 @@ No
 force is needed for a URL recorded only by legacy notes
 without a Highlights PDF (it warns and captures a fresh copy) or for a
 new-day vault-note snapshot (an ordinary dated create).
+
+A filed overwrite reports the same plan on dry runs and real runs, ending
+dry runs with `writes: none`:
+
+```text
+ok replaced Highlights-ready PDF
+overwrite: papers/report (ready · 0 highlights)
+title: Report
+earlier: ref_history/papers/report__2026-10-16.md
+task: kept sase.md ^ref-report [ ] ready
+audio: kept lib/papers/report.mp3 (narrates the replaced capture; add -L to re-narrate)
+sync: committed abc1234
+```
+
+`overwrite:` names the replaced reading with its final status and highlight
+count. `task:` prints the final mark and status (`· pass -s ready to reopen`
+is appended for a kept closed, non-archived task). A replacement episode
+prints `audio: replaced <path>`; a kept episode keeps the note embed and the
+Play link of the replaced capture. With no authored prose there is no
+archive: `earlier: nothing to archive (0 highlights, no notes); git keeps
+the old capture`. The commit prints `sync: committed <sha7>` like an
+ordinary create; when the post-sync cannot publish, bob keeps the commit and
+prints `overwritten; push pending (run bob vault-sync)`. A verification
+failure exits 1 with code `verify_failed` and rolls the bundle back. Other
+refusal codes: `legacy_reference`, `intake_reference`, `not_in_sync`,
+`dirty_paths`, `open_note_tasks`, `intake_unavailable`,
+`annotated_reference`, the incompatible-flag refusals (`-o`, `-k`, a
+differing `-P` or `-t`, an unstampable `-s`, an archived `-s` reopen, a free
+`-N`), and `nothing to overwrite` for a fresh source.
 
 An exact-URL-set collection rereads the same way in any URL order. Several
 readings sharing one set count as one family; unrelated duplicate families

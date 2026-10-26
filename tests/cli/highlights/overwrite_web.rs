@@ -1093,7 +1093,9 @@ fn web_overwrite_selects_older_member_with_name() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.lines().any(|line| line == "overwrite: blogs/hello")
+        report
+            .lines()
+            .any(|line| line == "overwrite: blogs/hello (ready · 0 highlights)")
             && report.contains("title: Symphony Spec Revised"),
         "the named member is replaced in place:\n{report}"
     );

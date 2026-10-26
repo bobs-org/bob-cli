@@ -1248,6 +1248,414 @@ fn library_pdf_target_still_refuses_overwrite() {
     );
 }
 
+fn skip_pandoc_xelatex(test_name: &str) -> bool {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !pandoc_available || !xelatex_available {
+        eprintln!("skipping {test_name}: pandoc/xelatex are required");
+        return true;
+    }
+    false
+}
+
+fn task_line(vault: &Path, stem: &str) -> String {
+    let parent =
+        fs::read_to_string(vault.join("sase.md")).expect("read parent");
+    parent
+        .lines()
+        .find(|line| line.contains(&format!("ref/papers/{stem}|")))
+        .expect("reading task line")
+        .to_string()
+}
+
+#[test]
+fn overwrite_without_title_change_keeps_task_file_byte_identical() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-alias-same", "ready", false, false);
+    let parent_before =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    let source = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &source)
+        .args(["-T", TITLE])
+        .output()
+        .expect("overwrite same title");
+    assert_success(&output);
+    let parent_after =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    assert_eq!(
+        parent_after, parent_before,
+        "an unchanged title keeps the task file byte-identical"
+    );
+    let report = stdout(&output);
+    assert!(
+        report.contains("task: kept sase.md ^ref-report [ ] ready"),
+        "task line reports the final state:\n{report}"
+    );
+}
+
+#[test]
+fn overwrite_preserves_custom_task_alias() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-alias-custom", "ready", false, false);
+    let parent = fixture.vault.join("sase.md");
+    let before = fs::read_to_string(&parent).expect("read parent");
+    let customized = before.replacen("|Report]]", "|My custom alias]]", 1);
+    assert!(
+        customized != before,
+        "fixture must carry the expected alias:\n{before}"
+    );
+    fs::write(&parent, &customized).expect("write custom alias");
+    commit_vault(&fixture.vault, "customize task alias");
+    let source = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &source)
+        .args(["-T", TITLE])
+        .output()
+        .expect("overwrite with custom alias");
+    assert_success(&output);
+    let after = fs::read_to_string(&parent).expect("read parent after");
+    assert_eq!(
+        after, customized,
+        "an unchanged title keeps a custom alias verbatim"
+    );
+    assert!(
+        after.contains("|My custom alias]]"),
+        "custom alias survives:\n{after}"
+    );
+}
+
+#[test]
+fn overwrite_root_without_title_change_adds_no_version_suffix() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-alias-root", "ready", false, false);
+    let reread_source = source_pdf(&fixture, TITLE);
+    let reread = reread_command(&fixture, &reread_source)
+        .output()
+        .expect("reread to v2");
+    assert_success(&reread);
+    commit_if_dirty(&fixture.vault, "file second reading");
+    assert!(
+        task_line(&fixture.vault, "report").contains("|Report]]"),
+        "root starts without a suffix:\n{}",
+        task_line(&fixture.vault, "report")
+    );
+    let parent_before =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+        .args(["-N", STEM, "-T", TITLE])
+        .output()
+        .expect("overwrite root");
+    assert_success(&output);
+    let parent_after =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    assert_eq!(
+        parent_after, parent_before,
+        "overwriting the root without a title change rewrites no alias"
+    );
+    assert!(
+        !parent_after.contains("Report (v1)"),
+        "no version suffix is invented:\n{parent_after}"
+    );
+}
+
+#[test]
+fn overwrite_title_change_keeps_old_version_suffix() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-alias-suffix", "ready", false, false);
+    let reread = reread_command(&fixture, &source_pdf(&fixture, TITLE))
+        .output()
+        .expect("reread to v2");
+    assert_success(&reread);
+    commit_if_dirty(&fixture.vault, "file second reading");
+    assert!(
+        task_line(&fixture.vault, "report__v2").contains("|report (v2)]]"),
+        "second reading carries its suffix:\n{}",
+        task_line(&fixture.vault, "report__v2")
+    );
+    // NB: the replacement material comes from distinctly named files.
+    // Selecting `-N report__v2` with the same-stem source file falls back
+    // to a humanized `-N` title for identity and misses the family; that
+    // title-route selection quirk is recorded as a follow-up and is not
+    // part of this phase.
+    let other = fixture.temp.path().join("other.pdf");
+    write_bare_pdf(&other, Some(TITLE));
+    let output = overwrite_command(&fixture, &other)
+        .args(["-N", "report__v2", "-T", "A Better Report"])
+        .output()
+        .expect("overwrite v2 with a new title");
+    assert_success(&output);
+    let parent =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    assert!(
+        parent.contains("[[ref/papers/report__v2|A Better Report (v2)]]"),
+        "the title change keeps the old suffix:\n{parent}"
+    );
+    let another = fixture.temp.path().join("another.pdf");
+    write_bare_pdf(&another, Some(TITLE));
+    let output = overwrite_command(&fixture, &another)
+        .args(["-N", STEM, "-T", "Another Title"])
+        .output()
+        .expect("overwrite root with a new title");
+    assert_success(&output);
+    let parent =
+        fs::read_to_string(fixture.vault.join("sase.md")).expect("parent");
+    assert!(
+        parent.contains("[[ref/papers/report|Another Title]]"),
+        "a suffix-free alias gains none:\n{parent}"
+    );
+    assert!(
+        !parent.contains("Another Title (v"),
+        "no reading number is invented:\n{parent}"
+    );
+}
+
+#[test]
+fn overwrite_reports_final_state_and_commit() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-final-state", "ready", false, false);
+    let source = source_pdf(&fixture, TITLE);
+    let dry = overwrite_command(&fixture, &source)
+        .args(["-s", "next", "-d"])
+        .output()
+        .expect("dry-run overwrite");
+    assert_success(&dry);
+    let dry_report = stdout(&dry);
+    assert!(
+        dry_report.contains("ok would replace Highlights-ready PDF")
+            && dry_report
+                .contains("overwrite: papers/report (next · 0 highlights)")
+            && dry_report.contains("task: kept sase.md ^ref-report [*] next")
+            && dry_report.contains("writes: none")
+            && !dry_report.contains("sync: committed"),
+        "dry run previews the final state:\n{dry_report}"
+    );
+    let output = overwrite_command(&fixture, &source)
+        .arg("-s")
+        .arg("next")
+        .output()
+        .expect("overwrite with -s next");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ok replaced Highlights-ready PDF")
+            && report
+                .contains("overwrite: papers/report (next · 0 highlights)")
+            && report.contains("task: kept sase.md ^ref-report [*] next")
+            && report
+                .lines()
+                .any(|line| line.starts_with("sync: committed ")),
+        "success reports the final task state and commit:\n{report}"
+    );
+}
+
+#[test]
+fn overwrite_kept_closed_task_reports_reopen_hint_inline() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-kept-closed", "read", false, false);
+    let source = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &source)
+        .output()
+        .expect("overwrite kept closed task");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.lines().any(|line| {
+            line == "task: kept sase.md ^ref-report [x] read · pass -s ready to reopen"
+        }),
+        "kept closed task carries the inline reopen hint:\n{report}"
+    );
+}
+
+#[test]
+fn local_pdf_overwrite_audio_extension_replaces_companion() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-pdf-new-ext", "ready", true, false);
+    let source = source_pdf(&fixture, TITLE);
+    let replacement = fixture.temp.path().join("new.m4a");
+    write_file(&replacement, "new audio");
+    let output = overwrite_command(&fixture, &source)
+        .arg("-a")
+        .arg(&replacement)
+        .output()
+        .expect("overwrite with a differently-suffixed episode");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("audio: replaced lib/papers/report.m4a"),
+        "replacement lands at the library stem with its own extension:\n{report}"
+    );
+    assert_eq!(
+        fs::read(fixture.vault.join("lib/papers/report.m4a"))
+            .expect("read replacement audio"),
+        b"new audio",
+        "replacement audio bytes"
+    );
+    assert!(
+        !fixture.vault.join("lib/papers/report.mp3").exists(),
+        "the old companion is removed in the same transaction"
+    );
+    let note = note_body(&fixture);
+    assert!(
+        note.contains("lib/papers/report.m4a")
+            && !note.contains("lib/papers/report.mp3"),
+        "the note embed points at the remaining companion:\n{note}"
+    );
+}
+
+#[test]
+fn overwrite_carries_aliases_topics_and_research() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-user-fields", "ready", false, false);
+    let note_path = fixture.vault.join(format!("ref/papers/{STEM}.md"));
+    let note = fs::read_to_string(&note_path).expect("read note");
+    let mut lines: Vec<String> = note.lines().map(str::to_string).collect();
+    let fence = lines
+        .iter()
+        .position(|line| line == "---")
+        .expect("frontmatter fence");
+    // Markers are line-based: aliases and topics ride as inline lists.
+    lines.insert(
+        fence + 1,
+        "aliases: [Report Alias]\ntopics: [rust]\nresearch: \"[[my-question]]\""
+            .to_string(),
+    );
+    fs::write(&note_path, lines.join("\n") + "\n").expect("write fields");
+    commit_vault(&fixture.vault, "add user fields");
+    let restabilize = bob_command()
+        .args(["ref", "scan", "-w"])
+        .env("BOB_DIR", &fixture.vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("restabilize user fields");
+    assert_success(&restabilize);
+    commit_if_dirty(&fixture.vault, "sync user fields");
+    let source = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &source)
+        .output()
+        .expect("overwrite with user fields");
+    assert_success(&output);
+    let marker = stdout(
+        &bob_command()
+            .args(["highlights", "marker"])
+            .arg(&fixture.pdf)
+            .env("BOB_DIR", &fixture.vault)
+            .output()
+            .expect("read marker"),
+    );
+    assert!(
+        marker.contains("Report Alias")
+            && marker.contains("rust")
+            && marker.contains("my-question"),
+        "the replacement marker carries the old user fields:\n{marker}"
+    );
+    let after = note_body(&fixture);
+    assert!(
+        after.contains("Report Alias")
+            && after.contains("rust")
+            && after.contains("my-question"),
+        "the live note keeps the old user fields:\n{after}"
+    );
+}
+
+#[test]
+fn local_pdf_overwrite_listen_failure_after_narration_keeps_scratch() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-listen-kept", "ready", false, false);
+    // Break the scoped commit without touching the bundle: a failing
+    // pre-commit hook means the executor fails after the narration is
+    // finished. The hook lives in git config (untracked), so the vault
+    // tree comparison below is unaffected.
+    let hooks = fixture.temp.path().join("hooks");
+    fs::create_dir_all(&hooks).expect("create hooks dir");
+    write_executable(
+        &hooks.join("pre-commit"),
+        "#!/bin/sh\necho 'hook refuses the overwrite commit' >&2\nexit 1\n",
+    );
+    git_in(
+        &fixture.vault,
+        ["config", "core.hooksPath", path_str(&hooks)],
+    );
+    let before_tree = snapshot_tree(&fixture.vault);
+    let source = source_pdf(&fixture, TITLE);
+    let bin = write_fake_sase(fixture.temp.path());
+    let log = fixture.temp.path().join("listen.log");
+    let output = overwrite_command(&fixture, &source)
+        .arg("-L")
+        .env("PATH", path_with_prefix(&bin))
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -o {audio}",
+        )
+        .env("FAKE_LISTEN_LOG", &log)
+        .output()
+        .expect("overwrite with failing commit");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "commit failure must fail:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    let kept = report
+        .lines()
+        .find_map(|line| line.strip_prefix("kept: "))
+        .expect("a finished narration is kept:\n{report}")
+        .to_string();
+    assert!(
+        Path::new(&kept).is_file(),
+        "the kept scratch episode survives:\n{report}"
+    );
+    assert_eq!(
+        snapshot_tree(&fixture.vault),
+        before_tree,
+        "a narration failure after staging leaves the vault unchanged"
+    );
+    assert!(
+        stderr(&output).contains("verify_failed"),
+        "the commit failure surfaces its machine code:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn markdown_overwrite_keeps_play_link_for_kept_audio() {
+    if skip_pandoc_xelatex("markdown overwrite Play link") {
+        return;
+    }
+    let fixture =
+        filed_vault("bob-cli-overwrite-md-play", "ready", true, false);
+    let source = fixture.temp.path().join(format!("{STEM}.md"));
+    write_file(
+        &source,
+        concat!(
+            "# Report\n\n<div class=\"listen\">\n\n♫ **Brief audio edition** · 1 min · 1 chapter\n\n</div>\n\nReplacement body.\n",
+        ),
+    );
+    let output = overwrite_command(&fixture, &source)
+        .output()
+        .expect("markdown overwrite with kept audio");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "audio: kept lib/papers/report.mp3 (narrates the replaced capture; add -L to re-narrate)"
+        ),
+        "kept audio names the narrated capture:\n{report}"
+    );
+    let pdf = fs::read(&fixture.pdf).expect("read replacement PDF");
+    let haystack = String::from_utf8_lossy(&pdf);
+    assert!(
+        haystack.contains("obsidian://open?vault=")
+            && haystack.contains("report.mp3"),
+        "the replacement keeps the Play link"
+    );
+}
+
 pub(crate) fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, current: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(current).expect("read snapshot") {

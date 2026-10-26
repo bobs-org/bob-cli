@@ -60,8 +60,9 @@ plus the episode instead.
    `source_url`.
 2. Each URL is deduped against ref-note `source_url` (and legacy
    `url:`) values and queued intake PDFs. A PDF-backed ref-note hit refuses
-   even with `--force`; that flag can overwrite the same intake target when
-   the planned path matches. A URL recorded only by notes without a
+   even with bare `--force`; that flag can overwrite the same intake target when
+   the planned path matches, while `-f overwrite` replaces an eligible filed
+   reference in place (see `highlights-create.md` Recapture). A URL recorded only by notes without a
    Highlights PDF warns (`already in the library as <path>, a note without a
    Highlights PDF; capturing a fresh copy`) and captures a fresh copy.
    Import deduplication reads every URL from scalar or list-valued
@@ -164,9 +165,10 @@ is used for comparison, not written back over `source_url`.
 
 Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
 different reference is suffixed (with a `renamed:` line before `pdf:`),
-and only the same reference refuses. `--force` overwrites the same intake
-target only; library PDFs are never overwritten, and an already-captured
-ref note is never remade.
+and only the same reference refuses. Bare `--force` overwrites the same
+intake target only: it never overwrites a library PDF and never remakes an
+already-captured ref note, while `-f overwrite` replaces an eligible filed
+reference in place (see `highlights-create.md` Recapture).
 
 A ref-note hit refuses only when the note is PDF-backed (it carries a
 `source_pdf`). A URL recorded only by legacy notes without a Highlights

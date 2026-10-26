@@ -819,10 +819,15 @@ pub(super) fn capture_article_overwrite(
     explicit_status: Option<&str>,
 ) -> std::result::Result<(), ClipError> {
     if options.dry_run {
-        super::overwrite::local::print_dry_run(plan, &plan.title, replacing);
+        super::overwrite::local::print_dry_run(
+            plan,
+            &plan.title,
+            replacing,
+            explicit_status,
+        );
         return Ok(());
     }
-    let workdir = ScratchDir::create("clip-overwrite")
+    let mut workdir = ScratchDir::create("clip-overwrite")
         .map_err(|error| ClipError::from(CommandError::new(error.message)))?;
     let html_path = match &options.html {
         None => None,
@@ -897,23 +902,33 @@ pub(super) fn capture_article_overwrite(
         explicit_status,
         existing_status.as_deref(),
     );
+    // `keep_user_fields = keep`: carry the old aliases, topics, and
+    // research into the replacement marker whenever the new capture does
+    // not supply them.
+    let mut carried: Vec<(&str, MarkerValue)> = plan
+        .user_fields
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.clone()))
+        .collect();
+    let mut marker_extras = vec![
+        ("source_url", MarkerValue::String(url.cleaned.clone())),
+        (
+            "author",
+            MarkerValue::String(author.clone().unwrap_or_default()),
+        ),
+        (
+            "published",
+            MarkerValue::String(published.clone().unwrap_or_default()),
+        ),
+        ("captured", MarkerValue::String(captured.clone())),
+    ];
+    marker_extras.append(&mut carried);
     let marker = compose_marker(
         &status,
         &options.parent,
         &title,
         Some(&stem),
-        &[
-            ("source_url", MarkerValue::String(url.cleaned.clone())),
-            (
-                "author",
-                MarkerValue::String(author.clone().unwrap_or_default()),
-            ),
-            (
-                "published",
-                MarkerValue::String(published.clone().unwrap_or_default()),
-            ),
-            ("captured", MarkerValue::String(captured.clone())),
-        ],
+        &marker_extras,
     )?;
     let info = PdfInfo {
         title: Some(title.clone()),
@@ -934,6 +949,12 @@ pub(super) fn capture_article_overwrite(
     )?;
     let final_marker = super::overwrite::local::marker_from_pdf(&staged_pdf)
         .map_err(ClipError::from)?;
+    // A finished narration survives a later failure: keep the scratch
+    // episode and report it instead of dropping it with the workdir.
+    let listen_audio = (matches!(companion, Companion::Listen(_))
+        && audio.is_some())
+    .then(|| audio.as_ref().map(|staged| staged.private_path.clone()))
+    .flatten();
     let result = super::overwrite::execute::execute(
         config,
         plan,
@@ -943,8 +964,22 @@ pub(super) fn capture_article_overwrite(
             audio,
             marker: final_marker,
         },
-    )
-    .map_err(ClipError::from)?;
+    );
+    let result = match (result, listen_audio) {
+        (Err(error), Some(kept)) => {
+            return Err(ClipError::from(super::listen::post_listen_error(
+                &mut workdir,
+                &kept,
+                error.to_string(),
+                format!(
+                    "bind it with bob ref create {} -f overwrite --audio {}",
+                    url.cleaned,
+                    kept.display()
+                ),
+            )));
+        }
+        (result, _) => result.map_err(ClipError::from)?,
+    };
     super::overwrite::local::print_success(
         plan,
         &result,

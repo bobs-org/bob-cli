@@ -1303,6 +1303,7 @@ fn capture_and_install_overwrite(
             &preflight,
             title,
             replacing_audio,
+            options.explicit_status.as_deref(),
         );
         return Ok(());
     }
@@ -1410,6 +1411,15 @@ fn capture_and_install_overwrite(
     recheck_collection_overwrite(config, &urls, &options, &preflight)?;
 
     let marker = super::overwrite::local::marker_from_pdf(&staged_pdf)?;
+    // A finished narration survives a later failure: keep the scratch
+    // episode and report it instead of dropping it with the workdir.
+    let listen_audio = (listen.is_some() && staged_audio.is_some())
+        .then(|| {
+            staged_audio
+                .as_ref()
+                .map(|staged| staged.private_path.clone())
+        })
+        .flatten();
     let result = super::overwrite::execute::execute(
         config,
         &preflight,
@@ -1419,7 +1429,25 @@ fn capture_and_install_overwrite(
             audio: staged_audio,
             marker,
         },
-    )?;
+    );
+    let result = match (result, listen_audio) {
+        (Err(error), Some(kept)) => {
+            let mut command = String::from("bind it with bob ref create");
+            for url in &urls {
+                command.push(' ');
+                command.push_str(&super::listen::shell_quote(&url.cleaned));
+            }
+            command.push_str(" -f overwrite --audio ");
+            command.push_str(&kept.display().to_string());
+            return Err(super::listen::post_listen_error(
+                &mut scratch,
+                &kept,
+                error.to_string(),
+                command,
+            ));
+        }
+        (result, _) => result?,
+    };
     let replaced_audio = replacing_audio
         .then_some(
             request
@@ -1430,6 +1458,7 @@ fn capture_and_install_overwrite(
         .flatten();
     super::overwrite::local::print_success_report(
         &preflight,
+        &result,
         &derived.title,
         replaced_audio,
         super::overwrite::local::kept_closed_task(
