@@ -214,6 +214,9 @@ pub(super) fn hold_message(
             "marker changed in Highlights during the scan · retrying next scan"
                 .to_string()
         }
+        HoldReason::ReplacedCapture => {
+            "Highlights wrote the replaced capture back".to_string()
+        }
     }
 }
 
@@ -363,6 +366,9 @@ pub(super) fn execute_pdf_sync(
     run_state: &mut RunWriteState,
     session: &mut MarkerWriteSession,
 ) -> Result<PdfSyncOutcome> {
+    if let Some(hold) = super::sync::replaced_capture_hold(config, &plan.pdf)? {
+        return Ok(PdfSyncOutcome::Held(hold));
+    }
     if !plan.marker_write_needed || !session.policy.coordinate_pdf_writes {
         return execute_pdf_sync_inner(config, plan, run_state, None).map(
             |report| {
@@ -415,6 +421,14 @@ pub(super) fn execute_pdf_sync(
         let policy = &session.policy;
         let coordinator = &session.coordinator;
         coordinator.run(&plan.pdf, budget, || {
+            // The coordinator may have asked Highlights to save just before
+            // this callback. Check the archived digest again before marker
+            // reconciliation or any per-PDF note/task/asset work.
+            if let Some(hold) =
+                super::sync::replaced_capture_hold(config, &plan.pdf)?
+            {
+                return Ok(PdfSyncOutcome::Held(hold));
+            }
             match recheck_marker(plan, policy)? {
                 Recheck::Hold(hold) => Ok(PdfSyncOutcome::Held(hold)),
                 Recheck::Write(prep) => {
@@ -474,6 +488,7 @@ pub(super) struct FakeCoordinator {
 #[derive(Clone)]
 pub(super) enum FakeAction {
     Grant { waited: Duration },
+    GrantAfterSave { waited: Duration, bytes: Vec<u8> },
     Hold { waited: Duration },
     Fail { message: String },
 }
@@ -483,6 +498,13 @@ impl FakeCoordinator {
     pub(super) fn grant(waited: Duration) -> Self {
         Self {
             action: FakeAction::Grant { waited },
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    pub(super) fn grant_after_save(waited: Duration, bytes: Vec<u8>) -> Self {
+        Self {
+            action: FakeAction::GrantAfterSave { waited, bytes },
             calls: Arc::new(Mutex::new(0)),
         }
     }
@@ -520,6 +542,14 @@ impl FakeCoordinator {
                 value: accessor(),
                 waited: *waited,
             },
+            FakeAction::GrantAfterSave { waited, bytes } => {
+                std::fs::write(path, bytes)
+                    .expect("simulate Highlights saving before access");
+                Coordination::Granted {
+                    value: accessor(),
+                    waited: *waited,
+                }
+            }
             FakeAction::Hold { waited } => {
                 Coordination::Held(file_coordination::TimedOut {
                     waited: *waited,

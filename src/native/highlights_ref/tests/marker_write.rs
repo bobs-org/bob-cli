@@ -106,6 +106,35 @@ fn write_pdf_with_marker(path: &Path, marker: &str, pad: bool) {
     doc.save(path).expect("write PDF");
 }
 
+fn attach_archive_history(bob: &Path, note: &Path, archive_bytes: &[u8]) {
+    let date = "2026-10-25";
+    let note_rel = note
+        .strip_prefix(bob)
+        .expect("note is in the vault")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let live_identity = note_rel.strip_suffix(".md").expect("note extension");
+    let archive_stem = "race__2026-10-25";
+    let archive_rel = format!("ref_history/{archive_stem}");
+    let archive_pdf_rel = format!("{archive_rel}__annotated.pdf");
+    write_test_bytes(&bob.join(&archive_pdf_rel), archive_bytes);
+    let hash = sha256_file(&bob.join(&archive_pdf_rel)).expect("archive hash");
+    write_test_file(
+        &bob.join(format!("{archive_rel}.md")),
+        &format!(
+            "---\nparent: \"[[{live_identity}]]\"\nannotated_pdf: \"[[{archive_pdf_rel}]]\"\nannotated_pdf_sha256: \"{hash}\"\n---\n"
+        ),
+    );
+    let current = text_of(note);
+    let (front, body) = current.split_once("\n---\n").expect("frontmatter");
+    write_test_file(
+        note,
+        &format!(
+            "{front}\nearlier:\n  - \"[[{archive_rel}|replaced {date} · 1 highlight]]\"\n---\n{body}"
+        ),
+    );
+}
+
 fn seed_v1(note: &Path, task_line: &str) {
     write_test_file(
         note,
@@ -747,4 +776,87 @@ fn reading_hold_report_names_attended_holding_and_unknown() {
         ReadingHoldMode::Evaluate,
     );
     assert_eq!(clear.reading_hold_report(&plans, false), "clear");
+}
+
+#[test]
+fn restored_capture_is_held_at_execution_and_after_coordinated_save() {
+    let bob = temp_bob_dir("marker-write-replaced-capture");
+    seed_area(&bob);
+    let config = vault_config(&bob);
+    let pdf = bob.join("lib/race.pdf");
+    let note = bob.join("ref/race.md");
+    write_pdf_with_marker(&pdf, WIP_MARKER, false);
+    seed_v1(&note, &V1_TASK.replace("example", "race"));
+    settle_v1(&config, &pdf);
+
+    let archived_source = bob.join("archived-source.pdf");
+    write_pdf_with_marker(&archived_source, NEXT_MARKER, true);
+    let archived_bytes = bytes_of(&archived_source);
+    let current_note = text_of(&note);
+    let completed = current_note.replace("- [/] #task", "- [x] #task");
+    assert_ne!(completed, current_note);
+    write_test_file(&note, &completed);
+    attach_archive_history(&bob, &note, &archived_bytes);
+
+    let plan = plan_single_pdf_sync(&config, &pdf, write_opts())
+        .expect("plan against current replacement PDF");
+    assert!(plan.marker_write_needed, "fixture also needs marker repair");
+    let note_before = text_of(&note);
+    let replacement_bytes = bytes_of(&pdf);
+
+    // A presenter restore between planning and execution is held before the
+    // marker or any other per-PDF write path starts.
+    write_test_bytes(&pdf, &archived_bytes);
+    let mut direct = MarkerWriteSession::uncoordinated();
+    let direct_outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut direct,
+    )
+    .expect("race recheck");
+    match direct_outcome {
+        PdfSyncOutcome::Held(hold) => {
+            assert_eq!(hold.reason, HoldReason::ReplacedCapture);
+            assert_eq!(
+                hold.message,
+                "Highlights wrote the replaced capture back"
+            );
+        }
+        other => panic!("expected replaced-capture hold, got {other:?}"),
+    }
+    assert_eq!(bytes_of(&pdf), archived_bytes);
+    assert_eq!(text_of(&note), note_before);
+
+    // Simulate Highlights saving the old capture when coordination is
+    // granted. The callback must recheck its digest before marker repair.
+    write_test_bytes(&pdf, &replacement_bytes);
+    let fake = FakeCoordinator::grant_after_save(
+        Duration::from_millis(10),
+        archived_bytes.clone(),
+    );
+    let mut coordinated = write_session(
+        MarkerWriteCoordinator::Fake(fake.clone()),
+        ReadingHoldMode::Exempt,
+    );
+    let coordinated_outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut coordinated,
+    )
+    .expect("coordinated save recheck");
+    match coordinated_outcome {
+        PdfSyncOutcome::Held(hold) => {
+            assert_eq!(hold.reason, HoldReason::ReplacedCapture);
+            assert_eq!(
+                hold.message,
+                "Highlights wrote the replaced capture back"
+            );
+        }
+        other => panic!("expected replaced-capture hold, got {other:?}"),
+    }
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&pdf), archived_bytes);
+    assert_eq!(text_of(&note), note_before);
 }

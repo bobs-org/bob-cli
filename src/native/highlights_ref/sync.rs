@@ -8,6 +8,10 @@ pub(super) fn sync_pdf(
     pdf: &Path,
     options: SyncOptions,
 ) -> Result<()> {
+    if let Some(hold) = replaced_capture_hold(config, pdf)? {
+        print_sync_hold_report(&hold);
+        return Ok(());
+    }
     let plan = plan_single_pdf_sync(config, pdf, options)?;
     print_pdf_sync_report("sync", config, &plan, options);
 
@@ -52,6 +56,9 @@ pub(super) fn write_single_pdf_sync(
     config: &Config,
     plan: &PdfSyncPlan,
 ) -> Result<PdfSyncOutcome> {
+    if let Some(hold) = replaced_capture_hold(config, &plan.pdf)? {
+        return Ok(PdfSyncOutcome::Held(hold));
+    }
     ensure_safe_to_write(config, iter::once(plan))?;
     let mut session = MarkerWriteSession::for_explicit_write()?;
     execute_pdf_sync(config, plan, &mut RunWriteState::default(), &mut session)
@@ -126,22 +133,12 @@ fn scan_library_dry_run(
     // embarrassingly parallel. We collect into a position-keyed vector and
     // reassemble in `pdfs` order so reporting output stays deterministic
     // regardless of completion order.
-    let mut plan_outcomes = pdfs
-        .iter()
-        .zip(plan_pdfs(config, &pdfs, options, jobs, &ctx))
-        .map(|(pdf, result)| match result {
-            Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
-            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
-                pdf: pdf.clone(),
-                error,
-            }),
-        })
-        .collect::<Vec<_>>();
+    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
     let mut plans_to_finalize = plan_outcomes
         .iter_mut()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
@@ -150,14 +147,14 @@ fn scan_library_dry_run(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     validate_planned_asset_collisions(&plans)?;
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(_) => None,
+            ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Held(_) => None,
             ScanPlanOutcome::Failed(failure) => Some(failure),
         })
         .collect::<Vec<_>>();
@@ -180,7 +177,11 @@ fn scan_library_dry_run(
     }
 
     if verbose {
-        print_scan_plan_summary(&plans, plan_failures.len());
+        print_scan_plan_summary(
+            &plans,
+            plan_failures.len(),
+            plan_hold_count(&plan_outcomes),
+        );
         println!("writes: none");
     } else {
         print_concise_scan_plan_report(
@@ -257,22 +258,12 @@ fn scan_library_write(
     // embarrassingly parallel. We collect into a position-keyed vector and
     // reassemble in `pdfs` order so reporting output stays deterministic
     // regardless of completion order.
-    let mut plan_outcomes = pdfs
-        .iter()
-        .zip(plan_pdfs(config, &pdfs, options, jobs, &ctx))
-        .map(|(pdf, result)| match result {
-            Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
-            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
-                pdf: pdf.clone(),
-                error,
-            }),
-        })
-        .collect::<Vec<_>>();
+    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
     let mut plans_to_finalize = plan_outcomes
         .iter_mut()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     if let Err(error) =
@@ -286,7 +277,7 @@ fn scan_library_write(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     if let Err(error) = validate_planned_asset_collisions(&plans) {
@@ -296,7 +287,7 @@ fn scan_library_write(
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(_) => None,
+            ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Held(_) => None,
             ScanPlanOutcome::Failed(failure) => Some(failure),
         })
         .collect::<Vec<_>>();
@@ -374,7 +365,7 @@ fn scan_library_write(
             &plans,
             plan_failures.len(),
             write_failures.len(),
-            held_count(&write_outcomes),
+            held_count(&write_outcomes) + plan_hold_count(&plan_outcomes),
         );
     } else {
         print_concise_scan_write_report(
@@ -388,7 +379,7 @@ fn scan_library_write(
         );
     }
     let mut counts = ScanCounts::from_reports(&reports);
-    counts.held = held_count(&write_outcomes);
+    counts.held = held_count(&write_outcomes) + plan_hold_count(&plan_outcomes);
     let assembled =
         assemble_full_scan_entries(config, &plan_outcomes, &write_outcomes);
     emit_scan_receipt(&render_scan_report_envelope(
@@ -408,6 +399,7 @@ fn scan_library_write(
         ),
         assembled.notes,
         assembled.failures,
+        Vec::new(),
         false,
         Vec::new(),
         assembled.held,
@@ -431,47 +423,119 @@ pub(super) fn plan_pdfs(
     options: SyncOptions,
     jobs: usize,
     ctx: &ScanContext,
-) -> Vec<Result<PdfSyncPlan>> {
+) -> Vec<ScanPlanOutcome> {
     if jobs <= 1 || pdfs.len() <= 1 {
         return pdfs
             .iter()
-            .map(|pdf| plan_pdf_sync(config, pdf, options, ctx))
+            .map(|pdf| plan_pdf_sync_for_scan(config, pdf, options, ctx))
             .collect();
     }
 
     let next = AtomicUsize::new(0);
     let worker_count = jobs.min(pdfs.len());
-    let mut indexed: Vec<(usize, Result<PdfSyncPlan>)> =
-        thread::scope(|scope| {
-            let handles: Vec<_> = (0..worker_count)
-                .map(|_| {
-                    let next = &next;
-                    scope.spawn(move || {
-                        let mut local = Vec::new();
-                        loop {
-                            let index = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(pdf) = pdfs.get(index) else {
-                                break;
-                            };
-                            local.push((
-                                index,
-                                plan_pdf_sync(config, pdf, options, ctx),
-                            ));
-                        }
-                        local
-                    })
+    let mut indexed: Vec<(usize, ScanPlanOutcome)> = thread::scope(|scope| {
+        let handles: Vec<_> = (0..worker_count)
+            .map(|_| {
+                let next = &next;
+                scope.spawn(move || {
+                    let mut local = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(pdf) = pdfs.get(index) else {
+                            break;
+                        };
+                        local.push((
+                            index,
+                            plan_pdf_sync_for_scan(config, pdf, options, ctx),
+                        ));
+                    }
+                    local
                 })
-                .collect();
-            handles
-                .into_iter()
-                .flat_map(|handle| {
-                    handle.join().expect("planning worker thread panicked")
-                })
-                .collect()
-        });
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| {
+                handle.join().expect("planning worker thread panicked")
+            })
+            .collect()
+    });
 
     indexed.sort_by_key(|(index, _)| *index);
     indexed.into_iter().map(|(_, result)| result).collect()
+}
+
+/// Plan one scan target, recognizing an archived capture before marker
+/// parsing or any annotation/task planning.
+fn plan_pdf_sync_for_scan(
+    config: &Config,
+    pdf: &Path,
+    options: SyncOptions,
+    ctx: &ScanContext,
+) -> ScanPlanOutcome {
+    match replaced_capture_hold(config, pdf) {
+        Ok(Some(hold)) => ScanPlanOutcome::Held(hold),
+        Ok(None) => match plan_pdf_sync(config, pdf, options, ctx) {
+            Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
+            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
+                pdf: pdf.to_path_buf(),
+                error,
+            }),
+        },
+        Err(error) => ScanPlanOutcome::Failed(ScanFailure {
+            pdf: pdf.to_path_buf(),
+            error,
+        }),
+    }
+}
+
+/// Hold a PDF whose exact bytes match one of this reference's archived
+/// annotated captures. The archive reader validates lineage and paths; no
+/// filename or cross-reference hash guesses are used.
+pub(super) fn replaced_capture_hold(
+    config: &Config,
+    pdf: &Path,
+) -> Result<Option<ScanHold>> {
+    if !pdf.is_file() {
+        return Ok(None);
+    }
+    let note_path = ref_note_path(config, pdf)?;
+    if !note_path.is_file() {
+        return Ok(None);
+    }
+    let Ok(note_relative) = note_path.strip_prefix(&config.bob_dir) else {
+        return Ok(None);
+    };
+    let note_relative = note_relative.to_string_lossy().replace('\\', "/");
+    let records = overwrite::archive::records_for_live_note(
+        &config.bob_dir,
+        &note_relative,
+    )
+    .map_err(|error| {
+        CommandError::new(format!(
+            "read archived capture metadata for {note_relative}: {}",
+            error.message
+        ))
+    })?;
+    let archived_hashes = records
+        .iter()
+        .filter_map(|record| record.annotated_pdf.as_ref())
+        .map(|archive| archive.sha256.as_str())
+        .collect::<Vec<_>>();
+    if archived_hashes.is_empty() {
+        return Ok(None);
+    }
+    let live_hash = sha256_file(pdf)?;
+    if !archived_hashes.contains(&live_hash.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(ScanHold {
+        pdf: pdf.to_path_buf(),
+        note_path: note_path.clone(),
+        title: note_title(pdf, &Projection::new()),
+        reason: HoldReason::ReplacedCapture,
+        message: "Highlights wrote the replaced capture back".to_string(),
+    }))
 }
 
 /// Vault-relative forward-slash path for locator-index lookups.

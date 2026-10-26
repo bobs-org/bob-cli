@@ -692,6 +692,7 @@ pub(super) enum HoldReason {
     EditorActive,
     CoordinationTimeout,
     MarkerChanged,
+    ReplacedCapture,
 }
 
 impl HoldReason {
@@ -700,6 +701,7 @@ impl HoldReason {
             Self::EditorActive => "editor_active",
             Self::CoordinationTimeout => "coordination_timeout",
             Self::MarkerChanged => "marker_changed",
+            Self::ReplacedCapture => "replaced_capture",
         }
     }
 }
@@ -767,6 +769,7 @@ pub(super) struct NormalizedProjection {
 #[derive(Debug, Clone)]
 pub(super) enum ScanPlanOutcome {
     Planned(Box<PdfSyncPlan>),
+    Held(ScanHold),
     Failed(ScanFailure),
 }
 

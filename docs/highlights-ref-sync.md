@@ -754,6 +754,14 @@ scan exits 0, and the next scan retries. A hold is not a failure.
 | `editor_active` | Unattended scan; Highlights frontmost; last input less than 30 s ago | `waiting while you read in Highlights · retrying next scan` |
 | `coordination_timeout` | Access not granted within 10 s, or the scan's 30 s cap is spent | `Highlights didn't answer within 10 s (a dialog may be open) · retrying next scan` (cap variant: `Highlights didn't answer this scan (30 s spent) · retrying next scan`) |
 | `marker_changed` | Fresh bytes carry a marker other than the planned one | `marker changed in Highlights during the scan · retrying next scan` |
+| `replaced_capture` | The live PDF's SHA-256 matches an annotated PDF archived by this reference's `earlier:` lineage | `Highlights wrote the replaced capture back` |
+
+The `replaced_capture` guard applies on every host, with or without PDF
+write-back. It runs before marker reconciliation, annotation-task intake, or
+asset writes, and checks again at the per-PDF write boundary. The digest is
+exact byte evidence from this reference's validated archive metadata; it is
+not a similarity check. Bob leaves the restored PDF untouched so the current
+capture can be restored before another scan.
 
 Concise scan output prints a yellow `held` line and a `N held` summary count.
 Verbose scan (`-v`) prints `pdf_write_coordination: on` and a `reading_hold`
@@ -988,7 +996,7 @@ queued in `queued`.
 A successful or partially failed scan prints this envelope (field order is
 fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 `write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`,
-`intake_only`, `queued`, `held`):
+`intake_only`, `queued`, optional `preview_holds`, `held`):
 
 | Field | Meaning |
 | --- | --- |
@@ -1018,7 +1026,8 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
-| `held` | PDFs held instead of written (coordinated marker writes waiting on Highlights), always last and `[]` for dry runs: `{pdf, note, title, reason, message}` with vault-relative `pdf`/`note`, a stable `reason` slug (`editor_active`, `coordination_timeout`, `marker_changed`), and the same message the human `held` line prints. The error envelope has no `held` field |
+| `preview_holds` | Present only when a dry-run can diagnose a hold before writes; rows have the same `{pdf, note, title, reason, message}` shape as `held`. `held` and `summary.held` remain empty/zero in dry-run output |
+| `held` | PDFs held instead of written, always last and `[]` for dry runs: `{pdf, note, title, reason, message}` with vault-relative `pdf`/`note`, a stable `reason` slug (`editor_active`, `coordination_timeout`, `marker_changed`, `replaced_capture`), and the same message the human `held` line prints. The error envelope has no `held` field |
 
 A hard failure prints the error envelope instead (`ok`, `schema_version`,
 `command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`,
@@ -2119,7 +2128,7 @@ adoptions are not creations, unchanged tasks are not updates, and
 failures never count. Remaining unmigrated references print as `N open
 v1 ref tasks · run bob ref migrate-tasks`. Verbose, dry-run, and
 single-PDF reports name the destination, preview or final ID, adoptions,
-and planned or performed line edits. JSON output is unchanged.
+and planned or performed line edits. The JSON reading-task fields are unchanged.
 
 ## MacBook Setup Guide
 

@@ -491,6 +491,13 @@ pub(super) fn print_verbose_scan_plan_report(
     for outcome in plan_outcomes {
         match outcome {
             ScanPlanOutcome::Planned(plan) => print_scan_plan_entry(plan),
+            ScanPlanOutcome::Held(hold) => {
+                println!("pdf: {}", hold.pdf.display());
+                println!(
+                    "  pdf_marker_action: held ({})",
+                    hold_verbose_message(&hold.message)
+                );
+            }
             ScanPlanOutcome::Failed(failure) => {
                 print_scan_plan_failure_entry(failure);
             }
@@ -603,17 +610,20 @@ pub(super) fn print_concise_scan_plan_report(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => ScanLine::from_plan(plan),
+            ScanPlanOutcome::Held(hold) => Some(ScanLine::from_hold(hold)),
             ScanPlanOutcome::Failed(failure) => {
                 Some(ScanLine::from_failure(failure, false))
             }
         })
         .collect::<Vec<_>>();
     print_scan_lines(&lines, true, styler);
+    let mut counts = ScanCounts::from_plans(plans);
+    counts.held = plan_hold_count(plan_outcomes);
     println!(
         "{}",
         scan_summary_line(
             pdf_count,
-            ScanCounts::from_plans(plans),
+            counts,
             plan_failure_count,
             "none",
             styler,
@@ -648,7 +658,7 @@ pub(super) fn print_concise_scan_write_report(
                         }
                     }
                     Some(ScanWriteOutcome::Held(hold)) => {
-                        lines.push(ScanLine::from_hold(plan, hold));
+                        lines.push(ScanLine::from_hold(hold));
                     }
                     Some(ScanWriteOutcome::Failed(failure)) => {
                         lines.push(ScanLine::from_failure(failure, true));
@@ -659,15 +669,20 @@ pub(super) fn print_concise_scan_write_report(
             ScanPlanOutcome::Failed(failure) => {
                 lines.push(ScanLine::from_failure(failure, false));
             }
+            ScanPlanOutcome::Held(hold) => {
+                lines.push(ScanLine::from_hold(hold));
+            }
         }
     }
 
     print_scan_lines(&lines, false, styler);
+    let mut counts = ScanCounts::from_write_outcomes(write_outcomes, reports);
+    counts.held += plan_hold_count(plan_outcomes);
     println!(
         "{}",
         scan_summary_line(
             pdf_count,
-            ScanCounts::from_write_outcomes(write_outcomes, reports),
+            counts,
             plan_failure_count + write_failure_count,
             write_summary_from_reports(reports),
             styler,
@@ -677,7 +692,7 @@ pub(super) fn print_concise_scan_write_report(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect();
     print_reading_summary_lines(
@@ -767,9 +782,9 @@ impl ScanLine {
         })
     }
 
-    pub(super) fn from_hold(plan: &PdfSyncPlan, hold: &ScanHold) -> Self {
+    pub(super) fn from_hold(hold: &ScanHold) -> Self {
         Self::Held {
-            name: scan_display_name(&plan.note_path),
+            name: scan_display_name(&hold.note_path),
             message: hold.message.clone(),
         }
     }
@@ -1246,6 +1261,13 @@ pub(super) fn held_count(write_outcomes: &[ScanWriteOutcome]) -> usize {
         .count()
 }
 
+pub(super) fn plan_hold_count(plan_outcomes: &[ScanPlanOutcome]) -> usize {
+    plan_outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, ScanPlanOutcome::Held(_)))
+        .count()
+}
+
 pub(super) fn scan_summary_line(
     pdf_count: usize,
     counts: ScanCounts,
@@ -1444,7 +1466,11 @@ pub(super) fn print_verbose_scan_write_marker_lines(
     write_outcomes: &[ScanWriteOutcome],
     session: &MarkerWriteSession,
 ) {
-    if !session.policy.coordinate_pdf_writes {
+    if !session.policy.coordinate_pdf_writes
+        && !plan_outcomes
+            .iter()
+            .any(|outcome| matches!(outcome, ScanPlanOutcome::Held(_)))
+    {
         return;
     }
     let mut write_index = 0usize;
@@ -1475,6 +1501,13 @@ pub(super) fn print_verbose_scan_write_marker_lines(
                     _ => {}
                 }
             }
+            ScanPlanOutcome::Held(hold) => {
+                println!("pdf: {}", hold.pdf.display());
+                println!(
+                    "  pdf_marker_action: held ({})",
+                    hold_verbose_message(&hold.message)
+                );
+            }
             ScanPlanOutcome::Failed(_) => {}
         }
     }
@@ -1483,8 +1516,10 @@ pub(super) fn print_verbose_scan_write_marker_lines(
 pub(super) fn print_scan_plan_summary(
     plans: &[&PdfSyncPlan],
     plan_failure_count: usize,
+    held_count: usize,
 ) {
-    let counts = ScanCounts::from_plans(plans);
+    let mut counts = ScanCounts::from_plans(plans);
+    counts.held = held_count;
     println!("summary:");
     println!("  notes_create: {}", counts.creates);
     println!("  notes_update: {}", counts.updates);
@@ -1511,6 +1546,7 @@ pub(super) fn print_scan_plan_summary(
     println!("  reading_tasks_update: {}", reading.updated);
     println!("  open_v1_ref_tasks: {}", count_open_v1(plans));
     println!("  pdfs_planned: {}", plans.len());
+    println!("  pdfs_held: {}", counts.held);
     println!("  plan_failures: {plan_failure_count}");
     println!("  scan_failures: {plan_failure_count}");
     if plan_failure_count > 0 {

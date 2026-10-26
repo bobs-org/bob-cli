@@ -161,6 +161,8 @@ pub(super) struct ScanReportEnvelope {
     failures: Vec<ScanJsonFailure>,
     intake_only: bool,
     queued: Vec<ScanJsonQueued>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    preview_holds: Vec<ScanJsonHold>,
     held: Vec<ScanJsonHold>,
 }
 
@@ -516,22 +518,12 @@ pub(super) fn scan_library_json(
     }
 
     let ctx = ScanContext::build(config);
-    let mut plan_outcomes = pdfs
-        .iter()
-        .zip(plan_pdfs(config, &pdfs, options, jobs, &ctx))
-        .map(|(pdf, result)| match result {
-            Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
-            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
-                pdf: pdf.clone(),
-                error,
-            }),
-        })
-        .collect::<Vec<_>>();
+    let mut plan_outcomes = plan_pdfs(config, &pdfs, options, jobs, &ctx);
     let mut plans_to_finalize = plan_outcomes
         .iter_mut()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_mut()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
@@ -552,7 +544,7 @@ pub(super) fn scan_library_json(
         .iter()
         .filter_map(|outcome| match outcome {
             ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
-            ScanPlanOutcome::Failed(_) => None,
+            ScanPlanOutcome::Held(_) | ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
     if let Err(error) = validate_planned_asset_collisions(&plans) {
@@ -569,7 +561,7 @@ pub(super) fn scan_library_json(
     let plan_failures = plan_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanPlanOutcome::Planned(_) => None,
+            ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Held(_) => None,
             ScanPlanOutcome::Failed(failure) => Some(failure),
         })
         .collect::<Vec<_>>();
@@ -590,14 +582,25 @@ pub(super) fn scan_library_json(
                         None,
                     ))
                 }
-                ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Failed(_) => {
-                    None
-                }
+                ScanPlanOutcome::Planned(_)
+                | ScanPlanOutcome::Held(_)
+                | ScanPlanOutcome::Failed(_) => None,
             })
             .collect::<Vec<_>>();
         let failures = plan_failures
             .iter()
             .map(|failure| scan_failure_entry(config, failure, "plan"))
+            .collect::<Vec<_>>();
+        let preview_holds = plan_outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                ScanPlanOutcome::Held(hold) => {
+                    Some(scan_hold_entry(config, hold))
+                }
+                ScanPlanOutcome::Planned(_) | ScanPlanOutcome::Failed(_) => {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
         return print_scan_report_envelope(
             config,
@@ -610,6 +613,7 @@ pub(super) fn scan_library_json(
             plan_failures.len(),
             notes,
             failures,
+            preview_holds,
             Vec::new(),
             false,
         );
@@ -666,7 +670,7 @@ pub(super) fn scan_library_json(
         })
         .collect::<Vec<_>>();
     let mut counts = ScanCounts::from_reports(&reports);
-    counts.held = held_count(&write_outcomes);
+    counts.held = held_count(&write_outcomes) + plan_hold_count(&plan_outcomes);
     let assembled =
         assemble_full_scan_entries(config, &plan_outcomes, &write_outcomes);
     let failure_count = plan_failures.len()
@@ -685,6 +689,7 @@ pub(super) fn scan_library_json(
         failure_count,
         assembled.notes,
         assembled.failures,
+        Vec::new(),
         assembled.held,
         true,
     )
@@ -863,6 +868,9 @@ pub(super) fn assemble_full_scan_entries(
             ScanPlanOutcome::Failed(failure) => {
                 failures.push(scan_failure_entry(config, failure, "plan"));
             }
+            ScanPlanOutcome::Held(hold) => {
+                held.push(scan_hold_entry(config, hold));
+            }
         }
     }
     AssembledScanEntries {
@@ -939,6 +947,7 @@ pub(super) fn render_scan_report_envelope(
     summary: ScanJsonSummary,
     notes: Vec<ScanJsonNote>,
     failures: Vec<ScanJsonFailure>,
+    preview_holds: Vec<ScanJsonHold>,
     intake_only: bool,
     queued: Vec<ScanJsonQueued>,
     held: Vec<ScanJsonHold>,
@@ -957,6 +966,7 @@ pub(super) fn render_scan_report_envelope(
         failures,
         intake_only,
         queued,
+        preview_holds,
         held,
     };
     serde_json::to_string(&envelope).expect("scan envelope serializes")
@@ -978,6 +988,7 @@ fn print_scan_report_envelope(
     failure_count: usize,
     notes: Vec<ScanJsonNote>,
     failures: Vec<ScanJsonFailure>,
+    preview_holds: Vec<ScanJsonHold>,
     held: Vec<ScanJsonHold>,
     write_receipt: bool,
 ) -> i32 {
@@ -991,6 +1002,7 @@ fn print_scan_report_envelope(
         scan_summary_json(&counts, pdf_count, failure_count),
         notes,
         failures,
+        preview_holds,
         false,
         Vec::new(),
         held,
@@ -1344,6 +1356,7 @@ pub(super) fn render_intake_only_envelope(
         scan_summary_json(&counts, pdfs, failures.len()),
         notes,
         failures,
+        Vec::new(),
         true,
         queued,
         Vec::new(),

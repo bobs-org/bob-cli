@@ -16,6 +16,7 @@ mod overwrite;
 mod overwrite_local;
 mod overwrite_recovery;
 mod overwrite_web;
+mod replaced_capture;
 mod scan;
 mod scan_hooks;
 mod scan_intake;

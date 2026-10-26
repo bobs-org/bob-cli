@@ -103,7 +103,16 @@ pub(super) fn ensure_safe_to_write<'a, I>(
 where
     I: IntoIterator<Item = &'a PdfSyncPlan>,
 {
-    let plans = plans.into_iter().collect::<Vec<_>>();
+    let mut active_plans = Vec::new();
+    for plan in plans {
+        // A capture that was restored after planning is now a hold. Do not
+        // let its otherwise-planned note/task/assets target trigger a broad
+        // dirty-target refusal before execution can report that hold.
+        if super::sync::replaced_capture_hold(config, &plan.pdf)?.is_none() {
+            active_plans.push(plan);
+        }
+    }
+    let plans = active_plans;
     let mut touched_paths = BTreeSet::new();
     for plan in &plans {
         let path_set = scoped_write_path_set(config, plan);
