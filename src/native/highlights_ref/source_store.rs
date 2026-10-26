@@ -181,11 +181,6 @@ fn vault_rel_forward(bob_dir: &Path, path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-#[allow(dead_code)]
-pub(crate) fn pdf_vault_rel(bob_dir: &Path, pdf_abs: &Path) -> String {
-    vault_rel_forward(bob_dir, pdf_abs)
-}
-
 fn pandoc_version_string() -> String {
     // Integration tests point `BOB_PANDOC_COMMAND` at a logging fake that
     // overwrites its args log on every invocation. Probing `--version`
@@ -546,9 +541,7 @@ pub(crate) enum StoreStatus {
 #[derive(Debug, Clone)]
 pub(crate) struct StoreRead {
     pub(crate) status: StoreStatus,
-    #[allow(dead_code)]
     pub(crate) detail: Option<String>,
-    #[allow(dead_code)]
     pub(crate) bytes: Option<Vec<u8>>,
     pub(crate) catalog: Option<StoredCatalog>,
 }

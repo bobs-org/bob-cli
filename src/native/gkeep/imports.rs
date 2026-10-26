@@ -25,6 +25,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::native::vault_git::IgnoreQuiet;
+
 /// Import-store schema version.
 pub(super) const SCHEMA_VERSION: u32 = 1;
 
@@ -533,12 +535,6 @@ impl TrackError {
     }
 }
 
-/// Quiet `git check-ignore` outcome for one path.
-enum IgnoreQuiet {
-    Ignored,
-    Trackable,
-}
-
 /// Preflight that paths can be tracked in a Git vault: if any is ignored,
 /// fail with the matching rule instead of force-adding or editing
 /// `.gitignore`. Tracked paths stay trackable even when an ignore pattern
@@ -647,47 +643,10 @@ fn check_ignore_quiet(
     child_env: &crate::native::ob::ChildEnv,
     rel: &Path,
 ) -> Result<IgnoreQuiet, TrackError> {
-    let output = crate::native::ob::git_command(bob_dir, child_env)
-        .arg("check-ignore")
-        .arg("--quiet")
-        .arg("--")
-        .arg(rel)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            TrackError::new(
-                format!("failed to run git check-ignore: {error}"),
-                None,
-            )
-        })?;
-    match output.status.code() {
-        Some(0) => Ok(IgnoreQuiet::Ignored),
-        Some(1) => Ok(IgnoreQuiet::Trackable),
-        Some(code) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr.trim();
-            let message = if detail.is_empty() {
-                format!(
-                    "cannot inspect Git ignore rules for {}: git check-ignore exited {code}",
-                    rel.display()
-                )
-            } else {
-                format!(
-                    "cannot inspect Git ignore rules for {}: {detail}",
-                    rel.display()
-                )
-            };
-            Err(TrackError::new(message, Some(inspect_hint(bob_dir, rel))))
-        }
-        None => Err(TrackError::new(
-            format!(
-                "cannot inspect Git ignore rules for {}: git check-ignore terminated by signal",
-                rel.display()
-            ),
-            Some(inspect_hint(bob_dir, rel)),
-        )),
-    }
+    crate::native::vault_git::check_ignore_quiet(bob_dir, child_env, rel)
+        .map_err(|message| {
+            TrackError::new(message, Some(inspect_hint(bob_dir, rel)))
+        })
 }
 
 fn ignored_path_error(

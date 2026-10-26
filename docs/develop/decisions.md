@@ -217,6 +217,49 @@ as the source of truth.
 See also [Task Dependencies Are Links On One Depends-On Line](#task-deps-are-depends-on-links) and
 [Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites](#capture-link-drops-blocking-deps).
 
+## Code Copy Reads bob's Render-Time Catalog {#code-copy-reads-render-time-catalog}
+
+**Status:** Accepted
+
+bob records code blocks and page anchors during PDF rendering, and serves the catalog through bob ref code; clients present those bytes and never extract code from the PDF text layer or re-parse Markdown at read time.
+
+**Applies to.** bob-cli PDF rendering and `bob ref code`, plus Bob Refs code
+copy and Highlights integration.
+
+**Claim.** Capture code and Mermaid blocks during the pandoc render that creates
+the PDF. The render-time catalog records exact block text, language, attributes,
+section, and anchor-derived page range, paired with the preserved source. Serve
+the verified catalog through `bob ref code`; that command never runs pandoc.
+Bob Mac Capture decodes bob's result, previews the payload, and copies the
+reported bytes. Plain copy preserves tabs, indentation, blank lines, trailing
+spaces, Unicode, and all other recorded content, with LF line endings and no
+added trailing newline. Fenced copy is an explicit alternate. The PDF text layer
+is only a locator during verified attachment and is never a code-copy source.
+
+**Why.** Pandoc's render is the only point that knows which blocks reached the
+PDF after transclusion, section filtering, and Mermaid conversion; it also has
+the block text before PDF layout changes it and can attach page anchors. Reading
+the PDF text layer silently changes code through wrapped lines, lost tabs, and
+dropped glyphs. Parsing Markdown later with a second parser would disagree with
+pandoc on its dialect, nested containers, and rendered block order. A shared
+JSON read surface leaves one semantic authority in bob while letting the Mac
+client show exactly what it will copy.
+
+**Cost.** The catalog is derived data tied to a specific PDF and source digest,
+so it must be regenerated when rendering changes and validated before use. The
+Mac depends on a compatible `bob` JSON contract; clients must handle missing or
+invalid catalogs without inventing fallback code.
+
+**Reopens when.** A renderer change makes the catalog fail to match the rendered
+PDF, or a future shared parser can prove exact agreement with pandoc for every
+supported input route and preserve the same page and byte guarantees.
+
+Evidence: `research:202610/ref_code_block_copy/ref_code_block_copy.md`; bob-cli
+`c7ced497` (render-time catalog), `009060f9` (catalog storage), `fb28faa1`
+(`bob ref code` read contract), `36ae0ef0` (verified attachment); Bob Mac
+Capture `d8a828f` (catalog and picker models), `c7a5f37` (Copy card and preview
+well), `7b9bbdd` (Highlights Command-Y entry).
+
 ## Decay Decisions Are Available Immediately {#decay-decisions-are-available-immediately}
 
 **Status:** Accepted
@@ -862,6 +905,51 @@ annotated renames gain a safe method that preserves highlight IDs and follow-up
 links.
 
 Superseded in part: the claim that a rename keeps the reference `id`, PDF marker, and PDF bytes is replaced by [Reference Ids Follow File Stems](#reference-ids-follow-file-stems); the `^ref-…` block ID, title, `source_url`, and dates still stay.
+
+## Reference Sources Are Preserved Write-Once {#reference-sources-are-preserved-write-once}
+
+**Status:** Accepted
+
+bob preserves render-input Markdown and its derived code catalog in a hidden, content-addressed .bob store; source bytes are write-once and reference notes carry a note-local source_markdown pointer.
+
+**Applies to.** bob-cli reference creation, intake, overwrite, backfill, and the
+Bob Refs clients.
+
+**Claim.** Preserve the exact Markdown bytes consumed by pandoc in
+`.bob/ref-sources/<ref_type>/<birth-stem>--<hash12>/source.md`, alongside the
+render-time `code.json` catalog. The source file is write-once: matching content
+reuses it, while a digest mismatch refuses replacement. Keep the source outside
+`lib/` and exclude `.bob/` from bob's note walkers. A reference note's
+`source_markdown` frontmatter field points to the store. Derive that pointer at
+birth by matching reference type, stem, and PDF digest; overwrite and verified
+attach set it explicitly. Preserve old stores as history when content changes.
+
+**Why.** The research found that 449 of 538 reports had code, with 70 blocks
+containing literal tabs and 47% containing lines longer than 80 columns. PDF text
+extraction loses tabs, wraps lines, and drops glyphs, so keeping the original
+render input preserves exact copy bytes. A content-addressed hidden store keeps
+those bytes and their catalog together, survives overwrite history, and avoids
+the Highlights sidecar namespace. `lib/<stem>.md` conflicts with Highlights
+annotations; other files under `lib/` are indexed and walked. Embedded PDF files
+add a coordinated PDF write path and may not survive Highlights saves. The
+note-local pointer keeps source metadata out of the PDF marker and avoids
+rewriting annotated PDFs during backfill; it is derived once from the PDF digest
+at note birth.
+
+**Cost.** Source Markdown, including comments and frontmatter, is synced in the
+private vault. Stores accumulate as history, and readers must validate digests
+and tolerate missing catalogs. The pointer depends on birth-time PDF identity
+and remains note-local.
+
+**Reopens when.** A real collision or recovery issue shows content-addressed
+history is unsafe, or the vault's privacy/sync model changes enough that syncing
+the preserved Markdown is no longer acceptable.
+
+Evidence: `research:202610/ref_code_block_copy/ref_code_block_copy.md`; bob-cli
+`01f7ec97` (walker exclusion), `c7ced497` (render-time catalog), `009060f9`
+(write-once source store and note pointer), `a6d3ecbf` (overwrite lifecycle),
+`36ae0ef0` (verified attachment); Bob Mac Capture `d8a828f` (catalog models),
+`c7a5f37` (Copy card integration).
 
 ## References Are Ingested At Birth {#references-are-ingested-at-birth}
 

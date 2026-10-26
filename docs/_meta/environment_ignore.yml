@@ -13,3 +13,4 @@ BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK: "Private marker added to the child hook process
 BOB_HIGHLIGHTS_PRE_SCAN_COMMAND: "Retired setting detected only to reject old configurations; use BOB_HIGHLIGHTS_PRE_SCAN_HOOK."
 BOB_HIGHLIGHTS_RESOLVE: "Private DNS fixture override for URL-fetch tests; production downloads resolve and validate DNS directly."
 BOB_REF_SCAN_LOCK_WAIT_SECONDS: "Internal test override for scan-writer lock timing; normal scans use the fixed wait."
+BOB_TEST_FIXTURE_PDF: "Fake-pandoc fixture marker in create tests; source-store capture skips its pandoc --version probe so the fake's args log survives."

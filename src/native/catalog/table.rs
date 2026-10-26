@@ -686,8 +686,8 @@ pub(crate) const ENTRIES: &[Row] = &[
         ..reads(
             "ref-code",
             &["ref", "code"],
-            "Show saved code blocks",
-            &["code", "blocks", "source", "markdown"],
+            "Reference code blocks",
+            &["code", "blocks", "snippet", "markdown", "source"],
             Presentation::Report,
             60,
         )
@@ -928,7 +928,7 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     },
     Excluded {
         path: &["ref", "attach-source"],
-        reason: "Batch source backfill; run it from a terminal",
+        reason: "Backfill that needs search paths; run it from a terminal",
     },
     Excluded {
         path: &["ref", "migrate-tasks"],

@@ -4,10 +4,7 @@
 //! reference source store, so both report the same allowlist guidance
 //! when a vault `.gitignore` would keep machine data out of git.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-};
+use std::{path::Path, process::Stdio};
 
 /// Quiet `git check-ignore` outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,19 +63,4 @@ pub(crate) fn is_ignored(
         check_ignore_quiet(bob_dir, child_env, rel),
         Ok(IgnoreQuiet::Ignored)
     )
-}
-
-/// Hint for inspecting the matching rule.
-#[allow(dead_code)]
-pub(crate) fn inspect_hint(bob_dir: &Path, rel: &Path) -> String {
-    format!(
-        "git -C {} check-ignore -v -- {}",
-        bob_dir.display(),
-        rel.display()
-    )
-}
-
-#[allow(dead_code)]
-pub(crate) fn trackability_probe(rel: &Path) -> PathBuf {
-    rel.to_path_buf()
 }

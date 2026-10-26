@@ -308,8 +308,21 @@ fn shell_quote(text: &str) -> String {
     }
 }
 
+fn format_source_bytes(bytes: usize) -> String {
+    if bytes >= 1_000_000 {
+        format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.1} KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn render_human(
     title: &str,
+    path: &str,
+    total_bytes: usize,
+    captured: &str,
     blocks: &[CodeBlockJson],
     styler: Styler,
     hint_ref: &str,
@@ -319,6 +332,14 @@ fn render_human(
         return "no code blocks\n".to_string();
     }
     let mut output = format!("{}\n", styler.bold(title));
+    let block_word = if blocks.len() == 1 { "block" } else { "blocks" };
+    output.push_str(&format!(
+        "{} · {} {block_word} · {} · captured {}\n",
+        path,
+        blocks.len(),
+        format_source_bytes(total_bytes),
+        captured
+    ));
     let mut last_section: Option<(Option<String>, String)> = None;
     for block in blocks {
         if let Some(section) = block.section.as_ref() {
@@ -341,10 +362,10 @@ fn render_human(
         let lang = block.lang.as_deref().unwrap_or("text");
         let summary = block.summary.as_deref().unwrap_or("(empty block)");
         output.push_str(&format!(
-            "  {:>3}  {}  {} · {} · {}\n",
-            block.n,
+            "  {}  {}  {} · {} · {}\n",
+            styler.bold(&format!("{:>3}", block.n)),
             styler.cyan(lang),
-            page_label(block.page, block.page_end),
+            styler.dim(&page_label(block.page, block.page_end)),
             if block.lines == 1 {
                 "1 line".to_string()
             } else {
@@ -657,9 +678,31 @@ pub(crate) fn run_code(matches: &ArgMatches) -> i32 {
         return 0;
     }
     let hint_ref = shortest_ref(&index, resolved.row);
+    let total_bytes = read.bytes.as_deref().map(<[u8]>::len).unwrap_or(0);
+    let captured = read
+        .catalog
+        .as_ref()
+        .map(|catalog| {
+            catalog
+                .captured_at
+                .split('T')
+                .next()
+                .unwrap_or(&catalog.captured_at)
+                .to_string()
+        })
+        .unwrap_or_default();
     print!(
         "{}",
-        render_human(&row.title, &blocks, Styler::detect(), &hint_ref, number,)
+        render_human(
+            &row.title,
+            &row.path,
+            total_bytes,
+            &captured,
+            &blocks,
+            Styler::detect(),
+            &hint_ref,
+            number,
+        )
     );
     0
 }

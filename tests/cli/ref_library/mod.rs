@@ -2,6 +2,7 @@
 //! `highlights-ref` spellings stay byte-identical to the canonical command.
 
 mod attach;
+mod code;
 mod find;
 mod list;
 mod migrate_tasks;
