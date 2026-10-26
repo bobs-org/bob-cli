@@ -28,3 +28,27 @@ repos:
     custom:
       research:
         description: Durable SASE research reports and generated media.
+
+# Project-owned named tools. Complete entries; other config layers cannot
+# splice or concatenate this catalog.
+tools:
+  # Canonical Rust verification gate: cargo fmt, clippy, then the full test
+  # suite via the justfile `check` recipe. `stages: run_silent` is what SASE
+  # prepared completion requires of the matched check command.
+  check:
+    argv: [just, check]
+    description: Run the canonical Rust verification gate (fmt, clippy, tests).
+    stages: run_silent
+    inputs:
+      - justfile
+      - Cargo.toml
+      - Cargo.lock
+      - clippy.toml
+      - rustfmt.toml
+      - rust-toolchain.toml
+    args: deny
+    fingerprint:
+      toolchain:
+        just: [just, --version]
+        cargo: [cargo, --version]
+        rustc: [rustc, --version]
