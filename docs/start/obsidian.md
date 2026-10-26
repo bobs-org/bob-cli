@@ -40,6 +40,9 @@ to In Progress, `[?]` to Blocked, `[x]` to Done, and `[-]` to Cancelled.
 Match these values before reviewing; the CLI refuses a non-Dataview format
 for freshness and ready reports.
 
+To run CLI commands without leaving Obsidian, see [Run bob from
+Obsidian](../guides/run-bob-from-obsidian.md).
+
 ## 3. Deploy the custom plugins from source
 
 The custom Bob plugins do not live in Community plugins. Clone their public

@@ -15,6 +15,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 - [Install a specific Bob release](install-a-tagged-release.md)
 - [Point bob at your vault](point-bob-at-your-vault.md)
 - [Deploy the Obsidian plugins](deploy-obsidian-plugins.md)
+- [Run bob from Obsidian](run-bob-from-obsidian.md)
 - [Sync the vault across machines](sync-vault-across-machines.md)
 
 ## Capture

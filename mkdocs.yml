@@ -154,6 +154,7 @@ nav:
           - Install a specific Bob release: guides/install-a-tagged-release.md
           - Point bob at your vault: guides/point-bob-at-your-vault.md
           - Deploy the Obsidian plugins: guides/deploy-obsidian-plugins.md
+          - Run bob from Obsidian: guides/run-bob-from-obsidian.md
           - Sync the vault across machines: guides/sync-vault-across-machines.md
       - Capture:
           - Capture a task from anywhere on your Mac: guides/capture-from-your-mac.md
