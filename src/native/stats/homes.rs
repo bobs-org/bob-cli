@@ -1259,4 +1259,83 @@ mod tests {
             serde_json::Value::String("sase.md".to_string())
         );
     }
+
+    fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let dest = dst.join(entry.file_name());
+            if entry.path().is_dir() {
+                copy_tree(&entry.path(), &dest);
+            } else {
+                std::fs::copy(entry.path(), dest).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn root_flag_regroups_blog_minutes_under_its_own_root() {
+        let workspace = TempDir::new().unwrap();
+        let vault = workspace.path().join("vault");
+        copy_tree(&homes_vault(), &vault);
+        let blog = vault.join("sase_blog.md");
+        let contents = std::fs::read_to_string(&blog).unwrap();
+        let flagged = contents.replacen(
+            "type: \"[[project]]\"",
+            "type: \"[[project]]\"\nroot: true",
+            1,
+        );
+        assert_ne!(flagged, contents, "sase_blog.md gains root: true");
+        std::fs::write(&blog, flagged).unwrap();
+        let config = write_config(&workspace);
+        let report = compute(&homes_request(vault, config))
+            .expect("flagged homes fixture computes");
+
+        let worked = metric(&report, "worked");
+        // H17: blog minutes regroup under their own root; total unchanged.
+        assert_eq!(dimension_total(worked, "root_parent"), 167);
+        assert_eq!(part_value(worked, "root_parent", "sase.md"), 30);
+        assert_eq!(part_value(worked, "root_parent", "sase_blog.md"), 50);
+        assert_eq!(part_value(worked, "root_parent", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
+        assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
+        assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
+        assert_eq!(part_value(worked, "root_parent", "job_apply.md"), 3);
+        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "root_parent", "@unfiled"), 15);
+        // Area and project dimensions match H2 and H3.
+        assert_eq!(part_value(worked, "area", "gtd.md"), 45);
+        assert_eq!(part_value(worked, "area", "dev.md"), 90);
+        assert_eq!(part_value(worked, "area", "job.md"), 7);
+        assert_eq!(part_value(worked, "area", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "area", "@unfiled"), 15);
+        assert_eq!(part_value(worked, "project", "sase.md"), 30);
+        assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
+        assert_eq!(part_value(worked, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "project", "bob.md"), 10);
+        assert_eq!(part_value(worked, "project", "dev.md"), 10);
+        assert_eq!(part_value(worked, "project", "job.md"), 4);
+        assert_eq!(part_value(worked, "project", "job_apply.md"), 3);
+        // in: filters still match the full residence chain.
+        let sase_in = metric(&report, "sase_in");
+        assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
+        let sase_blog_in = metric(&report, "sase_blog_in");
+        assert_eq!(
+            sase_blog_in.summary.total.as_ref().unwrap().value,
+            Some(50)
+        );
+        // The catalog names the new root.
+        assert_eq!(
+            report.homes["sase_blog.md"].root_parent,
+            "sase_blog.md".to_string()
+        );
+        assert_eq!(report.homes["sase.md"].root_parent, "sase.md".to_string());
+        // Count mode: the BLOG session leads sase_blog, GTD+SASE leads sase.
+        let sessions = metric(&report, "sessions");
+        assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
+        assert_eq!(dimension_total(sessions, "root_parent"), 8);
+        assert_eq!(part_value(sessions, "root_parent", "sase.md"), 1);
+        assert_eq!(part_value(sessions, "root_parent", "sase_blog.md"), 1);
+        assert_eq!(part_value(sessions, "root_parent", "@review:GTD"), 2);
+    }
 }

@@ -15,6 +15,7 @@ pub(crate) struct NoteFacts {
     pub(crate) kind: NoteKind,
     pub(crate) parent: Option<String>,
     pub(crate) color: Option<String>,
+    pub(crate) root: bool,
 }
 
 impl NoteFacts {
@@ -38,10 +39,17 @@ impl NoteFacts {
             .as_ref()
             .and_then(|frontmatter| frontmatter_value(frontmatter, "color"))
             .map(|value| trim_yaml_scalar(value).to_string());
+        let root = frontmatter
+            .as_ref()
+            .and_then(|frontmatter| frontmatter_value(frontmatter, "root"))
+            .is_some_and(|value| {
+                trim_yaml_scalar(value).eq_ignore_ascii_case("true")
+            });
         Self {
             kind,
             parent,
             color,
+            root,
         }
     }
 }

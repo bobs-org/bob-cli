@@ -36,7 +36,8 @@ the nearest area below that top-level area. A home without an area uses
 ## R2 — Root parent
 
 A task's working time groups under its **root parent**: the area note the
-task lives in, else the top-level project above its project note. A
+task lives in, else the nearest project marked `root: true` on the walk up
+to that area, else the top-level project above its project note. A
 top-level project is a project whose `parent` walk reaches an area before
 any other project (normally its `parent` is an area; a sub-area counts). A
 project under another project is a sub-project at any depth. "Top" is never
@@ -46,7 +47,8 @@ Take `chain` as built in R1 and `h` as the nearest-home index:
 
 - If `chain[h]` is an area, `root = chain[h]`.
 - If `chain[h]` is a project, let `a` be the first area index above `h`,
-  or the chain's end. Then `root` is the last project in `chain[h..a]`.
+  or the chain's end. Then `root` is the first project in `chain[h..a]`
+  with `root: true`, else the last project in `chain[h..a]`.
   Non-area, non-project notes in between are walked through, exactly as R1
   walks archive and ref notes.
 - If the walk never reaches an area, the outermost project reached stands
@@ -54,14 +56,26 @@ Take `chain` as built in R1 and `h` as the nearest-home index:
   `@unfiled`.
 - A bucket is its own root: `@review:<NAME>`, `@unlinked`, and `@unfiled`.
 
+Root projects (`root: true`): a project note may set `root: true` in its
+frontmatter to become its own root parent, grouping its own and its
+sub-projects' working time under itself instead of the top-level project
+above it. The flag is read with `frontmatter_value(fm, "root")` and counts
+only when `trim_yaml_scalar` equals `true` ASCII-case-insensitively, so
+`"true"` and `True` count while an absent, `false`, `yes`, empty, or list
+value is silently off. The key is ignored on every non-project note.
+Reporting only: it changes no blocking, Sub-projects lines, Ready caps,
+review tiers, capture routing, plan budget, or `bob projects` output.
+
 | Task lives in | Walk | Root parent |
 | --- | --- | --- |
-| `sase_blog.md` (project) | `sase_blog → sase → dev` | `sase` |
+| `sase_goals.md` (project) | `sase_goals → sase → dev` | `sase` |
+| `sase_blog.md` (project, `root: true`) | `sase_blog → sase → dev` | `sase_blog` |
+| `sase_pre_blog.md` (project) | `sase_pre_blog → sase_blog → sase → dev` | `sase_blog` |
 | `sase.md` / `bob.md` (project) | `→ dev` / `→ gtd` | itself |
 | `dev.md` (area) | — | `dev` |
 | `gtd_daily.md` (sub-area) | — | `gtd_daily` |
 | `p.md` (project, parent `gtd_daily`) | `p → gtd_daily` | `p` |
-| `done/sase_blog_done.md` (archive) | `→ sase_blog → sase → dev` | `sase` |
+| `done/sase_blog_done.md` (archive) | `→ sase_blog → sase → dev` | `sase_blog` |
 | `ref/x.md` (parent `bob`) | `→ bob → dev` | `bob` |
 | `ref/y.md` (parent `dev`) | `→ dev` | `dev` |
 | orphan project `o.md` (no area above) | `o → …` | `o`, area `@unfiled` |

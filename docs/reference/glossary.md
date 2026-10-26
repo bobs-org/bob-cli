@@ -264,8 +264,9 @@ without that tag remain recognized. Follow-up tasks track separate work. See
 
 ### Root Parent {#root-parent}
 
-The [Area Note](#area-note) a task lives in, else the [Top-Level Project](#top-level-project) above
-its project note. Archive and reference wrappers are walked through, and
+The [Area Note](#area-note) a task lives in, else the nearest project marked
+`root: true` on the walk up to that area, else the [Top-Level Project](#top-level-project)
+above its project note. Archive and reference wrappers are walked through, and
 an area-less walk falls back to the outermost project. Buckets `GTD
 review`, `unlinked`, and `unfiled` stay buckets. Derived at read time
 from today's note tree and never written; `rollup:` no longer exists. The
@@ -375,8 +376,9 @@ counts as a Pomodoro Task Link, or changes its status, schedule, priority, or fr
 
 A [Project Note](#project-note) whose `parent` walk reaches an [Area Note](#area-note) before any
 other project — normally its `parent` is an area, and a sub-area counts. A
-project under another project is a sub-project at any depth and belongs to
-the top-level project above it. It is the project grain of
+project under another project is a sub-project at any depth and reports
+under the top-level project above it, unless it — or a project between
+them — sets `root: true`. It is the project grain of
 [Root Parent](#root-parent) reporting: working time groups by root parent, never by
 leaf project. "Top" is never folder depth, size, or status; see
 `docs/pomodoro-homes.md`.

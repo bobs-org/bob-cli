@@ -107,7 +107,8 @@ pub(crate) struct Home {
     /// Full residence chain from the linked note through its ancestors.
     pub(crate) residence_chain: Vec<String>,
     /// Root parent grouping for stats: the area the task lives in, else
-    /// the top-level project above its project note. Buckets are their
+    /// the nearest project marked `root: true` on the walk up to that area,
+    /// else the top-level project above its project note. Buckets are their
     /// own root.
     pub(crate) root_parent: String,
 }
@@ -283,7 +284,15 @@ impl<S: HomeSource> HomeResolver<S> {
                 chain[nearest_home..end]
                     .iter()
                     .filter(|(_, facts)| facts.kind == NoteKind::Project)
-                    .last()
+                    .find(|(_, facts)| facts.root)
+                    .or_else(|| {
+                        chain[nearest_home..end]
+                            .iter()
+                            .filter(|(_, facts)| {
+                                facts.kind == NoteKind::Project
+                            })
+                            .last()
+                    })
                     .map(|(path, _)| path_string(path))
                     .unwrap_or_else(|| path_string(home_path))
             }

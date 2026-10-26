@@ -71,6 +71,11 @@ Bare `type: [[project]]` is accepted too. The scan skips `done/`, `.git/`,
 `sync` also reads an optional `parent` frontmatter field when it is an Obsidian
 wikilink, such as `parent: "[[Parent Project]]"`.
 
+A project note may also set optional `root: true` in its frontmatter. It is
+reporting only: the note becomes its own root parent for Stats grouping,
+instead of folding into the top-level project above it. See
+[R2 — Root parent](pomodoro-homes.md#r2-root-parent).
+
 ## External Names (`project_name_aliases`)
 
 An area or project note can answer to more than its file stem. Add a

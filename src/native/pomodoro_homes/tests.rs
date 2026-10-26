@@ -296,6 +296,189 @@ fn root_parent_follows_the_examples_table() {
     assert_eq!(review.root_parent, "@review:GTD");
 }
 
+#[test]
+fn root_flag_makes_a_project_its_own_root_parent() {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    let mut notes = BTreeMap::new();
+    let project = |parent: &str| {
+        format!("---\ntype: [[project]]\nparent: [[{parent}]]\n---\n")
+    };
+    let root_project = |parent: &str| {
+        format!(
+            "---\ntype: [[project]]\nroot: true\nparent: [[{parent}]]\n---\n"
+        )
+    };
+    notes.insert(
+        PathBuf::from("dev.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    notes.insert(PathBuf::from("sase.md"), project("dev"));
+    notes.insert(PathBuf::from("sase_goals.md"), project("sase"));
+    notes.insert(PathBuf::from("sase_blog.md"), root_project("sase"));
+    notes.insert(PathBuf::from("sase_pre_blog.md"), project("sase_blog"));
+    notes.insert(
+        PathBuf::from("done/sase_blog_done.md"),
+        "---\ntype: [[done]]\nparent: [[sase_blog]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("ref_under_blog.md"),
+        "---\ntype: [[ref]]\nparent: [[sase_pre_blog]]\n---\n".to_string(),
+    );
+    // Nested flags: the nearest flag wins.
+    notes.insert(
+        PathBuf::from("nested_flag.md"),
+        root_project("sase_pre_blog"),
+    );
+    notes.insert(PathBuf::from("under_nested.md"), project("nested_flag"));
+    // Flagged top-level project is unchanged.
+    notes.insert(
+        PathBuf::from("top.md"),
+        "---\ntype: [[project]]\nroot: true\nparent: [[dev]]\n---\n"
+            .to_string(),
+    );
+    // Flags on non-project notes are ignored.
+    notes.insert(
+        PathBuf::from("flagged_area.md"),
+        "---\ntype: [[area]]\nroot: true\nparent: [[dev]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("flagged_ref.md"),
+        "---\ntype: [[ref]]\nroot: true\nparent: [[dev]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("flagged_archive.md"),
+        "---\ntype: [[done]]\nroot: true\nparent: [[sase]]\n---\n".to_string(),
+    );
+    // Quoted/cased values count; other values do not.
+    notes.insert(
+        PathBuf::from("quoted_root.md"),
+        "---\ntype: [[project]]\nroot: \"true\"\nparent: [[sase]]\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("cased_root.md"),
+        "---\ntype: [[project]]\nroot: True\nparent: [[sase]]\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("false_root.md"),
+        "---\ntype: [[project]]\nroot: false\nparent: [[sase]]\n---\n"
+            .to_string(),
+    );
+    notes.insert(
+        PathBuf::from("yes_root.md"),
+        "---\ntype: [[project]]\nroot: yes\nparent: [[sase]]\n---\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+    // A flagged sub-project is its own root.
+    assert_eq!(
+        resolver.resolve_note(Path::new("sase_blog.md")).root_parent,
+        "sase_blog.md"
+    );
+    // Its sub-project, a done archive, and a ref under it root there.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("sase_pre_blog.md"))
+            .root_parent,
+        "sase_blog.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("done/sase_blog_done.md"))
+            .root_parent,
+        "sase_blog.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("ref_under_blog.md"))
+            .root_parent,
+        "sase_blog.md"
+    );
+    // An unflagged sibling still folds to the top-level project.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("sase_goals.md"))
+            .root_parent,
+        "sase.md"
+    );
+    // Nested flags: the nearest flag wins.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("nested_flag.md"))
+            .root_parent,
+        "nested_flag.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("under_nested.md"))
+            .root_parent,
+        "nested_flag.md"
+    );
+    // A flagged top-level project is unchanged.
+    assert_eq!(
+        resolver.resolve_note(Path::new("top.md")).root_parent,
+        "top.md"
+    );
+    // A flag on an area, ref, or archive note is ignored.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("flagged_area.md"))
+            .root_parent,
+        "flagged_area.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("flagged_ref.md"))
+            .root_parent,
+        "dev.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("flagged_archive.md"))
+            .root_parent,
+        "sase.md"
+    );
+    // Quoted and cased true counts; false and yes do not.
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("quoted_root.md"))
+            .root_parent,
+        "quoted_root.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("cased_root.md"))
+            .root_parent,
+        "cased_root.md"
+    );
+    assert_eq!(
+        resolver
+            .resolve_note(Path::new("false_root.md"))
+            .root_parent,
+        "sase.md"
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("yes_root.md")).root_parent,
+        "sase.md"
+    );
+    // The flagged home keeps key, area, hue, and residence chain.
+    let mut plain_notes = notes.clone();
+    plain_notes.insert(PathBuf::from("sase_blog.md"), project("sase"));
+    let plain_index = NoteIndex::from_paths(plain_notes.keys().cloned());
+    let mut plain =
+        HomeResolver::new(IndexedHomeSource::new(&plain_index, &plain_notes));
+    let flagged = resolver.resolve_note(Path::new("sase_blog.md"));
+    let plain_home = plain.resolve_note(Path::new("sase_blog.md"));
+    assert_eq!(flagged.key, plain_home.key);
+    assert_eq!(flagged.area, plain_home.area);
+    assert_eq!(flagged.hue, plain_home.hue);
+    assert_eq!(flagged.residence_chain, plain_home.residence_chain);
+}
+
 fn unlinked_home_root() -> String {
     super::unlinked_home().root_parent.clone()
 }

@@ -270,7 +270,9 @@ While `^prj` is Blocked by its own open prerequisites or a future inline
 `scheduled` date, every open resident is Blocked and tagged `#prj_is_blocked`.
 `^prj` itself is never tagged. `bob projects sync` maps checked to
 `status: done`, canceled to `status: canceled`, and a reopened terminal
-project to `status: wip`.
+project to `status: wip`. A project note may set optional `root: true` to
+become its own root parent for Stats grouping; see
+[R2 — Root parent](../pomodoro-homes.md#r2-root-parent).
 
 Contract: [Project Task Sync](../projects.md),
 [Project Note](glossary.md#project-note),

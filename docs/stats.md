@@ -657,6 +657,7 @@ metric total.
 | H14 | sase_count_in | `measure: count`, `in: [sase]` keeps 3 complete-window sessions when any linked task matches |
 | H15 | review_time / review_count | Oct 14 work session splits 50m into 25m `@review:GTD` and 25m `bob`; review-only minutes and count keep the review share/session |
 | H16 | worked `root_parent` | sase 80 (blog 50 + sase 30), `@review:GTD` 35, bob 10, dev 10, job 4, job_apply 3, `@unlinked` 10, `@unfiled` 15; sums to 167 |
+| H17 | worked `root_parent` with `root: true` on sase_blog | root_parent sase 30, sase_blog 50; area, project, and `in:` values unchanged |
 
 Oct 14 adds the separate H15 check: an unnamed 50m work session links the
 Oct 15 `^gtd` row and `bob`; it is not treated as the same-day review bridge.
@@ -666,7 +667,7 @@ MISC 15m on an article (@unfiled), GTD+SASE 20m all on sase (theme remainder
 gives SASE 10m), unnamed 10m review via `[[#^gtd]]`. Oct 17 is an empty
 Pomodoros section (real zero). Oct 18 (today) BLOG 15m is in `sessions` and
 provisional on metrics. Repeated `compute` calls return byte-identical
-JSON.
+JSON. H17 copies that fixture with `root: true` added to `sase_blog.md`.
 
 ## Limitations
 
