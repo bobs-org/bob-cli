@@ -563,13 +563,15 @@ lists every copy:
 ```text
 bob ref: error: already captured: Attention Is All You Need
   ref/papers/attention_is_all_you_need.md · read · 41 highlights · captured 2026-03-02
-hint: -L  add --listen to narrate it and attach the episode to the existing capture
+hint: -f            read it again as attention_is_all_you_need__v2
+hint: -L            add --listen to narrate it and attach the episode to the existing capture
+hint: -f overwrite  replace ref/papers/attention_is_all_you_need.md in place; authored notes move to ref_history/
 ```
 
 Queued hits render `already queued: <title>` with `hint: -f  replace
 the queued PDF`. Title routes add `hint: -N <name>  capture under a
 different name`. A filed single-source family refuses with its copies
-newest-first (each carrying its `reading vN` number) plus
+newest-first (multi-reading copies carrying their `reading vN` number) plus
 `hint: -f read it again as <root>__vN`; bare `-f` on that family reads
 it again as the named `<root>__vN` beside the earlier readings instead.
 The reread defaults to the newest reading's parent and type (explicit
