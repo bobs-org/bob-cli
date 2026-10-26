@@ -109,17 +109,21 @@ fn run_obsidian(request: &Request) -> Result<(), DataviewError> {
 }
 
 fn run_native(request: &Request) -> Result<(), DataviewError> {
-    let vault = NativeVault::read(
-        &request.vault.bob_dir,
-        request.vault.origin.as_deref(),
-    )?;
     match &request.query {
         QueryInput::Source(source) => {
+            let vault = NativeVault::read(
+                &request.vault.bob_dir,
+                request.vault.origin.as_deref(),
+            )?;
             let source = NativeSourceExpr::parse(source)?;
             let output = vault.evaluate_source(&source);
             emit_engine_output(request, output)
         }
         QueryInput::Dql(input) => {
+            let vault = NativeVault::read(
+                &request.vault.bob_dir,
+                request.vault.origin.as_deref(),
+            )?;
             let query = NativeQuery::parse(&input.read_query()?)?;
             if request.format == OutputFormat::Markdown {
                 let settings =
@@ -131,12 +135,18 @@ fn run_native(request: &Request) -> Result<(), DataviewError> {
                 emit_native_output(request, output)
             }
         }
-        QueryInput::Tasks(input) => tasks::run(
-            &request.vault.bob_dir,
-            request.vault.origin.as_deref(),
-            &input.read_query()?,
-            request.format,
-        ),
+        QueryInput::Tasks(input) => {
+            NativeVault::validate_tasks_origin(
+                &request.vault.bob_dir,
+                request.vault.origin.as_deref(),
+            )?;
+            tasks::run(
+                &request.vault.bob_dir,
+                request.vault.origin.as_deref(),
+                &input.read_query()?,
+                request.format,
+            )
+        }
         QueryInput::TasksNote(path) => {
             tasks::run_note(&request.vault.bob_dir, path, request.format)
         }

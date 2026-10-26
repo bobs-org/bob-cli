@@ -37,6 +37,81 @@ impl NativeVault {
         })
     }
 
+    pub(super) fn validate_tasks_origin(
+        bob_dir: &Path,
+        origin: Option<&Path>,
+    ) -> Result<(), DataviewError> {
+        let Some(origin) = origin else {
+            return Ok(());
+        };
+        let path = normalize_note_path(&origin.to_string_lossy()).map_err(
+            |message| DataviewError::NativeQuery {
+                message: format!(
+                    "invalid native --origin {}: {message}",
+                    origin.display()
+                ),
+            },
+        )?;
+        let not_indexed = || DataviewError::NativeQuery {
+            message: format!(
+                "native --origin {path} does not name an indexed note"
+            ),
+        };
+        let mut parts: Vec<&str> = path.split('/').collect();
+        let Some(file) = parts.pop() else {
+            return Err(not_indexed());
+        };
+        if file.is_empty() {
+            return Err(not_indexed());
+        }
+        let mut current = bob_dir.to_path_buf();
+        for dir in parts {
+            if is_hidden_path_component(std::ffi::OsStr::new(dir))
+                || dir == "_conflicts"
+            {
+                return Err(not_indexed());
+            }
+            current.push(dir);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        return Err(not_indexed());
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(not_indexed());
+                }
+                Err(error) => {
+                    return Err(DataviewError::NativeVaultRead {
+                        path: current.clone(),
+                        error,
+                    });
+                }
+            }
+        }
+        current.push(file);
+        if !has_markdown_extension(&current) {
+            return Err(not_indexed());
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(not_indexed());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(not_indexed());
+            }
+            Err(error) => {
+                return Err(DataviewError::NativeVaultRead {
+                    path: current.clone(),
+                    error,
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn origin_index(
         index: &DataviewIndex,
         origin: Option<&Path>,

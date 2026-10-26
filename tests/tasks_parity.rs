@@ -680,6 +680,127 @@ fn tasks_cli_rejects_invalid_combinations_and_unsupported_surface() {
 }
 
 #[test]
+fn tasks_explicit_origin_preserves_indexed_note_compatibility() {
+    let bare = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "dash.md",
+        "--tasks",
+        "status.type is IN_PROGRESS",
+    ]);
+    assert_success(&bare);
+    let dotted = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "./dash.md",
+        "--tasks",
+        "status.type is IN_PROGRESS",
+    ]);
+    assert_success(&dotted);
+    assert_eq!(
+        json_stdout(&dotted)["result"],
+        json_stdout(&bare)["result"],
+        "{}",
+        format_output(&dotted)
+    );
+
+    let dql = run_fixture(&[
+        "--format",
+        "json",
+        "--origin",
+        "./dash.md",
+        "--query",
+        "LIST",
+    ]);
+    assert_success(&dql);
+
+    let temp = TempDir::new("bob-cli-tasks-origin-compat");
+    write_file(&temp.path().join("Tasks.md"), "- [ ] #task Hello\n");
+    write_file(&temp.path().join("plain.txt"), "hello\n");
+    write_file(&temp.path().join(".hidden/secret.md"), "# hi\n");
+    write_file(&temp.path().join("_conflicts/c.md"), "# hi\n");
+    write_file(&temp.path().join("Real.md"), "# real\n- [ ] #task Real\n");
+
+    for origin in [
+        "missing.md",
+        "plain.txt",
+        ".hidden/secret.md",
+        "_conflicts/c.md",
+    ] {
+        let output = run_tasks(
+            temp.path(),
+            &[
+                "--format", "paths", "--origin", origin, "--tasks", "not done",
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "origin {origin:?}:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("does not name an indexed note"),
+            "origin {origin:?}:\n{}",
+            format_output(&output)
+        );
+    }
+
+    let no_ext = run_tasks(
+        temp.path(),
+        &[
+            "--format", "paths", "--origin", "Tasks", "--tasks", "not done",
+        ],
+    );
+    assert_eq!(no_ext.status.code(), Some(1), "{}", format_output(&no_ext));
+    assert!(
+        stderr(&no_ext).contains("failed to read vault path"),
+        "{}",
+        format_output(&no_ext)
+    );
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(
+            temp.path().join("Real.md"),
+            temp.path().join("Link.md"),
+        )
+        .expect("symlink origin");
+        let output = run_tasks(
+            temp.path(),
+            &[
+                "--format", "paths", "--origin", "Link.md", "--tasks",
+                "not done",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output).contains("does not name an indexed note"),
+            "{}",
+            format_output(&output)
+        );
+    }
+
+    let missing_note = run_tasks(
+        temp.path(),
+        &["--format", "paths", "--tasks-note", "missing.md"],
+    );
+    assert_eq!(
+        missing_note.status.code(),
+        Some(1),
+        "{}",
+        format_output(&missing_note)
+    );
+    assert!(
+        stderr(&missing_note).contains("failed to read vault path"),
+        "{}",
+        format_output(&missing_note)
+    );
+}
+
+#[test]
 fn tasks_note_executes_every_dashboard_block_with_origin_defaults() {
     let output = run_fixture(&["--format", "json", "--tasks-note", "dash.md"]);
     assert_success(&output);

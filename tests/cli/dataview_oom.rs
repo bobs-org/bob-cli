@@ -255,6 +255,332 @@ fn query_command(vault: &Path, format: &str, query: &str) -> Command {
     command
 }
 
+fn tasks_big_page_fixture(big_bytes: usize, flat_items: usize) -> String {
+    let big = "y".repeat(big_bytes);
+    let mut body = format!("---\nbigfield: \"{big}\"\n---\n# Big\n\n");
+    for index in 0..flat_items {
+        body.push_str(&format!("- item {index}\n"));
+    }
+    body
+}
+
+fn write_tasks_settings(vault: &Path) {
+    write_file(
+        &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+        r##"{
+          "globalFilter": "#task",
+          "globalQuery": "",
+          "taskFormat": "dataview"
+        }"##,
+    );
+}
+
+fn tasks_command(vault: &Path, args: &[&str]) -> Command {
+    let mut command = bob_command();
+    command
+        .arg("query")
+        .arg("--bob-dir")
+        .arg(vault)
+        .arg("--engine")
+        .arg("native")
+        .args(args);
+    command.env("BOB_NOW", "2026-07-10 12:00:00");
+    command
+}
+
+#[test]
+fn tasks_ignores_dataview_only_page_metadata() {
+    let temp = TempDir::new("bob-cli-tasks-skips-dataview-index");
+    let vault = temp.path().join("vault");
+    write_tasks_settings(&vault);
+    write_file(&vault.join("Big.md"), &tasks_big_page_fixture(20_000, 200));
+    write_file(&vault.join("Tasks.md"), "- [ ] #task Hello\n");
+    write_file(
+        &vault.join("Queries.md"),
+        "# Queries\n\n```tasks\nnot done\n```\n",
+    );
+    write_file(&vault.join("query.txt"), "not done\n");
+
+    for (args, expected_paths) in [
+        (
+            vec!["--format", "paths", "--tasks", "not done"],
+            "Tasks.md\n",
+        ),
+        (
+            vec!["--format", "paths", "--tasks-note", "Queries.md"],
+            "[Queries.md#Queries (block 1, line 3)]\nTasks.md\n",
+        ),
+    ] {
+        let output = tasks_command(&vault, &args)
+            .output()
+            .expect("run bob tasks query");
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            expected_paths,
+            "tasks args {args:?}:\n{}",
+            format_output(&output)
+        );
+    }
+
+    let file_output = tasks_command(
+        &vault,
+        &["--format", "paths", "--tasks-file", "query.txt"],
+    )
+    .current_dir(&vault)
+    .output()
+    .expect("run bob tasks-file query");
+    // --tasks-file resolves relative to cwd in this harness; fall back to
+    // absolute when the harness cwd differs.
+    let file_output = if file_output.status.success() {
+        file_output
+    } else {
+        let query_file = vault.join("query.txt");
+        tasks_command(
+            &vault,
+            &[
+                "--format",
+                "paths",
+                "--tasks-file",
+                query_file.to_str().expect("utf8 query path"),
+            ],
+        )
+        .output()
+        .expect("run bob tasks-file query absolute")
+    };
+    assert_success(&file_output);
+    assert_eq!(
+        stdout(&file_output),
+        "Tasks.md\n",
+        "{}",
+        format_output(&file_output)
+    );
+
+    let json_output =
+        tasks_command(&vault, &["--format", "json", "--tasks", "not done"])
+            .output()
+            .expect("run bob tasks json");
+    assert_success(&json_output);
+    let json: Value =
+        serde_json::from_str(stdout(&json_output).trim()).expect("tasks json");
+    assert_eq!(json["result"]["count"], 1);
+    assert_eq!(json["result"]["tasks"][0]["description"], "#task Hello");
+
+    let markdown_output =
+        tasks_command(&vault, &["--format", "markdown", "--tasks", "not done"])
+            .output()
+            .expect("run bob tasks markdown");
+    assert_success(&markdown_output);
+    assert!(
+        stdout(&markdown_output).contains("#task Hello"),
+        "{}",
+        format_output(&markdown_output)
+    );
+
+    let placeholder = tasks_command(
+        &vault,
+        &[
+            "--format",
+            "paths",
+            "--origin",
+            "Tasks.md",
+            "--tasks",
+            "path includes {{query.file.path}}",
+        ],
+    )
+    .output()
+    .expect("run bob tasks placeholder");
+    assert_success(&placeholder);
+    assert_eq!(
+        stdout(&placeholder),
+        "Tasks.md\n",
+        "{}",
+        format_output(&placeholder)
+    );
+
+    let function = tasks_command(
+        &vault,
+        &[
+            "--format",
+            "json",
+            "--origin",
+            "Tasks.md",
+            "--tasks",
+            "filter by function task.file.path === query.file.path",
+        ],
+    )
+    .output()
+    .expect("run bob tasks function");
+    assert_success(&function);
+    let function_json: Value =
+        serde_json::from_str(stdout(&function).trim()).expect("function json");
+    assert_eq!(function_json["result"]["count"], 1);
+
+    let dql = run_query(&vault, "json", "LIST FROM \"Big.md\"");
+    assert_success(&dql);
+    let dql_json: Value =
+        serde_json::from_str(stdout(&dql).trim()).expect("dql json");
+    assert_eq!(
+        dql_json["paths"],
+        serde_json::json!(["Big.md"]),
+        "{}",
+        format_output(&dql)
+    );
+
+    let mut source = bob_command();
+    source
+        .arg("query")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .arg("--engine")
+        .arg("native")
+        .arg("--format")
+        .arg("paths")
+        .arg("--source")
+        .arg("\"Big.md\"");
+    let source = source.output().expect("run bob source");
+    assert_success(&source);
+    assert_eq!(stdout(&source), "Big.md\n", "{}", format_output(&source));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tasks_skips_dataview_index_under_address_space_cap() {
+    let temp = TempDir::new("bob-cli-tasks-no-dataview-cap");
+    let vault = temp.path().join("vault");
+    write_tasks_settings(&vault);
+    write_file(
+        &vault.join("Big.md"),
+        &tasks_big_page_fixture(200_000, 3_000),
+    );
+    write_file(&vault.join("Tasks.md"), "- [ ] #task Hello\n");
+    write_file(
+        &vault.join("Queries.md"),
+        "# Queries\n\n```tasks\nnot done\n```\n",
+    );
+
+    for extra in [
+        vec!["--format", "paths", "--tasks", "not done"],
+        vec!["--format", "paths", "--tasks-note", "Queries.md"],
+    ] {
+        let limited = run_limited_tasks(&vault, &extra);
+        assert_eq!(
+            limited.code,
+            Some(0),
+            "tasks {extra:?} failed under 512 MiB cap: {}",
+            limited.summary()
+        );
+        assert!(
+            limited.max_rss < 256 * 1024 * 1024,
+            "tasks {extra:?} used {} under cap, want < 256 MiB: {}",
+            format_bytes(limited.max_rss),
+            limited.summary()
+        );
+    }
+
+    let limited = run_limited_tasks(
+        &vault,
+        &["--format", "paths", "--tasks", "not done"],
+    );
+    assert_eq!(
+        limited.stdout,
+        "Tasks.md\n",
+        "capped tasks output:\n{}",
+        limited.summary()
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::zombie_processes)]
+fn run_limited_tasks(vault: &Path, extra: &[&str]) -> LimitedOutput {
+    use std::io::{self, Read};
+    use std::mem;
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let mut command = tasks_command(vault, extra);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(|| {
+            let limit = libc::rlimit {
+                rlim_cur: AS_LIMIT_BYTES,
+                rlim_max: AS_LIMIT_BYTES,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+
+    let mut child = command.spawn().expect("spawn capped bob tasks");
+    let mut stdout_pipe = child.stdout.take().expect("stdout pipe");
+    let mut stderr_pipe = child.stderr.take().expect("stderr pipe");
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let pid = child.id() as libc::pid_t;
+    let started = Instant::now();
+    loop {
+        let mut status = 0;
+        let mut usage = unsafe { mem::zeroed::<libc::rusage>() };
+        let waited =
+            unsafe { libc::wait4(pid, &mut status, libc::WNOHANG, &mut usage) };
+        if waited < 0 {
+            panic!("wait4 failed: {}", io::Error::last_os_error());
+        }
+        if waited == pid {
+            mem::forget(child);
+            let stdout = String::from_utf8_lossy(
+                &stdout_handle.join().expect("join stdout"),
+            )
+            .into_owned();
+            let stderr = String::from_utf8_lossy(
+                &stderr_handle.join().expect("join stderr"),
+            )
+            .into_owned();
+            return LimitedOutput {
+                code: wait_status_code(status),
+                stdout,
+                stderr,
+                max_rss: (usage.ru_maxrss as u64).saturating_mul(1024),
+            };
+        }
+        if started.elapsed() >= QUERY_TIMEOUT {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            let mut status = 0;
+            let mut usage = unsafe { mem::zeroed::<libc::rusage>() };
+            unsafe {
+                libc::wait4(pid, &mut status, 0, &mut usage);
+            }
+            mem::forget(child);
+            let _ = stdout_handle.join();
+            let _ = stderr_handle.join();
+            panic!(
+                "bob tasks exceeded {}s under a 512 MiB address-space cap",
+                QUERY_TIMEOUT.as_secs()
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn yaml_int_array(name: &str, count: usize) -> String {
     let items = (0..count)
         .map(|index| index.to_string())
