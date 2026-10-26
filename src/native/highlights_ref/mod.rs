@@ -75,6 +75,9 @@ mod reading_plan;
 // allocation, consumed by the single-source and collection reread writers.
 pub(crate) mod recapture;
 mod region;
+// Lock, precondition, scoped-git, and rollback helpers shared by rename
+// and the overwrite transaction that consumes them in later phases.
+pub(crate) mod reference_mutation;
 // The dependent `ref rename` command consumes this module in the next phase.
 #[allow(dead_code)]
 pub(crate) mod rename;

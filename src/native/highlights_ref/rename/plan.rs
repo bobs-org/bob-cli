@@ -4,14 +4,20 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
 };
 
 use serde::Serialize;
 
 use super::{super::*, links};
 use crate::native::{
+    highlights_ref::reference_mutation::{
+        acquire_mutation_session, committed_despite_error, dirty_touched_paths,
+        display_paths, git_head, has_managed_highlights, intake_query,
+        is_in_sync, is_legacy, latest_commit_for_path, normalized_path,
+        restore_bytes_if_uncontended, rollback_moves,
+        unstage_paths as unstage_scoped_paths, vault_path, DirtyPathError,
+        MutationSessionError,
+    },
     ob,
     ref_library::{
         build_index,
@@ -24,9 +30,6 @@ use crate::native::{
 
 const RENAME_COMMAND: &str = "ref rename";
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "ogg", "opus"];
-const LEGACY_REF_DIRS: &[&str] = &["ai", "zorg"];
-const MAINTENANCE_LOCK_BUDGET: Duration = Duration::from_secs(60);
-const SCAN_LOCK_BUDGET: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct RenameFailure {
@@ -187,9 +190,12 @@ fn run_live(
     offline: bool,
     format: Format,
 ) -> i32 {
-    let _maintenance_lock = {
-        let json_mode = format == Format::Json;
-        let on_first_wait = move || {
+    let child_env = ob::child_env();
+    let json_mode = format == Format::Json;
+    let _locks = match acquire_mutation_session(
+        &config.bob_dir,
+        &child_env,
+        move || {
             if json_mode {
                 eprintln!("waiting for another vault maintenance run…");
             } else {
@@ -199,26 +205,20 @@ fn run_live(
                         .dim("waiting for another vault maintenance run…")
                 );
             }
-        };
-        match ob::acquire_lock_waiting(MAINTENANCE_LOCK_BUDGET, on_first_wait) {
-            Ok(lock) => lock,
-            Err(error) => {
-                return print_failure(
-                    format,
-                    RenameFailure::new(
-                        "lock_busy",
-                        format!("could not acquire the vault maintenance lock: {error}"),
-                        Some("wait for the other maintenance run to finish, then retry"),
-                    ),
-                );
-            }
+        },
+    ) {
+        Ok(locks) => locks,
+        Err(MutationSessionError::Maintenance(error)) => {
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "lock_busy",
+                    format!("could not acquire the vault maintenance lock: {error}"),
+                    Some("wait for the other maintenance run to finish, then retry"),
+                ),
+            );
         }
-    };
-    let child_env = ob::child_env();
-
-    match ob::detect_git_worktree(&config.bob_dir, &child_env) {
-        Ok(true) => {}
-        Ok(false) | Err(_) => {
+        Err(MutationSessionError::NotAWorktree) => {
             return print_failure(
                 format,
                 RenameFailure::new(
@@ -231,13 +231,7 @@ fn run_live(
                 ),
             );
         }
-    }
-
-    let _scan_lock = match super::super::acquire_scan_writer_lock_with_timeout(
-        SCAN_LOCK_BUDGET,
-    ) {
-        Ok(lock) => lock,
-        Err(error) => {
+        Err(MutationSessionError::Scan(error)) => {
             return print_failure(
                 format,
                 RenameFailure::new(
@@ -607,30 +601,6 @@ fn old_stem_from_query(query: &str) -> Option<String> {
         .then(|| stem.to_string())
 }
 
-fn latest_commit_for_path(
-    vault: &Path,
-    child_env: &ob::ChildEnv,
-    path: &Path,
-) -> std::result::Result<Option<(String, String)>, String> {
-    let output = ob::git_command(vault, child_env)
-        .args(["log", "-1", "--format=%H%x00%s", "--"])
-        .arg(path)
-        .output()
-        .map_err(|error| format!("git log for {}: {error}", path.display()))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git log for {} failed: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let value = String::from_utf8_lossy(&output.stdout);
-    let Some((sha, subject)) = value.trim_end().split_once('\0') else {
-        return Ok(None);
-    };
-    Ok(Some((sha.to_string(), subject.to_string())))
-}
-
 #[derive(Debug, Default)]
 struct AppliedRename {
     moves: Vec<(PathBuf, PathBuf)>,
@@ -749,62 +719,16 @@ fn apply_transaction(
 }
 
 fn rollback_applied(transaction: &AppliedRename) -> String {
-    let mut failures = Vec::new();
-    for (from, to) in transaction.moves.iter().rev() {
-        if !to.exists() {
-            if from.exists() {
-                continue;
-            }
-            failures.push(format!(
-                "{} and {} are both missing",
-                from.display(),
-                to.display()
-            ));
-            continue;
-        }
-        if from.exists() {
-            failures.push(format!(
-                "{} exists; left {} in place",
-                from.display(),
-                to.display()
-            ));
-            continue;
-        }
-        if let Err(error) = super::super::io::rename_no_replace(to, from) {
-            failures.push(format!(
-                "could not move {} back to {}: {error}",
-                to.display(),
-                from.display()
-            ));
-        }
-    }
-    if let Some((path, before)) = &transaction.pdf_before {
-        match fs::read(path) {
-            Ok(current)
-                if transaction
-                    .pdf_after
-                    .as_ref()
-                    .is_some_and(|after| after == &current)
-                    || current == *before =>
-            {
-                if current != *before {
-                    if let Err(error) = atomic_write_bytes(path, before) {
-                        failures.push(format!(
-                            "could not restore PDF bytes at {}: {error}",
-                            path.display()
-                        ));
-                    }
-                }
-            }
-            Ok(_) => failures.push(format!(
-                "left concurrently changed PDF {} in place",
-                path.display()
-            )),
-            Err(error) => failures.push(format!(
-                "could not read PDF {} before restore: {error}",
-                path.display()
-            )),
-        }
+    let mut failures = rollback_moves(&transaction.moves);
+    if let Some((path, before)) = &transaction.pdf_before
+        && let Some(message) = restore_bytes_if_uncontended(
+            path,
+            before,
+            transaction.pdf_after.as_deref(),
+            "PDF",
+        )
+    {
+        failures.push(message);
     }
     let diverged =
         crate::native::ref_library::migrate_tasks::restore_before_images(
@@ -819,21 +743,6 @@ fn rollback_applied(transaction: &AppliedRename) -> String {
     } else {
         format!("; rollback issues: {}", failures.join("; "))
     }
-}
-
-fn atomic_write_bytes(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temporary =
-        parent.join(format!(".{name}.bob-rollback-{}.tmp", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-    fs::write(&temporary, contents)?;
-    fs::File::open(&temporary)?.sync_all()?;
-    fs::rename(&temporary, path)?;
-    if let Ok(directory) = fs::File::open(parent) {
-        directory.sync_all()?;
-    }
-    Ok(())
 }
 
 fn write_id_marker(
@@ -1003,55 +912,15 @@ fn verify_renamed(
     Ok(())
 }
 
-fn git_head(
-    vault: &Path,
-    child_env: &ob::ChildEnv,
-) -> std::result::Result<String, String> {
-    let output = ob::git_command(vault, child_env)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .map_err(|error| format!("git rev-parse HEAD: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "git rev-parse HEAD failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 fn unstage_paths(
     vault: &Path,
     child_env: &ob::ChildEnv,
     paths: &[PathBuf],
 ) -> String {
-    let output = ob::git_command(vault, child_env)
-        .arg("reset")
-        .arg("--quiet")
-        .arg("HEAD")
-        .arg("--")
-        .args(paths)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => String::new(),
-        Ok(output) => format!(
-            "; could not unstage rename paths: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
+    match unstage_scoped_paths(vault, child_env, paths) {
+        Ok(()) => String::new(),
         Err(error) => format!("; could not unstage rename paths: {error}"),
     }
-}
-
-fn committed_despite_error(
-    vault: &Path,
-    child_env: &ob::ChildEnv,
-    old_head: Option<&str>,
-    expected_subject: &str,
-) -> Option<(String, String)> {
-    let (sha, subject) =
-        latest_commit_for_path(vault, child_env, Path::new(".")).ok()??;
-    (old_head != Some(sha.as_str()) && subject == expected_subject)
-        .then_some((sha, subject))
 }
 
 fn allocate_row_id(rows: &[RefRow], self_index: usize, stem: &str) -> String {
@@ -1343,7 +1212,7 @@ fn prepare(
     if let Some((path, _)) = &own_note_rewrite {
         touched_paths.insert(path.clone());
     }
-    let dirty_paths = dirty_touched_paths(&config.bob_dir, &touched_paths)?;
+    let dirty_paths = dirty_rename_paths(&config.bob_dir, &touched_paths)?;
     if offline && !dirty_paths.is_empty() {
         return Err(RenameFailure::new(
             "dirty_paths",
@@ -1465,7 +1334,7 @@ fn id_update_plan(
 
     let touched_paths =
         BTreeSet::from([bundle.note_from.clone(), bundle.pdf_from.clone()]);
-    let dirty_paths = dirty_touched_paths(&config.bob_dir, &touched_paths)?;
+    let dirty_paths = dirty_rename_paths(&config.bob_dir, &touched_paths)?;
     if offline && !dirty_paths.is_empty() {
         return Err(RenameFailure::new(
             "dirty_paths",
@@ -1823,24 +1692,6 @@ fn build_bundle(
     })
 }
 
-fn is_legacy(row: &RefRow, configured_ref_dir: &Path) -> bool {
-    if row.era == "legacy" || row.source_pdf.is_none() {
-        return true;
-    }
-    let path = Path::new(&row.path);
-    let Some(relative) = path
-        .strip_prefix(configured_ref_dir.file_name().unwrap_or_default())
-        .ok()
-    else {
-        return false;
-    };
-    relative
-        .components()
-        .next()
-        .and_then(|part| part.as_os_str().to_str())
-        .is_some_and(|name| LEGACY_REF_DIRS.contains(&name))
-}
-
 fn invalid_name_failure(name: &str) -> RenameFailure {
     let without_pdf = name
         .strip_suffix(".pdf")
@@ -1875,29 +1726,6 @@ fn candidate_hint(candidates: &[ErrorCandidate]) -> Option<String> {
             .collect::<Vec<_>>()
             .join("; ")
     ))
-}
-
-fn intake_query(config: &Config, query: &str) -> bool {
-    let value = crate::native::env::expand_tilde(Path::new(query));
-    let intake_root = &config.xlib_dir;
-    if value.is_absolute() && value.starts_with(intake_root) {
-        return true;
-    }
-    let under_vault = if value.is_absolute() {
-        value
-            .strip_prefix(&config.bob_dir)
-            .ok()
-            .map(Path::to_path_buf)
-    } else {
-        Some(value.to_path_buf())
-    };
-    let Some(relative) = under_vault else {
-        return false;
-    };
-    let xlib_relative = intake_root
-        .strip_prefix(&config.bob_dir)
-        .unwrap_or(Path::new("xlib"));
-    relative.starts_with(xlib_relative)
 }
 
 fn destinations_taken(
@@ -2032,22 +1860,6 @@ fn collect_vault_entries(
     Ok(())
 }
 
-fn has_managed_highlights(contents: &str) -> bool {
-    let body = split_frontmatter(contents)
-        .map(|(_, body)| body)
-        .unwrap_or_else(|| contents.to_string());
-    let parts = split_note_body(&body);
-    let Some(region) = parts.region else {
-        return false;
-    };
-    let parsed = parse_managed_region(&region);
-    parsed
-        .blocks
-        .iter()
-        .any(|block| block.block_id.starts_with("h-"))
-        || parsed.removed.iter().any(|id| id.starts_with("h-"))
-}
-
 fn pdf_has_listen_card_link(pdf: &Path, audio_paths: &[PathBuf]) -> bool {
     if audio_paths.is_empty() {
         return false;
@@ -2107,37 +1919,6 @@ fn pdf_has_listen_card_link(pdf: &Path, audio_paths: &[PathBuf]) -> bool {
         }
     }
     false
-}
-
-fn is_in_sync(config: &Config, pdf_relative: &Path) -> bool {
-    let pdf = config.bob_dir.join(pdf_relative);
-    let ctx = ScanContext::build(config);
-    let Ok(mut plan) = plan_pdf_sync(
-        config,
-        &pdf,
-        SyncOptions {
-            dry_run: true,
-            write_pdf: false,
-            prefer: None,
-        },
-        &ctx,
-    ) else {
-        return false;
-    };
-    let mut plans = [&mut plan];
-    if finalize_annotation_task_plans(config, &mut plans, &ctx).is_err() {
-        return false;
-    }
-    reserve_preview_ids(config, &mut plans, &ctx);
-    let reading_unchanged_or_adopted =
-        plan.reading_task_plan.as_ref().is_some_and(|reading| {
-            reading.action == ReadingTaskAction::NoWrite
-                && (plan.reading_located.is_some()
-                    || reading.kind == ReadingTaskKind::Birth)
-        });
-    plan.stable_note_action == "none"
-        && !plan.marker_write_needed
-        && reading_unchanged_or_adopted
 }
 
 fn rewrite_own_frontmatter(
@@ -2249,60 +2030,24 @@ fn rewrite_reference_id_frontmatter(
     Some((output, vec!["id".to_string()]))
 }
 
-fn dirty_touched_paths(
+fn dirty_rename_paths(
     vault: &Path,
     touched_paths: &BTreeSet<PathBuf>,
 ) -> std::result::Result<Vec<PathBuf>, RenameFailure> {
-    if !vault.join(".git").exists() {
-        return Ok(Vec::new());
-    }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(vault)
-        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
-        .output()
-        .map_err(|error| {
-            RenameFailure::new(
+    dirty_touched_paths(vault, touched_paths, false).map_err(
+        |error| match error {
+            DirtyPathError::GitUnavailable(error) => RenameFailure::new(
                 "not_in_sync",
                 format!("could not inspect Git status: {error}"),
                 Some("check Git availability and retry"),
-            )
-        })?;
-    if !output.status.success() {
-        return Err(RenameFailure::new(
-            "not_in_sync",
-            "could not inspect Git status for the rename plan",
-            Some("check that the Bob vault is a Git worktree and retry"),
-        ));
-    }
-    let mut records = output.stdout.split(|byte| *byte == 0);
-    let mut dirty = BTreeSet::new();
-    while let Some(record) = records.next() {
-        if record.len() < 4 {
-            continue;
-        }
-        let status = String::from_utf8_lossy(&record[..2]);
-        let path =
-            PathBuf::from(String::from_utf8_lossy(&record[3..]).as_ref());
-        dirty.insert(path);
-        if (status.contains('R') || status.contains('C'))
-            && let Some(previous) = records.next()
-        {
-            dirty.insert(PathBuf::from(
-                String::from_utf8_lossy(previous).as_ref(),
-            ));
-        }
-    }
-    let touched = touched_paths
-        .iter()
-        .map(|path| normalized_path(&vault_path(path)))
-        .collect::<BTreeSet<_>>();
-    let mut matches = dirty
-        .into_iter()
-        .filter(|path| touched.contains(&normalized_path(&vault_path(path))))
-        .collect::<Vec<_>>();
-    matches.sort();
-    Ok(matches)
+            ),
+            DirtyPathError::StatusFailed => RenameFailure::new(
+                "not_in_sync",
+                "could not inspect Git status for the rename plan",
+                Some("check that the Bob vault is a Git worktree and retry"),
+            ),
+        },
+    )
 }
 
 fn print_failure(format: Format, failure: RenameFailure) -> i32 {
@@ -2314,27 +2059,6 @@ fn print_failure(format: Format, failure: RenameFailure) -> i32 {
         failure.hint.as_deref(),
     );
     1
-}
-
-fn vault_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn normalized_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
-        .to_ascii_lowercase()
-}
-
-fn display_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| vault_path(path))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]
@@ -2512,62 +2236,5 @@ mod tests {
         );
         assert!(!vault.join("ref/blogs/new.md").exists());
         assert!(!vault.join("lib/blogs/new.pdf").exists());
-    }
-
-    #[test]
-    fn legacy_paths_are_recognized_by_ref_type() {
-        let row = RefRow {
-            path: "ref/ai/book.md".into(),
-            link: String::new(),
-            title: String::new(),
-            marker_id: None,
-            origin: String::new(),
-            ref_type: None,
-            era: "modern".into(),
-            status: None,
-            status_sync: String::new(),
-            frontmatter_status: None,
-            legacy_status: None,
-            reading_state: String::new(),
-            reading_state_source: String::new(),
-            blocked: false,
-            blocked_by: Vec::new(),
-            parent: None,
-            task: None,
-            urls: Vec::new(),
-            earlier: Vec::new(),
-            reading: None,
-            identity: crate::native::ref_library::RefIdentity {
-                keys: Vec::new(),
-                arxiv: None,
-                doi: None,
-            },
-            author: None,
-            published: None,
-            captured: None,
-            added: None,
-            added_source: None,
-            added_at: None,
-            finished: None,
-            finished_source: None,
-            source_pdf: Some("lib/ai/book.pdf".into()),
-            audio: None,
-            annotation_count: 0,
-            comment_count: 0,
-            snapshot: None,
-            research_ref: None,
-            superseded_by: None,
-            diagnostics: Vec::new(),
-            family: "ref/ai/book.md".into(),
-            has_later: false,
-            id: None,
-            source_block: None,
-            source_path: None,
-            source_id: None,
-            source_blocks: Vec::new(),
-            v2: false,
-            task_line: None,
-        };
-        assert!(is_legacy(&row, Path::new("/vault/ref")));
     }
 }
