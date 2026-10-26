@@ -137,10 +137,11 @@ pub(super) fn decode_force(
     })
 }
 
-/// True when the raw argv carries an explicit `--force=MODE` or
-/// `-f=MODE` token before any `--` separator. At most one force
-/// occurrence survives successful clap parsing (a second is a usage
-/// error), so one explicit token decides for the whole command.
+/// True when the raw argv carries an explicit `--force=MODE`,
+/// `-f=MODE`, or clustered-short `f=` (for example `-df=reread`) token
+/// before any `--` separator. At most one force occurrence survives
+/// successful clap parsing (a second is a usage error), so one explicit
+/// token decides for the whole command.
 fn is_explicit_force(raw: &[OsString]) -> bool {
     for token in raw {
         let bytes = token.as_encoded_bytes();
@@ -148,6 +149,16 @@ fn is_explicit_force(raw: &[OsString]) -> bool {
             break;
         }
         if bytes.starts_with(b"--force=") || bytes.starts_with(b"-f=") {
+            return true;
+        }
+        // A clustered short ending in `f=` (for example `-df=reread`):
+        // a single-dash token whose pre-`=` cluster ends in `f`.
+        if bytes.first() == Some(&b'-')
+            && !bytes.starts_with(b"--")
+            && let Some(eq) = bytes.iter().position(|byte| *byte == b'=')
+            && eq > 1
+            && bytes[eq - 1] == b'f'
+        {
             return true;
         }
     }
@@ -251,13 +262,18 @@ pub(super) fn is_overwrite(force: Option<ForceMode>) -> bool {
 
 /// Under `--force=overwrite`, triage a URL dedupe outcome before any
 /// fetch: filed references are unavailable (exit 2), a queued-only
-/// match keeps the old replacement permission, and a fresh source
+/// match keeps the old replacement permission, an existing exact-output
+/// file keeps the old replacement permission, and a fresh source
 /// refuses (exit 1) instead of capturing.
 pub(super) fn triage_overwrite_url(
     recorded: &[sources_mod::RecordedSource],
     dedupe_key: &str,
     source: &str,
+    output: Option<&std::path::Path>,
 ) -> Result<()> {
+    if output.is_some_and(|path| path.exists()) {
+        return Ok(());
+    }
     let hits = sources_mod::refusing_hits(recorded, dedupe_key, None, false);
     if hits.iter().any(|hit| hit.is_ref_note) {
         return Err(overwrite_filed_unavailable());
@@ -367,6 +383,24 @@ mod tests {
                 "{argv:?}",
             );
         }
+    }
+
+    #[test]
+    fn clustered_short_ending_in_f_equals_is_explicit() {
+        // `-df=reread` is `-d` plus explicit `--force=reread`: it never
+        // adopts a following mode word, so `overwrite` stays a stray
+        // TARGET (exit 2) instead of becoming the mode.
+        let argv = vec!["-df=reread", "https://example.com/essay"];
+        let raw: Vec<OsString> = argv.iter().map(OsString::from).collect();
+        assert!(is_explicit_force(&raw), "{argv:?} must count as explicit");
+        let decoded = decode(&argv).expect("decodes");
+        assert_eq!(decoded.mode, Some(ForceMode::Reread), "{argv:?}");
+        // Explicit clustered force never adopts: `overwrite` after
+        // `-df=reread` is a stray mode word.
+        assert!(matches!(
+            decode(&["-df=reread", "overwrite", "https://example.com/essay"]),
+            Err(ForceDecodeError::StrayMode { .. }),
+        ));
     }
 
     #[test]

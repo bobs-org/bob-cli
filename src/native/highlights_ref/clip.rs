@@ -269,24 +269,18 @@ pub(super) fn capture_article(
         recorded: &recorded,
     };
     let overwrite = options.force == Some(super::force::ForceMode::Overwrite);
+    // The shared preflight already refused filed families with the typed
+    // reread remedy (or the typed overwrite interim message), so no
+    // string-matched overwrite fallback remains here.
     let pre_plan = if rereading {
         None
     } else {
         match &options.output {
-            Some(output) => Some(
-                plan_exact_output_guarded(
-                    config,
-                    output,
-                    options.force.is_some(),
-                )
-                .map_err(|error| {
-                    if overwrite && error.message.contains("already captured") {
-                        super::force::overwrite_filed_unavailable().into()
-                    } else {
-                        error
-                    }
-                })?,
-            ),
+            Some(output) => Some(plan_exact_output_guarded(
+                config,
+                output,
+                options.force.is_some(),
+            )?),
             None => pre_stem
                 .as_ref()
                 .map(|stem| {
@@ -297,15 +291,6 @@ pub(super) fn capture_article(
                         options.force.is_some(),
                         &pre_identity,
                     )
-                    .map_err(|error| {
-                        if overwrite
-                            && error.message.contains("already captured")
-                        {
-                            super::force::overwrite_filed_unavailable()
-                        } else {
-                            error
-                        }
-                    })
                 })
                 .transpose()?,
         }
@@ -432,6 +417,9 @@ pub(super) fn capture_article(
         keys: vec![web_url.dedupe_key.clone()],
         recorded: &recorded,
     };
+    // The shared preflight already refused filed families with the typed
+    // reread remedy (or the typed overwrite interim message), so no
+    // string-matched overwrite fallback remains here.
     let plan = match (&options.reread, &options.output) {
         (Some(preflight), _) => super::recapture::plan_reread_target(
             config,
@@ -441,14 +429,7 @@ pub(super) fn capture_article(
         )
         .map_err(ClipError::from)?,
         (None, Some(output)) => {
-            plan_exact_output_guarded(config, output, options.force.is_some())
-                .map_err(|error| {
-                if overwrite && error.message.contains("already captured") {
-                    super::force::overwrite_filed_unavailable().into()
-                } else {
-                    error
-                }
-            })?
+            plan_exact_output_guarded(config, output, options.force.is_some())?
         }
         (None, None) => plan_default_target(
             config,
@@ -456,14 +437,7 @@ pub(super) fn capture_article(
             &options.ref_type,
             options.force.is_some(),
             &final_identity,
-        )
-        .map_err(|error| {
-            if overwrite && error.message.contains("already captured") {
-                super::force::overwrite_filed_unavailable()
-            } else {
-                error
-            }
-        })?,
+        )?,
     };
     // With `--force=overwrite` only an existing target keeps the old
     // replacement permission; a free target refuses instead of
@@ -493,7 +467,9 @@ pub(super) fn capture_article(
     // The fetched identity is guarded again: a reread re-resolves its
     // keys against the live index (a redirected or re-identified capture
     // that now claims another family refuses), while ordinary captures
-    // keep the attach-or-refuse check.
+    // keep the attach-or-refuse check. The adapter's final URL gets its
+    // own redirect guard: a final URL recorded outside the selected
+    // family refuses before writing.
     if let Some(preflight) = &options.reread {
         let fresh_recorded = collect_recorded_source_urls(config)?;
         let rows = super::recapture::index_rows(config);
@@ -518,6 +494,15 @@ pub(super) fn capture_article(
                 "reread {} is already filed; nothing written",
                 plan.stem,
             )));
+        }
+        if let Some(final_url) = response.final_url.as_deref() {
+            super::recapture::refuse_redirected_reread(
+                config,
+                &web_url.dedupe_key,
+                final_url,
+                preflight,
+            )
+            .map_err(ClipError::from)?;
         }
         let _ = preflight;
     } else if let Some(hit) = check_dedupe_for_clip(
@@ -773,7 +758,9 @@ pub(super) fn capture_article(
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
         if report_audio.is_some_and(|audio| audio.origin == "--listen") {
-            super::recapture::print_reread_listen_hint(preflight);
+            super::recapture::print_reread_audio_hint(preflight, true);
+        } else if matches!(companion, Companion::None) {
+            super::recapture::print_reread_audio_hint(preflight, false);
         }
     } else if let Some(line) = plan.renamed_line() {
         println!("{line}");
@@ -916,7 +903,9 @@ fn print_dry_run(
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
         if audio.is_some_and(|audio| audio.origin == "--listen") {
-            super::recapture::print_reread_listen_hint(preflight);
+            super::recapture::print_reread_audio_hint(preflight, true);
+        } else if audio.is_none() {
+            super::recapture::print_reread_audio_hint(preflight, false);
         }
     } else if let Some(line) = plan.renamed_line() {
         println!("{line}");

@@ -25,10 +25,7 @@ fn pdf_progress(line: &str) {
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
 
-use super::force::{
-    is_overwrite, nothing_to_overwrite, overwrite_filed_unavailable,
-    triage_overwrite_url,
-};
+use super::force::{is_overwrite, nothing_to_overwrite, triage_overwrite_url};
 use super::note_snapshot;
 use super::recapture::RereadPreflight;
 use super::FIELD_SOURCE_NOTE;
@@ -877,6 +874,25 @@ fn resolve_parent_for_target(
                 .map_err(|error| CommandError::new(error.message()))?;
                 return Ok((resolved.route.clone(), Some(resolved), None));
             }
+            // A same-day reread carries the newest reading's located task
+            // residence as its parent default; explicit `-P` already won
+            // above. The shared preflight runs before parent resolution
+            // so the refusal wins over the missing-parent error.
+            if let Some(preflight) = reread
+                && let Some(task_path) = &preflight.defaults.parent
+                && let Ok(resolved) =
+                    crate::native::parent_notes::resolve_parent(
+                        &config.bob_dir,
+                        task_path,
+                    )
+            {
+                let reason = format!("newest reading's task in {task_path}");
+                return Ok((
+                    resolved.route.clone(),
+                    Some(resolved),
+                    Some(reason),
+                ));
+            }
             let Some(default) = note_snapshot::default_parent(store, note)
             else {
                 return Err(missing_parent_error());
@@ -927,9 +943,10 @@ pub(super) fn missing_parent_error() -> CommandError {
 
 /// Shared reread preflight for single-source routes, resolved before `-P`
 /// is required and before any fetch or adapter work. Vault-note targets
-/// defer to their route (their dated stem is known only after snapshot
-/// planning); every other route resolves here so refusals precede
-/// missing-parent errors and rereads carry family defaults.
+/// compute their dated stem (honoring `BOB_NOW` and `-N`) here so the
+/// refusal wins over the missing-parent error and rereads carry the
+/// newest reading's parent default; new-day snapshots stay ordinary
+/// dated creates.
 fn preflight_before_parent(
     config: &Config,
     target_os: &OsString,
@@ -1055,7 +1072,40 @@ fn preflight_before_parent(
                 super::recapture::StemIdentity::Title(&pdf_plan.title),
             )
         }
-        PreparedTarget::VaultNote { .. } => Ok(None),
+        PreparedTarget::VaultNote { note, .. } => {
+            // The dated stem is known without snapshot planning:
+            // `<note-stem>_<YYMMDD>` from `BOB_NOW`, overridden by `-N`.
+            // Same-day duplicates reread as `<dated-root>__vN`; a new day
+            // keeps its ordinary dated create.
+            let source_route = note.identity.route.clone();
+            let source_stem = source_route
+                .rsplit('/')
+                .next()
+                .filter(|stem| !stem.is_empty())
+                .unwrap_or(source_route.as_str())
+                .to_string();
+            let snapshot_date = bob_env::current_datetime().date();
+            let dated_stem =
+                format!("{source_stem}_{}", snapshot_date.format("%y%m%d"));
+            let stem = name.unwrap_or(dated_stem.as_str()).to_string();
+            let title_fallback = matches
+                .get_one::<String>("title")
+                .filter(|title| !title.is_empty())
+                .map(String::as_str)
+                .unwrap_or(stem.as_str())
+                .to_string();
+            let rows = super::recapture::index_rows(config);
+            super::recapture::preflight_for_stem(
+                config,
+                &rows,
+                &stem,
+                name,
+                output,
+                force,
+                &title_fallback,
+                super::recapture::StemIdentity::SourceNote(&source_route),
+            )
+        }
     }
 }
 
@@ -1152,12 +1202,16 @@ fn check_duplicate_before_parent(
                 }
             }
             // Overwrite triage runs after `-L` attach (attach is not a
-            // fresh capture) and before the plain refusal.
+            // fresh capture) and before the plain refusal. An existing
+            // exact-output file keeps the old replacement permission.
             if is_overwrite(force)
                 && let Err(error) = triage_overwrite_url(
                     &recorded,
                     &dedupe_key,
                     &source_display,
+                    matches
+                        .get_one::<OsString>("output")
+                        .map(std::path::Path::new),
                 )
             {
                 return Some(report_create_error(error));
@@ -1200,6 +1254,16 @@ fn check_markdown_stamp_before_parent(
     force: Option<super::force::ForceMode>,
     source_display: &str,
 ) -> Option<i32> {
+    // An existing exact-output file keeps the old replacement permission
+    // under overwrite: skip the default-target duplicate probe and let
+    // the exact-output planner decide.
+    if is_overwrite(force)
+        && matches
+            .get_one::<OsString>("output")
+            .is_some_and(|output| Path::new(output).exists())
+    {
+        return None;
+    }
     let canonical = fs::canonicalize(source).ok()?;
     let markdown = fs::read_to_string(&canonical).ok()?;
     let stem = match matches.get_one::<String>("name") {
@@ -1241,15 +1305,10 @@ fn check_markdown_stamp_before_parent(
             }
             None
         }
-        Err(error) => {
-            if is_overwrite(force) && error.message.contains("already captured")
-            {
-                return Some(
-                    report_create_error(overwrite_filed_unavailable()),
-                );
-            }
-            Some(report_create_error(error))
-        }
+        // The shared preflight already refused filed families with the
+        // typed reread remedy (or the typed overwrite interim message),
+        // so no string-matched overwrite fallback remains here.
+        Err(error) => Some(report_create_error(error)),
     }
 }
 
@@ -1260,19 +1319,25 @@ fn check_pdf_stamp_before_parent(
     force: Option<super::force::ForceMode>,
     source_display: &str,
 ) -> Option<i32> {
+    // An existing exact-output file keeps the old replacement permission
+    // under overwrite: skip the default-target duplicate probe and let
+    // the exact-output planner decide.
+    if is_overwrite(force)
+        && matches
+            .get_one::<OsString>("output")
+            .is_some_and(|output| Path::new(output).exists())
+    {
+        return None;
+    }
     if let Err(error) = pdf_target_mod::check_local_pdf_identity(config, source)
     {
         // Only pre-empt the parent error for duplicates; other
-        // library/intake placement errors still surface after `-P`.
+        // library/intake placement errors still surface after `-P`. The
+        // shared preflight already refused filed families with the typed
+        // remedy, so no string-matched overwrite fallback remains here.
         if error.message.contains("already captured")
             || error.message.contains("already queued")
         {
-            if is_overwrite(force) && error.message.contains("already captured")
-            {
-                return Some(
-                    report_create_error(overwrite_filed_unavailable()),
-                );
-            }
             return Some(report_create_error(error));
         }
         return None;
@@ -1312,15 +1377,10 @@ fn check_pdf_stamp_before_parent(
             }
             None
         }
-        Err(error) => {
-            if is_overwrite(force) && error.message.contains("already captured")
-            {
-                return Some(
-                    report_create_error(overwrite_filed_unavailable()),
-                );
-            }
-            Some(report_create_error(error))
-        }
+        // The shared preflight already refused filed families with the
+        // typed reread remedy (or the typed overwrite interim message),
+        // so no string-matched overwrite fallback remains here.
+        Err(error) => Some(report_create_error(error)),
     }
 }
 
@@ -1396,9 +1456,15 @@ fn create_pdf(
         }
         // Overwrite triage runs after `-L` attach (attach is not a
         // fresh capture) and before any fetch or adapter work. A reread
-        // already passed triage at preflight.
+        // already passed triage at preflight. An existing exact-output
+        // file keeps the old replacement permission.
         if !rereading && is_overwrite(options.force) {
-            triage_overwrite_url(&recorded, &dedupe_key, target_raw)?;
+            triage_overwrite_url(
+                &recorded,
+                &dedupe_key,
+                target_raw,
+                options.output.as_deref().map(std::path::Path::new),
+            )?;
         }
         if !rereading {
             check_dedupe_with_listen_hint(
@@ -1437,11 +1503,16 @@ fn create_pdf(
             &scratch,
             Some(&fetch_progress),
         )? {
-            target_mod::CreateSource::PdfUrl { url, downloaded } => {
+            target_mod::CreateSource::PdfUrl {
+                url,
+                downloaded,
+                final_url,
+            } => {
                 return create_pdf_url_route(
                     config,
                     url,
                     downloaded,
+                    final_url,
                     &mut scratch,
                     options,
                     &recorded,
@@ -1676,13 +1747,16 @@ fn check_dedupe_with_listen_hint(
 /// Print the reread report line for an enabled reread, else the
 /// existing `renamed:` line. Rereads occupy the `renamed:` position in
 /// both real runs and dry runs. A narrated reread (`-f` + `-L`) also
-/// names the earlier episode it leaves behind, since earlier audio is
-/// never inherited.
+/// names the earlier episode it leaves behind, while a plain reread
+/// without `-L` or `-a` names the newest narrated earlier reading (if
+/// any), since earlier audio is never inherited.
 fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
         if options.listen {
-            super::recapture::print_reread_listen_hint(preflight);
+            super::recapture::print_reread_audio_hint(preflight, true);
+        } else if options.audio.is_none() {
+            super::recapture::print_reread_audio_hint(preflight, false);
         }
     } else if let Some(line) = plan.renamed_line() {
         println!("{line}");
@@ -1722,18 +1796,14 @@ fn plan_target_for(
     identity: &DefaultTargetIdentity<'_>,
     source_display: &str,
 ) -> Result<TargetPlan> {
+    // The shared preflight already refused filed families with the typed
+    // reread remedy (or the typed overwrite interim message): exact-output
+    // planning never reports `already captured`, and a default-target
+    // `already captured` would mean the preflight missed a family, so no
+    // string-matched overwrite fallback remains here.
     let plan = match output {
         Some(output) => {
-            let plan = plan_exact_output(config, output, force.is_some())
-                .map_err(|error| {
-                    if is_overwrite(force)
-                        && error.message.contains("already captured")
-                    {
-                        overwrite_filed_unavailable()
-                    } else {
-                        error
-                    }
-                })?;
+            let plan = plan_exact_output(config, output, force.is_some())?;
             if include_id {
                 super::stamp::ensure_reference_id_available(
                     config, &plan.stem,
@@ -1747,15 +1817,7 @@ fn plan_target_for(
             ref_type,
             force.is_some(),
             identity,
-        )
-        .map_err(|error| {
-            if is_overwrite(force) && error.message.contains("already captured")
-            {
-                overwrite_filed_unavailable()
-            } else {
-                error
-            }
-        })?,
+        )?,
     };
     if is_overwrite(force) && !plan.target.exists() {
         return Err(nothing_to_overwrite(source_display));
@@ -2783,9 +2845,12 @@ fn create_local_pdf_route(
         ))
     })?;
     // Attach when the target itself is an existing capture. A reread
-    // narrates a new reading instead; a library PDF as TARGET never
-    // produces a preflight, so `-L` attach without force still lands here.
+    // narrates a new reading instead, and a library PDF as TARGET never
+    // produces a preflight: under reread force the library-PDF refusal
+    // (with its source_url hint) wins even with `-L`, while `-L`
+    // without force still attaches here.
     if options.reread.is_none()
+        && options.force != Some(super::force::ForceMode::Reread)
         && let Some(command) = listen
         && let Some(attach) =
             attach_mod::attach_for_local_pdf(config, &canonical)?
@@ -2993,6 +3058,7 @@ fn create_pdf_url_route(
     config: &Config,
     url: super::clip_url::WebUrl,
     downloaded: PathBuf,
+    final_url: String,
     scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     recorded: &[sources_mod::RecordedSource],
@@ -3085,6 +3151,14 @@ fn create_pdf_url_route(
                 target_plan.stem,
             )));
         }
+        // A redirect that now claims another family refuses before
+        // writing, even when the pre-fetch key still selects our family.
+        super::recapture::refuse_redirected_reread(
+            config,
+            &url.dedupe_key,
+            &final_url,
+            preflight,
+        )?;
         let _ = preflight;
     } else {
         check_dedupe_with_listen_hint(
@@ -3369,7 +3443,7 @@ fn create_arxiv_route(
             Some(&target_plan.target),
             options.force.is_some(),
         )?;
-    } else {
+    } else if let Some(preflight) = &options.reread {
         let fresh_recorded = sources_mod::collect_recorded_source_urls(config)
             .map_err(|error| CommandError::new(error.message.clone()))?;
         let rows = super::recapture::index_rows(config);
@@ -3392,6 +3466,14 @@ fn create_arxiv_route(
                 target_plan.stem,
             )));
         }
+        // A redirect that now claims another family refuses before
+        // writing, even when the pre-fetch key still selects our family.
+        super::recapture::refuse_redirected_reread(
+            config,
+            &key,
+            &fetch.final_url,
+            preflight,
+        )?;
     }
     // A downloaded arXiv PDF that already carries a marker is already captured.
     {
@@ -3547,6 +3629,19 @@ fn plan_pdf_audio(
             return Err(CommandError::new(
                 "--no-audio cannot be used with --audio",
             ));
+        }
+        return Ok(None);
+    }
+    // On a reread earlier audio is never inherited: skip reused-companion
+    // discovery unless an explicit `--audio` path is given.
+    if options.reread.is_some() {
+        if let Some(explicit) = &options.audio {
+            return companion_mod::plan_explicit_audio(
+                config,
+                target_plan,
+                options.force.is_some(),
+                explicit,
+            );
         }
         return Ok(None);
     }
@@ -4056,6 +4151,19 @@ fn plan_audio_copy(
             return Err(CommandError::new(
                 "--no-audio cannot be used with --audio",
             ));
+        }
+        return Ok(None);
+    }
+    // On a reread earlier audio is never inherited: skip Markdown
+    // auto-discovery unless an explicit `--audio` path is given.
+    if options.reread.is_some() {
+        if let Some(explicit) = &options.audio {
+            return companion_mod::plan_explicit_audio(
+                config,
+                target_plan,
+                options.force.is_some(),
+                explicit,
+            );
         }
         return Ok(None);
     }

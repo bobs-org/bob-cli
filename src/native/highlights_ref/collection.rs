@@ -286,16 +286,23 @@ fn attach_gate(
     // clear/attach. Run it first with no planned target.
     let overlap =
         check_collection_overlap(config, &recorded, urls, None, force, true);
+    // An existing exact-output file keeps the old replacement
+    // permission under overwrite, like an exact queued set.
+    let output_exists = matches
+        .get_one::<OsString>("output")
+        .is_some_and(|output| Path::new(output).exists());
     match &overlap {
         Err(_) => return overlap.map(|_| None),
         Ok(OverlapCheck::Clear { .. })
             if super::force::is_overwrite(force)
+                && !output_exists
                 && !has_exact_queued_match(&recorded, urls) =>
         {
-            // Under `--force=overwrite` only an exact queued set keeps
-            // the old replacement permission; anything else is fresh
-            // (legacy-only included) and refuses before parent
-            // resolution, fetch, or adapter work.
+            // Under `--force=overwrite` only an exact queued set (or an
+            // existing exact-output file) keeps the old replacement
+            // permission; anything else is fresh (legacy-only included)
+            // and refuses before parent resolution, fetch, or adapter
+            // work.
             return Err(super::force::nothing_to_overwrite(
                 &targets
                     .iter()
@@ -380,8 +387,14 @@ fn recapture_gate(
             // No filed family claims the exact set: queued-only handling
             // keeps the old replacement permission, queued partial
             // overlaps refuse, and overwrite on a fresh set refuses,
-            // all before parent resolution.
-            fresh_queued_gate(config, &recorded, urls, targets, force)?;
+            // all before parent resolution. An existing exact-output
+            // file keeps the old replacement permission.
+            let output_exists = matches
+                .get_one::<OsString>("output")
+                .is_some_and(|output| Path::new(output).exists());
+            if !(super::force::is_overwrite(force) && output_exists) {
+                fresh_queued_gate(config, &recorded, urls, targets, force)?;
+            }
             Ok(None)
         }
     }
@@ -616,13 +629,16 @@ fn recheck_collection_overlap(
 /// Print the reread report line for an enabled reread, else the existing
 /// `renamed:` line. Rereads occupy the `renamed:` position in both real
 /// runs and dry runs. A narrated reread (`-f` + `-L`) also names the
-/// earlier episode it leaves behind, since earlier audio is never
-/// inherited.
+/// earlier episode it leaves behind, while a plain reread without `-L`
+/// or `-a` names the newest narrated earlier reading (if any), since
+/// earlier audio is never inherited.
 fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
         if options.listen {
-            recapture::print_reread_listen_hint(preflight);
+            recapture::print_reread_audio_hint(preflight, true);
+        } else if options.audio.is_none() {
+            recapture::print_reread_audio_hint(preflight, false);
         }
     } else if let Some(line) = plan.renamed_line() {
         println!("{line}");
@@ -1658,6 +1674,26 @@ fn check_collection_overlap(
         }
         if hit.is_ref_note {
             if super::force::is_overwrite(force) {
+                // Reachable when the recapture gate was skipped (for
+                // example `-L` attach without reread force): name the
+                // reread it would take via the typed recapture result.
+                let rows = recapture::index_rows(config);
+                let title_fallback = urls
+                    .first()
+                    .map(|url| url.cleaned.as_str())
+                    .unwrap_or("collection");
+                if let Err(typed) = recapture::preflight_for_url(
+                    config,
+                    &rows,
+                    recorded,
+                    &wanted,
+                    None,
+                    None,
+                    force,
+                    title_fallback,
+                ) {
+                    return Err(typed);
+                }
                 return Err(super::force::overwrite_filed_unavailable());
             }
             let copy = super::duplicate::copy_from_occupant(config, &hit.path);

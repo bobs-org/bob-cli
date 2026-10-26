@@ -23,9 +23,15 @@ pub(super) enum CreateSource {
     Markdown(PathBuf),
     /// Existing local PDF file.
     LocalPdf(PathBuf),
-    /// A generic URL that fetched as a PDF (downloaded body in scratch).
-    PdfUrl { url: WebUrl, downloaded: PathBuf },
-    /// A web article URL (clip engine; next phase).
+    /// A generic URL that fetched as a PDF (downloaded body in scratch,
+    /// plus the final URL after redirects for the redirect guard).
+    PdfUrl {
+        url: WebUrl,
+        downloaded: PathBuf,
+        final_url: String,
+    },
+    /// A web article URL (clip engine; next phase). Its redirect guard
+    /// uses the adapter's `final_url`, not the routing fetch.
     WebArticle { url: WebUrl },
 }
 
@@ -117,6 +123,7 @@ pub(super) fn fetch_and_route(
             Ok(CreateSource::PdfUrl {
                 url,
                 downloaded: fetch.path.clone(),
+                final_url: fetch.final_url.clone(),
             })
         }
         "text/html" | "application/xhtml+xml" => {
@@ -127,6 +134,7 @@ pub(super) fn fetch_and_route(
                 Ok(CreateSource::PdfUrl {
                     url,
                     downloaded: fetch.path.clone(),
+                    final_url: fetch.final_url.clone(),
                 })
             } else if normalized.is_empty() {
                 Err(CommandError::new(format!(

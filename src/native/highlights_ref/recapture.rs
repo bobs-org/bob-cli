@@ -1040,6 +1040,97 @@ pub(super) fn print_reread_listen_hint(preflight: &RereadPreflight) {
     }
 }
 
+/// On a plain reread (no `-L` or `-a`) when the newest reading is
+/// narrated, point at it: earlier audio is never inherited, so the new
+/// reading needs `-L` to be narrated too.
+pub(super) fn print_reread_narrated_hint(preflight: &RereadPreflight) {
+    let newest = preflight.plan.family.newest();
+    if !newest.has_audio {
+        return;
+    }
+    let reading = newest.reading.unwrap_or(1);
+    match &newest.audio_path {
+        Some(path) => println!(
+            "hint: v{reading} is narrated ({path}); add -L to narrate this reading"
+        ),
+        None => println!(
+            "hint: v{reading} is narrated; add -L to narrate this reading"
+        ),
+    }
+}
+
+/// Route a reread's audio hint through one helper: a narrated new
+/// reading keeps the existing `-L` hint, while a plain reread without
+/// an explicit `--audio` names the newest narrated reading (if any).
+pub(super) fn print_reread_audio_hint(
+    preflight: &RereadPreflight,
+    narrates_new: bool,
+) {
+    if narrates_new {
+        print_reread_listen_hint(preflight);
+    } else {
+        print_reread_narrated_hint(preflight);
+    }
+}
+
+/// Redirect guard for rereads: when the fetched final URL differs from
+/// the requested key and is recorded by a filed or queued reference
+/// outside the selected family, refuse before writing (exit 1).
+/// The post-fetch rechecks otherwise reuse the pre-fetch key and only
+/// catch races; this catches a redirect that now claims another family.
+pub(super) fn refuse_redirected_reread(
+    config: &Config,
+    requested_dedupe: &str,
+    final_url: &str,
+    preflight: &RereadPreflight,
+) -> std::result::Result<(), CommandError> {
+    if final_url.trim().is_empty() {
+        return Ok(());
+    }
+    let Ok(cleaned) = super::clip_url::validate_and_clean(final_url) else {
+        return Ok(());
+    };
+    let final_dedupe = cleaned.dedupe_key;
+    if final_dedupe == requested_dedupe {
+        return Ok(());
+    }
+    // Inside the selected family (for example an arXiv alias) is fine.
+    if preflight.plan.family.source_keys.contains(&final_dedupe) {
+        return Ok(());
+    }
+    let Ok(recorded) = super::sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message.clone()))
+    else {
+        return Ok(());
+    };
+    let Some(hit) = recorded.iter().find(|hit| {
+        hit.dedupe_key == final_dedupe
+            && ((hit.is_ref_note && hit.source_pdf.is_some())
+                || !hit.is_ref_note)
+    }) else {
+        return Ok(());
+    };
+    // A hit that is itself a member of the selected family is fine;
+    // anything else refuses before writing.
+    let relative = hit
+        .path
+        .strip_prefix(&config.bob_dir)
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| hit.path.display().to_string());
+    if preflight
+        .plan
+        .family
+        .members
+        .iter()
+        .any(|member| member.path == relative)
+    {
+        return Ok(());
+    }
+    Err(CommandError::new(format!(
+        "redirected to {final_url} which is already captured as {relative}; nothing written"
+    )))
+}
+
 /// The `reread:` output line for a finished plan.
 pub(super) fn reread_report_line(
     old_stem: &str,

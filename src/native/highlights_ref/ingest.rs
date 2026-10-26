@@ -678,19 +678,19 @@ pub(crate) fn ingest_url(
         match super::target::fetch_and_route(url.clone(), &scratch, None)
             .map_err(command_error)?
         {
-            super::target::CreateSource::PdfUrl { url, downloaded } => {
-                ingest_pdf_url_route(
-                    &config,
-                    &url,
-                    &downloaded,
-                    &mut scratch,
-                    &recorded,
-                    superseded_legacy,
-                    request.parent,
-                    request.progress,
-                    listen_command.as_ref(),
-                )?
-            }
+            super::target::CreateSource::PdfUrl {
+                url, downloaded, ..
+            } => ingest_pdf_url_route(
+                &config,
+                &url,
+                &downloaded,
+                &mut scratch,
+                &recorded,
+                superseded_legacy,
+                request.parent,
+                request.progress,
+                listen_command.as_ref(),
+            )?,
             super::target::CreateSource::WebArticle { url } => {
                 ingest_article_route(
                     &config,
