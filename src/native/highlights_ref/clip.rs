@@ -757,6 +757,7 @@ pub(super) fn capture_article(
     );
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
+        super::recapture::print_overwrite_hint(preflight);
         if report_audio.is_some_and(|audio| audio.origin == "--listen") {
             super::recapture::print_reread_audio_hint(preflight, true);
         } else if matches!(companion, Companion::None) {
@@ -1120,6 +1121,7 @@ fn print_dry_run(
     println!("source_url: {}", web_url.cleaned);
     if let Some(preflight) = &options.reread {
         println!("{}", preflight.plan.report_line());
+        super::recapture::print_overwrite_hint(preflight);
         if audio.is_some_and(|audio| audio.origin == "--listen") {
             super::recapture::print_reread_audio_hint(preflight, true);
         } else if audio.is_none() {

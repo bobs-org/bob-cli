@@ -5,6 +5,7 @@
 //! duplicate-before-fetch, and listen semantics.
 
 use super::fake_clip::FakeClip;
+use super::overwrite_local::snapshot_tree;
 use crate::support::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -170,6 +171,46 @@ fn write_bare_pdf(path: &Path, title: Option<&str>, author: Option<&str>) {
         doc.trailer.set("Info", info_id);
     }
     doc.save(path).expect("write bare PDF");
+}
+
+fn add_pdf_annotation(path: &Path, subtype: &[u8]) {
+    use lopdf::{dictionary, Document, Object, StringFormat};
+
+    let mut document = Document::load(path).expect("load reference PDF");
+    let page_id = document.page_iter().next().expect("first PDF page");
+    let mut annotation = dictionary! {
+        "Type" => "Annot",
+        "Subtype" => Object::Name(subtype.to_vec()),
+        "Rect" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(20),
+            Object::Integer(20),
+        ],
+        "Contents" => Object::String(b"test annotation".to_vec(), StringFormat::Literal),
+    };
+    if subtype == b"Link" {
+        let action_id = document.add_object(dictionary! {
+            "S" => "URI",
+            "URI" => Object::String(b"https://example.com/".to_vec(), StringFormat::Literal),
+        });
+        annotation.set("A", Object::Reference(action_id));
+    }
+    let annotation_id = document.add_object(annotation);
+    let page = document
+        .get_object_mut(page_id)
+        .expect("page object")
+        .as_dict_mut()
+        .expect("page dictionary");
+    let mut annotations = page
+        .get(b"Annots")
+        .ok()
+        .and_then(|value| value.as_array().ok())
+        .cloned()
+        .unwrap_or_default();
+    annotations.push(Object::Reference(annotation_id));
+    page.set("Annots", Object::Array(annotations));
+    document.save(path).expect("save reference PDF annotation");
 }
 
 fn write_fake_curl(dir: &Path) -> PathBuf {
@@ -526,6 +567,59 @@ fn web_overwrite_dry_run_writes_nothing_without_network() {
 }
 
 #[test]
+fn web_overwrite_refuses_disabled_ingest_before_dry_run_or_network() {
+    let fixture = web_vault("bob-cli-overwrite-web-ingest-disabled");
+    file_web_ref(
+        &fixture.vault,
+        "hello",
+        "blogs",
+        "Symphony Spec",
+        "https://example.com/article/hello",
+    );
+    commit_vault(&fixture.vault, "file reference");
+    let before_tree = snapshot_tree(&fixture.vault);
+    let before_head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+    let root = fixture.temp.path().join("curl-root");
+    fs::create_dir_all(&root).expect("create curl root");
+    let curl = write_fake_curl(fixture.temp.path());
+    let log = fixture.temp.path().join("curl.log");
+    fs::write(&log, "").expect("init curl log");
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    let mut command = web_command(
+        &fixture,
+        &[
+            "https://example.com/article/hello",
+            "-P",
+            "sase",
+            "-f",
+            "overwrite",
+            "-d",
+        ],
+    );
+    command.env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "0");
+    with_network(&mut command, &fake.path, &curl, &root, &log);
+    let output = command.output().expect("disabled-ingest dry-run");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("intake_unavailable")
+            && stderr(&output)
+                .contains("disabled by BOB_HIGHLIGHTS_INGEST_ON_CREATE")
+            && stderr(&output).contains("BOB_HIGHLIGHTS_INGEST_ON_CREATE=1"),
+        "refusal names the reason and enabling hint:\n{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "disabled ingest must refuse before adapter");
+    assert!(fs::read_to_string(&log).expect("curl log").is_empty());
+    assert_eq!(snapshot_tree(&fixture.vault), before_tree);
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])).trim(),
+        before_head
+    );
+}
+
+#[test]
 fn web_overwrite_redirect_to_other_family_refuses() {
     let fixture = web_vault("bob-cli-overwrite-web-redirect");
     file_web_ref(
@@ -628,12 +722,188 @@ fn annotated_web_target_refuses_without_network() {
     );
     assert!(
         stderr(&output).contains(
-            "overwriting an annotated reference is not available yet"
+            "overwriting an annotated reference is not available yet; -f starts a new reading"
         ),
         "the annotated interim refusal wins:\n{}",
         format_output(&output)
     );
     assert!(!fake.called(), "annotated targets do no adapter work");
+}
+
+#[test]
+fn every_annotation_source_refuses_with_the_contract_remedy() {
+    for (kind, evidence) in [
+        ("sidecar", "Highlights sidecar has annotations"),
+        ("pdf", "PDF has user annotations"),
+        ("fragment", "inbound link targets a highlight"),
+        ("follow-up", "inbound link carries a highlight follow-up"),
+    ] {
+        let fixture =
+            web_vault(&format!("bob-cli-overwrite-annotation-{kind}"));
+        file_web_ref(
+            &fixture.vault,
+            "hello",
+            "blogs",
+            "Symphony Spec",
+            "https://example.com/article/hello",
+        );
+        commit_vault(&fixture.vault, "file reference before annotation");
+        match kind {
+            "sidecar" => write_file(
+                &fixture.vault.join("lib/blogs/hello.md"),
+                "## Page 1\n\n> [!quote] Highlighted words\n>\n> Sidecar evidence.\n",
+            ),
+            "pdf" => add_pdf_annotation(
+                &fixture.vault.join("lib/blogs/hello.pdf"),
+                b"Highlight",
+            ),
+            "fragment" => {
+                let parent = fixture.vault.join("sase.md");
+                let mut contents = fs::read_to_string(&parent).expect("parent");
+                contents.push_str("\nA link to [[ref/blogs/hello#^h-test]].\n");
+                fs::write(parent, contents).expect("write inbound highlight link");
+            }
+            "follow-up" => {
+                let parent = fixture.vault.join("sase.md");
+                let mut contents = fs::read_to_string(&parent).expect("parent");
+                contents.push_str(
+                    "\n- [ ] #task Follow up [[ref/blogs/hello#^h-test]] [h:: note]\n",
+                );
+                fs::write(parent, contents).expect("write inbound follow-up");
+            }
+            _ => unreachable!(),
+        }
+        if matches!(kind, "sidecar" | "pdf") {
+            let sync = bob_command()
+                .args(["ref", "sync"])
+                .arg(fixture.vault.join("lib/blogs/hello.pdf"))
+                .env("BOB_DIR", &fixture.vault)
+                .output()
+                .expect("sync annotation evidence");
+            assert_success(&sync);
+        }
+        commit_vault(&fixture.vault, "add annotation evidence");
+
+        let before_tree = snapshot_tree(&fixture.vault);
+        let before_head =
+            stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+                .trim()
+                .to_string();
+        let before_status = stdout(&git_in(
+            &fixture.vault,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+        ));
+        let state = fixture.temp.path().join("state");
+        let intent =
+            super::overwrite_recovery::intent_path(&state, &fixture.vault);
+        let before_intent = fs::read(&intent).ok();
+        let root = fixture.temp.path().join("curl-root");
+        fs::create_dir_all(&root).expect("create curl root");
+        let curl = write_fake_curl(fixture.temp.path());
+        let log = fixture.temp.path().join("curl.log");
+        fs::write(&log, "").expect("init curl log");
+        let fake = FakeClip::new(&fixture.temp, "adapter");
+        let mut command = web_command(
+            &fixture,
+            &[
+                "https://example.com/article/hello",
+                "-P",
+                "sase",
+                "-f",
+                "overwrite",
+            ],
+        );
+        with_network(&mut command, &fake.path, &curl, &root, &log);
+        let output = command.output().expect("attempt annotated overwrite");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{kind} evidence must refuse:\n{}",
+            format_output(&output)
+        );
+        let diagnostic = stderr(&output);
+        assert!(
+            diagnostic.contains("annotated_reference")
+                && diagnostic.contains(
+                    "overwriting an annotated reference is not available yet; -f starts a new reading"
+                )
+                && diagnostic.contains(evidence),
+            "{kind} refusal must include its code, remedy, and evidence:\n{diagnostic}"
+        );
+        assert!(!fake.called(), "{kind} refusal must precede adapters");
+        assert!(
+            fs::read_to_string(&log).expect("curl log").is_empty(),
+            "{kind} refusal must precede fetch"
+        );
+        assert_eq!(snapshot_tree(&fixture.vault), before_tree);
+        assert_eq!(
+            stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])).trim(),
+            before_head
+        );
+        assert_eq!(
+            stdout(&git_in(
+                &fixture.vault,
+                ["status", "--porcelain=v1", "--untracked-files=all"]
+            )),
+            before_status
+        );
+        assert_eq!(fs::read(intent).ok(), before_intent);
+    }
+}
+
+#[test]
+fn pdf_link_annotations_for_navigation_and_audio_do_not_refuse() {
+    let fixture = web_vault("bob-cli-overwrite-web-link-annotations");
+    file_web_ref(
+        &fixture.vault,
+        "hello",
+        "blogs",
+        "Symphony Spec",
+        "https://example.com/article/hello",
+    );
+    commit_vault(&fixture.vault, "file reference before PDF links");
+    let pdf = fixture.vault.join("lib/blogs/hello.pdf");
+    add_pdf_annotation(&pdf, b"Link");
+    add_pdf_annotation(&pdf, b"Link");
+    let sync = bob_command()
+        .args(["ref", "sync"])
+        .arg(&pdf)
+        .env("BOB_DIR", &fixture.vault)
+        .output()
+        .expect("sync PDF Link annotations");
+    assert_success(&sync);
+    commit_vault(&fixture.vault, "add navigation and audio links");
+
+    let root = fixture.temp.path().join("curl-root");
+    fs::create_dir_all(&root).expect("create curl root");
+    let curl = write_fake_curl(fixture.temp.path());
+    let log = fixture.temp.path().join("curl.log");
+    fs::write(&log, "").expect("init curl log");
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    fake.respond(&article_capture(
+        "Symphony Spec Revised",
+        "https://example.com/article/hello",
+    ));
+    let mut command = web_command(
+        &fixture,
+        &[
+            "https://example.com/article/hello",
+            "-P",
+            "sase",
+            "-f",
+            "overwrite",
+        ],
+    );
+    with_network(&mut command, &fake.path, &curl, &root, &log);
+    let output = command
+        .output()
+        .expect("overwrite with PDF Link annotations");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("ok replaced Highlights-ready PDF"),
+        "Link annotations alone must allow overwrite:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]
@@ -712,6 +982,56 @@ fn web_overwrite_listen_narrates_replacement() {
 }
 
 #[test]
+fn bare_web_reread_hints_at_dry_run() {
+    let fixture = web_vault("bob-cli-overwrite-web-reread-hint");
+    let target = "https://example.com/paper.pdf";
+    file_web_ref(&fixture.vault, "hello", "papers", "Symphony Spec", target);
+    let note_path = fixture.vault.join("ref/papers/hello.md");
+    let note = fs::read_to_string(&note_path).expect("read filed reference");
+    fs::write(
+        &note_path,
+        note.replacen(
+            "status: ready\n",
+            "status: ready\nhighlights_count: 0\n",
+            1,
+        ),
+    )
+    .expect("set known zero highlight count");
+    commit_vault(&fixture.vault, "file reference");
+    let expected =
+        "hint: hello is still ready with 0 highlights; -f overwrite would replace it instead";
+
+    let root = fixture.temp.path().join("curl-root");
+    fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"), Some("Symphony Spec"), None);
+    let curl = write_fake_curl(fixture.temp.path());
+    let log = fixture.temp.path().join("curl.log");
+    fs::write(&log, "").expect("init curl log");
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+
+    let mut command =
+        web_command(&fixture, &[target, "-P", "sase", "-f", "-d"]);
+    with_network(&mut command, &fake.path, &curl, &root, &log);
+    let dry = command.output().expect("dry-run bare URL reread");
+    assert_success(&dry);
+    assert!(
+        stdout(&dry).contains(expected),
+        "dry run must print the overwrite hint:\n{}",
+        stdout(&dry)
+    );
+
+    let mut reread = web_command(&fixture, &[target, "-P", "sase", "-f"]);
+    with_network(&mut reread, &fake.path, &curl, &root, &log);
+    let reread = reread.output().expect("real bare URL reread");
+    assert_success(&reread);
+    assert!(
+        stdout(&reread).contains(expected),
+        "real reread must print the overwrite hint:\n{}",
+        stdout(&reread)
+    );
+}
+
+#[test]
 fn web_overwrite_selects_older_member_with_name() {
     let fixture = web_vault("bob-cli-overwrite-web-named-member");
     file_web_ref(
@@ -742,6 +1062,14 @@ fn web_overwrite_selects_older_member_with_name() {
     let reread_output = reread.output().expect("reread the article");
     assert_success(&reread_output);
     commit_if_dirty(&fixture.vault, "file reread");
+    let older_note = fixture.vault.join("ref/blogs/hello.md");
+    let newer_note = fixture.vault.join("ref/blogs/hello__v2.md");
+    let older_pdf = fixture.vault.join("lib/blogs/hello.pdf");
+    let newer_pdf = fixture.vault.join("lib/blogs/hello__v2.pdf");
+    let newer_note_before = fs::read(&newer_note).expect("newer note before");
+    let newer_pdf_before = fs::read(&newer_pdf).expect("newer PDF before");
+    let older_note_before = fs::read(&older_note).expect("older note before");
+    let older_pdf_before = fs::read(&older_pdf).expect("older PDF before");
 
     // An explicit `-N` replaces the named older reading in place.
     fake.respond(&article_capture(
@@ -765,8 +1093,28 @@ fn web_overwrite_selects_older_member_with_name() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("overwrite: blogs/hello")
+        report.lines().any(|line| line == "overwrite: blogs/hello")
             && report.contains("title: Symphony Spec Revised"),
         "the named member is replaced in place:\n{report}"
+    );
+    assert_ne!(
+        fs::read(&older_note).expect("older note after"),
+        older_note_before,
+        "the selected root note must be replaced"
+    );
+    assert_ne!(
+        fs::read(&older_pdf).expect("older PDF after"),
+        older_pdf_before,
+        "the selected root PDF must be replaced"
+    );
+    assert_eq!(
+        fs::read(&newer_note).expect("newer note after"),
+        newer_note_before,
+        "the unselected newer note stays byte-identical"
+    );
+    assert_eq!(
+        fs::read(&newer_pdf).expect("newer PDF after"),
+        newer_pdf_before,
+        "the unselected newer PDF stays byte-identical"
     );
 }

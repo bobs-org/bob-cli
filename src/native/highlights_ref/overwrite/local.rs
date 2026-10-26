@@ -185,6 +185,6 @@ pub(in crate::native::highlights_ref) fn kept_closed_task(
     explicit_status: Option<&str>,
 ) -> bool {
     explicit_status.is_none()
-        && (plan.task_view.archived
-            || matches!(plan.task.mark, 'x' | 'X' | '-'))
+        && !plan.task_view.archived
+        && matches!(plan.task.mark, 'x' | 'X' | '-')
 }

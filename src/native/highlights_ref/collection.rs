@@ -782,6 +782,7 @@ fn recheck_collection_overlap(
 fn print_reread_or_renamed(plan: &TargetPlan, options: &CreateOptions) {
     if let Some(preflight) = options.reread() {
         println!("{}", preflight.plan.report_line());
+        recapture::print_overwrite_hint(preflight);
         if options.listen {
             recapture::print_reread_audio_hint(preflight, true);
         } else if options.audio.is_none() {

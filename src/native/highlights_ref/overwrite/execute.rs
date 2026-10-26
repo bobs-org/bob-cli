@@ -205,7 +205,7 @@ fn execute_with_sync(
                     "could not persist overwrite intent: {error}{}",
                     rollback_suffix(rollback)
                 ))
-                .with_code("verify_failed"));
+                .with_human_code("verify_failed"));
             }
 
             let applied =
@@ -222,7 +222,7 @@ fn execute_with_sync(
                         "{error}{}",
                         rollback_suffix(rollback)
                     ))
-                    .with_code("verify_failed"));
+                    .with_human_code("verify_failed"));
                 }
             };
 
@@ -242,7 +242,7 @@ fn execute_with_sync(
                         "could not build scoped overwrite commit paths: {error}{}",
                         rollback_suffix(rollback)
                     ))
-                    .with_code("verify_failed"));
+                    .with_human_code("verify_failed"));
                 }
             };
             if paths.is_empty() {
@@ -255,7 +255,7 @@ fn execute_with_sync(
                     "verified overwrite produced no scoped Git paths{}",
                     rollback_suffix(rollback)
                 ))
-                .with_code("verify_failed"));
+                .with_human_code("verify_failed"));
             }
             let sha = match ob::commit_paths(
                 &config.bob_dir,
@@ -274,7 +274,7 @@ fn execute_with_sync(
                         "verified overwrite produced no scoped Git commit{}",
                         rollback_suffix(rollback)
                     ))
-                    .with_code("verify_failed"));
+                    .with_human_code("verify_failed"));
                 }
                 Err(error) => {
                     if let Some((sha, committed_subject)) =
@@ -297,7 +297,7 @@ fn execute_with_sync(
                             "Git commit failed: {error}{}",
                             rollback_suffix(rollback)
                         ))
-                        .with_code("verify_failed"));
+                        .with_human_code("verify_failed"));
                     }
                 }
             };

@@ -88,7 +88,7 @@ impl AlreadyCaptured {
     }
 
     /// Carry the allocated next-reread stem for the reread remedy and
-    /// the overwrite interim refusal.
+    /// the selected overwrite target for the in-place remedy.
     pub(crate) fn with_next_stem(mut self, stem: impl Into<String>) -> Self {
         self.next_stem = Some(stem.into());
         self

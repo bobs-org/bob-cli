@@ -1,5 +1,6 @@
 //! Local Markdown, original local PDF, and same-day vault-note overwrite.
 
+use super::overwrite_recovery;
 use crate::support::*;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -216,13 +217,21 @@ pub(crate) fn overwrite_command(
     fixture: &OverwriteVault,
     source: &Path,
 ) -> Command {
+    overwrite_command_with_parent(fixture, source, "sase")
+}
+
+fn overwrite_command_with_parent(
+    fixture: &OverwriteVault,
+    source: &Path,
+    parent: &str,
+) -> Command {
     let mut command = bob_command();
     command
         .arg("ref")
         .arg("create")
         .arg(source)
         .arg("-P")
-        .arg("sase")
+        .arg(parent)
         .arg("-f")
         .arg("overwrite")
         .arg("-b")
@@ -243,6 +252,58 @@ pub(crate) fn overwrite_command(
         )
         .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1");
     command
+}
+
+fn no_force_command(fixture: &OverwriteVault, source: &Path) -> Command {
+    let mut command = bob_command();
+    command
+        .args(["ref", "create"])
+        .arg(source)
+        .args(["-P", "sase"])
+        .arg("-b")
+        .arg(&fixture.vault)
+        .env("BOB_DIR", &fixture.vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("NO_COLOR", "1")
+        .env("HOME", fixture.temp.path().join("home"))
+        .env("XDG_STATE_HOME", fixture.temp.path().join("state"))
+        .env("XDG_CACHE_HOME", fixture.temp.path().join("cache"))
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            fixture.temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            fixture.temp.path().join("vault-sync.json"),
+        )
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "1");
+    command
+}
+
+fn assert_readonly_refusal(
+    fixture: &OverwriteVault,
+    before_tree: &[(String, Vec<u8>)],
+    before_head: &str,
+    before_status: &str,
+    before_intent: Option<Vec<u8>>,
+) {
+    assert_eq!(snapshot_tree(&fixture.vault), before_tree);
+    assert_eq!(
+        stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"])).trim(),
+        before_head
+    );
+    assert_eq!(
+        stdout(&git_in(
+            &fixture.vault,
+            ["status", "--porcelain=v1", "--untracked-files=all"]
+        )),
+        before_status
+    );
+    let intent = overwrite_recovery::intent_path(
+        &fixture.temp.path().join("state"),
+        &fixture.vault,
+    );
+    assert_eq!(fs::read(intent).ok(), before_intent);
 }
 
 pub(crate) fn source_pdf(fixture: &OverwriteVault, title: &str) -> PathBuf {
@@ -271,6 +332,230 @@ fn pdf_bytes(fixture: &OverwriteVault) -> Vec<u8> {
 }
 
 #[test]
+fn overwrite_refuses_incompatible_flags_without_writing() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-flag-refusals", "ready", false, false);
+    write_area_note(&fixture.vault.join("other.md"), "Other");
+    commit_vault(&fixture.vault, "add other area");
+    let source = source_pdf(&fixture, TITLE);
+    let before_tree = snapshot_tree(&fixture.vault);
+    let before_head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+    let before_status = stdout(&git_in(
+        &fixture.vault,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    ));
+    let before_intent = None;
+
+    for (args, code, text) in [
+        (vec!["-k"], "intake_not_supported", "-k"),
+        (vec!["-t", "blogs"], "ref_type_mismatch", "-t blogs"),
+        (vec!["-P", "other"], "parent_mismatch", "bob task move"),
+    ] {
+        let mut command = if args.first() == Some(&"-P") {
+            overwrite_command_with_parent(&fixture, &source, args[1])
+        } else {
+            let mut command = overwrite_command(&fixture, &source);
+            for arg in &args {
+                command.arg(arg);
+            }
+            command
+        };
+        let output = command.output().expect("run incompatible overwrite");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must refuse:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(code) && stderr(&output).contains(text),
+            "{args:?} refusal must name its reason and remedy:\n{}",
+            format_output(&output)
+        );
+        assert_readonly_refusal(
+            &fixture,
+            &before_tree,
+            &before_head,
+            &before_status,
+            before_intent.clone(),
+        );
+    }
+
+    let accepted = overwrite_command_with_parent(&fixture, &source, "sase")
+        .arg("-t")
+        .arg("papers")
+        .output()
+        .expect("matching explicit parent and type");
+    assert_success(&accepted);
+}
+
+#[test]
+fn overwrite_refuses_disabled_ingest_and_unstampable_status_before_render() {
+    let fixture = filed_vault(
+        "bob-cli-overwrite-ingest-status-refusals",
+        "ready",
+        false,
+        false,
+    );
+    let source = source_pdf(&fixture, TITLE);
+    let before_tree = snapshot_tree(&fixture.vault);
+    let before_head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+    let before_status = stdout(&git_in(
+        &fixture.vault,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    ));
+    let before_intent = None;
+
+    for (command, code, expected_exit) in [
+        (
+            overwrite_command(&fixture, &source)
+                .arg("-d")
+                .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "0"),
+            "intake_unavailable",
+            1,
+        ),
+        (
+            overwrite_command(&fixture, &source).args(["-s", "legacy"]),
+            "unsupported_status",
+            2,
+        ),
+    ] {
+        let output = command.output().expect("run refused overwrite");
+        assert_eq!(output.status.code(), Some(expected_exit));
+        assert!(
+            stderr(&output).contains(code),
+            "refusal must expose {code}:\n{}",
+            format_output(&output)
+        );
+        assert_readonly_refusal(
+            &fixture,
+            &before_tree,
+            &before_head,
+            &before_status,
+            before_intent.clone(),
+        );
+    }
+}
+
+#[test]
+fn overwrite_refuses_all_remaining_preflight_codes_without_writing() {
+    for (case, expected_code) in [
+        ("legacy", "legacy_reference"),
+        ("intake", "intake_reference"),
+        ("not-in-sync", "not_in_sync"),
+        ("dirty", "dirty_paths"),
+        ("open-note-task", "open_note_tasks"),
+    ] {
+        let fixture = filed_vault(
+            &format!("bob-cli-overwrite-preflight-{case}"),
+            "ready",
+            false,
+            false,
+        );
+        let note = fixture.vault.join("ref/papers/report.md");
+        match case {
+            "legacy" => {
+                let contents = fs::read_to_string(&note).expect("read note");
+                let changed = contents
+                    .lines()
+                    .filter(|line| !line.starts_with("source_pdf:"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                fs::write(&note, format!("{changed}\n"))
+                    .expect("remove source PDF provenance");
+                commit_vault(&fixture.vault, "make legacy reference");
+            }
+            "intake" => {
+                fs::create_dir_all(fixture.vault.join("xlib/papers"))
+                    .expect("create intake directory");
+                fs::copy(
+                    &fixture.pdf,
+                    fixture.vault.join("xlib/papers/report.pdf"),
+                )
+                .expect("copy PDF into intake");
+                let contents = fs::read_to_string(&note).expect("read note");
+                let changed = contents
+                    .replace("lib/papers/report.pdf", "xlib/papers/report.pdf");
+                fs::write(&note, changed).expect("point at intake PDF");
+                commit_vault(&fixture.vault, "make intake reference");
+            }
+            "not-in-sync" => {
+                let parent = fixture.vault.join("sase.md");
+                let contents = fs::read_to_string(&parent).expect("parent");
+                let changed = contents
+                    .lines()
+                    .map(|line| {
+                        if line.contains("^ref-report") {
+                            line.replacen("- [ ]", "- [/]", 1)
+                        } else {
+                            line.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                fs::write(parent, format!("{changed}\n"))
+                    .expect("change reading task without syncing marker");
+                commit_vault(&fixture.vault, "desynchronize reading marker");
+            }
+            "dirty" => {
+                let mut contents =
+                    fs::read_to_string(&note).expect("read note");
+                contents.push_str("\nDirty authored prose.\n");
+                fs::write(&note, contents).expect("dirty reference note");
+            }
+            "open-note-task" => {
+                let mut contents =
+                    fs::read_to_string(&note).expect("read note");
+                contents.push_str("\n- [ ] #task Unfinished note work.\n");
+                fs::write(&note, contents).expect("add open note task");
+                commit_vault(&fixture.vault, "add open note task");
+            }
+            _ => unreachable!(),
+        }
+
+        let before_tree = snapshot_tree(&fixture.vault);
+        let before_head =
+            stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+                .trim()
+                .to_string();
+        let before_status = stdout(&git_in(
+            &fixture.vault,
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+        ));
+        let intent = overwrite_recovery::intent_path(
+            &fixture.temp.path().join("state"),
+            &fixture.vault,
+        );
+        let before_intent = fs::read(&intent).ok();
+        let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+            .output()
+            .expect("run preflight refusal");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{case} must exit 2:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(expected_code),
+            "{case} must use {expected_code}:\n{}",
+            format_output(&output)
+        );
+        assert_readonly_refusal(
+            &fixture,
+            &before_tree,
+            &before_head,
+            &before_status,
+            before_intent,
+        );
+    }
+}
+
+#[test]
 fn local_pdf_overwrite_dry_run_writes_nothing() {
     let fixture =
         filed_vault("bob-cli-overwrite-pdf-dry", "ready", false, false);
@@ -293,6 +578,41 @@ fn local_pdf_overwrite_dry_run_writes_nothing() {
         snapshot_tree(&fixture.vault),
         before,
         "dry-run overwrite must not write"
+    );
+}
+
+#[test]
+fn bare_local_reread_hints_at_overwrite_on_real_and_dry_runs() {
+    let fixture =
+        filed_vault("bob-cli-reread-overwrite-hint", "ready", false, false);
+    let source = source_pdf(&fixture, TITLE);
+    let note_path = fixture.vault.join("ref/papers/report.md");
+    let mut note = fs::read_to_string(&note_path).expect("read filed note");
+    let marker_end = note.find("\n---").expect("frontmatter end") + 1;
+    note.insert_str(marker_end, "highlights_count: 0\n");
+    fs::write(&note_path, note).expect("set zero highlight count");
+    commit_vault(&fixture.vault, "record zero highlights");
+    let expected =
+        "hint: report is still ready with 0 highlights; -f overwrite would replace it instead";
+    let dry = reread_command(&fixture, &source)
+        .arg("-d")
+        .output()
+        .expect("dry-run bare reread");
+    assert_success(&dry);
+    assert!(
+        stdout(&dry).contains(expected),
+        "dry run:\n{}",
+        stdout(&dry)
+    );
+
+    let real = reread_command(&fixture, &source)
+        .output()
+        .expect("real bare reread");
+    assert_success(&real);
+    assert!(
+        stdout(&real).contains(expected),
+        "real run:\n{}",
+        stdout(&real)
     );
 }
 
@@ -494,14 +814,33 @@ fn local_pdf_overwrite_keeps_archived_closed_task() {
     assert_success(&restabilize);
     commit_vault(&fixture.vault, "sync archived embed");
     let source = source_pdf(&fixture, TITLE);
+    let before = snapshot_tree(&fixture.vault);
+    let reopen = overwrite_command(&fixture, &source)
+        .arg("-s")
+        .arg("ready")
+        .output()
+        .expect("attempt to reopen archived task");
+    assert_eq!(
+        reopen.status.code(),
+        Some(2),
+        "an explicit open status must refuse for an archived task:\n{}",
+        format_output(&reopen)
+    );
+    assert!(
+        stderr(&reopen).contains("archived_task_reopen")
+            && stderr(&reopen).contains("done/sase_done.md"),
+        "refusal points at the archived task:\n{}",
+        format_output(&reopen)
+    );
+    assert_eq!(snapshot_tree(&fixture.vault), before);
     let output = overwrite_command(&fixture, &source)
         .output()
         .expect("overwrite archived");
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("pass -s ready to reopen"),
-        "archived closed task stays closed:\n{report}"
+        !report.contains("pass -s ready to reopen"),
+        "the success hint must not suggest an archived reopen:\n{report}"
     );
     let done = fs::read_to_string(fixture.vault.join("done/sase_done.md"))
         .expect("done note");
@@ -551,6 +890,50 @@ fn local_pdf_overwrite_selected_older_reading() {
         fs::read(&v2).expect("v2 after"),
         v2_before,
         "newer reading stays untouched"
+    );
+}
+
+#[test]
+fn no_force_overwrite_remedy_uses_the_selected_reading() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-remedy-selected", "ready", false, false);
+    let source = source_pdf(&fixture, TITLE);
+    let reread = reread_command(&fixture, &source)
+        .output()
+        .expect("file a second reading");
+    assert_success(&reread);
+    commit_if_dirty(&fixture.vault, "file second reading");
+
+    let output = no_force_command(&fixture, &source)
+        .args(["-N", "report"])
+        .output()
+        .expect("refuse without force for selected root");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    let remedy = diagnostic
+        .lines()
+        .find(|line| line.contains("-f overwrite"))
+        .expect("overwrite remedy row");
+    assert!(
+        remedy.contains("ref/papers/report.md")
+            && remedy.contains("authored notes move to ref_history/"),
+        "the remedy must name the selected reading and archive:\n{diagnostic}"
+    );
+}
+
+#[test]
+fn free_name_on_title_route_is_still_fresh_for_overwrite() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-free-name", "ready", false, false);
+    let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+        .args(["-N", "unfiled_name"])
+        .output()
+        .expect("overwrite with a free title-route name");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("nothing to overwrite"),
+        "a free -N must remain a fresh capture and refuse overwrite:\n{}",
+        format_output(&output)
     );
 }
 

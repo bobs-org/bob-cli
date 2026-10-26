@@ -1168,8 +1168,11 @@ fn finish_selection(
             &[overlap_group(&family, false)],
         ));
     }
+    let mut family = family;
     if let Some(name) = name {
         validate_reread_name(&family, name)?;
+        family.selected =
+            family.member_named(name).expect("validated family member");
     }
     match force {
         None => {
@@ -1417,6 +1420,19 @@ pub(super) fn print_reread_audio_hint(
         print_reread_listen_hint(preflight);
     } else {
         print_reread_narrated_hint(preflight);
+    }
+}
+
+/// Offer an in-place overwrite when the newest reading is still unread.
+/// Called alongside the reread line by real and dry-run route reporters.
+pub(super) fn print_overwrite_hint(preflight: &RereadPreflight) {
+    let newest = preflight.plan.family.newest();
+    if newest.status.as_deref() == Some("ready") && newest.highlights == Some(0)
+    {
+        println!(
+            "hint: {} is still ready with 0 highlights; -f overwrite would replace it instead",
+            newest.stem
+        );
     }
 }
 

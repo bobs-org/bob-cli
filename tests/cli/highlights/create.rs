@@ -8525,6 +8525,16 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     assert_success(&scan());
     let v1_note = vault.join("ref/blogs/tokio_internals.md");
     assert!(v1_note.is_file(), "scan must file the v1 note");
+    let v1_text = std::fs::read_to_string(&v1_note).expect("read v1 note");
+    std::fs::write(
+        &v1_note,
+        v1_text.replacen(
+            "status: ready\n",
+            "status: ready\nhighlights_count: 0\n",
+            1,
+        ),
+    )
+    .expect("record known zero highlights");
     let v1_bytes = std::fs::read(&v1_note).expect("read v1 note");
     let v1_pdf = vault.join("lib/blogs/tokio_internals.pdf");
     let v1_pdf_bytes = std::fs::read(&v1_pdf).expect("read v1 PDF");
@@ -8550,6 +8560,7 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     let report = stdout(&output);
     assert!(
         report.contains("reread: tokio_internals → tokio_internals__v2 (v1")
+            && report.contains("hint: tokio_internals is still ready with 0 highlights; -f overwrite would replace it instead")
             && report.contains("writes: none"),
         "dry run must report the reread:\n{report}"
     );
@@ -8573,6 +8584,7 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     let report = stdout(&output);
     assert!(
         report.contains("reread: tokio_internals → tokio_internals__v2 (v1")
+            && report.contains("hint: tokio_internals is still ready with 0 highlights; -f overwrite would replace it instead")
             && report.contains(
                 "name: tokio_internals__v2 (reread of the exact URL set; -N selects the family)"
             )
@@ -8582,6 +8594,11 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     );
     let staged = vault.join("xlib/blogs/tokio_internals__v2.pdf");
     assert!(staged.is_file(), "the reread waits in intake:\n{report}");
+    assert_eq!(
+        std::fs::read(&v1_note).expect("reread v1 note"),
+        v1_bytes,
+        "the reread leaves the earlier note untouched"
+    );
 
     // The marker preserves argument order for the new content and stamps
     // id to the new stem.
@@ -8625,11 +8642,6 @@ fn highlights_create_collection_rereads_exact_set_reversed() {
     assert!(
         parent.contains("^ref-tokio-internals-v2"),
         "scan must insert the versioned reading task:\n{parent}"
-    );
-    assert_eq!(
-        std::fs::read(&v1_note).expect("reread v1 note"),
-        v1_bytes,
-        "the earlier note keeps its bytes"
     );
     assert_eq!(
         std::fs::read(&v1_pdf).expect("reread v1 PDF"),
@@ -8694,6 +8706,15 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
             ),
         );
     }
+    for (index, title) in [
+        (7, "Tokio Internals, Part 1: The Scheduler"),
+        (8, "Tokio Internals, Part 2: The Reactor"),
+    ] {
+        fake.respond_n(
+            index,
+            &article_capture(title, "Jane Doe", "2024-01-08", 2140),
+        );
+    }
 
     let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
     capture.env("BOB_NOW", NOW);
@@ -8711,6 +8732,19 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
             .expect("file collection into library")
     };
     assert_success(&scan());
+
+    let mut reread = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    reread.args(["-f", "-k"]).env("BOB_NOW", NOW);
+    collection_env(&mut reread, &curl, &curl_root, &log, &fake.path);
+    let reread_output =
+        reread.output().expect("file second collection reading");
+    assert_success(&reread_output);
+    assert_success(&scan());
+    let newer_note = vault.join("ref/blogs/tokio_internals__v2.md");
+    let newer_pdf = vault.join("lib/blogs/tokio_internals__v2.pdf");
+    assert!(newer_note.is_file() && newer_pdf.is_file());
+    let newer_note_before = fs::read(&newer_note).expect("newer note");
+    let newer_pdf_before = fs::read(&newer_pdf).expect("newer PDF");
 
     let note = vault.join("ref/blogs/tokio_internals.md");
     let parent = vault.join("sase.md");
@@ -8740,6 +8774,29 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
 
     let adapter_calls = fake.request_count();
     let curl_before = fs::read_to_string(&log).expect("read curl log");
+    let mut disabled = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    disabled
+        .args(["--force=overwrite", "-d"])
+        .env("BOB_NOW", NOW)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "0");
+    collection_env(&mut disabled, &curl, &curl_root, &log, &fake.path);
+    let disabled_output = disabled
+        .output()
+        .expect("disabled-ingest collection overwrite");
+    assert_eq!(
+        disabled_output.status.code(),
+        Some(1),
+        "disabled collection overwrite must refuse:\n{}",
+        format_output(&disabled_output)
+    );
+    assert!(
+        stderr(&disabled_output).contains("intake_unavailable"),
+        "disabled collection overwrite code:\n{}",
+        format_output(&disabled_output)
+    );
+    assert_eq!(fake.request_count(), adapter_calls);
+    assert_eq!(fs::read_to_string(&log).unwrap(), curl_before);
+
     let mut dry = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
     dry.args(["--force=overwrite", "-N", "tokio_internals", "-d"]);
     dry.env("BOB_NOW", NOW);
@@ -8749,7 +8806,9 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
     let dry_report = stdout(&dry_output);
     assert!(
         dry_report.contains("ok would replace Highlights-ready PDF")
-            && dry_report.contains("overwrite: blogs/tokio_internals")
+            && dry_report
+                .lines()
+                .any(|line| { line == "overwrite: blogs/tokio_internals" })
             && dry_report.contains("writes: none"),
         "dry-run must describe the selected member:\n{dry_report}"
     );
@@ -8796,7 +8855,9 @@ printf 'ID3 replacement episode' > "$audio_path"
     let report = stdout(&output);
     assert!(
         report.contains("ok replaced Highlights-ready PDF")
-            && report.contains("overwrite: blogs/tokio_internals")
+            && report
+                .lines()
+                .any(|line| { line == "overwrite: blogs/tokio_internals" })
             && report.contains(
                 "earlier: ref_history/blogs/tokio_internals__2026-10-16.md"
             )
@@ -8836,19 +8897,50 @@ printf 'ID3 replacement episode' > "$audio_path"
             .contains("Authored collection notes to freeze."),
         "old prose must be frozen"
     );
+    let parent_after =
+        fs::read_to_string(&parent).expect("read updated parent");
+    let task_after = parent_after
+        .lines()
+        .find(|line| line.contains("^ref-tokio-internals"))
+        .expect("reading task stays present");
+    let normalize_task_alias = |line: &str| {
+        let start = line
+            .find("[[ref/blogs/tokio_internals|")
+            .expect("reading task links to selected root");
+        let end = start
+            + line[start..].find("]]").expect("reading task link closes")
+            + 2;
+        format!(
+            "{}[[ref/blogs/tokio_internals|<title>]]{}",
+            &line[..start],
+            &line[end..]
+        )
+    };
+    assert!(
+        task_after.starts_with(
+            "- [ ] #task #ref [[ref/blogs/tokio_internals|"
+        ) && task_after.contains("[created::2026-10-16] ^ref-tokio-internals"),
+        "overwrite must keep the selected root reading task and block id:\n{task_after}"
+    );
     assert_eq!(
-        fs::read_to_string(&parent)
-            .expect("read updated parent")
-            .lines()
-            .find(|line| line.contains("^ref-tokio-internals"))
-            .expect("reading task stays present"),
-        task_before,
-        "overwrite must preserve the task line and address"
+        normalize_task_alias(task_after),
+        normalize_task_alias(&task_before),
+        "overwrite keeps task state and metadata; alias tracks the replacement title"
     );
     assert_eq!(
         fs::read(vault.join("lib/blogs/tokio_internals.mp3"))
             .expect("read replacement audio"),
         b"ID3 replacement episode",
+    );
+    assert_eq!(
+        fs::read(&newer_note).expect("newer note after"),
+        newer_note_before,
+        "the unselected newer collection note stays byte-identical"
+    );
+    assert_eq!(
+        fs::read(&newer_pdf).expect("newer PDF after"),
+        newer_pdf_before,
+        "the unselected newer collection PDF stays byte-identical"
     );
     let marker = bob_command()
         .arg("highlights")

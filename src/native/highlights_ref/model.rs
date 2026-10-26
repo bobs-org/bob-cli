@@ -86,6 +86,16 @@ impl CommandError {
         self
     }
 
+    /// Attach a machine code and include it in human output for failures
+    /// whose code is part of the recovery contract.
+    pub(super) fn with_human_code(mut self, code: &'static str) -> Self {
+        if !self.message.starts_with(&format!("{code}:")) {
+            self.message = format!("{code}: {}", self.message);
+        }
+        self.code = Some(code);
+        self
+    }
+
     pub(super) fn with_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.paths = paths;
         self
@@ -101,6 +111,24 @@ impl fmt::Display for CommandError {
 impl StdError for CommandError {}
 
 pub(crate) type Result<T> = std::result::Result<T, CommandError>;
+
+#[cfg(test)]
+mod command_error_tests {
+    use super::CommandError;
+
+    #[test]
+    fn human_code_is_visible_without_losing_machine_code() {
+        let error = CommandError::new("verification did not match")
+            .with_human_code("verify_failed");
+        assert_eq!(error.message, "verify_failed: verification did not match");
+        assert_eq!(error.code, Some("verify_failed"));
+
+        let already_prefixed =
+            CommandError::new("verify_failed: verification did not match")
+                .with_human_code("verify_failed");
+        assert_eq!(already_prefixed.message, error.message);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct PdfMarker {

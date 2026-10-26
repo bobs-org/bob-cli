@@ -57,6 +57,12 @@ behavior can be selected with
 `0`, `false`, `no`, or `off` to disable intake and `1`, `true`, `yes`, or `on`
 to enable it. A nonblank environment value overrides the config value.
 
+Filed `-f overwrite` requires intake to be enabled because overwrite cannot
+queue a replacement. With intake disabled, it refuses with
+`intake_unavailable` before fetching or rendering, including in dry runs.
+Enable `highlights.ingest_on_create` or set
+`BOB_HIGHLIGHTS_INGEST_ON_CREATE=1` on this host.
+
 When enabled, create takes `bob_sync.lock` and then `scan.lock`, pulls the
 vault, rechecks the library destinations, moves the PDF and its companions,
 writes the reference note and reading task, commits only those paths, and
@@ -785,6 +791,10 @@ and dry runs alike:
 reread: attention_is_all_you_need → attention_is_all_you_need__v2 (v1 read · 41 highlights)
 ```
 
+When the newest reading is still `ready` with zero highlights, both the dry
+run and the real reread also print
+`hint: <stem> is still ready with 0 highlights; -f overwrite would replace it instead`.
+
 Without force the refusal names the next stem
 (`hint: -f read it again as <stem>__vN`). Bare `-f` on a fresh source
 captures it as usual. `-N` must name a reading of the same family (a free
@@ -809,10 +819,14 @@ saved HTML, PDF URL, arXiv) replaces that reading in place: the note
 path, stem, id, and reading task stay, companion audio is preserved
 unless `-a` or `-L` (which narrates the replacement) replaces it, and
 `--no-audio` leaves an existing episode in place. Clap's default `-s ready`
-is not an explicit reopen; pass `-s` to change the kept task. Exact-set
+is not an explicit reopen; pass `-s` to change the kept task. An explicit
+open status cannot reopen a task archived in `done/`; reopen it where it lives
+first. Any status overwrite cannot stamp is rejected before rendering. Exact-set
 collection overwrite follows the same identity, audio, and task-preservation
 rules; partial overlaps refuse under every mode. Without a filed match
-overwrite exits 1. No
+overwrite exits 1. Annotated references refuse with
+`overwriting an annotated reference is not available yet; -f starts a new reading`.
+No
 force is needed for a URL recorded only by legacy notes
 without a Highlights PDF (it warns and captures a fresh copy) or for a
 new-day vault-note snapshot (an ordinary dated create).

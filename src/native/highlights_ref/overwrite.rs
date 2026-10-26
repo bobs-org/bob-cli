@@ -44,6 +44,9 @@ pub(super) struct OverwriteRequest {
     /// Destination chosen before rendering for requested companion audio.
     /// Including it here makes its preimage part of the read-only plan.
     pub(super) replacement_audio_path: Option<String>,
+    /// A host-local ingest disable reason. Filed overwrites cannot queue, so
+    /// they refuse before fetching or rendering when intake is unavailable.
+    pub(super) intake_disabled_reason: Option<String>,
     /// Status explicitly supplied by the user. `None` preserves the located
     /// task's checkbox, including blocked and terminal marks.
     pub(super) explicit_status: Option<String>,
@@ -281,6 +284,16 @@ pub(super) fn prepare(
             2,
         ));
     }
+    if let Some(reason) = request.intake_disabled_reason.as_deref() {
+        return Err(OverwriteRefusal::new(
+            "intake_unavailable",
+            format!("overwrite cannot run while ingest is disabled: {reason}"),
+            Some(
+                "enable highlights.ingest_on_create or set BOB_HIGHLIGHTS_INGEST_ON_CREATE=1 on this host",
+            ),
+            1,
+        ));
+    }
     if let Some(explicit_type) = request.explicit_ref_type.as_deref()
         && !explicit_type.eq_ignore_ascii_case(&ref_type)
     {
@@ -294,6 +307,44 @@ pub(super) fn prepare(
         ));
     }
     let task_view = row.task.as_ref().ok_or_else(|| task_refusal(row))?;
+    if let Some(status) = request.explicit_status.as_deref() {
+        if !matches!(
+            status,
+            "ready"
+                | "next"
+                | "wip"
+                | "in_progress"
+                | "blocked"
+                | "read"
+                | "abandoned"
+        ) {
+            return Err(OverwriteRefusal::new(
+                "unsupported_status",
+                format!("unsupported overwrite task status: {status}"),
+                Some("use ready, next, wip, blocked, read, or abandoned"),
+                2,
+            ));
+        }
+        if task_view.archived
+            && matches!(
+                status,
+                "ready" | "next" | "wip" | "in_progress" | "blocked"
+            )
+        {
+            return Err(OverwriteRefusal::new(
+                "archived_task_reopen",
+                format!(
+                    "cannot reopen archived reading task {} during overwrite",
+                    task_view.path
+                ),
+                Some(format!(
+                    "reopen the reading task where it lives ({}) before overwriting",
+                    task_view.path
+                )),
+                2,
+            ));
+        }
+    }
     if let Some(parent) = request.resolved_parent.as_deref() {
         let expected = route_for_task(task_view);
         let parent_norm = normalize_route(parent);
@@ -1361,10 +1412,10 @@ fn annotated_refusal(
     OverwriteRefusal::new(
         "annotated_reference",
         format!(
-            "overwriting an annotated reference is not available yet: {}",
+            "overwriting an annotated reference is not available yet; -f starts a new reading\nevidence: {}",
             evidence.join("; ")
         ),
-        Some("-f starts a new reading"),
+        None::<String>,
         2,
     )
 }
