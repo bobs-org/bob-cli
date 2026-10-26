@@ -2,9 +2,12 @@ use crate::native::style::{
     display_width, pad_right, terminal_width, truncate, Styler,
 };
 
-use super::model::{
-    DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
-    SyncReport, SyncResult, SyncState, VaultState,
+use super::{
+    deploy::uncommitted_detail,
+    model::{
+        DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
+        SyncReport, SyncResult, SyncState, VaultState,
+    },
 };
 
 const DETAIL_INDENT: &str = "             ";
@@ -85,9 +88,20 @@ pub(super) fn print_sync_report(
             .filter(|file| file.action != FileAction::Unchanged)
             .collect::<Vec<_>>();
 
+        if let Some(blocked) = &plugin.blocked {
+            let prefix = styler.warning_prefix();
+            println!("  {prefix} {id}  {blocked}");
+            continue;
+        }
+
         if changed.is_empty() {
             let prefix = styler.success_prefix(dry_run);
             println!("  {prefix} {id}  up to date");
+            if let Some(info) = &plugin.deployment
+                && let Some(detail) = uncommitted_detail(info)
+            {
+                println!("{DETAIL_INDENT}{}", styler.dim(&detail));
+            }
             continue;
         }
 
@@ -101,6 +115,11 @@ pub(super) fn print_sync_report(
             println!("  {prefix} {id}  {detail}");
             print_file_diff(file, styler);
             print_backup_outcome(file, dry_run, styler);
+        }
+        if let Some(info) = &plugin.deployment
+            && let Some(detail) = uncommitted_detail(info)
+        {
+            println!("{DETAIL_INDENT}{}", styler.dim(&detail));
         }
     }
 
@@ -298,6 +317,11 @@ pub(super) fn print_plugins_table(report: &PluginsReport, styler: &Styler) {
         let description =
             styler.dim(&truncate(&plugin.description, widths.description));
         println!("  {id}  {version}  {sync}  {vault}  {description}");
+        if let Some(info) = &plugin.deployment
+            && let Some(detail) = uncommitted_detail(info)
+        {
+            println!("{DETAIL_INDENT}{}", styler.dim(&detail));
+        }
     }
 
     println!();

@@ -1,9 +1,12 @@
 use std::{collections::HashSet, fs, io, path::Path};
 
-use super::model::{
-    Manifest, PluginEntry, PluginsReport, SyncState, VaultState,
-    COMMUNITY_PLUGINS_FILE, MANAGED_FILES, REPO_PLUGINS_SUBDIR,
-    VAULT_PLUGINS_SUBDIR,
+use super::{
+    deploy::scan_deployment,
+    model::{
+        Manifest, PluginEntry, PluginsReport, SyncState, VaultState,
+        COMMUNITY_PLUGINS_FILE, MANAGED_FILES, REPO_PLUGINS_SUBDIR,
+        VAULT_PLUGINS_SUBDIR,
+    },
 };
 
 pub(super) fn scan_plugins(repo: &Path, bob_dir: &Path) -> PluginsReport {
@@ -60,6 +63,7 @@ pub(super) fn scan_plugins(repo: &Path, bob_dir: &Path) -> PluginsReport {
         plugins.push(PluginEntry {
             sync: sync_state(&path, &vault_plugin_dir),
             vault: vault_state(&id, &enabled, &vault_plugin_dir),
+            deployment: scan_deployment(&vault_plugin_dir),
             version: manifest.version,
             description: manifest.description,
             id,

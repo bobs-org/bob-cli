@@ -64,7 +64,11 @@ renders.
 Uncommitted vault edits are skipped with `skipped <file> (dirty in vault; use
 -F/--force)`. Read the printed diff, commit or discard the vault change, and
 rerun the sync. Do not make `--force` a habit. A refused foreign checkout
-exits 2 and prints the `--repo` command to run instead.
+exits 2 and prints the `--repo` command to run instead. Sync also refuses
+another checkout's uncommitted or non-ancestor deploy (exit 1) and prints
+preview and force recovery commands. In a Git vault, ignore
+`.obsidian/plugins/*/.bob-deploy.json` so the provenance stamp stays out of
+version control.
 
 ## Related
 

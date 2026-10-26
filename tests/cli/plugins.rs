@@ -677,6 +677,7 @@ fn plugins_sync_refuses_dirty_vault_file_then_forces() {
     let vault_main = vault.join(".obsidian/plugins/delta/main.js");
     write_file(&vault_main, "// committed\n");
 
+    write_stamp_ignore(&vault);
     git_in(&vault, ["init", "-q"]);
     git_in(&vault, ["config", "user.name", "Test User"]);
     git_in(&vault, ["config", "user.email", "test@example.com"]);
@@ -1017,6 +1018,381 @@ fn plugins_sync_explicit_repo_from_foreign_checkout_is_allowed() {
     );
 }
 
+#[test]
+fn plugins_sync_refuses_dirty_deploy_from_another_checkout() {
+    let temp = TempDir::new("bob-cli-plugins-guard-ab");
+    let (checkout_a, checkout_b, vault, backups) =
+        init_two_checkouts_and_vault(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+
+    let deployed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("deploy from checkout A");
+    assert_success(&deployed);
+    let stamp = vault.join(".obsidian/plugins/alpha/.bob-deploy.json");
+    let stamp_bytes = fs::read(&stamp).expect("read stamp");
+    assert!(
+        String::from_utf8_lossy(&stamp_bytes).contains("\"dirty\": \"dirty\"")
+    );
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("overwrite from checkout B");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "other-checkout dirty deploy must refuse:\n{}",
+        format_output(&refused)
+    );
+    let err = stderr(&refused);
+    assert!(
+        err.contains("refusing to overwrite plugin alpha")
+            && err.contains("deployed from uncommitted build")
+            && err.contains("--dry-run")
+            && err.contains("-F"),
+        "refusal must name the plugin, uncommitted deploy, and recovery:\n{}",
+        format_output(&refused)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read vault main"),
+        "// dirty-a\n"
+    );
+    assert_eq!(fs::read(&stamp).expect("reread stamp"), stamp_bytes);
+
+    configure_test_git_identity(&checkout_b);
+    write_file(&checkout_b.join("README.md"), "later\n");
+    git_in(&checkout_b, ["add", "README.md"]);
+    git_in(
+        &checkout_b,
+        ["commit", "-q", "-m", "descendant without A's dirty"],
+    );
+    let still = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("descendant without dirty bytes");
+    assert_eq!(still.status.code(), Some(1), "{}", format_output(&still));
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("read vault main"),
+        "// dirty-a\n"
+    );
+
+    let dry = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-d")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("dry-run refusal");
+    assert_eq!(dry.status.code(), Some(1), "{}", format_output(&dry));
+    assert_eq!(fs::read(&stamp).expect("stamp after dry-run"), stamp_bytes);
+
+    let forced = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-F")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("forced overwrite");
+    assert_success(&forced);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("forced vault main"),
+        "// old\n"
+    );
+    let stamp_backup = find_stamp_backup(&backups);
+    assert!(
+        stamp_backup.is_some(),
+        "forced replacement must back up the prior stamp under {}",
+        backups.display()
+    );
+}
+
+#[test]
+fn plugins_sync_clean_landing_reconciles_then_updates() {
+    let temp = TempDir::new("bob-cli-plugins-guard-land");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed.join("plugins/alpha"), "alpha", "1.0.0", "base");
+    git(["init", "-q", path_str(&seed)]);
+    configure_test_git_identity(&seed);
+    git_in(&seed, ["add", "."]);
+    git_in(&seed, ["commit", "-q", "-m", "seed"]);
+
+    let checkout_a = temp.path().join("a");
+    let checkout_b = temp.path().join("b");
+    git(["clone", "-q", path_str(&seed), path_str(&checkout_a)]);
+    configure_test_git_identity(&checkout_a);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// fix\n");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_stamp_ignore(&vault);
+    let first = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("deploy A's dirty fix");
+    assert_success(&first);
+
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "land the fix"]);
+    git(["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)]);
+    let landed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("clean landing");
+    assert_success(&landed);
+    let stamp = fs::read_to_string(
+        vault.join(".obsidian/plugins/alpha/.bob-deploy.json"),
+    )
+    .expect("read stamp");
+    assert!(
+        stamp.contains("\"dirty\": \"clean\""),
+        "exact-match landing must reconcile to a clean stamp: {stamp}"
+    );
+    assert_eq!(landed.status.code(), Some(0));
+    let copied_unchanged = stdout(&landed).contains("up to date")
+        || stdout(&landed).contains("0 copied")
+        || stdout(&landed).contains("0 to copy");
+    assert!(
+        copied_unchanged || stdout(&landed).contains("unchanged"),
+        "landing identical bytes must not count as a content copy:\n{}",
+        stdout(&landed)
+    );
+
+    configure_test_git_identity(&checkout_b);
+    write_file(&checkout_b.join("plugins/alpha/main.js"), "// later\n");
+    git_in(&checkout_b, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_b, ["commit", "-q", "-m", "later update"]);
+    let updated = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("descendant update");
+    assert_success(&updated);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("later vault"),
+        "// later\n"
+    );
+}
+
+#[test]
+fn plugins_list_and_json_report_uncommitted_deployment() {
+    let temp = TempDir::new("bob-cli-plugins-list-uncommitted");
+    let repo = temp.path().join("repo");
+    write_plugin(&repo.join("plugins/alpha"), "alpha", "1.0.0", "alpha");
+    git(["init", "-q", path_str(&repo)]);
+    configure_test_git_identity(&repo);
+    git_in(&repo, ["add", "."]);
+    git_in(&repo, ["commit", "-q", "-m", "clean"]);
+    write_file(&repo.join("plugins/alpha/main.js"), "// dirty\n");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_stamp_ignore(&vault);
+    let synced = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("dirty deploy");
+    assert_success(&synced);
+    let sync_json: serde_json::Value =
+        serde_json::from_str(&stdout(&synced)).expect("sync json");
+    assert_eq!(sync_json["ok"], true);
+    assert_eq!(
+        sync_json["plugins"][0]["deployment"]["status"],
+        "uncommitted"
+    );
+    assert_eq!(sync_json["copied"], 2);
+
+    let listed = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("-n")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("list after dirty deploy");
+    assert_success(&listed);
+    let out = stdout(&listed);
+    assert!(
+        out.contains("deployed from uncommitted build"),
+        "list must show uncommitted provenance:\n{out}"
+    );
+
+    let listed_json = bob_command()
+        .arg("plugins")
+        .arg("list")
+        .arg("-n")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("list json after dirty deploy");
+    assert_success(&listed_json);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout(&listed_json)).expect("list json");
+    assert_eq!(value["plugins"][0]["deployment"]["status"], "uncommitted");
+    assert_eq!(value["plugins"][0]["sync"], "synced");
+}
+
+#[test]
+fn plugins_sync_git_vault_requires_ignored_stamp() {
+    let temp = TempDir::new("bob-cli-plugins-stamp-ignore-cli");
+    let repo = temp.path().join("repo");
+    write_plugin(&repo.join("plugins/alpha"), "alpha", "1.0.0", "alpha");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_file(&vault.join("README.md"), "vault\n");
+    git(["init", "-q", path_str(&vault)]);
+    configure_test_git_identity(&vault);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "vault"]);
+
+    let refused = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("sync without stamp ignore");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "{}",
+        format_output(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("not ignored")
+            || stderr(&refused).contains("tracked"),
+        "{}",
+        format_output(&refused)
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/alpha/main.js").exists(),
+        "unignored stamp storage must block copies"
+    );
+
+    write_stamp_ignore(&vault);
+    git_in(&vault, ["add", ".gitignore"]);
+    git_in(&vault, ["commit", "-q", "-m", "ignore stamps"]);
+    let allowed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .output()
+        .expect("sync with stamp ignore");
+    assert_success(&allowed);
+    assert!(vault.join(".obsidian/plugins/alpha/main.js").is_file());
+}
+
 /// Writes a three-plugin repo and matching vault exercising every state:
 /// `alpha` is synced and enabled, `beta` drifts and is disabled, and `gamma`
 /// is absent from the vault (not installed).
@@ -1090,6 +1466,45 @@ fn init_pullable_plugins_repo(temp: &TempDir) -> (PathBuf, PathBuf) {
     git(["clone", "-q", path_str(&remote), path_str(&upstream)]);
     configure_test_git_identity(&upstream);
     (repo, upstream)
+}
+
+fn write_stamp_ignore(vault: &Path) {
+    write_file(
+        &vault.join(".gitignore"),
+        ".obsidian/plugins/*/.bob-deploy.json\n",
+    );
+}
+
+fn init_two_checkouts_and_vault(
+    temp: &TempDir,
+) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let seed = temp.path().join("seed");
+    write_plugin(&seed.join("plugins/alpha"), "alpha", "1.0.0", "old");
+    git(["init", "-q", path_str(&seed)]);
+    configure_test_git_identity(&seed);
+    git_in(&seed, ["add", "."]);
+    git_in(&seed, ["commit", "-q", "-m", "seed"]);
+    let checkout_a = temp.path().join("a");
+    let checkout_b = temp.path().join("b");
+    git(["clone", "-q", path_str(&seed), path_str(&checkout_a)]);
+    git(["clone", "-q", path_str(&seed), path_str(&checkout_b)]);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+    let backups = temp.path().join("backups");
+    (checkout_a, checkout_b, vault, backups)
+}
+
+fn find_stamp_backup(backups: &Path) -> Option<PathBuf> {
+    let Ok(runs) = fs::read_dir(backups) else {
+        return None;
+    };
+    for run in runs.flatten() {
+        let stamp = run.path().join("alpha/.bob-deploy.json");
+        if stamp.is_file() {
+            return Some(stamp);
+        }
+    }
+    None
 }
 
 fn advance_plugins_remote(upstream: &Path, body: &str) {

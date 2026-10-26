@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::deploy::DeploymentInfo;
+
 pub(super) const COMMAND_NAME: &str = "bob plugins";
 pub(super) const REPO_PLUGINS_SUBDIR: &str = "plugins";
 pub(super) const VAULT_PLUGINS_SUBDIR: &str = ".obsidian/plugins";
@@ -87,6 +89,7 @@ impl SyncReport {
                             }),
                         })
                         .collect(),
+                    deployment: plugin.deployment.clone(),
                 })
                 .collect(),
         }
@@ -113,6 +116,8 @@ pub(super) struct SyncResult {
 pub(super) struct PluginSyncResult {
     pub(super) id: String,
     pub(super) files: Vec<FileSyncResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) deployment: Option<DeploymentInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -126,6 +131,8 @@ pub(super) struct FileSyncResult {
 pub(super) struct PluginSync {
     pub(super) id: String,
     pub(super) files: Vec<FileSync>,
+    pub(super) deployment: Option<DeploymentInfo>,
+    pub(super) blocked: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +274,8 @@ pub(super) struct PluginEntry {
     pub(super) description: String,
     pub(super) sync: SyncState,
     pub(super) vault: VaultState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) deployment: Option<DeploymentInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

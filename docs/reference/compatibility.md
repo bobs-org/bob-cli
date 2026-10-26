@@ -76,9 +76,9 @@ The documented workflows use these external-tool integrations:
 - `obsidian` CLI plus a running desktop Obsidian vault with the Dataview
   plugin only when using `bob query --engine obsidian`
 - `git` for `bob vault-sync`, Git-backed `bob task archive`, plugin
-  dirty-file checks, and the default `bob plugins` repository refresh;
-  remote operations also need the credentials required by the configured
-  remote
+  dirty-file checks, plugin deploy-stamp ignore and ancestry probes, and
+  the default `bob plugins` repository refresh; remote operations also
+  need the credentials required by the configured remote
 - `notify-send` for desktop notifications from `bob pomodoro notify`; Bob
   also rings the terminal bell whether or not `notify-send` is available
 - platform clipboard tools for `bob capture` clipboard input: `pbpaste` on

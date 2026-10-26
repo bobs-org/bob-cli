@@ -75,10 +75,13 @@ non-interactive `git pull` unless --no-pull is given. Pull failures warn and \
 continue with the existing checkout.\n\n\
 The sync subcommand deploys the repo into the vault: it copies the managed \
 files (manifest.json, main.js, and styles.css) from the repo into the vault \
-plugin folder, never touching data.json or other runtime files. It refuses to \
-overwrite a vault file that has uncommitted changes in the vault Git repo \
-unless --force is given. For files that would change, sync prints a diff, and \
-every overwritten vault file is backed up before it is replaced.",
+plugin folder, never touching data.json or other runtime files. Each real \
+deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync \
+refuses to overwrite another checkout's uncommitted or non-ancestor deploy \
+unless --force is given, and it also refuses to overwrite a vault file that \
+has uncommitted changes in the vault Git repo unless --force is given. For \
+files that would change, sync prints a diff, and every overwritten vault file \
+is backed up before it is replaced.",
         )
         .after_help(
             "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks",
@@ -111,16 +114,22 @@ fn sync_command() -> ClapCommand {
 For each plugin, the managed files (manifest.json, main.js, and styles.css \
 when present) are copied from <repo>/plugins/<id>/ into \
 <bob-dir>/.obsidian/plugins/<id>/. Runtime files such as data.json are never \
-touched. A vault file that has uncommitted changes in the vault Git repo is \
-left alone with a warning unless --force is given, so local edits are never \
-clobbered silently. Files that would change are shown as unified diffs; \
-overwritten vault files are copied to a timestamped backup directory first. \
-Files that already match the repo are reported as unchanged. The plugins repo \
-is refreshed with a non-interactive `git pull` before analysis unless \
---no-pull is given. Pass `-f json` to print a single machine-readable object \
-instead of the table and diffs. A bare sync (no --repo) run from inside a \
-different bob-plugins checkout refuses before any pull or copy: pass \
---repo <checkout> to deploy that checkout.",
+touched. Each real deploy writes a `.bob-deploy.json` stamp recording the \
+source checkout, HEAD, dirty state, host, time, and managed-file hashes. In a \
+Git vault that stamp must be ignored (for example \
+`.obsidian/plugins/*/.bob-deploy.json`); --force does not bypass a tracked or \
+unignored stamp. Sync refuses to overwrite a deploy from another checkout's \
+uncommitted build, a non-ancestor clean revision, or unknown/incomplete \
+provenance unless --force is given. A vault file that has uncommitted changes \
+in the vault Git repo is left alone with a warning unless --force is given, \
+so local edits are never clobbered silently. Files that would change are \
+shown as unified diffs; overwritten vault files are copied to a timestamped \
+backup directory first. Files that already match the repo are reported as \
+unchanged. The plugins repo is refreshed with a non-interactive `git pull` \
+before analysis unless --no-pull is given. Pass `-f json` to print a single \
+machine-readable object instead of the table and diffs. A bare sync (no \
+--repo) run from inside a different bob-plugins checkout refuses before any \
+pull or copy: pass --repo <checkout> to deploy that checkout.",
         )
         .after_help(
             "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
@@ -191,7 +200,10 @@ fn force_arg() -> Arg {
         .long("force")
         .short('F')
         .action(ArgAction::SetTrue)
-        .help("Overwrite vault files with uncommitted Git changes")
+        .help(
+            "Overwrite a protected plugin deploy or vault files with \
+uncommitted Git changes",
+        )
 }
 
 fn no_pull_arg() -> Arg {
@@ -335,8 +347,9 @@ fn run_sync(matches: &ArgMatches) -> i32 {
         }
     }
 
-    // A refused dirty file is a deliberate warning, not a failure; only a real
-    // error such as an unreadable repo or a failed copy sets a non-zero exit.
+    // A skipped dirty vault file is a deliberate warning, not a failure.
+    // Deploy-protection refusals, unreadable repos, and failed copies set a
+    // non-zero exit.
     if report.issues.is_empty() {
         0
     } else {
