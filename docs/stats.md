@@ -870,11 +870,16 @@ so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
 `review_closed`, in that order). Each fact stacks the report's metric
-label (small, uppercased, muted) over the D point `display` (large,
+label (small, uppercased, muted) over the D point value (large,
 tabular). Facts share the line's width in columns split by hairlines and
 fold into three columns below about 34em. In numeric displays, the unit
-letters are set smaller. The displayed text is always bob's `display`
-exactly. Line 2
+letters are set smaller. Numeric and word values show bob's `display`
+exactly. Boolean facts paint a status mark chosen from the point: a
+green check for met, a red ✕ for missed, and the yellow In Progress
+half-ring while today's review is still open. Bob's `display` stays the
+accessible text and tooltip. When today's review flips from not yet to
+met on a live, non-stale repaint of the same day, the check draws itself
+once. Line 2
 holds the legend plus the meta: one `span[role=link]` with as many roots
 as fit the line in bar order — each a hue dot, the legend label, and the
 value — then one `+N` counter in their place, with the timestamp
@@ -918,22 +923,25 @@ sentences do too.
 
 Bob owns every value: labels, values, part displays, and definitions all
 come from the report. The strip derives its colours from the report's area
-hues. The strip writes its own fixed copy only
+hues plus status inks for boolean marks. The strip writes its own fixed copy only
 (`so far`, `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`,
 `Retry`) plus accessibility sentences and date words derived from D.
 
 Display states: today in progress shows provisional values with
-`so far · HH:MM`, and an unmet closeout reads `not yet`. A past day shows
-values with no meta, and `missed` is allowed. `not_tracked` shows `–`.
+`so far · HH:MM`, and an unmet closeout shows the yellow In Progress
+half-ring. A past day shows values with no meta; a missed closeout shows
+a red ✕ and a met closeout shows a green check. A stale cached frame
+mutes the mark ink like the numerals. `not_tracked` shows `–`.
 `missing`, or a report warning for D, shows `–` (or the display) plus a
-small `⚠` beside the label. The legend and bar are omitted if `worked` is absent, is not
+small `⚠` beside the label; the mark still paints when the point has
+one. The legend and bar are omitted if `worked` is absent, is not
 measured in minutes, or has no nonempty `parts.root_parent` (or fallback
 `parts.area`) anywhere in its daily series.
 Otherwise a zero worked day with `quality: ok` shows an empty track and
 `no Pomodoros`. With no bar or status text, line 2 holds the meta alone.
 A future daily note shows nothing: no element height, no spawn. The first
 load paints a skeleton in the loaded geometry, including the empty bar
-track. A failed refresh keeps the cached values, in muted text, with
+track and a round placeholder for the boolean fact. A failed refresh keeps the cached values, in muted text, with
 `refresh failed` (today: `so far · HH:MM · refresh failed`). A failure with nothing cached shows
 one muted line, `Day stats unavailable — <title>.`, plus a `Retry` link;
 when bob is not found the line names `stats.bob_path`. Mobile and hosts
