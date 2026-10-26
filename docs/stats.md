@@ -795,7 +795,7 @@ The context panel follows the focused metric family:
 
 - Pomodoro metrics open on **Where the time went**, grouped by root parent by
   default, with **Themes** one click away. The root bar reuses the area-bar component
-  and is fed root rows in the same order as the Day strip bar (area hue-slot
+  and is fed root rows in the same order as the Day strip's root-parent bar (area hue-slot
   order, then label, with buckets last in gray), with those same distinct root
   colours; root rows and their sub-project leaves match them and area headers keep
   the area hue; its `aria-label` reads
@@ -816,11 +816,13 @@ The context panel follows the focused metric family:
   row. The footer reads
   `▒ split from sessions with several root parents · grouped by today's note tree · from Task Links`.
   Opening the dash with a day pinned (`openStatsForDay({ panel: "homes" })`) selects
-  the Root parents view, even right after a Themes visit. Reports without
+  the Root parents view, even right after a Themes visit. `openStatsForDay({ panel:
+  "themes" })` selects the Themes view. Reports without
   `parts_summary.root_parent` fall back to the old `Areas & projects` leaf grouping
   with an `Update bob to group by root parent.` hint; a stale
   `homesView === "areas"` maps to `roots`.
-- **Themes** remains one click away and shows the supplied theme breakdown. Reports
+- **Themes** remains one click away and shows the supplied theme breakdown. Theme
+  bars and names come from the report's `theme_hues`. Reports
   without `root_parent` parts default to Themes and show an update-bob hint. Reports
   without the additive `sessions` list omit session drill-down controls.
 - Root rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
@@ -864,9 +866,9 @@ rendered `bob-plan` block in canonical daily notes (`YYYY/YYYYMMDD.md`),
 with the `.bob-plan` badges directly after it, in Live Preview and
 Reading view. It summarizes that note's date, called D below. Daily
 notes without a `bob-plan` block show no automatic strip. The full-width
-working-time bar is the strip's last line, so it reads as the separator
-above the badges. `## Pomodoros` carries no total; the strip repeats it,
-so the heading stays bare.
+theme bar (else the roots bar) is the strip's last line, so it reads as
+the separator above the badges. `## Pomodoros` carries no total; the
+strip repeats it, so the heading stays bare.
 
 Line 1 holds five facts (`worked`, `reviewed`, `done`, `created`,
 `review_closed`, in that order). Each fact stacks the report's metric
@@ -879,20 +881,22 @@ green check for met, a red ✕ for missed, and the yellow In Progress
 half-ring while today's review is still open. Bob's `display` stays the
 accessible text and tooltip. When today's review flips from not yet to
 met on a live, non-stale repaint of the same day, the check draws itself
-once. Line 2
-holds the legend plus the meta: one `span[role=link]` with as many roots
-as fit the line in bar order — each a hue dot, the legend label, and the
-value — then one `+N` counter in their place, with the timestamp
-(`so far · HH:MM`, the fetch time of the shown report, not the wall clock)
-right-aligned on today's note only. Line 3 is the full-width bar: a 4 px
-fully rounded `div` (`aria-hidden`) with one segment per root, `flex-grow`
-set to minutes and 2 px gaps of note background between segments, never
-track colour. Each segment's `title` reads `<label> <display>`; the track
-(`--background-modifier-border`) shows only when the bar is empty or in
-the skeleton. There are no history marks, no collapse control, and no
-separate Stats link: every fact is itself the link to Stats, and the bar
-is a second mouse-only target for the legend's action. A metric hidden
-by `stats.hide` is omitted from the strip, not faked.
+once. The roots legend plus the meta sit over the roots bar: one
+`span[role=link]` with as many roots as fit the line in bar order — each
+a hue dot, the legend label, and the value — then one `+N` counter in
+their place, with the timestamp (`so far · HH:MM`, the fetch time of the
+shown report, not the wall clock) right-aligned on today's note only.
+The roots bar is a 4 px fully rounded `div` (`aria-hidden`) with one
+segment per root, `flex-grow` set to minutes and 2 px gaps of note
+background between segments, never track colour. Each segment's `title`
+reads `<label> <display>`; the track (`--background-modifier-border`)
+shows only when the bar is empty or in the skeleton. Below it, the
+themes legend sits over the themes bar, which is the strip's last line
+when present. The themes legend has no meta, so it gets the full width.
+There are no history marks, no collapse control, and no separate Stats
+link: every fact is itself the link to Stats, and each bar is a second
+mouse-only target for its legend's action. A metric hidden by
+`stats.hide` is omitted from the strip, not faked.
 
 Segments group D's `worked` minutes by root parent (see
 [pomodoro-homes.md](pomodoro-homes.md)), in the same order as
@@ -921,9 +925,29 @@ keep full labels: each legend item's `title` reads `<label> <display>`, and
 bar segment titles, the `+N` title, and the legend and group `aria-label`
 sentences do too.
 
+The theme lane splits the same `worked` minutes by Pomodoro theme. One
+segment per positive key in D's `parts.theme`, displayed with
+`parts_display.theme[key]`. Labels come from `report.theme_hues[normalize(key)].name`
+when present, else the part key; `(unnamed)` and `other` keep their keys.
+Coloured themes sort by minutes descending then label; gray segments
+follow, with `(unnamed)` last. Colour is identity from Bob's theme hues
+(`theme_hues`, else the plugin's `pomodoroThemeHueFor` fallback): a palette
+hue, or gray for exempt, `(unnamed)`, and `other`. Among coloured
+segments that share a hue, the largest keeps the exact hue, the second
+is `color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
+later one is `42%`. Gray is never shaded. `bob themes color` pins remove
+a recurring collision. Each theme legend item is a rounded-square swatch
+(the legend-dot footprint), the ALL-CAPS name, and the value. The fitter
+is the same as the roots legend, independently. Titles read
+`<label> <display>`; the themes legend's `aria-label`/`title` start with
+`Time by theme`. When `report.sessions` lists a session dated D whose
+name splits into two or more components, the title appends `Pomodoros
+with several themes are split evenly between them.` The group
+`aria-label` appends ` Time by theme: <label> <display>, ….`.
+
 Bob owns every value: labels, values, part displays, and definitions all
 come from the report. The strip derives its colours from the report's area
-hues plus status inks for boolean marks. The strip writes its own fixed copy only
+hues, theme hues, plus status inks for boolean marks. The strip writes its own fixed copy only
 (`so far`, `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`,
 `Retry`) plus accessibility sentences and date words derived from D.
 
@@ -934,14 +958,17 @@ a red ✕ and a met closeout shows a green check. A stale cached frame
 mutes the mark ink like the numerals. `not_tracked` shows `–`.
 `missing`, or a report warning for D, shows `–` (or the display) plus a
 small `⚠` beside the label; the mark still paints when the point has
-one. The legend and bar are omitted if `worked` is absent, is not
+one. The roots legend and bar are omitted if `worked` is absent, is not
 measured in minutes, or has no nonempty `parts.root_parent` (or fallback
 `parts.area`) anywhere in its daily series.
-Otherwise a zero worked day with `quality: ok` shows an empty track and
-`no Pomodoros`. With no bar or status text, line 2 holds the meta alone.
+Otherwise a zero worked day with `quality: ok` shows an empty roots track and
+`no Pomodoros`; the theme lane is absent. The theme lane is omitted whenever
+`worked` is absent, is not in minutes, no daily point has a nonempty
+`parts.theme`, or D has no positive theme part. With no bar or status text, the
+roots row holds the meta alone.
 A future daily note shows nothing: no element height, no spawn. The first
-load paints a skeleton in the loaded geometry, including the empty bar
-track and a round placeholder for the boolean fact. A failed refresh keeps the cached values, in muted text, with
+load paints a skeleton in the loaded geometry, including both empty bar
+tracks and a round placeholder for the boolean fact. A failed refresh keeps the cached values, in muted text, with
 `refresh failed` (today: `so far · HH:MM · refresh failed`). A failure with nothing cached shows
 one muted line, `Day stats unavailable — <title>.`, plus a `Retry` link;
 when bob is not found the line names `stats.bob_path`. Mobile and hosts
@@ -964,23 +991,26 @@ asks for a daily note or an explicit date. An explicit fence and the
 automatic strip can both appear in the same daily note.
 
 Interaction: clicking a fact opens Stats with D pinned and that metric
-focused; clicking the legend or the bar opens Stats with `worked`
-focused, D pinned, and "Where the time went" on the Root parents view
-revealed. A plain click reuses an open Stats tab; Ctrl/Cmd-click and
+focused; clicking the roots legend or the roots bar opens Stats with
+`worked` focused, D pinned, and "Where the time went" on the Root
+parents view revealed; clicking the themes legend or the themes bar
+opens the same pin on the Themes view (`openStatsForDay({ panel:
+"themes" })`). A plain click reuses an open Stats tab; Ctrl/Cmd-click and
 middle-click always open a new tab. Enter and Space
-activate facts and the legend. `mousedown` never steals focus (the bar
+activate facts and the legends. `mousedown` never steals focus (each bar
 calls `preventDefault`), so vim keeps working.
-Facts and the legend are `span` links (`role="link"`,
-`tabindex="0"`); the bar has no tabindex: the strip contains no
+Facts and the legends are `span` links (`role="link"`,
+`tabindex="0"`); the bars have no tabindex: the strip contains no
 `<button>` elements.
 
 Layout: `.bob-day-strip` keeps `margin: .5rem 0 0` and
 `container-type: inline-size`. `.bob-plan-has-day-strip > .bob-plan`
-takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. Line 2 sits
-`~.2em` below line 1, and the bar sits `~.45em` below line 2, with no
-card, border, background, shadow, or button. Height budget at a 16 px
-base: at most 56 px when the facts fit on one line (540 and 700 px),
-at most 80 px when they wrap once (410 px).
+takes `margin-top: ~.7rem` and keeps `margin-bottom: 1rem`. The roots
+row sits `~.35em` below the facts, its bar `~.45em` below that row, the
+themes row `~.6em` below the roots bar, and the themes bar `~.45em`
+below its row, with no card, border, background, shadow, or button.
+Height budget at a 16 px base: at most 116 px when the facts fit on one
+line (540 and 700 px), at most 167 px when they wrap once (410 px).
 
 Data: the strip reuses the cached default Stats report when its daily
 series covers every date D−7…D and D is before `report.today`, or D and

@@ -94,10 +94,11 @@ two or more items is a [Bulk Capture](#bulk-capture); the grammar lives in `docs
 The read-only daily Stats summary at the top of the `bob-plan` block on
 canonical daily notes, above the badges, in Live Preview and Reading
 view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
-LABEL-value facts, a [Root Parent](#root-parent) legend with `so far · HH:MM`, and
-the full-width root-parent bar that separates it from the badges. bob
+LABEL-value facts, a [Root Parent](#root-parent) legend with `so far · HH:MM` over
+the root-parent bar, and a [Pomodoro Theme](#pomodoro-theme) legend over the full-width
+theme bar that separates it from the badges. bob
 owns every value, and it never writes the note. `## Pomodoros` no longer
-repeats its total. Facts and the bar open the [Stats Dash](#stats-dash) with the day
+repeats its total. Facts and the bars open the [Stats Dash](#stats-dash) with the day
 pinned. "Day stats" in UI copy (`Toggle Day stats`, `stats.day_strip`).
 Not the [Morning GTD Review Footer](#morning-gtd-review-footer).
 
@@ -270,7 +271,7 @@ above its project note. Archive and reference wrappers are walked through, and
 an area-less walk falls back to the outermost project. Buckets `GTD
 review`, `unlinked`, and `unfiled` stay buckets. Derived at read time
 from today's note tree and never written; `rollup:` no longer exists. The
-[Day Strip](#day-strip) bar and the default [Stats Dash](#stats-dash) view group by it; Stats
+[Day Strip](#day-strip)'s root-parent bar and the default [Stats Dash](#stats-dash) view group by it; Stats
 JSON calls the dimension `root_parent`. It is not the nearest home
 (`project`), a top-level area, or a [Pomodoro Theme](#pomodoro-theme); see
 `docs/pomodoro-homes.md`.
