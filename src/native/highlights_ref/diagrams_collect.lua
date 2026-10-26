@@ -9,6 +9,7 @@ local items = {}
 return {{
   CodeBlock = function(cb)
     if cb.classes:includes("mermaid") then
+      cb.text = bob_expand_tabs(cb.text)
       items[#items + 1] = {id = pandoc.utils.sha1(cb.text), text = cb.text}
     end
   end

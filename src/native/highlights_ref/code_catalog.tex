@@ -1,0 +1,5 @@
+% Invisible destinations used to map each source code block to PDF pages.
+\makeatletter
+\newcommand{\BobCodeAnchor}[1]{\par\special{pdf:dest (#1) [@thispage /XYZ null @ypos null]}\nopagebreak[4]\@nobreaktrue}
+\newcommand{\BobCodeEndAnchor}[1]{\par\special{pdf:dest (#1) [@thispage /XYZ null @ypos null]}\nopagebreak[4]}
+\makeatother

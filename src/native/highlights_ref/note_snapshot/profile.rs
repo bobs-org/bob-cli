@@ -97,6 +97,8 @@ pub(crate) struct RenderOutcome {
     pub(crate) warnings: Vec<NoteWarning>,
     /// Return-link report for create-wiring to stamp its marker correctly.
     pub(crate) report: super::super::return_links::ReportOutcome,
+    /// Render-time code catalog, with page ranges resolved from the PDF.
+    pub(crate) code_catalog: super::super::code_catalog::CatalogOutcome,
 }
 
 /// Render projected Markdown to PDF via pandoc then xelatex.
@@ -159,9 +161,14 @@ pub(crate) fn render_note_pdf(
     // preserved.
     let pandoc_path = resolve_for_cwd(&pandoc);
     let xelatex_path = resolve_for_cwd(&xelatex);
+    let code_catalog = resolve_path_for_cwd(&filters.code_catalog);
     let code_break = resolve_path_for_cwd(&filters.code_break);
     let return_links = resolve_path_for_cwd(&filters.return_links);
+    let code_catalog_report_filter =
+        resolve_path_for_cwd(&filters.code_catalog_report_filter);
     let report = resolve_path_for_cwd(&filters.report);
+    let code_catalog_report =
+        resolve_path_for_cwd(&filters.code_catalog_report);
 
     let tex_path = scratch.join(GENERATED_TEX);
     let mut pandoc_cmd = Command::new(&pandoc_path);
@@ -173,7 +180,10 @@ pub(crate) fn render_note_pdf(
         .arg("latex")
         .arg("-s")
         .arg("-o")
-        .arg(&tex_path);
+        .arg(&tex_path)
+        .arg("--preserve-tabs")
+        .arg("--lua-filter")
+        .arg(&code_catalog);
     if let Some(diagrams) = &filters.diagrams {
         super::super::diagrams::apply_swap_filter_args(
             &mut pandoc_cmd,
@@ -188,6 +198,8 @@ pub(crate) fn render_note_pdf(
         .arg(&return_links)
         .arg("--lua-filter")
         .arg(&note_filter_path)
+        .arg("--lua-filter")
+        .arg(&code_catalog_report_filter)
         .arg("--include-in-header")
         .arg(&header_path)
         .arg("--highlight-style=tango")
@@ -205,10 +217,11 @@ pub(crate) fn render_note_pdf(
         .arg("geometry:top=0.9in,bottom=1in,left=1.1in,right=1.1in,letterpaper")
         .arg("-V")
         .arg(format!(
-            "header-includes={}\n{}\n{}",
+            "header-includes={}\n{}\n{}\n{}",
             super::super::create::PANDOC_HEADER_INCLUDES,
             super::super::return_links::HEADER_INCLUDES,
-            super::super::diagrams::HEADER_INCLUDES
+            super::super::diagrams::HEADER_INCLUDES,
+            super::super::code_catalog::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", meta.identity_title))
@@ -223,6 +236,12 @@ pub(crate) fn render_note_pdf(
             "{}={}",
             super::super::return_links::REPORT_METADATA_KEY,
             report.display()
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::super::code_catalog::REPORT_METADATA_KEY,
+            code_catalog_report.display()
         ))
         .arg("--metadata")
         .arg(format!("bob-glyph-table={GLYPHS_NAME}"));
@@ -319,10 +338,13 @@ pub(crate) fn render_note_pdf(
     let warnings = collect_warnings(&last_log);
     let report_outcome =
         super::super::return_links::read_report(&filters.report);
+    let code_catalog_outcome =
+        super::super::code_catalog::build(&code_catalog_report, &pdf_path);
     Ok(RenderOutcome {
         pdf: pdf_path,
         warnings,
         report: report_outcome,
+        code_catalog: code_catalog_outcome,
     })
 }
 
@@ -540,16 +562,8 @@ mod tests {
     }
 
     fn test_filters(dir: &Path) -> super::super::super::create::RenderFilters {
-        let code_break = dir.join("code-break.lua");
-        let return_links = dir.join("return-links.lua");
-        fs::write(&code_break, "-- fake code break").expect("write filter");
-        fs::write(&return_links, "-- fake return links").expect("write filter");
-        super::super::super::create::RenderFilters {
-            code_break,
-            return_links,
-            report: dir.join("return-links.json"),
-            diagrams: None,
-        }
+        super::super::super::create::write_render_filters(dir)
+            .expect("write render filters")
     }
 
     #[test]
@@ -645,7 +659,9 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             !log.lines().any(|l| l == "PANDOC-ARG:--pdf-engine"),
             "no pdf-engine: {log}"
         );
-        // Filter order: code-break, return-links, note.lua.
+        // Catalog records first; its report sees the final AST after all
+        // content-changing filters.
+        let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
         // The note filter path ends with scratch/note.lua; avoid matching
@@ -655,7 +671,14 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .find("scratch/note.lua")
             .or_else(|| log.find("/note.lua"))
             .expect("note.lua");
-        assert!(cb < rl && rl < nl, "filter order: {log}");
+        let report = log
+            .find("code-catalog-report.lua")
+            .expect("catalog report filter");
+        assert!(
+            catalog < cb && cb < rl && rl < nl && nl < report,
+            "filter order: {log}"
+        );
+        assert!(log.contains("--preserve-tabs"), "reader flags: {log}");
         // Two xelatex passes, same cwd=scratch, no shell splitting.
         let xelatex_calls: Vec<&str> = log
             .lines()
@@ -775,21 +798,8 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
     fn write_filters_for_render(
         dir: &Path,
     ) -> super::super::super::create::RenderFilters {
-        let code_break = dir.join("code-break.lua");
-        let return_links = dir.join("return-links.lua");
-        fs::write(
-            &code_break,
-            super::super::super::create::PANDOC_CODE_BREAK_FILTER,
-        )
-        .expect("code-break filter");
-        fs::write(&return_links, super::super::super::return_links::FILTER)
-            .expect("return-link filter");
-        super::super::super::create::RenderFilters {
-            code_break,
-            return_links,
-            report: dir.join("return-links.json"),
-            diagrams: None,
-        }
+        super::super::super::create::write_render_filters(dir)
+            .expect("write render filters")
     }
 
     fn stage_synthetic_image(scratch: &Path) {
@@ -1204,6 +1214,22 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         )
         .expect("real render");
         assert!(outcome.pdf.is_file(), "PDF exists");
+        let super::super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &outcome.code_catalog
+        else {
+            panic!("snapshot render should produce a catalog: {outcome:?}");
+        };
+        assert_eq!(catalog.blocks.len(), 1);
+        assert!(catalog.blocks[0].text.contains("println!"));
+        assert!(catalog.blocks[0].page.is_some());
+        assert_eq!(
+            catalog.blocks[0]
+                .section
+                .as_ref()
+                .and_then(|section| section.number.as_deref()),
+            None,
+            "snapshot routes do not number sections"
+        );
         assert!(
             outcome.warnings.is_empty(),
             "zero missing glyphs and no >20pt overfull: {:?}",
@@ -1703,10 +1729,17 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         render_note_pdf("# Hi\n", &scratch, &filters, &test_meta())
             .expect("fake render");
         let log = fs::read_to_string(&calls).expect("calls log");
+        let catalog = log.find("code-catalog.lua").expect("catalog filter");
         let diagrams = log.find("diagrams.lua").expect("diagrams filter");
         let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
-        assert!(diagrams < cb && cb < rl, "diagrams filter first: {log}");
+        let report = log
+            .find("code-catalog-report.lua")
+            .expect("catalog report filter");
+        assert!(
+            catalog < diagrams && diagrams < cb && cb < rl && rl < report,
+            "catalog before diagrams and report last: {log}"
+        );
         assert!(
             log.contains("bob-diagrams-results="),
             "results metadata: {log}"

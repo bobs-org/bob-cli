@@ -307,7 +307,15 @@ pub(crate) fn collect(
         ))
     })?;
     let filter_path = workdir.join("diagrams-collect.lua");
-    fs::write(&filter_path, COLLECT_FILTER).map_err(|error| {
+    fs::write(
+        &filter_path,
+        format!(
+            "{}\n{}",
+            super::code_catalog::TAB_EXPANSION_PRELUDE,
+            COLLECT_FILTER
+        ),
+    )
+    .map_err(|error| {
         CommandError::new(format!(
             "write collect filter {}: {error}",
             filter_path.display()
@@ -316,7 +324,7 @@ pub(crate) fn collect(
     let manifest_path = workdir.join("manifest.json");
     let throwaway = workdir.join("collect.out");
     let mut cmd = Command::new(pandoc);
-    cmd.arg(source);
+    cmd.arg(source).arg("--preserve-tabs");
     if let DiagramReader::Snapshot = reader {
         cmd.arg("-f")
             .arg(super::note_snapshot::profile::SNAPSHOT_PANDOC_READER);

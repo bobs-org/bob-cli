@@ -40,6 +40,7 @@ pub(crate) mod cli;
 mod clip;
 mod clip_adapter;
 mod clip_url;
+pub(crate) mod code_catalog;
 mod collection;
 mod collection_name;
 mod companion;
@@ -65,6 +66,7 @@ mod note;
 // the following snapshot phases wire these crate-visible seams into projection.
 #[allow(dead_code)]
 pub(crate) mod note_snapshot;
+mod pdf_dests;
 mod pdf_meta;
 mod pdf_target;
 pub(crate) mod pdf_write_policy;

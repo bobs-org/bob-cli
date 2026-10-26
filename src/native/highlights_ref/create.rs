@@ -301,10 +301,20 @@ struct CreatePlan {
 /// filters plus its own contract filter. [`super::diagrams::prepare`]
 /// fills `diagrams` when the pass finds Mermaid blocks.
 pub(crate) struct RenderFilters {
+    pub(crate) code_catalog: PathBuf,
     pub(crate) code_break: PathBuf,
     pub(crate) return_links: PathBuf,
+    pub(crate) code_catalog_report_filter: PathBuf,
     pub(crate) report: PathBuf,
+    pub(crate) code_catalog_report: PathBuf,
     pub(crate) diagrams: Option<super::diagrams::DiagramFilter>,
+}
+
+/// Reports from the two non-fatal Lua render passes.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RenderReports {
+    pub(crate) return_links: super::return_links::ReportOutcome,
+    pub(crate) code_catalog: super::code_catalog::CatalogOutcome,
 }
 
 impl CreatePlan {
@@ -2152,10 +2162,11 @@ fn overwrite_markdown(
     })?;
     let audio_uri = overwrite_play_uri(config, &plan, &request)?;
     let render_path = scratch.path().join("render.pdf");
+    let frozen_source = freeze_markdown_source(&create_plan, scratch.path())?;
     let mut filters = write_render_filters(scratch.path())?;
     let diagram_pass = super::diagrams::prepare(
         Some(pandoc.as_os_str()),
-        super::diagrams::DiagramSource::Path(&canonical),
+        super::diagrams::DiagramSource::Path(&frozen_source),
         super::diagrams::DiagramRoute {
             reader: super::diagrams::DiagramReader::Inferred,
             text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
@@ -2164,12 +2175,13 @@ fn overwrite_markdown(
         scratch.path(),
     );
     filters.diagrams = diagram_pass.filter.clone();
-    let _ = render_temp_pdf(
+    let _ = render_temp_pdf_from(
         &pandoc,
         &create_plan,
         &render_path,
         &filters,
         audio_uri.as_deref(),
+        Some(&frozen_source),
     )?;
     let mut extras = Vec::new();
     if let Some(author) = &author {
@@ -2280,10 +2292,12 @@ fn overwrite_vault_note(
             ))
         })?;
         let render_path = scratch.path().join("render.pdf");
+        let frozen_source =
+            freeze_markdown_source(&create_plan, scratch.path())?;
         let mut filters = write_render_filters(scratch.path())?;
         let diagram_pass = super::diagrams::prepare(
             Some(pandoc.as_os_str()),
-            super::diagrams::DiagramSource::Path(&snapshot.note.canonical_path),
+            super::diagrams::DiagramSource::Path(&frozen_source),
             super::diagrams::DiagramRoute {
                 reader: super::diagrams::DiagramReader::Inferred,
                 text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
@@ -2292,12 +2306,13 @@ fn overwrite_vault_note(
             scratch.path(),
         );
         filters.diagrams = diagram_pass.filter.clone();
-        let _ = render_temp_pdf(
+        let _ = render_temp_pdf_from(
             &pandoc,
             &create_plan,
             &render_path,
             &filters,
             audio_uri.as_deref(),
+            Some(&frozen_source),
         )?;
         render_path
     } else {
@@ -2933,8 +2948,23 @@ fn stage_snapshot_assets(
     Ok(())
 }
 
-fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
-    let code_break = scratch.join("filter.lua");
+pub(crate) fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
+    let code_catalog = scratch.join("code-catalog.lua");
+    fs::write(
+        &code_catalog,
+        format!(
+            "{}\n{}",
+            super::code_catalog::TAB_EXPANSION_PRELUDE,
+            super::code_catalog::FILTER
+        ),
+    )
+    .map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            code_catalog.display()
+        ))
+    })?;
+    let code_break = scratch.join("code-break.lua");
     fs::write(&code_break, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
         CommandError::new(format!(
             "write pandoc filter {}: {error}",
@@ -2948,10 +2978,24 @@ fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
             return_links.display()
         ))
     })?;
+    let code_catalog_report_filter = scratch.join("code-catalog-report.lua");
+    fs::write(
+        &code_catalog_report_filter,
+        super::code_catalog::REPORT_FILTER,
+    )
+    .map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            code_catalog_report_filter.display()
+        ))
+    })?;
     Ok(RenderFilters {
+        code_catalog,
         code_break,
         return_links,
+        code_catalog_report_filter,
         report: scratch.join("return-links.json"),
+        code_catalog_report: scratch.join("code-catalog.json"),
         diagrams: None,
     })
 }
@@ -3354,6 +3398,41 @@ fn create_markdown_route(
     create_markdown_plan(config, plan, scratch, options, listen)
 }
 
+/// Freeze the bytes already captured by the planner so both pandoc passes
+/// and the final renderer consume the same Markdown snapshot.
+fn freeze_markdown_source(
+    plan: &CreatePlan,
+    scratch: &Path,
+) -> Result<PathBuf> {
+    let markdown = plan.source_markdown.as_deref().ok_or_else(|| {
+        CommandError::new(format!(
+            "Markdown render has no frozen source bytes for {}",
+            plan.source
+        ))
+    })?;
+    let filename = Path::new(&plan.source).file_name().ok_or_else(|| {
+        CommandError::new(format!(
+            "Markdown source has no file name: {}",
+            plan.source
+        ))
+    })?;
+    let directory = scratch.join("frozen");
+    fs::create_dir_all(&directory).map_err(|error| {
+        CommandError::new(format!(
+            "create frozen Markdown directory {}: {error}",
+            directory.display()
+        ))
+    })?;
+    let frozen = directory.join(filename);
+    fs::write(&frozen, markdown).map_err(|error| {
+        CommandError::new(format!(
+            "write frozen Markdown source {}: {error}",
+            frozen.display()
+        ))
+    })?;
+    Ok(frozen)
+}
+
 fn create_markdown_plan(
     config: &Config,
     mut plan: CreatePlan,
@@ -3432,9 +3511,10 @@ fn create_markdown_plan(
         None => scratch.path().join("render.pdf"),
     };
     let mut filters = write_render_filters(scratch.path())?;
+    let frozen_source = freeze_markdown_source(&plan, scratch.path())?;
     let diagram_pass = super::diagrams::prepare(
         Some(pandoc.as_os_str()),
-        super::diagrams::DiagramSource::Path(Path::new(&plan.source)),
+        super::diagrams::DiagramSource::Path(&frozen_source),
         super::diagrams::DiagramRoute {
             reader: super::diagrams::DiagramReader::Inferred,
             text_width_pt: GENERIC_DIAGRAM_TEXT_WIDTH_PT,
@@ -3443,14 +3523,15 @@ fn create_markdown_plan(
         scratch.path(),
     );
     filters.diagrams = diagram_pass.filter.clone();
-    let (_audio_created, page_count, link_outcome) = match &listen_setup {
+    let (_audio_created, page_count, render_reports) = match &listen_setup {
         Some((command, flow, _)) => {
-            let link_outcome = render_temp_pdf(
+            let render_reports = render_temp_pdf_from(
                 &pandoc,
                 &plan,
                 &render_path,
                 &filters,
                 audio_uri.as_deref(),
+                Some(&frozen_source),
             )?;
             let values = super::listen::ListenValues {
                 target: render_path.display().to_string(),
@@ -3486,8 +3567,11 @@ fn create_markdown_plan(
                     bind_create_hint(&plan.source, &flow.scratch_audio),
                 )
             })?;
-            let marker =
-                stamp_marker_for_outcome(&plan, options, &link_outcome)?;
+            let marker = stamp_marker_for_outcome(
+                &plan,
+                options,
+                &render_reports.return_links,
+            )?;
             let page_count = match stamp_and_install(
                 &render_path,
                 &plan.target,
@@ -3505,15 +3589,16 @@ fn create_markdown_plan(
                     ));
                 }
             };
-            (created, page_count, link_outcome)
+            (created, page_count, render_reports)
         }
         None => {
-            let render_result = render_temp_pdf(
+            let render_result = render_temp_pdf_from(
                 &pandoc,
                 &plan,
                 &render_path,
                 &filters,
                 audio_uri.as_deref(),
+                Some(&frozen_source),
             );
             let audio_created = if render_result.is_ok() {
                 match companion_mod::copy_audio_for_install(plan.audio.as_ref())
@@ -3524,20 +3609,26 @@ fn create_markdown_plan(
             } else {
                 None
             };
-            let install_result = render_result.and_then(|link_outcome| {
-                stamp_marker_for_outcome(&plan, options, &link_outcome)
-                    .and_then(|marker| {
-                        stamp_and_install(
-                            &render_path,
-                            &plan.target,
-                            &marker,
-                            &PdfInfo::default(),
-                        )
-                        .map(|page_count| (link_outcome, page_count))
-                    })
+            let install_result = render_result.and_then(|render_reports| {
+                stamp_marker_for_outcome(
+                    &plan,
+                    options,
+                    &render_reports.return_links,
+                )
+                .and_then(|marker| {
+                    stamp_and_install(
+                        &render_path,
+                        &plan.target,
+                        &marker,
+                        &PdfInfo::default(),
+                    )
+                    .map(|page_count| (render_reports, page_count))
+                })
             });
-            let (link_outcome, page_count) = match install_result {
-                Ok((link_outcome, page_count)) => (link_outcome, page_count),
+            let (render_reports, page_count) = match install_result {
+                Ok((render_reports, page_count)) => {
+                    (render_reports, page_count)
+                }
                 Err(error) => {
                     companion_mod::cleanup_audio_on_failure(
                         audio_created.as_ref(),
@@ -3545,7 +3636,7 @@ fn create_markdown_plan(
                     return Err(error);
                 }
             };
-            (audio_created, page_count, link_outcome)
+            (audio_created, page_count, render_reports)
         }
     };
     println!(
@@ -3570,7 +3661,7 @@ fn create_markdown_plan(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
-    super::return_links::emit_outcome(&link_outcome, &styler);
+    super::return_links::emit_outcome(&render_reports.return_links, &styler);
     diagram_pass.emit(&styler);
     finish_create_intake(
         config,
@@ -5254,17 +5345,29 @@ pub(crate) const GENERIC_DIAGRAM_TEXT_HEIGHT_PT: f64 =
 /// routes encode vault and path components identically; only the template
 /// source differs (audio keeps its env/config/default precedence,
 /// snapshots use the default template).
+#[cfg(test)]
 fn render_temp_pdf(
     pandoc: &OsStr,
     plan: &CreatePlan,
     render_path: &Path,
     filters: &RenderFilters,
     audio_uri: Option<&str>,
-) -> Result<super::return_links::ReportOutcome> {
+) -> Result<RenderReports> {
+    render_temp_pdf_from(pandoc, plan, render_path, filters, audio_uri, None)
+}
+
+fn render_temp_pdf_from(
+    pandoc: &OsStr,
+    plan: &CreatePlan,
+    render_path: &Path,
+    filters: &RenderFilters,
+    audio_uri: Option<&str>,
+    source_override: Option<&Path>,
+) -> Result<RenderReports> {
     let source_path = Path::new(&plan.source);
     let resource_path = source_path.parent().unwrap_or_else(|| Path::new("."));
     let mut cmd = Command::new(pandoc);
-    cmd.arg(&plan.source)
+    cmd.arg(source_override.unwrap_or(source_path))
         .arg("-o")
         .arg(render_path)
         .arg("--standalone")
@@ -5272,8 +5375,10 @@ fn render_temp_pdf(
         .arg("--toc-depth=3")
         .arg("--number-sections")
         .arg("--pdf-engine=xelatex")
+        .arg("--preserve-tabs")
         .arg(format!("--resource-path={}", resource_path.display()))
         .arg("--highlight-style=tango");
+    cmd.arg("--lua-filter").arg(&filters.code_catalog);
     if let Some(diagrams) = &filters.diagrams {
         super::diagrams::apply_swap_filter_args(
             &mut cmd,
@@ -5286,6 +5391,8 @@ fn render_temp_pdf(
         .arg(&filters.code_break)
         .arg("--lua-filter")
         .arg(&filters.return_links)
+        .arg("--lua-filter")
+        .arg(&filters.code_catalog_report_filter)
         .arg("-V")
         .arg("colorlinks=true")
         .arg("-V")
@@ -5316,9 +5423,10 @@ fn render_temp_pdf(
         .arg("monofontoptions=Ligatures=NoCommon")
         .arg("-V")
         .arg(format!(
-            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}",
+            "header-includes={PANDOC_HEADER_INCLUDES}\n{}\n{}\n{}",
             super::return_links::HEADER_INCLUDES,
-            super::diagrams::HEADER_INCLUDES
+            super::diagrams::HEADER_INCLUDES,
+            super::code_catalog::HEADER_INCLUDES
         ))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
@@ -5327,6 +5435,12 @@ fn render_temp_pdf(
             "{}={}",
             super::return_links::REPORT_METADATA_KEY,
             filters.report.display()
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::code_catalog::REPORT_METADATA_KEY,
+            filters.code_catalog_report.display()
         ))
         .args(audio_uri.into_iter().flat_map(|uri| {
             ["--metadata".to_string(), format!("bob-listen-uri={uri}")]
@@ -5364,7 +5478,13 @@ fn render_temp_pdf(
         return Err(CommandError::new(base));
     }
 
-    Ok(super::return_links::read_report(&filters.report))
+    Ok(RenderReports {
+        return_links: super::return_links::read_report(&filters.report),
+        code_catalog: super::code_catalog::build(
+            &filters.code_catalog_report,
+            render_path,
+        ),
+    })
 }
 
 /// The dry-run parent line: the resolved `parent    route  (kind · label
@@ -6074,12 +6194,10 @@ mod tests {
         let return_filter_path = temp.path.join("return-links.lua");
         fs::write(&return_filter_path, super::super::return_links::FILTER)
             .expect("write return-link filter");
-        let filters = RenderFilters {
-            code_break: filter_path,
-            return_links: return_filter_path,
-            report: temp.path.join("return-links.json"),
-            diagrams: None,
-        };
+        let mut filters = write_render_filters(&temp.path)
+            .expect("write catalog render filters");
+        filters.code_break = filter_path;
+        filters.return_links = return_filter_path;
         let pandoc = pandoc_command().expect("pandoc checked above");
         render_temp_pdf(
             &pandoc,
@@ -6192,92 +6310,7 @@ mod tests {
     fn named_dest_pages(
         document: &lopdf::Document,
     ) -> std::collections::BTreeMap<String, u32> {
-        let mut dests = std::collections::BTreeMap::new();
-        let page_numbers: std::collections::BTreeMap<lopdf::ObjectId, u32> =
-            document
-                .get_pages()
-                .into_iter()
-                .map(|(number, id)| (id, number))
-                .collect();
-        fn dest_page(
-            document: &lopdf::Document,
-            page_numbers: &std::collections::BTreeMap<lopdf::ObjectId, u32>,
-            value: &lopdf::Object,
-        ) -> Option<u32> {
-            match resolve_pdf_object(document, value)? {
-                lopdf::Object::Array(items) => items
-                    .first()
-                    .and_then(|page| page.as_reference().ok())
-                    .and_then(|id| page_numbers.get(&id).copied()),
-                lopdf::Object::Dictionary(dictionary) => {
-                    let dest = dictionary.get(b"D").ok()?;
-                    dest_page(
-                        document,
-                        page_numbers,
-                        &resolve_pdf_object(document, dest)?,
-                    )
-                }
-                _ => None,
-            }
-        }
-        let Ok(catalog) = document.catalog() else {
-            return dests;
-        };
-        let Some(names) = catalog
-            .get(b"Names")
-            .ok()
-            .and_then(|object| pdf_dictionary(document, object))
-        else {
-            return dests;
-        };
-        let Some(tree) = names
-            .get(b"Dests")
-            .ok()
-            .and_then(|object| pdf_dictionary(document, object))
-        else {
-            return dests;
-        };
-        // The xelatex name tree may nest intermediate `/Kids` nodes above
-        // the leaf `/Names` arrays; walk the whole tree.
-        fn collect(
-            document: &lopdf::Document,
-            page_numbers: &std::collections::BTreeMap<lopdf::ObjectId, u32>,
-            node: &lopdf::Dictionary,
-            dests: &mut std::collections::BTreeMap<String, u32>,
-        ) {
-            if let Some(lopdf::Object::Array(entries)) = node
-                .get(b"Names")
-                .ok()
-                .and_then(|object| resolve_pdf_object(document, object))
-            {
-                let mut pairs = entries.iter();
-                while let (Some(key), Some(value)) =
-                    (pairs.next(), pairs.next())
-                {
-                    let lopdf::Object::String(name_bytes, _) = key else {
-                        continue;
-                    };
-                    let name = String::from_utf8_lossy(name_bytes).into_owned();
-                    if let Some(page) = dest_page(document, page_numbers, value)
-                    {
-                        dests.insert(name, page);
-                    }
-                }
-            }
-            if let Some(lopdf::Object::Array(kids)) = node
-                .get(b"Kids")
-                .ok()
-                .and_then(|object| resolve_pdf_object(document, object))
-            {
-                for kid in &kids {
-                    if let Some(child) = pdf_dictionary(document, kid) {
-                        collect(document, page_numbers, &child, dests);
-                    }
-                }
-            }
-        }
-        collect(document, &page_numbers, &tree, &mut dests);
-        dests
+        super::super::pdf_dests::named_dest_pages(document)
     }
 
     /// Every GoTo link destination name in the document.
@@ -6469,17 +6502,16 @@ mod tests {
         let return_filter_path = temp.path.join("return-links.lua");
         fs::write(&return_filter_path, super::super::return_links::FILTER)
             .expect("write return-link filter");
-        let filters = RenderFilters {
-            code_break: code_break_path,
-            return_links: return_filter_path,
-            report: temp.path.join("return-links.json"),
-            diagrams: None,
-        };
+        let mut filters = write_render_filters(&temp.path)
+            .expect("write catalog render filters");
+        filters.code_break = code_break_path;
+        filters.return_links = return_filter_path;
         let pandoc = pandoc_command().expect("pandoc checked above");
         let outcome =
             render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
                 .expect("render return-link PDF");
-        let super::super::return_links::ReportOutcome::Report(report) = outcome
+        let super::super::return_links::ReportOutcome::Report(report) =
+            &outcome.return_links
         else {
             panic!("render must write a return-link report: {outcome:?}");
         };
@@ -6645,17 +6677,9 @@ mod tests {
         dir: &Path,
         diagrams: Option<super::super::diagrams::DiagramFilter>,
     ) -> RenderFilters {
-        let code_break = dir.join("filter.lua");
-        fs::write(&code_break, PANDOC_CODE_BREAK_FILTER).expect("write filter");
-        let return_links = dir.join("return-links.lua");
-        fs::write(&return_links, super::super::return_links::FILTER)
-            .expect("write return-link filter");
-        RenderFilters {
-            code_break,
-            return_links,
-            report: dir.join("return-links.json"),
-            diagrams,
-        }
+        let mut filters = write_render_filters(dir).expect("write filters");
+        filters.diagrams = diagrams;
+        filters
     }
 
     fn pdf_haystack(path: &Path) -> String {
@@ -6734,8 +6758,18 @@ mod tests {
                 results: results_path,
             }),
         );
-        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
-            .expect("render swapped PDF");
+        let reports =
+            render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+                .expect("render swapped PDF");
+        let super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &reports.code_catalog
+        else {
+            panic!("swapped render should preserve its catalog: {reports:?}");
+        };
+        assert_eq!(catalog.blocks.len(), 1);
+        assert_eq!(catalog.blocks[0].kind, "mermaid");
+        assert_eq!(catalog.blocks[0].text, MERMAID_FLOW.trim_end());
+        assert!(catalog.blocks[0].page.is_some());
         let text = pdf_haystack(&render_path);
         assert!(!text.contains("flowchart LR"), "source gone: {text}");
         assert!(!text.contains("Figure 1"), "no implicit caption: {text}");
@@ -6923,6 +6957,229 @@ mod tests {
     fn page_count(pdf: &Path) -> u32 {
         let document = lopdf::Document::load(pdf).expect("load rendered PDF");
         document.get_pages().len() as u32
+    }
+
+    #[test]
+    fn code_catalog_preserves_source_and_maps_rendered_pages() {
+        if skip_pandoc_xelatex("code catalog render") {
+            return;
+        }
+        let temp = TempDir::new("code-catalog-render");
+        let source = temp.path.join("catalog.md");
+        let tab = "\t";
+        let long_lines = (0..110)
+            .map(|line| format!("row-{line:03}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let markdown = format!(
+            r##"# Catalog
+
+Inline code keeps its source tab: `left{tab}right`.
+
+## Build
+
+```makefile
+ROOT{tab}= value  
+{tab}echo{tab}done
+Unicode café🙂
+```
+
+> - nested item
+>
+>   ```rust
+>   {tab}fn nested() {{}}
+>   ```
+
+>   ```mermaid
+>   flowchart LR
+>     A{tab}--> B
+>   ```
+
+## Plain
+
+    untagged{tab}value
+
+````markdown
+```sh
+echo fenced
+```
+````
+
+## Long
+
+```text
+BEGIN_LONG_BLOCK
+{long_lines}
+END_LONG_BLOCK
+```
+"##
+        );
+        fs::write(&source, "# The source changes after planning\n")
+            .expect("write original source");
+        let mut plan = mermaid_plan(&temp, &source);
+        plan.title = "Catalog".to_string();
+        plan.source_markdown = Some(markdown.clone());
+        let frozen = freeze_markdown_source(&plan, &temp.path)
+            .expect("freeze planned bytes");
+        assert_eq!(
+            fs::read_to_string(&frozen).expect("read frozen source"),
+            markdown
+        );
+        fs::write(&source, "# Changed on disk\n").expect("change source");
+
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let collected = super::super::diagrams::collect(
+            &pandoc,
+            &frozen,
+            super::super::diagrams::DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect Mermaid source");
+        assert_eq!(collected.len(), 1, "one Mermaid block: {collected:?}");
+        assert!(
+            collected[0].text.contains("A --> B"),
+            "collector expands tabs at the same stop: {:?}",
+            collected[0].text
+        );
+        let filters = write_render_filters(&temp.path).expect("write filters");
+        let catalog_filter = fs::read_to_string(&filters.code_catalog)
+            .expect("read catalog filter");
+        let prelude = super::super::code_catalog::TAB_EXPANSION_PRELUDE;
+        assert!(catalog_filter.starts_with(prelude));
+        let collector_filter =
+            fs::read_to_string(temp.path.join("collect/diagrams-collect.lua"))
+                .expect("read collector filter");
+        assert!(collector_filter.starts_with(prelude));
+
+        let inline_ast = Command::new(&pandoc)
+            .arg(&frozen)
+            .arg("--preserve-tabs")
+            .arg("-t")
+            .arg("json")
+            .arg("--lua-filter")
+            .arg(&filters.code_catalog)
+            .output()
+            .expect("run inline-code AST pass");
+        assert!(inline_ast.status.success(), "{inline_ast:?}");
+        fn collect_inline_code(
+            value: &serde_json::Value,
+            out: &mut Vec<String>,
+        ) {
+            match value {
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        collect_inline_code(value, out);
+                    }
+                }
+                serde_json::Value::Object(object) => {
+                    if object.get("t").and_then(serde_json::Value::as_str)
+                        == Some("Code")
+                        && let Some(text) = object
+                            .get("c")
+                            .and_then(serde_json::Value::as_array)
+                            .and_then(|content| content.get(1))
+                            .and_then(serde_json::Value::as_str)
+                    {
+                        out.push(text.to_string());
+                    }
+                    for value in object.values() {
+                        collect_inline_code(value, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let ast: serde_json::Value = serde_json::from_slice(&inline_ast.stdout)
+            .expect("parse inline-code AST");
+        let mut inline_code = Vec::new();
+        collect_inline_code(&ast, &mut inline_code);
+        assert!(
+            inline_code.contains(&"left    right".to_string()),
+            "inline code expands to four-column stops: {inline_code:?}"
+        );
+
+        let render_path = temp.path.join("catalog.pdf");
+        let reports = render_temp_pdf_from(
+            &pandoc,
+            &plan,
+            &render_path,
+            &filters,
+            None,
+            Some(&frozen),
+        )
+        .expect("render frozen catalog");
+        let super::super::code_catalog::CatalogOutcome::Catalog(catalog) =
+            &reports.code_catalog
+        else {
+            panic!("render should produce a code catalog: {reports:?}");
+        };
+        assert_eq!(catalog.version, 1);
+        assert_eq!(catalog.blocks.len(), 6, "all nested and plain blocks");
+        assert_eq!(catalog.blocks[0].kind, "code");
+        assert_eq!(catalog.blocks[0].lang.as_deref(), Some("makefile"));
+        assert_eq!(
+            catalog.blocks[0].text,
+            format!("ROOT{tab}= value  \n{tab}echo{tab}done\nUnicode café🙂")
+        );
+        assert_eq!(catalog.blocks[1].text, format!("{tab}fn nested() {{}}"));
+        assert_eq!(catalog.blocks[2].kind, "mermaid");
+        assert!(catalog.blocks[2].text.contains("A\t--> B"));
+        assert_eq!(catalog.blocks[3].text, format!("untagged{tab}value"));
+        assert!(catalog.blocks[3].classes.is_empty());
+        assert_eq!(catalog.blocks[3].lang, None);
+        assert_eq!(catalog.blocks[4].text, "```sh\necho fenced\n```");
+        assert_eq!(
+            catalog.blocks[5].text,
+            format!("BEGIN_LONG_BLOCK\n{long_lines}\nEND_LONG_BLOCK")
+        );
+        assert!(catalog.blocks[0].attrs.is_empty());
+        assert_eq!(
+            catalog.blocks[0].section.as_ref().map(|section| (
+                section.title.as_str(),
+                section.number.as_deref()
+            )),
+            Some(("Build", Some("1")))
+        );
+        assert_eq!(
+            catalog.blocks[3].section.as_ref().map(|section| (
+                section.title.as_str(),
+                section.number.as_deref()
+            )),
+            Some(("Plain", Some("2")))
+        );
+
+        let pages = page_count(&render_path);
+        let page_with = |needle: &str| {
+            (1..=pages)
+                .find(|page| page_text(&render_path, *page).contains(needle))
+                .unwrap_or_else(|| panic!("missing {needle:?} in rendered PDF"))
+        };
+        for (index, first_line) in [
+            "ROOT",
+            "fn nested()",
+            "flowchart LR",
+            "untagged",
+            "echo fenced",
+            "BEGIN_LONG_BLOCK",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let block = &catalog.blocks[index];
+            assert_eq!(
+                block.page,
+                Some(page_with(first_line)),
+                "block {index}"
+            );
+            assert_eq!(block.page_source.as_deref(), Some("anchor"));
+        }
+        let last_page = page_with("END_LONG_BLOCK");
+        assert_eq!(catalog.blocks[5].page_end, Some(last_page));
+        assert!(
+            catalog.blocks[5].page_end > catalog.blocks[5].page,
+            "long block spans pages: {:?}",
+            catalog.blocks[5]
+        );
     }
 
     fn is_body_empty(text: &str) -> bool {
@@ -7190,7 +7447,8 @@ mod tests {
         let outcome =
             render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
                 .expect("render div PDF");
-        let super::super::return_links::ReportOutcome::Report(report) = outcome
+        let super::super::return_links::ReportOutcome::Report(report) =
+            &outcome.return_links
         else {
             panic!("div render must write a return-link report: {outcome:?}");
         };
@@ -7339,7 +7597,7 @@ mod tests {
         .expect("fake render");
         let log = fs::read_to_string(&calls).expect("calls log");
         let diagrams = log.find("diagrams.lua").expect("diagrams filter");
-        let cb = log.find("filter.lua").expect("code-break");
+        let cb = log.find("code-break.lua").expect("code-break");
         let rl = log.find("return-links.lua").expect("return-links");
         assert!(diagrams < cb && cb < rl, "diagrams filter first: {log}");
         assert!(

@@ -493,6 +493,21 @@ carries a Highlights marker is refused before any write:
 `PDF already carries a Highlights marker: <path>` with a
 `bob ref sync` / `create <library PDF> --listen` hint.
 
+## Code catalog
+
+Markdown, `-M` vault-note renders, and note snapshots record each code block
+from the Markdown AST before Mermaid diagrams are swapped for images. The
+catalog keeps the original code text, language and other attributes, section,
+and the PDF pages marked by invisible destinations; it does not change the
+PDF's visible or selectable text. Mermaid source remains in the catalog when
+its rendered block becomes an image.
+
+Pandoc reads these sources with `--preserve-tabs`. A render filter expands tabs
+to four-column stops in code blocks and inline code, preserving the current
+layout while the catalog retains the original tab characters. A tab at the
+start of a blockquote code line therefore expands to four columns, where the
+older parser could treat it as two.
+
 ## arXiv
 
 URL recognition mirrors `sase-listen` (`abs`, `html`, `pdf`, new- and
