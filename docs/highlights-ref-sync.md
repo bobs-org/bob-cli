@@ -32,6 +32,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Scheduled scan](#scheduled-scan)
 - [Disable one PDF](#disable-one-pdf)
 - [Backup and rollback](#backup-and-rollback)
+  - [Interrupted overwrite recovery](#interrupted-overwrite-recovery)
 - [Conflict resolution](#conflict-resolution)
 - [Expected failures](#expected-failures)
 
@@ -2343,6 +2344,21 @@ still scanned and its existing reference note lacks the managed markers, the
 command fails before guessing where generated content belongs.
 
 ## Backup and Rollback
+
+### Interrupted overwrite recovery
+
+`-f overwrite` writes a host-local intent under
+`$XDG_STATE_HOME/bob-cli/ref/overwrite-intents/` before it mutates the vault.
+The next writing `bob ref create` or `bob ref scan` on that host recovers under
+`bob_sync.lock` then `scan.lock` before any pre-sync can commit half-applied
+files: a proved overwrite commit is kept; otherwise the recorded base HEAD is
+restored and the intent is cleared. Standalone `bob vault-sync` does the same
+recovery (it takes `scan.lock` when an intent is pending) and refuses the cycle
+if the lock is busy or recovery fails. Other pre-syncs (`bob task move`,
+`bob randomize`, migrations, `vault_rewrite`) refuse to stage or commit while
+an intent is pending; the error names the stem and says to run `bob ref scan`
+on this host. `bob ref rename` already holds both locks and recovers before its
+pre-sync.
 
 Before first writes, make the vault clean or intentionally checkpointed:
 

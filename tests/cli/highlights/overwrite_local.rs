@@ -1656,6 +1656,60 @@ fn markdown_overwrite_keeps_play_link_for_kept_audio() {
     );
 }
 
+#[test]
+fn overwrite_refuses_gitignored_sidecar_file_as_dirty_paths() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-ignored-sidecar", "ready", false, false);
+    let sidecar = fixture.vault.join(format!("lib/papers/{STEM}.textbundle"));
+    fs::create_dir_all(&sidecar).expect("sidecar dir");
+    // A page heading with no annotation body is unannotated, so prepare
+    // reaches dirty_paths instead of annotated_reference. Do not re-sync:
+    // sync would copy the sidecar into the note as managed highlights.
+    write_file(&sidecar.join("text.md"), "Report\n======\n\n## Page 1\n");
+    write_file(&fixture.vault.join(".gitignore"), "*.tmp\n");
+    commit_vault(&fixture.vault, "track sidecar and gitignore");
+
+    let ignored = sidecar.join("secret.tmp");
+    write_file(&ignored, "do not delete me\n");
+
+    let before_tree = snapshot_tree(&fixture.vault);
+    let before_head = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+    let before_status = stdout(&git_in(
+        &fixture.vault,
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+    ));
+    let before_intent = None;
+    let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+        .output()
+        .expect("overwrite with gitignored sidecar file");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "gitignored sidecar files must refuse dirty_paths:\n{}",
+        format_output(&output)
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains("dirty_paths") && err.contains("secret.tmp"),
+        "refusal must name the ignored sidecar file:\n{}",
+        format_output(&output)
+    );
+    assert_readonly_refusal(
+        &fixture,
+        &before_tree,
+        &before_head,
+        &before_status,
+        before_intent,
+    );
+    assert_eq!(
+        fs::read_to_string(&ignored).expect("ignored sidecar file"),
+        "do not delete me\n",
+        "overwrite must not delete the gitignored sidecar file"
+    );
+}
+
 pub(crate) fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, current: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(current).expect("read snapshot") {

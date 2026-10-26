@@ -164,6 +164,11 @@ struct RunOptions {
     dry_run: bool,
     message: Option<String>,
     quiet: bool,
+    /// Standalone `bob vault-sync` recovers a pending overwrite intent
+    /// (taking `scan.lock`). In-process `run_cycle_with_existing_lock*`
+    /// callers refuse to stage while an intent is pending, except those
+    /// that already recovered before invoking the cycle.
+    recover_overwrite_intent: bool,
 }
 
 impl Default for RunOptions {
@@ -172,6 +177,7 @@ impl Default for RunOptions {
             dry_run: false,
             message: None,
             quiet: false,
+            recover_overwrite_intent: false,
         }
     }
 }
@@ -182,6 +188,7 @@ impl RunOptions {
             dry_run: matches.get_flag("dry-run"),
             message: matches.get_one::<String>("message").cloned(),
             quiet: matches.get_flag("quiet"),
+            recover_overwrite_intent: true,
         }
     }
 }
@@ -361,6 +368,7 @@ fn run_cycle_inner(
         options,
         &format!("reconciling Bob vault at {}", vault.display()),
     );
+    gate_pending_overwrite_intent(vault, child_env, options, styler)?;
 
     let interrupted_merge_recovered = recover_interrupted_operation(
         vault, child_env, options, styler, status,
@@ -438,6 +446,34 @@ fn run_cycle_inner(
     }
 
     Err(CycleError::fatal("push retry limit exceeded"))
+}
+
+fn gate_pending_overwrite_intent(
+    vault: &Path,
+    child_env: &ChildEnv,
+    options: &RunOptions,
+    styler: &Styler,
+) -> Result<(), CycleError> {
+    if options.recover_overwrite_intent {
+        match crate::native::highlights_ref::overwrite::recovery::recover_for_standalone_sync(
+            vault, child_env, options.dry_run,
+        ) {
+            Ok(None) => Ok(()),
+            Ok(Some(notice)) => {
+                print_log(options, &notice);
+                Ok(())
+            }
+            Err(message) => {
+                warn(styler, &message);
+                Err(CycleError::fatal(message))
+            }
+        }
+    } else {
+        crate::native::highlights_ref::overwrite::recovery::refuse_sync_if_overwrite_pending(
+            vault,
+        )
+        .map_err(CycleError::fatal)
+    }
 }
 
 fn recover_interrupted_operation(

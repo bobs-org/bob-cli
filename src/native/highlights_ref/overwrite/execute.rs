@@ -11,6 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+use std::cell::Cell;
+
 use sha2::{Digest, Sha256};
 
 use super::super::reading_plan::ReadingTaskAction;
@@ -25,6 +28,48 @@ use crate::native::ref_library;
 use crate::native::ref_tasks;
 
 const OVERWRITE_SUBJECT_PREFIX: &str = "bob ref create: overwrite";
+
+/// Test-only injection points for the overwrite executor. Never compiled
+/// into release builds and never read from a CLI flag or environment
+/// variable.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverwriteFailpoint {
+    AfterStagingValidation,
+    AfterIntentPersistence,
+    AfterFrozenNote,
+    AfterSidecarRemoval,
+    AfterAudio,
+    AfterPdf,
+    AfterNote,
+    AfterTaskEdit,
+    AfterSyncWrite,
+    ForcedVerificationFailure,
+    BeforeCommit,
+    CommitReportedAsError,
+    PostSyncFailure,
+    CrashWithoutRollback,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAILPOINT: Cell<Option<OverwriteFailpoint>> = Cell::new(None);
+}
+
+#[cfg(test)]
+fn failpoint_is(point: OverwriteFailpoint) -> bool {
+    FAILPOINT.with(|cell| cell.get() == Some(point))
+}
+
+#[cfg(test)]
+fn trip(point: OverwriteFailpoint) -> Result<(), CommandError> {
+    if failpoint_is(point) {
+        Err(CommandError::new(format!("injected failpoint {point:?}"))
+            .with_code("injected_failpoint"))
+    } else {
+        Ok(())
+    }
+}
 
 /// Final marker identity expected from the private PDF renderer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +159,8 @@ fn execute_with_sync(
 ) -> Result<OverwriteResult, CommandError> {
     validate_staged_files(config, &staged)?;
     validate_staged_metadata(initial, request, &staged)?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterStagingValidation)?;
 
     let child_env = ob::child_env();
     let _locks = reference_mutation::acquire_mutation_session(
@@ -141,11 +188,15 @@ fn execute_with_sync(
             .with_code("sync_failed")
     })?;
 
-    // Re-plan after the pre-sync. The exact prepared manifest, selected task,
-    // archive destination, and all preimages must still match the renderer's
-    // original plan; the command never silently retargets a changed source.
+    // Re-derive selection after the locked pre-sync, then re-plan. A
+    // default selection must still be the newest live member; an explicit
+    // `-N` member must still exist in the same family. The exact prepared
+    // manifest, selected task, archive destination, and all preimages must
+    // still match the renderer's original plan; the command never silently
+    // retargets a changed source.
+    let selected = super::reselect_after_presync(config, initial, request)?;
     let locked =
-        super::prepare(config, &initial.member, request, &initial.planned_date)
+        super::prepare(config, &selected, request, &initial.planned_date)
             .map_err(|refusal| refusal.command_error())?;
     if locked.bundle_sha256 != initial.bundle_sha256
         || locked.task != initial.task
@@ -212,9 +263,32 @@ fn execute_with_sync(
                 ))
                 .with_human_code("verify_failed"));
             }
+            #[cfg(test)]
+            if let Err(error) = trip(OverwriteFailpoint::AfterIntentPersistence)
+            {
+                let rollback = recovery::rollback_transaction(
+                    config,
+                    &child_env,
+                    &intent,
+                );
+                return Err(CommandError::new(format!(
+                    "{error}{}",
+                    rollback_suffix(rollback)
+                ))
+                .with_human_code("verify_failed"));
+            }
 
             let applied =
                 apply_and_verify(config, &locked, request, &staged, &manifest);
+            #[cfg(test)]
+            if failpoint_is(OverwriteFailpoint::CrashWithoutRollback)
+                && applied.is_ok()
+            {
+                return Err(CommandError::new(
+                    "injected crash after applying the overwrite",
+                )
+                .with_code("injected_crash"));
+            }
             let task_mark = match applied {
                 Ok((_, task_mark)) => task_mark,
                 Err(error) => {
@@ -262,12 +336,40 @@ fn execute_with_sync(
                 ))
                 .with_human_code("verify_failed"));
             }
-            let sha = match ob::commit_paths(
-                &config.bob_dir,
-                &child_env,
-                &subject,
-                &paths,
-            ) {
+            #[cfg(test)]
+            if let Err(error) = trip(OverwriteFailpoint::BeforeCommit) {
+                let rollback = recovery::rollback_transaction(
+                    config,
+                    &child_env,
+                    &intent,
+                );
+                return Err(CommandError::new(format!(
+                    "{error}{}",
+                    rollback_suffix(rollback)
+                ))
+                .with_human_code("verify_failed"));
+            }
+            let commit_result = {
+                let result = ob::commit_paths(
+                    &config.bob_dir,
+                    &child_env,
+                    &subject,
+                    &paths,
+                );
+                #[cfg(test)]
+                if failpoint_is(OverwriteFailpoint::CommitReportedAsError)
+                    && matches!(result, Ok(Some(_)))
+                {
+                    Err("injected commit reporting error".to_string())
+                } else {
+                    result
+                }
+                #[cfg(not(test))]
+                {
+                    result
+                }
+            };
+            let sha = match commit_result {
                 Ok(Some(sha)) => sha,
                 Ok(None) => {
                     let rollback = recovery::rollback_transaction(
@@ -372,7 +474,14 @@ fn execute_with_sync(
         }
         Err(error) => return Err(error),
     };
-    if vault_sync(false).is_err() {
+    let post_sync = vault_sync(false);
+    #[cfg(test)]
+    let post_sync = if failpoint_is(OverwriteFailpoint::PostSyncFailure) {
+        Err("injected post-sync failure".to_string())
+    } else {
+        post_sync
+    };
+    if post_sync.is_err() {
         result.push_pending = true;
     }
     Ok(result)
@@ -672,10 +781,18 @@ fn apply_and_verify(
             archive.contents.as_bytes(),
         )?;
     }
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterFrozenNote)?;
 
     remove_old_sidecar(config, plan)?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterSidecarRemoval)?;
     publish_audio(config, plan, staged)?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterAudio)?;
     write_expected_file(config, plan, &plan.pdf_path, &staged.private_pdf)?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterPdf)?;
 
     let body = super::render_fresh_skeleton(
         config,
@@ -706,6 +823,8 @@ fn apply_and_verify(
         &plan.note_path,
         note_contents.as_bytes(),
     )?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterNote)?;
 
     if plan.task.path != plan.note_path {
         replace_task_file_subtree(
@@ -716,6 +835,8 @@ fn apply_and_verify(
             &expected_subtree,
         )?;
     }
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterTaskEdit)?;
 
     let sync_plan = sync::plan_single_pdf_sync(
         config,
@@ -747,6 +868,8 @@ fn apply_and_verify(
             return Err(CommandError::new(hold.message))
         }
     }
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterSyncWrite)?;
 
     let verification = sync::plan_single_pdf_sync(
         config,
@@ -781,6 +904,8 @@ fn apply_and_verify(
         expected_mark,
         &original_task_file,
     )?;
+    #[cfg(test)]
+    trip(OverwriteFailpoint::ForcedVerificationFailure)?;
     Ok((expected_subtree, expected_mark))
 }
 
@@ -1702,5 +1827,510 @@ mod tests {
         assert!(note.contains("recaptured: 2026-02-03"));
         assert!(!note.contains("highlights_marker_hash"));
         assert!(!note.contains("title: Old"));
+    }
+
+    struct FailpointGuard;
+
+    impl Drop for FailpointGuard {
+        fn drop(&mut self) {
+            FAILPOINT.with(|cell| cell.set(None));
+        }
+    }
+
+    fn arm(point: OverwriteFailpoint) -> FailpointGuard {
+        FAILPOINT.with(|cell| cell.set(Some(point)));
+        FailpointGuard
+    }
+
+    const READY_MARKER: &str = concat!(
+        "- status: ready\n",
+        "- parent: sase\n",
+        "- title: Report\n",
+        "- id: report\n",
+        "- captured: 2026-01-01\n",
+    );
+    const STAGED_MARKER: &str = concat!(
+        "- status: ready\n",
+        "- parent: sase\n",
+        "- title: Report\n",
+        "- id: report\n",
+        "- captured: 2026-10-16\n",
+    );
+
+    fn git(vault: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn write_marker_pdf(path: &Path, marker: &str) {
+        use lopdf::{dictionary, Document, Object, Stream};
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("pdf parent");
+        }
+        let mut doc = Document::with_version("1.4");
+        let pages_id = doc.new_object_id();
+        let content_id =
+            doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+        let annot_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Integer(24),
+                Object::Integer(24),
+            ],
+            "Contents" => marker::pdf_text_string(marker),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![
+                Object::Integer(0),
+                Object::Integer(0),
+                Object::Integer(612),
+                Object::Integer(792),
+            ],
+            "Contents" => content_id,
+            "Annots" => vec![Object::Reference(annot_id)],
+        });
+        doc.set_object(
+            pages_id,
+            dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            },
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.save(path).expect("write marker PDF");
+    }
+
+    struct ExecuteFixture {
+        _temp: tempfile::TempDir,
+        _guard: crate::native::env::TestEnvGuard,
+        config: Config,
+        plan: super::super::OverwritePreflight,
+        request: super::super::OverwriteRequest,
+        staged: StagedOverwrite,
+        vault: PathBuf,
+        note: PathBuf,
+        pdf: PathBuf,
+        old_note: Vec<u8>,
+        old_pdf: Vec<u8>,
+        old_head: String,
+        old_status: String,
+    }
+
+    fn filed_execute_fixture(tag: &str) -> ExecuteFixture {
+        use std::ffi::OsStr;
+        let temp = tempfile::Builder::new()
+            .prefix(tag)
+            .tempdir()
+            .expect("temp");
+        let vault = temp.path().join("vault");
+        let state = temp.path().join("state");
+        let config_home = temp.path().join("config");
+        let home = temp.path().join("home");
+        let lock = temp.path().join("bob_sync.lock");
+        fs::create_dir_all(vault.join("lib/papers")).expect("lib");
+        fs::create_dir_all(vault.join("ref/papers")).expect("ref");
+        fs::create_dir_all(vault.join("xlib")).expect("xlib");
+        fs::create_dir_all(&state).expect("state");
+        fs::create_dir_all(&home).expect("home");
+        fs::create_dir_all(&config_home).expect("config");
+        fs::write(
+            vault.join("sase.md"),
+            "---\ntype: \"[[area]]\"\n---\n\n# SASE\n",
+        )
+        .expect("area");
+        let pdf = vault.join("lib/papers/report.pdf");
+        write_marker_pdf(&pdf, READY_MARKER);
+
+        let guard = crate::native::env::TestEnvGuard::set(&[
+            ("BOB_DIR", Some(vault.as_os_str())),
+            ("HOME", Some(home.as_os_str())),
+            ("XDG_STATE_HOME", Some(state.as_os_str())),
+            ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
+            ("BOB_VAULT_SYNC_LOCK_FILE", Some(lock.as_os_str())),
+            ("BOB_NOW", Some(OsStr::new("2026-10-16 12:00:00"))),
+        ]);
+
+        let config = Config::for_vault(&vault);
+        super::super::super::sync::sync_pdf(
+            &config,
+            &pdf,
+            SyncOptions {
+                dry_run: false,
+                write_pdf: false,
+                prefer: None,
+                ignore_unannotated_sidecar: false,
+            },
+        )
+        .unwrap_or_else(|error| panic!("file reference via sync: {error}"));
+
+        git(&vault, &["init", "-q"]);
+        git(&vault, &["config", "user.email", "test@example.com"]);
+        git(&vault, &["config", "user.name", "Test"]);
+        git(&vault, &["config", "commit.gpgsign", "false"]);
+        git(&vault, &["add", "-A"]);
+        git(&vault, &["commit", "-q", "-m", "file reference"]);
+
+        let index = crate::native::ref_library::build_index(
+            &crate::native::ref_library::LibraryConfig {
+                bob_dir: config.bob_dir.clone(),
+                ref_dir: config.ref_dir.clone(),
+                xlib_dir: config.xlib_dir.clone(),
+            },
+        )
+        .expect("index");
+        let family = super::super::super::recapture::select_overwrite_for_stem(
+            &config,
+            &index.rows,
+            "report",
+            None,
+            super::super::super::recapture::StemIdentity::Title("Report"),
+        )
+        .expect("select stem")
+        .expect("filed family");
+        let member = family.newest().clone();
+        let request = super::super::OverwriteRequest::default();
+        let plan =
+            super::super::prepare(&config, &member, &request, "2026-10-16")
+                .unwrap_or_else(|refusal| {
+                    panic!(
+                        "prepare refused {}: {}",
+                        refusal.code, refusal.message
+                    )
+                });
+
+        let staged_pdf = temp.path().join("staged.pdf");
+        write_marker_pdf(&staged_pdf, STAGED_MARKER);
+        let staged = StagedOverwrite {
+            private_pdf: staged_pdf,
+            audio: None,
+            marker: FinalMarkerMetadata {
+                id: "report".into(),
+                title: "Report".into(),
+                status: "ready".into(),
+                parent: Some("sase".into()),
+                captured: Some("2026-10-16".into()),
+            },
+        };
+        let note = vault.join("ref/papers/report.md");
+        ExecuteFixture {
+            old_note: fs::read(&note).expect("note"),
+            old_pdf: fs::read(&pdf).expect("pdf"),
+            old_head: git(&vault, &["rev-parse", "HEAD"]),
+            old_status: git(
+                &vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            _temp: temp,
+            _guard: guard,
+            config,
+            plan,
+            request,
+            staged,
+            vault,
+            note,
+            pdf,
+        }
+    }
+
+    fn assert_intact_old_state(fixture: &ExecuteFixture) {
+        assert_eq!(
+            fs::read(&fixture.note).expect("note"),
+            fixture.old_note,
+            "the live note must match the pre-overwrite bytes"
+        );
+        assert_eq!(
+            fs::read(&fixture.pdf).expect("pdf"),
+            fixture.old_pdf,
+            "the library PDF must match the pre-overwrite bytes"
+        );
+        assert_eq!(
+            git(&fixture.vault, &["rev-parse", "HEAD"]),
+            fixture.old_head,
+            "HEAD must stay at the pre-overwrite commit"
+        );
+        assert_eq!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            fixture.old_status,
+            "the worktree and index must match the pre-overwrite state"
+        );
+        assert!(
+            super::super::recovery::load_intent(&fixture.config)
+                .expect("load intent")
+                .is_none(),
+            "the overwrite intent must be cleared"
+        );
+    }
+
+    fn assert_committed_new_state(
+        fixture: &ExecuteFixture,
+        result: &OverwriteResult,
+    ) {
+        assert_ne!(
+            fs::read(&fixture.note).expect("note"),
+            fixture.old_note,
+            "the live note must change"
+        );
+        assert_ne!(
+            fs::read(&fixture.pdf).expect("pdf"),
+            fixture.old_pdf,
+            "the library PDF must change"
+        );
+        let head = git(&fixture.vault, &["rev-parse", "HEAD"]);
+        assert_ne!(head, fixture.old_head, "HEAD must advance");
+        assert_eq!(head, result.commit_sha, "the result names the new HEAD");
+        assert!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            )
+            .is_empty(),
+            "the committed overwrite leaves a clean worktree"
+        );
+        assert!(
+            super::super::recovery::load_intent(&fixture.config)
+                .expect("load intent")
+                .is_none(),
+            "the overwrite intent must be cleared"
+        );
+    }
+
+    fn run_execute(
+        fixture: &ExecuteFixture,
+        mut vault_sync: impl FnMut(bool) -> Result<(), String>,
+    ) -> Result<OverwriteResult, CommandError> {
+        execute_with_sync(
+            &fixture.config,
+            &fixture.plan,
+            &fixture.request,
+            fixture.staged.clone(),
+            &mut vault_sync,
+        )
+    }
+
+    #[test]
+    fn overwrite_commits_when_pre_sync_leaves_selection_unchanged() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-happy");
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("execute: {error}"));
+        assert!(!result.push_pending, "a no-op post-sync is not pending");
+        assert_committed_new_state(&fixture, &result);
+    }
+
+    #[test]
+    fn failpoints_that_abort_before_commit_restore_the_old_state() {
+        const POINTS: &[OverwriteFailpoint] = &[
+            OverwriteFailpoint::AfterStagingValidation,
+            OverwriteFailpoint::AfterIntentPersistence,
+            OverwriteFailpoint::AfterFrozenNote,
+            OverwriteFailpoint::AfterSidecarRemoval,
+            OverwriteFailpoint::AfterAudio,
+            OverwriteFailpoint::AfterPdf,
+            OverwriteFailpoint::AfterNote,
+            OverwriteFailpoint::AfterTaskEdit,
+            OverwriteFailpoint::AfterSyncWrite,
+            OverwriteFailpoint::ForcedVerificationFailure,
+            OverwriteFailpoint::BeforeCommit,
+        ];
+        for point in POINTS {
+            let fixture = filed_execute_fixture(&format!(
+                "bob-cli-overwrite-fp-{point:?}"
+            ));
+            let _armed = arm(*point);
+            let error = run_execute(&fixture, |_| Ok(()))
+                .expect_err(&format!("{point:?} must abort"));
+            assert!(
+                error.to_string().contains("injected failpoint")
+                    || error.code == Some("injected_failpoint"),
+                "{point:?} unexpected error: {error}"
+            );
+            assert_intact_old_state(&fixture);
+        }
+    }
+
+    #[test]
+    fn crash_without_rollback_is_recovered_to_the_old_state() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-crash");
+        let _armed = arm(OverwriteFailpoint::CrashWithoutRollback);
+        let error =
+            run_execute(&fixture, |_| Ok(())).expect_err("injected crash");
+        assert_eq!(error.code, Some("injected_crash"));
+        assert_ne!(
+            fs::read(&fixture.note).expect("note"),
+            fixture.old_note,
+            "the crash leaves half-applied files"
+        );
+        assert!(
+            super::super::recovery::load_intent(&fixture.config)
+                .expect("load intent")
+                .is_some(),
+            "the crash keeps the intent"
+        );
+        drop(_armed);
+        let notice = super::super::recovery::recover_with_locks_held(
+            &fixture.config,
+            &ob::child_env(),
+            false,
+        )
+        .expect("recover crashed overwrite");
+        assert_eq!(
+            notice.as_deref(),
+            Some("recovered: rolled back an interrupted overwrite of report")
+        );
+        assert_intact_old_state(&fixture);
+    }
+
+    #[test]
+    fn commit_reported_as_error_keeps_the_commit() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-commit-err");
+        let _armed = arm(OverwriteFailpoint::CommitReportedAsError);
+        let result =
+            run_execute(&fixture, |_| Ok(())).unwrap_or_else(|error| {
+                panic!("commit-reported-as-error must keep the commit: {error}")
+            });
+        assert!(!result.push_pending);
+        assert_committed_new_state(&fixture, &result);
+    }
+
+    #[test]
+    fn post_sync_failure_keeps_the_commit_and_sets_push_pending() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-post-sync");
+        let _armed = arm(OverwriteFailpoint::PostSyncFailure);
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("post-sync: {error}"));
+        assert!(
+            result.push_pending,
+            "a post-sync failure reports push-pending"
+        );
+        assert_committed_new_state(&fixture, &result);
+    }
+
+    #[test]
+    fn pre_sync_byte_change_aborts_with_preimage_changed() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-preimage");
+        let note = fixture.note.clone();
+        let vault = fixture.vault.clone();
+        let error = run_execute(&fixture, |pre| {
+            if pre {
+                let mut body = fs::read_to_string(&note).expect("note");
+                body.push_str("\nmutated after pre-sync\n");
+                fs::write(&note, body).expect("mutate");
+                git(&vault, &["add", "-A"]);
+                git(
+                    &vault,
+                    &["commit", "-q", "-m", "pre-sync pulled a newer note"],
+                );
+            }
+            Ok(())
+        })
+        .expect_err("preimage must change");
+        assert_eq!(error.code, Some("preimage_changed"), "{error}");
+        assert!(
+            fs::read_to_string(&fixture.note)
+                .expect("note")
+                .contains("mutated after pre-sync"),
+            "overwrite must not roll back the pulled pre-sync commit"
+        );
+        let subject = git(&fixture.vault, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject, "pre-sync pulled a newer note");
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn pre_sync_later_reading_aborts_default_selection() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-later");
+        let vault = fixture.vault.clone();
+        let pdf = fixture.pdf.clone();
+        let error = run_execute(&fixture, |pre| {
+            if pre {
+                fs::copy(&pdf, vault.join("lib/papers/report__v2.pdf"))
+                    .expect("later pdf");
+                fs::write(
+                    vault.join("ref/papers/report__v2.md"),
+                    "---\nid: report__v2\ntitle: Report\nearlier:\n  - \"[[ref/papers/report]]\"\nsource_pdf: lib/papers/report__v2.pdf\n---\n",
+                )
+                .expect("later note");
+                git(&vault, &["add", "-A"]);
+                git(
+                    &vault,
+                    &[
+                        "commit",
+                        "-q",
+                        "-m",
+                        "pre-sync pulled a later reading",
+                    ],
+                );
+            }
+            Ok(())
+        })
+        .expect_err("later reading must retarget default selection");
+        assert_eq!(error.code, Some("preimage_changed"), "{error}");
+        assert_eq!(
+            fs::read(&fixture.note).expect("note"),
+            fixture.old_note,
+            "overwrite must not rewrite the now-older reading"
+        );
+        let subject = git(&fixture.vault, &["log", "-1", "--format=%s"]);
+        assert_eq!(subject, "pre-sync pulled a later reading");
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn named_member_still_selected_after_pre_sync() {
+        let mut fixture = filed_execute_fixture("bob-cli-overwrite-fp-named");
+        fixture.request.name = Some("report".into());
+        let result = run_execute(&fixture, |_| Ok(()))
+            .unwrap_or_else(|error| panic!("named execute: {error}"));
+        assert_committed_new_state(&fixture, &result);
+    }
+
+    #[test]
+    fn named_member_missing_after_pre_sync_aborts() {
+        let mut fixture =
+            filed_execute_fixture("bob-cli-overwrite-fp-named-gone");
+        fixture.request.name = Some("report".into());
+        let note = fixture.note.clone();
+        let error = run_execute(&fixture, |pre| {
+            if pre {
+                fs::remove_file(&note).expect("remove named member");
+            }
+            Ok(())
+        })
+        .expect_err("missing named member");
+        assert_eq!(error.code, Some("preimage_changed"));
+        fs::write(&fixture.note, &fixture.old_note).expect("restore note");
+        assert_eq!(
+            git(&fixture.vault, &["rev-parse", "HEAD"]),
+            fixture.old_head
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
     }
 }

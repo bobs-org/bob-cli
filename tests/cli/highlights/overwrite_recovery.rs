@@ -306,3 +306,137 @@ fn overwrite_recovery_keeps_committed_overwrite_on_scan() {
         "the intent is cleared once the commit is proved"
     );
 }
+
+#[test]
+fn vault_sync_recovers_a_planted_overwrite_intent() {
+    let temp = TempDir::new("bob-cli-overwrite-vault-sync-recover");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    fs::create_dir_all(vault.join("ref/blogs")).expect("ref dir");
+    write_file(
+        &vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nbody\n",
+    );
+    let committed = git_in(&vault, ["add", "-A"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let committed = git_in(&vault, ["commit", "-q", "-m", "file reference"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let pushed = git_in(&vault, ["push", "-q", "origin", "master"]);
+    assert!(pushed.status.success(), "{}", format_output(&pushed));
+    let base = head(&vault);
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("dirty note");
+    let state = temp.path().join("state");
+    write_intent(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md"],
+        &[],
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("standalone vault-sync with pending overwrite intent");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "standalone vault-sync recovers then finishes:\n{}",
+        format_output(&output)
+    );
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains(
+            "recovered: rolled back an interrupted overwrite of half-written"
+        ),
+        "vault-sync must print the rollback notice:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        note_body(&vault).contains("body"),
+        "vault-sync restores the note to the base"
+    );
+    assert!(
+        !intent_path(&state, &vault).exists(),
+        "vault-sync clears the intent after a proved rollback"
+    );
+}
+
+#[test]
+fn task_move_refuses_while_overwrite_intent_is_pending() {
+    let (temp, vault, state) = fixture("bob-cli-overwrite-task-move-refuse");
+    write_file(
+        &vault.join("source.md"),
+        "---\ntype: [[area]]\n---\n\n## Tasks\n\n- [ ] #task Move this task [id:: source__move-me] ^move-me\n",
+    );
+    write_file(
+        &vault.join("dest.md"),
+        "---\ntype: [[area]]\n---\n\n## Tasks\n",
+    );
+    let committed = git_in(&vault, ["add", "-A"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let committed = git_in(&vault, ["commit", "-q", "-m", "movable task"]);
+    assert!(committed.status.success(), "{}", format_output(&committed));
+    let base = head(&vault);
+    fs::write(
+        vault.join("ref/blogs/half-written.md"),
+        "---\nid: half-written\n---\nCRASHED\n",
+    )
+    .expect("dirty note");
+    write_intent(
+        &state,
+        &vault,
+        &base,
+        None,
+        &["ref/blogs/half-written.md"],
+        &[],
+    );
+
+    let output = bob_command()
+        .args(["task", "move", "source", "dest", "-b", "move-me"])
+        .env("BOB_DIR", &vault)
+        .env("NO_COLOR", "1")
+        .env("HOME", temp.path().join("home"))
+        .env("XDG_STATE_HOME", &state)
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("task move with pending overwrite intent");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "task move must refuse while an overwrite intent is pending:\n{}",
+        format_output(&output)
+    );
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("interrupted overwrite of half-written")
+            && combined.contains("bob ref scan"),
+        "the refusal names the stem and tells the operator to scan:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        note_body(&vault).contains("CRASHED"),
+        "task move must not recover or commit the crashed overwrite"
+    );
+    assert!(
+        intent_path(&state, &vault).exists(),
+        "task move must leave the pending intent in place"
+    );
+    assert!(
+        fs::read_to_string(vault.join("source.md"))
+            .expect("source")
+            .contains("^move-me"),
+        "the move must not apply"
+    );
+}

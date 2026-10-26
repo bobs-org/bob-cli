@@ -1519,6 +1519,29 @@ pub(super) fn reread_report_line(
     format!("reread: {old_stem} → {new_stem} ({detail})")
 }
 
+/// Live family keyed by the index family root path, or `None` when that
+/// root has no remaining live members. Overwrite re-derives selection
+/// from this after the locked pre-sync.
+pub(super) fn family_for_root(
+    rows: &[RefRow],
+    root_path: &str,
+    bob_dir: &Path,
+) -> Option<SelectedFamily> {
+    let members: Vec<FamilyMember> = rows
+        .iter()
+        .filter(|row| row.family == root_path && row.superseded_by.is_none())
+        .map(|row| member_from_row(row, bob_dir))
+        .collect();
+    if members.is_empty() {
+        return None;
+    }
+    Some(select_family(
+        root_path,
+        family_root_stem(rows, root_path),
+        members,
+    ))
+}
+
 /// Assemble one family: members newest first, the newest selected.
 /// The root path comes from the index family key (never re-derived from
 /// a filename), so a later stem never becomes the next root.

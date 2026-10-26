@@ -5,7 +5,11 @@
 //! mutating the vault, so a crash cannot lose the earlier capture. The next
 //! real `ref create` or writing `ref scan` (including intake-only and JSON
 //! variants) recovers under the same lock order before any pre-sync can
-//! commit half-applied files:
+//! commit half-applied files. Standalone `bob vault-sync` recovers the same
+//! way (taking `scan.lock` when an intent is pending). Other pre-syncs
+//! (`task move`, `randomize`, migrations, `vault_rewrite`) refuse to stage
+//! while an intent is pending. `ref rename` recovers under the locks it
+//! already holds. Recovery then:
 //!
 //! * the recorded overwrite commit is present → keep the new state and
 //!   clear the intent;
@@ -127,7 +131,6 @@ impl OverwriteIntent {
 /// Persist (or replace) the intent for `config`'s vault atomically: write
 /// a temp file, fsync it, rename over the destination, then fsync the
 /// directory. Consumed by the transaction phase.
-#[allow(dead_code)]
 pub(crate) fn save_intent(
     config: &Config,
     intent: &OverwriteIntent,
@@ -138,8 +141,7 @@ pub(crate) fn save_intent(
 /// Load the pending intent for `config`'s vault, if any. A present but
 /// unreadable file is a hard error: recovery must fail closed rather than
 /// treat a half-written marker as absent. Consumed by the transaction
-/// phase.
-#[allow(dead_code)]
+/// phase and by other pre-syncs that must not commit a crashed overwrite.
 pub(crate) fn load_intent(
     config: &Config,
 ) -> std::result::Result<Option<OverwriteIntent>, CommandError> {
@@ -148,7 +150,6 @@ pub(crate) fn load_intent(
 
 /// Remove the intent for `config`'s vault. Missing files are fine.
 /// Consumed by the transaction phase alongside recovery's own clears.
-#[allow(dead_code)]
 pub(crate) fn clear_intent(config: &Config) -> std::result::Result<(), String> {
     let canonical =
         canonical_vault(config).map_err(|error| error.to_string())?;
@@ -228,6 +229,50 @@ pub(crate) fn recover_with_locks_held(
         return Ok(None);
     };
     recover_locked(&state_dir, config, child_env, &intent, dry_run)
+}
+
+/// Standalone `bob vault-sync` already holds `bob_sync.lock`. When a
+/// pending overwrite intent exists, take `scan.lock` (same order and
+/// timeout as other mutation sessions) and recover before staging. A
+/// busy lock or a failed recovery refuses the cycle without staging.
+pub(crate) fn recover_for_standalone_sync(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    dry_run: bool,
+) -> std::result::Result<Option<String>, String> {
+    let config = super::super::Config::for_vault(vault);
+    let Some(intent) =
+        load_intent(&config).map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let _scan = super::super::acquire_scan_writer_lock_with_timeout(
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| {
+        format!(
+            "could not recover the interrupted overwrite of {}: {error}; run bob ref scan on this host",
+            intent.stem
+        )
+    })?;
+    recover_with_locks_held(&config, child_env, dry_run)
+        .map_err(|error| format!("{error}; run bob ref scan on this host"))
+}
+
+/// Other `run_cycle_*` callers already hold `bob_sync.lock` and must not
+/// stage or commit while an overwrite intent is pending. The error names
+/// the stem and tells the operator to run `bob ref scan` on this host.
+pub(crate) fn refuse_sync_if_overwrite_pending(
+    vault: &Path,
+) -> std::result::Result<(), String> {
+    let config = super::super::Config::for_vault(vault);
+    match load_intent(&config).map_err(|error| error.to_string())? {
+        None => Ok(()),
+        Some(intent) => Err(format!(
+            "an interrupted overwrite of {} is pending; run bob ref scan on this host",
+            intent.stem
+        )),
+    }
 }
 
 /// Core recovery: validate, prove-or-restore, then clear. Never broadens
@@ -357,12 +402,19 @@ fn restore_from_base(
     touched: &[PathBuf],
     created: &[PathBuf],
 ) -> std::result::Result<(), CommandError> {
-    if !touched.is_empty() {
+    let restore = paths_tracked_in_commit(
+        vault,
+        child_env,
+        &intent.base_head,
+        touched,
+        intent,
+    )?;
+    if !restore.is_empty() {
         let status = ob::git_command(vault, child_env)
             .arg("checkout")
             .arg(&intent.base_head)
             .arg("--")
-            .args(touched)
+            .args(&restore)
             .status()
             .map_err(|error| {
                 preserve_message(
@@ -412,10 +464,10 @@ fn restore_from_base(
             &format!("could not unstage recovered paths: {error}"),
         ));
     }
-    if !touched.is_empty() {
+    if !restore.is_empty() {
         let differs = ob::git_command(vault, child_env)
             .args(["diff", "--quiet", &intent.base_head, "--"])
-            .args(touched)
+            .args(&restore)
             .status()
             .map(|status| !status.success())
             .unwrap_or(true);
@@ -427,6 +479,42 @@ fn restore_from_base(
         }
     }
     Ok(())
+}
+
+/// Paths in `candidates` that the recorded base commit actually tracks.
+/// Recovery never asks `git checkout` for a path absent from base (an
+/// ignored sidecar file, an untracked leftover, a stale intent entry):
+/// those would fail the whole restore.
+fn paths_tracked_in_commit(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    base: &str,
+    candidates: &[PathBuf],
+    intent: &OverwriteIntent,
+) -> std::result::Result<Vec<PathBuf>, CommandError> {
+    let mut tracked = Vec::new();
+    for path in candidates {
+        let output = ob::git_command(vault, child_env)
+            .args(["ls-tree", "--name-only", base, "--"])
+            .arg(path)
+            .output()
+            .map_err(|error| {
+                preserve_message(
+                    intent,
+                    &format!("could not inspect recorded base paths: {error}"),
+                )
+            })?;
+        if !output.status.success() {
+            return Err(preserve_message(
+                intent,
+                &format!("could not inspect recorded base {}", base),
+            ));
+        }
+        if !String::from_utf8_lossy(&output.stdout).trim().is_empty() {
+            tracked.push(path.clone());
+        }
+    }
+    Ok(tracked)
 }
 
 /// Remove one recorded creation: files and symlinks directly, directories
@@ -507,36 +595,49 @@ fn remove_empty_parents(directory: &Path, vault: &Path) {
 }
 
 /// Reject vault-escaping or non-relative intent paths without touching the
-/// vault. `.git` roots are rejected outright: recovery never restores or
-/// cleans repository internals.
+/// vault. Empty paths, `.`, any `CurDir` component, and anything that does
+/// not name a path below the vault root are refused so recovery never runs
+/// `git checkout <base> -- .`. `.git` roots are rejected outright.
 fn validated_paths(
     paths: &[String],
 ) -> std::result::Result<Vec<PathBuf>, CommandError> {
     let mut validated = Vec::with_capacity(paths.len());
     for raw in paths {
         let path = Path::new(raw);
-        let mut components = path.components().peekable();
-        let relative = matches!(
-            components.peek(),
-            Some(Component::Normal(_)) | Some(Component::CurDir)
-        ) && !path.is_absolute();
-        let mut escaped = !relative;
+        let invalid = || {
+            CommandError::new(format!(
+                "ignoring malformed overwrite intent with invalid path {raw}; remove it to proceed"
+            ))
+        };
+        if raw.is_empty() || path.is_absolute() {
+            return Err(invalid());
+        }
+        // `Path::components()` skips interior `.` (so `ref/./note.md`
+        // would otherwise name a real vault file). Reject any CurDir
+        // spelling in the raw path, including `./`, `/./`, and `/.`.
+        if raw.split(['/', '\\']).any(|part| part == ".") {
+            return Err(invalid());
+        }
+        let mut depth = 0usize;
         let mut under_git = false;
         for component in path.components() {
             match component {
-                Component::ParentDir => escaped = true,
-                Component::Normal(name)
-                    if name.eq_ignore_ascii_case(".git") =>
-                {
-                    under_git = true;
+                Component::Normal(name) => {
+                    if name.eq_ignore_ascii_case(".git") {
+                        under_git = true;
+                    }
+                    depth += 1;
                 }
-                _ => {}
+                Component::CurDir
+                | Component::ParentDir
+                | Component::Prefix(_)
+                | Component::RootDir => {
+                    return Err(invalid());
+                }
             }
         }
-        if escaped || under_git {
-            return Err(CommandError::new(format!(
-                "ignoring malformed overwrite intent with invalid path {raw}; remove it to proceed"
-            )));
+        if depth == 0 || under_git {
+            return Err(invalid());
         }
         validated.push(path.to_path_buf());
     }
@@ -1115,9 +1216,15 @@ mod tests {
         let state = state_temp.path();
         let base = git_output(vault, &["rev-parse", "HEAD"]);
 
-        for invalid in
-            ["../evil.md", "/absolute.md", "ref/blogs/../../evil.md", ""]
-        {
+        for invalid in [
+            "../evil.md",
+            "/absolute.md",
+            "ref/blogs/../../evil.md",
+            "",
+            ".",
+            "./ref/blogs/half-written.md",
+            "ref/./blogs/half-written.md",
+        ] {
             let intent = save_pending(
                 state,
                 &config,
@@ -1208,7 +1315,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_checkout_preserves_the_intent() {
+    fn restore_skips_paths_absent_from_the_base_commit() {
         let vault_temp = fixture_vault();
         let vault = vault_temp.path();
         let config = test_config(vault);
@@ -1216,8 +1323,8 @@ mod tests {
         let state = state_temp.path();
         let base = git_output(vault, &["rev-parse", "HEAD"]);
 
-        // A touched path absent from the base fails the whole restore, so
-        // the marker must survive for a retry and the worktree is untouched.
+        // A touched path absent from the base (gitignored sidecar junk,
+        // a stale intent entry) must not fail the whole restore.
         fs::write(
             vault.join("ref/blogs/half-written.md"),
             "---\nid: half-written\n---\nCRASHED\n",
@@ -1233,18 +1340,35 @@ mod tests {
                 &[],
             ),
         );
-        let error =
-            recover(state, &config, &intent, false).expect_err("checkout");
-        assert!(
-            error.to_string().contains("could not restore vault files"),
-            "unexpected error: {error}"
+        let notice = recover(state, &config, &intent, false).expect("restore");
+        assert_eq!(
+            notice.as_deref(),
+            Some("recovered: rolled back an interrupted overwrite of half-written")
         );
-        assert!(intent_file(state, &config).exists());
-        assert!(
+        assert_eq!(
             fs::read_to_string(vault.join("ref/blogs/half-written.md"))
-                .expect("note")
-                .contains("CRASHED"),
-            "failed repairs leave the worktree alone"
+                .expect("note"),
+            "---\nid: half-written\n---\nbody\n"
+        );
+        assert!(
+            !intent_file(state, &config).exists(),
+            "a skipped absent path still clears the intent"
+        );
+    }
+
+    #[test]
+    fn validated_paths_rejects_empty_curdir_and_dot_components() {
+        for invalid in ["", ".", "./foo", "foo/./bar", "foo/../bar", "/abs"] {
+            let error =
+                validated_paths(&[invalid.to_string()]).expect_err(invalid);
+            assert!(
+                error.to_string().contains("invalid path"),
+                "unexpected error for {invalid:?}: {error}"
+            );
+        }
+        assert!(
+            validated_paths(&["ref/blogs/note.md".into()]).is_ok(),
+            "a vault-relative file is accepted"
         );
     }
 

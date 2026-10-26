@@ -243,6 +243,23 @@ fn run_live(
         }
     };
 
+    match crate::native::highlights_ref::overwrite::recovery::recover_with_locks_held(
+        config, &child_env, false,
+    ) {
+        Ok(Some(notice)) => eprintln!("{notice}"),
+        Ok(None) => {}
+        Err(error) => {
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    error.code.unwrap_or("recovery_failed"),
+                    error.to_string(),
+                    Some("run bob ref scan on this host to recover the interrupted overwrite"),
+                ),
+            );
+        }
+    }
+
     if !offline {
         let cycle =
             crate::native::vault_sync::run_cycle_with_existing_lock_report(

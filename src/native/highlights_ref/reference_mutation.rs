@@ -200,6 +200,45 @@ pub(crate) fn dirty_touched_paths(
     Ok(matches)
 }
 
+/// Ignored (and therefore invisible to `git status --untracked-files=all`)
+/// files under `touched_paths`. Overwrite preflight merges these into
+/// `dirty_paths` so a gitignored file inside a sidecar directory cannot
+/// be deleted by `remove_old_sidecar` and then wedge rollback.
+pub(crate) fn ignored_paths_under(
+    vault: &Path,
+    touched_paths: &BTreeSet<PathBuf>,
+) -> std::result::Result<Vec<PathBuf>, DirtyPathError> {
+    if !vault.join(".git").exists() || touched_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(vault)
+        .args([
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--",
+        ])
+        .args(touched_paths)
+        .output()
+        .map_err(|error| DirtyPathError::GitUnavailable(error.to_string()))?;
+    if !output.status.success() {
+        return Err(DirtyPathError::StatusFailed);
+    }
+    let mut ignored = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(|record| PathBuf::from(String::from_utf8_lossy(record).as_ref()))
+        .collect::<Vec<_>>();
+    ignored.sort();
+    ignored.dedup();
+    Ok(ignored)
+}
+
 fn dirty_path_matches(
     dirty: &str,
     touched: &BTreeSet<String>,
@@ -648,6 +687,50 @@ mod tests {
         let exact_tree = dirty_touched_paths(vault, &tree_touched, false)
             .expect("exact tree");
         assert!(exact_tree.is_empty());
+    }
+
+    #[test]
+    fn ignored_paths_under_lists_gitignored_sidecar_files() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        fs::create_dir_all(vault.join("lib/blogs/old.textbundle")).unwrap();
+        fs::write(vault.join("lib/blogs/old.pdf"), b"pdf").unwrap();
+        fs::write(vault.join("lib/blogs/old.textbundle/text.md"), "sidecar\n")
+            .unwrap();
+        fs::write(vault.join(".gitignore"), "*.tmp\n").unwrap();
+        init_repo(vault);
+        let add = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["add", "-A"])
+            .status()
+            .expect("git add");
+        assert!(add.success());
+        let commit = Command::new("git")
+            .arg("-C")
+            .arg(vault)
+            .args(["commit", "-q", "-m", "fixture"])
+            .status()
+            .expect("git commit");
+        assert!(commit.success());
+        fs::write(
+            vault.join("lib/blogs/old.textbundle/secret.tmp"),
+            "ignored\n",
+        )
+        .unwrap();
+
+        let touched =
+            BTreeSet::from([PathBuf::from("lib/blogs/old.textbundle")]);
+        let dirty = dirty_touched_paths(vault, &touched, true).expect("dirty");
+        assert!(
+            dirty.is_empty(),
+            "git status does not report ignored files: {dirty:?}"
+        );
+        let ignored = ignored_paths_under(vault, &touched).expect("ignored");
+        assert_eq!(
+            ignored,
+            [PathBuf::from("lib/blogs/old.textbundle/secret.tmp")]
+        );
     }
 
     #[test]

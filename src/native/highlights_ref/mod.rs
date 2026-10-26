@@ -76,13 +76,13 @@ mod reading_plan;
 pub(crate) mod recapture;
 mod region;
 // Lock, precondition, scoped-git, and rollback helpers shared by rename
-// and the overwrite transaction that consumes them in later phases.
+// and the overwrite transaction.
 pub(crate) mod reference_mutation;
 // Staged in-place overwrite of unannotated references; recovery hooks run
-// before create and scan can sync.
-#[allow(dead_code)]
+// before create, scan, rename, and standalone vault-sync can commit.
 pub(crate) mod overwrite;
-// The dependent `ref rename` command consumes this module in the next phase.
+// `ref rename` consumes the shared mutation helpers and recovers a pending
+// overwrite intent before its pre-sync.
 #[allow(dead_code)]
 pub(crate) mod rename;
 mod render_tex;

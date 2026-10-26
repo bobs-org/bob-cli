@@ -94,12 +94,7 @@ pub(super) struct OverwritePreflight {
     pub(super) bundle_preimages: Vec<FilePreimage>,
     pub(super) bundle_sha256: String,
     pub(super) frozen_note: Option<FrozenNote>,
-    pub(super) old_skeleton: String,
-    pub(super) authored_prose: bool,
-    pub(super) lineage: Vec<lineage::EarlierEntry>,
     pub(super) status: String,
-    pub(super) created: Option<YamlValue>,
-    pub(super) captured: Option<String>,
     pub(super) title: String,
     pub(super) ref_type: String,
     pub(super) audio_path: Option<String>,
@@ -110,6 +105,13 @@ pub(super) struct OverwritePreflight {
     /// (`keep_user_fields = keep`).
     pub(super) user_fields: Vec<(String, MarkerValue)>,
     pub(super) planned_date: String,
+    /// Index family root path (`RefRow.family`) so the locked recheck can
+    /// re-derive selection after pre-sync.
+    pub(super) family_root_path: String,
+    /// URL-derived identity keys of the selected family. Empty for
+    /// title-only identity. A collection overwrite aborts when the live
+    /// set no longer matches.
+    pub(super) family_source_keys: BTreeSet<String>,
 }
 
 /// A typed refusal so route renderers can preserve the established JSON code.
@@ -146,6 +148,9 @@ impl OverwriteRefusal {
 }
 
 /// Resolve URL identity and select the family member that overwrite targets.
+/// Routes currently select through recapture preflight; this wrap keeps the
+/// overwrite-named entry used by the recapture selectors.
+#[allow(dead_code)]
 pub(super) fn select_url_member(
     config: &Config,
     rows: &[RefRow],
@@ -163,6 +168,7 @@ pub(super) fn select_url_member(
 }
 
 /// Resolve title identity and select a member, if this is a filed capture.
+#[allow(dead_code)]
 pub(super) fn select_stem_member(
     config: &Config,
     rows: &[RefRow],
@@ -407,7 +413,7 @@ pub(super) fn prepare(
                 2,
             )
         })?;
-    let (front, body) =
+    let (_front, body) =
         super::split_frontmatter(&note_contents).ok_or_else(|| {
             OverwriteRefusal::new(
                 "not_in_sync",
@@ -637,8 +643,6 @@ pub(super) fn prepare(
             2,
         )
     })?;
-    let existing_lineage =
-        lineage::parse_earlier(&ParsedFrontmatter::parse(&front));
     let frozen_note = if authored_prose {
         let path = allocate_archive_path(config, &ref_type, stem, date);
         let archive_contents = render_frozen_note(
@@ -667,7 +671,7 @@ pub(super) fn prepare(
     } else {
         None
     };
-    let dirty = reference_mutation::dirty_touched_paths(
+    let mut dirty = reference_mutation::dirty_touched_paths(
         &config.bob_dir,
         &touched,
         true,
@@ -683,6 +687,24 @@ pub(super) fn prepare(
             2,
         )
     })?;
+    let ignored = reference_mutation::ignored_paths_under(
+        &config.bob_dir,
+        &touched,
+    )
+    .map_err(|error| {
+        OverwriteRefusal::new(
+            "dirty_paths",
+            format!(
+                "could not inspect ignored reference paths: {}",
+                dirty_error(error)
+            ),
+            Some("commit, revert, or remove ignored files under the touched paths before overwriting"),
+            2,
+        )
+    })?;
+    dirty.extend(ignored);
+    dirty.sort();
+    dirty.dedup();
     if !dirty.is_empty() {
         return Err(OverwriteRefusal::new(
             "dirty_paths",
@@ -712,7 +734,6 @@ pub(super) fn prepare(
     bundle_preimages.sort_by(|left, right| left.path.cmp(&right.path));
     bundle_preimages.dedup_by(|left, right| left.path == right.path);
     let bundle_sha256 = fingerprint_preimages(&bundle_preimages);
-    let created = yaml_frontmatter_value(&front, "created");
     Ok(OverwritePreflight {
         member: member.clone(),
         note_path: row.path.clone(),
@@ -723,12 +744,7 @@ pub(super) fn prepare(
         bundle_preimages,
         bundle_sha256,
         frozen_note,
-        old_skeleton: fresh_body,
-        authored_prose,
-        lineage: existing_lineage,
         status,
-        created,
-        captured: row.captured.clone(),
         title,
         ref_type,
         audio_path: audio_path.map(|path| {
@@ -739,7 +755,66 @@ pub(super) fn prepare(
         highlights: member.highlights.unwrap_or(0),
         user_fields,
         planned_date: date.to_string(),
+        family_root_path: row.family.clone(),
+        family_source_keys: recapture::family_for_root(
+            &index.rows,
+            &row.family,
+            &config.bob_dir,
+        )
+        .map(|family| family.source_keys)
+        .unwrap_or_default(),
     })
+}
+
+/// Re-derive the overwrite member after the locked pre-sync. A default
+/// selection must still be the newest live member (no `has_later`). An
+/// explicit `-N` member must still exist in the same family. Collections
+/// must still match the exact URL set. Otherwise abort with
+/// `preimage_changed` and write nothing.
+pub(super) fn reselect_after_presync(
+    config: &Config,
+    initial: &OverwritePreflight,
+    request: &OverwriteRequest,
+) -> Result<recapture::FamilyMember, CommandError> {
+    let changed = || {
+        CommandError::new(
+            "overwrite target changed while the replacement was rendering; no files were written",
+        )
+        .with_code("preimage_changed")
+    };
+    let index = build_index(&LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    })
+    .map_err(|_| changed())?;
+    let Some(family) = recapture::family_for_root(
+        &index.rows,
+        &initial.family_root_path,
+        &config.bob_dir,
+    ) else {
+        return Err(changed());
+    };
+    if !initial.family_source_keys.is_empty()
+        && family.source_keys != initial.family_source_keys
+    {
+        return Err(changed());
+    }
+    if let Some(name) = request.name.as_deref() {
+        let Some(selected) = family.member_named(name) else {
+            return Err(changed());
+        };
+        return Ok(family.members[selected].clone());
+    }
+    let newest = family.newest();
+    let Some(row) = index.rows.iter().find(|row| row.path == newest.path)
+    else {
+        return Err(changed());
+    };
+    if row.has_later || newest.path != initial.member.path {
+        return Err(changed());
+    }
+    Ok(newest.clone())
 }
 
 fn task_refusal(row: &RefRow) -> OverwriteRefusal {
@@ -1369,13 +1444,6 @@ fn allocate_archive_path(
         }
     }
     unreachable!("archive suffix space is unbounded")
-}
-
-fn yaml_frontmatter_value(lines: &[String], key: &str) -> Option<YamlValue> {
-    let yaml = serde_yaml::from_str::<YamlValue>(&lines.join("\n")).ok()?;
-    yaml.as_mapping()?
-        .get(YamlValue::String(key.to_string()))
-        .cloned()
 }
 
 fn has_user_pdf_annotations(pdf: &Path) -> Result<bool, String> {
