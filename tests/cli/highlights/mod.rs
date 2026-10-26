@@ -12,6 +12,7 @@ mod jobs;
 mod listen;
 mod marker;
 mod marker_write;
+mod overwrite_recovery;
 mod scan;
 mod scan_hooks;
 mod scan_intake;

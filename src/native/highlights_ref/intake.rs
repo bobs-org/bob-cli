@@ -1282,6 +1282,19 @@ fn drain_queue(
     progress: &mut dyn FnMut(&str),
     on_item: &mut dyn FnMut(&DrainItem),
 ) -> (Result<IntakeOnlyRun>, bool) {
+    // Recover an interrupted overwrite before draining: a pending intent
+    // blocks even dry runs (which stay read-only) until a writing command
+    // repairs the vault. This hook owns its own locks; the session below
+    // locks again sequentially. Recovery notices use the stderr progress
+    // reporter so JSON stdout stays parseable.
+    match super::overwrite::recovery::recover_before_command(config, dry_run) {
+        Ok(notice) => {
+            if let Some(notice) = notice {
+                progress(&notice);
+            }
+        }
+        Err(error) => return (Err(error), false),
+    }
     let layout = (|| -> Result<Vec<IntakeUnit>> {
         validate_library_layout(config)?;
         enumerate_queue(config)

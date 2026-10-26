@@ -393,6 +393,32 @@ pub(super) fn scan_library_json(
         }
     };
 
+    // Recover an interrupted overwrite under the held locks before any
+    // pre-sync can commit half-applied files. Dry runs only report, and
+    // recovery notices stay on stderr so stdout keeps one envelope line.
+    match overwrite::recovery::recover_with_locks_held(
+        config,
+        &ob::child_env(),
+        options.dry_run,
+    ) {
+        Ok(notice) => {
+            if let Some(notice) = notice {
+                eprintln!("{notice}");
+            }
+        }
+        Err(error) => {
+            return print_scan_error_envelope(
+                config,
+                options,
+                mode,
+                &[],
+                0,
+                &error,
+                false,
+            );
+        }
+    }
+
     let resolved_hook: Option<PreScanHook> = if no_hooks {
         None
     } else {

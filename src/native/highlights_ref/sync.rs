@@ -68,6 +68,15 @@ pub(super) fn scan_library(
     validate_library_layout(config)?;
     let _maintenance_lock = acquire_scan_maintenance_lock(options.dry_run)?;
     let _scan_lock = acquire_scan_writer_lock(options.dry_run)?;
+    // Recover an interrupted overwrite under the held locks before any
+    // pre-sync can commit half-applied files. Dry runs only report.
+    if let Some(notice) = overwrite::recovery::recover_with_locks_held(
+        config,
+        &ob::child_env(),
+        options.dry_run,
+    )? {
+        eprintln!("{notice}");
+    }
     if options.dry_run {
         return scan_library_dry_run(
             config, options, jobs, verbose, no_hooks, attended,

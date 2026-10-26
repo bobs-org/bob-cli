@@ -78,6 +78,9 @@ mod region;
 // Lock, precondition, scoped-git, and rollback helpers shared by rename
 // and the overwrite transaction that consumes them in later phases.
 pub(crate) mod reference_mutation;
+// Staged in-place overwrite of unannotated references; recovery hooks run
+// before create and scan can sync.
+pub(crate) mod overwrite;
 // The dependent `ref rename` command consumes this module in the next phase.
 #[allow(dead_code)]
 pub(crate) mod rename;

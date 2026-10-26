@@ -529,6 +529,20 @@ pub(super) fn run(matches: &ArgMatches, raw: &[OsString]) -> i32 {
 
 fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     let config = Config::from_matches(matches);
+    // Recover an interrupted overwrite before dispatch: a pending intent
+    // blocks even dry runs (which stay read-only) until a writing command
+    // repairs the vault.
+    match super::overwrite::recovery::recover_before_command(
+        &config,
+        matches.get_flag("dry-run"),
+    ) {
+        Ok(notice) => {
+            if let Some(notice) = notice {
+                eprintln!("{notice}");
+            }
+        }
+        Err(error) => return report_create_error(error),
+    }
     let (ingest_enabled, disabled_reason) =
         match super::intake::ingest_on_create() {
             Ok(setting) => setting,
