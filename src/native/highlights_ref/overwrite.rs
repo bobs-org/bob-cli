@@ -53,6 +53,9 @@ pub(super) struct OverwriteRequest {
     pub(super) explicit_status: Option<String>,
     /// Optional explicit title. Otherwise the staged source title wins.
     pub(super) explicit_title: Option<String>,
+    /// Dry runs may render an annotated archive preview on any host. Real
+    /// annotated execution is gated by macOS file coordination in preflight.
+    pub(super) dry_run: bool,
 }
 
 /// A path and its observed preimage. `sha256: None` means it was absent.
@@ -83,16 +86,20 @@ pub(super) struct FrozenNote {
     pub(super) contents: String,
 }
 
-/// Read-only annotated archive and inbound-highlight rewrite plan.
-/// Execution still refuses until the execute phase consumes this contract.
-#[derive(Debug, Clone)]
-struct AnnotatedArchivePlan {
-    bundle: archive::ArchiveBundle,
-    frozen: FrozenNote,
-    inbound: super::rename::links::LinkRewritePlan,
-    preimages: Vec<FilePreimage>,
-    history: Vec<archive::ArchiveRecord>,
-    highlights: u64,
+/// Prepared annotated archive, retained-PDF move, and inbound-highlight
+/// rewrite plan consumed by the coordinated overwrite transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AnnotatedArchivePlan {
+    pub(super) bundle: archive::ArchiveBundle,
+    pub(super) frozen: FrozenNote,
+    pub(super) inbound: super::rename::links::LinkRewritePlan,
+    pub(super) preimages: Vec<FilePreimage>,
+    pub(super) history: Vec<archive::ArchiveRecord>,
+    pub(super) highlights: u64,
+    pub(super) asset_map: BTreeMap<PathBuf, PathBuf>,
+    pub(super) asset_manifest: Vec<recovery::PendingMoveFile>,
+    pub(super) live_assets_path: Option<String>,
+    pub(super) live_marker_sha256: String,
 }
 
 impl AnnotatedArchivePlan {
@@ -144,6 +151,18 @@ impl AnnotatedArchivePlan {
                 hasher.update(assets.as_bytes());
             }
         }
+        for (source, dest) in &self.asset_map {
+            hasher.update(vault_slash_path(source).as_bytes());
+            hasher.update(vault_slash_path(dest).as_bytes());
+        }
+        for file in &self.asset_manifest {
+            hasher.update(file.rel.as_bytes());
+            hasher.update(file.sha256.as_bytes());
+        }
+        if let Some(path) = &self.live_assets_path {
+            hasher.update(path.as_bytes());
+        }
+        hasher.update(self.live_marker_sha256.as_bytes());
         hex::encode(hasher.finalize())
     }
 }
@@ -164,6 +183,10 @@ pub(super) struct OverwritePreflight {
     pub(super) bundle_preimages: Vec<FilePreimage>,
     pub(super) bundle_sha256: String,
     pub(super) frozen_note: Option<FrozenNote>,
+    /// Prepared annotated archive and selective inbound-link rewrite.
+    /// Present only when the replaced reference contains annotations,
+    /// assets, or inbound highlight links.
+    pub(super) annotated: Option<AnnotatedArchivePlan>,
     pub(super) status: String,
     pub(super) title: String,
     pub(super) ref_type: String,
@@ -571,7 +594,7 @@ pub(super) fn prepare(
             2,
         )
             })?;
-    if note_has_annotations
+    let annotated = if note_has_annotations
         || sidecar_has_annotations
         || pdf_has_annotations
         || assets_path.exists()
@@ -591,6 +614,17 @@ pub(super) fn prepare(
             .ok()
             .filter(|_| assets_path.exists())
             .map(Path::to_path_buf);
+        let marker_contents =
+            super::marker::read_pdf_marker_from_bytes(&pdf_path, &pdf_bytes)
+                .map_err(|error| {
+                    OverwriteRefusal::new(
+                        "not_in_sync",
+                        format!("could not inspect PDF marker: {error}"),
+                        Some("run bob ref scan -w on the Mac first"),
+                        2,
+                    )
+                })?
+                .contents;
         let plan = plan_annotated_archive(
             config,
             &row.path,
@@ -604,6 +638,7 @@ pub(super) fn prepare(
             &note_contents,
             &pdf_relative,
             &sha256(&pdf_bytes),
+            &sha256(marker_contents.as_bytes()),
             assets_relative.as_deref(),
         )?;
         if plan.integrity_fingerprint().len() != 64 {
@@ -614,15 +649,17 @@ pub(super) fn prepare(
                 2,
             ));
         }
-        return Err(annotated_refusal(
-            row,
-            &assets_path,
-            note_has_annotations,
-            sidecar_has_annotations,
-            pdf_has_annotations,
-            &inbound,
-        ));
-    }
+        if !request.dry_run {
+            if let Some(refusal) =
+                annotated_execution_refusal(member.highlights.unwrap_or(0))?
+            {
+                return Err(refusal);
+            }
+        }
+        Some(plan)
+    } else {
+        None
+    };
 
     let mut touched = BTreeSet::from([
         PathBuf::from(&row.path),
@@ -747,6 +784,14 @@ pub(super) fn prepare(
     } else {
         None
     };
+    if let Some(annotated) = &annotated {
+        touched.extend(
+            annotated
+                .preimages
+                .iter()
+                .map(|preimage| PathBuf::from(&preimage.path)),
+        );
+    }
     let mut dirty = reference_mutation::dirty_touched_paths(
         &config.bob_dir,
         &touched,
@@ -820,6 +865,7 @@ pub(super) fn prepare(
         bundle_preimages,
         bundle_sha256,
         frozen_note,
+        annotated,
         status,
         title,
         ref_type,
@@ -1258,7 +1304,7 @@ pub(super) fn prepend_archive_lineage(
     contents: &str,
     archive_path: &str,
     replaced_date: &str,
-    highlights: usize,
+    highlights: u64,
 ) -> Result<String, String> {
     let (mut front, body) =
         super::split_frontmatter(contents).ok_or_else(|| {
@@ -1570,6 +1616,7 @@ fn plan_annotated_archive(
     note_contents: &str,
     pdf_relative: &Path,
     pdf_sha256: &str,
+    live_marker_sha256: &str,
     assets_relative: Option<&Path>,
 ) -> Result<AnnotatedArchivePlan, OverwriteRefusal> {
     let refuse = |error: String| {
@@ -1597,6 +1644,14 @@ fn plan_annotated_archive(
     let asset_map =
         collect_asset_rewrites(config, assets_relative, &bundle.assets_path)
             .map_err(refuse)?;
+    let asset_manifest = match assets_relative {
+        Some(path) => recovery::asset_manifest(
+            &config.bob_dir,
+            &reference_mutation::vault_path(path),
+        )
+        .map_err(refuse)?,
+        None => Vec::new(),
+    };
     let annotated = FrozenAnnotated {
         note_path: &bundle.note_path,
         pdf_path: &bundle.annotated_pdf_path,
@@ -1679,6 +1734,10 @@ fn plan_annotated_archive(
         preimages,
         history,
         highlights,
+        asset_map,
+        asset_manifest,
+        live_assets_path: assets_relative.map(reference_mutation::vault_path),
+        live_marker_sha256: live_marker_sha256.to_string(),
     })
 }
 
@@ -1788,44 +1847,59 @@ fn has_user_pdf_annotations(pdf: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn annotated_refusal(
-    row: &RefRow,
-    assets: &Path,
-    note_annotations: bool,
-    sidecar_annotations: bool,
-    pdf_annotations: bool,
-    links: &super::rename::links::LinkRewritePlan,
-) -> OverwriteRefusal {
-    let mut evidence = Vec::new();
-    if note_annotations {
-        evidence.push("the reference note has managed highlights".to_string());
+fn annotated_execution_refusal(
+    highlights: u64,
+) -> Result<Option<OverwriteRefusal>, OverwriteRefusal> {
+    if !cfg!(target_os = "macos") {
+        return Ok(annotated_execution_refusal_for(false, false, highlights));
     }
-    if sidecar_annotations {
-        evidence.push("the Highlights sidecar has annotations".to_string());
-    }
-    if pdf_annotations {
-        evidence.push("the PDF has user annotations".to_string());
-    }
-    if assets.exists() {
-        evidence.push(format!("{} exists", assets.display()));
-    }
-    if !links.highlight_fragments.is_empty() {
-        evidence.push("an inbound link targets a highlight".to_string());
-    }
-    if !links.highlight_follow_ups.is_empty() {
-        evidence
-            .push("an inbound link carries a highlight follow-up".to_string());
-    }
-    let _ = row;
-    OverwriteRefusal::new(
-        "annotated_reference",
-        format!(
-            "overwriting an annotated reference is not available yet; -f starts a new reading\nevidence: {}",
-            evidence.join("; ")
-        ),
-        None::<String>,
-        2,
+    let highlights_config = crate::native::config::load_highlights_config(
+        &crate::native::config::config_path(),
     )
+    .map_err(|error| {
+        OverwriteRefusal::new(
+            "annotated_reference",
+            format!("could not read Highlights coordination config: {error}"),
+            Some("check highlights.coordinate_pdf_writes and retry"),
+            2,
+        )
+    })?;
+    Ok(annotated_execution_refusal_for(
+        true,
+        highlights_config.coordinate_pdf_writes(),
+        highlights,
+    ))
+}
+
+fn annotated_execution_refusal_for(
+    is_macos: bool,
+    coordination_enabled: bool,
+    highlights: u64,
+) -> Option<OverwriteRefusal> {
+    if !is_macos {
+        let count = if highlights == 1 {
+            "1 highlight".to_string()
+        } else {
+            format!("{highlights} highlights")
+        };
+        Some(OverwriteRefusal::new(
+            "annotated_reference",
+            format!(
+                "this reference has {count}, which Highlights holds on the Mac; run the overwrite there"
+            ),
+            Some("-f starts a new reading from any host"),
+            2,
+        ))
+    } else if !coordination_enabled {
+        Some(OverwriteRefusal::new(
+            "annotated_reference",
+            "annotated overwrite requires highlights.coordinate_pdf_writes: true",
+            Some("enable it only after the guided Highlights acceptance run"),
+            2,
+        ))
+    } else {
+        None
+    }
 }
 
 fn collect_preimages(
@@ -1947,6 +2021,32 @@ fn dirty_error(error: reference_mutation::DirtyPathError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annotated_execution_requires_macos_and_enabled_coordination() {
+        let elsewhere = annotated_execution_refusal_for(false, true, 1)
+            .expect("other hosts must refuse");
+        assert_eq!(elsewhere.code, "annotated_reference");
+        assert!(elsewhere.message.contains(
+            "this reference has 1 highlight, which Highlights holds on the Mac; run the overwrite there"
+        ));
+        assert_eq!(
+            elsewhere.hint.as_deref(),
+            Some("-f starts a new reading from any host")
+        );
+
+        let disabled = annotated_execution_refusal_for(true, false, 3)
+            .expect("Mac coordination must be explicitly enabled");
+        assert_eq!(disabled.code, "annotated_reference");
+        assert!(disabled.message.contains(
+            "annotated overwrite requires highlights.coordinate_pdf_writes: true"
+        ));
+        assert_eq!(
+            disabled.hint.as_deref(),
+            Some("enable it only after the guided Highlights acceptance run")
+        );
+        assert!(annotated_execution_refusal_for(true, true, 3).is_none());
+    }
 
     #[test]
     fn selection_does_not_allocate_a_reread_number() {
@@ -2248,6 +2348,7 @@ mod tests {
             1,
             &fs::read_to_string(root.join("ref/papers/paper.md")).unwrap(),
             Path::new("lib/papers/paper.pdf"),
+            &hash,
             &hash,
             Some(Path::new("ref/papers/paper.assets")),
         )

@@ -133,25 +133,26 @@ impl MarkerWriteSession {
         }
     }
 
-    /// Wrap a complete explicit PDF write when coordination is enabled.
-    /// The accessor is never run on a hold or coordination failure.
-    pub(super) fn coordinate_explicit_pdf_write<T>(
+    /// Use this session's policy and coordinator for one bounded explicit
+    /// write. The instance form also lets transaction tests inject a fake
+    /// save/hold without introducing a production environment override.
+    pub(super) fn coordinate_explicit_pdf_write_with<T>(
+        &self,
         pdf: &Path,
         accessor: impl FnOnce() -> T,
     ) -> Result<Coordination<T>> {
-        let session = Self::for_explicit_write()?;
-        if !session.policy.coordinate_pdf_writes || !session.coordinates() {
+        if !self.policy.coordinate_pdf_writes || !self.coordinates() {
             return Ok(Coordination::Granted {
                 value: accessor(),
                 waited: Duration::ZERO,
             });
         }
-        let Some(budget) = session.next_budget() else {
+        let Some(budget) = self.next_budget() else {
             return Ok(Coordination::Held(file_coordination::TimedOut {
                 waited: Duration::ZERO,
             }));
         };
-        Ok(session.coordinator.run(pdf, budget, accessor))
+        Ok(self.coordinator.run(pdf, budget, accessor))
     }
 
     fn record_wait(&mut self, waited: Duration) {

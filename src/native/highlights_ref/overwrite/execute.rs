@@ -5,7 +5,7 @@
 //! rollback boundary; it never queues a half-published overwrite.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -39,6 +39,8 @@ enum OverwriteFailpoint {
     AfterIntentPersistence,
     AfterFrozenNote,
     AfterSidecarRemoval,
+    AfterArchivePdf,
+    AfterAssets,
     AfterAudio,
     AfterPdf,
     AfterNote,
@@ -125,6 +127,13 @@ pub(in crate::native::highlights_ref) fn execute(
     request: &OverwriteRequest,
     staged: StagedOverwrite,
 ) -> Result<OverwriteResult, CommandError> {
+    if initial.annotated.is_some()
+        && let Some(refusal) =
+            super::annotated_execution_refusal(initial.highlights)
+                .map_err(|refusal| refusal.command_error())?
+    {
+        return Err(refusal.command_error());
+    }
     execute_with_sync(config, initial, request, staged, |pre| {
         let report =
             crate::native::vault_sync::run_cycle_with_existing_lock_report(
@@ -157,6 +166,32 @@ fn execute_with_sync(
     staged: StagedOverwrite,
     mut vault_sync: impl FnMut(bool) -> Result<(), String>,
 ) -> Result<OverwriteResult, CommandError> {
+    let session =
+        super::super::marker_write::MarkerWriteSession::for_explicit_write()?;
+    execute_with_sync_and_session(
+        config,
+        initial,
+        request,
+        staged,
+        &mut vault_sync,
+        session,
+    )
+}
+
+fn execute_with_sync_and_session(
+    config: &Config,
+    initial: &OverwritePreflight,
+    request: &OverwriteRequest,
+    staged: StagedOverwrite,
+    mut vault_sync: impl FnMut(bool) -> Result<(), String>,
+    session: super::super::marker_write::MarkerWriteSession,
+) -> Result<OverwriteResult, CommandError> {
+    if initial.annotated.is_some() && !session.coordinates() {
+        return Err(CommandError::new(
+            "annotated overwrite requires a coordinated macOS file write; no overwrite was written; close it in Highlights and retry",
+        )
+        .with_code("annotated_reference"));
+    }
     validate_staged_files(config, &staged)?;
     validate_staged_metadata(initial, request, &staged)?;
     #[cfg(test)]
@@ -218,17 +253,18 @@ fn execute_with_sync(
         "{OVERWRITE_SUBJECT_PREFIX} {}/{}",
         locked.ref_type, locked.member.stem
     );
-    let manifest = locked
-        .bundle_preimages
-        .iter()
-        .map(|preimage| PathBuf::from(&preimage.path))
-        .collect::<BTreeSet<_>>();
-    let transaction = super::super::marker_write::MarkerWriteSession::coordinate_explicit_pdf_write(
+    let manifest = transaction_manifest(&locked);
+    let transaction = session.coordinate_explicit_pdf_write_with(
         &config.bob_dir.join(&locked.pdf_path),
         || {
             // Coordination asks an open Highlights document to save before
             // the first vault mutation. Re-plan inside the accessor so a
             // presenter save cannot be overwritten as if it were our write.
+            if locked.annotated.is_some()
+                && !matches!(preimages_match(config, &locked), Ok(true))
+            {
+                return Err(coordinated_preimage_error(config, &locked));
+            }
             let current = super::prepare(
                 config,
                 &locked.member,
@@ -237,6 +273,9 @@ fn execute_with_sync(
             )
             .map_err(|refusal| refusal.command_error())?;
             if !same_locked_preflight(&locked, &current) {
+                if locked.annotated.is_some() {
+                    return Err(coordinated_preimage_error(config, &locked));
+                }
                 return Err(CommandError::new(
                     "overwrite target changed during PDF coordination; no files were written",
                 )
@@ -251,8 +290,14 @@ fn execute_with_sync(
                 subject.clone(),
                 &locked.bundle_preimages,
             )?;
+            if locked.annotated.is_some() {
+                intent = intent.with_annotated_moves(
+                    annotated_moves(&locked, &staged)?,
+                    annotated_writes(&locked, &staged)?,
+                );
+            }
             if let Err(error) = recovery::save_intent(config, &intent) {
-                let rollback = recovery::rollback_transaction(
+                let rollback = recovery::rollback_transaction_with_external_coordination(
                     config,
                     &child_env,
                     &intent,
@@ -266,7 +311,7 @@ fn execute_with_sync(
             #[cfg(test)]
             if let Err(error) = trip(OverwriteFailpoint::AfterIntentPersistence)
             {
-                let rollback = recovery::rollback_transaction(
+                let rollback = recovery::rollback_transaction_with_external_coordination(
                     config,
                     &child_env,
                     &intent,
@@ -292,7 +337,7 @@ fn execute_with_sync(
             let task_mark = match applied {
                 Ok((_, task_mark)) => task_mark,
                 Err(error) => {
-                    let rollback = recovery::rollback_transaction(
+                    let rollback = recovery::rollback_transaction_with_external_coordination(
                         config,
                         &child_env,
                         &intent,
@@ -312,7 +357,7 @@ fn execute_with_sync(
             ) {
                 Ok(paths) => paths,
                 Err(error) => {
-                    let rollback = recovery::rollback_transaction(
+                    let rollback = recovery::rollback_transaction_with_external_coordination(
                         config,
                         &child_env,
                         &intent,
@@ -325,7 +370,7 @@ fn execute_with_sync(
                 }
             };
             if paths.is_empty() {
-                let rollback = recovery::rollback_transaction(
+                let rollback = recovery::rollback_transaction_with_external_coordination(
                     config,
                     &child_env,
                     &intent,
@@ -338,7 +383,7 @@ fn execute_with_sync(
             }
             #[cfg(test)]
             if let Err(error) = trip(OverwriteFailpoint::BeforeCommit) {
-                let rollback = recovery::rollback_transaction(
+                let rollback = recovery::rollback_transaction_with_external_coordination(
                     config,
                     &child_env,
                     &intent,
@@ -372,7 +417,7 @@ fn execute_with_sync(
             let sha = match commit_result {
                 Ok(Some(sha)) => sha,
                 Ok(None) => {
-                    let rollback = recovery::rollback_transaction(
+                    let rollback = recovery::rollback_transaction_with_external_coordination(
                         config,
                         &child_env,
                         &intent,
@@ -395,7 +440,7 @@ fn execute_with_sync(
                     {
                         sha
                     } else {
-                        let rollback = recovery::rollback_transaction(
+                        let rollback = recovery::rollback_transaction_with_external_coordination(
                             config,
                             &child_env,
                             &intent,
@@ -432,10 +477,7 @@ fn execute_with_sync(
             Ok(OverwriteResult {
                 note: locked.note_path.clone(),
                 pdf: locked.pdf_path.clone(),
-                archive: locked
-                    .frozen_note
-                    .as_ref()
-                    .map(|archive| archive.path.clone()),
+                archive: archive_path(&locked).map(str::to_string),
                 task_path: locked.task.path.clone(),
                 task_block_id: locked.task.block_id.clone(),
                 task_mark,
@@ -461,14 +503,14 @@ fn execute_with_sync(
         }
         Ok(Coordination::Held(timeout)) => {
             return Err(CommandError::new(format!(
-                "PDF coordination timed out after {:.2}s; no overwrite was written",
+                "PDF coordination timed out after {:.2}s; no overwrite was written; close it in Highlights and retry",
                 timeout.waited.as_secs_f64()
             ))
             .with_code("coordination_timeout"));
         }
         Ok(Coordination::Failed(detail)) => {
             return Err(CommandError::new(format!(
-                "PDF coordination failed: {detail}; no overwrite was written"
+                "PDF coordination failed: {detail}; no overwrite was written; close it in Highlights and retry"
             ))
             .with_code("coordination_failed"));
         }
@@ -500,8 +542,233 @@ fn same_locked_preflight(
         && expected.pdf_path == current.pdf_path
         && expected.ref_type == current.ref_type
         && expected.frozen_note == current.frozen_note
+        && expected.annotated == current.annotated
         && expected.status == current.status
         && expected.audio_path == current.audio_path
+}
+
+fn transaction_manifest(plan: &OverwritePreflight) -> BTreeSet<PathBuf> {
+    let mut paths = plan
+        .bundle_preimages
+        .iter()
+        .map(|preimage| PathBuf::from(&preimage.path))
+        .collect::<BTreeSet<_>>();
+    if let Some(annotated) = &plan.annotated {
+        paths.insert(PathBuf::from(&annotated.bundle.note_path));
+        paths.insert(PathBuf::from(&annotated.bundle.annotated_pdf_path));
+        paths.insert(PathBuf::from(&annotated.bundle.assets_path));
+        paths.extend(annotated.asset_map.values().cloned());
+    }
+    paths
+}
+
+fn preimages_match(
+    config: &Config,
+    plan: &OverwritePreflight,
+) -> Result<bool, CommandError> {
+    let paths = plan
+        .bundle_preimages
+        .iter()
+        .map(|preimage| PathBuf::from(&preimage.path))
+        .collect::<BTreeSet<_>>();
+    let current =
+        super::collect_preimages(config, &paths).map_err(|error| {
+            CommandError::new(format!(
+                "could not recheck overwrite preimages: {error}"
+            ))
+        })?;
+    Ok(current == plan.bundle_preimages)
+}
+
+fn coordinated_preimage_error(
+    config: &Config,
+    plan: &OverwritePreflight,
+) -> CommandError {
+    let marker_changed = plan.annotated.as_ref().is_some_and(|annotated| {
+        super::super::marker::read_pdf_marker(
+            &config.bob_dir.join(&plan.pdf_path),
+        )
+        .is_ok_and(|marker| {
+            super::sha256(marker.contents.as_bytes())
+                != annotated.live_marker_sha256
+        })
+    });
+    if marker_changed {
+        CommandError::new(
+            "marker changed in Highlights during overwrite; no files were written; close it in Highlights and retry",
+        )
+        .with_code("marker_changed")
+    } else {
+        CommandError::new(
+            "Highlights or another writer changed a planned PDF, sidecar, note, or link while the overwrite waited; no files were written. Run bob ref scan -w to commit the save, then retry the overwrite",
+        )
+        .with_code("preimage_changed")
+    }
+}
+
+fn annotated_moves(
+    plan: &OverwritePreflight,
+    staged: &StagedOverwrite,
+) -> Result<Vec<recovery::PendingMove>, CommandError> {
+    let annotated = plan
+        .annotated
+        .as_ref()
+        .expect("annotated move requested only for annotated plans");
+    let pdf_hash = plan
+        .bundle_preimages
+        .iter()
+        .find(|preimage| preimage.path == plan.pdf_path)
+        .and_then(|preimage| preimage.sha256.as_deref())
+        .ok_or_else(|| {
+            CommandError::new("annotated PDF preimage is missing")
+        })?;
+    let replacement_hash = hash_file(&staged.private_pdf)?;
+    let mut moves = vec![recovery::pdf_move_for_archive(
+        &annotated.bundle,
+        &plan.pdf_path,
+        pdf_hash,
+        Some(&replacement_hash),
+    )];
+    if let Some(live_assets) = &annotated.live_assets_path {
+        moves.push(recovery::assets_move_for_archive(
+            &annotated.bundle,
+            live_assets,
+            annotated.asset_manifest.clone(),
+        ));
+    }
+    Ok(moves)
+}
+
+fn annotated_writes(
+    plan: &OverwritePreflight,
+    staged: &StagedOverwrite,
+) -> Result<Vec<recovery::PendingWrite>, CommandError> {
+    let mut writes = Vec::new();
+    if let Some(annotated) = &plan.annotated {
+        writes.push(recovery::PendingWrite {
+            path: annotated.frozen.path.clone(),
+            sha256: super::sha256(annotated.frozen.contents.as_bytes()),
+        });
+    }
+    if let Some(audio) = &staged.audio
+        && plan
+            .bundle_preimages
+            .iter()
+            .find(|preimage| preimage.path == audio.destination)
+            .is_some_and(|preimage| preimage.sha256.is_none())
+    {
+        let hash = hash_file(&audio.private_path)?;
+        writes.push(recovery::PendingWrite {
+            path: audio.destination.clone(),
+            sha256: hash,
+        });
+    }
+    Ok(writes)
+}
+
+fn hash_file(path: &Path) -> Result<String, CommandError> {
+    let bytes = fs::read(path).map_err(|error| {
+        CommandError::new(format!(
+            "could not read {} for SHA-256: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(super::sha256(&bytes))
+}
+
+fn archive_path(plan: &OverwritePreflight) -> Option<&str> {
+    plan.annotated
+        .as_ref()
+        .map(|annotated| annotated.frozen.path.as_str())
+        .or_else(|| {
+            plan.frozen_note
+                .as_ref()
+                .map(|archive| archive.path.as_str())
+        })
+}
+
+fn archive_note(plan: &OverwritePreflight) -> Option<&super::FrozenNote> {
+    plan.annotated
+        .as_ref()
+        .map(|annotated| &annotated.frozen)
+        .or(plan.frozen_note.as_ref())
+}
+
+/// The link plan has already been rendered from the exact preflight bytes.
+/// Exclude the live note, which is replaced by the new capture skeleton and
+/// whose self-links are rewritten in the frozen archive body.
+fn planned_inbound_writes(
+    plan: &OverwritePreflight,
+) -> BTreeMap<String, String> {
+    let Some(annotated) = &plan.annotated else {
+        return BTreeMap::new();
+    };
+    annotated
+        .inbound
+        .files
+        .iter()
+        .filter(|file| {
+            reference_mutation::vault_path(&file.path) != plan.note_path
+        })
+        .map(|file| {
+            (
+                reference_mutation::vault_path(&file.path),
+                file.contents.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Apply the reading-task edit on top of any planned inbound link rewrites
+/// to the same Markdown file. The file preimage was checked before intent
+/// persistence, and link rewrites preserve line count, so its row remains
+/// addressable by its original block ID or line index.
+fn replace_task_subtree_after_links(
+    contents: &str,
+    plan: &OverwritePreflight,
+    replacement: &str,
+) -> Result<String, CommandError> {
+    let mut lines = contents.split_inclusive('\n').collect::<Vec<_>>();
+    let line_index = task_line_index(&lines, plan)?;
+    let end = task_subtree_end(&lines, line_index);
+    lines.splice(
+        line_index..end,
+        replacement.split_inclusive('\n').collect::<Vec<_>>(),
+    );
+    Ok(lines.concat())
+}
+
+fn task_subtree_from_contents(
+    contents: &str,
+    plan: &OverwritePreflight,
+) -> Result<String, CommandError> {
+    let lines = contents.split_inclusive('\n').collect::<Vec<_>>();
+    let start = task_line_index(&lines, plan)?;
+    let end = task_subtree_end(&lines, start);
+    Ok(lines[start..end].concat())
+}
+
+fn task_line_index(
+    lines: &[&str],
+    plan: &OverwritePreflight,
+) -> Result<usize, CommandError> {
+    let line_index = plan
+        .task
+        .block_id
+        .as_deref()
+        .and_then(|block_id| {
+            lines
+                .iter()
+                .position(|line| line.contains(&format!("^{block_id}")))
+        })
+        .unwrap_or(plan.task.line_index);
+    if line_index >= lines.len() {
+        Err(CommandError::new(
+            "could not locate the preserved reading task after inbound link planning",
+        ))
+    } else {
+        Ok(line_index)
+    }
 }
 
 fn rollback_suffix(result: Result<(), CommandError>) -> String {
@@ -747,8 +1014,21 @@ fn apply_and_verify(
         .map(status_to_mark)
         .transpose()?
         .unwrap_or(plan.task.mark);
+    let mut rewritten_files = planned_inbound_writes(plan);
+    let task_subtree_before_gesture = if plan.task.path != plan.note_path {
+        let task_contents = rewritten_files
+            .get(&plan.task.path)
+            .cloned()
+            .unwrap_or_else(|| {
+                String::from_utf8(original_task_file.clone())
+                    .expect("preflighted task Markdown is UTF-8")
+            });
+        task_subtree_from_contents(&task_contents, plan)?
+    } else {
+        plan.task.subtree.clone()
+    };
     let expected_subtree = rewrite_task_subtree(
-        &plan.task.subtree,
+        &task_subtree_before_gesture,
         &plan.note_path,
         &plan.pdf_path,
         &staged.marker.title,
@@ -764,6 +1044,15 @@ fn apply_and_verify(
     if let Some(audio) = &staged.audio {
         all_paths.insert(PathBuf::from(&audio.destination));
     }
+    if let Some(annotated) = &plan.annotated {
+        all_paths.insert(PathBuf::from(&annotated.bundle.note_path));
+        all_paths.insert(PathBuf::from(&annotated.bundle.annotated_pdf_path));
+        all_paths.insert(PathBuf::from(&annotated.bundle.assets_path));
+        all_paths.extend(annotated.asset_map.values().cloned());
+        all_paths.extend(
+            annotated.inbound.files.iter().map(|file| file.path.clone()),
+        );
+    }
     if !all_paths.is_subset(manifest) {
         return Err(CommandError::new(format!(
             "overwrite transaction predicted an unplanned write: {}",
@@ -775,7 +1064,8 @@ fn apply_and_verify(
         )));
     }
 
-    if let Some(archive) = &plan.frozen_note {
+    if let Some(archive) = archive_note(plan) {
+        ensure_vault_parent_is_safe(config, Path::new(&archive.path))?;
         write_new_file(
             &config.bob_dir.join(&archive.path),
             archive.contents.as_bytes(),
@@ -787,10 +1077,17 @@ fn apply_and_verify(
     remove_old_sidecar(config, plan)?;
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterSidecarRemoval)?;
+    if plan.annotated.is_some() {
+        move_annotated_bundle(config, plan)?;
+    }
     publish_audio(config, plan, staged)?;
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterAudio)?;
-    write_expected_file(config, plan, &plan.pdf_path, &staged.private_pdf)?;
+    if plan.annotated.is_some() {
+        publish_pdf_after_archive(config, plan, &staged.private_pdf)?;
+    } else {
+        write_expected_file(config, plan, &plan.pdf_path, &staged.private_pdf)?;
+    }
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterPdf)?;
 
@@ -812,10 +1109,9 @@ fn apply_and_verify(
     let note_contents = fresh_note_contents(
         &old_note,
         &body,
-        plan.frozen_note
-            .as_ref()
-            .map(|archive| archive.path.as_str()),
+        archive_path(plan),
         &plan.planned_date,
+        plan.highlights,
     )?;
     write_expected_bytes(
         config,
@@ -826,14 +1122,23 @@ fn apply_and_verify(
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterNote)?;
 
+    let mut expected_task_file = None;
     if plan.task.path != plan.note_path {
-        replace_task_file_subtree(
-            &config.bob_dir.join(&plan.task.path),
-            &original_task_file,
-            plan.task.line_index,
-            &plan.task.subtree,
+        let task_contents =
+            rewritten_files.remove(&plan.task.path).unwrap_or_else(|| {
+                String::from_utf8(original_task_file.clone())
+                    .expect("preflighted task Markdown is UTF-8")
+            });
+        let updated = replace_task_subtree_after_links(
+            &task_contents,
+            plan,
             &expected_subtree,
         )?;
+        expected_task_file = Some(updated.as_bytes().to_vec());
+        rewritten_files.insert(plan.task.path.clone(), updated);
+    }
+    for (relative, contents) in &rewritten_files {
+        write_expected_bytes(config, plan, relative, contents.as_bytes())?;
     }
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterTaskEdit)?;
@@ -896,13 +1201,14 @@ fn apply_and_verify(
         ));
     }
 
-    verify_identity_and_links(config, plan, &staged.marker)?;
+    verify_identity_and_links(config, plan, &staged.marker, &rewritten_files)?;
     verify_task_subtree(
         config,
         plan,
         &expected_subtree,
         expected_mark,
         &original_task_file,
+        expected_task_file.as_deref(),
     )?;
     #[cfg(test)]
     trip(OverwriteFailpoint::ForcedVerificationFailure)?;
@@ -986,6 +1292,265 @@ fn ensure_marker_matches(
         ));
     }
     Ok(())
+}
+
+fn move_annotated_bundle(
+    config: &Config,
+    plan: &OverwritePreflight,
+) -> Result<(), CommandError> {
+    let annotated = plan
+        .annotated
+        .as_ref()
+        .expect("annotated bundle move requires an annotated plan");
+    let pdf_preimage = plan
+        .bundle_preimages
+        .iter()
+        .find(|preimage| preimage.path == plan.pdf_path)
+        .ok_or_else(|| {
+            CommandError::new("annotated PDF was not preflighted")
+        })?;
+    let pdf_hash = pdf_preimage
+        .sha256
+        .as_deref()
+        .ok_or_else(|| CommandError::new("annotated PDF preimage is absent"))?;
+    verify_expected_preimage(config, plan, &plan.pdf_path)?;
+    let archive_pdf = &annotated.bundle.annotated_pdf_path;
+    require_preflighted_absent(config, plan, archive_pdf)?;
+    let source = config.bob_dir.join(&plan.pdf_path);
+    let destination = config.bob_dir.join(archive_pdf);
+    ensure_vault_parent_is_safe(config, Path::new(archive_pdf))?;
+    let parent = destination.parent().unwrap_or(&config.bob_dir);
+    ensure_same_filesystem(&source, parent)?;
+    let before = fs::symlink_metadata(&source).map_err(|error| {
+        CommandError::new(format!("could not inspect annotated PDF: {error}"))
+    })?;
+    super::super::io::rename_no_replace(&source, &destination).map_err(
+        |error| {
+            CommandError::new(format!(
+                "could not rename annotated PDF into its archive without replacement: {error}"
+            ))
+        },
+    )?;
+    if hash_file(&destination)? != pdf_hash {
+        return Err(CommandError::new(
+            "annotated PDF changed while it was being archived",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after = fs::symlink_metadata(&destination).map_err(|error| {
+            CommandError::new(format!("could not verify archived PDF: {error}"))
+        })?;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(CommandError::new(
+                "annotated PDF archive did not preserve the original file object",
+            ));
+        }
+    }
+
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterArchivePdf)?;
+
+    if let Some(live_assets) = &annotated.live_assets_path {
+        let live_manifest =
+            recovery::asset_manifest(&config.bob_dir, live_assets)
+                .map_err(|error| CommandError::new(error))?;
+        if live_manifest != annotated.asset_manifest {
+            return Err(CommandError::new(
+                "annotated assets changed before their archive move",
+            ));
+        }
+        let archive_assets = &annotated.bundle.assets_path;
+        require_preflighted_absent(config, plan, archive_assets)?;
+        let source = config.bob_dir.join(live_assets);
+        let destination = config.bob_dir.join(archive_assets);
+        ensure_vault_parent_is_safe(config, Path::new(archive_assets))?;
+        let parent = destination.parent().unwrap_or(&config.bob_dir);
+        ensure_same_filesystem(&source, parent)?;
+        super::super::io::rename_no_replace(&source, &destination).map_err(
+            |error| {
+                CommandError::new(format!(
+                    "could not rename annotated assets into their archive without replacement: {error}"
+                ))
+            },
+        )?;
+        let archived_manifest =
+            recovery::asset_manifest(&config.bob_dir, archive_assets)
+                .map_err(CommandError::new)?;
+        if archived_manifest != annotated.asset_manifest {
+            return Err(CommandError::new(
+                "archived assets do not match the preflighted bundle",
+            ));
+        }
+    }
+    #[cfg(test)]
+    trip(OverwriteFailpoint::AfterAssets)?;
+    Ok(())
+}
+
+fn require_preflighted_absent(
+    config: &Config,
+    plan: &OverwritePreflight,
+    relative: &str,
+) -> Result<(), CommandError> {
+    let expected_absent = plan
+        .bundle_preimages
+        .iter()
+        .any(|preimage| preimage.path == relative && preimage.sha256.is_none());
+    if !expected_absent {
+        return Err(CommandError::new(format!(
+            "archive destination was not preflighted as absent: {relative}"
+        )));
+    }
+    match fs::symlink_metadata(config.bob_dir.join(relative)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CommandError::new(format!(
+            "could not inspect archive destination {relative}: {error}"
+        ))),
+        Ok(_) => Err(CommandError::new(format!(
+            "archive destination appeared after preflight: {relative}"
+        ))),
+    }
+}
+
+fn ensure_vault_parent_is_safe(
+    config: &Config,
+    relative: &Path,
+) -> Result<(), CommandError> {
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            !matches!(component, std::path::Component::Normal(_))
+        })
+    {
+        return Err(CommandError::new("archive path is not vault-relative"));
+    }
+    let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+    let mut current = config.bob_dir.clone();
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(CommandError::new("archive parent path is unsafe"));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(CommandError::new(format!(
+                    "archive parent contains a symlink: {}",
+                    current.display()
+                )));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(CommandError::new(format!(
+                    "archive parent is not a directory: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(CommandError::new(format!(
+                    "could not inspect archive parent {}: {error}",
+                    current.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_same_filesystem(
+    source: &Path,
+    destination_parent: &Path,
+) -> Result<(), CommandError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let source_metadata =
+            fs::symlink_metadata(source).map_err(|error| {
+                CommandError::new(format!(
+                    "could not inspect move source {}: {error}",
+                    source.display()
+                ))
+            })?;
+        let parent_metadata =
+            fs::metadata(destination_parent).map_err(|error| {
+                CommandError::new(format!(
+                    "could not inspect archive filesystem {}: {error}",
+                    destination_parent.display()
+                ))
+            })?;
+        if source_metadata.dev() != parent_metadata.dev() {
+            return Err(CommandError::new(format!(
+                "cannot archive {} without copying because the archive is on another filesystem",
+                source.display()
+            )));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (source, destination_parent);
+        Err(CommandError::new(
+            "cannot guarantee a same-filesystem annotated archive move on this platform",
+        ))
+    }
+}
+
+fn publish_pdf_after_archive(
+    config: &Config,
+    plan: &OverwritePreflight,
+    staged: &Path,
+) -> Result<(), CommandError> {
+    let annotated = plan
+        .annotated
+        .as_ref()
+        .expect("replacement publish requires an annotated plan");
+    let destination = config.bob_dir.join(&plan.pdf_path);
+    match fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CommandError::new(format!(
+                "could not inspect live PDF destination: {error}"
+            )));
+        }
+        Ok(_) => {
+            return Err(CommandError::new(
+                "live PDF destination was recreated before replacement publication",
+            ));
+        }
+    }
+    let pdf_archive = config.bob_dir.join(&annotated.bundle.annotated_pdf_path);
+    let expected_old = plan
+        .bundle_preimages
+        .iter()
+        .find(|preimage| preimage.path == plan.pdf_path)
+        .and_then(|preimage| preimage.sha256.as_deref())
+        .ok_or_else(|| {
+            CommandError::new("annotated PDF preimage is missing")
+        })?;
+    if hash_file(&pdf_archive)? != expected_old {
+        return Err(CommandError::new(
+            "annotated PDF archive changed before replacement publication",
+        ));
+    }
+    let bytes = fs::read(staged).map_err(|error| {
+        CommandError::new(format!("could not read staged PDF: {error}"))
+    })?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .map_err(|error| {
+            CommandError::new(format!(
+                "could not publish replacement PDF without replacing a file: {error}"
+            ))
+        })?;
+    file.write_all(&bytes).map_err(|error| {
+        CommandError::new(format!("could not write replacement PDF: {error}"))
+    })?;
+    file.sync_all().map_err(|error| {
+        CommandError::new(format!("could not sync replacement PDF: {error}"))
+    })
 }
 
 fn remove_old_sidecar(
@@ -1234,10 +1799,13 @@ fn fresh_note_contents(
     body: &str,
     archive: Option<&str>,
     date: &str,
+    highlights: u64,
 ) -> Result<String, CommandError> {
     let lined = match archive {
-        Some(path) => super::prepend_archive_lineage(existing, path, date, 0)
-            .map_err(CommandError::new)?,
+        Some(path) => {
+            super::prepend_archive_lineage(existing, path, date, highlights)
+                .map_err(CommandError::new)?
+        }
         None => existing.to_string(),
     };
     let parsed = frontmatter::parse_note(&lined);
@@ -1415,48 +1983,13 @@ fn rewrite_task_alias(
     (output, found)
 }
 
-fn replace_task_file_subtree(
-    path: &Path,
-    original: &[u8],
-    line_index: usize,
-    expected: &str,
-    replacement: &str,
-) -> Result<(), CommandError> {
-    let current = fs::read(path).map_err(|error| {
-        CommandError::new(format!(
-            "could not re-read reading task {}: {error}",
-            path.display()
-        ))
-    })?;
-    if current != original {
-        return Err(CommandError::new(
-            "selected reading task changed after the locked recheck",
-        ));
-    }
-    let contents = String::from_utf8(current).map_err(|error| {
-        CommandError::new(format!("reading task is not UTF-8: {error}"))
-    })?;
-    let mut lines = contents.split_inclusive('\n').collect::<Vec<_>>();
-    let end = task_subtree_end(&lines, line_index);
-    let current_subtree = lines[line_index..end].concat();
-    if normalized_subtree(&current_subtree) != normalized_subtree(expected) {
-        return Err(CommandError::new("selected reading task subtree changed"));
-    }
-    let replacement_lines =
-        replacement.split_inclusive('\n').collect::<Vec<_>>();
-    lines.splice(line_index..end, replacement_lines);
-    reference_mutation::atomic_write_bytes(path, lines.concat().as_bytes())
-        .map_err(|error| {
-            CommandError::new(format!("could not update reading task: {error}"))
-        })
-}
-
 fn verify_task_subtree(
     config: &Config,
     plan: &OverwritePreflight,
     expected: &str,
     expected_mark: char,
     original_file: &[u8],
+    expected_task_file: Option<&[u8]>,
 ) -> Result<(), CommandError> {
     let path = config.bob_dir.join(&plan.task.path);
     let contents = fs::read_to_string(&path).map_err(|error| {
@@ -1481,12 +2014,15 @@ fn verify_task_subtree(
     }
 
     if plan.task.path != plan.note_path {
-        let expected_file = replace_subtree_in_bytes(
-            original_file,
-            plan.task.line_index,
-            &plan.task.subtree,
-            expected,
-        )?;
+        let expected_file = match expected_task_file {
+            Some(bytes) => bytes.to_vec(),
+            None => replace_subtree_in_bytes(
+                original_file,
+                plan.task.line_index,
+                &plan.task.subtree,
+                expected,
+            )?,
+        };
         if fs::read(&path).ok().as_deref() != Some(expected_file.as_slice()) {
             return Err(CommandError::new(
                 "unrelated reading-task file content changed during overwrite",
@@ -1587,6 +2123,7 @@ fn verify_identity_and_links(
     config: &Config,
     plan: &OverwritePreflight,
     marker: &FinalMarkerMetadata,
+    rewritten_files: &BTreeMap<String, String>,
 ) -> Result<(), CommandError> {
     let library = ref_library::build_index(&ref_library::LibraryConfig {
         bob_dir: config.bob_dir.clone(),
@@ -1661,6 +2198,105 @@ fn verify_identity_and_links(
             return Err(CommandError::new(
                 "replacement managed embed does not resolve to the preserved reading task",
             ));
+        }
+    }
+    for (relative, expected) in rewritten_files {
+        let actual = fs::read_to_string(config.bob_dir.join(relative))
+            .map_err(|error| {
+                CommandError::new(format!(
+                    "could not verify inbound highlight links in {relative}: {error}"
+                ))
+            })?;
+        if actual != *expected {
+            return Err(CommandError::new(format!(
+                "inbound highlight-link rewrite did not persist exactly in {relative}"
+            )));
+        }
+    }
+    if let Some(annotated) = &plan.annotated {
+        let archive_contents = fs::read_to_string(
+            config.bob_dir.join(&annotated.bundle.note_path),
+        )
+        .map_err(|error| {
+            CommandError::new(format!(
+                "could not read frozen annotated note: {error}"
+            ))
+        })?;
+        if archive_contents != annotated.frozen.contents {
+            return Err(CommandError::new(
+                "frozen annotated note differs from its prepared archive contents",
+            ));
+        }
+        let archive_pdf_path =
+            config.bob_dir.join(&annotated.bundle.annotated_pdf_path);
+        let archive_hash = hash_file(&archive_pdf_path)?;
+        let expected_hash = plan
+            .bundle_preimages
+            .iter()
+            .find(|preimage| preimage.path == plan.pdf_path)
+            .and_then(|preimage| preimage.sha256.as_deref());
+        if expected_hash != Some(archive_hash.as_str()) {
+            return Err(CommandError::new(
+                "archived annotated PDF hash does not match its preimage",
+            ));
+        }
+        let records = super::archive::records_for_live_note(
+            &config.bob_dir,
+            &plan.note_path,
+        )
+        .map_err(|error| CommandError::new(error.message))?;
+        let valid_record = records.iter().any(|record| {
+            record.note_path == annotated.bundle.note_path
+                && record.parent
+                    == format!("[[{}]]", plan.note_path.trim_end_matches(".md"))
+                && record.annotated_pdf.as_ref().is_some_and(|pdf| {
+                    pdf.path == annotated.bundle.annotated_pdf_path
+                        && pdf.sha256 == archive_hash
+                })
+        });
+        if !valid_record {
+            return Err(CommandError::new(
+                "annotated archive metadata or lineage does not match the retained PDF",
+            ));
+        }
+        for finding in &annotated.inbound.highlight_fragments {
+            let Some((_, fragment)) = finding.target.rsplit_once("#^") else {
+                continue;
+            };
+            if fragment.starts_with("h-")
+                && !archive_contents.contains(&format!("^{fragment}"))
+            {
+                return Err(CommandError::new(format!(
+                    "rewritten highlight anchor does not resolve in {}: ^{fragment}",
+                    annotated.bundle.note_path
+                )));
+            }
+        }
+        for (source, dest) in &annotated.asset_map {
+            let from = config.bob_dir.join(source);
+            let to = config.bob_dir.join(dest);
+            if fs::symlink_metadata(&from).is_ok() || !to.is_file() {
+                return Err(CommandError::new(format!(
+                    "archived asset move is incomplete: {} -> {}",
+                    source.display(),
+                    dest.display()
+                )));
+            }
+        }
+        if let Some(live_assets) = &annotated.live_assets_path {
+            let archived_assets = recovery::asset_manifest(
+                &config.bob_dir,
+                &annotated.bundle.assets_path,
+            )
+            .map_err(CommandError::new)?;
+            if archived_assets != annotated.asset_manifest
+                || fs::symlink_metadata(config.bob_dir.join(live_assets))
+                    .is_ok()
+            {
+                return Err(CommandError::new(
+                    "archived assets do not match the preflighted bundle",
+                ));
+            }
         }
     }
     Ok(())
@@ -2289,6 +2925,106 @@ mod tests {
         )
     }
 
+    fn refresh_fixture_plan(fixture: &mut ExecuteFixture) {
+        fixture.request.dry_run = true;
+        fixture.plan = super::super::prepare(
+            &fixture.config,
+            &fixture.plan.member,
+            &fixture.request,
+            &fixture.plan.planned_date,
+        )
+        .unwrap_or_else(|refusal| {
+            panic!("prepare fixture overwrite: {}", refusal.message)
+        });
+        fixture.request.dry_run = false;
+        fixture.old_note = fs::read(&fixture.note).expect("refresh old note");
+        fixture.old_task_file =
+            fs::read(fixture.vault.join(&fixture.plan.task.path))
+                .expect("refresh old task file");
+        fixture.old_head = git(&fixture.vault, &["rev-parse", "HEAD"]);
+        fixture.old_status = git(
+            &fixture.vault,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        );
+    }
+
+    fn annotated_execute_fixture(tag: &str) -> ExecuteFixture {
+        let mut fixture = filed_execute_fixture(tag);
+        let assets = fixture.vault.join("ref/papers/report.assets/figure.png");
+        fs::create_dir_all(assets.parent().expect("assets parent"))
+            .expect("assets dir");
+        fs::write(&assets, b"archived figure bytes").expect("asset");
+
+        let mut note = fs::read_to_string(&fixture.note).expect("live note");
+        note.push_str(
+            "\n![[ref/papers/report.assets/figure.png|420]]\n\nQuote stays ^h-execute\n",
+        );
+        fs::write(&fixture.note, note).expect("annotated note");
+
+        let task_file = fixture.vault.join(&fixture.plan.task.path);
+        let task_contents = fs::read_to_string(&task_file).expect("task file");
+        let block = fixture
+            .plan
+            .task
+            .block_id
+            .as_deref()
+            .expect("fixture task block id");
+        let task_contents = task_contents.replacen(
+            &format!("^{block}"),
+            &format!("^{block}\n  - See [[ref/papers/report#^h-execute]]"),
+            1,
+        );
+        fs::write(&task_file, task_contents).expect("inbound task link");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "add annotated overwrite fixtures"],
+        );
+        refresh_fixture_plan(&mut fixture);
+        assert!(fixture.plan.annotated.is_some());
+        fixture
+    }
+
+    fn coordinated_fake_session(
+        coordinator: super::super::super::marker_write::FakeCoordinator,
+    ) -> super::super::super::marker_write::MarkerWriteSession {
+        let config = crate::native::config::HighlightsConfig::default();
+        let mut policy =
+            super::super::super::pdf_write_policy::PdfWritePolicy::from_config(
+                &config,
+            );
+        policy.coordinate_pdf_writes = true;
+        super::super::super::marker_write::MarkerWriteSession::new(
+            policy,
+            super::super::super::marker_write::MarkerWriteCoordinator::Fake(
+                coordinator,
+            ),
+        )
+    }
+
+    fn run_annotated_execute(
+        fixture: &ExecuteFixture,
+        coordinator: super::super::super::marker_write::FakeCoordinator,
+    ) -> (
+        Result<OverwriteResult, CommandError>,
+        super::super::super::marker_write::FakeCoordinator,
+    ) {
+        let observed = coordinator.clone();
+        let mut request = fixture.request.clone();
+        // The fake coordinator is the test-only platform seam; keep Linux
+        // preflight on its preview path while exercising the real executor.
+        request.dry_run = true;
+        let result = execute_with_sync_and_session(
+            &fixture.config,
+            &fixture.plan,
+            &request,
+            fixture.staged.clone(),
+            |_| Ok(()),
+            coordinated_fake_session(coordinator),
+        );
+        (result, observed)
+    }
+
     #[test]
     fn overwrite_commits_when_pre_sync_leaves_selection_unchanged() {
         let fixture = filed_execute_fixture("bob-cli-overwrite-fp-happy");
@@ -2296,6 +3032,252 @@ mod tests {
             .unwrap_or_else(|error| panic!("execute: {error}"));
         assert!(!result.push_pending, "a no-op post-sync is not pending");
         assert_committed_new_state(&fixture, &result);
+    }
+
+    #[test]
+    fn annotated_overwrite_moves_bundle_and_merges_task_link_edit_once() {
+        use std::os::unix::fs::MetadataExt;
+
+        let fixture = annotated_execute_fixture("bob-cli-overwrite-annotated");
+        let annotated = fixture.plan.annotated.as_ref().expect("annotated");
+        let archive_note = annotated.bundle.note_path.clone();
+        let archive_pdf = annotated.bundle.annotated_pdf_path.clone();
+        let archive_assets = annotated.bundle.assets_path.clone();
+        let old_pdf_identity =
+            fs::metadata(&fixture.pdf).expect("old PDF metadata");
+        let old_pdf = fixture.old_pdf.clone();
+        let old_assets =
+            fs::read(fixture.vault.join("ref/papers/report.assets/figure.png"))
+                .expect("old asset");
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::from_millis(17),
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let result = result.unwrap_or_else(|error| panic!("execute: {error}"));
+
+        assert_eq!(observed.call_count(), 1, "one outer PDF accessor");
+        assert_eq!(result.archive.as_deref(), Some(archive_note.as_str()));
+        let retained_pdf = fixture.vault.join(&archive_pdf);
+        assert_eq!(fs::read(&retained_pdf).expect("archived PDF"), old_pdf);
+        assert_eq!(
+            fs::read(fixture.vault.join(&archive_assets).join("figure.png"))
+                .expect("archived asset"),
+            old_assets
+        );
+        assert!(
+            !fixture.vault.join("ref/papers/report.assets").exists(),
+            "the live assets directory moved"
+        );
+        assert!(fixture.pdf.is_file(), "the replacement PDF is live");
+        #[cfg(unix)]
+        {
+            let archived_pdf_identity =
+                fs::metadata(&retained_pdf).expect("archived PDF metadata");
+            assert_eq!(old_pdf_identity.dev(), archived_pdf_identity.dev());
+            assert_eq!(old_pdf_identity.ino(), archived_pdf_identity.ino());
+        }
+
+        let frozen = fs::read_to_string(fixture.vault.join(&archive_note))
+            .expect("frozen annotated note");
+        assert!(frozen.contains("Quote stays ^h-execute"));
+        assert!(
+            frozen.contains(&format!("![[{archive_assets}/figure.png|420]]"))
+        );
+        assert!(frozen.contains("annotated_pdf:"));
+        assert!(frozen.contains(&archive_pdf));
+        assert!(frozen.contains("annotated_pdf_sha256:"));
+
+        let task =
+            fs::read_to_string(fixture.vault.join(&fixture.plan.task.path))
+                .expect("updated reading task");
+        let archived_target = archive_note.trim_end_matches(".md");
+        assert!(task.contains(&format!("[[{archived_target}#^h-execute]]")));
+        assert!(task.contains("A Better Report"));
+        assert!(task.contains("preserved child"));
+
+        let live_note = fs::read_to_string(&fixture.note).expect("live note");
+        assert!(live_note.contains(&format!(
+            "[[{}|replaced 2026-10-16",
+            archive_note.trim_end_matches(".md")
+        )));
+        assert!(live_note.contains("replaced 2026-10-16 · 0 highlights"));
+        assert_eq!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            "",
+            "the scoped commit includes the archive bundle and rewritten links"
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn annotated_coordination_hold_writes_nothing_and_has_retry_hint() {
+        let fixture =
+            annotated_execute_fixture("bob-cli-overwrite-annotated-hold");
+        let annotated = fixture.plan.annotated.as_ref().expect("annotated");
+        let fake = super::super::super::marker_write::FakeCoordinator::hold(
+            std::time::Duration::from_secs(2),
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("held coordinated write");
+        assert_eq!(error.code, Some("coordination_timeout"));
+        assert!(error.message.contains("close it in Highlights and retry"));
+        assert_eq!(observed.call_count(), 1);
+        assert_eq!(
+            fs::read(&fixture.note).expect("live note"),
+            fixture.old_note
+        );
+        assert_eq!(fs::read(&fixture.pdf).expect("live PDF"), fixture.old_pdf);
+        assert!(
+            !fixture.vault.join(&annotated.bundle.note_path).exists()
+                && !fixture
+                    .vault
+                    .join(&annotated.bundle.annotated_pdf_path)
+                    .exists()
+                && !fixture.vault.join(&annotated.bundle.assets_path).exists()
+        );
+        assert_eq!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            fixture.old_status
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn coordinated_save_aborts_safely_then_retry_archives_saved_pdf() {
+        let mut fixture =
+            annotated_execute_fixture("bob-cli-overwrite-annotated-save");
+        let mut saved_pdf = fixture.old_pdf.clone();
+        saved_pdf.extend_from_slice(b"\n% presenter saved new annotations\n");
+        let fake = super::super::super::marker_write::FakeCoordinator::grant_after_save(
+            std::time::Duration::from_millis(11),
+            saved_pdf.clone(),
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("changed preimage abort");
+        assert_eq!(error.code, Some("preimage_changed"));
+        assert!(error
+            .message
+            .contains("Run bob ref scan -w to commit the save"));
+        assert_eq!(observed.call_count(), 1);
+        assert_eq!(fs::read(&fixture.pdf).expect("presenter save"), saved_pdf);
+        assert_eq!(
+            fs::read(&fixture.note).expect("live note"),
+            fixture.old_note
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+
+        super::super::super::sync::sync_pdf(
+            &fixture.config,
+            &fixture.pdf,
+            SyncOptions {
+                dry_run: false,
+                write_pdf: false,
+                prefer: None,
+                ignore_unannotated_sidecar: false,
+            },
+        )
+        .expect("sync presenter save before retry");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "sync presenter save"],
+        );
+        fixture.old_pdf = saved_pdf.clone();
+        refresh_fixture_plan(&mut fixture);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let result = result.unwrap_or_else(|error| panic!("retry: {error}"));
+        assert_eq!(observed.call_count(), 1);
+        let archive_pdf = fixture
+            .plan
+            .annotated
+            .as_ref()
+            .expect("annotated retry plan")
+            .bundle
+            .annotated_pdf_path
+            .clone();
+        assert_eq!(
+            fs::read(fixture.vault.join(archive_pdf)).expect("saved archive"),
+            saved_pdf
+        );
+        assert_eq!(
+            result.commit_sha,
+            git(&fixture.vault, &["rev-parse", "HEAD"])
+        );
+    }
+
+    #[test]
+    fn changed_marker_during_coordination_is_a_specific_hold() {
+        let fixture =
+            annotated_execute_fixture("bob-cli-overwrite-annotated-marker");
+        let changed = fixture._temp.path().join("changed-marker.pdf");
+        write_marker_pdf(&changed, STAGED_MARKER);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant_after_save(
+            std::time::Duration::ZERO,
+            fs::read(&changed).expect("changed marker PDF"),
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("changed marker abort");
+        assert_eq!(error.code, Some("marker_changed"));
+        assert!(error.message.contains("close it in Highlights and retry"));
+        assert_eq!(observed.call_count(), 1);
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn failed_annotated_transaction_reverses_the_pdf_move_inside_accessor() {
+        let fixture =
+            annotated_execute_fixture("bob-cli-overwrite-annotated-rollback");
+        let archive = fixture
+            .plan
+            .annotated
+            .as_ref()
+            .expect("annotated")
+            .bundle
+            .clone();
+        let _armed = arm(OverwriteFailpoint::AfterArchivePdf);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, observed) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("injected post-move failure");
+        assert!(error.message.contains("rolled back"), "{error}");
+        assert_eq!(observed.call_count(), 1);
+        assert_eq!(
+            fs::read(&fixture.pdf).expect("restored PDF"),
+            fixture.old_pdf
+        );
+        assert!(
+            !fixture.vault.join(&archive.note_path).exists()
+                && !fixture.vault.join(&archive.annotated_pdf_path).exists()
+                && !fixture.vault.join(&archive.assets_path).exists()
+        );
+        assert_eq!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            fixture.old_status
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
     }
 
     #[test]

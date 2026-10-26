@@ -722,9 +722,9 @@ fn annotated_web_target_refuses_without_network() {
     );
     assert!(
         stderr(&output).contains(
-            "overwriting an annotated reference is not available yet; -f starts a new reading"
+            "this reference has 0 highlights, which Highlights holds on the Mac; run the overwrite there"
         ),
-        "the annotated interim refusal wins:\n{}",
+        "the host-coordination gate wins:\n{}",
         format_output(&output)
     );
     assert!(!fake.called(), "annotated targets do no adapter work");
@@ -732,12 +732,7 @@ fn annotated_web_target_refuses_without_network() {
 
 #[test]
 fn every_annotation_source_refuses_with_the_contract_remedy() {
-    for (kind, evidence) in [
-        ("sidecar", "Highlights sidecar has annotations"),
-        ("pdf", "PDF has user annotations"),
-        ("fragment", "inbound link targets a highlight"),
-        ("follow-up", "inbound link carries a highlight follow-up"),
-    ] {
+    for kind in ["sidecar", "pdf", "fragment", "follow-up"] {
         let fixture =
             web_vault(&format!("bob-cli-overwrite-annotation-{kind}"));
         file_web_ref(
@@ -825,10 +820,10 @@ fn every_annotation_source_refuses_with_the_contract_remedy() {
         assert!(
             diagnostic.contains("annotated_reference")
                 && diagnostic.contains(
-                    "overwriting an annotated reference is not available yet; -f starts a new reading"
+                    "which Highlights holds on the Mac; run the overwrite there"
                 )
-                && diagnostic.contains(evidence),
-            "{kind} refusal must include its code, remedy, and evidence:\n{diagnostic}"
+                && diagnostic.contains("-f starts a new reading from any host"),
+            "{kind} refusal must include its code and host remedy:\n{diagnostic}"
         );
         assert!(!fake.called(), "{kind} refusal must precede adapters");
         assert!(

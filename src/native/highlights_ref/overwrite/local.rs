@@ -146,11 +146,25 @@ fn predicted_mark(
 }
 
 fn print_archive_line(plan: &OverwritePreflight) {
-    match &plan.frozen_note {
-        Some(archive) => println!("earlier: {}", archive.path),
-        None => println!(
+    if let Some(annotated) = &plan.annotated {
+        let link_count = annotated.inbound.rewritten;
+        let links = if link_count == 1 {
+            "1 highlight link".to_string()
+        } else {
+            format!("{link_count} highlight links")
+        };
+        println!(
+            "earlier: {} ({} highlights · {links} · annotated PDF retained: {})",
+            annotated.frozen.path,
+            annotated.highlights,
+            annotated.bundle.annotated_pdf_path,
+        );
+    } else if let Some(archive) = &plan.frozen_note {
+        println!("earlier: {}", archive.path);
+    } else {
+        println!(
             "earlier: nothing to archive (0 highlights, no notes); git keeps the old capture"
-        ),
+        );
     }
 }
 

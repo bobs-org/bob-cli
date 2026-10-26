@@ -1788,6 +1788,7 @@ fn overwrite_request(
         replacement_audio_path,
         explicit_status: options.explicit_status.clone(),
         explicit_title: options.title.clone(),
+        dry_run: options.dry_run,
     }
 }
 

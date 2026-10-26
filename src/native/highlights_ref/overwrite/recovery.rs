@@ -129,6 +129,11 @@ pub(crate) struct PendingMove {
     /// anything else there fails closed.
     #[serde(default)]
     pub(crate) replacement_sha256: Option<String>,
+    /// Explicit directory marker permits an empty `.assets` directory to
+    /// be moved and recovered. Older v2 directory entries infer this from
+    /// their non-empty file manifest.
+    #[serde(default)]
+    pub(crate) directory: bool,
     /// Per-file manifest for a directory move (live `.assets` into the
     /// archive `.assets`). Empty for a single-file move.
     #[serde(default)]
@@ -148,7 +153,6 @@ pub(crate) struct PendingWrite {
 /// Constructors for synthetic interrupted transactions in tests. The
 /// execute phase promotes these to shared API when it wires annotated
 /// transactions; until then they stay test-only so the lint gate holds.
-#[cfg(test)]
 impl PendingMove {
     /// A single-file rename with the source hash observed before the move.
     pub(crate) fn file(source: &str, dest: &str, source_sha256: &str) -> Self {
@@ -157,11 +161,13 @@ impl PendingMove {
             dest: dest.to_string(),
             source_sha256: Some(source_sha256.to_string()),
             replacement_sha256: None,
+            directory: false,
             files: Vec::new(),
         }
     }
 
     /// Record transaction-owned bytes later published to the live path.
+    #[cfg(test)]
     pub(crate) fn with_replacement(mut self, sha256: &str) -> Self {
         self.replacement_sha256 = Some(sha256.to_string());
         self
@@ -178,6 +184,7 @@ impl PendingMove {
             dest: dest.to_string(),
             source_sha256: None,
             replacement_sha256: None,
+            directory: true,
             files,
         }
     }
@@ -195,7 +202,6 @@ impl PendingMove {
 /// replacement bytes that will reuse the live path. The execute phase
 /// persists this before the first rename; recovery consumes it without
 /// enabling the CLI route.
-#[cfg(test)]
 pub(crate) fn pdf_move_for_archive(
     bundle: &super::archive::ArchiveBundle,
     live_pdf: &str,
@@ -215,7 +221,6 @@ pub(crate) fn pdf_move_for_archive(
 
 /// The live-assets rename into one archive bundle, with a per-file
 /// manifest collected from the vault before the move.
-#[cfg(test)]
 pub(crate) fn assets_move_for_archive(
     bundle: &super::archive::ArchiveBundle,
     live_assets: &str,
@@ -227,7 +232,6 @@ pub(crate) fn assets_move_for_archive(
 /// Hash every regular file under a live assets directory, returning the
 /// manifest a directory move records. Refuses symlinks so recovery never
 /// follows one out of the vault.
-#[cfg(test)]
 pub(crate) fn asset_manifest(
     vault: &Path,
     live_assets: &str,
@@ -242,7 +246,6 @@ pub(crate) fn asset_manifest(
     Ok(manifest)
 }
 
-#[cfg(test)]
 fn collect_manifest_files(
     absolute: &Path,
     rel: &Path,
@@ -335,7 +338,6 @@ impl OverwriteIntent {
     /// Attach annotated move evidence and transaction-owned writes to an
     /// intent built by `for_transaction`. The execute phase calls this
     /// before persisting, so the evidence predates the first rename.
-    #[cfg(test)]
     pub(in crate::native::highlights_ref) fn with_annotated_moves(
         mut self,
         moves: Vec<PendingMove>,
@@ -468,9 +470,25 @@ impl ReverseCoordinator for DirectReverseCoordinator {
     }
 }
 
-/// Roll back a transaction that failed before its commit. The marker stays
-/// durable until the scoped restore and unstage both succeed.
-pub(in crate::native::highlights_ref) fn rollback_transaction(
+/// Reverse an in-flight overwrite from inside its already-held outer PDF
+/// coordination accessor. This prevents recovery from nesting a second
+/// coordinator around the same live PDF.
+pub(crate) struct ExternalCoordinationReverseCoordinator;
+
+impl ReverseCoordinator for ExternalCoordinationReverseCoordinator {
+    fn reverse_file(
+        &self,
+        _vault: &Path,
+        from: &Path,
+        to: &Path,
+    ) -> std::result::Result<(), String> {
+        rename_no_clobber(from, to)
+    }
+}
+
+/// Roll back while the caller owns a single outer `.forMerging` accessor.
+/// Recovery reverses file and asset moves directly inside that scope.
+pub(in crate::native::highlights_ref) fn rollback_transaction_with_external_coordination(
     config: &Config,
     child_env: &ob::ChildEnv,
     intent: &OverwriteIntent,
@@ -482,7 +500,7 @@ pub(in crate::native::highlights_ref) fn rollback_transaction(
         child_env,
         intent,
         false,
-        &PlatformReverseCoordinator,
+        &ExternalCoordinationReverseCoordinator,
     )
     .map(|_| ())
 }
@@ -778,7 +796,7 @@ fn validate_move(
         ));
     }
     let is_file = step.source_sha256.is_some();
-    let is_dir = !step.files.is_empty();
+    let is_dir = step.directory || !step.files.is_empty();
     if is_file == is_dir {
         return Err(malformed(
             "a move for {stem} must record either one file hash or a directory manifest",
@@ -959,6 +977,27 @@ fn plan_dir_move(
 ) -> std::result::Result<(), CommandError> {
     let source_root = Path::new(&step.source);
     let dest_root = Path::new(&step.dest);
+    if step.files.is_empty() {
+        let source = empty_directory_state(vault, source_root, intent)?;
+        let dest = empty_directory_state(vault, dest_root, intent)?;
+        return match (source, dest) {
+            (Some(()), None) => Ok(()),
+            (None, Some(())) => {
+                plan.reversals.push((
+                    vault.join(dest_root),
+                    vault.join(source_root),
+                ));
+                Ok(())
+            }
+            _ => Err(preserve_message(
+                intent,
+                &format!(
+                    "empty assets move {} -> {} has unexpected endpoints; left the intent in place",
+                    step.source, step.dest
+                ),
+            )),
+        };
+    }
     let manifest_rels: BTreeSet<&str> =
         step.files.iter().map(|file| file.rel.as_str()).collect();
     for file in &step.files {
@@ -1009,6 +1048,51 @@ fn plan_dir_move(
         }
     }
     Ok(())
+}
+
+/// Report an existing empty real directory, absence, or a fail-closed
+/// recovery error for an unexpected path at an empty-directory move end.
+fn empty_directory_state(
+    vault: &Path,
+    relative: &Path,
+    intent: &OverwriteIntent,
+) -> std::result::Result<Option<()>, CommandError> {
+    let absolute = vault.join(relative);
+    match fs::symlink_metadata(&absolute) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(preserve_message(
+            intent,
+            &format!("could not inspect {}: {error}", vault_slash(relative)),
+        )),
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            Err(preserve_message(
+                intent,
+                &format!(
+                    "{} is not a real empty directory; left the intent in place",
+                    vault_slash(relative)
+                ),
+            ))
+        }
+        Ok(_) => {
+            let mut entries = fs::read_dir(&absolute).map_err(|error| {
+                preserve_message(
+                    intent,
+                    &format!("could not inspect {}: {error}", vault_slash(relative)),
+                )
+            })?;
+            if entries.next().is_some() {
+                Err(preserve_message(
+                    intent,
+                    &format!(
+                        "{} is no longer empty; left the intent in place",
+                        vault_slash(relative)
+                    ),
+                ))
+            } else {
+                Ok(Some(()))
+            }
+        }
+    }
 }
 
 /// Classify one (source, dest) file pair against the recorded hashes.
@@ -3165,6 +3249,7 @@ mod tests {
                 dest: ARCHIVE_PDF.to_string(),
                 source_sha256: None,
                 replacement_sha256: None,
+                directory: false,
                 files: Vec::new(),
             },
             PendingMove::dir(
