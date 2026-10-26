@@ -1963,23 +1963,30 @@ fn finish_local_overwrite(
     scratch: &mut super::ScratchDir,
     rebind_source: &str,
 ) -> Result<()> {
-    let marker = super::overwrite::local::marker_from_pdf(&staged_pdf)?;
-    // A finished narration survives a later failure: when listen produced
-    // the staged audio, keep the scratch episode and report it instead of
-    // dropping it with the workdir, as ordinary create does.
+    // A finished narration survives every later failure: marker extraction
+    // and execution run under the preservation path so a corrupt stage or
+    // failed transaction keeps the episode with a rebind hint.
     let listen_audio = (options.listen && audio.is_some())
         .then(|| audio.as_ref().map(|staged| staged.private_path.clone()))
         .flatten();
-    let result = super::overwrite::execute::execute(
-        config,
-        plan,
-        request,
-        StagedOverwrite {
-            private_pdf: staged_pdf,
-            audio,
-            marker,
-        },
-    );
+    let staged_path = staged_pdf.clone();
+    let result = (|| -> std::result::Result<
+        super::overwrite::execute::OverwriteResult,
+        CommandError,
+    > {
+        let marker =
+            super::overwrite::local::marker_from_pdf(&staged_path)?;
+        super::overwrite::execute::execute(
+            config,
+            plan,
+            request,
+            StagedOverwrite {
+                private_pdf: staged_path,
+                audio,
+                marker,
+            },
+        )
+    })();
     let result = match (result, listen_audio) {
         (Err(error), Some(kept)) => {
             return Err(super::listen::post_listen_error(

@@ -87,7 +87,11 @@ pub(super) fn plan_local_pdf(
         title = info;
         title_source = "pdf info";
     } else {
-        title = humanize_stem(&stem);
+        // Source identity is independent of the requested output stem:
+        // a `-N` selector names the member to replace, never a new
+        // family key, so an absent or filename-equal Info title falls
+        // back to the original file stem.
+        title = humanize_stem(&file_stem);
         title_source = "filename";
     }
     let (author, author_source) =

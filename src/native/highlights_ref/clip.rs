@@ -947,30 +947,39 @@ pub(super) fn capture_article_overwrite(
         &out_pdf,
         &title,
     )?;
-    let final_marker = super::overwrite::local::marker_from_pdf(&staged_pdf)
-        .map_err(ClipError::from)?;
-    // A finished narration survives a later failure: keep the scratch
-    // episode and report it instead of dropping it with the workdir.
+    // A finished narration survives every later failure: marker
+    // extraction and execution run under the preservation path so a
+    // corrupt stage or failed transaction keeps the episode.
     let listen_audio = (matches!(companion, Companion::Listen(_))
         && audio.is_some())
     .then(|| audio.as_ref().map(|staged| staged.private_path.clone()))
     .flatten();
-    let result = super::overwrite::execute::execute(
-        config,
-        plan,
-        request,
-        super::overwrite::execute::StagedOverwrite {
-            private_pdf: staged_pdf,
-            audio,
-            marker: final_marker,
-        },
-    );
+    let staged_path = staged_pdf.clone();
+    let result = (|| -> std::result::Result<
+        super::overwrite::execute::OverwriteResult,
+        ClipError,
+    > {
+        let final_marker =
+            super::overwrite::local::marker_from_pdf(&staged_path)
+                .map_err(ClipError::from)?;
+        super::overwrite::execute::execute(
+            config,
+            plan,
+            request,
+            super::overwrite::execute::StagedOverwrite {
+                private_pdf: staged_path,
+                audio,
+                marker: final_marker,
+            },
+        )
+        .map_err(ClipError::from)
+    })();
     let result = match (result, listen_audio) {
         (Err(error), Some(kept)) => {
             return Err(ClipError::from(super::listen::post_listen_error(
                 &mut workdir,
                 &kept,
-                error.to_string(),
+                error.message,
                 format!(
                     "bind it with bob ref create {} -f overwrite --audio {}",
                     url.cleaned,
@@ -978,7 +987,7 @@ pub(super) fn capture_article_overwrite(
                 ),
             )));
         }
-        (result, _) => result.map_err(ClipError::from)?,
+        (result, _) => result?,
     };
     super::overwrite::local::print_success(
         plan,

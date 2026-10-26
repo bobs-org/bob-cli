@@ -8963,6 +8963,136 @@ printf 'ID3 replacement episode' > "$audio_path"
     );
 }
 
+/// A post-listen concurrent edit that retargets the collection keeps the
+/// finished narration instead of dropping it with the scratch directory.
+#[test]
+fn highlights_create_collection_post_listen_recheck_keeps_narration() {
+    const NOW: &str = "2026-10-16 12:00:00";
+    let temp = TempDir::new("bob-cli-highlights-collection-recheck-kept");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    write_area_note(&vault.join("sase.md"), "SASE");
+    git_in(&vault, ["add", "sase.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "seed parent"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let fake = FakeClip::new(&temp, "adapter");
+    let curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
+    let log = temp.path().join("collection-overwrite-curl.log");
+    fs::write(&log, "").expect("init curl log");
+    for index in 1..=10 {
+        fake.respond_n(
+            index,
+            &article_capture(
+                "Tokio Internals, Part 1: The Scheduler",
+                "Jane Doe",
+                "2024-01-08",
+                2140,
+            ),
+        );
+    }
+
+    let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    capture.env("BOB_NOW", NOW);
+    collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
+    assert_success(&capture.output().expect("capture initial collection"));
+    let scan = || {
+        bob_command()
+            .arg("highlights")
+            .arg("--no-hooks")
+            .arg("scan")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_NOW", NOW)
+            .output()
+            .expect("file collection into library")
+    };
+    assert_success(&scan());
+    let note = vault.join("ref/blogs/tokio_internals.md");
+    let pdf = vault.join("lib/blogs/tokio_internals.pdf");
+    assert!(note.is_file() && pdf.is_file());
+    let pdf_before = fs::read(&pdf).expect("filed PDF");
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "file initial collection"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    let head_before = stdout(&git_in(&vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+
+    // The listener writes the episode, logs its path, then removes the
+    // selected root note through an explicitly passed test path (the
+    // listener environment does not retain `BOB_DIR`). The post-listen
+    // recheck then fails and must preserve the narration.
+    let listen_bin = temp.path().join("collection-recheck-listen-bin");
+    fs::create_dir_all(&listen_bin).expect("fake listen bin");
+    let listen_log = temp.path().join("collection-recheck-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+audio_path=""
+for arg in "$@"; do
+  case "$arg" in *.mp3) audio_path="$arg" ;; esac
+done
+test -n "$audio_path" || exit 8
+printf 'ID3 replacement episode' > "$audio_path"
+echo "audio:$audio_path" >> "$FAKE_LISTEN_LOG"
+rm -f "$FAKE_LISTEN_REMOVE_TARGET"
+"#,
+    );
+    let mut overwrite =
+        collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    overwrite.args(["--force=overwrite", "-N", "tokio_internals", "-L"]);
+    overwrite
+        .env("BOB_NOW", NOW)
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {pdf} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("FAKE_LISTEN_REMOVE_TARGET", &note)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut overwrite, &curl, &curl_root, &log, &fake.path);
+    let output = overwrite.output().expect("overwrite with concurrent edit");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "post-listen recheck failure must fail:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    let kept = report
+        .lines()
+        .find_map(|line| line.strip_prefix("kept: "))
+        .expect("a finished narration is kept:\n{report}")
+        .to_string();
+    assert!(
+        std::path::Path::new(&kept).is_file(),
+        "the kept scratch episode survives:\n{report}"
+    );
+    assert_eq!(
+        fs::read(&kept).expect("kept audio"),
+        b"ID3 replacement episode",
+        "kept audio bytes are intact"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["rev-parse", "HEAD"])).trim(),
+        head_before,
+        "no overwrite commit is published"
+    );
+    assert_eq!(
+        fs::read(&pdf).expect("PDF after"),
+        pdf_before,
+        "the library PDF is unchanged"
+    );
+    assert!(
+        !vault
+            .join("ref_history/blogs/tokio_internals__2026-10-16.md")
+            .exists(),
+        "no frozen note is published"
+    );
+}
+
 /// Partial collection overlaps refuse under every force mode before any
 /// adapter or fetch work, naming the overlapping members and the exact
 /// set `-f` would recapture.

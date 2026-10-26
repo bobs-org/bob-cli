@@ -147,38 +147,6 @@ impl OverwriteRefusal {
     }
 }
 
-/// Resolve URL identity and select the family member that overwrite targets.
-/// Routes currently select through recapture preflight; this wrap keeps the
-/// overwrite-named entry used by the recapture selectors.
-#[allow(dead_code)]
-pub(super) fn select_url_member(
-    config: &Config,
-    rows: &[RefRow],
-    recorded: &[super::sources::RecordedSource],
-    wanted: &BTreeSet<String>,
-    name: Option<&str>,
-) -> Result<Option<recapture::SelectedFamily>, CommandError> {
-    recapture::select_overwrite_for_url(
-        rows,
-        recorded,
-        wanted,
-        &config.bob_dir,
-        name,
-    )
-}
-
-/// Resolve title identity and select a member, if this is a filed capture.
-#[allow(dead_code)]
-pub(super) fn select_stem_member(
-    config: &Config,
-    rows: &[RefRow],
-    stem: &str,
-    name: Option<&str>,
-    identity: recapture::StemIdentity<'_>,
-) -> Result<Option<recapture::SelectedFamily>, CommandError> {
-    recapture::select_overwrite_for_stem(config, rows, stem, name, identity)
-}
-
 /// Strict, read-only preflight for one selected overwrite member.
 pub(super) fn prepare(
     config: &Config,

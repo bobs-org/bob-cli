@@ -1408,11 +1408,10 @@ fn capture_and_install_overwrite(
         &staged_pdf,
         &derived.title,
     )?;
-    recheck_collection_overwrite(config, &urls, &options, &preflight)?;
-
-    let marker = super::overwrite::local::marker_from_pdf(&staged_pdf)?;
-    // A finished narration survives a later failure: keep the scratch
-    // episode and report it instead of dropping it with the workdir.
+    // A finished narration survives every later failure: the post-listen
+    // recheck, marker extraction, and execution all run under the
+    // preservation path so a concurrent edit or corrupt stage keeps the
+    // episode with a usable rebind hint instead of dropping it.
     let listen_audio = (listen.is_some() && staged_audio.is_some())
         .then(|| {
             staged_audio
@@ -1420,16 +1419,25 @@ fn capture_and_install_overwrite(
                 .map(|staged| staged.private_path.clone())
         })
         .flatten();
-    let result = super::overwrite::execute::execute(
-        config,
-        &preflight,
-        &request,
-        super::overwrite::execute::StagedOverwrite {
-            private_pdf: staged_pdf,
-            audio: staged_audio,
-            marker,
-        },
-    );
+    let staged_pdf_path = staged_pdf.clone();
+    let result = (|| -> Result<
+        super::overwrite::execute::OverwriteResult,
+        CommandError,
+    > {
+        recheck_collection_overwrite(config, &urls, &options, &preflight)?;
+        let marker =
+            super::overwrite::local::marker_from_pdf(&staged_pdf_path)?;
+        super::overwrite::execute::execute(
+            config,
+            &preflight,
+            &request,
+            super::overwrite::execute::StagedOverwrite {
+                private_pdf: staged_pdf_path,
+                audio: staged_audio,
+                marker,
+            },
+        )
+    })();
     let result = match (result, listen_audio) {
         (Err(error), Some(kept)) => {
             let mut command = String::from("bind it with bob ref create");

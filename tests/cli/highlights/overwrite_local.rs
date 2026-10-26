@@ -1377,14 +1377,9 @@ fn overwrite_title_change_keeps_old_version_suffix() {
         "second reading carries its suffix:\n{}",
         task_line(&fixture.vault, "report__v2")
     );
-    // NB: the replacement material comes from distinctly named files.
-    // Selecting `-N report__v2` with the same-stem source file falls back
-    // to a humanized `-N` title for identity and misses the family; that
-    // title-route selection quirk is recorded as a follow-up and is not
-    // part of this phase.
-    let other = fixture.temp.path().join("other.pdf");
-    write_bare_pdf(&other, Some(TITLE));
-    let output = overwrite_command(&fixture, &other)
+    // Same-stem source selects the named member: identity comes from
+    // the original file and its metadata, independently of `-N`.
+    let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
         .args(["-N", "report__v2", "-T", "A Better Report"])
         .output()
         .expect("overwrite v2 with a new title");
@@ -1411,6 +1406,93 @@ fn overwrite_title_change_keeps_old_version_suffix() {
     assert!(
         !parent.contains("Another Title (v"),
         "no reading number is invented:\n{parent}"
+    );
+}
+
+#[test]
+fn overwrite_same_stem_source_selects_named_member() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-same-stem", "ready", false, false);
+    let reread = reread_command(&fixture, &source_pdf(&fixture, TITLE))
+        .output()
+        .expect("reread to v2");
+    assert_success(&reread);
+    commit_if_dirty(&fixture.vault, "file second reading");
+    let root_before = task_line(&fixture.vault, "report");
+    let v2_before = task_line(&fixture.vault, "report__v2");
+    assert!(
+        root_before.contains("^ref-report"),
+        "root task address:\n{root_before}"
+    );
+    assert!(
+        v2_before.contains("^ref-report-v2"),
+        "v2 task address:\n{v2_before}"
+    );
+    let root_pdf_before = fs::read(fixture.vault.join("lib/papers/report.pdf"))
+        .expect("root pdf");
+    let v2_pdf_before =
+        fs::read(fixture.vault.join("lib/papers/report__v2.pdf"))
+            .expect("v2 pdf");
+
+    // Dry run with the original same-stem source and filename-equal Info.
+    let dry = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+        .args(["-N", "report__v2", "-d"])
+        .output()
+        .expect("dry-run same-stem overwrite");
+    assert_success(&dry);
+    let dry_report = stdout(&dry);
+    assert!(
+        dry_report.contains("overwrite: papers/report__v2")
+            && dry_report.contains("writes: none"),
+        "dry run selects v2:\n{dry_report}"
+    );
+
+    // Real run without a replacement title: v2 changes, root is untouched.
+    let output = overwrite_command(&fixture, &source_pdf(&fixture, TITLE))
+        .args(["-N", "report__v2"])
+        .output()
+        .expect("overwrite v2 from same-stem source");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("overwrite: papers/report__v2"),
+        "real run selects v2:\n{report}"
+    );
+    assert_eq!(
+        task_line(&fixture.vault, "report"),
+        root_before,
+        "root task stays byte-identical"
+    );
+    assert!(
+        task_line(&fixture.vault, "report__v2").contains("^ref-report-v2"),
+        "v2 task address is preserved:\n{}",
+        task_line(&fixture.vault, "report__v2")
+    );
+    assert_eq!(
+        fs::read(fixture.vault.join("lib/papers/report.pdf"))
+            .expect("root pdf after"),
+        root_pdf_before,
+        "root PDF is unchanged"
+    );
+    assert_ne!(
+        fs::read(fixture.vault.join("lib/papers/report__v2.pdf"))
+            .expect("v2 pdf after"),
+        v2_pdf_before,
+        "selected v2 PDF bytes must change"
+    );
+
+    // Absent Info title falls back to the file stem, not the `-N` stem.
+    let bare = fixture.temp.path().join("report.pdf");
+    write_bare_pdf(&bare, None);
+    let output = overwrite_command(&fixture, &bare)
+        .args(["-N", "report", "-T", TITLE])
+        .output()
+        .expect("overwrite root from bare same-stem source");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("overwrite: papers/report"),
+        "bare same-stem source selects the root:\n{}",
+        format_output(&output)
     );
 }
 
@@ -1619,6 +1701,70 @@ fn local_pdf_overwrite_listen_failure_after_narration_keeps_scratch() {
         stderr(&output).contains("verify_failed"),
         "the commit failure surfaces its machine code:\n{}",
         format_output(&output)
+    );
+}
+
+#[test]
+fn local_pdf_overwrite_marker_failure_after_narration_keeps_scratch() {
+    let fixture =
+        filed_vault("bob-cli-overwrite-marker-kept", "ready", false, false);
+    let before_tree = snapshot_tree(&fixture.vault);
+    // Corrupt the staged PDF after narration so the post-listen marker read
+    // fails under the preservation path. The command includes `{pdf}` so the
+    // fake sees the staged path explicitly.
+    let bin = fixture.temp.path().join("marker-bin");
+    fs::create_dir_all(&bin).expect("fake bin");
+    write_executable(
+        &bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+audio_path=""
+pdf_path=""
+for arg in "$@"; do
+  case "$arg" in *.mp3) audio_path="$arg" ;; *.pdf) pdf_path="$arg" ;; esac
+done
+if [ -n "$audio_path" ]; then printf 'ID3 fake episode' > "$audio_path"; fi
+echo "audio:$audio_path" >> "$FAKE_LISTEN_LOG"
+if [ -n "$pdf_path" ]; then printf 'corrupt' > "$pdf_path"; fi
+"#,
+    );
+    let log = fixture.temp.path().join("listen.log");
+    let source = source_pdf(&fixture, TITLE);
+    let output = overwrite_command(&fixture, &source)
+        .arg("-L")
+        .env("PATH", path_with_prefix(&bin))
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} {pdf} -o {audio}",
+        )
+        .env("FAKE_LISTEN_LOG", &log)
+        .output()
+        .expect("overwrite with corrupt staged PDF");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "marker failure must fail:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    let kept = report
+        .lines()
+        .find_map(|line| line.strip_prefix("kept: "))
+        .expect("a finished narration is kept:\n{report}")
+        .to_string();
+    assert!(
+        Path::new(&kept).is_file(),
+        "the kept scratch episode survives:\n{report}"
+    );
+    assert_eq!(
+        fs::read(&kept).expect("kept audio"),
+        b"ID3 fake episode",
+        "kept audio bytes are intact"
+    );
+    assert_eq!(
+        snapshot_tree(&fixture.vault),
+        before_tree,
+        "a marker failure after narration leaves the vault unchanged"
     );
 }
 

@@ -1850,9 +1850,9 @@ mod tests {
         "- captured: 2026-01-01\n",
     );
     const STAGED_MARKER: &str = concat!(
-        "- status: ready\n",
+        "- status: next\n",
         "- parent: sase\n",
-        "- title: Report\n",
+        "- title: A Better Report\n",
         "- id: report\n",
         "- captured: 2026-10-16\n",
     );
@@ -1934,6 +1934,10 @@ mod tests {
         old_pdf: Vec<u8>,
         old_head: String,
         old_status: String,
+        old_sidecar: Vec<u8>,
+        old_audio: Vec<u8>,
+        old_task_file: Vec<u8>,
+        new_audio_bytes: Vec<u8>,
     }
 
     fn filed_execute_fixture(tag: &str) -> ExecuteFixture {
@@ -1960,6 +1964,10 @@ mod tests {
         .expect("area");
         let pdf = vault.join("lib/papers/report.pdf");
         write_marker_pdf(&pdf, READY_MARKER);
+        // The old companion exists before filing so the filed note embeds
+        // it and the bundle stays in sync.
+        fs::write(vault.join("lib/papers/report.mp3"), "old audio")
+            .expect("old audio");
 
         let guard = crate::native::env::TestEnvGuard::set(&[
             ("BOB_DIR", Some(vault.as_os_str())),
@@ -1990,6 +1998,34 @@ mod tests {
         git(&vault, &["add", "-A"]);
         git(&vault, &["commit", "-q", "-m", "file reference"]);
 
+        // Extend the filed reference with real mutations: authored prose for
+        // the frozen note, an unannotated tracked `.textbundle` sidecar, and
+        // a preserved child under the reading task. All stable for preflight
+        // without re-sync.
+        let note_path = vault.join("ref/papers/report.md");
+        let mut note_body = fs::read_to_string(&note_path).expect("filed note");
+        note_body.push_str("\nAuthored paragraph that must freeze.\n");
+        fs::write(&note_path, &note_body).expect("author prose");
+        let bundle_dir = vault.join("lib/papers/report.textbundle");
+        fs::create_dir_all(&bundle_dir).expect("textbundle");
+        fs::write(bundle_dir.join("text.md"), "Report\n======\n\n## Page 1\n")
+            .expect("sidecar text");
+        fs::write(bundle_dir.join("info.json"), "{}").expect("info");
+        let parent_path = vault.join("sase.md");
+        let parent_body = fs::read_to_string(&parent_path).expect("parent");
+        let mut parent_lines: Vec<String> =
+            parent_body.lines().map(str::to_string).collect();
+        let task_index = parent_lines
+            .iter()
+            .position(|line| line.contains("^ref-report"))
+            .expect("reading task");
+        parent_lines
+            .insert(task_index + 1, "  - [ ] preserved child".to_string());
+        fs::write(&parent_path, parent_lines.join("\n") + "\n")
+            .expect("task child");
+        git(&vault, &["add", "-A"]);
+        git(&vault, &["commit", "-q", "-m", "extend fixture bundle"]);
+
         let index = crate::native::ref_library::build_index(
             &crate::native::ref_library::LibraryConfig {
                 bob_dir: config.bob_dir.clone(),
@@ -1998,17 +2034,29 @@ mod tests {
             },
         )
         .expect("index");
-        let family = super::super::super::recapture::select_overwrite_for_stem(
+        let outcome = super::super::super::recapture::preflight_for_stem(
             &config,
             &index.rows,
             "report",
             None,
+            None,
+            Some(super::super::super::force::ForceMode::Overwrite),
+            "Report",
             super::super::super::recapture::StemIdentity::Title("Report"),
         )
-        .expect("select stem")
-        .expect("filed family");
-        let member = family.newest().clone();
-        let request = super::super::OverwriteRequest::default();
+        .expect("select stem");
+        let super::super::super::recapture::CaptureOutcome::Overwrite(
+            selection,
+        ) = outcome
+        else {
+            panic!("expected overwrite selection, got {outcome:?}");
+        };
+        let member = selection.family.newest().clone();
+        let mut request = super::super::OverwriteRequest::default();
+        request.explicit_title = Some("A Better Report".to_string());
+        request.explicit_status = Some("next".to_string());
+        request.replacement_audio_path =
+            Some("lib/papers/report.m4a".to_string());
         let plan =
             super::super::prepare(&config, &member, &request, "2026-10-16")
                 .unwrap_or_else(|refusal| {
@@ -2017,21 +2065,38 @@ mod tests {
                         refusal.code, refusal.message
                     )
                 });
+        assert!(
+            plan.frozen_note.is_some(),
+            "fixture prose must plan a frozen note"
+        );
+        assert!(
+            plan.audio_path.as_deref() == Some("lib/papers/report.mp3"),
+            "fixture must discover the old companion: {:?}",
+            plan.audio_path
+        );
 
         let staged_pdf = temp.path().join("staged.pdf");
         write_marker_pdf(&staged_pdf, STAGED_MARKER);
+        let private_audio = temp.path().join("new.m4a");
+        fs::write(&private_audio, "new audio").expect("staged audio");
         let staged = StagedOverwrite {
             private_pdf: staged_pdf,
-            audio: None,
+            audio: Some(super::super::super::overwrite::execute::StagedAudio {
+                private_path: private_audio,
+                destination: "lib/papers/report.m4a".to_string(),
+            }),
             marker: FinalMarkerMetadata {
                 id: "report".into(),
-                title: "Report".into(),
-                status: "ready".into(),
+                title: "A Better Report".into(),
+                status: "next".into(),
                 parent: Some("sase".into()),
                 captured: Some("2026-10-16".into()),
             },
         };
         let note = vault.join("ref/papers/report.md");
+        let sidecar_text = vault.join("lib/papers/report.textbundle/text.md");
+        let old_audio = vault.join("lib/papers/report.mp3");
+        let task_file = vault.join(plan.task.path.as_str());
         ExecuteFixture {
             old_note: fs::read(&note).expect("note"),
             old_pdf: fs::read(&pdf).expect("pdf"),
@@ -2040,6 +2105,10 @@ mod tests {
                 &vault,
                 &["status", "--porcelain=v1", "--untracked-files=all"],
             ),
+            old_sidecar: fs::read(&sidecar_text).expect("sidecar"),
+            old_audio: fs::read(&old_audio).expect("audio"),
+            old_task_file: fs::read(&task_file).expect("task file"),
+            new_audio_bytes: b"new audio".to_vec(),
             _temp: temp,
             _guard: guard,
             config,
@@ -2063,6 +2132,44 @@ mod tests {
             fixture.old_pdf,
             "the library PDF must match the pre-overwrite bytes"
         );
+        // Abort restores the prose carrier, sidecar text, companion, and
+        // task file with its preserved child.
+        assert_eq!(
+            fs::read(
+                fixture.vault.join("lib/papers/report.textbundle/text.md")
+            )
+            .expect("sidecar"),
+            fixture.old_sidecar,
+            "the stale sidecar must survive an abort"
+        );
+        assert_eq!(
+            fs::read(fixture.vault.join("lib/papers/report.mp3"))
+                .expect("audio"),
+            fixture.old_audio,
+            "the old companion must survive an abort"
+        );
+        assert!(
+            !fixture.vault.join("lib/papers/report.m4a").exists(),
+            "the replacement audio must not exist after an abort"
+        );
+        let task_path = fixture.vault.join(&fixture.plan.task.path);
+        assert_eq!(
+            fs::read(&task_path).expect("task file"),
+            fixture.old_task_file,
+            "the reading task file must match the pre-overwrite bytes"
+        );
+        assert!(
+            fs::read_to_string(&task_path)
+                .expect("task file")
+                .contains("preserved child"),
+            "the preserved child must survive an abort"
+        );
+        if let Some(archive) = &fixture.plan.frozen_note {
+            assert!(
+                !fixture.vault.join(&archive.path).exists(),
+                "no frozen note may exist after an abort"
+            );
+        }
         assert_eq!(
             git(&fixture.vault, &["rev-parse", "HEAD"]),
             fixture.old_head,
@@ -2097,6 +2204,58 @@ mod tests {
             fs::read(&fixture.pdf).expect("pdf"),
             fixture.old_pdf,
             "the library PDF must change"
+        );
+        // The stronger fixture proves each mutation: prose archives, the
+        // stale sidecar is gone, the audio extension swaps, and the task
+        // title/status edit lands.
+        let archive_path = fixture
+            .plan
+            .frozen_note
+            .as_ref()
+            .expect("fixture plans a frozen note")
+            .path
+            .clone();
+        let archive_body =
+            fs::read_to_string(fixture.vault.join(&archive_path))
+                .expect("frozen note");
+        assert!(
+            archive_body.contains("Authored paragraph that must freeze."),
+            "the archive keeps the authored prose"
+        );
+        assert!(
+            !fixture.vault.join("lib/papers/report.textbundle").exists(),
+            "the stale sidecar is removed"
+        );
+        assert!(
+            !fixture.vault.join("lib/papers/report.mp3").exists(),
+            "the old companion is removed on extension swap"
+        );
+        assert_eq!(
+            fs::read(fixture.vault.join("lib/papers/report.m4a"))
+                .expect("new audio"),
+            fixture.new_audio_bytes,
+            "the replacement audio bytes land at the new extension"
+        );
+        let task_path = fixture.vault.join(&fixture.plan.task.path);
+        let task_body = fs::read_to_string(&task_path).expect("task file");
+        assert!(
+            task_body.contains("preserved child"),
+            "the task edit preserves children:\n{task_body}"
+        );
+        assert!(
+            task_body.contains("A Better Report"),
+            "the title change lands in the task:\n{task_body}"
+        );
+        assert_ne!(
+            task_body.as_bytes(),
+            &fixture.old_task_file,
+            "the task file must change"
+        );
+        assert!(
+            fs::read_to_string(&fixture.note)
+                .expect("note")
+                .contains("A Better Report"),
+            "the live note carries the new title"
         );
         let head = git(&fixture.vault, &["rev-parse", "HEAD"]);
         assert_ne!(head, fixture.old_head, "HEAD must advance");
@@ -2168,6 +2327,56 @@ mod tests {
             );
             assert_intact_old_state(&fixture);
         }
+    }
+
+    #[test]
+    fn unrelated_staged_and_dirty_files_survive_abort() {
+        let fixture = filed_execute_fixture("bob-cli-overwrite-fp-unrelated");
+        // An unrelated staged file and an unrelated dirty change must
+        // survive a rollback that restores only the transaction paths.
+        let staged_path = fixture.vault.join("unrelated-staged.md");
+        fs::write(&staged_path, "staged\n").expect("staged");
+        git(&fixture.vault, &["add", "unrelated-staged.md"]);
+        let dirty_path = fixture.vault.join("unrelated-dirty.md");
+        fs::write(&dirty_path, "dirty\n").expect("dirty");
+        let status_before = git(
+            &fixture.vault,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        );
+        assert!(
+            status_before.contains("unrelated-staged.md")
+                && status_before.contains("unrelated-dirty.md"),
+            "unrelated files are staged/dirty:\n{status_before}"
+        );
+        let _armed = arm(OverwriteFailpoint::AfterPdf);
+        let error = run_execute(&fixture, |_| Ok(()))
+            .expect_err("injected failpoint must abort");
+        assert!(
+            error.to_string().contains("injected failpoint")
+                || error.code == Some("injected_failpoint"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            fs::read(&staged_path).expect("staged"),
+            b"staged\n",
+            "staged unrelated file survives"
+        );
+        assert_eq!(
+            fs::read(&dirty_path).expect("dirty"),
+            b"dirty\n",
+            "dirty unrelated file survives"
+        );
+        assert_eq!(
+            git(
+                &fixture.vault,
+                &["status", "--porcelain=v1", "--untracked-files=all"],
+            ),
+            status_before,
+            "rollback leaves unrelated staged/dirty state untouched"
+        );
+        // The transaction paths themselves still roll back.
+        assert_eq!(fs::read(&fixture.note).expect("note"), fixture.old_note,);
+        assert_eq!(fs::read(&fixture.pdf).expect("pdf"), fixture.old_pdf);
     }
 
     #[test]
