@@ -212,6 +212,65 @@ fn relation_rename_arguments_complete_catalog_labels_including_hidden() {
 }
 
 #[test]
+fn theme_mutations_and_relation_hide_use_their_catalogs() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("2026/20260531.md"),
+        "## Pomodoros\n- [ ] () — FOCUS\n",
+    );
+    write_file(
+        &fixture.vault.join("relations.md"),
+        "- [ ] Source #task ^source\n  - 🪢 **LINKS:** inspired by [[cash#^buy-milk]]\n",
+    );
+    write_file(
+        &fixture.vault.join(".bob/relations/apollo.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"host\":\"apollo\",\"kind\":\"relation_label.hide\",\"key\":\"hidden label\",\"name\":\"hidden label\",\"via\":\"test\"}\n",
+    );
+
+    for args in [
+        &["themes", "hide", ""][..],
+        &["themes", "unhide", ""],
+        &["themes", "color", ""],
+        &["themes", "rename", ""],
+    ] {
+        let output = complete(
+            &fixture,
+            &["bob"]
+                .into_iter()
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>(),
+        );
+        assert_success(&output);
+        assert!(
+            values(&output).contains(&"FOCUS".to_string()),
+            "{}",
+            stdout(&output)
+        );
+    }
+
+    for args in [&["relations", "hide", ""][..], &["relations", "unhide", ""]] {
+        let output = complete(
+            &fixture,
+            &["bob"]
+                .into_iter()
+                .chain(args.iter().copied())
+                .collect::<Vec<_>>(),
+        );
+        assert_success(&output);
+        assert!(
+            values(&output).contains(&"inspired by".to_string()),
+            "{}",
+            stdout(&output)
+        );
+        assert!(
+            values(&output).contains(&"hidden label".to_string()),
+            "{}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
 fn sections_follow_long_short_and_attached_route_forms() {
     let fixture = fixture();
     let expected = concat!(

@@ -40,10 +40,39 @@ pub(crate) fn vault_lines(
         Kind::Level => Some(levels()),
         Kind::Metric => Some(metrics()),
         Kind::RelationLabel => Some(relation_labels(context)),
+        Kind::ThemeName => Some(theme_names(context)),
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::ArticleNote => Some(article_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
+}
+
+/// Remembered Pomodoro themes, including hidden names so hide, unhide,
+/// color, and rename can all operate on the existing catalog. This uses
+/// the completion-only catalog load and performs no vault writes.
+fn theme_names(context: &Context) -> Vec<String> {
+    let today = crate::native::env::current_datetime().date();
+    let Ok(catalog) =
+        crate::native::pomodoro_themes::Catalog::load_for_completion(
+            &context.bob_dir,
+            today,
+            Default::default(),
+            None,
+        )
+    else {
+        return Vec::new();
+    };
+    catalog
+        .records()
+        .filter_map(|record| {
+            protocol::candidate_line(
+                OsStr::new(&record.name),
+                "remembered theme",
+                "themes",
+                false,
+            )
+        })
+        .collect()
 }
 
 /// Relation labels, including hidden labels so rename can recover a label

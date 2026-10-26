@@ -47,6 +47,8 @@ pub(crate) enum Kind {
     Metric,
     /// A relation label from the live relation catalog.
     RelationLabel,
+    /// A remembered Pomodoro theme from the read-only theme catalog.
+    ThemeName,
     /// A vault note, completed as a path relative to the vault root.
     VaultNote,
     /// An article note, completed with its current section count.
@@ -481,9 +483,24 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["themes", "hide"],
+        arg: "name",
+        kind: Kind::ThemeName,
+    },
+    Entry {
+        path: &["themes", "unhide"],
+        arg: "name",
+        kind: Kind::ThemeName,
+    },
+    Entry {
+        path: &["themes", "color"],
+        arg: "name",
+        kind: Kind::ThemeName,
+    },
+    Entry {
         path: &["themes", "rename"],
         arg: "old",
-        kind: Kind::FreeText,
+        kind: Kind::ThemeName,
     },
     Entry {
         path: &["themes", "rename"],
@@ -493,7 +510,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &["relations", "hide"],
         arg: "label",
-        kind: Kind::FreeText,
+        kind: Kind::RelationLabel,
     },
     Entry {
         path: &["relations", "rename"],
@@ -508,7 +525,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &["relations", "unhide"],
         arg: "label",
-        kind: Kind::FreeText,
+        kind: Kind::RelationLabel,
     },
     Entry {
         path: &[],
