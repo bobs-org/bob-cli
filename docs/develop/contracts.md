@@ -19,6 +19,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [`bob ref create` — vault notes, Markdown, PDF, and URL targets](../highlights-create.md) — `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections
 - [Highlights Reference Note Sync](../highlights-ref-sync.md) — `bob ref` PDF intake and reference notes
 - [Bob Plugins](../plugins.md) — `bob plugins` list and vault deploy
+- [Command catalog protocol](../command-catalog.md) — Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage
 
 ## Tasks and projects
 

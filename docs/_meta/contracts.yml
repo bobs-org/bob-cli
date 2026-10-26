@@ -8,6 +8,9 @@ groups:
         summary: "Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)"
         order: 2
         reader: guides/add-prerequisites.md
+      - stem: command-catalog
+        summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
+        order: 30
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3

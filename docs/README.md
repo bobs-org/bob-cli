@@ -60,6 +60,7 @@ queued intake; full scans also synchronize annotations. The
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill |
 | [today-marks.md](today-marks.md) | Today marks: a display-only tomato on task lines linked under today's open Pomodoros |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |
+| [command-catalog.md](command-catalog.md) | Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage |
 <!-- END GENERATED: contract table -->
 
 `bob <command> --help` is the concise usage source for that command, and

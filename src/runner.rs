@@ -90,6 +90,19 @@ impl Section {
             Self::CaptureProtocol => "capture protocol",
         }
     }
+
+    /// Catalog section id, or `None` for the Capture protocol section
+    /// which the catalog omits from `sections`.
+    pub(crate) const fn catalog_id(self) -> Option<&'static str> {
+        match self {
+            Self::DailyWorkflow => Some("daily"),
+            Self::TasksAndProjects => Some("tasks"),
+            Self::Vault => Some("vault"),
+            Self::Integrations => Some("integrations"),
+            Self::Setup => Some("setup"),
+            Self::CaptureProtocol => None,
+        }
+    }
 }
 
 pub(crate) const SECTIONS: &[Section] = &[
@@ -912,6 +925,12 @@ fn run_bob_inner() -> i32 {
     // help output or the completion tree.
     if argv.get(1).is_some_and(|first| first == "__complete") {
         return crate::native::completion::run_complete(&argv[2..]);
+    }
+    // Hidden command-catalog endpoint. Same intercept as `__complete`:
+    // before alias rewriting and clap, so it never appears in help,
+    // the docs catalog, or completion.
+    if argv.get(1).is_some_and(|first| first == "__catalog") {
+        return crate::native::catalog::run_catalog(&argv[2..]);
     }
 
     let mut args = rewrite_alias_args(&argv[1..]);

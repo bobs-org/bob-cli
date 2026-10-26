@@ -84,6 +84,7 @@ plugins:
         Contracts (optional):
           - articles.md
           - capture.md
+          - command-catalog.md
           - completion.md
           - getting-started.md
           - gkeep.md
@@ -275,6 +276,7 @@ nav:
               - "`bob ref create` — vault notes, Markdown, PDF, and URL targets": highlights-create.md
               - "Highlights Reference Note Sync": highlights-ref-sync.md
               - "Bob Plugins": plugins.md
+              - "Command catalog protocol": command-catalog.md
           - "Tasks and projects":
               - "Dashboard navigation and child pages": dashboard.md
               - "Task date marks": date-marks.md

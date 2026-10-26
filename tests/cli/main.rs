@@ -4,6 +4,7 @@ mod aliases;
 mod articles;
 mod capture;
 mod capture_templates;
+mod catalog;
 mod completion;
 mod dataview;
 mod dataview_oom;

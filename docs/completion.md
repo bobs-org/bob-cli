@@ -85,6 +85,8 @@ failure, which yields empty output.
   slot's full candidate set. Attached `--opt=` values are served with
   `!prefix`.
 
+See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
+
 ## What completes
 
 - **Commands.** Root commands use the same six workflow sections as
