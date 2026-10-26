@@ -27,6 +27,18 @@ fn scans_markdown_files_with_exclusions_and_threshold() {
         &vault.path().join(".obsidian/settings.md"),
         "- [x] settings #task\n",
     );
+    write_file(
+        &vault
+            .path()
+            .join(".bob/ref-sources/chat/x--0123456789ab/source.md"),
+        "\
+---
+type: [[project]]
+---
+- [x] shipped #task ^done1
+- [x] also shipped #task
+",
+    );
 
     let plan = build_collection_plan(vault.path(), 2).expect("build plan");
 

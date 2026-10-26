@@ -1,6 +1,7 @@
 use std::ffi::{OsStr, OsString};
 
 const ALWAYS_EXCLUDED_NOTE_DIRECTORY_NAMES: &[&str] = &[
+    ".bob",
     ".git",
     ".obsidian",
     "_conflicts",

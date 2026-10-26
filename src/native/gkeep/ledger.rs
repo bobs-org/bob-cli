@@ -688,6 +688,10 @@ mod tests {
             &root.join(".obsidian/config.md"),
             "%%gkeep:v1:note-9:000000000001%%\n",
         );
+        write(
+            &root.join(".bob/ref-sources/chat/x--0123456789ab/source.md"),
+            "%%gkeep:v1:note-9:000000000002%%\n",
+        );
         write(&root.join("plain.md"), "plain text, no marker\n");
         dir
     }

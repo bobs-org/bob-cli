@@ -14,6 +14,7 @@ mod help;
 mod help_options;
 mod highlights;
 mod move_done;
+mod note_walkers;
 mod plan;
 mod plugins;
 mod pomodoro;

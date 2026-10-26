@@ -497,6 +497,14 @@ fn refusals() {
         .as_deref(),
         Some("excluded-directory")
     );
+    assert_eq!(
+        skip(
+            "---\ntype: [[article]]\n---\n\n# Title\n",
+            ".bob/ref-sources/chat/x--0123456789ab/source.md"
+        )
+        .as_deref(),
+        Some("excluded-directory")
+    );
 }
 
 #[test]

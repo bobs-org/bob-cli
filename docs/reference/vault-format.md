@@ -404,8 +404,9 @@ vault/
 ├── file/                    # saved clipboard snippets
 ├── _conflicts/              # local copies vault-sync could not merge
 ├── _templates/              # skipped by lane queries
-├── .bob/themes/             # synced per-host theme preference journals
-├── .bob/relations/          # synced per-host relation-label preference journals
+├── .bob/                    # machine data; never scanned as notes
+│   ├── themes/              # synced per-host theme preference journals
+│   └── relations/           # synced per-host relation-label preference journals
 └── .obsidian/plugins/       # installed community plugins, including Bob's
 ```
 
@@ -418,6 +419,11 @@ vault/
 | `gkeep_inbox.md` | Needed for Keep drain | `gkeep.target` |
 | `done/` | Created by archive | none |
 | `.obsidian/plugins/obsidian-tasks-plugin/data.json` | Needed for Dataview Tasks and Blocked writes | none |
+
+`.bob/` is machine data (preference journals, Keep import receipts, and
+saved reference sources). Note walkers never scan it as vault notes:
+task archive, link repair, project and ready scans, task-status hooks,
+`bob query`, and the gkeep ledger skip it.
 
 `old_lib/` is the archival predecessor of `lib/`. Capture routes select
 root-level notes: `@work` writes `work.md`. Nested notes are reached with
