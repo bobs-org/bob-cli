@@ -9,6 +9,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 #[cfg(test)]
@@ -36,6 +37,9 @@ const OVERWRITE_SUBJECT_PREFIX: &str = "bob ref create: overwrite";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverwriteFailpoint {
     AfterStagingValidation,
+    FailedNewFileWrite,
+    LateHistorySaveBeforeRollback,
+    CrashAfterLateHistorySave,
     AfterIntentPersistence,
     AfterFrozenNote,
     AfterSidecarRemoval,
@@ -289,6 +293,7 @@ fn execute_with_sync_and_session(
                 &base_head,
                 subject.clone(),
                 &locked.bundle_preimages,
+                &annotated_history_paths(&locked),
             )?;
             if locked.annotated.is_some() {
                 intent = intent.with_annotated_moves(
@@ -325,6 +330,28 @@ fn execute_with_sync_and_session(
 
             let applied =
                 apply_and_verify(config, &locked, request, &staged, &manifest);
+            #[cfg(test)]
+            let applied = if applied.is_ok()
+                && failpoint_is(OverwriteFailpoint::LateHistorySaveBeforeRollback)
+            {
+                mutate_older_archive_for_test(config, &locked).and_then(|()| {
+                    Err(CommandError::new(
+                        "injected failpoint LateHistorySaveBeforeRollback",
+                    ))
+                })
+            } else {
+                applied
+            };
+            #[cfg(test)]
+            if applied.is_ok()
+                && failpoint_is(OverwriteFailpoint::CrashAfterLateHistorySave)
+            {
+                mutate_older_archive_for_test(config, &locked)?;
+                return Err(CommandError::new(
+                    "injected crash after a late save to an older archive",
+                )
+                .with_code("injected_crash"));
+            }
             #[cfg(test)]
             if failpoint_is(OverwriteFailpoint::CrashWithoutRollback)
                 && applied.is_ok()
@@ -639,6 +666,47 @@ fn annotated_moves(
     Ok(moves)
 }
 
+fn annotated_history_paths(plan: &OverwritePreflight) -> BTreeSet<String> {
+    let Some(annotated) = &plan.annotated else {
+        return BTreeSet::new();
+    };
+    let mut paths = BTreeSet::new();
+    for record in &annotated.history {
+        paths.insert(record.note_path.clone());
+        if let Some(pdf) = &record.annotated_pdf {
+            paths.insert(pdf.path.clone());
+        }
+        if let Some(assets) = &record.assets_path {
+            paths.insert(assets.clone());
+        }
+    }
+    paths
+}
+
+#[cfg(test)]
+fn mutate_older_archive_for_test(
+    config: &Config,
+    plan: &OverwritePreflight,
+) -> Result<(), CommandError> {
+    let path = plan
+        .annotated
+        .as_ref()
+        .and_then(|annotated| annotated.history.first())
+        .and_then(|record| record.annotated_pdf.as_ref())
+        .map(|pdf| pdf.path.as_str())
+        .ok_or_else(|| {
+            CommandError::new("test fixture has no older annotated archive")
+        })?;
+    let absolute = config.bob_dir.join(path);
+    let mut bytes = fs::read(&absolute).map_err(|error| {
+        CommandError::new(format!("read older archive for test: {error}"))
+    })?;
+    bytes.extend_from_slice(b"\nlate older archive save\n");
+    fs::write(&absolute, bytes).map_err(|error| {
+        CommandError::new(format!("write older archive for test: {error}"))
+    })
+}
+
 fn annotated_writes(
     plan: &OverwritePreflight,
     staged: &StagedOverwrite,
@@ -752,23 +820,34 @@ fn task_line_index(
     lines: &[&str],
     plan: &OverwritePreflight,
 ) -> Result<usize, CommandError> {
-    let line_index = plan
-        .task
-        .block_id
-        .as_deref()
-        .and_then(|block_id| {
-            lines
-                .iter()
-                .position(|line| line.contains(&format!("^{block_id}")))
-        })
-        .unwrap_or(plan.task.line_index);
-    if line_index >= lines.len() {
-        Err(CommandError::new(
-            "could not locate the preserved reading task after inbound link planning",
-        ))
-    } else {
-        Ok(line_index)
+    if let Some(block_id) = plan.task.block_id.as_deref() {
+        if lines
+            .get(plan.task.line_index)
+            .is_some_and(|line| line_has_exact_block_id(line, block_id))
+        {
+            return Ok(plan.task.line_index);
+        }
+        return lines
+            .iter()
+            .position(|line| line_has_exact_block_id(line, block_id))
+            .ok_or_else(|| {
+                CommandError::new(
+                    "could not locate the preserved reading task after inbound link planning",
+                )
+            });
     }
+    (plan.task.line_index < lines.len())
+        .then_some(plan.task.line_index)
+        .ok_or_else(|| {
+            CommandError::new(
+                "could not locate the preserved reading task after inbound link planning",
+            )
+        })
+}
+
+fn line_has_exact_block_id(line: &str, expected: &str) -> bool {
+    crate::native::collect_done::trailing_block_id_in_line(line).as_deref()
+        == Some(expected)
 }
 
 fn rollback_suffix(result: Result<(), CommandError>) -> String {
@@ -1536,21 +1615,7 @@ fn publish_pdf_after_archive(
     let bytes = fs::read(staged).map_err(|error| {
         CommandError::new(format!("could not read staged PDF: {error}"))
     })?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&destination)
-        .map_err(|error| {
-            CommandError::new(format!(
-                "could not publish replacement PDF without replacing a file: {error}"
-            ))
-        })?;
-    file.write_all(&bytes).map_err(|error| {
-        CommandError::new(format!("could not write replacement PDF: {error}"))
-    })?;
-    file.sync_all().map_err(|error| {
-        CommandError::new(format!("could not sync replacement PDF: {error}"))
-    })
+    atomic_publish_new_file(&destination, &bytes, "replacement PDF")
 }
 
 fn remove_old_sidecar(
@@ -1754,28 +1819,95 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<(), CommandError> {
             ))
         })?;
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
+    atomic_publish_new_file(path, bytes, "frozen note")
+}
+
+static NEXT_OVERWRITE_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+fn atomic_publish_new_file(
+    destination: &Path,
+    bytes: &[u8],
+    description: &str,
+) -> Result<(), CommandError> {
+    let parent = destination.parent().ok_or_else(|| {
+        CommandError::new(format!(
+            "{description} destination has no parent: {}",
+            destination.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        CommandError::new(format!(
+            "could not create {description} directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    let filename = destination.file_name().ok_or_else(|| {
+        CommandError::new(format!(
+            "{description} destination has no filename: {}",
+            destination.display()
+        ))
+    })?;
+    let (temp_path, mut file) = loop {
+        let id = NEXT_OVERWRITE_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let mut name = std::ffi::OsString::from(".bob-overwrite-tmp-");
+        name.push(filename);
+        name.push(format!("-{}-{id}.tmp", std::process::id()));
+        let temp_path = parent.join(name);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => break (temp_path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                continue;
+            }
+            Err(error) => {
+                return Err(CommandError::new(format!(
+                    "could not create temporary {description} without replacement: {error}"
+                )));
+            }
+        }
+    };
+
+    let write_result = (|| {
+        #[cfg(test)]
+        if failpoint_is(OverwriteFailpoint::FailedNewFileWrite) {
+            let partial = bytes.len().max(1) / 2;
+            file.write_all(&bytes[..partial.min(bytes.len())])?;
+            return Err(std::io::Error::other(
+                "injected partial write failure",
+            ));
+        }
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(CommandError::new(format!(
+            "could not write complete {description} {}: {error}",
+            destination.display()
+        )));
+    }
+
+    if let Err(error) =
+        super::super::io::rename_no_replace(&temp_path, destination)
+    {
+        let _ = fs::remove_file(&temp_path);
+        return Err(CommandError::new(format!(
+            "could not publish {description} without replacing a file at {}: {error}",
+            destination.display()
+        )));
+    }
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
         .map_err(|error| {
-        CommandError::new(format!(
-            "could not create frozen note {} without replacement: {error}",
-            path.display()
-        ))
-    })?;
-    file.write_all(bytes).map_err(|error| {
-        CommandError::new(format!(
-            "could not write frozen note {}: {error}",
-            path.display()
-        ))
-    })?;
-    file.sync_all().map_err(|error| {
-        CommandError::new(format!(
-            "could not sync frozen note {}: {error}",
-            path.display()
-        ))
-    })
+            CommandError::new(format!(
+                "could not sync {description} directory {}: {error}",
+                parent.display()
+            ))
+        })
 }
 
 fn current_audio_absolute(
@@ -2078,12 +2210,19 @@ fn find_task_line(
     task: &super::TaskFingerprint,
     expected: &str,
 ) -> Result<usize, CommandError> {
-    if let Some(block_id) = task.block_id.as_deref()
-        && let Some(index) = lines
+    if let Some(block_id) = task.block_id.as_deref() {
+        if lines
+            .get(task.line_index)
+            .is_some_and(|line| line_has_exact_block_id(line, block_id))
+        {
+            return Ok(task.line_index);
+        }
+        return lines
             .iter()
-            .position(|line| line.contains(&format!("^{block_id}")))
-    {
-        return Ok(index);
+            .position(|line| line_has_exact_block_id(line, block_id))
+            .ok_or_else(|| {
+                CommandError::new("could not locate the preserved reading task")
+            });
     }
     let first = expected.lines().next().unwrap_or_default();
     lines
@@ -2938,6 +3077,7 @@ mod tests {
         });
         fixture.request.dry_run = false;
         fixture.old_note = fs::read(&fixture.note).expect("refresh old note");
+        fixture.old_pdf = fs::read(&fixture.pdf).expect("refresh old PDF");
         fixture.old_task_file =
             fs::read(fixture.vault.join(&fixture.plan.task.path))
                 .expect("refresh old task file");
@@ -3115,6 +3255,58 @@ mod tests {
     }
 
     #[test]
+    fn task_edit_and_verification_match_the_exact_reading_block_id() {
+        let mut fixture =
+            annotated_execute_fixture("bob-cli-overwrite-exact-task-id");
+        let task_file = fixture.vault.join(&fixture.plan.task.path);
+        let block = fixture
+            .plan
+            .task
+            .block_id
+            .clone()
+            .expect("reading-task block id");
+        assert_eq!(block, "ref-report");
+        let contents = fs::read_to_string(&task_file).expect("task file");
+        let lines = contents.lines().collect::<Vec<_>>();
+        let task_index = lines
+            .iter()
+            .position(|line| line_has_exact_block_id(line, &block))
+            .expect("exact reading task line");
+        let mut lines =
+            lines.into_iter().map(str::to_string).collect::<Vec<_>>();
+        lines.splice(
+            task_index..task_index,
+            [
+                "- [ ] #task Similar name v2 ^ref-report-v2".to_string(),
+                "- [ ] #task Similar name two ^ref-report-two".to_string(),
+            ],
+        );
+        fs::write(&task_file, lines.join("\n") + "\n")
+            .expect("insert decoy tasks");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "add similar task ids"],
+        );
+        refresh_fixture_plan(&mut fixture);
+
+        grant_and_overwrite(&fixture);
+        let after = fs::read_to_string(&task_file).expect("task after");
+        assert!(after.contains("- [ ] #task Similar name v2 ^ref-report-v2"));
+        assert!(after.contains("- [ ] #task Similar name two ^ref-report-two"));
+        assert!(after.contains(&format!("^{block}")));
+        assert!(after.contains("A Better Report"));
+        assert_eq!(
+            after
+                .lines()
+                .filter(|line| line_has_exact_block_id(line, &block))
+                .count(),
+            1,
+            "only the exact reading task remains matched"
+        );
+    }
+
+    #[test]
     fn annotated_coordination_hold_writes_nothing_and_has_retry_hint() {
         let fixture =
             annotated_execute_fixture("bob-cli-overwrite-annotated-hold");
@@ -3275,6 +3467,216 @@ mod tests {
             ),
             fixture.old_status
         );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+    }
+
+    #[test]
+    fn annotated_failpoint_sweep_restores_bundle_links_and_clears_intent() {
+        const POINTS: &[OverwriteFailpoint] = &[
+            OverwriteFailpoint::AfterStagingValidation,
+            OverwriteFailpoint::AfterIntentPersistence,
+            OverwriteFailpoint::FailedNewFileWrite,
+            OverwriteFailpoint::AfterFrozenNote,
+            OverwriteFailpoint::AfterSidecarRemoval,
+            OverwriteFailpoint::AfterArchivePdf,
+            OverwriteFailpoint::AfterAssets,
+            OverwriteFailpoint::AfterAudio,
+            OverwriteFailpoint::AfterPdf,
+            OverwriteFailpoint::AfterNote,
+            OverwriteFailpoint::AfterTaskEdit,
+            OverwriteFailpoint::AfterSyncWrite,
+            OverwriteFailpoint::ForcedVerificationFailure,
+            OverwriteFailpoint::BeforeCommit,
+        ];
+        for point in POINTS {
+            let fixture = annotated_execute_fixture(&format!(
+                "bob-cli-overwrite-annotated-fp-{point:?}"
+            ));
+            let _armed = arm(*point);
+            let fake =
+                super::super::super::marker_write::FakeCoordinator::grant(
+                    std::time::Duration::ZERO,
+                );
+            let (result, _) = run_annotated_execute(&fixture, fake);
+            let error = result.expect_err(&format!("{point:?} must abort"));
+            assert!(
+                error.to_string().contains("injected failpoint")
+                    || error
+                        .to_string()
+                        .contains("injected partial write failure")
+                    || error.code == Some("injected_failpoint"),
+                "{point:?} unexpected error: {error}"
+            );
+            assert_intact_annotated_state(&fixture);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn annotated_overwrite_rollback_keeps_vault_relative_paths_through_symlinked_parent(
+    ) {
+        use std::os::unix::fs::symlink;
+
+        let mut fixture =
+            annotated_execute_fixture("bob-cli-overwrite-symlink-parent");
+        let actual_parent = fixture._temp.path().join("actual-parent");
+        fs::create_dir_all(&actual_parent).expect("actual parent");
+        let actual_vault = actual_parent.join("vault");
+        fs::rename(&fixture.vault, &actual_vault).expect("move vault");
+        let alias_parent = fixture._temp.path().join("vault-parent-link");
+        symlink(&actual_parent, &alias_parent).expect("symlink parent");
+        let alias_vault = alias_parent.join("vault");
+        fixture.vault = alias_vault.clone();
+        fixture.note = alias_vault.join("ref/papers/report.md");
+        fixture.pdf = alias_vault.join("lib/papers/report.pdf");
+        fixture.config = Config::for_vault(&alias_vault);
+        refresh_fixture_plan(&mut fixture);
+
+        let _armed = arm(OverwriteFailpoint::CrashWithoutRollback);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, _) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("injected crash");
+        assert_eq!(error.code, Some("injected_crash"));
+        drop(_armed);
+        let intent = super::super::recovery::load_intent(&fixture.config)
+            .expect("load symlink-vault intent")
+            .expect("crashed transaction intent");
+        for path in intent.touched.iter().chain(&intent.created) {
+            assert!(
+                !Path::new(path).is_absolute(),
+                "intent path stays vault-relative: {path}"
+            );
+        }
+        for step in &intent.moves {
+            for path in [&step.source, &step.dest] {
+                assert!(!Path::new(path).is_absolute(), "move path: {path}");
+            }
+            for file in &step.files {
+                assert!(
+                    !Path::new(&file.rel).is_absolute(),
+                    "asset path: {}",
+                    file.rel
+                );
+            }
+        }
+        for write in &intent.writes {
+            assert!(
+                !Path::new(&write.path).is_absolute(),
+                "write path: {}",
+                write.path
+            );
+        }
+        let annotated =
+            fixture.plan.annotated.as_ref().expect("annotated plan");
+        for preimage in &fixture.plan.bundle_preimages {
+            assert!(
+                !Path::new(&preimage.path).is_absolute(),
+                "preimage path: {}",
+                preimage.path
+            );
+        }
+        for preimage in &annotated.preimages {
+            assert!(
+                !Path::new(&preimage.path).is_absolute(),
+                "annotated preimage path: {}",
+                preimage.path
+            );
+        }
+        assert!(
+            annotated
+                .live_assets_path
+                .as_deref()
+                .is_some_and(|path| !Path::new(path).is_absolute()),
+            "assets_relative stays vault-relative"
+        );
+        super::super::recovery::recover_with_locks_held(
+            &fixture.config,
+            &ob::child_env(),
+            false,
+        )
+        .expect("rollback symlink-vault transaction");
+        assert_intact_annotated_state(&fixture);
+    }
+
+    #[test]
+    fn older_archive_save_survives_failed_second_overwrite_rollback() {
+        let (fixture, first_archive_pdf) = second_annotated_overwrite_fixture(
+            "bob-cli-overwrite-older-save-rollback",
+        );
+        let original_archive =
+            fs::read(fixture.vault.join(&first_archive_pdf)).expect("archive");
+        let _armed = arm(OverwriteFailpoint::LateHistorySaveBeforeRollback);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, _) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("late history save failpoint");
+        assert!(
+            error.to_string().contains("LateHistorySaveBeforeRollback"),
+            "unexpected failure before failpoint: {error}"
+        );
+        assert_eq!(
+            fs::read(fixture.vault.join(&first_archive_pdf))
+                .expect("older archive after rollback"),
+            [original_archive, b"\nlate older archive save\n".to_vec()]
+                .concat(),
+            "rollback never restores an older archive from HEAD"
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_none());
+        assert_eq!(
+            fs::read(&fixture.note).expect("live note"),
+            fixture.old_note
+        );
+        assert_eq!(fs::read(&fixture.pdf).expect("live PDF"), fixture.old_pdf);
+    }
+
+    #[test]
+    fn older_archive_save_survives_second_overwrite_crash_recovery() {
+        let (fixture, first_archive_pdf) = second_annotated_overwrite_fixture(
+            "bob-cli-overwrite-older-save-crash",
+        );
+        let original_archive =
+            fs::read(fixture.vault.join(&first_archive_pdf)).expect("archive");
+        let _armed = arm(OverwriteFailpoint::CrashAfterLateHistorySave);
+        let fake = super::super::super::marker_write::FakeCoordinator::grant(
+            std::time::Duration::ZERO,
+        );
+        let (result, _) = run_annotated_execute(&fixture, fake);
+        let error = result.expect_err("injected crash");
+        assert_eq!(
+            error.code,
+            Some("injected_crash"),
+            "unexpected failure before failpoint: {error}"
+        );
+        assert!(super::super::recovery::load_intent(&fixture.config)
+            .expect("load intent")
+            .is_some());
+        drop(_armed);
+
+        super::super::recovery::recover_with_locks_held(
+            &fixture.config,
+            &ob::child_env(),
+            false,
+        )
+        .expect("recover second overwrite");
+        assert_eq!(
+            fs::read(fixture.vault.join(&first_archive_pdf))
+                .expect("older archive after recovery"),
+            [original_archive, b"\nlate older archive save\n".to_vec()]
+                .concat(),
+            "crash recovery leaves the older archive byte-for-byte as saved"
+        );
+        assert_eq!(
+            fs::read(&fixture.note).expect("live note"),
+            fixture.old_note
+        );
+        assert_eq!(fs::read(&fixture.pdf).expect("live PDF"), fixture.old_pdf);
         assert!(super::super::recovery::load_intent(&fixture.config)
             .expect("load intent")
             .is_none());
@@ -3647,6 +4049,77 @@ mod tests {
         result
     }
 
+    fn assert_intact_annotated_state(fixture: &ExecuteFixture) {
+        assert_intact_old_state(fixture);
+        let annotated = fixture.plan.annotated.as_ref().expect("annotated");
+        let live_assets = annotated
+            .live_assets_path
+            .as_deref()
+            .expect("fixture assets path");
+        for file in &annotated.asset_manifest {
+            let path = fixture.vault.join(live_assets).join(&file.rel);
+            let bytes = fs::read(&path).expect("restored asset");
+            assert_eq!(
+                super::super::sha256(&bytes),
+                file.sha256,
+                "asset bytes restore exactly at {}",
+                path.display()
+            );
+        }
+        for path in [
+            &annotated.bundle.note_path,
+            &annotated.bundle.annotated_pdf_path,
+            &annotated.bundle.assets_path,
+        ] {
+            assert!(
+                !fixture.vault.join(path).exists(),
+                "current archive bundle path is absent after rollback: {path}"
+            );
+        }
+    }
+
+    fn second_annotated_overwrite_fixture(
+        tag: &str,
+    ) -> (ExecuteFixture, String) {
+        let mut fixture = annotated_execute_fixture(tag);
+        let first_archive_pdf = fixture
+            .plan
+            .annotated
+            .as_ref()
+            .expect("first annotated plan")
+            .bundle
+            .annotated_pdf_path
+            .clone();
+        grant_and_overwrite(&fixture);
+        write_marker_pdf(&fixture.staged.private_pdf, SECOND_STAGED_MARKER);
+        fixture.staged.marker.captured = Some("2026-10-17".into());
+        fs::create_dir_all(fixture.vault.join("ref/papers/report.assets"))
+            .expect("second assets directory");
+        fs::write(
+            fixture.vault.join("ref/papers/report.assets/revision.png"),
+            b"second annotation asset",
+        )
+        .expect("second asset");
+        git(&fixture.vault, &["add", "-A"]);
+        git(
+            &fixture.vault,
+            &["commit", "-q", "-m", "add second annotation"],
+        );
+        refresh_fixture_plan(&mut fixture);
+        assert_eq!(
+            fixture
+                .plan
+                .annotated
+                .as_ref()
+                .expect("second annotated plan")
+                .history
+                .len(),
+            1,
+            "second overwrite fingerprints the older archive"
+        );
+        (fixture, first_archive_pdf)
+    }
+
     #[test]
     fn processed_highlight_identity_survives_overwrite_and_rescan() {
         let fixture = processed_annotation_execute_fixture(
@@ -3688,12 +4161,15 @@ mod tests {
             !frozen.contains("#task #ref") && !frozen.contains("^ref"),
             "archive must not grow a reading tracker:\n{frozen}"
         );
+        let open_tasks = frozen
+            .lines()
+            .filter(|line| {
+                ref_tasks::task_mark(line).is_some_and(ref_tasks::is_open_mark)
+            })
+            .collect::<Vec<_>>();
         assert!(
-            frozen
-                .lines()
-                .all(|line| ref_tasks::task_mark(line).is_none()
-                    || line.contains("[h::")),
-            "archive must not introduce open annotation tasks:\n{frozen}"
+            open_tasks.is_empty(),
+            "frozen note must have no open task lines outside the neutralized banner; found {open_tasks:?}:\n{frozen}"
         );
         let count = fixture.plan.highlights;
         let count_label = if count == 1 {

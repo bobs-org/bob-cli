@@ -147,18 +147,42 @@ fn predicted_mark(
 
 fn print_archive_line(plan: &OverwritePreflight) {
     if let Some(annotated) = &plan.annotated {
-        let link_count = annotated.inbound.rewritten;
+        let link_count = annotated
+            .inbound
+            .files
+            .iter()
+            .filter(|file| file.path != Path::new(&plan.note_path))
+            .map(|file| file.rewritten)
+            .sum::<usize>();
+        let highlight_count = if annotated.highlights == 1 {
+            "1 highlight".to_string()
+        } else {
+            format!("{} highlights", annotated.highlights)
+        };
         let links = if link_count == 1 {
             "1 highlight link".to_string()
         } else {
             format!("{link_count} highlight links")
         };
         println!(
-            "earlier: {} ({} highlights · {links} · annotated PDF retained: {})",
+            "earlier: {} ({highlight_count} · {links} · annotated PDF retained: {})",
             annotated.frozen.path,
-            annotated.highlights,
             annotated.bundle.annotated_pdf_path,
         );
+        for finding in &annotated.inbound.skipped_ambiguous {
+            println!(
+                "warning: ambiguous highlight link left unresolved in {}: {}",
+                finding.file.display(),
+                finding.target,
+            );
+        }
+        for finding in &annotated.inbound.skipped_dangling_highlights {
+            println!(
+                "warning: dangling highlight link left unchanged in {}: {}",
+                finding.file.display(),
+                finding.target,
+            );
+        }
     } else if let Some(archive) = &plan.frozen_note {
         println!("earlier: {}", archive.path);
     } else {

@@ -113,6 +113,18 @@ fn web_command(fixture: &WebVault, args: &[&str]) -> Command {
     command
 }
 
+fn highlights_on_note(note: &Path) -> u64 {
+    fs::read_to_string(note)
+        .ok()
+        .and_then(|contents| {
+            contents.lines().find_map(|line| {
+                line.strip_prefix("highlights_count:")
+                    .and_then(|value| value.trim().parse().ok())
+            })
+        })
+        .unwrap_or(0)
+}
+
 fn with_network(
     command: &mut Command,
     adapter: &Path,
@@ -714,18 +726,10 @@ fn annotated_web_target_refuses_without_network() {
     .env("FAKE_CURL_LOG", &curl_log)
     .output()
     .expect("overwrite annotated reference");
-    assert_eq!(
-        output.status.code(),
-        Some(2),
-        "annotated overwrite must refuse:\n{}",
-        format_output(&output)
-    );
-    assert!(
-        stderr(&output).contains(
-            "this reference has 0 highlights, which Highlights holds on the Mac; run the overwrite there"
-        ),
-        "the host-coordination gate wins:\n{}",
-        format_output(&output)
+    super::overwrite_annotated::assert_annotated_host_refusal(
+        &output,
+        highlights_on_note(&fixture.vault.join("ref/blogs/hello.md")),
+        "annotated web target",
     );
     assert!(!fake.called(), "annotated targets do no adapter work");
 }
@@ -816,14 +820,10 @@ fn every_annotation_source_refuses_with_the_contract_remedy() {
             "{kind} evidence must refuse:\n{}",
             format_output(&output)
         );
-        let diagnostic = stderr(&output);
-        assert!(
-            diagnostic.contains("annotated_reference")
-                && diagnostic.contains(
-                    "which Highlights holds on the Mac; run the overwrite there"
-                )
-                && diagnostic.contains("-f starts a new reading from any host"),
-            "{kind} refusal must include its code and host remedy:\n{diagnostic}"
+        super::overwrite_annotated::assert_annotated_host_refusal(
+            &output,
+            highlights_on_note(&fixture.vault.join("ref/blogs/hello.md")),
+            kind,
         );
         assert!(!fake.called(), "{kind} refusal must precede adapters");
         assert!(

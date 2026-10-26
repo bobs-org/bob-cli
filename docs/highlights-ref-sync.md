@@ -2418,6 +2418,13 @@ an intent is pending; the error names the stem and says to run `bob ref scan`
 on this host. `bob ref rename` already holds both locks and recovers before its
 pre-sync.
 
+If recovery finds bytes that no longer match the transaction, it keeps those
+files and the intent. The error names the intent file and the conflicting
+vault paths. Keep or commit the late save you want, then move each conflicting
+file aside and rerun a writing command to retry recovery. If you resolve the
+state manually instead, remove only the named intent file after checking the
+vault; the next writing command can then proceed.
+
 Before first writes, make the vault clean or intentionally checkpointed:
 
 ```bash

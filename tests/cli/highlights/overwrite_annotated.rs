@@ -105,6 +105,17 @@ fn highlights_on_note(fixture: &OverwriteVault) -> u64 {
         .unwrap_or(0)
 }
 
+fn first_highlight_id(fixture: &OverwriteVault) -> String {
+    fs::read_to_string(fixture.vault.join(format!("ref/papers/{STEM}.md")))
+        .expect("annotated note")
+        .lines()
+        .flat_map(str::split_whitespace)
+        .find_map(|token| token.strip_prefix('^'))
+        .filter(|block_id| block_id.starts_with("h-"))
+        .expect("highlight anchor")
+        .to_string()
+}
+
 fn expected_annotated_message(output: &Output) -> String {
     let diagnostic = stderr(output);
     #[cfg(target_os = "macos")]
@@ -118,7 +129,7 @@ fn expected_annotated_message(output: &Output) -> String {
     diagnostic
 }
 
-fn assert_annotated_host_refusal(
+pub(super) fn assert_annotated_host_refusal(
     output: &Output,
     highlights: u64,
     label: &str,
@@ -220,6 +231,7 @@ fn linux_refuses_each_annotation_kind_before_render_and_leaves_vault() {
 }
 
 #[test]
+#[cfg(not(target_os = "macos"))]
 fn coordination_key_on_still_refuses_annotated_overwrite_off_macos() {
     let fixture =
         filed_vault("bob-cli-overwrite-ann-key-on", "ready", false, false);
@@ -240,9 +252,16 @@ fn dry_run_previews_annotated_archive_and_writes_nothing() {
     let fixture =
         filed_vault("bob-cli-overwrite-ann-dry", "ready", false, false);
     plant_text_highlight(&fixture);
+    let highlight_id = first_highlight_id(&fixture);
+    write_file(
+        &fixture.vault.join("zk/report.md"),
+        "# Unrelated report note\n",
+    );
     write_file(
         &fixture.vault.join("zk/pointer.md"),
-        &format!("# Pointer\n\nSee [[ref/papers/{STEM}#^h-test]].\n"),
+        &format!(
+            "# Pointer\n\nSee [[ref/papers/{STEM}#^{highlight_id}]].\n\nSee [[ref/papers/{STEM}#^h-missing]].\n\nSee [[report#^{highlight_id}]].\n"
+        ),
     );
     commit_vault(&fixture.vault, "inbound highlight link");
     let before = snapshot_state(&fixture);
@@ -259,9 +278,22 @@ fn dry_run_previews_annotated_archive_and_writes_nothing() {
                 "earlier: ref_history/papers/{STEM}__2026-10-16.md"
             ))
             && report.contains("1 highlight")
+            && report.contains("1 highlight link")
             && report.contains("annotated PDF retained: ref_history/papers/")
             && report.contains(&format!("{STEM}__2026-10-16__annotated.pdf")),
         "dry-run must preview the annotated archive:\n{report}"
+    );
+    assert!(
+        report.contains(&format!(
+            "warning: dangling highlight link left unchanged in zk/pointer.md: ref/papers/{STEM}#^h-missing"
+        )),
+        "dangling links are named and left unchanged:\n{report}"
+    );
+    assert!(
+        report.contains(&format!(
+            "warning: ambiguous highlight link left unresolved in zk/pointer.md: report#^{highlight_id}"
+        )),
+        "ambiguous bare links are named and left unresolved:\n{report}"
     );
     assert_unchanged(&fixture, &before);
 }
@@ -270,9 +302,11 @@ fn dry_run_previews_annotated_archive_and_writes_nothing() {
 fn dirty_inbound_highlight_file_wins_over_annotated_gate() {
     let fixture =
         filed_vault("bob-cli-overwrite-ann-dirty-in", "ready", false, false);
+    plant_text_highlight(&fixture);
+    let highlight_id = first_highlight_id(&fixture);
     write_file(
         &fixture.vault.join("zk/pointer.md"),
-        &format!("# Pointer\n\nSee [[ref/papers/{STEM}#^h-test]].\n"),
+        &format!("# Pointer\n\nSee [[ref/papers/{STEM}#^{highlight_id}]].\n"),
     );
     commit_vault(&fixture.vault, "inbound highlight link");
     let pointer = fixture.vault.join("zk/pointer.md");

@@ -1470,6 +1470,9 @@ pub(super) fn print_verbose_scan_write_marker_lines(
         && !plan_outcomes
             .iter()
             .any(|outcome| matches!(outcome, ScanPlanOutcome::Held(_)))
+        && !write_outcomes
+            .iter()
+            .any(|outcome| matches!(outcome, ScanWriteOutcome::Held(_)))
     {
         return;
     }

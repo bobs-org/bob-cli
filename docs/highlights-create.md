@@ -903,6 +903,11 @@ real highlight count, inbound `#^h-` rewrite count, and retained PDF:
 earlier: ref_history/papers/report__2026-10-16.md (3 highlights · 1 highlight link · annotated PDF retained: ref_history/papers/report__2026-10-16__annotated.pdf)
 ```
 
+The link count covers rewritten links in other vault notes; links inside the
+live note are rewritten in its frozen copy and are not reported as inbound
+edits. Ambiguous bare targets and dangling highlight anchors stay unchanged
+and each produces a `warning:` line naming its file and target.
+
 The old PDF is renamed (not copied) to
 `<archive>__annotated.pdf` and assets to `<archive>.assets/` under one
 bounded `.forMerging` accessor. The frozen note keeps `^h-`/`^s-` anchors,
@@ -914,10 +919,11 @@ checkbox, residence, dependencies, relations, freshness, and logs stay
 except explicit `-s` and title-alias edits. `[h::]` processed IDs survive
 so highlighting the same passage again does not mint a duplicate follow-up.
 
-Coordination holds (`editor_active`, timeout, `marker_changed`) write
-nothing and hint to close Highlights and retry. If Highlights saves new
-annotations during the grant, overwrite aborts before intent or apply,
-keeps those bytes, and asks for `bob ref scan -w` then retry. A later
+Coordination holds (`coordination_timeout`, `coordination_failed`, and
+`marker_changed`) write nothing and hint to close Highlights and retry. If
+Highlights saves new annotations during the grant, overwrite aborts before
+intent or apply, keeps those bytes, and asks for `bob ref scan -w` then
+retry. A later
 scan that sees the archived PDF bytes back at the live path holds with
 `replaced_capture` (`Highlights wrote the replaced capture back`).
 

@@ -261,6 +261,10 @@ fn json_scan_checks_all_archives_and_keeps_dry_run_holds_as_previews() {
         "target",
         &[("2026-10-24", old_target), ("2026-10-25", &target_current)],
     );
+    fs::remove_file(
+        vault.join("ref_history/papers/target__2026-10-24__annotated.pdf"),
+    )
+    .expect("remove archived PDF while retaining its recorded digest");
     // Match the older of two valid archives. This proves the guard checks
     // the full lineage rather than only the most recent replacement.
     fs::write(&target_pdf, old_target).expect("restore older archived bytes");

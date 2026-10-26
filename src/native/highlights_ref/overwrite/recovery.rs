@@ -150,9 +150,8 @@ pub(crate) struct PendingWrite {
     pub(crate) sha256: String,
 }
 
-/// Constructors for synthetic interrupted transactions in tests. The
-/// execute phase promotes these to shared API when it wires annotated
-/// transactions; until then they stay test-only so the lint gate holds.
+/// Constructors for the persisted move evidence shared by the overwrite
+/// executor and recovery planner.
 impl PendingMove {
     /// A single-file rename with the source hash observed before the move.
     pub(crate) fn file(source: &str, dest: &str, source_sha256: &str) -> Self {
@@ -305,11 +304,15 @@ impl OverwriteIntent {
         base_head: &str,
         expected_subject: String,
         preimages: &[super::FilePreimage],
+        restore_excluded: &BTreeSet<String>,
     ) -> std::result::Result<Self, CommandError> {
         let vault = canonical_vault(config)?;
         let mut touched = Vec::new();
         let mut created = Vec::new();
         for preimage in preimages {
+            if restore_excluded.contains(&preimage.path) {
+                continue;
+            }
             if preimage.sha256.is_some() {
                 touched.push(preimage.path.clone());
             } else {
@@ -406,12 +409,14 @@ pub(crate) trait ReverseCoordinator {
         vault: &Path,
         from: &Path,
         to: &Path,
+        expected_sha256: &str,
+        expected_replacement_sha256: Option<&str>,
     ) -> std::result::Result<(), String>;
 }
 
-/// Production reverse moves: coordinate when explicit overwrite would,
-/// otherwise rename directly. A hold or failure never falls back to an
-/// uncoordinated rename.
+/// Production reverse moves coordinate on the archived file being moved.
+/// A hold, config error, or failure never falls back to an uncoordinated
+/// rename.
 pub(crate) struct PlatformReverseCoordinator;
 
 impl ReverseCoordinator for PlatformReverseCoordinator {
@@ -420,19 +425,20 @@ impl ReverseCoordinator for PlatformReverseCoordinator {
         _vault: &Path,
         from: &Path,
         to: &Path,
+        expected_sha256: &str,
+        expected_replacement_sha256: Option<&str>,
     ) -> std::result::Result<(), String> {
-        let coordinated =
-            super::super::marker_write::MarkerWriteSession::for_explicit_write(
-            )
-            .map(|session| session.coordinates())
-            .unwrap_or(false);
-        if !coordinated {
-            return rename_no_clobber(from, to);
-        }
         match crate::native::file_coordination::coordinate_merging_write(
-            to,
+            from,
             std::time::Duration::from_secs(10),
-            || rename_no_clobber(from, to),
+            || {
+                reverse_file_if_hashes_match(
+                    from,
+                    to,
+                    expected_sha256,
+                    expected_replacement_sha256,
+                )
+            },
         ) {
             crate::native::file_coordination::Coordination::Granted {
                 value,
@@ -465,8 +471,15 @@ impl ReverseCoordinator for DirectReverseCoordinator {
         _vault: &Path,
         from: &Path,
         to: &Path,
+        expected_sha256: &str,
+        expected_replacement_sha256: Option<&str>,
     ) -> std::result::Result<(), String> {
-        rename_no_clobber(from, to)
+        reverse_file_if_hashes_match(
+            from,
+            to,
+            expected_sha256,
+            expected_replacement_sha256,
+        )
     }
 }
 
@@ -481,8 +494,15 @@ impl ReverseCoordinator for ExternalCoordinationReverseCoordinator {
         _vault: &Path,
         from: &Path,
         to: &Path,
+        expected_sha256: &str,
+        expected_replacement_sha256: Option<&str>,
     ) -> std::result::Result<(), String> {
-        rename_no_clobber(from, to)
+        reverse_file_if_hashes_match(
+            from,
+            to,
+            expected_sha256,
+            expected_replacement_sha256,
+        )
     }
 }
 
@@ -680,6 +700,7 @@ fn recover_locked(
             ),
         ));
     }
+    remove_atomic_write_temps(vault, intent)?;
     // Annotated renames reverse before generic cleanup: a proved move
     // returns the only annotated copy to its live path, and ownership
     // failures stop here with the files and intent retained. Version-1
@@ -962,6 +983,7 @@ fn plan_file_move(
         source_hash,
         step.replacement_sha256.as_deref(),
         owned.get(step.source.as_str()).copied(),
+        true,
         plan,
     )
 }
@@ -986,6 +1008,9 @@ fn plan_dir_move(
                 plan.reversals.push((
                     vault.join(dest_root),
                     vault.join(source_root),
+                    None,
+                    None,
+                    false,
                 ));
                 Ok(())
             }
@@ -1012,6 +1037,7 @@ fn plan_dir_move(
             &file.sha256,
             None,
             owned.get(source_key.as_str()).copied(),
+            false,
             plan,
         )?;
     }
@@ -1107,6 +1133,7 @@ fn plan_endpoint_pair(
     intent_hash: &str,
     replacement: Option<&str>,
     owned_write: Option<&str>,
+    coordinate: bool,
     plan: &mut ReversalPlan,
 ) -> std::result::Result<(), CommandError> {
     let current_source = endpoint_hash(vault, intent, source)?;
@@ -1148,6 +1175,9 @@ fn plan_endpoint_pair(
                 plan.reversals.push((
                     vault.join(dest),
                     vault.join(source),
+                    Some(intent_hash.to_string()),
+                    None,
+                    coordinate,
                 ));
                 Ok(())
             } else {
@@ -1164,12 +1194,20 @@ fn plan_endpoint_pair(
                 && (Some(current_source.as_deref()) == replacement.map(Some)
                     || Some(current_source.as_deref()) == owned_write.map(Some))
             {
-                // Published replacement: clear the transaction-owned live
-                // bytes, then reverse the proven rename.
-                plan.clears.push(vault.join(source));
+                // Published replacement: a coordinated reverse clears these
+                // bytes only after the archived PDF accessor is granted and
+                // both recorded hashes are proved again.
+                let replacement_hash =
+                    replacement.or(owned_write).map(str::to_string);
+                if !coordinate {
+                    plan.clears.push(vault.join(source));
+                }
                 plan.reversals.push((
                     vault.join(dest),
                     vault.join(source),
+                    Some(intent_hash.to_string()),
+                    replacement_hash,
+                    coordinate,
                 ));
                 Ok(())
             } else if current_dest.as_deref() == Some(intent_hash)
@@ -1204,7 +1242,7 @@ fn plan_endpoint_pair(
 #[derive(Debug, Default)]
 struct ReversalPlan {
     clears: Vec<PathBuf>,
-    reversals: Vec<(PathBuf, PathBuf)>,
+    reversals: Vec<(PathBuf, PathBuf, Option<String>, Option<String>, bool)>,
     duplicates: Vec<PathBuf>,
 }
 
@@ -1228,10 +1266,34 @@ fn execute_reversal_plan(
             )
         })?;
     }
-    for (from, to) in &plan.reversals {
-        coordinator
-            .reverse_file(vault, from, to)
-            .map_err(|error| preserve_message(intent, &error))?;
+    for (from, to, expected_sha256, expected_replacement_sha256, coordinate) in
+        &plan.reversals
+    {
+        let result = if *coordinate {
+            coordinator.reverse_file(
+                vault,
+                from,
+                to,
+                expected_sha256
+                    .as_deref()
+                    .expect("coordinated reverse has a recorded hash"),
+                expected_replacement_sha256.as_deref(),
+            )
+        } else if let Some(expected_sha256) = expected_sha256 {
+            rename_if_hash_matches(from, to, expected_sha256)
+        } else {
+            rename_no_clobber(from, to)
+        };
+        result.map_err(|error| {
+            preserve_message(
+                intent,
+                &format!(
+                    "could not reverse {} to {}: {error}",
+                    from.strip_prefix(vault).unwrap_or(from).display(),
+                    to.strip_prefix(vault).unwrap_or(to).display()
+                ),
+            )
+        })?;
     }
     for path in &plan.duplicates {
         fs::remove_file(path).map_err(|error| {
@@ -1454,6 +1516,89 @@ fn verify_created_ownership(
     Ok(())
 }
 
+/// Remove unpublished temp files from atomic overwrite writes. Their names
+/// include the destination filename and they are deliberately absent from
+/// the transaction manifest, so a crash cannot commit partial bytes.
+fn remove_atomic_write_temps(
+    vault: &Path,
+    intent: &OverwriteIntent,
+) -> std::result::Result<(), CommandError> {
+    let mut destinations = BTreeSet::new();
+    destinations.extend(intent.writes.iter().map(|write| write.path.as_str()));
+    destinations.extend(
+        intent
+            .moves
+            .iter()
+            .filter(|step| step.replacement_sha256.is_some())
+            .map(|step| step.source.as_str()),
+    );
+    for relative in destinations {
+        let destination = Path::new(relative);
+        let Some(parent) = destination.parent() else {
+            continue;
+        };
+        let Some(filename) = destination.file_name() else {
+            continue;
+        };
+        let prefix =
+            format!(".bob-overwrite-tmp-{}-", filename.to_string_lossy());
+        let directory = vault.join(parent);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Err(error) => {
+                return Err(preserve_message(
+                    intent,
+                    &format!(
+                        "could not inspect temporary-write directory {}: {error}",
+                        vault_slash(parent)
+                    ),
+                ));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                preserve_message(
+                    intent,
+                    &format!(
+                        "could not inspect temporary-write directory {}: {error}",
+                        vault_slash(parent)
+                    ),
+                )
+            })?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.starts_with(&prefix) || !name.ends_with(".tmp") {
+                continue;
+            }
+            let metadata =
+                fs::symlink_metadata(entry.path()).map_err(|error| {
+                    preserve_message(
+                        intent,
+                        &format!(
+                            "could not inspect overwrite temp {name}: {error}"
+                        ),
+                    )
+                })?;
+            if !metadata.file_type().is_file() {
+                return Err(preserve_message(
+                    intent,
+                    &format!("overwrite temp {name} is not a regular file"),
+                ));
+            }
+            fs::remove_file(entry.path()).map_err(|error| {
+                preserve_message(
+                    intent,
+                    &format!("could not remove incomplete overwrite temp {name}: {error}"),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Rename without overwriting: the destination parent is created, the
 /// destination itself must be absent, and both endpoints must sit on the
 /// same filesystem. Never clobbers, never follows a destination symlink
@@ -1476,7 +1621,7 @@ fn rename_no_clobber(
             from.display()
         ));
     }
-    fs::rename(from, to).map_err(|error| {
+    super::super::io::rename_no_replace(from, to).map_err(|error| {
         format!(
             "could not rename {} to {}: {error}",
             from.display(),
@@ -1496,6 +1641,76 @@ fn rename_no_clobber(
         ));
     }
     Ok(())
+}
+
+fn rename_if_hash_matches(
+    from: &Path,
+    to: &Path,
+    expected_sha256: &str,
+) -> std::result::Result<(), String> {
+    let current = file_sha256(from)?;
+    if current != expected_sha256 {
+        return Err(format!(
+            "{} changed after the overwrite began; no reverse rename was made",
+            from.display()
+        ));
+    }
+    rename_no_clobber(from, to)
+}
+
+/// Reverse a coordinated PDF move without discarding the staged replacement
+/// until the archive accessor has been granted and both sides still match
+/// the transaction's recorded hashes.
+fn reverse_file_if_hashes_match(
+    from: &Path,
+    to: &Path,
+    expected_sha256: &str,
+    expected_replacement_sha256: Option<&str>,
+) -> std::result::Result<(), String> {
+    let source_hash = file_sha256(from).map_err(|error| {
+        format!("could not hash archived source {}: {error}", from.display())
+    })?;
+    if source_hash != expected_sha256 {
+        return Err(format!(
+            "archived source {} changed before the coordinated reverse move",
+            from.display()
+        ));
+    }
+    if let Some(expected_replacement_sha256) = expected_replacement_sha256 {
+        match fs::symlink_metadata(to) {
+            Ok(metadata)
+                if metadata.is_file() && !metadata.file_type().is_symlink() =>
+            {
+                let hash = file_sha256(to)?;
+                if hash != expected_replacement_sha256 {
+                    return Err(format!(
+                        "live destination {} changed before the coordinated reverse move",
+                        to.display()
+                    ));
+                }
+                fs::remove_file(to).map_err(|error| {
+                    format!(
+                        "could not clear transaction-owned {}: {error}",
+                        to.display()
+                    )
+                })?;
+            }
+            Ok(_) => {
+                return Err(format!(
+                    "live destination {} is not a regular file",
+                    to.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "could not inspect live destination {}: {error}",
+                    to.display()
+                ));
+            }
+        }
+    }
+    rename_if_hash_matches(from, to, expected_sha256)
 }
 
 /// True when the nearest existing ancestors of both paths share a
@@ -1811,8 +2026,9 @@ fn recovery_required(intent: &OverwriteIntent) -> CommandError {
 /// Wrap a repair failure so the report states the marker was preserved.
 fn preserve_message(intent: &OverwriteIntent, detail: &str) -> CommandError {
     CommandError::new(format!(
-        "could not recover the interrupted overwrite of {}: {detail}; left the intent in place",
-        intent.stem
+        "could not recover the interrupted overwrite of {}: {detail}; left the intent in place at {}. Keep or commit the late save you want, move the conflicting file aside, then rerun a writing command to retry recovery; remove the named intent only after resolving the vault state manually",
+        intent.stem,
+        intent_path_for(&state_ref_dir(), &intent.vault).display()
     ))
 }
 
@@ -2633,12 +2849,15 @@ mod tests {
         Grant,
         Hold,
         Fail,
+        ChangeBeforeAccessor,
+        DestinationRace,
     }
 
     struct FakeReverseCoordinator {
         behavior: FakeReverseBehavior,
         message: String,
         calls: std::sync::Mutex<usize>,
+        paths: std::sync::Mutex<Vec<(PathBuf, PathBuf)>>,
     }
 
     impl FakeReverseCoordinator {
@@ -2647,6 +2866,7 @@ mod tests {
                 behavior: FakeReverseBehavior::Grant,
                 message: String::new(),
                 calls: std::sync::Mutex::new(0),
+                paths: std::sync::Mutex::new(Vec::new()),
             }
         }
 
@@ -2655,6 +2875,7 @@ mod tests {
                 behavior: FakeReverseBehavior::Hold,
                 message: String::new(),
                 calls: std::sync::Mutex::new(0),
+                paths: std::sync::Mutex::new(Vec::new()),
             }
         }
 
@@ -2663,11 +2884,16 @@ mod tests {
                 behavior: FakeReverseBehavior::Fail,
                 message: message.to_string(),
                 calls: std::sync::Mutex::new(0),
+                paths: std::sync::Mutex::new(Vec::new()),
             }
         }
 
         fn calls(&self) -> usize {
             *self.calls.lock().expect("fake coordinator calls")
+        }
+
+        fn paths(&self) -> Vec<(PathBuf, PathBuf)> {
+            self.paths.lock().expect("fake coordinator paths").clone()
         }
     }
 
@@ -2677,15 +2903,48 @@ mod tests {
             _vault: &Path,
             from: &Path,
             to: &Path,
+            expected_sha256: &str,
+            expected_replacement_sha256: Option<&str>,
         ) -> std::result::Result<(), String> {
             *self.calls.lock().expect("fake coordinator calls") += 1;
+            self.paths
+                .lock()
+                .expect("fake coordinator paths")
+                .push((from.to_path_buf(), to.to_path_buf()));
             match self.behavior {
-                FakeReverseBehavior::Grant => rename_no_clobber(from, to),
+                FakeReverseBehavior::Grant => {
+                    reverse_file_if_hashes_match(
+                        from,
+                        to,
+                        expected_sha256,
+                        expected_replacement_sha256,
+                    )
+                }
                 FakeReverseBehavior::Hold => Err(
                     "PDF coordination timed out after 10.00s; close it in Highlights and retry"
                         .to_string(),
                 ),
                 FakeReverseBehavior::Fail => Err(self.message.clone()),
+                FakeReverseBehavior::ChangeBeforeAccessor => {
+                    fs::write(from, b"late accessor save")
+                        .map_err(|error| error.to_string())?;
+                    reverse_file_if_hashes_match(
+                        from,
+                        to,
+                        expected_sha256,
+                        expected_replacement_sha256,
+                    )
+                }
+                FakeReverseBehavior::DestinationRace => {
+                    fs::write(to, b"racing destination")
+                        .map_err(|error| error.to_string())?;
+                    reverse_file_if_hashes_match(
+                        from,
+                        to,
+                        expected_sha256,
+                        expected_replacement_sha256,
+                    )
+                }
             }
         }
     }
@@ -2783,6 +3042,7 @@ mod tests {
             base,
             PAPER_SUBJECT.to_string(),
             &preimages,
+            &BTreeSet::new(),
         )
         .expect("annotated intent")
         .with_annotated_moves(moves, writes);
@@ -3113,10 +3373,17 @@ mod tests {
             "the reverse rename attempted coordination"
         );
         assert_eq!(
+            hold.paths()[0].0,
+            vault.join(ARCHIVE_PDF),
+            "the coordinator holds the archived PDF that is moved"
+        );
+        assert_eq!(
             fs::read(vault.join(ARCHIVE_PDF)).expect("archive"),
             OLD_PDF,
             "the only annotated copy survives the hold"
         );
+        assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), NEW_PDF);
+        assert!(intent_file(&state, &config).exists());
 
         // The retry after the hold completes the same recovery.
         recover_with(
@@ -3158,6 +3425,95 @@ mod tests {
             fs::read(vault.join(ARCHIVE_PDF)).expect("archive"),
             OLD_PDF,
             "no uncoordinated fallback renames underneath the editor"
+        );
+        assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), NEW_PDF);
+        assert!(intent_file(&state, &config).exists());
+    }
+
+    #[test]
+    fn reverse_hash_is_rechecked_inside_the_accessor() {
+        let (vault_temp, state_temp, config, base) = annotated_fixture();
+        let vault = vault_temp.path();
+        let state = state_dir_of(&state_temp);
+        let manifest = asset_manifest(vault, LIVE_ASSETS).expect("manifest");
+        let (intent, _, _, _) =
+            annotated_intent_via_builder(&config, &base, manifest);
+        let intent = save_pending(&state, &config, &intent);
+        simulate_post_move_crash(vault);
+        let coordinator = FakeReverseCoordinator {
+            behavior: FakeReverseBehavior::ChangeBeforeAccessor,
+            message: String::new(),
+            calls: std::sync::Mutex::new(0),
+            paths: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let error = recover_with(&state, &config, &intent, &coordinator)
+            .expect_err("accessor hash mismatch");
+        assert_failed_closed(&error, &state_temp, &config);
+        assert!(error.to_string().contains(ARCHIVE_PDF), "{error}");
+        assert_eq!(
+            fs::read(vault.join(ARCHIVE_PDF)).expect("late archive save"),
+            b"late accessor save"
+        );
+        assert_eq!(
+            fs::read(vault.join(LIVE_PDF)).expect("staged live PDF"),
+            NEW_PDF,
+            "a late archive save leaves the staged live copy intact"
+        );
+    }
+
+    #[test]
+    fn reverse_rename_never_replaces_a_destination_that_appears_late() {
+        let (vault_temp, state_temp, config, base) = annotated_fixture();
+        let vault = vault_temp.path();
+        let state = state_dir_of(&state_temp);
+        let manifest = asset_manifest(vault, LIVE_ASSETS).expect("manifest");
+        let (intent, _, _, _) =
+            annotated_intent_via_builder(&config, &base, manifest);
+        let intent = save_pending(&state, &config, &intent);
+        simulate_post_move_crash(vault);
+        let coordinator = FakeReverseCoordinator {
+            behavior: FakeReverseBehavior::DestinationRace,
+            message: String::new(),
+            calls: std::sync::Mutex::new(0),
+            paths: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let error = recover_with(&state, &config, &intent, &coordinator)
+            .expect_err("late destination");
+        assert_failed_closed(&error, &state_temp, &config);
+        assert_eq!(
+            fs::read(vault.join(LIVE_PDF)).expect("racing destination"),
+            b"racing destination",
+            "the no-replace rename preserves a destination created in the race window"
+        );
+        assert_eq!(
+            fs::read(vault.join(ARCHIVE_PDF)).expect("archive"),
+            OLD_PDF
+        );
+    }
+
+    #[test]
+    fn recovery_removes_unpublished_atomic_write_temps() {
+        let (vault_temp, state_temp, config, base) = annotated_fixture();
+        let vault = vault_temp.path();
+        let state = state_dir_of(&state_temp);
+        let manifest = asset_manifest(vault, LIVE_ASSETS).expect("manifest");
+        let (intent, _, _, _) =
+            annotated_intent_via_builder(&config, &base, manifest);
+        let intent = save_pending(&state, &config, &intent);
+        let frozen_temp = "ref_history/blogs/.bob-overwrite-tmp-paper__2026-10-26.md-123-1.tmp";
+        let pdf_temp = "lib/blogs/.bob-overwrite-tmp-paper.pdf-123-2.tmp";
+        write_file(vault, frozen_temp, b"partial note");
+        write_file(vault, pdf_temp, b"partial pdf");
+        simulate_post_move_crash(vault);
+
+        recover(&state, &config, &intent, false).expect("recover crash");
+        assert!(!vault.join(frozen_temp).exists());
+        assert!(!vault.join(pdf_temp).exists());
+        assert_eq!(
+            fs::read(vault.join(LIVE_PDF)).expect("restored PDF"),
+            OLD_PDF
         );
     }
 

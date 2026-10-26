@@ -26,6 +26,8 @@ pub(crate) struct FileRewrite {
     /// Vault-relative path, with the host's native separators.
     pub(crate) path: PathBuf,
     pub(crate) edits: Vec<LineEdit>,
+    /// Number of individual link targets rewritten in this file.
+    pub(crate) rewritten: usize,
     /// Full post-rewrite contents. The writer should write this atomically.
     pub(crate) contents: String,
 }
@@ -53,6 +55,9 @@ pub(crate) struct LinkRewritePlan {
     /// Number of distinct inbound link targets that will change.
     pub(crate) rewritten: usize,
     pub(crate) skipped_ambiguous: Vec<AmbiguousBareLink>,
+    /// Dangling `#^h-` links intentionally left unchanged when the caller
+    /// supplied the old note's known highlight anchors.
+    pub(crate) skipped_dangling_highlights: Vec<LinkFinding>,
     /// Inbound links whose fragment is a highlight block ID (`#^h-…`).
     pub(crate) highlight_fragments: Vec<LinkFinding>,
     /// Lines with an `[h:: …]` property that link to the renamed note.
@@ -241,6 +246,18 @@ pub(crate) fn plan_vault_links_with(
     bundle: &BTreeMap<PathBuf, PathBuf>,
     selector: LinkSelector,
 ) -> Result<LinkRewritePlan, LinkScanError> {
+    plan_vault_links_with_known_highlights(vault_root, bundle, selector, None)
+}
+
+/// Plan rewrites while requiring highlight fragments to resolve in the old
+/// note. Dangling highlight links remain unchanged and are returned for a
+/// caller-visible warning.
+pub(crate) fn plan_vault_links_with_known_highlights(
+    vault_root: &Path,
+    bundle: &BTreeMap<PathBuf, PathBuf>,
+    selector: LinkSelector,
+    known_highlights: Option<&BTreeSet<String>>,
+) -> Result<LinkRewritePlan, LinkScanError> {
     let mut all_markdown = Vec::new();
     collect_markdown_paths(vault_root, vault_root, &mut all_markdown)?;
     all_markdown.sort();
@@ -265,22 +282,27 @@ pub(crate) fn plan_vault_links_with(
             &all_markdown,
             relative,
             selector,
+            known_highlights,
         );
         if !result.edits.is_empty() {
             plan.files.push(FileRewrite {
                 path: relative.clone(),
                 edits: result.edits,
+                rewritten: result.rewritten,
                 contents: result.contents,
             });
         }
         plan.rewritten += result.rewritten;
         plan.skipped_ambiguous.extend(result.skipped_ambiguous);
+        plan.skipped_dangling_highlights
+            .extend(result.skipped_dangling_highlights);
         plan.highlight_fragments.extend(result.highlight_fragments);
         plan.highlight_follow_ups
             .extend(result.highlight_follow_ups);
     }
 
     plan.skipped_ambiguous.sort();
+    plan.skipped_dangling_highlights.sort();
     plan.highlight_fragments.sort();
     plan.highlight_follow_ups.sort();
     Ok(plan)
@@ -296,7 +318,8 @@ pub(crate) fn rewrite_contents(
     current_file: &Path,
 ) -> String {
     let bundle_paths = BundlePaths::new(bundle);
-    rewrite_text(contents, &bundle_paths, &[], current_file, selector).contents
+    rewrite_text(contents, &bundle_paths, &[], current_file, selector, None)
+        .contents
 }
 
 #[derive(Debug, Default)]
@@ -305,6 +328,7 @@ struct TextRewrite {
     edits: Vec<LineEdit>,
     rewritten: usize,
     skipped_ambiguous: Vec<AmbiguousBareLink>,
+    skipped_dangling_highlights: Vec<LinkFinding>,
     highlight_fragments: Vec<LinkFinding>,
     highlight_follow_ups: Vec<LinkFinding>,
 }
@@ -315,6 +339,7 @@ fn rewrite_text(
     markdown_paths: &[PathBuf],
     current_file: &Path,
     selector: LinkSelector,
+    known_highlights: Option<&BTreeSet<String>>,
 ) -> TextRewrite {
     let raw_lines = contents.split_inclusive('\n').collect::<Vec<_>>();
     let logical_lines = raw_lines
@@ -340,6 +365,7 @@ fn rewrite_text(
             &file,
             index + 1,
             selector,
+            known_highlights,
         );
         output.push_str(&line_result.after);
         if raw_line.ends_with('\n') {
@@ -355,6 +381,9 @@ fn rewrite_text(
         result
             .skipped_ambiguous
             .extend(line_result.skipped_ambiguous);
+        result
+            .skipped_dangling_highlights
+            .extend(line_result.skipped_dangling_highlights);
         result
             .highlight_fragments
             .extend(line_result.highlight_fragments);
@@ -372,6 +401,7 @@ struct LineRewrite {
     after: String,
     rewritten: usize,
     skipped_ambiguous: Vec<AmbiguousBareLink>,
+    skipped_dangling_highlights: Vec<LinkFinding>,
     highlight_fragments: Vec<LinkFinding>,
     highlight_follow_ups: Vec<LinkFinding>,
 }
@@ -402,6 +432,7 @@ fn rewrite_line(
     file: &Path,
     line_number: usize,
     selector: LinkSelector,
+    known_highlights: Option<&BTreeSet<String>>,
 ) -> LineRewrite {
     let mut result = LineRewrite {
         after: line.to_string(),
@@ -490,12 +521,21 @@ fn rewrite_line(
                 target: link.original_target.clone(),
             });
         }
-        if link.highlight_fragment {
-            result.highlight_fragments.push(LinkFinding {
-                file: file.to_path_buf(),
-                line: line_number,
-                target: link.original_target.clone(),
+        let finding = LinkFinding {
+            file: file.to_path_buf(),
+            line: line_number,
+            target: link.original_target.clone(),
+        };
+        let dangling_highlight = selector == LinkSelector::HighlightFragments
+            && link.highlight_fragment
+            && known_highlights.is_some_and(|known| {
+                highlight_anchor(&link.original_target)
+                    .is_none_or(|anchor| !known.contains(anchor))
             });
+        if link.highlight_fragment && dangling_highlight {
+            result.skipped_dangling_highlights.push(finding.clone());
+        } else if link.highlight_fragment {
+            result.highlight_fragments.push(finding.clone());
         }
         if link.is_note && has_h_property {
             result.highlight_follow_ups.push(LinkFinding {
@@ -506,7 +546,9 @@ fn rewrite_line(
         }
         let replacement = match selector {
             LinkSelector::All => link.replacement,
-            LinkSelector::HighlightFragments if link.highlight_fragment => {
+            LinkSelector::HighlightFragments
+                if link.highlight_fragment && !dangling_highlight =>
+            {
                 link.qualified_replacement.or(link.replacement)
             }
             LinkSelector::HighlightFragments => None,
@@ -532,6 +574,16 @@ fn rewrite_line(
         );
     }
     result
+}
+
+fn highlight_anchor(target: &str) -> Option<&str> {
+    let (_, fragment) = target.rsplit_once("#^")?;
+    let anchor = fragment
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '-')
+        })
+        .next()?;
+    anchor.starts_with("h-").then_some(anchor)
 }
 
 fn qualified_note_path(
@@ -934,6 +986,7 @@ mod tests {
             &note_paths,
             Path::new("sase.md"),
             selector,
+            None,
         )
     }
 
@@ -1145,6 +1198,48 @@ mod tests {
         assert_eq!(result.highlight_fragments.len(), 3);
         assert_eq!(result.highlight_follow_ups.len(), 1);
         assert_eq!(result.rewritten, 3);
+    }
+
+    #[test]
+    fn known_highlight_anchors_leave_dangling_links_unchanged() {
+        let moves = BTreeMap::from([(
+            PathBuf::from("ref/blogs/old.md"),
+            PathBuf::from("ref_history/blogs/old__2026-10-25.md"),
+        )]);
+        let bundle = BundlePaths::new(&moves);
+        let notes = [PathBuf::from("ref/blogs/old.md")];
+        let known = BTreeSet::from(["h-present".to_string()]);
+        let input = concat!(
+            "[[ref/blogs/old#^h-present]] ",
+            "[[ref/blogs/old#^h-missing]]\n"
+        );
+
+        let result = rewrite_text(
+            input,
+            &bundle,
+            &notes,
+            Path::new("sase.md"),
+            LinkSelector::HighlightFragments,
+            Some(&known),
+        );
+        assert_eq!(
+            result.contents,
+            concat!(
+                "[[ref_history/blogs/old__2026-10-25#^h-present]] ",
+                "[[ref/blogs/old#^h-missing]]\n"
+            )
+        );
+        assert_eq!(result.rewritten, 1);
+        assert_eq!(result.highlight_fragments.len(), 1);
+        assert_eq!(
+            result.highlight_fragments[0].target,
+            "ref/blogs/old#^h-present"
+        );
+        assert_eq!(result.skipped_dangling_highlights.len(), 1);
+        assert_eq!(
+            result.skipped_dangling_highlights[0].target,
+            "ref/blogs/old#^h-missing"
+        );
     }
 
     #[test]

@@ -102,71 +102,6 @@ pub(super) struct AnnotatedArchivePlan {
     pub(super) live_marker_sha256: String,
 }
 
-impl AnnotatedArchivePlan {
-    fn integrity_fingerprint(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.bundle.stem.as_bytes());
-        hasher.update(self.bundle.note_path.as_bytes());
-        hasher.update(self.bundle.annotated_pdf_path.as_bytes());
-        hasher.update(self.bundle.assets_path.as_bytes());
-        hasher.update(self.frozen.path.as_bytes());
-        hasher.update(self.frozen.contents.as_bytes());
-        hasher.update(self.highlights.to_le_bytes());
-        hasher.update(self.inbound.rewritten.to_le_bytes());
-        for file in &self.inbound.files {
-            hasher.update(vault_slash_path(&file.path).as_bytes());
-            hasher.update(file.contents.as_bytes());
-            for edit in &file.edits {
-                hasher.update(edit.line.to_le_bytes());
-                hasher.update(edit.before.as_bytes());
-                hasher.update(edit.after.as_bytes());
-            }
-        }
-        for finding in &self.inbound.highlight_fragments {
-            hasher.update(vault_slash_path(&finding.file).as_bytes());
-            hasher.update(finding.target.as_bytes());
-        }
-        for finding in &self.inbound.highlight_follow_ups {
-            hasher.update(vault_slash_path(&finding.file).as_bytes());
-            hasher.update(finding.target.as_bytes());
-        }
-        for ambiguous in &self.inbound.skipped_ambiguous {
-            hasher.update(vault_slash_path(&ambiguous.file).as_bytes());
-            hasher.update(ambiguous.target.as_bytes());
-        }
-        for preimage in &self.preimages {
-            hasher.update(preimage.path.as_bytes());
-            hasher.update(
-                preimage.sha256.as_deref().unwrap_or("<absent>").as_bytes(),
-            );
-        }
-        for record in &self.history {
-            hasher.update(record.note_path.as_bytes());
-            hasher.update(record.parent.as_bytes());
-            if let Some(pdf) = &record.annotated_pdf {
-                hasher.update(pdf.path.as_bytes());
-                hasher.update(pdf.sha256.as_bytes());
-            }
-            if let Some(assets) = &record.assets_path {
-                hasher.update(assets.as_bytes());
-            }
-        }
-        for (source, dest) in &self.asset_map {
-            hasher.update(vault_slash_path(source).as_bytes());
-            hasher.update(vault_slash_path(dest).as_bytes());
-        }
-        for file in &self.asset_manifest {
-            hasher.update(file.rel.as_bytes());
-            hasher.update(file.sha256.as_bytes());
-        }
-        if let Some(path) = &self.live_assets_path {
-            hasher.update(path.as_bytes());
-        }
-        hasher.update(self.live_marker_sha256.as_bytes());
-        hex::encode(hasher.finalize())
-    }
-}
-
 fn vault_slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -318,19 +253,15 @@ pub(super) fn prepare(
             2,
         ));
     }
-    let library_pdf = checked_vault_path(
-        config,
-        pdf_path
-            .strip_prefix(&config.bob_dir)
-            .expect("vault-relative source PDF"),
-    )
-    .ok()
-    .is_some_and(|path| {
-        let Ok(library) = config.lib_dir.canonicalize() else {
-            return false;
-        };
-        path.starts_with(library)
-    });
+    let library_pdf = checked_vault_path(config, &pdf_relative)
+        .ok()
+        .and_then(|path| path.canonicalize().ok())
+        .is_some_and(|path| {
+            let Ok(library) = config.lib_dir.canonicalize() else {
+                return false;
+            };
+            path.starts_with(library)
+        });
     if !library_pdf {
         return Err(OverwriteRefusal::new(
             "legacy_reference",
@@ -528,7 +459,13 @@ pub(super) fn prepare(
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
-    let assets_path = note_absolute
+    // Keep the configured vault spelling for relative-path calculations.
+    // `checked_vault_path` validates through canonical paths but returns this
+    // joined path so a symlinked vault root does not leak absolute paths into
+    // the transaction manifest.
+    let assets_path = config
+        .bob_dir
+        .join(&row.path)
         .parent()
         .unwrap_or(&config.ref_dir)
         .join(format!("{stem}.assets"));
@@ -641,14 +578,6 @@ pub(super) fn prepare(
             &sha256(marker_contents.as_bytes()),
             assets_relative.as_deref(),
         )?;
-        if plan.integrity_fingerprint().len() != 64 {
-            return Err(OverwriteRefusal::new(
-                "not_in_sync",
-                "annotated archive plan is incomplete",
-                Some("run bob ref scan -w on the Mac first"),
-                2,
-            ));
-        }
         Some(plan)
     } else {
         None
@@ -752,8 +681,6 @@ pub(super) fn prepare(
         let archive_contents = render_frozen_note(
             &note_contents,
             &row.path,
-            &ref_type,
-            stem,
             date,
             row.captured.as_deref(),
             &status,
@@ -1012,7 +939,10 @@ fn checked_vault_path(
     if !resolved.starts_with(&root) {
         return Err("path resolves outside the vault".to_string());
     }
-    Ok(resolved)
+    // The canonical path is only evidence for the containment check. Keep
+    // the configured spelling in callers so `strip_prefix(config.bob_dir)`
+    // remains vault-relative when the vault root itself is a symlink.
+    Ok(current)
 }
 
 /// Resolve a vault destination whose leaf may not exist yet. Existing
@@ -1040,10 +970,7 @@ fn checked_vault_destination(
                     resolved_parent.display()
                 ));
             }
-            let name = relative
-                .file_name()
-                .ok_or_else(|| "destination has no filename".to_string())?;
-            Ok(resolved_parent.join(name))
+            Ok(config.bob_dir.join(relative))
         }
         Err(error) => Err(format!(
             "inspect {}: {error}",
@@ -1417,8 +1344,6 @@ struct FrozenAnnotated<'a> {
 fn render_frozen_note(
     old_contents: &str,
     live_note: &str,
-    ref_type: &str,
-    stem: &str,
     date: &str,
     captured: Option<&str>,
     status: &str,
@@ -1446,7 +1371,10 @@ fn render_frozen_note(
     copy_yaml_key(old_map, &mut archive_front, "created");
     archive_front.insert(
         YamlValue::String("parent".to_string()),
-        YamlValue::String(format!("[[ref/{ref_type}/{stem}]]")),
+        YamlValue::String(format!(
+            "[[{}]]",
+            live_note.strip_suffix(".md").unwrap_or(live_note)
+        )),
     );
     archive_front.insert(
         YamlValue::String("replaced".to_string()),
@@ -1637,10 +1565,16 @@ fn plan_annotated_archive(
         PathBuf::from(live_note),
         PathBuf::from(&bundle.note_path),
     )]);
-    let inbound = super::rename::links::plan_vault_links_with(
+    let known_highlights =
+        crate::native::collect_done::block_ids_in_markdown(note_contents)
+            .into_iter()
+            .filter(|block_id| block_id.starts_with("h-"))
+            .collect::<BTreeSet<_>>();
+    let inbound = super::rename::links::plan_vault_links_with_known_highlights(
         &config.bob_dir,
         &highlight_map,
         super::rename::links::LinkSelector::HighlightFragments,
+        Some(&known_highlights),
     )
     .map_err(|error| refuse(error.to_string()))?;
     let asset_map =
@@ -1664,8 +1598,6 @@ fn plan_annotated_archive(
     let contents = render_frozen_note(
         note_contents,
         live_note,
-        ref_type,
-        stem,
         date,
         captured,
         status,
@@ -2085,8 +2017,6 @@ mod tests {
         let frozen = render_frozen_note(
             old,
             "ref/papers/paper.md",
-            "papers",
-            "paper",
             "2026-10-25",
             Some("2020-01-01"),
             "ready",
@@ -2266,8 +2196,6 @@ mod tests {
         let frozen = render_frozen_note(
             old,
             "ref/papers/paper.md",
-            "papers",
-            "paper",
             "2026-10-25",
             Some("2020-01-01"),
             "read",
@@ -2281,6 +2209,11 @@ mod tests {
         let yaml = serde_yaml::from_str::<YamlValue>(&front.join("\n"))
             .expect("valid YAML");
         let map = yaml.as_mapping().unwrap();
+        assert_eq!(
+            map.get("parent").and_then(YamlValue::as_str),
+            Some("[[ref/papers/paper]]"),
+            "the frozen parent follows the live note path"
+        );
         assert_eq!(
             map.get("highlights_count").and_then(YamlValue::as_u64),
             Some(2)
@@ -2403,6 +2336,5 @@ mod tests {
             .find(|preimage| preimage.path == "lib/papers/paper.pdf")
             .unwrap();
         assert_eq!(live_pdf.sha256.as_deref(), Some(hash.as_str()));
-        assert!(!plan.integrity_fingerprint().is_empty());
     }
 }

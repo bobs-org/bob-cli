@@ -205,7 +205,10 @@ fn annotated_pdf_from_front(
     if !pdf_belongs_to_note(note_path, &pdf_path) {
         return Ok(None);
     }
-    if validated_archive_file(vault_root, &pdf_path)?.is_none() {
+    // The recorded digest is immutable evidence even if the archived file
+    // has since gone missing. Validate that its path is still safe and
+    // belongs to this archive, but do not require the file to be present.
+    if validated_archive_path(vault_root, &pdf_path)?.is_none() {
         return Ok(None);
     }
     Ok(Some(ArchivePdf {
@@ -318,13 +321,30 @@ fn validated_archive_path(
             message: format!("resolve vault root: {error}"),
         })?;
     let mut current = vault_root.to_path_buf();
-    for component in relative.components() {
+    let components = relative.components().collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
         let Component::Normal(name) = component else {
             return Ok(None);
         };
         current.push(name);
         let metadata = match fs::symlink_metadata(&current) {
             Ok(metadata) => metadata,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && index + 1 == components.len() =>
+            {
+                let Some(parent) = current.parent() else {
+                    return Ok(None);
+                };
+                return match parent.canonicalize() {
+                    Ok(resolved_parent)
+                        if resolved_parent.starts_with(&root) =>
+                    {
+                        Ok(Some(current))
+                    }
+                    _ => Ok(None),
+                };
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(None);
             }
@@ -470,6 +490,20 @@ mod tests {
         assert_eq!(
             records[0].assets_path.as_deref(),
             Some("ref_history/papers/paper__2026-10-25.assets")
+        );
+        fs::remove_file(
+            root.join("ref_history/papers/paper__2026-10-25__annotated.pdf"),
+        )
+        .unwrap();
+        let records =
+            records_for_live_note(root, "ref/papers/paper.md").unwrap();
+        assert_eq!(
+            records[0]
+                .annotated_pdf
+                .as_ref()
+                .map(|pdf| pdf.sha256.as_str()),
+            Some(hash.as_str()),
+            "the safe recorded digest survives a missing archived PDF"
         );
     }
 
