@@ -14,6 +14,7 @@ use chrono::{DateTime, FixedOffset, SecondsFormat};
 
 mod blocked_by;
 pub(crate) mod cli;
+pub(crate) mod code;
 mod coverage;
 mod find;
 mod frontmatter;

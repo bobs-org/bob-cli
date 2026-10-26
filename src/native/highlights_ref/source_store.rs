@@ -465,7 +465,7 @@ pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
     let code_abs = dir.as_ref().map(|dir| dir.join("code.json"));
     let bytes = match fs::read(&source_abs) {
         Ok(bytes) => bytes,
-        Err(_) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return StoreRead {
                 status: StoreStatus::SourceMissing,
                 detail: Some(format!(
@@ -475,8 +475,35 @@ pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
                 catalog: None,
             };
         }
+        Err(error) => {
+            return StoreRead {
+                status: StoreStatus::SourceInvalid,
+                detail: Some(format!(
+                    "saved Markdown {trimmed} is unreadable: {error}"
+                )),
+                bytes: None,
+                catalog: None,
+            };
+        }
     };
     let digest = sha256_hex(&bytes);
+    let expected_hash = source_abs
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.rsplit_once("--"))
+        .map(|(_, hash)| hash);
+    if expected_hash != Some(&digest[..12]) {
+        return StoreRead {
+            status: StoreStatus::SourceInvalid,
+            detail: Some(
+                "saved Markdown does not match its store path digest"
+                    .to_string(),
+            ),
+            bytes: None,
+            catalog: None,
+        };
+    }
     let Some(code_abs) = code_abs else {
         return StoreRead {
             status: StoreStatus::SourceInvalid,
@@ -489,7 +516,7 @@ pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
     };
     let raw = match fs::read_to_string(&code_abs) {
         Ok(raw) => raw,
-        Err(_) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return StoreRead {
                 status: StoreStatus::NoCatalog,
                 detail: Some(
@@ -497,6 +524,16 @@ pub(crate) fn read_store(bob_dir: &Path, pointer: &str) -> StoreRead {
                         .to_string(),
                 ),
                 bytes: Some(bytes),
+                catalog: None,
+            };
+        }
+        Err(error) => {
+            return StoreRead {
+                status: StoreStatus::SourceInvalid,
+                detail: Some(format!(
+                    "saved source catalog is unreadable: {error}"
+                )),
+                bytes: None,
                 catalog: None,
             };
         }

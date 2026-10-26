@@ -237,6 +237,12 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref code` resolves the same exact reference handles as `show`.
+    Entry {
+        path: &["ref", "code"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
     // `bob ref today` resolves the same exact note index, then links.
     Entry {
         path: &["ref", "today"],

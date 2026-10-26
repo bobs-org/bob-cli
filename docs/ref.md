@@ -6,9 +6,11 @@ answers "is this already in my library?" with a verdict per query, in
 human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
-into their metadata, annotations, notes, and tasks. `bob ref today`
+into their metadata, annotations, notes, and tasks. `bob ref code` reads
+the saved Markdown source and exact render-time code blocks without
+rerendering. `bob ref today`
 links a reference's v2 reading task under today's Pomodoro. `find`,
-`list`, and `show` are read-only; `find -i` also reads intake PDF
+`list`, `show`, and `code` are read-only; `find -i` also reads intake PDF
 markers. `bob ref today --dry-run` plans without writing. `bob ref rename` renames
 an unannotated modern reference's files and updates links (preview with `-d`).
 `bob ref migrate-zorg`
@@ -22,6 +24,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Check whether a reference is known | `bob ref find <URL-or-identifier>` | Read library notes; `--include-intake` also checks queued PDFs |
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
+| Copy or inspect a saved code block | `bob ref code <REF> [N]` | Read exact block bytes, a block catalog, or the saved Markdown source |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
@@ -578,6 +581,40 @@ exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
 Bryan's own thoughts on a reference, and never claim a `not_found`
 result means he has not read something — it only means it is not under
 `ref/`.
+
+## `bob ref code`
+
+```bash
+bob ref code ea_graph
+bob ref code ea_graph 2 | pbcopy
+bob ref code ea_graph 2 -f markdown
+bob ref code ea_graph -p 7 -f json
+bob ref code ea_graph --source > source.md
+```
+
+Options: `-b/--bob-dir`, `-f/--format human|json|markdown|raw`,
+`-p/--page PAGE`, `-r/--ref-dir`, and `-s/--source`. Without a block
+number, the default format is a human list; with `N`, the default is
+`raw` and writes only that block's exact text, with no added newline.
+`-f markdown` writes a fenced block when `N` is present, or a titled,
+sectioned digest when it is absent. `-p` keeps blocks whose rendered
+page range includes that page. `--source` writes the exact saved
+`source.md` bytes and conflicts with `N`, `-p`, and `-f`.
+
+The command resolves `REF` with the same exact resolver as `bob ref
+show`, verifies the saved source digest, and never runs pandoc. JSON
+uses `schema_version: 1` and reports the reference, source, blocks,
+and one of these statuses: `available`, `no_code`, `no_catalog`,
+`no_source`, `source_missing`, or `source_invalid`. Each block includes
+its exact `text`, a safe fenced form, language, title, summary,
+caption, section, and rendered page range. JSON status responses exit
+successfully so callers can branch on `status`; unknown or ambiguous
+references and a requested block number that does not exist exit 1.
+
+The `id` on each block is generation-scoped as `<source-hash12>/<N>`.
+The summary skips blank lines, simple rules, box-drawing lines, and
+lone brackets or braces. For Mermaid blocks, a leading frontmatter
+title becomes the caption and the diagram type becomes the summary.
 
 ## `bob ref today`
 

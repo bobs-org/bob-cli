@@ -345,6 +345,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             crate::native::ref_library::cli::run_list(sub_matches)
         }
         Some(("rename", sub_matches)) => rename::run(sub_matches),
+        Some(("code", sub_matches)) => {
+            crate::native::ref_library::cli::run_code(sub_matches)
+        }
         Some(("show", sub_matches)) => {
             crate::native::ref_library::cli::run_show(sub_matches)
         }

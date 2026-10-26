@@ -14,6 +14,7 @@ Find, list, read, rename, and plan Bob reference notes for today, and sync Highl
 Usage: bob ref [OPTIONS] <COMMAND>
 
 Library:
+  code           Read the saved Markdown or exact code blocks from a reference
   find           Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
   list           List notes by reading state, status, type, origin, or date
   migrate-tasks  Move open ref tasks into parent notes; dry run unless --write
@@ -37,6 +38,7 @@ Options:
   -h, --help      Print help
 
 Examples:
+  bob ref code ea_graph 2 | pbcopy              Copy one exact code block
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days

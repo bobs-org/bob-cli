@@ -11,6 +11,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Library",
         &[
+            "code",
             "find",
             "list",
             "migrate-tasks",
@@ -35,6 +36,7 @@ const REF_HELP_TEMPLATE: &str = "\
 
 const REF_AFTER_HELP: &str = "\
 Examples:
+  bob ref code ea_graph 2 | pbcopy              Copy one exact code block
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
@@ -87,6 +89,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 /// Every `bob ref` subcommand builder, in `HELP_GROUPS` order.
 fn all_subcommands() -> Vec<ClapCommand> {
     vec![
+        crate::native::ref_library::cli::code_command(),
         crate::native::ref_library::cli::find_command(),
         crate::native::ref_library::cli::list_command(),
         crate::native::ref_library::migrate_tasks::migrate_tasks_command(),

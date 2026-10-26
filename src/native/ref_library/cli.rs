@@ -22,6 +22,7 @@ use super::{
     LIST_STATE_ORDER,
 };
 
+pub(crate) use super::code::run_code;
 pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
@@ -249,6 +250,55 @@ pub(crate) fn show_command() -> ClapCommand {
             bob ref show ea_graph\n  \
             bob ref show ea_graph -c\n  \
             bob ref show ref/papers/ea_graph.md -f json",
+        )
+}
+
+/// The `bob ref code` read-only saved-source and code-catalog command.
+pub(crate) fn code_command() -> ClapCommand {
+    ClapCommand::new("code")
+        .about("Read the saved Markdown or exact code blocks from a reference")
+        .arg(
+            Arg::new("ref")
+                .value_name("REF")
+                .required(true)
+                .help("Vault path, note stem or id, URL, arXiv ID, DOI, or exact title"),
+        )
+        .arg(
+            Arg::new("number")
+                .value_name("N")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .conflicts_with("source")
+                .help("Select one 1-based code-block number"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .short('f')
+                .value_name("FORMAT")
+                .value_parser(["human", "json", "markdown", "raw"])
+                .conflicts_with("source")
+                .help("Output format; defaults to human, or raw when N is given"),
+        )
+        .arg(
+            Arg::new("page")
+                .long("page")
+                .short('p')
+                .value_name("PAGE")
+                .value_parser(clap::value_parser!(u32).range(1..))
+                .conflicts_with("source")
+                .help("Keep blocks whose rendered page range contains PAGE"),
+        )
+        .arg(ref_dir_arg())
+        .arg(
+            Arg::new("source")
+                .long("source")
+                .short('s')
+                .action(ArgAction::SetTrue)
+                .help("Write the exact saved source.md bytes"),
+        )
+        .after_help(
+            "Without N, the default is a sectioned human list. With N, the default is the exact raw block bytes. `--format markdown` emits fenced Markdown; `--format json` emits the versioned catalog and verified saved source. `--source` writes saved Markdown and conflicts with N, --page, and --format. This command is read-only and never runs pandoc.\n\nExamples:\n  bob ref code ace_refresh_loop\n  bob ref code ace_refresh_loop 2 | pbcopy\n  bob ref code ace_refresh_loop -p 7 -f json\n  bob ref code ace_refresh_loop --source > source.md",
         )
 }
 
