@@ -609,7 +609,7 @@ pub(super) fn plan_pdf_sync(
         }
     }
 
-    let sidecar = read_sidecar_for_pdf(pdf)?;
+    let sidecar = read_sidecar_for_sync(pdf, options)?;
     let strip_return_links =
         super::return_links::strip_enabled(&synced_projection);
     let rendered_highlights = sidecar
@@ -1029,7 +1029,7 @@ fn plan_pdf_sync_v2(
         }
         None => (marker.contents.clone(), false),
     };
-    let sidecar = read_sidecar_for_pdf(pdf)?;
+    let sidecar = read_sidecar_for_sync(pdf, options)?;
     let strip_return_links = super::return_links::strip_enabled(&synced_pf);
     let rendered_highlights = sidecar
         .as_ref()

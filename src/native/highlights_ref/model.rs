@@ -33,6 +33,9 @@ pub(super) struct SyncOptions {
     pub(super) dry_run: bool,
     pub(super) write_pdf: bool,
     pub(super) prefer: Option<Prefer>,
+    /// Overwrite preflight ignores leftover empty sidecars so they can
+    /// be removed instead of refusing `not_in_sync`.
+    pub(super) ignore_unannotated_sidecar: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -9,10 +9,10 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const STEM: &str = "half-written";
-const SUBJECT: &str = "bob ref create: overwrite blogs/half-written";
+pub(crate) const STEM: &str = "half-written";
+pub(crate) const SUBJECT: &str = "bob ref create: overwrite blogs/half-written";
 
-fn fixture(prefix: &str) -> (TempDir, PathBuf, PathBuf) {
+pub(crate) fn fixture(prefix: &str) -> (TempDir, PathBuf, PathBuf) {
     let temp = TempDir::new(prefix);
     let vault = temp.path().join("vault");
     for directory in ["lib/blogs", "ref/blogs", "xlib"] {
@@ -39,13 +39,13 @@ fn fixture(prefix: &str) -> (TempDir, PathBuf, PathBuf) {
     (temp, vault, state)
 }
 
-fn head(vault: &Path) -> String {
+pub(crate) fn head(vault: &Path) -> String {
     let output = git_in(&vault, &["rev-parse", "HEAD"]);
     assert!(output.status.success(), "rev-parse HEAD failed");
     stdout(&output).trim().to_string()
 }
 
-fn intent_path(state: &Path, vault: &Path) -> PathBuf {
+pub(crate) fn intent_path(state: &Path, vault: &Path) -> PathBuf {
     let canonical = fs::canonicalize(vault)
         .expect("canonical vault")
         .to_string_lossy()
@@ -56,7 +56,7 @@ fn intent_path(state: &Path, vault: &Path) -> PathBuf {
     state.join("bob-cli/ref/overwrite-intents").join(name)
 }
 
-fn write_intent(
+pub(crate) fn write_intent(
     state: &Path,
     vault: &Path,
     base: &str,

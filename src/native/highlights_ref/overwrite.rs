@@ -320,7 +320,7 @@ pub(super) fn prepare(
             2,
         ));
     }
-    if !reference_mutation::is_in_sync(config, &pdf_relative) {
+    if !reference_mutation::is_in_sync_for_overwrite(config, &pdf_relative) {
         return Err(OverwriteRefusal::new(
             "not_in_sync",
             format!(
@@ -425,12 +425,9 @@ pub(super) fn prepare(
                 2,
             )
         })?;
-    let sidecar_has_annotations = sidecar.as_ref().is_some_and(|sidecar| {
-        sidecar
-            .annotations
-            .iter()
-            .any(|annotation| !super::is_sidecar_marker_mirror(annotation))
-    });
+    let sidecar_has_annotations = sidecar
+        .as_ref()
+        .is_some_and(sidecar::sidecar_has_user_annotations);
     let note_has_annotations =
         reference_mutation::has_managed_highlights(&note_contents);
     let pdf_has_annotations =

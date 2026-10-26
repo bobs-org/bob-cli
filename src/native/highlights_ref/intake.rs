@@ -434,6 +434,7 @@ impl IntakeSession {
                 dry_run: false,
                 write_pdf: false,
                 prefer: None,
+                ignore_unannotated_sidecar: false,
             },
         ) {
             Ok(plan) => plan,
@@ -1403,6 +1404,7 @@ pub(super) fn scan_intake_only(config: &Config, dry_run: bool) -> i32 {
                         dry_run,
                         write_pdf: false,
                         prefer: None,
+                        ignore_unannotated_sidecar: false,
                     },
                     mode,
                     Vec::new(),

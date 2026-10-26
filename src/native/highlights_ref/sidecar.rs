@@ -170,6 +170,26 @@ pub(super) fn read_sidecar_for_pdf(pdf: &Path) -> Result<Option<SidecarInput>> {
     }))
 }
 
+pub(super) fn sidecar_has_user_annotations(sidecar: &SidecarInput) -> bool {
+    sidecar
+        .annotations
+        .iter()
+        .any(|annotation| !is_sidecar_marker_mirror(annotation))
+}
+
+pub(super) fn read_sidecar_for_sync(
+    pdf: &Path,
+    options: SyncOptions,
+) -> Result<Option<SidecarInput>> {
+    let sidecar = read_sidecar_for_pdf(pdf)?;
+    if options.ignore_unannotated_sidecar
+        && !sidecar.as_ref().is_some_and(sidecar_has_user_annotations)
+    {
+        return Ok(None);
+    }
+    Ok(sidecar)
+}
+
 pub(super) fn discover_sidecar_path(pdf: &Path) -> Result<Option<PathBuf>> {
     let markdown = pdf.with_extension("md");
     if markdown.is_file() {

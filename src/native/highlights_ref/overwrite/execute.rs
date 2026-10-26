@@ -715,6 +715,7 @@ fn apply_and_verify(
             dry_run: false,
             write_pdf: false,
             prefer: None,
+            ignore_unannotated_sidecar: false,
         },
     )?;
     ensure_sync_writes_are_scoped(config, &sync_plan, manifest)?;
@@ -745,6 +746,7 @@ fn apply_and_verify(
             dry_run: true,
             write_pdf: false,
             prefer: None,
+            ignore_unannotated_sidecar: false,
         },
     )?;
     if verification.stable_note_action != "none"

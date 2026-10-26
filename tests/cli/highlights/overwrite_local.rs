@@ -5,11 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const FIXED_NOW: &str = "2026-10-16 12:00:00";
-const STEM: &str = "report";
-const TITLE: &str = "Report";
+pub(crate) const FIXED_NOW: &str = "2026-10-16 12:00:00";
+pub(crate) const STEM: &str = "report";
+pub(crate) const TITLE: &str = "Report";
 
-fn write_bare_pdf(path: &Path, title: Option<&str>) {
+pub(crate) fn write_bare_pdf(path: &Path, title: Option<&str>) {
     use lopdf::{dictionary, Document, Object, Stream};
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create bare PDF parent");
@@ -112,13 +112,13 @@ fn marker(status: &str) -> String {
     )
 }
 
-struct OverwriteVault {
-    temp: TempDir,
-    vault: PathBuf,
-    pdf: PathBuf,
+pub(crate) struct OverwriteVault {
+    pub(crate) temp: TempDir,
+    pub(crate) vault: PathBuf,
+    pub(crate) pdf: PathBuf,
 }
 
-fn filed_vault(
+pub(crate) fn filed_vault(
     prefix: &str,
     status: &str,
     audio: bool,
@@ -156,13 +156,34 @@ fn filed_vault(
     OverwriteVault { temp, vault, pdf }
 }
 
-fn commit_vault(vault: &Path, message: &str) {
+pub(crate) fn commit_vault(vault: &Path, message: &str) {
     git_in(vault, ["add", "-A"]);
     git_in(vault, ["commit", "-q", "-m", message]);
     git_in(vault, ["push", "-q", "origin", "master"]);
 }
 
-fn reread_command(fixture: &OverwriteVault, source: &Path) -> Command {
+/// Intake files its own commit, so a post-create stabilization must not
+/// fail when the tree is already clean.
+pub(crate) fn commit_if_dirty(vault: &Path, message: &str) {
+    git_in(vault, ["add", "-A"]);
+    let status = Command::new("git")
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("-C")
+        .arg(vault)
+        .args(["status", "--porcelain"])
+        .output()
+        .expect("git status");
+    if !status.stdout.is_empty() {
+        git_in(vault, ["commit", "-q", "-m", message]);
+    }
+    git_in(vault, ["push", "-q", "origin", "master"]);
+}
+
+pub(crate) fn reread_command(
+    fixture: &OverwriteVault,
+    source: &Path,
+) -> Command {
     let mut command = bob_command();
     command
         .arg("ref")
@@ -191,7 +212,10 @@ fn reread_command(fixture: &OverwriteVault, source: &Path) -> Command {
     command
 }
 
-fn overwrite_command(fixture: &OverwriteVault, source: &Path) -> Command {
+pub(crate) fn overwrite_command(
+    fixture: &OverwriteVault,
+    source: &Path,
+) -> Command {
     let mut command = bob_command();
     command
         .arg("ref")
@@ -221,7 +245,7 @@ fn overwrite_command(fixture: &OverwriteVault, source: &Path) -> Command {
     command
 }
 
-fn source_pdf(fixture: &OverwriteVault, title: &str) -> PathBuf {
+pub(crate) fn source_pdf(fixture: &OverwriteVault, title: &str) -> PathBuf {
     let path = fixture.temp.path().join(format!("{STEM}.pdf"));
     write_bare_pdf(&path, Some(title));
     path
@@ -237,7 +261,7 @@ fn source_markdown(
     path
 }
 
-fn note_body(fixture: &OverwriteVault) -> String {
+pub(crate) fn note_body(fixture: &OverwriteVault) -> String {
     fs::read_to_string(fixture.vault.join(format!("ref/papers/{STEM}.md")))
         .expect("read reference note")
 }
@@ -841,7 +865,7 @@ fn library_pdf_target_still_refuses_overwrite() {
     );
 }
 
-fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
+pub(crate) fn snapshot_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, current: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(current).expect("read snapshot") {
             let path = entry.expect("entry").path();

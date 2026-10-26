@@ -1159,6 +1159,7 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
         dry_run,
         write_pdf: false,
         prefer: None,
+        ignore_unannotated_sidecar: false,
     };
     let mut progress = |line: &str| eprintln!("{line}");
     let outcome = intake::run_intake_only_tracked(

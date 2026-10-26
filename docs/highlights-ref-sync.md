@@ -668,8 +668,10 @@ note. The archive preserves the old body apart from a replacement banner in
 place of the managed reading-task embed and neutralized legacy task tracker.
 Its frontmatter records the title, source URL, creation date, live-note parent,
 replacement date, prior status, and highlight count. It is an inert history
-note: it does not represent another library reference or reading task. With
-no authored prose, no archive is created and existing `earlier:` entries stay
+note: it does not represent another library reference or reading task.
+`bob ref list`, `find`, `doctor`, and create's source walk never treat
+`ref_history/` as a library member, duplicate hit, or reading-task source.
+With no authored prose, no archive is created and existing `earlier:` entries stay
 unchanged.
 
 Overwrite writes a durable intent under the host-local `bob_cli_state_dir()/ref/`

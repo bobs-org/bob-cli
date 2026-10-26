@@ -1080,7 +1080,7 @@ pub(super) fn preflight_for_stem(
 }
 
 /// Map a URL-route selection onto a capture outcome. Single-URL routes
-/// enable in-place overwrite; exact-set collections keep refusing it.
+/// and exact-set collections enable in-place overwrite.
 fn url_selection_from_selection(
     config: &Config,
     family: SelectedFamily,

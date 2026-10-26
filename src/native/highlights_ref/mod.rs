@@ -399,6 +399,7 @@ fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
         dry_run: matches.get_flag("dry-run"),
         write_pdf: matches.get_flag("write-pdfs"),
         prefer: None,
+        ignore_unannotated_sidecar: false,
     };
     let queued = (!options.dry_run).then(|| queued_xlib_count(&config));
     if json {
@@ -497,6 +498,7 @@ fn run_sync(matches: &ArgMatches) -> i32 {
         dry_run: matches.get_flag("dry-run"),
         write_pdf: matches.get_flag("write-pdf"),
         prefer: prefer_from_matches(matches),
+        ignore_unannotated_sidecar: false,
     };
 
     report_result(sync_pdf(&config, &pdf, options))

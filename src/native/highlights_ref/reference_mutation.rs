@@ -278,6 +278,21 @@ pub(crate) fn has_managed_highlights(contents: &str) -> bool {
 }
 
 pub(crate) fn is_in_sync(config: &Config, pdf_relative: &Path) -> bool {
+    is_in_sync_with(config, pdf_relative, false)
+}
+
+pub(crate) fn is_in_sync_for_overwrite(
+    config: &Config,
+    pdf_relative: &Path,
+) -> bool {
+    is_in_sync_with(config, pdf_relative, true)
+}
+
+fn is_in_sync_with(
+    config: &Config,
+    pdf_relative: &Path,
+    ignore_unannotated_sidecar: bool,
+) -> bool {
     let pdf = config.bob_dir.join(pdf_relative);
     let ctx = ScanContext::build(config);
     let Ok(mut plan) = plan_pdf_sync(
@@ -287,6 +302,7 @@ pub(crate) fn is_in_sync(config: &Config, pdf_relative: &Path) -> bool {
             dry_run: true,
             write_pdf: false,
             prefer: None,
+            ignore_unannotated_sidecar,
         },
         &ctx,
     ) else {

@@ -500,6 +500,7 @@ fn skip_stale_restore_without_write_opt_in_is_restore_alone() {
         dry_run: false,
         write_pdf: false,
         prefer: None,
+        ignore_unannotated_sidecar: false,
     };
     assert!(skip_stale_restore_without_write_opt_in(
         true, false, false, scan

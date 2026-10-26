@@ -765,6 +765,7 @@ fn write_id_marker(
             dry_run: false,
             write_pdf: true,
             prefer: None,
+            ignore_unannotated_sidecar: false,
         },
         &context,
     )

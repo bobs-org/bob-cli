@@ -239,8 +239,8 @@ pub(super) struct CreateOptions {
     pub(super) explicit_status: Option<String>,
     pub(super) title: Option<String>,
     /// Typed capture outcome: ordinary create, allocated reread, or
-    /// selected in-place overwrite. Local and single-URL routes enable
-    /// overwrite; collections still refuse it at preflight.
+    /// selected in-place overwrite. Local, single-URL, and exact-set
+    /// collection routes enable overwrite.
     pub(super) capture: CaptureOutcome,
     /// True only when the user passed `-k`; disabled ingest is a
     /// different `keep_intake_reason` and does not refuse overwrite.
@@ -672,9 +672,9 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     // Shared capture preflight: resolve duplicates and family defaults
     // before requiring -P, doing network work, or invoking adapters. A
     // filed family refuses here (no force carries the `-f` remedy with
-    // the computed next stem). Local and single-URL overwrite select the
-    // member in place; collections still refuse overwrite. `-L`
-    // without force keeps the legacy attach path, so it skips preflight.
+    // the computed next stem). Local, single-URL, and exact-set collection
+    // overwrite select the member in place. `-L` without force keeps the
+    // legacy attach path, so it skips preflight.
     let capture = match preflight_before_parent(
         &config,
         &target_os,

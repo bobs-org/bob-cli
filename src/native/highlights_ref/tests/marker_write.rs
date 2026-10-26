@@ -20,6 +20,7 @@ fn write_opts() -> SyncOptions {
         dry_run: false,
         write_pdf: true,
         prefer: None,
+        ignore_unannotated_sidecar: false,
     }
 }
 
@@ -28,6 +29,7 @@ fn note_opts() -> SyncOptions {
         dry_run: false,
         write_pdf: false,
         prefer: None,
+        ignore_unannotated_sidecar: false,
     }
 }
 
