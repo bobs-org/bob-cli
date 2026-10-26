@@ -45,6 +45,7 @@ uses more than one surface appears in each matching group.
 - [Link related tasks](../guides/link-related-tasks.md)
 - [Projects and dependencies](../concepts/projects-and-dependencies.md)
 - [Resolve a vault-sync conflict copy](../guides/resolve-vault-conflict-copy.md)
+- [Run bob from Obsidian](../guides/run-bob-from-obsidian.md)
 - [Run the morning review walk](../guides/run-morning-review.md)
 - [Sync the vault across machines](../guides/sync-vault-across-machines.md)
 - [Tasks and lanes](../concepts/tasks-and-lanes.md)

@@ -91,8 +91,12 @@ Visual-mode `:` remains Vim's native range command. In the command sheet,
 `:42` is routed to Vim, and matching `exmap` commands appear as suggestions.
 The plugin warns about recursive mappings that replay `:`; change those maps
 to `nnoremap` so they do not reopen the command sheet recursively. If `:`
-does nothing, confirm that the plugin is enabled and the `exmap` and
-`nnoremap` lines are present.
+does nothing, check that the `exmap` and `nnoremap` lines are present, then
+confirm the plugin itself is deployed: plugin folders are host-local and
+gitignored, so each desktop host needs its own `bob plugins sync`. `bob plugins list`
+should show `bob-command-mode` as `synced` and `enabled`; after enabling or
+deploying it, reload Obsidian so the new enabled list takes effect. Meanwhile
+`g:` still opens Vim's ex line.
 
 ## If bob is not found
 
