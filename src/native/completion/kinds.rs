@@ -254,6 +254,16 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    Entry {
+        path: &["ref", "code"],
+        arg: "number",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "code"],
+        arg: "page",
+        kind: Kind::FreeText,
+    },
     // `bob ref today` resolves the same exact note index, then links.
     Entry {
         path: &["ref", "today"],

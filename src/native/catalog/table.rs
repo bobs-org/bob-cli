@@ -683,6 +683,17 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         slots: &[("REF", "ref"), ("ref", "ref")],
+        ..reads(
+            "ref-code",
+            &["ref", "code"],
+            "Show saved code blocks",
+            &["code", "blocks", "source", "markdown"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        slots: &[("REF", "ref"), ("ref", "ref")],
         invalidates: &["tasks"],
         ..writes(
             "ref-today",
@@ -914,6 +925,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
         path: &["gkeep", "migrate-tasks"],
         reason: "One-time migration; run it from a terminal",
+    },
+    Excluded {
+        path: &["ref", "attach-source"],
+        reason: "Batch source backfill; run it from a terminal",
     },
     Excluded {
         path: &["ref", "migrate-tasks"],

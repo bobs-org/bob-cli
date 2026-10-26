@@ -1321,13 +1321,15 @@ mod tests {
             None,
         );
 
-        let missing_ptr =
-            ".bob/ref-sources/papers/missing--bbbbbbbbbbbb/source.md";
-        let missing_dir =
-            bob_dir.join(".bob/ref-sources/papers/missing--bbbbbbbbbbbb");
+        let missing = b"# no catalog\n";
+        let missing_hash12 = &sha256_hex(missing)[..12];
+        let missing_ptr = format!(
+            ".bob/ref-sources/papers/missing--{missing_hash12}/source.md"
+        );
+        let missing_dir = bob_dir
+            .join(format!(".bob/ref-sources/papers/missing--{missing_hash12}"));
         fs::create_dir_all(&missing_dir).expect("missing dir");
-        fs::write(missing_dir.join("source.md"), b"# no catalog\n")
-            .expect("source");
+        fs::write(missing_dir.join("source.md"), missing).expect("source");
 
         let mismatch_ptr =
             ".bob/ref-sources/papers/mismatch--cccccccccccc/source.md";
@@ -1363,7 +1365,7 @@ mod tests {
                 "ref/papers/dangling.md",
                 Some(".bob/ref-sources/papers/gone--aaaaaaaaaaaa/source.md"),
             ),
-            inspect_row("ref/papers/missing.md", Some(missing_ptr)),
+            inspect_row("ref/papers/missing.md", Some(&missing_ptr)),
             inspect_row("ref/papers/mismatch.md", Some(mismatch_ptr)),
             inspect_row("ref/papers/plain.md", None),
         ];

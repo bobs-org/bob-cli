@@ -3574,6 +3574,7 @@ fn stage_overwrite_source_store(
         pdf_rel,
         pdf_sha256,
         catalog,
+        verified: None,
     };
     super::source_store::stage_store_files(
         &scratch.join("ref-source-store"),

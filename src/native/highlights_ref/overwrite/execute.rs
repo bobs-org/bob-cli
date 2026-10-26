@@ -3337,6 +3337,7 @@ mod tests {
             pdf_rel,
             pdf_sha256: hex::encode(Sha256::digest(b"staged-pdf")),
             catalog: &catalog,
+            verified: None,
         };
         let staged = source_store::stage_store_files(&scratch, params)
             .expect("stage store");
