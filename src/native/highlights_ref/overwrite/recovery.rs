@@ -2107,6 +2107,13 @@ fn load_intent_from(
     state_dir: &Path,
     config: &Config,
 ) -> std::result::Result<Option<OverwriteIntent>, CommandError> {
+    // A missing vault holds no interrupted overwrite: intents are keyed
+    // by the canonical path of a vault that existed when they were saved.
+    if let Err(error) = fs::metadata(&config.bob_dir)
+        && error.kind() == std::io::ErrorKind::NotFound
+    {
+        return Ok(None);
+    }
     let canonical = canonical_vault(config)?;
     let path = intent_path_for(state_dir, &canonical);
     let text = match fs::read_to_string(&path) {
@@ -2690,6 +2697,17 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(path.exists(), "malformed markers are never deleted");
+    }
+
+    #[test]
+    fn missing_vault_has_no_pending_intent() {
+        let root = tempfile::tempdir().expect("root");
+        let config = test_config(&root.path().join("no-vault"));
+        let state_temp = tempfile::tempdir().expect("state root");
+
+        assert!(load_intent_from(state_temp.path(), &config)
+            .expect("a missing vault is not an error")
+            .is_none());
     }
 
     #[test]

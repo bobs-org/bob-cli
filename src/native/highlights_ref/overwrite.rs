@@ -305,6 +305,16 @@ pub(super) fn prepare(
             1,
         ));
     }
+    // The transaction's pre- and post-sync run against `BOB_DIR`, so a
+    // `-b` vault that differs from it would sync the wrong vault.
+    if let Some(detail) = super::intake::vault_identity_problem(config) {
+        return Err(OverwriteRefusal::new(
+            "intake_unavailable",
+            format!("overwrite cannot run because intake cannot file into the selected vault: {detail}"),
+            Some("point BOB_DIR at the vault passed with -b"),
+            1,
+        ));
+    }
     if let Some(explicit_type) = request.explicit_ref_type.as_deref()
         && !explicit_type.eq_ignore_ascii_case(&ref_type)
     {

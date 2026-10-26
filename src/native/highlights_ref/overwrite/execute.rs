@@ -3786,6 +3786,11 @@ mod tests {
         let alias_parent = fixture._temp.path().join("vault-parent-link");
         symlink(&actual_parent, &alias_parent).expect("symlink parent");
         let alias_vault = alias_parent.join("vault");
+        // Overwrite only runs against the `BOB_DIR` vault, which moved.
+        let _bob_dir = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_DIR",
+            Some(alias_vault.as_os_str()),
+        )]);
         fixture.vault = alias_vault.clone();
         fixture.note = alias_vault.join("ref/papers/report.md");
         fixture.pdf = alias_vault.join("lib/papers/report.pdf");

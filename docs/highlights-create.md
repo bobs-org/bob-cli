@@ -58,10 +58,12 @@ behavior can be selected with
 to enable it. A nonblank environment value overrides the config value.
 
 Filed `-f overwrite` requires intake to be enabled because overwrite cannot
-queue a replacement. With intake disabled, it refuses with
+queue a replacement. With intake disabled, or with a `-b` vault that differs
+from `BOB_DIR` (the vault its pre- and post-sync use), it refuses with
 `intake_unavailable` before fetching or rendering, including in dry runs.
 Enable `highlights.ingest_on_create` or set
-`BOB_HIGHLIGHTS_INGEST_ON_CREATE=1` on this host.
+`BOB_HIGHLIGHTS_INGEST_ON_CREATE=1` on this host, and point `BOB_DIR` at the
+vault you pass with `-b`.
 
 When enabled, create takes `bob_sync.lock` and then `scan.lock`, pulls the
 vault, rechecks the library destinations, moves the PDF and its companions,

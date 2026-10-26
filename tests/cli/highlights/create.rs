@@ -7605,11 +7605,15 @@ fn highlights_create_force_stray_mode_guard_runs_no_adapter_and_writes_nothing()
 /// Adopting the only TARGET as the mode leaves no TARGET: the normal
 /// missing-TARGET usage error fires, byte-identical to bare `create`.
 /// Both runs stay flag-free so the rendered usage lines match exactly.
+/// A missing vault proves the usage error never reaches the vault.
 #[test]
 fn highlights_create_force_adopted_empty_target_matches_missing_target_usage() {
+    let temp = TempDir::new("bob-cli-highlights-create-force-adopted-empty");
+    let missing_vault = temp.path().join("no-vault");
     let bare = bob_command()
         .arg("ref")
         .arg("create")
+        .env("BOB_DIR", &missing_vault)
         .output()
         .expect("run bare create");
     let adopted = bob_command()
@@ -7617,6 +7621,7 @@ fn highlights_create_force_adopted_empty_target_matches_missing_target_usage() {
         .arg("create")
         .arg("-f")
         .arg("overwrite")
+        .env("BOB_DIR", &missing_vault)
         .output()
         .expect("run create with an adopted-away target");
     assert_eq!(bare.status.code(), Some(2));
@@ -8797,9 +8802,38 @@ fn highlights_create_collection_overwrites_exact_set_with_listen() {
     assert_eq!(fake.request_count(), adapter_calls);
     assert_eq!(fs::read_to_string(&log).unwrap(), curl_before);
 
+    // The transaction syncs `BOB_DIR`, so a `-b` vault that differs from
+    // it refuses before any fetch instead of syncing another vault.
+    let other_vault = temp.path().join("other-vault");
+    fs::create_dir_all(&other_vault).expect("create other vault");
+    let mut elsewhere =
+        collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
+    elsewhere
+        .args(["--force=overwrite", "-N", "tokio_internals"])
+        .env("BOB_NOW", NOW)
+        .env("BOB_DIR", &other_vault);
+    collection_env(&mut elsewhere, &curl, &curl_root, &log, &fake.path);
+    let elsewhere_output = elsewhere
+        .output()
+        .expect("other-vault collection overwrite");
+    assert_eq!(
+        elsewhere_output.status.code(),
+        Some(1),
+        "other-vault collection overwrite must refuse:\n{}",
+        format_output(&elsewhere_output)
+    );
+    assert!(
+        stderr(&elsewhere_output).contains("intake_unavailable")
+            && stderr(&elsewhere_output).contains("differs from BOB_DIR"),
+        "other-vault collection overwrite code:\n{}",
+        format_output(&elsewhere_output)
+    );
+    assert_eq!(fake.request_count(), adapter_calls);
+    assert_eq!(fs::read_to_string(&log).unwrap(), curl_before);
+
     let mut dry = collection_create(&vault, &[TOKIO_PART_2, TOKIO_PART_1]);
     dry.args(["--force=overwrite", "-N", "tokio_internals", "-d"]);
-    dry.env("BOB_NOW", NOW);
+    dry.env("BOB_NOW", NOW).env("BOB_DIR", &vault);
     collection_env(&mut dry, &curl, &curl_root, &log, &fake.path);
     let dry_output = dry.output().expect("dry-run collection overwrite");
     assert_success(&dry_output);
@@ -8843,6 +8877,7 @@ printf 'ID3 replacement episode' > "$audio_path"
     overwrite.args(["--force=overwrite", "-N", "tokio_internals", "-L"]);
     overwrite
         .env("BOB_NOW", NOW)
+        .env("BOB_DIR", &vault)
         .env(
             "BOB_HIGHLIGHTS_LISTEN_COMMAND",
             "sase listen render {pdf} -e full -o {audio} --title {title}",
@@ -9045,6 +9080,7 @@ rm -f "$FAKE_LISTEN_REMOVE_TARGET"
     overwrite.args(["--force=overwrite", "-N", "tokio_internals", "-L"]);
     overwrite
         .env("BOB_NOW", NOW)
+        .env("BOB_DIR", &vault)
         .env(
             "BOB_HIGHLIGHTS_LISTEN_COMMAND",
             "sase listen render {pdf} -e full -o {audio} --title {title}",

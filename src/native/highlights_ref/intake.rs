@@ -586,6 +586,15 @@ struct MovedFile {
     to: PathBuf,
 }
 
+/// Why intake cannot file into `config`'s vault, if it cannot: the same
+/// identity check an intake session runs before any lock or sync, which
+/// syncs `BOB_DIR` rather than the `-b` vault.
+pub(super) fn vault_identity_problem(config: &Config) -> Option<String> {
+    validate_vault_identity(config)
+        .err()
+        .map(|failure| failure.detail)
+}
+
 fn validate_vault_identity(
     config: &Config,
 ) -> std::result::Result<(), QueueFailure> {
