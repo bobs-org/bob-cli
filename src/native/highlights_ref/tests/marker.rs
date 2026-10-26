@@ -345,6 +345,7 @@ Body
             created: None,
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         &note.body,
     );
@@ -386,6 +387,7 @@ fn new_note_render_emits_exactly_one_created_line() {
             created: Some("2026-10-03T15:42:18-0400".to_string()),
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         "# Example\n",
     );
@@ -435,6 +437,7 @@ Manual body.
             created: None,
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         &note.body,
     );

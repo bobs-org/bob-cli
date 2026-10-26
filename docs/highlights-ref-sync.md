@@ -662,6 +662,18 @@ stem, `id`, and reading task. It preserves the note-local `created` value and
 adds `recaptured: YYYY-MM-DD` for the replacement. Like `created` and
 `earlier`, `recaptured` stays out of the marker projection and its hash.
 
+Like `created` and `earlier`, the `source_markdown` pointer is note-local
+and birth-only: the shared single-PDF sync plan derives it once when the
+note is new by `find_birth_store(vault, ref_type, stem, pdf_sha256)` —
+the single store under `.bob/ref-sources/<ref_type>/<stem>--*/code.json`
+whose `pdf.sha256` equals the incoming PDF digest — and repeat syncs and
+`bob ref scan` preserve the authored line verbatim. It never enters the
+PDF marker, projection, or hash. For example:
+
+```yaml
+source_markdown: .bob/ref-sources/chat/ace--5d3be944e47e/source.md
+```
+
 When the old note has authored prose, overwrite freezes it at
 `ref_history/<type>/<stem>__<date>.md` (using `_2`, `_3`, and so on for
 same-day collisions), then adds a newest-first `earlier:` link to the live

@@ -249,6 +249,29 @@ allowance has to reach each host through this Git sync workflow. After the
 change is on `origin/master`, `bob vault-sync` on the MacBook is the path that
 makes `bob gkeep pull` able to track a new receipt.
 
+## Reference sources
+
+`.bob/ref-sources/<ref_type>/<stem>--<hash12>/` holds the write-once saved
+Markdown (`source.md`) plus its render-time code catalog (`code.json`).
+They travel with the vault on every host that runs `bob vault-sync`.
+`source.md` is covered by `!*.md`, but JSON is otherwise allowed only
+under `.obsidian`, so the vault root `.gitignore` also carries:
+
+```gitignore
+!/.bob/ref-sources/**/*.json
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/ref-sources/chat/probe--000000000000/code.json
+```
+
+A negated last match (`!/.bob/ref-sources/**/*.json`) means the file is
+trackable. When `code.json` is ignored on a host, `bob ref create` still
+files the reference and prints `warning: code catalogs are ignored...`.
+See `docs/highlights-create.md#saved-markdown`.
+
 ## Stats review journal
 
 `.bob/stats/review/*.jsonl` is the per-host review-walk journal. Each

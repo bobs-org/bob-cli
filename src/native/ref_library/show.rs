@@ -691,6 +691,36 @@ fn metadata_rows(row: &ShowRow) -> Vec<(String, String)> {
     if let Some(audio) = row.row.audio.as_deref() {
         rows.push(("audio".to_string(), audio.to_string()));
     }
+    if let Some(pointer) = row.row.source_markdown.as_deref() {
+        let handle = row
+            .row
+            .marker_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                row.row
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&row.row.path)
+                    .strip_suffix(".md")
+                    .or_else(|| {
+                        row.row
+                            .path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&row.row.path)
+                            .strip_suffix(".MD")
+                    })
+                    .unwrap_or(&row.row.path)
+                    .to_string()
+            });
+        rows.push((
+            "markdown".to_string(),
+            format!("{pointer} · bob ref code {handle}"),
+        ));
+    }
     if let Some(parent) = row.row.parent.as_deref() {
         rows.push(("parent".to_string(), parent.to_string()));
     }
@@ -1905,6 +1935,7 @@ mod tests {
                     highlights_count: None,
                 }),
                 research_ref: None,
+                source_markdown: None,
                 superseded_by: None,
                 diagnostics: Vec::new(),
                 family: "ref/papers/ea_graph.md".to_string(),

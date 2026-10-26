@@ -508,6 +508,34 @@ layout while the catalog retains the original tab characters. A tab at the
 start of a blockquote code line therefore expands to four columns, where the
 older parser could treat it as two.
 
+## Saved Markdown
+
+Every new Markdown-born reference keeps the exact bytes pandoc read under
+`.bob/ref-sources/<ref_type>/<stem>--<hash12>/source.md` plus its
+render-time catalog `code.json` (version 1). `hash12` is the first 12 hex
+digits of SHA-256(`source.md`); `<stem>` is the final target stem and
+`<ref_type>` the library type directory. `source.md` is write-once: a
+digest mismatch refuses with a warning and never overwrites. `code.json`
+is derived data that a later render of the same bytes may replace
+atomically. Writes hold `bob_sync.lock`, and readers treat a missing
+`code.json` as `no_catalog`.
+
+| Route | `code.json` route | `source.md` bytes | `source_note` |
+| --- | --- | --- | --- |
+| Plain `.md` | `markdown` | Input file bytes | — |
+| `-M` vault note | `plain_note` | Original note bytes | Note route + digest |
+| Snapshot | `note_snapshot` | Projected Markdown bytes | Note route + digest |
+
+Hidden content such as HTML comments and frontmatter is preserved verbatim
+and synced through vault git (`source.md` via `!*.md`, `code.json` via
+`!/.bob/ref-sources/**/*.json`). `rename` never moves a store; a reread
+makes a new store and an in-place overwrite makes a new store when the
+bytes changed, keeping the old one as history. The note frontmatter
+`source_markdown` points at `source.md` (for example
+`.bob/ref-sources/chat/ace--5d3be944e47e/source.md`). `create` prints
+`source_markdown:` and `code:` lines, and `bob ref show` carries the
+pointer in JSON and in its `markdown` row.
+
 ## arXiv
 
 URL recognition mirrors `sase-listen` (`abs`, `html`, `pdf`, new- and

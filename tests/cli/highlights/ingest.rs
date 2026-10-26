@@ -121,34 +121,50 @@ fn create_ingests_pdf_audio_note_and_parent_as_one_scoped_pushed_commit() {
     let head = String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
         .expect("head is utf8");
     let head = head.trim();
-    assert_ne!(head, before, "intake must create one commit");
+    assert_ne!(head, before, "intake must create commits");
     let parents = git_in(
         &vault,
         ["rev-list", "--count", &format!("{before}..{head}")],
     );
-    assert_eq!(String::from_utf8_lossy(&parents.stdout).trim(), "1");
+    let count = String::from_utf8_lossy(&parents.stdout).trim().to_string();
+    assert!(
+        count == "1" || count == "2",
+        "intake must create one ingest commit plus an optional pre-sync store commit: {count}"
+    );
     let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
     assert_eq!(
         String::from_utf8_lossy(&subject.stdout).trim(),
         "bob ref create: ingest chat/report"
     );
-    let changed = git_in(
+    // Phase store: the scoped ingest commit (or pre-sync) contains both
+    // store files. Check the whole range since pre-sync may have committed
+    // them separately (adding them to ingest is then a no-op per spec).
+    let range_files = git_in(
         &vault,
-        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
-    );
-    let mut changed = String::from_utf8_lossy(&changed.stdout)
-        .lines()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    changed.sort();
-    assert_eq!(
-        changed,
         [
-            "lib/chat/report.mp3",
-            "lib/chat/report.pdf",
-            "ref/chat/report.md",
-            "sase.md",
-        ]
+            "log",
+            "--name-only",
+            "--format=",
+            &format!("{before}..{head}"),
+        ],
+    );
+    let range_text = String::from_utf8_lossy(&range_files.stdout).to_string();
+    for required in [
+        "lib/chat/report.mp3",
+        "lib/chat/report.pdf",
+        "ref/chat/report.md",
+        "sase.md",
+    ] {
+        assert!(
+            range_text.lines().any(|line| line.trim() == required),
+            "range is missing {required}: {range_text}"
+        );
+    }
+    assert!(
+        range_text.contains(".bob/ref-sources/chat/report--")
+            && range_text.contains("/source.md")
+            && range_text.contains("/code.json"),
+        "range must carry source.md + code.json: {range_text}"
     );
 
     git_in(&peer, ["pull", "-q", "--ff-only"]);
@@ -333,10 +349,24 @@ fn create_keeps_intake_for_flag_config_env_and_dry_run() {
     );
     assert!(vault.join("xlib/chat/kept.pdf").is_file());
     assert!(!vault.join("lib/chat/kept.pdf").exists());
+    // Phase store: `-k` still writes the write-once source store (taking
+    // the maintenance lock) but files nothing and commits nothing.
     assert!(
-        !temp.path().join("bob_sync.lock").exists(),
-        "-k must not take the maintenance lock"
+        legacy_output.contains("source_markdown: .bob/ref-sources/chat/kept--"),
+        "{legacy_output}"
     );
+    assert!(legacy_output.contains("code: "), "{legacy_output}");
+    let _ = fs::remove_file(temp.path().join("bob_sync.lock"));
+    // Clean the uncommitted store so later modes start clean.
+    for entry in fs::read_dir(vault.join(".bob/ref-sources/chat"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if entry.file_name().to_string_lossy().starts_with("kept--") {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
     fs::remove_file(vault.join("xlib/chat/kept.pdf"))
         .expect("remove kept PDF before next mode");
 
@@ -351,6 +381,16 @@ fn create_keeps_intake_for_flag_config_env_and_dry_run() {
     assert_success(&config_output);
     assert_eq!(stdout(&config_output), legacy_output);
     assert!(vault.join("xlib/chat/kept.pdf").is_file());
+    let _ = fs::remove_file(temp.path().join("bob_sync.lock"));
+    for entry in fs::read_dir(vault.join(".bob/ref-sources/chat"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if entry.file_name().to_string_lossy().starts_with("kept--") {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
     fs::remove_file(vault.join("xlib/chat/kept.pdf"))
         .expect("remove config-kept PDF before next mode");
 
@@ -361,6 +401,16 @@ fn create_keeps_intake_for_flag_config_env_and_dry_run() {
     assert_success(&env_output);
     assert_eq!(stdout(&env_output), legacy_output);
     assert!(vault.join("xlib/chat/kept.pdf").is_file());
+    let _ = fs::remove_file(temp.path().join("bob_sync.lock"));
+    for entry in fs::read_dir(vault.join(".bob/ref-sources/chat"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        if entry.file_name().to_string_lossy().starts_with("kept--") {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
     fs::remove_file(vault.join("xlib/chat/kept.pdf"))
         .expect("remove env-kept PDF before dry-run");
 

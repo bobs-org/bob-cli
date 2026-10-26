@@ -310,6 +310,11 @@ pub(super) struct PipelineMetadata {
     /// at birth only; repeat syncs preserve the authored lines verbatim
     /// and never re-derive them, so this stays `None` there.
     pub(super) birth_lineage: Option<BirthLineage>,
+    /// Birth-only `source_markdown` pointer to the write-once saved
+    /// Markdown under `.bob/ref-sources`. Rendered once when the note is
+    /// new; repeat syncs preserve the authored line verbatim and never
+    /// re-derive it, so this stays `None` there.
+    pub(super) source_markdown: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1148,6 +1153,15 @@ impl ParsedNote {
         // carry no lineage here.
         if let Some(lineage) = &metadata.birth_lineage {
             lines.extend(super::birth::render_birth_earlier(&lineage.entries));
+        }
+        // Birth-only `source_markdown` pointer to the saved Markdown.
+        // New notes render it once; existing notes keep their authored
+        // line verbatim via preservation below (it is not a removed key).
+        if let Some(pointer) = &metadata.source_markdown {
+            lines.push(format!(
+                "{FIELD_SOURCE_MARKDOWN}: {}",
+                MarkerValue::String(pointer.clone()).as_frontmatter_value()
+            ));
         }
 
         // A removed block-style key leaves orphaned continuation lines

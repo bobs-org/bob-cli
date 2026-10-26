@@ -57,6 +57,7 @@ pub(crate) struct RefRow {
     pub comment_count: usize,
     pub snapshot: Option<RefSnapshot>,
     pub research_ref: Option<String>,
+    pub source_markdown: Option<String>,
     pub superseded_by: Option<String>,
     pub diagnostics: Vec<Diagnostic>,
     /// Frontmatter `id`, also exposed as `marker_id` in JSON.

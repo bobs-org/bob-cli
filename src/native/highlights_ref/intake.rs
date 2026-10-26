@@ -458,6 +458,18 @@ impl IntakeSession {
         // `scoped_write_path_set` once their destination already contains
         // the candidate identity.
         let mut path_set = scoped_write_path_set(config, &plan).write_paths;
+        // Birth-only `source_markdown` store files join the scoped ingest
+        // commit after the dirty-target guard. They are never part of
+        // `scoped_write_path_set` (the guard refuses untracked paths); when
+        // the pre-sync already committed them, adding them is a no-op and
+        // ignored paths are filtered with a warning below.
+        if let Some(pointer) = plan.stable_metadata.source_markdown.as_deref() {
+            let source_abs = config.bob_dir.join(pointer);
+            path_set.insert(source_abs.clone());
+            if let Some(parent) = source_abs.parent() {
+                path_set.insert(parent.join("code.json"));
+            }
+        }
         let mut session = MarkerWriteSession::for_explicit_write()
             .map_err(|error| IngestFailure::Incomplete(error.to_string()))?;
         let write = match execute_pdf_sync(

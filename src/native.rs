@@ -91,6 +91,7 @@ mod task_status_hooks_write;
 #[cfg(test)]
 pub(crate) mod test_stub;
 pub(crate) mod url_routing;
+pub(crate) mod vault_git;
 mod vault_links;
 mod vault_rewrite;
 mod vault_sync;

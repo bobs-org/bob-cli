@@ -53,6 +53,9 @@ pub(super) fn pipeline_metadata(
         // The sync plan derives reread lineage only for new notes and
         // sets it there; repeat plans preserve the authored lines.
         birth_lineage: None,
+        // The sync plan derives the `source_markdown` pointer only for
+        // new notes; repeat plans preserve the authored line.
+        source_markdown: None,
     })
 }
 

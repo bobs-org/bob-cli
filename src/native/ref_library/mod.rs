@@ -552,6 +552,11 @@ fn build_row(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|value| format!("research:{value}")),
+        source_markdown: front
+            .get_str("source_markdown")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         superseded_by: None,
         diagnostics,
         family: rel.to_string(),

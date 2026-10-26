@@ -545,6 +545,28 @@ fn vault_rel_forward(config: &Config, path: &Path) -> String {
         .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
 }
 
+/// Derive the birth-only `source_markdown` pointer for a new note:
+/// the single store under `.bob/ref-sources/<ref_type>/<stem>--*/`
+/// whose recorded PDF sha matches the incoming PDF. `None` when the note
+/// already exists, the type or stem is unknown, or no single store matches.
+fn derive_birth_source_markdown(
+    config: &Config,
+    pdf: &Path,
+    note_path: &Path,
+    pdf_sha256: &str,
+) -> Option<String> {
+    use super::io::pdf_path_metadata;
+    let meta = pdf_path_metadata(config, pdf).ok()?;
+    let ref_type = meta.ref_type?;
+    let stem = note_path.file_stem()?.to_str()?.to_string();
+    super::source_store::find_birth_store(
+        &config.bob_dir,
+        &ref_type,
+        &stem,
+        pdf_sha256,
+    )
+}
+
 pub(super) fn plan_pdf_sync(
     config: &Config,
     pdf: &Path,
@@ -696,7 +718,7 @@ pub(super) fn plan_pdf_sync(
         .as_ref()
         .map(|rendered| rendered.image_assets.clone())
         .unwrap_or_default();
-    let stable_metadata = pipeline_metadata(
+    let mut stable_metadata = pipeline_metadata(
         config,
         pdf,
         &marker.source_pdf_sha256,
@@ -705,6 +727,19 @@ pub(super) fn plan_pdf_sync(
         rendered_highlights.as_ref(),
         false,
     )?;
+    // Birth-only `source_markdown` pointer: new notes look up the
+    // write-once store by (ref_type, stem, PDF sha); existing notes keep
+    // their authored line verbatim.
+    if !note.exists()
+        && let Some(pointer) = derive_birth_source_markdown(
+            config,
+            pdf,
+            &note_path,
+            &marker.source_pdf_sha256,
+        )
+    {
+        stable_metadata.source_markdown = Some(pointer);
+    }
     let rendered_body = note.render_body(
         pdf,
         &synced_projection,
@@ -1126,6 +1161,20 @@ fn plan_pdf_sync_v2(
     )?;
     if let Some(lineage) = birth_lineage {
         stable_metadata.birth_lineage = Some(lineage);
+    }
+    // Birth-only `source_markdown` pointer alongside birth lineage: new
+    // notes look up the write-once store by (ref_type, stem, PDF sha);
+    // existing notes keep their authored line verbatim.
+    if !note.exists()
+        && stable_metadata.source_markdown.is_none()
+        && let Some(pointer) = derive_birth_source_markdown(
+            config,
+            pdf,
+            &note_path,
+            &marker.source_pdf_sha256,
+        )
+    {
+        stable_metadata.source_markdown = Some(pointer);
     }
     let highlights_content = rendered_highlights
         .as_ref()

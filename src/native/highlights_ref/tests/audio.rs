@@ -12,6 +12,7 @@ fn test_metadata(audio: Option<&str>) -> PipelineMetadata {
         created: None,
         audio: audio.map(str::to_string),
         birth_lineage: None,
+        source_markdown: None,
     }
 }
 

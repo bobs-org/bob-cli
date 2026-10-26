@@ -575,6 +575,7 @@ fn render_places_replaced_hash_after_marker_base() {
             created: None,
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         "",
     );
@@ -616,6 +617,7 @@ fn render_keeps_block_earlier_list_byte_identical() {
             created: None,
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         "# Attention\n",
     );
@@ -658,6 +660,7 @@ fn render_drops_continuations_of_a_removed_block_key() {
             created: None,
             audio: None,
             birth_lineage: None,
+            source_markdown: None,
         },
         "# Attention\n",
     );

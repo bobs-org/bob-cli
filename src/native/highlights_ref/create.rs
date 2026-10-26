@@ -2791,6 +2791,7 @@ fn create_snapshot_plan(
             options,
             &Styler::detect(),
         );
+        print_dry_run_snapshot_store(config, &plan, &snapshot);
         if let Some(line) =
             super::diagrams::dry_run_line(&snapshot.projected_markdown)
         {
@@ -2903,6 +2904,7 @@ fn create_snapshot_plan(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
+    persist_snapshot_store(config, &plan, &snapshot, &outcome.code_catalog);
     print_snapshot_shown_omitted(&snapshot.summary);
     emit_snapshot_warnings(
         &snapshot,
@@ -3398,6 +3400,177 @@ fn create_markdown_route(
     create_markdown_plan(config, plan, scratch, options, listen)
 }
 
+/// Planned `source_markdown` pointer for dry runs (computable from bytes).
+fn print_dry_run_source_store(config: &Config, plan: &CreatePlan) {
+    use super::stamp::TargetWorkflow;
+    if matches!(plan.workflow, TargetWorkflow::External) {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    }
+    let Some(bytes) = plan.source_markdown.as_deref().map(str::as_bytes) else {
+        return;
+    };
+    let Some((ref_type, stem, _)) =
+        super::source_store::store_context_for_target(
+            config,
+            &plan.target_plan(),
+        )
+    else {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    };
+    // Re-derive the stem from the plan (already collision-resolved).
+    let _ = stem;
+    let (_, pointer) =
+        super::source_store::planned_pointer(&ref_type, &plan.stem, bytes);
+    println!("source_markdown: {pointer}");
+}
+
+/// Planned pointer for snapshot dry runs.
+fn print_dry_run_snapshot_store(
+    config: &Config,
+    plan: &CreatePlan,
+    snapshot: &note_snapshot::SnapshotPlan,
+) {
+    use super::stamp::TargetWorkflow;
+    if matches!(plan.workflow, TargetWorkflow::External) {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    }
+    let Some((ref_type, _, _)) = super::source_store::store_context_for_target(
+        config,
+        &plan.target_plan(),
+    ) else {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    };
+    let (_, pointer) = super::source_store::planned_pointer(
+        &ref_type,
+        &plan.stem,
+        snapshot.projected_markdown.as_bytes(),
+    );
+    println!("source_markdown: {pointer}");
+}
+
+/// Persist the write-once source store for the Markdown / `-M` route and
+/// print the `source_markdown:` and `code:` lines. External targets print
+/// the `none` line and write nothing. Store failures warn and never fail
+/// the create.
+fn persist_markdown_store(
+    config: &Config,
+    plan: &CreatePlan,
+    frozen_source: &Path,
+    catalog: &super::code_catalog::CatalogOutcome,
+) {
+    use super::stamp::TargetWorkflow;
+    if matches!(plan.workflow, TargetWorkflow::External) {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    }
+    let source_bytes = match fs::read(frozen_source) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "warning: could not read frozen Markdown {}: {error}; skipping source store",
+                frozen_source.display()
+            );
+            return;
+        }
+    };
+    let route = if plan.source_kind == "vault note" {
+        "plain_note"
+    } else {
+        "markdown"
+    };
+    let source_note = plan.source_note.clone();
+    let source_note_sha256 = source_note
+        .as_ref()
+        .map(|_| super::source_store::sha256_hex(&source_bytes));
+    let origin = plan.source.clone();
+    match super::source_store::write_for_create(
+        config,
+        &plan.target_plan(),
+        &plan.target,
+        &source_bytes,
+        route,
+        origin,
+        source_note,
+        source_note_sha256,
+        catalog,
+    ) {
+        Some(outcome) => {
+            println!("source_markdown: {}", outcome.pointer);
+            println!("code: {}", super::source_store::code_summary(catalog));
+        }
+        None => {
+            // Warning already printed; keep the pointer line honest.
+            // Recompute the planned pointer so agents still see the path.
+            if let Some((ref_type, _, _)) =
+                super::source_store::store_context_for_target(
+                    config,
+                    &plan.target_plan(),
+                )
+            {
+                let (_, pointer) = super::source_store::planned_pointer(
+                    &ref_type,
+                    &plan.stem,
+                    &source_bytes,
+                );
+                println!("source_markdown: {pointer}");
+            }
+        }
+    }
+}
+
+/// Persist the store for the snapshot route (projected Markdown bytes).
+fn persist_snapshot_store(
+    config: &Config,
+    plan: &CreatePlan,
+    snapshot: &note_snapshot::SnapshotPlan,
+    catalog: &super::code_catalog::CatalogOutcome,
+) {
+    use super::stamp::TargetWorkflow;
+    if matches!(plan.workflow, TargetWorkflow::External) {
+        println!("source_markdown: none (output outside the library)");
+        return;
+    }
+    let source_bytes = snapshot.projected_markdown.as_bytes();
+    let origin = snapshot.note.canonical_path.display().to_string();
+    let source_note = Some(snapshot.note.identity.route.clone());
+    let source_note_sha256 = Some(snapshot.source_digest.clone());
+    match super::source_store::write_for_create(
+        config,
+        &plan.target_plan(),
+        &plan.target,
+        source_bytes,
+        "note_snapshot",
+        origin,
+        source_note,
+        source_note_sha256,
+        catalog,
+    ) {
+        Some(outcome) => {
+            println!("source_markdown: {}", outcome.pointer);
+            println!("code: {}", super::source_store::code_summary(catalog));
+        }
+        None => {
+            if let Some((ref_type, _, _)) =
+                super::source_store::store_context_for_target(
+                    config,
+                    &plan.target_plan(),
+                )
+            {
+                let (_, pointer) = super::source_store::planned_pointer(
+                    &ref_type,
+                    &plan.stem,
+                    source_bytes,
+                );
+                println!("source_markdown: {pointer}");
+            }
+        }
+    }
+}
+
 /// Freeze the bytes already captured by the planner so both pandoc passes
 /// and the final renderer consume the same Markdown snapshot.
 fn freeze_markdown_source(
@@ -3484,6 +3657,7 @@ fn create_markdown_plan(
             );
         }
         print_plan(config, &plan, options, &styler);
+        print_dry_run_source_store(config, &plan);
         if let Some(markdown) = plan.source_markdown.as_deref()
             && let Some(line) = super::diagrams::dry_run_line(markdown)
         {
@@ -3661,6 +3835,12 @@ fn create_markdown_plan(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
+    persist_markdown_store(
+        config,
+        &plan,
+        &frozen_source,
+        &render_reports.code_catalog,
+    );
     super::return_links::emit_outcome(&render_reports.return_links, &styler);
     diagram_pass.emit(&styler);
     finish_create_intake(

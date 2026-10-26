@@ -608,6 +608,7 @@ mod tests {
             comment_count: 0,
             snapshot: None,
             research_ref: None,
+            source_markdown: None,
             superseded_by: None,
             diagnostics: Vec::new(),
             family: "ref/papers/a.md".to_string(),

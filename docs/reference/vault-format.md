@@ -405,6 +405,7 @@ vault/
 ├── _conflicts/              # local copies vault-sync could not merge
 ├── _templates/              # skipped by lane queries
 ├── .bob/                    # machine data; never scanned as notes
+│   ├── ref-sources/         # write-once saved Markdown + code.json catalogs
 │   ├── themes/              # synced per-host theme preference journals
 │   └── relations/           # synced per-host relation-label preference journals
 └── .obsidian/plugins/       # installed community plugins, including Bob's
