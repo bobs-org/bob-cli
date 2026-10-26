@@ -958,8 +958,8 @@ automatic strip can both appear in the same daily note.
 Interaction: clicking a fact opens Stats with D pinned and that metric
 focused; clicking the legend or the bar opens Stats with `worked`
 focused, D pinned, and "Where the time went" on the Root parents view
-revealed. An already-open Stats tab is reused;
-otherwise Ctrl/Cmd-click and middle-click open a new tab. Enter and Space
+revealed. A plain click reuses an open Stats tab; Ctrl/Cmd-click and
+middle-click always open a new tab. Enter and Space
 activate facts and the legend. `mousedown` never steals focus (the bar
 calls `preventDefault`), so vim keeps working.
 Facts and the legend are `span` links (`role="link"`,
