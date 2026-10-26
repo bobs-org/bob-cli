@@ -208,7 +208,7 @@ fn dotted_note_names_keep_the_full_basename() {
 #[test]
 fn fenced_column_zero_content_does_not_end_dependency_scan() {
     let settings = test_settings();
-    let a_contents = "- [ ] #task A [dependsOn:: B__b] ^a\n  ```\nnot a list item\n  ```\n  - ![[B#^b]]\n";
+    let a_contents = "- [ ] #task A [dependsOn:: B__b] ^a\n  ```\nnot a list item\n  ```\n  - ⛓️ **DEPENDS ON:** [[B#^b]]\n";
     let b_contents = "- [ ] #task B [id:: B__b] ^b\n";
     let files = vec![
         FileScan {
@@ -706,7 +706,6 @@ fn reading_embeds_are_not_promotion_edges() {
         "a.md",
         "- [ ] #task Dependent ^dep\n  - ![[#^ref]]\n\nReference block only. ^ref\n",
     )]);
-    assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
     assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
 }
 
