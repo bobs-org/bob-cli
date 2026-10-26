@@ -383,7 +383,7 @@ summaries rank dimensions by total; only `note` and `theme` collapse to top
 five plus `other`. `area`, `root_parent`, and `project` keep every key (the
 note tree already bounds them). Rolling medians span 7 day points, 4 week
 buckets, or 3
-month buckets, with a 6-day / 3-week / 2-month lead-in so the first displayed
+month buckets, with a 7-day / 3-week / 2-month lead-in so the first displayed
 point can fill, need half the window in real observations, and stay `null`
 for today.
 
@@ -427,6 +427,20 @@ by total sign. The net label describes the window itself, not a comparison
 against the prior period. Every other delta names the prior period in words. Parts summary
 values use minutes formatting only when the metric unit is minutes.
 
+**Typical day.** Every current-window point on a day-grouped `count` or
+`minutes` metric carries an optional `typical` object: the median of the
+seven days before D (D−7…D−1, selected by calendar date so a gap can never
+shift it), needing at least 4 usable days. Real zeros count; `missing`,
+`not_tracked`, and provisional days are skipped. The rule is the one shared
+with rolling medians, so `typical(D)` always equals the prior day's
+`rolling_median`. The object names its window (`start`, `end`), the
+usable-day count (`days`), the median (`value`, `display`), and the words
+the Day strip paints: a `relation` (`above` | `below` | `equal`) that is
+`null` on today, on days with no value, and on short history, plus ready and
+short sentence builders (`words`, `detail`). Bool, ratio, and signed
+metrics, week/month points, `prior_points`, and `daily_points` never carry
+it; human and CSV output are unchanged.
+
 `all` with no history uses the same end convention as presets (end =
 yesterday, zero days) and still includes today as provisional.
 
@@ -448,7 +462,11 @@ homes}`: facts, not metric values, so themes and filters do not change
 them. `homes` is the shared R9 object; its keys are in the catalog. On
 the 2026-10-18 live vault, `bob stats -f json -r all` is 1,945,299 bytes
 (1.90 MiB) with 1,093 session facts. Ratio points
-add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
+add `num`/`den`, grouped points add `partial`, and day-grouped
+`count`/`minutes` points in the current window add an optional `typical`
+object (`start`, `end`, `days`, `value`, `display`, `relation`, `words`,
+`detail`); it is absent on bool/ratio/signed metrics, on week/month points,
+on `prior_points`, and on `daily_points`. Empty maps (`parts`,
 `parts_summary`, `parts_display`, `apportioned`) and empty lists
 (`daily_points`, `chores`) are omitted. `PartSummary` rows for `area`,
 `root_parent`, and `project` add an optional `label` plus minutes-mode
@@ -460,7 +478,7 @@ bare catalog label. Points add an optional `apportioned` map,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`short_label`, `health.homes` lint lists, and `sessions`.
+`short_label`, `health.homes` lint lists, `typical`, and `sessions`.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -511,6 +529,31 @@ keep table access. Never fake daily history from grouped totals.
   "health": {"journal": {"since": "2026-10-08", "malformed_lines": 1, "hosts": []},
              "tasks": {"invalid_dates": 1, "closed_without_date": 0, "missing_created": 1}},
   "warnings": []
+}
+```
+
+A day-grouped minutes point adds `typical` (ready history shown here;
+short history leaves `value` and `relation` `null` with `display` `"–"`):
+
+```json
+{
+  "date": "2026-10-25",
+  "end": "2026-10-25",
+  "value": 205,
+  "display": "3h 25m",
+  "quality": "ok",
+  "provisional": false,
+  "rolling_median": 240,
+  "typical": {
+    "start": "2026-10-18",
+    "end": "2026-10-24",
+    "days": 7,
+    "value": 250,
+    "display": "4h 10m",
+    "relation": "below",
+    "words": "45m below the typical day of 4h 10m",
+    "detail": "Typical day 4h 10m: median of Oct 18 – Oct 24 (7 of 7 days with data). This day is 45m below."
+  }
 }
 ```
 
@@ -616,6 +659,11 @@ byte-identical JSON without touching vault or config; an independent
 `[t:: Nm]` text scan sums to the Oct 9 worked total; month grouping pools
 one clipped October bucket plus a separate provisional today point; the
 default request reports 4 weeks, six overview metrics, and 29 day points.
+Worked and done also assert hand-derived `typical` objects on every
+displayed day — all short in this window (Oct 8 and 9 have no usable
+history, Oct 10 has one day, today has two) — and bool `review_closed`
+plus ratio `habits` points assert the `typical` key is absent, at both the
+struct and the JSON level.
 
 Writer vectors in `tests/fixtures/stats/review_answers.json` (R1–R24 plus
 the `hosts` sanitizer vectors) pin the plugin outcome mapping, Card
@@ -766,6 +814,20 @@ Root-parent measurement (athena, live `~/bob`, this checkout,
 
 The after median is 0.9% below the before median, within the 10% budget.
 The measured 4-week JSON is 82,632 bytes on this vault window.
+
+Typical-day measurement (athena, live `~/bob`, this checkout,
+real clock 2026-10-26, `NO_COLOR=1`, release
+`bob stats -f json -r 4w`, nine runs after one warmup, Python
+`perf_counter`):
+
+| Path | Time |
+| --- | --- |
+| Before (clean base, median / min / max) | 233.7 ms / 219.8 ms / 277.1 ms |
+| Typical-day after (median / min / max) | 217.3 ms / 212.0 ms / 218.7 ms |
+
+The after median is 7% below the before median (run-to-run noise either
+way), within the 10% budget. The measured 4-week JSON grows from 291,466
+to 320,133 bytes (+9.8%) for the additive `typical` objects.
 
 ## Obsidian Stats block
 

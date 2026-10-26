@@ -279,13 +279,14 @@ fn checked_add_days(date: NaiveDate, days: i64) -> Result<NaiveDate, String> {
 }
 
 /// Earliest date whose values feed the first displayed point's rolling
-/// median: 6 days, 3 ISO weeks, or 2 calendar months before `start`.
+/// median and typical day: 7 days, 3 ISO weeks, or 2 calendar months
+/// before `start`.
 pub(crate) fn lead_in_start(
     start: NaiveDate,
     group: GroupName,
 ) -> Option<NaiveDate> {
     match group {
-        GroupName::Day => start.checked_sub_days(Days::new(6)),
+        GroupName::Day => start.checked_sub_days(Days::new(7)),
         GroupName::Week => {
             let week_start = bucket_start(start, GroupName::Week);
             week_start.checked_sub_days(Days::new(21))
@@ -308,7 +309,7 @@ fn shift_calendar_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
     })
 }
 
-fn format_date_span(span: DateSpan) -> String {
+pub(crate) fn format_date_span(span: DateSpan) -> String {
     let start = span.start;
     let end = span.end;
     if start == end {
@@ -365,6 +366,7 @@ pub(crate) fn build_metric_series(
         range.group,
         range.complete,
         current_span.map(|span| span.start),
+        true,
     );
     let prior_points = make_points(
         &prior_daily,
@@ -372,6 +374,7 @@ pub(crate) fn build_metric_series(
         range.group,
         range.prior,
         range.prior.map(|span| span.start),
+        false,
     );
     let complete_daily: Vec<_> = current_daily
         .iter()
@@ -486,6 +489,7 @@ fn make_points(
     group: GroupName,
     clip: Option<DateSpan>,
     drop_before: Option<NaiveDate>,
+    add_typical: bool,
 ) -> Vec<SeriesPoint> {
     let mut points = match group {
         GroupName::Day => values
@@ -501,6 +505,9 @@ fn make_points(
         }
     };
     add_rolling_medians(&mut points, group);
+    if add_typical {
+        super::typical::add_typical_days(&mut points, group, unit);
+    }
     if let Some(start) = drop_before {
         points.retain(|point| point.end >= start);
     }
@@ -525,6 +532,7 @@ fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
         reason: value.reason.clone(),
         provisional: value.provisional,
         rolling_median: None,
+        typical: None,
         num: value.num,
         den: value.den,
         partial: None,
@@ -684,6 +692,7 @@ fn aggregate_bucket(
         reason,
         provisional,
         rolling_median: None,
+        typical: None,
         num,
         den,
         partial: partial_bucket.then_some(true),
@@ -737,9 +746,22 @@ fn aggregate_quality(
     }
 }
 
+/// Day window for rolling medians and the typical day.
+pub(crate) const DAY_WINDOW: usize = 7;
+/// Half the day window, rounded up: at least 4 usable days.
+pub(crate) const DAY_WINDOW_MIN: usize = DAY_WINDOW.div_ceil(2);
+
+/// One usable-value rule shared by rolling medians and the typical day:
+/// a point counts only when it is not provisional and carries a value.
+/// `missing` and `not_tracked` points always have `value: None`, so they
+/// never count.
+pub(crate) fn is_usable_value(point: &SeriesPoint) -> bool {
+    !point.provisional && point.value.is_some()
+}
+
 fn add_rolling_medians(points: &mut [SeriesPoint], group: GroupName) {
     let window: usize = match group {
-        GroupName::Day => 7,
+        GroupName::Day => DAY_WINDOW,
         GroupName::Week => 4,
         GroupName::Month => 3,
     };
@@ -752,7 +774,7 @@ fn add_rolling_medians(points: &mut [SeriesPoint], group: GroupName) {
         let start = index.saturating_add(1).saturating_sub(window);
         let values: Vec<_> = points[start..=index]
             .iter()
-            .filter(|point| !point.provisional)
+            .filter(|point| is_usable_value(point))
             .filter_map(|point| point.value)
             .collect();
         points[index].rolling_median = if values.len() >= minimum {
@@ -1263,7 +1285,7 @@ fn format_part_display(value: i64, unit: MetricUnit) -> String {
     }
 }
 
-fn format_value(value: Option<i64>, unit: MetricUnit) -> String {
+pub(crate) fn format_value(value: Option<i64>, unit: MetricUnit) -> String {
     let Some(value) = value else {
         return "–".to_string();
     };
@@ -1334,7 +1356,7 @@ fn mean(values: &[i64]) -> Option<i64> {
     Some(round_div(sum, values.len() as i128) as i64)
 }
 
-fn median(values: &[i64]) -> Option<i64> {
+pub(crate) fn median(values: &[i64]) -> Option<i64> {
     if values.is_empty() {
         return None;
     }
@@ -1383,6 +1405,7 @@ mod tests {
     use chrono::{Duration, NaiveDate};
 
     use super::*;
+    use crate::native::stats::report::TypicalRelation;
     use crate::native::stats::request::Grouping;
     use crate::native::stats::value::ChecklistState;
 
@@ -1645,8 +1668,14 @@ mod tests {
             .collect();
         values.push(daily(start + Duration::days(7), Some(100)));
         values.last_mut().unwrap().provisional = true;
-        let points =
-            make_points(&values, MetricUnit::Count, GroupName::Day, None, None);
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            false,
+        );
         assert_eq!(points[2].rolling_median, None);
         assert_eq!(points[3].rolling_median, Some(2));
         assert_eq!(points[6].rolling_median, Some(3));
@@ -2240,6 +2269,7 @@ mod tests {
             GroupName::Month,
             Some(clip),
             Some(date(2026, 10, 8)),
+            false,
         );
         assert_eq!(points.len(), 2);
         assert!(!points[0].provisional);
@@ -2269,6 +2299,7 @@ mod tests {
             GroupName::Day,
             Some(clip),
             Some(start),
+            false,
         );
         assert_eq!(points[0].date, start);
         assert_eq!(points[0].rolling_median, Some(3));
@@ -2707,5 +2738,715 @@ mod tests {
         );
         assert_eq!(built.points[1].parts_display["kind"]["task"], "4");
         assert_eq!(built.points[1].parts_display["kind"]["ref"], "1");
+    }
+
+    fn untracked_day(day: NaiveDate) -> DailyValue {
+        DailyValue {
+            date: day,
+            value: None,
+            num: None,
+            den: None,
+            quality: DataQuality::NotTracked,
+            reason: Some("before tracking began".to_string()),
+            provisional: false,
+            parts: BTreeMap::new(),
+            apportioned: BTreeMap::new(),
+            checklist_state: None,
+        }
+    }
+
+    fn partial_day(day: NaiveDate, value: i64) -> DailyValue {
+        DailyValue {
+            date: day,
+            value: Some(value),
+            num: None,
+            den: None,
+            quality: DataQuality::Partial,
+            reason: Some("range-estimated minutes".to_string()),
+            provisional: false,
+            parts: BTreeMap::new(),
+            apportioned: BTreeMap::new(),
+            checklist_state: None,
+        }
+    }
+
+    /// Seven window values for D−7…D−1 plus D itself, in calendar order.
+    /// `None` is a missing day.
+    fn window_values(
+        day: NaiveDate,
+        before: [Option<i64>; 7],
+        current: Option<i64>,
+    ) -> Vec<DailyValue> {
+        let mut values = Vec::new();
+        for (offset, value) in before.into_iter().enumerate() {
+            values.push(daily(day - Duration::days(7 - offset as i64), value));
+        }
+        values.push(daily(day, current));
+        values
+    }
+
+    fn ready_tip(
+        points: &[SeriesPoint],
+    ) -> &crate::native::stats::report::TypicalDay {
+        points.last().unwrap().typical.as_ref().unwrap()
+    }
+
+    #[test]
+    fn typical_day_uses_calendar_window_and_counts_only_usable_days() {
+        let day = date(2026, 1, 15);
+        let mut values = vec![
+            daily(date(2026, 1, 8), Some(0)),
+            daily(date(2026, 1, 9), None),
+            untracked_day(date(2026, 1, 10)),
+            partial_day(date(2026, 1, 11), 10),
+            daily(date(2026, 1, 12), Some(20)),
+            daily(date(2026, 1, 13), Some(30)),
+            daily(date(2026, 1, 14), Some(40)),
+            // D itself is far above the window: it must not leak in.
+            daily(day, Some(1000)),
+        ];
+        values.last_mut().unwrap().provisional = false;
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        // Usable: 0, 10, 20, 30, 40. The real zero counts, the missing
+        // and not-tracked days are skipped, the partial day counts.
+        assert_eq!(tip.start, date(2026, 1, 8));
+        assert_eq!(tip.end, date(2026, 1, 14));
+        assert_eq!(tip.days, 5);
+        assert_eq!(tip.value, Some(20));
+        assert_eq!(tip.display, "20");
+        assert_eq!(tip.relation, Some(TypicalRelation::Above));
+        assert_eq!(tip.words, "980 above the typical day of 20");
+        assert_eq!(
+            tip.detail,
+            "Typical day 20: median of Jan 8 – Jan 14 (5 of 7 days with data). This day is 980 above."
+        );
+    }
+
+    #[test]
+    fn typical_day_needs_four_usable_days() {
+        // Three usable days: short, plural "have".
+        let day = date(2026, 2, 10);
+        let points = make_points(
+            &window_values(
+                day,
+                [Some(1), Some(2), Some(3), None, None, None, None],
+                Some(50),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.days, 3);
+        assert_eq!(tip.value, None);
+        assert_eq!(tip.display, "–");
+        assert_eq!(tip.relation, None);
+        assert_eq!(tip.words, "no typical day yet");
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 3 of the previous 7 days have data (needs 4)."
+        );
+        // One usable day: singular "has".
+        let points = make_points(
+            &window_values(
+                day,
+                [None, None, None, None, None, None, Some(9)],
+                Some(50),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.days, 1);
+        assert_eq!(tip.value, None);
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 1 of the previous 7 days has data (needs 4)."
+        );
+        // No usable days.
+        let points = make_points(
+            &window_values(
+                day,
+                [None, None, None, None, None, None, None],
+                Some(50),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.days, 0);
+        assert_eq!(tip.value, None);
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 0 of the previous 7 days have data (needs 4)."
+        );
+        // Four usable days: ready.
+        let points = make_points(
+            &window_values(
+                day,
+                [Some(10), Some(20), Some(30), Some(40), None, None, None],
+                Some(25),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.days, 4);
+        assert_eq!(tip.value, Some(25));
+        assert_eq!(tip.relation, Some(TypicalRelation::Equal));
+    }
+
+    #[test]
+    fn typical_day_reports_above_below_and_equal() {
+        let day = date(2026, 3, 10);
+        let window =
+            [Some(10), Some(20), Some(30), Some(40), Some(50), None, None];
+        // Median of 10, 20, 30, 40, 50 is 30.
+        let points = make_points(
+            &window_values(day, window, Some(45)),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(30));
+        assert_eq!(tip.relation, Some(TypicalRelation::Above));
+        assert_eq!(tip.words, "15 above the typical day of 30");
+        assert_eq!(
+            tip.detail,
+            "Typical day 30: median of Mar 3 – Mar 9 (5 of 7 days with data). This day is 15 above."
+        );
+        let points = make_points(
+            &window_values(day, window, Some(12)),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.relation, Some(TypicalRelation::Below));
+        assert_eq!(tip.words, "18 below the typical day of 30");
+        assert_eq!(
+            tip.detail,
+            "Typical day 30: median of Mar 3 – Mar 9 (5 of 7 days with data). This day is 18 below."
+        );
+        let points = make_points(
+            &window_values(day, window, Some(30)),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.relation, Some(TypicalRelation::Equal));
+        assert_eq!(tip.words, "the same as the typical day of 30");
+        assert_eq!(
+            tip.detail,
+            "Typical day 30: median of Mar 3 – Mar 9 (5 of 7 days with data). This day matches it."
+        );
+    }
+
+    #[test]
+    fn typical_day_has_no_verdict_on_today_or_on_days_without_values() {
+        let day = date(2026, 4, 10);
+        let window = [
+            Some(100),
+            Some(200),
+            Some(300),
+            Some(400),
+            Some(500),
+            None,
+            None,
+        ];
+        // Median is 300 → "5h 00m".
+        let mut values = window_values(day, window, Some(150));
+        values.last_mut().unwrap().provisional = true;
+        let points = make_points(
+            &values,
+            MetricUnit::Minutes,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(300));
+        assert_eq!(tip.display, "5h 00m");
+        assert_eq!(tip.relation, None);
+        assert_eq!(tip.words, "typical full day 5h 00m");
+        assert_eq!(
+            tip.detail,
+            "Typical full day 5h 00m: median of Apr 3 – Apr 9 (5 of 7 days with data). Today is still in progress, so this is context, not a pace."
+        );
+        // A missing D keeps the reference but drops the verdict.
+        let points = make_points(
+            &window_values(day, window, None),
+            MetricUnit::Minutes,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(300));
+        assert_eq!(tip.relation, None);
+        assert_eq!(tip.words, "typical day 5h 00m");
+        assert_eq!(
+            tip.detail,
+            "Typical day 5h 00m: median of Apr 3 – Apr 9 (5 of 7 days with data)."
+        );
+    }
+
+    #[test]
+    fn typical_day_matches_the_research_vectors() {
+        // Prior week 86, 7, 21, 49, 1, 7, 6; D 25 → typical 7, above.
+        let day = date(2026, 10, 25);
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(86),
+                    Some(7),
+                    Some(21),
+                    Some(49),
+                    Some(1),
+                    Some(7),
+                    Some(6),
+                ],
+                Some(25),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(7));
+        assert_eq!(tip.relation, Some(TypicalRelation::Above));
+        assert_eq!(tip.words, "18 above the typical day of 7");
+        // Prior week 18, 37, 17, 31, 25, 86, 7; D 25 → typical 25, equal.
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(18),
+                    Some(37),
+                    Some(17),
+                    Some(31),
+                    Some(25),
+                    Some(86),
+                    Some(7),
+                ],
+                Some(25),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(25));
+        assert_eq!(tip.relation, Some(TypicalRelation::Equal));
+        // Prior week 25, 18, 37, 17, 31, 25, 86; D 27 → typical 25, above.
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(25),
+                    Some(18),
+                    Some(37),
+                    Some(17),
+                    Some(31),
+                    Some(25),
+                    Some(86),
+                ],
+                Some(27),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(25));
+        assert_eq!(tip.relation, Some(TypicalRelation::Above));
+        assert_eq!(tip.words, "2 above the typical day of 25");
+    }
+
+    #[test]
+    fn typical_day_spike_does_not_drag_the_next_week() {
+        // The 86-task spike stays in the window for seven days without
+        // moving the median off 25.
+        let spike = date(2026, 10, 7);
+        let mut values = window_values(
+            spike,
+            [
+                Some(25),
+                Some(18),
+                Some(37),
+                Some(17),
+                Some(31),
+                Some(25),
+                Some(25),
+            ],
+            Some(86),
+        );
+        for offset in 1..=7 {
+            values.push(daily(spike + Duration::days(offset), Some(25)));
+        }
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let next_day = ready_tip(&points[..8]);
+        assert_eq!(next_day.value, Some(25));
+        let week_out = ready_tip(&points);
+        assert_eq!(week_out.value, Some(25));
+        assert_eq!(week_out.relation, Some(TypicalRelation::Equal));
+    }
+
+    #[test]
+    fn typical_day_rounds_even_medians_half_away_from_zero() {
+        let day = date(2026, 5, 10);
+        // Usable 1, 2, 3, 4 → (2 + 3) / 2 = 2.5 → 3.
+        let window = [Some(1), Some(2), Some(3), Some(4), None, None, None];
+        let points = make_points(
+            &window_values(day, window, Some(2)),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(3));
+        // The relation compares against the rounded value.
+        assert_eq!(tip.relation, Some(TypicalRelation::Below));
+        let points = make_points(
+            &window_values(day, window, Some(3)),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        assert_eq!(ready_tip(&points).relation, Some(TypicalRelation::Equal));
+    }
+
+    #[test]
+    fn typical_value_matches_the_prior_day_rolling_median() {
+        let start = date(2026, 6, 1);
+        let values: Vec<_> = (0..14)
+            .map(|offset| {
+                daily(start + Duration::days(offset), Some(offset * 3 + 1))
+            })
+            .collect();
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        for index in 1..points.len() {
+            assert_eq!(
+                points[index].typical.as_ref().and_then(|tip| tip.value),
+                points[index - 1].rolling_median,
+                "typical({}) vs rolling_median({})",
+                points[index].date,
+                points[index - 1].date,
+            );
+        }
+    }
+
+    #[test]
+    fn typical_day_is_omitted_off_day_counts_and_minutes() {
+        let day = date(2026, 7, 10);
+        let values = window_values(
+            day,
+            [Some(1), Some(1), Some(1), Some(1), Some(1), None, None],
+            Some(1),
+        );
+        for unit in [MetricUnit::Bool, MetricUnit::Ratio, MetricUnit::Signed] {
+            let points =
+                make_points(&values, unit, GroupName::Day, None, None, true);
+            assert!(
+                points.iter().all(|point| point.typical.is_none()),
+                "{unit:?} points carry no typical day"
+            );
+        }
+        for group in [GroupName::Week, GroupName::Month] {
+            let points = make_points(
+                &values,
+                MetricUnit::Count,
+                group,
+                None,
+                None,
+                true,
+            );
+            assert!(
+                points.iter().all(|point| point.typical.is_none()),
+                "{group:?} points carry no typical day"
+            );
+        }
+    }
+
+    #[test]
+    fn typical_day_is_omitted_on_prior_and_daily_points() {
+        let today = date(2026, 10, 11);
+        let range = request_range("7d", today, true);
+        let values: Vec<_> = (4..=11)
+            .map(|day| daily(date(2026, 10, day), Some(10)))
+            .collect();
+        let built = build_metric_series(
+            &values,
+            "done",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
+        assert!(!built.points.is_empty());
+        assert!(
+            built.points.iter().all(|point| point.typical.is_some()),
+            "current day points carry a typical day"
+        );
+        assert!(
+            built
+                .prior_points
+                .iter()
+                .all(|point| point.typical.is_none()),
+            "prior points never carry a typical day"
+        );
+        let week = grouped_range("7d", today, Grouping::Week);
+        let built = build_metric_series(
+            &values,
+            "done",
+            MetricUnit::Count,
+            &week,
+            false,
+        );
+        assert!(
+            built.points.iter().all(|point| point.typical.is_none()),
+            "week points never carry a typical day"
+        );
+        assert!(
+            built
+                .daily_points
+                .iter()
+                .all(|point| point.typical.is_none()),
+            "daily points never carry a typical day"
+        );
+    }
+
+    #[test]
+    fn typical_day_spans_month_and_year_boundaries_and_leap_days() {
+        // Month boundary: Nov 3 → Oct 27 – Nov 2.
+        let day = date(2026, 11, 3);
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                ],
+                Some(8),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.start, date(2026, 10, 27));
+        assert_eq!(tip.end, date(2026, 11, 2));
+        assert_eq!(tip.value, Some(5));
+        assert_eq!(
+            tip.detail,
+            "Typical day 5: median of Oct 27 – Nov 2 (7 of 7 days with data). This day is 3 above."
+        );
+        // Year boundary: Jan 2, 2027 → Dec 26, 2026 – Jan 1, 2027.
+        let day = date(2027, 1, 2);
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                    Some(5),
+                ],
+                Some(8),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.start, date(2026, 12, 26));
+        assert_eq!(tip.end, date(2027, 1, 1));
+        assert_eq!(
+            tip.detail,
+            "Typical day 5: median of Dec 26, 2026 – Jan 1, 2027 (7 of 7 days with data). This day is 3 above."
+        );
+        // Leap day: Mar 1, 2028 includes Feb 29 in its window.
+        let day = date(2028, 3, 1);
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(4),
+                    Some(4),
+                    Some(4),
+                    Some(4),
+                    Some(4),
+                    Some(4),
+                    Some(4),
+                ],
+                Some(4),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.start, date(2028, 2, 23));
+        assert_eq!(tip.end, date(2028, 2, 29));
+        assert_eq!(tip.value, Some(4));
+        assert_eq!(tip.relation, Some(TypicalRelation::Equal));
+    }
+
+    #[test]
+    fn typical_day_words_cover_minutes_counts_equal_and_zero() {
+        // Minutes of 60 or more read as hours: 265 − 200 = 65 → 1h 05m.
+        let day = date(2026, 8, 10);
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(200),
+                    Some(200),
+                    Some(200),
+                    Some(200),
+                    Some(200),
+                    Some(200),
+                    Some(200),
+                ],
+                Some(265),
+            ),
+            MetricUnit::Minutes,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.display, "3h 20m");
+        assert_eq!(tip.words, "1h 05m above the typical day of 3h 20m");
+        assert_eq!(
+            tip.detail,
+            "Typical day 3h 20m: median of Aug 3 – Aug 9 (7 of 7 days with data). This day is 1h 05m above."
+        );
+        // A zero typical day still reads as a plain count.
+        let points = make_points(
+            &window_values(
+                day,
+                [
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                ],
+                Some(3),
+            ),
+            MetricUnit::Count,
+            GroupName::Day,
+            None,
+            None,
+            true,
+        );
+        let tip = ready_tip(&points);
+        assert_eq!(tip.value, Some(0));
+        assert_eq!(tip.display, "0");
+        assert_eq!(tip.words, "3 above the typical day of 0");
+        assert_eq!(
+            tip.detail,
+            "Typical day 0: median of Aug 3 – Aug 9 (7 of 7 days with data). This day is 3 above."
+        );
+    }
+
+    #[test]
+    fn one_day_range_keeps_a_full_typical_window() {
+        let today = date(2026, 1, 20);
+        let range = resolve_range(
+            &RangeSpec::parse("2026-01-15..2026-01-15").unwrap(),
+            today,
+            0,
+            Grouping::Day,
+            false,
+            None,
+        )
+        .unwrap();
+        let values: Vec<_> = (8..=15)
+            .map(|day| daily(date(2026, 1, day), Some(10)))
+            .collect();
+        let built = build_metric_series(
+            &values,
+            "done",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
+        assert_eq!(built.points.len(), 1);
+        let tip = built.points[0].typical.as_ref().unwrap();
+        assert_eq!(tip.days, 7);
+        assert_eq!(tip.value, Some(10));
+        assert_eq!(tip.relation, Some(TypicalRelation::Equal));
     }
 }

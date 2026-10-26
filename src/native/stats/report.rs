@@ -208,6 +208,30 @@ pub(crate) struct Delta {
     pub(crate) sign: i8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TypicalRelation {
+    Above,
+    Below,
+    Equal,
+}
+
+/// The median of the seven days before a day-grouped point, with the words
+/// the Day strip paints under each numeric fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TypicalDay {
+    #[serde(serialize_with = "iso_date")]
+    pub(crate) start: NaiveDate,
+    #[serde(serialize_with = "iso_date")]
+    pub(crate) end: NaiveDate,
+    pub(crate) days: u32,
+    pub(crate) value: Option<i64>,
+    pub(crate) display: String,
+    pub(crate) relation: Option<TypicalRelation>,
+    pub(crate) words: String,
+    pub(crate) detail: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SeriesPoint {
     #[serde(serialize_with = "iso_date")]
@@ -221,6 +245,8 @@ pub(crate) struct SeriesPoint {
     pub(crate) reason: Option<String>,
     pub(crate) provisional: bool,
     pub(crate) rolling_median: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) typical: Option<TypicalDay>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) num: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -513,6 +539,7 @@ mod tests {
                         reason: Some("no daily note".to_string()),
                         provisional: false,
                         rolling_median: Some(255),
+                        typical: None,
                         num: None,
                         den: None,
                         partial: None,
@@ -530,6 +557,7 @@ mod tests {
                         reason: None,
                         provisional: true,
                         rolling_median: None,
+                        typical: None,
                         num: None,
                         den: None,
                         partial: None,
@@ -633,6 +661,7 @@ mod tests {
             reason: None,
             provisional: false,
             rolling_median: Some(1000),
+            typical: None,
             num: Some(1),
             den: Some(10),
             partial: Some(true),

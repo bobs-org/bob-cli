@@ -17,6 +17,7 @@ pub(crate) mod report;
 pub(crate) mod request;
 pub(crate) mod series;
 mod session_facts;
+pub(crate) mod typical;
 pub(crate) mod value;
 
 #[allow(unused_imports)]

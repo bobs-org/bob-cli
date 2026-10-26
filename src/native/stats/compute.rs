@@ -1372,6 +1372,94 @@ mod tests {
     }
 
     #[test]
+    fn golden_typical_objects_are_hand_derived() {
+        let report = golden_report();
+        let worked = metric(&report, "worked");
+        // Oct 8 predates Pomodoro tracking: its Oct 1–7 window is empty.
+        let tip = worked.points[0].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(1));
+        assert_eq!(tip.end, day(7));
+        assert_eq!(tip.days, 0);
+        assert_eq!(tip.value, None);
+        assert_eq!(tip.display, "–");
+        assert_eq!(tip.relation, None);
+        assert_eq!(tip.words, "no typical day yet");
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 0 of the previous 7 days have data (needs 4)."
+        );
+        // Oct 9 (32m): its Oct 2–8 window holds only untracked days.
+        let tip = worked.points[1].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(2));
+        assert_eq!(tip.end, day(8));
+        assert_eq!(tip.days, 0);
+        assert_eq!(tip.value, None);
+        // Oct 10 (0m): its Oct 3–9 window holds one usable day (Oct 9).
+        let tip = worked.points[2].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(3));
+        assert_eq!(tip.end, day(9));
+        assert_eq!(tip.days, 1);
+        assert_eq!(tip.value, None);
+        assert_eq!(tip.relation, None);
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 1 of the previous 7 days has data (needs 4)."
+        );
+        // Today, Oct 11 (10m, provisional): two usable days, still short.
+        let tip = worked.points[3].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(4));
+        assert_eq!(tip.end, day(10));
+        assert_eq!(tip.days, 2);
+        assert_eq!(tip.value, None);
+        assert_eq!(tip.relation, None);
+
+        let done = metric(&report, "done");
+        let tip = done.points[0].typical.as_ref().unwrap();
+        assert_eq!(tip.days, 0);
+        assert_eq!(tip.value, None);
+        let tip = done.points[1].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(2));
+        assert_eq!(tip.end, day(8));
+        assert_eq!(tip.days, 0);
+        assert_eq!(tip.value, None);
+        // Oct 10 (4): its Oct 3–9 window holds Oct 9 (5) only.
+        let tip = done.points[2].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(3));
+        assert_eq!(tip.end, day(9));
+        assert_eq!(tip.days, 1);
+        assert_eq!(tip.value, None);
+        assert_eq!(
+            tip.detail,
+            "No typical day yet: 1 of the previous 7 days has data (needs 4)."
+        );
+        // Today, Oct 11 (1, provisional): Oct 9 (5) and Oct 10 (4).
+        let tip = done.points[3].typical.as_ref().unwrap();
+        assert_eq!(tip.start, day(4));
+        assert_eq!(tip.end, day(10));
+        assert_eq!(tip.days, 2);
+        assert_eq!(tip.value, None);
+        assert_eq!(tip.relation, None);
+
+        // Bool, ratio, and signed metrics never carry a typical day, even
+        // with comparison points present.
+        for id in ["review_closed", "habits", "keep_rate", "net"] {
+            let points = &metric(&report, id).points;
+            assert!(
+                points.iter().all(|point| point.typical.is_none()),
+                "{id} points carry no typical day"
+            );
+        }
+        let created = metric(&report, "created");
+        assert!(
+            created
+                .prior_points
+                .iter()
+                .all(|point| point.typical.is_none()),
+            "prior points never carry a typical day"
+        );
+    }
+
+    #[test]
     fn report_serializes_as_schema_one_with_optional_fields() {
         let report = golden_report();
         let json = serde_json::to_value(&report).unwrap();
@@ -1428,6 +1516,27 @@ mod tests {
         let closed = &json["metrics"][5];
         assert_eq!(closed["points"][1]["display"], "met");
         assert_eq!(closed["points"][1]["checklist_state"], "met");
+        // Bool, ratio, and signed points omit the key; the minutes point
+        // carries the short-history object with JSON nulls, not omissions.
+        for index in 0..4 {
+            assert!(closed["points"][index].get("typical").is_none());
+            assert!(habits["points"][index].get("typical").is_none());
+        }
+        let net = &json["metrics"][4];
+        assert_eq!(net["unit"], "signed");
+        assert!(net["points"][2].get("typical").is_none());
+        assert_eq!(worked["points"][2]["typical"]["days"], 1);
+        assert_eq!(
+            worked["points"][2]["typical"]["value"],
+            serde_json::Value::Null
+        );
+        assert_eq!(worked["points"][2]["typical"]["display"], "–");
+        assert_eq!(
+            worked["points"][2]["typical"]["relation"],
+            serde_json::Value::Null
+        );
+        assert_eq!(worked["points"][2]["typical"]["start"], "2026-10-03");
+        assert_eq!(worked["points"][2]["typical"]["end"], "2026-10-09");
 
         // Health keeps the schema counters; the gap warning names its day.
         assert_eq!(json["health"]["tasks"]["invalid_dates"], 1);
