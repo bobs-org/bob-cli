@@ -400,8 +400,25 @@ impl IntakeSession {
         // Locked reread recheck before any move/task/note mutation: when
         // another host filed the whole-bundle name after queue time,
         // refuse filing and preserve the queued source for recovery.
-        recheck_reread_occupancy(config, unit)
-            .map_err(IngestFailure::Queued)?;
+        if !matches!(unit, IntakeUnit::Audio { .. }) {
+            let occupants = recheck_reread_occupancy(
+                config,
+                unit.library_pdf(),
+                &reread_own_files(unit),
+            )
+            .map_err(|error| {
+                IngestFailure::Queued(QueueFailure::new(
+                    QueueReason::Refused,
+                    error.to_string(),
+                ))
+            })?;
+            if !occupants.is_empty() {
+                return Err(IngestFailure::Queued(reread_collision(
+                    unit.library_pdf(),
+                    occupants,
+                )));
+            }
+        }
         let mut moves =
             unit_moves(config, unit).map_err(IngestFailure::Queued)?;
         validate_unit_collisions(config, unit, &moves)
@@ -690,36 +707,34 @@ fn unit_moves(
 /// collision/nothing-filed report and preserves the queued source for
 /// recovery; it never re-uses the occupant or leaves a marker id
 /// different from its stem.
-fn recheck_reread_occupancy(
+pub(super) fn recheck_reread_occupancy(
     config: &Config,
-    unit: &IntakeUnit,
-) -> std::result::Result<(), QueueFailure> {
-    let pdf = unit.library_pdf();
+    pdf: &Path,
+    own: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
     let Some(stem) = pdf.file_stem().and_then(|stem| stem.to_str()) else {
-        return Ok(());
+        return Ok(Vec::new());
     };
     if split_reread_stem(stem).is_none() {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let ref_type = pdf_path_metadata(config, pdf)
-        .map_err(|error| {
-            QueueFailure::new(QueueReason::Refused, error.to_string())
-        })?
-        .ref_type;
+    let ref_type = pdf_path_metadata(config, pdf)?.ref_type;
     let Some(ref_type) = ref_type else {
-        return Ok(());
+        return Ok(Vec::new());
     };
-    let occupancy =
-        DefaultTargetOccupancy::build(config, &ref_type).map_err(|error| {
-            QueueFailure::new(QueueReason::Refused, error.to_string())
-        })?;
-    let own = reread_own_files(unit);
-    let mut occupants = occupancy.occupants_except(stem, &own);
-    if occupants.is_empty() {
-        return Ok(());
-    }
+    let occupancy = DefaultTargetOccupancy::build(config, &ref_type)?;
+    let mut occupants = occupancy.occupants_except(stem, own);
     occupants.sort();
-    Err(QueueFailure::new(
+    Ok(occupants)
+}
+
+fn reread_collision(pdf: &Path, mut occupants: Vec<PathBuf>) -> QueueFailure {
+    let stem = pdf
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("<unknown>");
+    occupants.sort();
+    QueueFailure::new(
         QueueReason::Collision,
         format!(
             "reread {stem} is already filed ({}); nothing filed, queued source preserved",
@@ -729,14 +744,14 @@ fn recheck_reread_occupancy(
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
-    ))
+    )
 }
 
 /// The queued unit's own files, ignored by the locked reread recheck:
 /// queued sources plus their same-stem companions, and already-placed
 /// library destinations (which do not exist yet for queued PDFs, but are
 /// harmless to list).
-fn reread_own_files(unit: &IntakeUnit) -> Vec<PathBuf> {
+pub(super) fn reread_own_files(unit: &IntakeUnit) -> Vec<PathBuf> {
     if let IntakeUnit::Audio {
         source,
         destination,
@@ -1143,6 +1158,19 @@ fn preflight_unit(
     config: &Config,
     unit: &IntakeUnit,
 ) -> std::result::Result<PathBuf, QueueFailure> {
+    if !matches!(unit, IntakeUnit::Audio { .. }) {
+        let occupants = recheck_reread_occupancy(
+            config,
+            unit.library_pdf(),
+            &reread_own_files(unit),
+        )
+        .map_err(|error| {
+            QueueFailure::new(QueueReason::Refused, error.to_string())
+        })?;
+        if !occupants.is_empty() {
+            return Err(reread_collision(unit.library_pdf(), occupants));
+        }
+    }
     let moves = unit_moves(config, unit)?;
     validate_unit_collisions(config, unit, &moves)?;
     validate_move_sizes(&moves)?;

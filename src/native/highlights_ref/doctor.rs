@@ -975,6 +975,20 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
     let mut pdf_stems = BTreeSet::new();
     for source in pdfs {
         let intake_move = plan_single_xlib_pdf_intake(config, &source)?;
+        let unit = super::intake::IntakeUnit::Pdf {
+            source: intake_move.source.clone(),
+            destination: intake_move.destination.clone(),
+        };
+        let occupants = super::intake::recheck_reread_occupancy(
+            config,
+            &intake_move.destination,
+            &super::intake::reread_own_files(&unit),
+        )?;
+        conflicts.extend(
+            occupants
+                .into_iter()
+                .map(|occupant| (intake_move.source.clone(), occupant)),
+        );
         let mut stem = intake_move
             .source
             .strip_prefix(&config.xlib_dir)

@@ -1185,3 +1185,95 @@ fn full_scan_files_queued_reread_with_lineage() {
         "full scan files the same reading task"
     );
 }
+
+#[test]
+fn full_scan_aborts_before_moving_any_queued_reread_with_an_occupant() {
+    let temp = TempDir::new("bob-cli-scan-full-reread-collision");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+    let unrelated = b"unrelated queued pdf bytes";
+    write_file(
+        &vault.join("xlib/chat/unrelated.pdf"),
+        "unrelated queued pdf bytes",
+    );
+    write_file(
+        &vault.join("ref/papers/alpha__v2.md"),
+        "---\ntitle: Squatter\n---\n",
+    );
+    let queued = fs::read(vault.join("xlib/blogs/alpha__v2.pdf"))
+        .expect("read queued reread bytes");
+
+    let output = scan_command(&temp, &vault, &[])
+        .output()
+        .expect("run full scan");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let report = stderr(&output);
+    assert!(
+        report.contains("xlib intake collision(s) detected before writes:")
+            && report.contains("ref/papers/alpha__v2.md"),
+        "{report}"
+    );
+    assert_eq!(
+        fs::read(vault.join("xlib/blogs/alpha__v2.pdf"))
+            .expect("queued reread remains"),
+        queued
+    );
+    assert_eq!(
+        fs::read(vault.join("xlib/chat/unrelated.pdf"))
+            .expect("unrelated queue remains"),
+        unrelated
+    );
+    assert!(!vault.join("lib/chat/unrelated.pdf").exists());
+    assert!(!vault.join("lib/blogs/alpha__v2.pdf").exists());
+}
+
+#[test]
+fn intake_only_preview_reports_a_queued_reread_occupant() {
+    let temp = TempDir::new("bob-cli-scan-intake-reread-preview-collision");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+    write_file(
+        &vault.join("ref/papers/alpha__v2.md"),
+        "---\ntitle: Squatter\n---\n",
+    );
+
+    let output = scan_command(&temp, &vault, &["-i", "-d"])
+        .output()
+        .expect("preview intake");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("would queue: xlib/blogs/alpha__v2.pdf")
+            && report.contains("reread alpha__v2 is already filed")
+            && report.contains("ref/papers/alpha__v2.md"),
+        "{report}"
+    );
+    assert!(vault.join("xlib/blogs/alpha__v2.pdf").is_file());
+    assert!(!vault.join("lib/blogs/alpha__v2.pdf").exists());
+}
+
+#[test]
+fn intake_only_attaches_audio_to_an_existing_reread() {
+    let temp = TempDir::new("bob-cli-scan-intake-reread-audio");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    seed_alpha_reread(&temp, &vault);
+    let filed = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("file queued reread");
+    assert_success(&filed);
+    write_file(&vault.join("xlib/blogs/alpha__v2.mp3"), "narrated v2");
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("attach audio to reread");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "attached audio: lib/blogs/alpha__v2.mp3 → ref/blogs/alpha__v2.md"
+        ),
+        "{report}"
+    );
+    assert!(vault.join("lib/blogs/alpha__v2.mp3").is_file());
+    assert!(!vault.join("xlib/blogs/alpha__v2.mp3").exists());
+}
