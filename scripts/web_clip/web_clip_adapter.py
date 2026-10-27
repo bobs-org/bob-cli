@@ -468,6 +468,73 @@ _SVG_ATTRS = {
 }
 
 
+_PRE_CODE_BLOCK_RE = re.compile(
+    r"<pre\b([^>]*)>\s*<code\b([^>]*)>(.*?)</code>\s*</pre>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CLASS_ATTR_RE = re.compile(
+    r"""\bclass\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+    re.IGNORECASE,
+)
+_LANGUAGE_TOKEN_RE = re.compile(r"(?:^|\s)(language-[\w+-]+)(?:\s|$)")
+
+
+def _language_class(attrs: str) -> str | None:
+    """Return the first ``language-*`` class in an HTML attribute string."""
+    match = _CLASS_ATTR_RE.search(attrs)
+    if match is None:
+        return None
+    classes = match.group(1) if match.group(1) is not None else match.group(2)
+    found = _LANGUAGE_TOKEN_RE.search(classes or "")
+    return found.group(1) if found else None
+
+
+def _normalize_code_text(text: str) -> str:
+    """Match Defuddle's code-text cleanup enough to key language restore."""
+    text = html_module.unescape(re.sub(r"<[^>]+>", "", text))
+    text = text.replace("\t", "    ").replace("\xa0", " ")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def restore_code_languages(source_html: str, extracted_html: str) -> str:
+    """Re-apply ``language-*`` classes Defuddle dropped, keyed by code text."""
+    by_text: dict[str, str] = {}
+    for match in _PRE_CODE_BLOCK_RE.finditer(source_html):
+        language = (_language_class(match.group(1))
+                    or _language_class(match.group(2)))
+        if language is None:
+            continue
+        key = _normalize_code_text(match.group(3))
+        if key:
+            by_text[key] = language
+    if not by_text:
+        return extracted_html
+
+    def restore(match: re.Match[str]) -> str:
+        pre_attrs, code_attrs, body = match.group(1), match.group(2), match.group(3)
+        if _language_class(pre_attrs) or _language_class(code_attrs):
+            return match.group(0)
+        language = by_text.get(_normalize_code_text(body))
+        if language is None:
+            return match.group(0)
+        if _CLASS_ATTR_RE.search(code_attrs):
+            def add_class(attr: re.Match[str]) -> str:
+                classes = attr.group(1)
+                if classes is None:
+                    classes = attr.group(2) or ""
+                if _LANGUAGE_TOKEN_RE.search(classes):
+                    return attr.group(0)
+                merged = f"{classes} {language}".strip()
+                return f'class="{merged}"'
+
+            code_attrs = _CLASS_ATTR_RE.sub(add_class, code_attrs, count=1)
+        else:
+            code_attrs += f' class="{language}"'
+        return f"<pre{pre_attrs}><code{code_attrs}>{body}</code></pre>"
+
+    return _PRE_CODE_BLOCK_RE.sub(restore, extracted_html)
+
+
 def sanitize_html(dirty: str) -> str:
     """Filter Defuddle HTML through the ``nh3`` allowlist."""
     import nh3
@@ -1071,7 +1138,44 @@ def _extract_isolated(context, keep: list, snapshot_html: str,
         )
         page.add_script_tag(content=defuddle_js)
         result = page.evaluate(
-            "(url) => new Defuddle(document, { url }).parse()", final_url)
+            """(url) => {
+              // Defuddle 0.19.4 rebuilds every <pre>/<code> and copies
+              // language-* only for its highlighter allowlist; mermaid is
+              // not on it. data-lang is read without that check and written
+              // back as class="language-<name>".
+              const languageName = (element) => {
+                const fromLang = (element.getAttribute("data-lang")
+                  || element.getAttribute("data-language")
+                  || "").trim();
+                if (fromLang) {
+                  return fromLang.replace(/^language-/i, "");
+                }
+                const fromClass = Array.from(element.classList || [])
+                  .find((name) => name.startsWith("language-"));
+                return fromClass ? fromClass.slice("language-".length) : "";
+              };
+              document.querySelectorAll("pre, code").forEach((element) => {
+                if (element.getAttribute("data-lang")) {
+                  return;
+                }
+                const language = languageName(element);
+                if (language) {
+                  element.setAttribute("data-lang", language);
+                }
+              });
+              document.querySelectorAll("pre").forEach((pre) => {
+                if (pre.getAttribute("data-lang")) {
+                  return;
+                }
+                const code = pre.querySelector("code");
+                const language = languageName(pre)
+                  || (code && languageName(code));
+                if (language) {
+                  pre.setAttribute("data-lang", language);
+                }
+              });
+              return new Defuddle(document, { url }).parse();
+            }""", final_url)
     except Exception as exc:  # noqa: BLE001 - mapped to thin below
         raise AdapterFail("thin", f"article extraction failed: {exc}",
                           THIN_HINT) from exc
@@ -1645,7 +1749,8 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             _check_deadline(deadline)
             extracted = _extract_isolated(context, keep, snapshot["html"],
                                           final_url, popup_guard)
-            content = extracted.get("content") or ""
+            content = restore_code_languages(
+                snapshot["html"], extracted.get("content") or "")
 
             slug = url_slug(final_url)
             owner = gist_owner(final_url)
@@ -2685,6 +2790,21 @@ def self_test() -> int:
     check("cleanup keeps foreign heading",
           clean_text_html("<h1>Other</h1><p>x</p>", "Symphony")[1] is False)
 
+    restored_languages = restore_code_languages(
+        '<pre><code class="language-shell">echo hi</code></pre>'
+        '<pre><code class="language-mermaid">graph TD\n  A --&gt; B</code></pre>',
+        "<pre><code>echo hi</code></pre>"
+        "<pre><code>graph TD\n  A --&gt; B</code></pre>",
+    )
+    check("restore re-applies mermaid and shell language classes",
+          'class="language-shell"' in restored_languages
+          and 'class="language-mermaid"' in restored_languages)
+    check("restore is a no-op when the language class survived",
+          restore_code_languages(
+              '<pre><code class="language-mermaid">graph TD</code></pre>',
+              '<pre><code class="language-mermaid">graph TD</code></pre>',
+          ) == '<pre><code class="language-mermaid">graph TD</code></pre>')
+
     # -- nh3 allowlist on the hostile fixture --------------------------------
     fixtures_dir = os.path.join(WEB_CLIP_DIR, "fixtures")
     with open(os.path.join(fixtures_dir, "hostile.html"),
@@ -3301,6 +3421,8 @@ def self_test() -> int:
             rendered_source = ""
         check("source view keeps code language classes",
               'class="language-shell"' in rendered_source)
+        check("source view keeps Mermaid language class",
+              'language-mermaid' in rendered_source)
         check("source view drops data URI images",
               "inline image" not in rendered_source
               and "data:image/" not in rendered_source)
@@ -3320,6 +3442,9 @@ def self_test() -> int:
               and 'class="language-mermaid"' in sanitize_html(
                   '<pre><code class="language-mermaid">graph TD</code>'
                   '</pre>'))
+        check("Defuddle capture keeps Mermaid language class",
+              'language-mermaid' in sanitized_out
+              and "graph TD" in sanitized_out)
         check("sanitizer removes data URI image sources",
               "data:image/" not in sanitized_out)
         check("word joiners stripped", "\u2060" not in sanitized_out)
