@@ -167,8 +167,13 @@ This covers plain Markdown files and `-M` vault-note renders. Sections are
 numbered from the file's top section level. A lone H1 prints as an unnumbered
 title heading and stays out of the Contents list and the bookmarks, so its H2s
 number `1`, `2`, …. A file with no H1 numbers from its shallowest heading.
-Files with two or more H1s number those H1s. A PDF with no listed heading skips
-the Contents list.
+Files with two or more H1s number those H1s. When any listed heading already
+carries its own number (`1. Evidence`, `10) Risks`, `2.3 Details`), the whole
+document prints with the author's numbers only: every heading stays listed in
+the Contents list and the bookmarks with its author-written text, and pandoc
+adds no numbers of its own. A bare year-led heading such as `2026 roadmap` is
+not a manual number and keeps today's numbering. A PDF with no listed heading
+skips the Contents list.
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.

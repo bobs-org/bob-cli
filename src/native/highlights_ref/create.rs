@@ -72,7 +72,10 @@ pub(super) const PANDOC_HEADER_INCLUDES: &str = concat!(
 /// listen-card Divs as a compact LaTeX callout, and numbers sections from the
 /// file's top section level (a lone H1 becomes an unnumbered, unlisted title
 /// heading and every other heading moves up) whenever pandoc numbers sections
-/// for LaTeX output.
+/// for LaTeX output. A document whose listed headings already carry manual
+/// numbers prints with the author's numbers only: every heading gains the
+/// `unnumbered` class (never `unlisted`) so the Contents list and bookmarks
+/// keep each heading with its author-written text.
 pub(crate) const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
 local PLAY_URI = nil
 
@@ -174,6 +177,19 @@ function Div(div)
     pandoc.write(pandoc.Pandoc({pandoc.Plain(content)}), "latex") .. "}")
 end
 
+local function has_manual_number(text)
+  text = text:match("^%s*(.-)%s*$") or ""
+  local token = text:match("^(%S+)")
+  if not token then return false end
+  if token:match("^%d+[%.%)]$") then return true end
+  if not token:find(".", 1, true) then return false end
+  local stripped = token:gsub("[%.%)]$", "")
+  if stripped:find("..", 1, true) then return false end
+  if not stripped:match("^%d+%.%d") then return false end
+  if not stripped:match("^[%d%.]+$") then return false end
+  return true
+end
+
 local function number_from_top_level(doc)
   if not ((FORMAT:match("latex") or FORMAT == "native") and PANDOC_WRITER_OPTIONS
       and PANDOC_WRITER_OPTIONS.number_sections) then
@@ -182,6 +198,14 @@ local function number_from_top_level(doc)
   local h1 = 0
   doc:walk({ Header = function(h) if h.level == 1 then h1 = h1 + 1 end end })
   local lone = h1 == 1
+  local self_numbered = false
+  doc:walk({ Header = function(h)
+    if lone and h.level == 1 then return end
+    if h.classes:includes("unlisted") then return end
+    if has_manual_number(pandoc.utils.stringify(h.content)) then
+      self_numbered = true
+    end
+  end })
   local shallowest = nil
   doc:walk({ Header = function(h)
     if not (lone and h.level == 1) and (shallowest == nil or h.level < shallowest) then
@@ -195,8 +219,13 @@ local function number_from_top_level(doc)
       for _, class in ipairs({ "unnumbered", "unlisted" }) do
         if not h.classes:includes(class) then h.classes:insert(class) end
       end
-    elseif shift > 0 then
-      h.level = h.level - shift
+    else
+      if self_numbered and not h.classes:includes("unnumbered") then
+        h.classes:insert("unnumbered")
+      end
+      if shift > 0 then
+        h.level = h.level - shift
+      end
     end
     if not h.classes:includes("unlisted") then listed = listed + 1 end
     return h
@@ -6348,6 +6377,109 @@ mod tests {
             !headingless.contains(r"\tableofcontents"),
             "heading-less file skips Contents: {headingless}"
         );
+    }
+
+    #[test]
+    fn section_numbering_self_numbered_doc_prints_author_numbers_only() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex(
+            "## 1. Summary\n\n## 2. Details\n\n### 2.1 Sub\n",
+            true,
+            false,
+        );
+        assert!(latex.contains(r"\section*{1. Summary}"), "{latex}");
+        assert!(latex.contains(r"\section*{2. Details}"), "{latex}");
+        assert!(latex.contains(r"\subsection*{2.1 Sub}"), "{latex}");
+        assert!(!latex.contains(r"\section{1. Summary}"), "{latex}");
+        assert!(!latex.contains(r"\section{2. Details}"), "{latex}");
+        assert!(latex.contains(r"\label{summary}"), "{latex}");
+        assert!(latex.contains(r"\label{details}"), "{latex}");
+        assert!(latex.contains(r"\label{sub}"), "{latex}");
+        let toc = section_latex("## 1. Summary\n\n## 2. Details\n", true, true);
+        assert!(toc.contains(r"\tableofcontents"), "{toc}");
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{1. Summary}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{2. Details}"),
+            "{toc}"
+        );
+    }
+
+    #[test]
+    fn section_numbering_mixed_doc_unnumbered_when_any_heading_numbered() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("## 1. Numbered\n\n## Plain\n", true, false);
+        assert!(latex.contains(r"\section*{1. Numbered}"), "{latex}");
+        assert!(latex.contains(r"\section*{Plain}"), "{latex}");
+        assert!(!latex.contains(r"\section{1. Numbered}"), "{latex}");
+        assert!(!latex.contains(r"\section{Plain}"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_year_led_heading_keeps_numbering() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("## 2026 roadmap\n\n## Plans\n", true, false);
+        assert!(latex.contains(r"\section{2026 roadmap}"), "{latex}");
+        assert!(latex.contains(r"\section{Plans}"), "{latex}");
+        assert!(!latex.contains(r"\section*{"), "{latex}");
+    }
+
+    #[test]
+    fn section_numbering_lone_h1_with_numbered_h2s_lists_author_numbers() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex(
+            "# Report\n\n## 1. Summary\n\n## 2. Details\n",
+            true,
+            false,
+        );
+        assert!(latex.contains(r"\section*{Report}"), "{latex}");
+        assert!(latex.contains(r"\section*{1. Summary}"), "{latex}");
+        assert!(latex.contains(r"\section*{2. Details}"), "{latex}");
+        assert!(!latex.contains(r"\section{1. Summary}"), "{latex}");
+        let toc = section_latex(
+            "# Report\n\n## 1. Summary\n\n## 2. Details\n",
+            true,
+            true,
+        );
+        assert!(toc.contains(r"\tableofcontents"), "{toc}");
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{1. Summary}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{2. Details}"),
+            "{toc}"
+        );
+        assert!(
+            !toc.contains(r"\addcontentsline{toc}{section}{Report}"),
+            "lone H1 stays out of Contents: {toc}"
+        );
+    }
+
+    #[test]
+    fn section_numbering_no_manual_numbers_unchanged() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let latex = section_latex("## Alpha\n\n### Beta\n", true, false);
+        assert!(latex.contains(r"\section{Alpha}"), "{latex}");
+        assert!(latex.contains(r"\subsection{Beta}"), "{latex}");
+        assert!(!latex.contains(r"\section*{"), "{latex}");
     }
 
     #[test]
