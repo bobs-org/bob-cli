@@ -136,6 +136,10 @@ jobs:
       - name: Run tests
         run: cargo test --locked --no-fail-fast
 
+      - name: Run archive-move presenter cases
+        if: runner.os == 'macOS'
+        run: cargo test --locked --lib archive_move_presenter -- --nocapture --test-threads=1
+
   package:
     name: package
     runs-on: ubuntu-latest

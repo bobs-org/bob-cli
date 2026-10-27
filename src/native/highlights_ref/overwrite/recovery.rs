@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::super::{reference_mutation, CommandError, Config};
+use crate::native::file_coordination::{self, MoveContext};
 use crate::native::{env as bob_env, ob};
 
 /// Intent schema version; bump when the JSON shape changes. Version 1
@@ -399,13 +400,13 @@ pub(crate) fn clear_intent(config: &Config) -> std::result::Result<(), String> {
 }
 
 /// How recovery performs the reverse rename of one file. Production
-/// coordinates the live PDF path exactly like explicit overwrite does, so
-/// a PDF an editor holds fails closed instead of renaming underneath it.
-/// Tests inject holds and failures through this seam rather than through
-/// a production environment variable pretending Linux is a Mac.
+/// coordinates the archived PDF being moved, so a PDF an editor holds
+/// fails closed instead of renaming underneath it. Tests inject holds
+/// and failures through this seam rather than through a production
+/// environment variable pretending Linux is a Mac.
 pub(crate) trait ReverseCoordinator {
     fn reverse_file(
-        &self,
+        &mut self,
         vault: &Path,
         from: &Path,
         to: &Path,
@@ -414,47 +415,44 @@ pub(crate) trait ReverseCoordinator {
     ) -> std::result::Result<(), String>;
 }
 
-/// Production reverse moves coordinate on the archived file being moved.
-/// A hold, config error, or failure never falls back to an uncoordinated
-/// rename.
+/// Production reverse moves use one bounded `.forMerging | .forMoving`
+/// scope from archive to live. A hold, config error, or failure never
+/// falls back to an uncoordinated rename, and never deletes the
+/// replacement until that accessor is granted.
 pub(crate) struct PlatformReverseCoordinator;
 
 impl ReverseCoordinator for PlatformReverseCoordinator {
     fn reverse_file(
-        &self,
+        &mut self,
         _vault: &Path,
         from: &Path,
         to: &Path,
         expected_sha256: &str,
         expected_replacement_sha256: Option<&str>,
     ) -> std::result::Result<(), String> {
-        match crate::native::file_coordination::coordinate_merging_write(
+        match file_coordination::coordinate_moving_write(
             from,
+            to,
             std::time::Duration::from_secs(10),
-            || {
-                reverse_file_if_hashes_match(
+            |scope| {
+                reverse_file_with_move_scope(
+                    scope,
                     from,
                     to,
                     expected_sha256,
                     expected_replacement_sha256,
+                    ReverseMoveKind::Forward,
                 )
             },
         ) {
-            crate::native::file_coordination::Coordination::Granted {
-                value,
-                ..
-            } => value,
-            crate::native::file_coordination::Coordination::Held(timed_out) => {
-                Err(format!(
-                    "PDF coordination timed out after {:.2}s; close it in Highlights and retry",
-                    timed_out.waited.as_secs_f64()
-                ))
-            }
-            crate::native::file_coordination::Coordination::Failed(detail) => {
-                Err(format!(
-                    "PDF coordination failed: {detail}; close it in Highlights and retry"
-                ))
-            }
+            file_coordination::Coordination::Granted { value, .. } => value,
+            file_coordination::Coordination::Held(timed_out) => Err(format!(
+                "PDF coordination timed out after {:.2}s; close it in Highlights and retry",
+                timed_out.waited.as_secs_f64()
+            )),
+            file_coordination::Coordination::Failed(detail) => Err(format!(
+                "PDF coordination failed: {detail}; close it in Highlights and retry"
+            )),
         }
     }
 }
@@ -467,7 +465,7 @@ pub(crate) struct DirectReverseCoordinator;
 #[cfg(test)]
 impl ReverseCoordinator for DirectReverseCoordinator {
     fn reverse_file(
-        &self,
+        &mut self,
         _vault: &Path,
         from: &Path,
         to: &Path,
@@ -483,14 +481,15 @@ impl ReverseCoordinator for DirectReverseCoordinator {
     }
 }
 
-/// Reverse an in-flight overwrite from inside its already-held outer PDF
-/// coordination accessor. This prevents recovery from nesting a second
-/// coordinator around the same live PDF.
+/// Reverse an in-flight overwrite from inside its already-held outer
+/// merging accessor. Unannotated overwrites still use this; annotated
+/// PDF restoration uses `InAccessorMoveReverseCoordinator` so the
+/// inverse shares the outer move notifications.
 pub(crate) struct ExternalCoordinationReverseCoordinator;
 
 impl ReverseCoordinator for ExternalCoordinationReverseCoordinator {
     fn reverse_file(
-        &self,
+        &mut self,
         _vault: &Path,
         from: &Path,
         to: &Path,
@@ -504,6 +503,38 @@ impl ReverseCoordinator for ExternalCoordinationReverseCoordinator {
             expected_replacement_sha256,
         )
     }
+}
+
+/// Inverse of the outer annotated-overwrite move, valid only while that
+/// accessor is still active. A rollback before `move_forward` is a
+/// no-op for the PDF.
+struct InAccessorMoveReverseCoordinator<'a, 'b> {
+    scope: &'a mut MoveContext<'b>,
+}
+
+impl ReverseCoordinator for InAccessorMoveReverseCoordinator<'_, '_> {
+    fn reverse_file(
+        &mut self,
+        _vault: &Path,
+        from: &Path,
+        to: &Path,
+        expected_sha256: &str,
+        expected_replacement_sha256: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        reverse_file_with_move_scope(
+            self.scope,
+            from,
+            to,
+            expected_sha256,
+            expected_replacement_sha256,
+            ReverseMoveKind::Back,
+        )
+    }
+}
+
+enum ReverseMoveKind {
+    Forward,
+    Back,
 }
 
 /// Roll back while the caller owns a single outer `.forMerging` accessor.
@@ -520,9 +551,37 @@ pub(in crate::native::highlights_ref) fn rollback_transaction_with_external_coor
         child_env,
         intent,
         false,
-        &ExternalCoordinationReverseCoordinator,
+        &mut ExternalCoordinationReverseCoordinator,
     )
     .map(|_| ())
+}
+
+/// Roll back an annotated overwrite from inside its outer move accessor.
+/// The PDF inverse uses that accessor's `move_back`; other reversals
+/// stay direct so they never nest a second coordinator.
+pub(in crate::native::highlights_ref) fn rollback_transaction(
+    config: &Config,
+    child_env: &ob::ChildEnv,
+    intent: &OverwriteIntent,
+    pdf_move: Option<&mut MoveContext<'_>>,
+) -> std::result::Result<(), CommandError> {
+    match pdf_move {
+        Some(scope) => {
+            let state_dir = state_ref_dir();
+            recover_locked(
+                &state_dir,
+                config,
+                child_env,
+                intent,
+                false,
+                &mut InAccessorMoveReverseCoordinator { scope },
+            )
+            .map(|_| ())
+        }
+        None => rollback_transaction_with_external_coordination(
+            config, child_env, intent,
+        ),
+    }
 }
 
 /// Entry hook for commands that do not hold locks yet (`ref create` and
@@ -569,7 +628,7 @@ pub(crate) fn recover_before_command(
         &child_env,
         &intent,
         false,
-        &PlatformReverseCoordinator,
+        &mut PlatformReverseCoordinator,
     )
 }
 
@@ -591,7 +650,7 @@ pub(crate) fn recover_with_locks_held(
         child_env,
         &intent,
         dry_run,
-        &PlatformReverseCoordinator,
+        &mut PlatformReverseCoordinator,
     )
 }
 
@@ -650,7 +709,7 @@ fn recover_locked(
     child_env: &ob::ChildEnv,
     intent: &OverwriteIntent,
     dry_run: bool,
-    coordinator: &dyn ReverseCoordinator,
+    coordinator: &mut dyn ReverseCoordinator,
 ) -> std::result::Result<Option<String>, CommandError> {
     let vault = &config.bob_dir;
     let canonical = canonical_vault(config)?;
@@ -1253,7 +1312,7 @@ fn execute_reversal_plan(
     vault: &Path,
     intent: &OverwriteIntent,
     plan: &ReversalPlan,
-    coordinator: &dyn ReverseCoordinator,
+    coordinator: &mut dyn ReverseCoordinator,
 ) -> std::result::Result<(), CommandError> {
     for path in &plan.clears {
         fs::remove_file(path).map_err(|error| {
@@ -1667,6 +1726,65 @@ fn reverse_file_if_hashes_match(
     expected_sha256: &str,
     expected_replacement_sha256: Option<&str>,
 ) -> std::result::Result<(), String> {
+    prepare_owned_reverse(
+        from,
+        to,
+        expected_sha256,
+        expected_replacement_sha256,
+    )?;
+    rename_if_hash_matches(from, to, expected_sha256)
+}
+
+fn reverse_file_with_move_scope(
+    scope: &mut MoveContext<'_>,
+    from: &Path,
+    to: &Path,
+    expected_sha256: &str,
+    expected_replacement_sha256: Option<&str>,
+    kind: ReverseMoveKind,
+) -> std::result::Result<(), String> {
+    match kind {
+        ReverseMoveKind::Back if !scope.completed() => return Ok(()),
+        ReverseMoveKind::Back | ReverseMoveKind::Forward => {}
+    }
+    prepare_owned_reverse(
+        from,
+        to,
+        expected_sha256,
+        expected_replacement_sha256,
+    )?;
+    let result = match kind {
+        ReverseMoveKind::Forward => scope.move_forward(),
+        ReverseMoveKind::Back => scope.move_back(),
+    };
+    result.map_err(|error| {
+        format!(
+            "could not rename {} to {}: {error}",
+            from.display(),
+            to.display()
+        )
+    })?;
+    if fs::symlink_metadata(from).is_ok() {
+        return Err(format!(
+            "rename left the source in place: {}",
+            from.display()
+        ));
+    }
+    if fs::symlink_metadata(to).is_err() {
+        return Err(format!(
+            "rename did not produce the destination: {}",
+            to.display()
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_owned_reverse(
+    from: &Path,
+    to: &Path,
+    expected_sha256: &str,
+    expected_replacement_sha256: Option<&str>,
+) -> std::result::Result<(), String> {
     let source_hash = file_sha256(from).map_err(|error| {
         format!("could not hash archived source {}: {error}", from.display())
     })?;
@@ -1710,7 +1828,7 @@ fn reverse_file_if_hashes_match(
             }
         }
     }
-    rename_if_hash_matches(from, to, expected_sha256)
+    Ok(())
 }
 
 /// True when the nearest existing ancestors of both paths share a
@@ -2298,7 +2416,7 @@ mod tests {
             &child_env,
             intent,
             dry_run,
-            &DirectReverseCoordinator,
+            &mut DirectReverseCoordinator,
         )
     }
 
@@ -2306,7 +2424,7 @@ mod tests {
         state: &Path,
         config: &Config,
         intent: &OverwriteIntent,
-        coordinator: &dyn ReverseCoordinator,
+        coordinator: &mut dyn ReverseCoordinator,
     ) -> std::result::Result<Option<String>, CommandError> {
         let child_env = ob::child_env();
         recover_locked(state, config, &child_env, intent, false, coordinator)
@@ -2917,7 +3035,7 @@ mod tests {
 
     impl ReverseCoordinator for FakeReverseCoordinator {
         fn reverse_file(
-            &self,
+            &mut self,
             _vault: &Path,
             from: &Path,
             to: &Path,
@@ -3167,8 +3285,8 @@ mod tests {
             annotated_intent_via_builder(&config, &base, manifest);
         let intent = save_pending(&state, &config, &intent);
 
-        let coordinator = FakeReverseCoordinator::grant();
-        let notice = recover_with(&state, &config, &intent, &coordinator)
+        let mut coordinator = FakeReverseCoordinator::grant();
+        let notice = recover_with(&state, &config, &intent, &mut coordinator)
             .expect("rollback");
         assert!(notice
             .expect("notice")
@@ -3376,9 +3494,9 @@ mod tests {
         let intent = save_pending(&state, &config, &intent);
         simulate_post_move_crash(vault);
 
-        let hold = FakeReverseCoordinator::hold();
-        let error =
-            recover_with(&state, &config, &intent, &hold).expect_err("hold");
+        let mut hold = FakeReverseCoordinator::hold();
+        let error = recover_with(&state, &config, &intent, &mut hold)
+            .expect_err("hold");
         assert_failed_closed(&error, &state_temp, &config);
         assert!(
             error
@@ -3408,7 +3526,7 @@ mod tests {
             &state,
             &config,
             &intent,
-            &FakeReverseCoordinator::grant(),
+            &mut FakeReverseCoordinator::grant(),
         )
         .expect("retry");
         assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), OLD_PDF);
@@ -3431,7 +3549,7 @@ mod tests {
             &state,
             &config,
             &intent,
-            &FakeReverseCoordinator::fail("presenter denied the rename"),
+            &mut FakeReverseCoordinator::fail("presenter denied the rename"),
         )
         .expect_err("coordination failure");
         assert_failed_closed(&error, &state_temp, &config);
@@ -3458,14 +3576,14 @@ mod tests {
             annotated_intent_via_builder(&config, &base, manifest);
         let intent = save_pending(&state, &config, &intent);
         simulate_post_move_crash(vault);
-        let coordinator = FakeReverseCoordinator {
+        let mut coordinator = FakeReverseCoordinator {
             behavior: FakeReverseBehavior::ChangeBeforeAccessor,
             message: String::new(),
             calls: std::sync::Mutex::new(0),
             paths: std::sync::Mutex::new(Vec::new()),
         };
 
-        let error = recover_with(&state, &config, &intent, &coordinator)
+        let error = recover_with(&state, &config, &intent, &mut coordinator)
             .expect_err("accessor hash mismatch");
         assert_failed_closed(&error, &state_temp, &config);
         assert!(error.to_string().contains(ARCHIVE_PDF), "{error}");
@@ -3490,14 +3608,14 @@ mod tests {
             annotated_intent_via_builder(&config, &base, manifest);
         let intent = save_pending(&state, &config, &intent);
         simulate_post_move_crash(vault);
-        let coordinator = FakeReverseCoordinator {
+        let mut coordinator = FakeReverseCoordinator {
             behavior: FakeReverseBehavior::DestinationRace,
             message: String::new(),
             calls: std::sync::Mutex::new(0),
             paths: std::sync::Mutex::new(Vec::new()),
         };
 
-        let error = recover_with(&state, &config, &intent, &coordinator)
+        let error = recover_with(&state, &config, &intent, &mut coordinator)
             .expect_err("late destination");
         assert_failed_closed(&error, &state_temp, &config);
         assert_eq!(
@@ -3509,6 +3627,81 @@ mod tests {
             fs::read(vault.join(ARCHIVE_PDF)).expect("archive"),
             OLD_PDF
         );
+    }
+
+    #[test]
+    fn platform_reverse_notifies_inverse_with_replacement_present_or_absent() {
+        let (vault_temp, _state_temp, config, base) = annotated_fixture();
+        let vault = vault_temp.path();
+        let manifest = asset_manifest(vault, LIVE_ASSETS).expect("manifest");
+        let (intent, old_hash, new_hash, _) =
+            annotated_intent_via_builder(&config, &base, manifest);
+        let pdf_move = intent
+            .moves
+            .iter()
+            .find(|step| step.source == LIVE_PDF)
+            .expect("pdf move");
+        assert_eq!(pdf_move.dest, ARCHIVE_PDF);
+        assert_eq!(pdf_move.source_sha256.as_deref(), Some(old_hash.as_str()));
+        assert_eq!(
+            pdf_move.replacement_sha256.as_deref(),
+            Some(new_hash.as_str())
+        );
+
+        simulate_post_move_crash(vault);
+        let mut coordinator = PlatformReverseCoordinator;
+        coordinator
+            .reverse_file(
+                vault,
+                &vault.join(ARCHIVE_PDF),
+                &vault.join(LIVE_PDF),
+                &old_hash,
+                Some(&new_hash),
+            )
+            .expect("reverse with replacement present");
+        assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), OLD_PDF);
+        assert!(!vault.join(ARCHIVE_PDF).exists());
+
+        fs::create_dir_all(vault.join("ref_history/blogs"))
+            .expect("archive dir");
+        fs::rename(vault.join(LIVE_PDF), vault.join(ARCHIVE_PDF))
+            .expect("re-archive");
+        coordinator
+            .reverse_file(
+                vault,
+                &vault.join(ARCHIVE_PDF),
+                &vault.join(LIVE_PDF),
+                &old_hash,
+                Some(&new_hash),
+            )
+            .expect("reverse with replacement absent");
+        assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), OLD_PDF);
+        assert!(!vault.join(ARCHIVE_PDF).exists());
+    }
+
+    #[test]
+    fn platform_reverse_refuses_a_changed_archive_without_deleting_replacement()
+    {
+        let (vault_temp, _state_temp, _config, _base) = annotated_fixture();
+        let vault = vault_temp.path();
+        simulate_post_move_crash(vault);
+        write_file(vault, ARCHIVE_PDF, b"late archive save");
+        let mut coordinator = PlatformReverseCoordinator;
+        let error = coordinator
+            .reverse_file(
+                vault,
+                &vault.join(ARCHIVE_PDF),
+                &vault.join(LIVE_PDF),
+                &sha256_hex(OLD_PDF),
+                Some(&sha256_hex(NEW_PDF)),
+            )
+            .expect_err("changed archive");
+        assert!(error.contains(ARCHIVE_PDF), "{error}");
+        assert_eq!(
+            fs::read(vault.join(ARCHIVE_PDF)).expect("archive"),
+            b"late archive save"
+        );
+        assert_eq!(fs::read(vault.join(LIVE_PDF)).expect("live"), NEW_PDF);
     }
 
     #[test]

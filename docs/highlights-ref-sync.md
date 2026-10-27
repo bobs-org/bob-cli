@@ -714,6 +714,24 @@ cleanup so the only annotated copy is never deleted, and a late editor save
 that no longer matches the recorded hashes is kept with the intent rather
 than discarded.
 
+On an enabled Mac, an annotated overwrite uses one bounded move request
+(`.forMerging | .forMoving`) from the live PDF to that preflighted archive
+PDF. Highlights saves first. Bob re-checks the saved bytes and refuses
+before any mutation when they no longer match preflight. A successful
+overwrite notifies the open document of the archive move: the same
+Highlights tab follows `ref_history/...__annotated.pdf`, later edits save
+into that archive, and the new live capture stays byte-for-byte unchanged.
+An immediate rollback notifies the inverse move so later saves land on the
+restored live PDF and do not recreate the archive. Independent crash
+recovery uses a fresh bounded moving scope from archive to live and
+rechecks both recorded hashes inside that accessor before deleting a
+verified transaction-owned replacement. Unannotated overwrites stay on a
+merging write. Annotated overwrite still refuses off macOS or with the key
+off. Reverse and rollback of a still-open archived Highlights tab have
+native NSDocument fixture coverage; they do not yet have a real-Highlights
+guided run, and the acceptance kit does not add a production failure
+switch to force recovery against the live vault.
+
 Unknown marker keys should round-trip into frontmatter. New frontmatter keys
 should sync back to the marker only when they are standard supported fields or
 explicitly listed in `highlights_marker_fields`.
@@ -831,6 +849,24 @@ then re-reads the saved PDF and repairs the id only when the marker and narrow
 sync plan remain safe. A changed marker or unsafe plan holds without Bob writes.
 This does not make a full filename rename eligible for annotated references.
 
+On an enabled Mac, an annotated `-f overwrite` uses one bounded move
+request for the whole transaction, from the locked live PDF to its
+preflighted archive PDF. Highlights saves first. Bob re-checks the saved
+bytes and refuses before any vault mutation when they no longer match
+preflight (`preimage_changed` / `marker_changed`). A successful overwrite
+notifies the open document of the archive move: the same Highlights tab
+follows `ref_history/...__annotated.pdf`, a later edit/save lands in that
+archive, and the replacement at the live path stays unchanged. An
+immediate in-accessor rollback notifies the inverse move so later saves
+land on the restored live PDF. Independent crash recovery uses a fresh
+bounded moving scope from archive to live; a timeout, coordinator
+failure, changed archive, changed replacement, or racing live destination
+keeps the relevant user bytes and the recoverable intent. Reverse and
+rollback of a still-open archived Highlights tab currently have native
+NSDocument fixture coverage only; the guided acceptance kit records
+forward archive-follow behavior and does not plant a production failure
+to force recovery against the live vault.
+
 When a capture replaces an existing public PDF, Bob checks the destination
 again inside one bounded request before publishing the PDF and companion
 audio. A newly saved destination holds with `preimage_changed` or
@@ -920,11 +956,19 @@ They cover: a modern annotated scratch reference with a closed reading
 task, an image selection, and an inbound highlight follow-up, using a
 clean replacement source (never the library PDF as `TARGET`); an unsaved
 annotation that must save-then-refuse-or-complete; the archived open
-document following the rename; a coordination hold with no bob-authored
-mutations; a late save into the still-open archived PDF; and scan holding
-when the exact old bytes reappear at the live path. Record outcomes in
-the scratch `results.md`. Bryan performs the real Highlights steps on the
-Mac; Linux self-test covers only the offline plumbing.
+document following the rename (record the same-tab URL, any conflict
+dialog, and where a later edit/save lands); a coordination hold with no
+bob-authored mutations; a late save into the still-open archived PDF
+(live and archive digests are snapshotted before that save so the
+replacement can be shown untouched); and scan holding when the exact old
+bytes reappear at the live path. The archive PDF for that overwrite is
+resolved from the live note's `earlier:` entry and the archive note's
+`annotated_pdf:` field. Reverse and rollback of a still-open archived
+tab have native NSDocument fixture coverage only; the kit does not add a
+production failure switch or damage the live vault to trigger recovery.
+Record outcomes in the scratch `results.md`. Bryan performs the real
+Highlights steps on the Mac; Linux self-test covers only the offline
+plumbing.
 
 The kit then runs a third checklist in a separate scratch vault, config, and
 state directory, with `BOB_DIR` matching that vault and every rename using
@@ -2466,8 +2510,14 @@ files: a proved overwrite commit is kept; otherwise the recorded base HEAD is
 restored and the intent is cleared. Annotated version-2 intents reverse
 proven PDF and asset moves first, so generic cleanup cannot delete the
 only annotated copy, and a late editor save that no longer matches the
-recorded hashes stays on disk with the intent. Standalone `bob vault-sync` does the same
-recovery (it takes `scan.lock` when an intent is pending) and refuses the cycle
+recorded hashes stays on disk with the intent. On an enabled Mac that
+reverse uses a fresh bounded moving scope from archive to live and
+rechecks both recorded hashes inside the accessor before deleting a
+verified transaction-owned replacement. Reverse and rollback of a
+still-open archived Highlights tab have native NSDocument fixture
+coverage; they do not yet have a real-Highlights guided run. Standalone
+`bob vault-sync` does the same recovery (it takes `scan.lock` when an
+intent is pending) and refuses the cycle
 if the lock is busy or recovery fails. Other pre-syncs (`bob task move`,
 `bob randomize`, migrations, `vault_rewrite`) refuse to stage or commit while
 an intent is pending; the error names the stem and says to run `bob ref scan`

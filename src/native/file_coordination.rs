@@ -63,6 +63,11 @@ impl MoveContext<'_> {
         Ok(())
     }
 
+    /// True after a successful `move_forward` that has not been inverted.
+    pub(crate) fn completed(&self) -> bool {
+        self.at_destination
+    }
+
     fn move_no_replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
         if from == to {
             return Err(std::io::Error::new(

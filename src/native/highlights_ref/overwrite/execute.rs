@@ -24,7 +24,7 @@ use super::super::{
     SyncOptions, FIELD_ID, FIELD_PARENT, FIELD_SOURCE_MARKDOWN, FIELD_STATUS,
 };
 use super::{recovery, OverwritePreflight, OverwriteRequest};
-use crate::native::file_coordination::Coordination;
+use crate::native::file_coordination::{Coordination, MoveContext};
 use crate::native::ref_library;
 use crate::native::ref_tasks;
 
@@ -261,266 +261,42 @@ fn execute_with_sync_and_session(
         locked.ref_type, locked.member.stem
     );
     let manifest = transaction_manifest(&locked);
-    let transaction = session.coordinate_explicit_pdf_write_with(
-        &config.bob_dir.join(&locked.pdf_path),
-        || {
-            // Coordination asks an open Highlights document to save before
-            // the first vault mutation. Re-plan inside the accessor so a
-            // presenter save cannot be overwritten as if it were our write.
-            if locked.annotated.is_some()
-                && !matches!(preimages_match(config, &locked), Ok(true))
-            {
-                return Err(coordinated_preimage_error(config, &locked));
-            }
-            let current = super::prepare(
-                config,
-                &locked.member,
-                request,
-                &locked.planned_date,
-            )
-            .map_err(|refusal| refusal.command_error())?;
-            if !same_locked_preflight(&locked, &current) {
-                if locked.annotated.is_some() {
-                    return Err(coordinated_preimage_error(config, &locked));
-                }
-                return Err(CommandError::new(
-                    "overwrite target changed during PDF coordination; no files were written",
+    let live_pdf = config.bob_dir.join(&locked.pdf_path);
+    let transaction = if let Some(annotated) = &locked.annotated {
+        let archive_pdf =
+            config.bob_dir.join(&annotated.bundle.annotated_pdf_path);
+        session.coordinate_explicit_pdf_move_with(
+            &live_pdf,
+            &archive_pdf,
+            |scope| {
+                overwrite_inside_accessor(
+                    config,
+                    &locked,
+                    request,
+                    &staged,
+                    &child_env,
+                    &base_head,
+                    subject.clone(),
+                    &manifest,
+                    Some(scope),
                 )
-                .with_code("preimage_changed"));
-            }
-
-            let mut intent = recovery::OverwriteIntent::for_transaction(
+            },
+        )
+    } else {
+        session.coordinate_explicit_pdf_write_with(&live_pdf, || {
+            overwrite_inside_accessor(
                 config,
-                &locked.member.stem,
-                &locked.ref_type,
+                &locked,
+                request,
+                &staged,
+                &child_env,
                 &base_head,
                 subject.clone(),
-                &locked.bundle_preimages,
-                &annotated_history_paths(&locked),
-            )?;
-            if locked.annotated.is_some() {
-                intent = intent.with_annotated_moves(
-                    annotated_moves(&locked, &staged)?,
-                    annotated_writes(&locked, &staged)?,
-                );
-            }
-            if let Err(error) = recovery::save_intent(config, &intent) {
-                let rollback = recovery::rollback_transaction_with_external_coordination(
-                    config,
-                    &child_env,
-                    &intent,
-                );
-                return Err(CommandError::new(format!(
-                    "could not persist overwrite intent: {error}{}",
-                    rollback_suffix(rollback)
-                ))
-                .with_human_code("verify_failed"));
-            }
-            #[cfg(test)]
-            if let Err(error) = trip(OverwriteFailpoint::AfterIntentPersistence)
-            {
-                let rollback = recovery::rollback_transaction_with_external_coordination(
-                    config,
-                    &child_env,
-                    &intent,
-                );
-                return Err(CommandError::new(format!(
-                    "{error}{}",
-                    rollback_suffix(rollback)
-                ))
-                .with_human_code("verify_failed"));
-            }
-
-            let applied =
-                apply_and_verify(config, &locked, request, &staged, &manifest);
-            #[cfg(test)]
-            let applied = if applied.is_ok()
-                && failpoint_is(OverwriteFailpoint::LateHistorySaveBeforeRollback)
-            {
-                mutate_older_archive_for_test(config, &locked).and_then(|()| {
-                    Err(CommandError::new(
-                        "injected failpoint LateHistorySaveBeforeRollback",
-                    ))
-                })
-            } else {
-                applied
-            };
-            #[cfg(test)]
-            if applied.is_ok()
-                && failpoint_is(OverwriteFailpoint::CrashAfterLateHistorySave)
-            {
-                mutate_older_archive_for_test(config, &locked)?;
-                return Err(CommandError::new(
-                    "injected crash after a late save to an older archive",
-                )
-                .with_code("injected_crash"));
-            }
-            #[cfg(test)]
-            if failpoint_is(OverwriteFailpoint::CrashWithoutRollback)
-                && applied.is_ok()
-            {
-                return Err(CommandError::new(
-                    "injected crash after applying the overwrite",
-                )
-                .with_code("injected_crash"));
-            }
-            let task_mark = match applied {
-                Ok((_, task_mark)) => task_mark,
-                Err(error) => {
-                    let rollback = recovery::rollback_transaction_with_external_coordination(
-                        config,
-                        &child_env,
-                        &intent,
-                    );
-                    return Err(CommandError::new(format!(
-                        "{error}{}",
-                        rollback_suffix(rollback)
-                    ))
-                    .with_human_code("verify_failed"));
-                }
-            };
-
-            let paths = match manifest_commit_paths(
-                &config.bob_dir,
-                &child_env,
                 &manifest,
-            ) {
-                Ok(paths) => paths,
-                Err(error) => {
-                    let rollback = recovery::rollback_transaction_with_external_coordination(
-                        config,
-                        &child_env,
-                        &intent,
-                    );
-                    return Err(CommandError::new(format!(
-                        "could not build scoped overwrite commit paths: {error}{}",
-                        rollback_suffix(rollback)
-                    ))
-                    .with_human_code("verify_failed"));
-                }
-            };
-            if paths.is_empty() {
-                let rollback = recovery::rollback_transaction_with_external_coordination(
-                    config,
-                    &child_env,
-                    &intent,
-                );
-                return Err(CommandError::new(format!(
-                    "verified overwrite produced no scoped Git paths{}",
-                    rollback_suffix(rollback)
-                ))
-                .with_human_code("verify_failed"));
-            }
-            #[cfg(test)]
-            if let Err(error) = trip(OverwriteFailpoint::BeforeCommit) {
-                let rollback = recovery::rollback_transaction_with_external_coordination(
-                    config,
-                    &child_env,
-                    &intent,
-                );
-                return Err(CommandError::new(format!(
-                    "{error}{}",
-                    rollback_suffix(rollback)
-                ))
-                .with_human_code("verify_failed"));
-            }
-            let commit_result = {
-                let result = ob::commit_paths(
-                    &config.bob_dir,
-                    &child_env,
-                    &subject,
-                    &paths,
-                );
-                #[cfg(test)]
-                if failpoint_is(OverwriteFailpoint::CommitReportedAsError)
-                    && matches!(result, Ok(Some(_)))
-                {
-                    Err("injected commit reporting error".to_string())
-                } else {
-                    result
-                }
-                #[cfg(not(test))]
-                {
-                    result
-                }
-            };
-            let sha = match commit_result {
-                Ok(Some(sha)) => sha,
-                Ok(None) => {
-                    let rollback = recovery::rollback_transaction_with_external_coordination(
-                        config,
-                        &child_env,
-                        &intent,
-                    );
-                    return Err(CommandError::new(format!(
-                        "verified overwrite produced no scoped Git commit{}",
-                        rollback_suffix(rollback)
-                    ))
-                    .with_human_code("verify_failed"));
-                }
-                Err(error) => {
-                    if let Some((sha, committed_subject)) =
-                        reference_mutation::committed_despite_error(
-                            &config.bob_dir,
-                            &child_env,
-                            Some(&base_head),
-                            &subject,
-                        )
-                        && committed_subject == subject
-                    {
-                        sha
-                    } else {
-                        let rollback = recovery::rollback_transaction_with_external_coordination(
-                            config,
-                            &child_env,
-                            &intent,
-                        );
-                        return Err(CommandError::new(format!(
-                            "Git commit failed: {error}{}",
-                            rollback_suffix(rollback)
-                        ))
-                        .with_human_code("verify_failed"));
-                    }
-                }
-            };
-
-            if !prove_commit(
-                &config.bob_dir,
-                &child_env,
-                &base_head,
-                &sha,
-                &subject,
-            ) {
-                return Err(CommandError::new(format!(
-                    "overwrite commit could not be proved; left its intent in place for recovery (HEAD is {sha})"
-                ))
-                .with_code("commit_unverified"));
-            }
-            // A crash before this update is still recoverable from the exact
-            // HEAD commit subject; storing the SHA makes proof unambiguous.
-            let mut push_pending =
-                intent.record_expected_head(config, &sha).is_err();
-            if recovery::clear_intent(config).is_err() {
-                push_pending = true;
-            }
-
-            Ok(OverwriteResult {
-                note: locked.note_path.clone(),
-                pdf: locked.pdf_path.clone(),
-                archive: archive_path(&locked).map(str::to_string),
-                task_path: locked.task.path.clone(),
-                task_block_id: locked.task.block_id.clone(),
-                task_mark,
-                task_status: request
-                    .explicit_status
-                    .clone()
-                    .unwrap_or_else(|| locked.status.clone()),
-                highlights: locked.member.highlights.unwrap_or(0),
-                commit_sha: sha,
-                push_pending,
-            })
-        },
-    );
+                None,
+            )
+        })
+    };
 
     let mut result = match transaction {
         Ok(Coordination::Granted {
@@ -557,6 +333,268 @@ fn execute_with_sync_and_session(
         result.push_pending = true;
     }
     Ok(result)
+}
+
+fn overwrite_inside_accessor(
+    config: &Config,
+    locked: &OverwritePreflight,
+    request: &OverwriteRequest,
+    staged: &StagedOverwrite,
+    child_env: &ob::ChildEnv,
+    base_head: &str,
+    subject: String,
+    manifest: &BTreeSet<PathBuf>,
+    mut pdf_move: Option<&mut MoveContext<'_>>,
+) -> Result<OverwriteResult, CommandError> {
+    // Coordination asks an open Highlights document to save before
+    // the first vault mutation. Re-plan inside the accessor so a
+    // presenter save cannot be overwritten as if it were our write.
+    if locked.annotated.is_some()
+        && !matches!(preimages_match(config, locked), Ok(true))
+    {
+        return Err(coordinated_preimage_error(config, locked));
+    }
+    let current =
+        super::prepare(config, &locked.member, request, &locked.planned_date)
+            .map_err(|refusal| refusal.command_error())?;
+    if !same_locked_preflight(locked, &current) {
+        if locked.annotated.is_some() {
+            return Err(coordinated_preimage_error(config, locked));
+        }
+        return Err(CommandError::new(
+            "overwrite target changed during PDF coordination; no files were written",
+        )
+        .with_code("preimage_changed"));
+    }
+
+    let mut intent = recovery::OverwriteIntent::for_transaction(
+        config,
+        &locked.member.stem,
+        &locked.ref_type,
+        base_head,
+        subject.clone(),
+        &locked.bundle_preimages,
+        &annotated_history_paths(locked),
+    )?;
+    if locked.annotated.is_some() {
+        intent = intent.with_annotated_moves(
+            annotated_moves(locked, staged)?,
+            annotated_writes(locked, staged)?,
+        );
+    }
+    if let Err(error) = recovery::save_intent(config, &intent) {
+        let rollback = recovery::rollback_transaction(
+            config,
+            child_env,
+            &intent,
+            pdf_move.as_deref_mut(),
+        );
+        return Err(CommandError::new(format!(
+            "could not persist overwrite intent: {error}{}",
+            rollback_suffix(rollback)
+        ))
+        .with_human_code("verify_failed"));
+    }
+    #[cfg(test)]
+    if let Err(error) = trip(OverwriteFailpoint::AfterIntentPersistence) {
+        let rollback = recovery::rollback_transaction(
+            config,
+            child_env,
+            &intent,
+            pdf_move.as_deref_mut(),
+        );
+        return Err(CommandError::new(format!(
+            "{error}{}",
+            rollback_suffix(rollback)
+        ))
+        .with_human_code("verify_failed"));
+    }
+
+    let applied = apply_and_verify(
+        config,
+        locked,
+        request,
+        staged,
+        manifest,
+        pdf_move.as_deref_mut(),
+    );
+    #[cfg(test)]
+    let applied = if applied.is_ok()
+        && failpoint_is(OverwriteFailpoint::LateHistorySaveBeforeRollback)
+    {
+        mutate_older_archive_for_test(config, locked).and_then(|()| {
+            Err(CommandError::new(
+                "injected failpoint LateHistorySaveBeforeRollback",
+            ))
+        })
+    } else {
+        applied
+    };
+    #[cfg(test)]
+    if applied.is_ok()
+        && failpoint_is(OverwriteFailpoint::CrashAfterLateHistorySave)
+    {
+        mutate_older_archive_for_test(config, locked)?;
+        return Err(CommandError::new(
+            "injected crash after a late save to an older archive",
+        )
+        .with_code("injected_crash"));
+    }
+    #[cfg(test)]
+    if failpoint_is(OverwriteFailpoint::CrashWithoutRollback) && applied.is_ok()
+    {
+        return Err(CommandError::new(
+            "injected crash after applying the overwrite",
+        )
+        .with_code("injected_crash"));
+    }
+    let task_mark = match applied {
+        Ok((_, task_mark)) => task_mark,
+        Err(error) => {
+            let rollback = recovery::rollback_transaction(
+                config,
+                child_env,
+                &intent,
+                pdf_move.as_deref_mut(),
+            );
+            return Err(CommandError::new(format!(
+                "{error}{}",
+                rollback_suffix(rollback)
+            ))
+            .with_human_code("verify_failed"));
+        }
+    };
+
+    let paths =
+        match manifest_commit_paths(&config.bob_dir, child_env, manifest) {
+            Ok(paths) => paths,
+            Err(error) => {
+                let rollback = recovery::rollback_transaction(
+                    config,
+                    child_env,
+                    &intent,
+                    pdf_move.as_deref_mut(),
+                );
+                return Err(CommandError::new(format!(
+                    "could not build scoped overwrite commit paths: {error}{}",
+                    rollback_suffix(rollback)
+                ))
+                .with_human_code("verify_failed"));
+            }
+        };
+    if paths.is_empty() {
+        let rollback = recovery::rollback_transaction(
+            config,
+            child_env,
+            &intent,
+            pdf_move.as_deref_mut(),
+        );
+        return Err(CommandError::new(format!(
+            "verified overwrite produced no scoped Git paths{}",
+            rollback_suffix(rollback)
+        ))
+        .with_human_code("verify_failed"));
+    }
+    #[cfg(test)]
+    if let Err(error) = trip(OverwriteFailpoint::BeforeCommit) {
+        let rollback = recovery::rollback_transaction(
+            config,
+            child_env,
+            &intent,
+            pdf_move.as_deref_mut(),
+        );
+        return Err(CommandError::new(format!(
+            "{error}{}",
+            rollback_suffix(rollback)
+        ))
+        .with_human_code("verify_failed"));
+    }
+    let commit_result = {
+        let result =
+            ob::commit_paths(&config.bob_dir, child_env, &subject, &paths);
+        #[cfg(test)]
+        if failpoint_is(OverwriteFailpoint::CommitReportedAsError)
+            && matches!(result, Ok(Some(_)))
+        {
+            Err("injected commit reporting error".to_string())
+        } else {
+            result
+        }
+        #[cfg(not(test))]
+        {
+            result
+        }
+    };
+    let sha = match commit_result {
+        Ok(Some(sha)) => sha,
+        Ok(None) => {
+            let rollback = recovery::rollback_transaction(
+                config,
+                child_env,
+                &intent,
+                pdf_move.as_deref_mut(),
+            );
+            return Err(CommandError::new(format!(
+                "verified overwrite produced no scoped Git commit{}",
+                rollback_suffix(rollback)
+            ))
+            .with_human_code("verify_failed"));
+        }
+        Err(error) => {
+            if let Some((sha, committed_subject)) =
+                reference_mutation::committed_despite_error(
+                    &config.bob_dir,
+                    child_env,
+                    Some(base_head),
+                    &subject,
+                )
+                && committed_subject == subject
+            {
+                sha
+            } else {
+                let rollback = recovery::rollback_transaction(
+                    config,
+                    child_env,
+                    &intent,
+                    pdf_move.as_deref_mut(),
+                );
+                return Err(CommandError::new(format!(
+                    "Git commit failed: {error}{}",
+                    rollback_suffix(rollback)
+                ))
+                .with_human_code("verify_failed"));
+            }
+        }
+    };
+
+    if !prove_commit(&config.bob_dir, child_env, base_head, &sha, &subject) {
+        return Err(CommandError::new(format!(
+            "overwrite commit could not be proved; left its intent in place for recovery (HEAD is {sha})"
+        ))
+        .with_code("commit_unverified"));
+    }
+    // A crash before this update is still recoverable from the exact
+    // HEAD commit subject; storing the SHA makes proof unambiguous.
+    let mut push_pending = intent.record_expected_head(config, &sha).is_err();
+    if recovery::clear_intent(config).is_err() {
+        push_pending = true;
+    }
+
+    Ok(OverwriteResult {
+        note: locked.note_path.clone(),
+        pdf: locked.pdf_path.clone(),
+        archive: archive_path(locked).map(str::to_string),
+        task_path: locked.task.path.clone(),
+        task_block_id: locked.task.block_id.clone(),
+        task_mark,
+        task_status: request
+            .explicit_status
+            .clone()
+            .unwrap_or_else(|| locked.status.clone()),
+        highlights: locked.member.highlights.unwrap_or(0),
+        commit_sha: sha,
+        push_pending,
+    })
 }
 
 fn same_locked_preflight(
@@ -1145,6 +1183,7 @@ fn apply_and_verify(
     request: &OverwriteRequest,
     staged: &StagedOverwrite,
     manifest: &BTreeSet<PathBuf>,
+    pdf_move: Option<&mut MoveContext<'_>>,
 ) -> Result<(String, char), CommandError> {
     let pdf = config.bob_dir.join(&plan.pdf_path);
     let note_path = config.bob_dir.join(&plan.note_path);
@@ -1244,7 +1283,12 @@ fn apply_and_verify(
     #[cfg(test)]
     trip(OverwriteFailpoint::AfterSidecarRemoval)?;
     if plan.annotated.is_some() {
-        move_annotated_bundle(config, plan)?;
+        let Some(scope) = pdf_move else {
+            return Err(CommandError::new(
+                "annotated overwrite is missing its coordinated PDF move scope",
+            ));
+        };
+        move_annotated_bundle(config, plan, scope)?;
     }
     publish_audio(config, plan, staged)?;
     #[cfg(test)]
@@ -1472,6 +1516,7 @@ fn ensure_marker_matches(
 fn move_annotated_bundle(
     config: &Config,
     plan: &OverwritePreflight,
+    pdf_move: &mut MoveContext<'_>,
 ) -> Result<(), CommandError> {
     let annotated = plan
         .annotated
@@ -1499,13 +1544,11 @@ fn move_annotated_bundle(
     let before = fs::symlink_metadata(&source).map_err(|error| {
         CommandError::new(format!("could not inspect annotated PDF: {error}"))
     })?;
-    super::super::io::rename_no_replace(&source, &destination).map_err(
-        |error| {
-            CommandError::new(format!(
-                "could not rename annotated PDF into its archive without replacement: {error}"
-            ))
-        },
-    )?;
+    pdf_move.move_forward().map_err(|error| {
+        CommandError::new(format!(
+            "could not rename annotated PDF into its archive without replacement: {error}"
+        ))
+    })?;
     if hash_file(&destination)? != pdf_hash {
         return Err(CommandError::new(
             "annotated PDF changed while it was being archived",
@@ -3424,6 +3467,42 @@ mod tests {
         (result, observed)
     }
 
+    fn annotated_pdf_endpoints(fixture: &ExecuteFixture) -> (PathBuf, PathBuf) {
+        let archive = fixture
+            .plan
+            .annotated
+            .as_ref()
+            .expect("annotated")
+            .bundle
+            .annotated_pdf_path
+            .clone();
+        (fixture.pdf.clone(), fixture.vault.join(archive))
+    }
+
+    fn forward_move_events(
+        from: &Path,
+        to: &Path,
+    ) -> Vec<super::super::super::marker_write::FakeMoveEvent> {
+        use super::super::super::marker_write::FakeMoveEvent;
+        vec![
+            FakeMoveEvent::Will(from.to_path_buf(), to.to_path_buf()),
+            FakeMoveEvent::Did(from.to_path_buf(), to.to_path_buf()),
+        ]
+    }
+
+    fn forward_and_inverse_move_events(
+        from: &Path,
+        to: &Path,
+    ) -> Vec<super::super::super::marker_write::FakeMoveEvent> {
+        use super::super::super::marker_write::FakeMoveEvent;
+        vec![
+            FakeMoveEvent::Will(from.to_path_buf(), to.to_path_buf()),
+            FakeMoveEvent::Did(from.to_path_buf(), to.to_path_buf()),
+            FakeMoveEvent::Will(to.to_path_buf(), from.to_path_buf()),
+            FakeMoveEvent::Did(to.to_path_buf(), from.to_path_buf()),
+        ]
+    }
+
     #[test]
     fn overwrite_commits_when_pre_sync_leaves_selection_unchanged() {
         let fixture = filed_execute_fixture("bob-cli-overwrite-fp-happy");
@@ -3455,6 +3534,12 @@ mod tests {
         let result = result.unwrap_or_else(|error| panic!("execute: {error}"));
 
         assert_eq!(observed.call_count(), 1, "one outer PDF accessor");
+        let (live_pdf, archive_pdf_abs) = annotated_pdf_endpoints(&fixture);
+        assert_eq!(
+            observed.move_events(),
+            forward_move_events(&live_pdf, &archive_pdf_abs),
+            "one forward notification pair"
+        );
         assert_eq!(result.archive.as_deref(), Some(archive_note.as_str()));
         let retained_pdf = fixture.vault.join(&archive_pdf);
         assert_eq!(fs::read(&retained_pdf).expect("archived PDF"), old_pdf);
@@ -3620,6 +3705,11 @@ mod tests {
             .message
             .contains("Run bob ref scan -w to commit the save"));
         assert_eq!(observed.call_count(), 1);
+        assert!(
+            observed.move_events().is_empty(),
+            "a presenter save after preflight must refuse before any move: {:?}",
+            observed.move_events()
+        );
         assert_eq!(fs::read(&fixture.pdf).expect("presenter save"), saved_pdf);
         assert_eq!(
             fs::read(&fixture.note).expect("live note"),
@@ -3710,6 +3800,12 @@ mod tests {
         let error = result.expect_err("injected post-move failure");
         assert!(error.message.contains("rolled back"), "{error}");
         assert_eq!(observed.call_count(), 1);
+        let (live_pdf, archive_pdf) = annotated_pdf_endpoints(&fixture);
+        assert_eq!(
+            observed.move_events(),
+            forward_and_inverse_move_events(&live_pdf, &archive_pdf),
+            "rollback inverts the notified PDF move inside the same accessor"
+        );
         assert_eq!(
             fs::read(&fixture.pdf).expect("restored PDF"),
             fixture.old_pdf
@@ -3758,7 +3854,7 @@ mod tests {
                 super::super::super::marker_write::FakeCoordinator::grant(
                     std::time::Duration::ZERO,
                 );
-            let (result, _) = run_annotated_execute(&fixture, fake);
+            let (result, observed) = run_annotated_execute(&fixture, fake);
             let error = result.expect_err(&format!("{point:?} must abort"));
             assert!(
                 error.to_string().contains("injected failpoint")
@@ -3769,6 +3865,35 @@ mod tests {
                 "{point:?} unexpected error: {error}"
             );
             assert_intact_annotated_state(&fixture);
+            let (live_pdf, archive_pdf) = annotated_pdf_endpoints(&fixture);
+            match point {
+                OverwriteFailpoint::AfterStagingValidation => {
+                    assert_eq!(observed.call_count(), 0, "{point:?}");
+                    assert!(observed.move_events().is_empty(), "{point:?}");
+                }
+                OverwriteFailpoint::AfterIntentPersistence
+                | OverwriteFailpoint::FailedNewFileWrite
+                | OverwriteFailpoint::AfterFrozenNote
+                | OverwriteFailpoint::AfterSidecarRemoval => {
+                    assert_eq!(observed.call_count(), 1, "{point:?}");
+                    assert!(
+                        observed.move_events().is_empty(),
+                        "{point:?} must not notify a move: {:?}",
+                        observed.move_events()
+                    );
+                }
+                _ => {
+                    assert_eq!(observed.call_count(), 1, "{point:?}");
+                    assert_eq!(
+                        observed.move_events(),
+                        forward_and_inverse_move_events(
+                            &live_pdf,
+                            &archive_pdf
+                        ),
+                        "{point:?}"
+                    );
+                }
+            }
         }
     }
 

@@ -2,11 +2,11 @@ use super::*;
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 struct Presenter {
     child: Child,
@@ -383,4 +383,300 @@ fn nsdocument_saves_reloads_and_holds_a_blocked_presenter() {
         "original+user+bob+unsaved"
     );
     assert_eq!(presenter.command("state")["dirty"], false);
+}
+
+fn withhold_archive_move_presenter(reason: &str) {
+    if std::env::var_os("CI").is_some() {
+        panic!(
+            "archive_move_presenter native verdict withheld on CI: {reason}"
+        );
+    }
+    eprintln!("skipped archive_move_presenter: {reason}");
+}
+
+fn require_archive_move_presenter(
+    dir: &Path,
+    path: &Path,
+) -> Option<Presenter> {
+    let Some(binary) = compile_presenter(dir) else {
+        withhold_archive_move_presenter("swiftc is missing");
+        return None;
+    };
+    let Some(presenter) = Presenter::start(&binary, path) else {
+        withhold_archive_move_presenter(
+            "missing login session or unregistered NSDocument presenter",
+        );
+        return None;
+    };
+    Some(presenter)
+}
+
+/// Characterization of merging access plus a raw rename that installs a
+/// distinct replacement at the original path. A later save may land on
+/// the replacement; this records that observation and is not a fix.
+#[test]
+fn archive_move_presenter_merging_rename_with_replacement_is_unsafe_control() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live.txt");
+    let archive = dir.path().join("archive.txt");
+    fs::write(&live, "original").unwrap();
+    let Some(mut presenter) = require_archive_move_presenter(dir.path(), &live)
+    else {
+        return;
+    };
+    let edited = presenter.command("edit +user");
+    assert_eq!(edited["dirty"], true);
+
+    assert_written(coordinate_merging_write(
+        &live,
+        Duration::from_secs(2),
+        || {
+            assert_eq!(
+                fs::read_to_string(&live)?,
+                "original+user",
+                "presenter must save BEFORE accessor"
+            );
+            crate::native::highlights_ref::rename_no_replace(&live, &archive)?;
+            fs::write(&live, "replacement")
+        },
+    ));
+    assert_eq!(fs::read_to_string(&archive).unwrap(), "original+user");
+    assert_eq!(fs::read_to_string(&live).unwrap(), "replacement");
+
+    let state = presenter.command("state");
+    eprintln!(
+        "archive_move_presenter merging+raw-rename control after move: url={} dirty={} text={:?} live={:?} archive={:?}",
+        state["url"],
+        state["dirty"],
+        state["text"],
+        fs::read_to_string(&live).ok(),
+        fs::read_to_string(&archive).ok(),
+    );
+
+    assert_eq!(presenter.command("edit +later")["dirty"], true);
+    let save = presenter.command("save");
+    let after = presenter.command("state");
+    let live_bytes = fs::read_to_string(&live).unwrap();
+    let archive_bytes = fs::read_to_string(&archive).unwrap();
+    eprintln!(
+        "archive_move_presenter merging+raw-rename later save: event={} url={} dirty={} live={:?} archive={:?}",
+        save["event"],
+        after["url"],
+        after["dirty"],
+        live_bytes,
+        archive_bytes,
+    );
+    if live_bytes.contains("+later") {
+        eprintln!(
+            "archive_move_presenter observation: later save mutated the replacement at the original URL (unsafe control)"
+        );
+    }
+}
+
+#[test]
+fn archive_move_presenter_notified_forward_follows_archive_and_keeps_replacement(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live.txt");
+    let archive = dir.path().join("archive.txt");
+    fs::write(&live, "original").unwrap();
+    let Some(mut presenter) = require_archive_move_presenter(dir.path(), &live)
+    else {
+        return;
+    };
+    let edited = presenter.command("edit +user");
+    assert_eq!(edited["dirty"], true);
+
+    assert_written(coordinate_moving_write(
+        &live,
+        &archive,
+        Duration::from_secs(2),
+        |scope| {
+            assert_eq!(
+                fs::read_to_string(&live)?,
+                "original+user",
+                "presenter must save BEFORE accessor"
+            );
+            scope.move_forward()?;
+            fs::write(&live, "replacement")
+        },
+    ));
+    assert_eq!(fs::read_to_string(&archive).unwrap(), "original+user");
+    assert_eq!(fs::read_to_string(&live).unwrap(), "replacement");
+    wait_for_document(&mut presenter, &archive, "original+user");
+
+    assert_eq!(presenter.command("edit +later")["dirty"], true);
+    assert_eq!(presenter.command("save")["event"], "saved");
+    assert_eq!(
+        fs::read_to_string(&archive).unwrap(),
+        "original+user+later",
+        "later save must land in the archive"
+    );
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "replacement",
+        "the replacement at the original path stays byte-for-byte unchanged"
+    );
+}
+
+#[test]
+fn archive_move_presenter_rollback_inside_move_restores_live_save_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live.txt");
+    let archive = dir.path().join("archive.txt");
+    fs::write(&live, "original").unwrap();
+    let Some(mut presenter) = require_archive_move_presenter(dir.path(), &live)
+    else {
+        return;
+    };
+    presenter.command("edit +user");
+
+    assert_written(coordinate_moving_write(
+        &live,
+        &archive,
+        Duration::from_secs(2),
+        |scope| {
+            assert_eq!(fs::read_to_string(&live)?, "original+user");
+            scope.move_forward()?;
+            fs::write(&live, "replacement")?;
+            fs::remove_file(&live)?;
+            scope.move_back()
+        },
+    ));
+    assert!(!archive.exists(), "rollback must not leave an archive");
+    assert_eq!(fs::read_to_string(&live).unwrap(), "original+user");
+    wait_for_document(&mut presenter, &live, "original+user");
+
+    assert_eq!(presenter.command("edit +rollback-save")["dirty"], true);
+    assert_eq!(presenter.command("save")["event"], "saved");
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "original+user+rollback-save"
+    );
+    assert!(
+        !archive.exists(),
+        "a later save must not recreate the archive path"
+    );
+}
+
+/// Characterization of crash recovery that reverse-renames under merging
+/// access only. The presenter may keep the archive URL; this records that
+/// observation and is not a fix.
+#[test]
+fn archive_move_presenter_merging_only_reverse_is_unsafe_control() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live.txt");
+    let archive = dir.path().join("archive.txt");
+    fs::write(&live, "original").unwrap();
+    let Some(mut presenter) = require_archive_move_presenter(dir.path(), &live)
+    else {
+        return;
+    };
+    presenter.command("edit +user");
+
+    assert_written(coordinate_moving_write(
+        &live,
+        &archive,
+        Duration::from_secs(2),
+        |scope| {
+            scope.move_forward()?;
+            fs::write(&live, "replacement")
+        },
+    ));
+    wait_for_document(&mut presenter, &archive, "original+user");
+
+    assert_written(coordinate_merging_write(
+        &archive,
+        Duration::from_secs(2),
+        || {
+            assert_eq!(fs::read_to_string(&archive)?, "original+user");
+            fs::remove_file(&live)?;
+            crate::native::highlights_ref::rename_no_replace(&archive, &live)
+        },
+    ));
+    assert_eq!(fs::read_to_string(&live).unwrap(), "original+user");
+    assert!(!archive.exists());
+
+    let state = presenter.command("state");
+    eprintln!(
+        "archive_move_presenter merging-only reverse control after reverse: url={} dirty={} text={:?} live={:?} archive_exists={}",
+        state["url"],
+        state["dirty"],
+        state["text"],
+        fs::read_to_string(&live).ok(),
+        archive.exists(),
+    );
+
+    assert_eq!(presenter.command("edit +later")["dirty"], true);
+    let save = presenter.command("save");
+    let after = presenter.command("state");
+    let live_bytes = fs::read_to_string(&live).ok();
+    let archive_bytes = fs::read_to_string(&archive).ok();
+    eprintln!(
+        "archive_move_presenter merging-only reverse later save: event={} url={} dirty={} live={:?} archive={:?}",
+        save["event"],
+        after["url"],
+        after["dirty"],
+        live_bytes,
+        archive_bytes,
+    );
+    if archive_bytes
+        .as_deref()
+        .is_some_and(|bytes| bytes.contains("+later"))
+    {
+        eprintln!(
+            "archive_move_presenter observation: later save recreated the archive path (unsafe control)"
+        );
+    }
+}
+
+#[test]
+fn archive_move_presenter_notified_reverse_restores_live_save_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().join("live.txt");
+    let archive = dir.path().join("archive.txt");
+    fs::write(&live, "original").unwrap();
+    let Some(mut presenter) = require_archive_move_presenter(dir.path(), &live)
+    else {
+        return;
+    };
+    presenter.command("edit +user");
+
+    assert_written(coordinate_moving_write(
+        &live,
+        &archive,
+        Duration::from_secs(2),
+        |scope| {
+            scope.move_forward()?;
+            fs::write(&live, "replacement")
+        },
+    ));
+    wait_for_document(&mut presenter, &archive, "original+user");
+
+    assert_written(coordinate_moving_write(
+        &archive,
+        &live,
+        Duration::from_secs(2),
+        |scope| {
+            assert_eq!(fs::read_to_string(&archive)?, "original+user");
+            assert_eq!(fs::read_to_string(&live)?, "replacement");
+            fs::remove_file(&live)?;
+            scope.move_forward()
+        },
+    ));
+    assert!(!archive.exists());
+    assert_eq!(fs::read_to_string(&live).unwrap(), "original+user");
+    wait_for_document(&mut presenter, &live, "original+user");
+
+    assert_eq!(presenter.command("edit +later")["dirty"], true);
+    assert_eq!(presenter.command("save")["event"], "saved");
+    assert_eq!(
+        fs::read_to_string(&live).unwrap(),
+        "original+user+later",
+        "later save must land on the restored live path"
+    );
+    assert!(
+        !archive.exists(),
+        "a later save must not recreate the archive path"
+    );
 }

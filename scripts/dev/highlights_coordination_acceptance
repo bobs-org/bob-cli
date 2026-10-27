@@ -439,6 +439,65 @@ print(archive_pdf_rel)
 EOF
 }
 
+resolve_overwrite_archive_pdf() {
+    # $1 = live note. Prints the absolute archived annotated PDF path for
+    # this overwrite from live earlier: plus the archive note's
+    # annotated_pdf:. Empty stdout if that lineage is missing.
+    python3 -I - "$vault" "$1" <<'EOF' || true
+import pathlib, re, sys
+
+vault = pathlib.Path(sys.argv[1])
+note = pathlib.Path(sys.argv[2])
+text = note.read_text(encoding="utf-8")
+if not text.startswith("---"):
+    raise SystemExit(0)
+front = text.split("---", 2)[1]
+lines = front.splitlines()
+entries = []
+in_earlier = False
+for line in lines:
+    if line.startswith("earlier:"):
+        in_earlier = True
+        rest = line.split(":", 1)[1].strip()
+        if rest:
+            entries.append(rest)
+        continue
+    if in_earlier:
+        if line.startswith("  - ") or line.startswith("\t- "):
+            entries.append(line.split("-", 1)[1].strip())
+            continue
+        if line.startswith(" ") or line.startswith("\t"):
+            continue
+        in_earlier = False
+
+def wiki_target(value):
+    value = value.strip().strip("\"'")
+    match = re.search(r"\[\[([^\]|#]+)", value)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+for entry in entries:
+    target = wiki_target(entry)
+    if not target:
+        continue
+    archive_note = vault / f"{target}.md"
+    if not archive_note.is_file():
+        continue
+    archive_front = archive_note.read_text(encoding="utf-8")
+    if not archive_front.startswith("---"):
+        continue
+    archive_yaml = archive_front.split("---", 2)[1]
+    for archive_line in archive_yaml.splitlines():
+        if archive_line.startswith("annotated_pdf:"):
+            pdf_target = wiki_target(archive_line.split(":", 1)[1])
+            if pdf_target:
+                print(vault / pdf_target)
+                raise SystemExit(0)
+raise SystemExit(0)
+EOF
+}
+
 self_test_ok() {
     paint 32 "  ok $1"
     printf '\n'
@@ -645,10 +704,13 @@ EOF
     # 10. Simulated replaced_capture: live bytes match an archived digest.
     plant_replaced_capture "$pdf" "$note"
     commit_vault "self-test plant replaced_capture"
-    local after_restore
+    local after_restore resolved_archive
     after_restore=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
     [[ $after_restore == "$before_pdf" ]] \
         || self_test_fail "replaced_capture plant rewrote the live PDF"
+    resolved_archive=$(resolve_overwrite_archive_pdf "$note" || true)
+    [[ -n ${resolved_archive-} && -f $resolved_archive ]] \
+        || self_test_fail "could not resolve planted archive PDF from live earlier:/annotated_pdf:"
     bobr ref scan --write-pdfs \
         --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
         >"$root/replaced.out" 2>>"$log" \
@@ -1090,8 +1152,13 @@ guided_annotated_overwrite() {
     cat <<'EOF'
 These steps do not certify the enablement verdict above. They walk
 annotated overwrite on the small scratch PDF from steps 1–6, using a
-fresh replacement PDF (never a library PDF as TARGET). Record pass,
-fail, or skip for each; results append to the same scratch results.md.
+fresh replacement PDF (never a library PDF as TARGET). Record the same
+open Highlights tab's URL, any conflict dialog, and where a later
+edit/save lands. Reverse and rollback of a still-open archived tab have
+native NSDocument fixture coverage only; this kit does not add a
+production failure switch or damage the live vault to trigger recovery.
+Record pass, fail, or skip for each; results append to the same scratch
+results.md.
 EOF
 
     {
@@ -1159,6 +1226,8 @@ EOF
         || true
     printf 'Live PDF now: %s bytes, marker %s\n' \
         "$(wc -c <"$pdf" | tr -d ' ')" "$(marker_status "$pdf")"
+    ask_detail "Step 12 same-tab URL after overwrite"
+    ask_detail "Step 12 conflict dialog appeared"
     ask_outcome 12 unsaved-overwrite || true
     commit_vault "acceptance annotated overwrite attempt" || true
 
@@ -1169,9 +1238,18 @@ Pass when: the still-open Highlights document followed the archive
 rename (`ref_history/...__annotated.pdf`); the live PDF has the
 replacement material; frozen ^h- anchors, image embeds, and the inbound
 highlight link resolve on the archive; the reading-task identity and
-closed status are unchanged.
+closed status are unchanged. Record the same-tab URL, whether a conflict
+dialog appeared, and where a new edit/save would land. Reverse/rollback
+of this still-open archived tab is covered by native NSDocument fixtures
+only; do not force a production recovery against this vault.
 EOF
-    if [[ -d $vault/ref_history ]]; then
+    local archive_pdf
+    archive_pdf=$(resolve_overwrite_archive_pdf "$note" || true)
+    if [[ -n ${archive_pdf-} && -f $archive_pdf ]]; then
+        printf 'Archive PDF (from live earlier: / archive annotated_pdf:):\n%s\n' \
+            "$archive_pdf"
+    elif [[ -d $vault/ref_history ]]; then
+        printf 'Could not resolve this overwrite archive from note metadata.\n'
         printf 'Archives now:\n'
         find "$vault/ref_history" -type f | sort
     else
@@ -1180,6 +1258,9 @@ EOF
     printf 'Scratch note earlier:/highlights now:\n'
     grep -E '^(earlier:|highlights_count:)|ref_history/|\^h-' "$note" | head -n 20 \
         || true
+    ask_detail "Step 13 same-tab URL after archive rename"
+    ask_detail "Step 13 conflict dialog appeared"
+    ask_detail "Step 13 later edit/save would land at"
     ask_outcome 13 archive-identity || true
 
     # -- Step 14: coordination hold, no bob-authored mutations -------------
@@ -1210,30 +1291,64 @@ EOF
     # -- Step 15: late archive save + simulated replaced_capture -----------
     banner 33 "15" "Step 15 — Late archive save and replaced-capture hold"
     cat <<'EOF'
-1. If overwrite succeeded, the archived PDF may still be open. Save
-   (Cmd+S) in that tab: the save must land in the archive, leaving the
-   new live capture unchanged.
-2. This kit then simulates the exact old bytes reappearing at the live
-   path and runs a scan. Pass when scan holds with
-   "Highlights wrote the replaced capture back" and writes nothing.
+1. If overwrite succeeded, the archived PDF may still be open. Add one
+   fresh annotation and save (Cmd+S) in that tab: the save must land in
+   the archive, leaving the new live capture unchanged.
+2. This kit snapshots live and archive digests before that save, then
+   compares them afterwards. It plants the snapshotted original archive
+   bytes onto the live path (not the post-save archive) and runs a scan.
+   Pass when the live digest was unchanged by the save, the archive
+   digest changed, and scan holds with "Highlights wrote the replaced
+   capture back" and writes nothing.
 EOF
-    pause_enter
-    local live_before archive_pdf
+    local live_before archive_before archive_snapshot live_after archive_after
+    archive_pdf=$(resolve_overwrite_archive_pdf "$note" || true)
     live_before=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
-    archive_pdf=$(find "$vault/ref_history" -name '*__annotated.pdf' 2>/dev/null | sort | tail -n 1 || true)
+    archive_snapshot=$root/step15-original-archive.pdf
     if [[ -n ${archive_pdf-} && -f $archive_pdf ]]; then
-        cp -- "$archive_pdf" "$pdf" \
-            || fail "cannot restore archived bytes to the live path"
-        commit_vault "acceptance restore archived bytes onto live PDF"
+        archive_before=$(md5sum <"$archive_pdf" 2>/dev/null || md5 -q "$archive_pdf")
+        cp -- "$archive_pdf" "$archive_snapshot" \
+            || fail "cannot snapshot original archive PDF"
+        printf 'Live digest before late save: %s\n' "$live_before"
+        printf 'Archive digest before late save: %s\n' "$archive_before"
+        printf 'Archive PDF: %s\n' "$archive_pdf"
+    else
+        archive_before=
+        printf 'No resolved archive PDF yet; late-save comparison will skip.\n'
+    fi
+    pause_enter
+    live_after=$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")
+    printf 'Live digest after late save: %s (before %s)\n' \
+        "$live_after" "$live_before"
+    if [[ -n ${archive_pdf-} && -f $archive_pdf ]]; then
+        archive_after=$(md5sum <"$archive_pdf" 2>/dev/null || md5 -q "$archive_pdf")
+        printf 'Archive digest after late save: %s (before %s)\n' \
+            "$archive_after" "$archive_before"
+        if [[ $live_after == "$live_before" ]]; then
+            printf 'Live replacement digest is unchanged.\n'
+        else
+            printf 'WARNING: live PDF digest changed; the replacement may have been overwritten.\n'
+        fi
+        if [[ -n $archive_before && $archive_after != "$archive_before" ]]; then
+            printf 'Archive digest changed; the late save landed in the archive.\n'
+        else
+            printf 'WARNING: archive digest did not change; the late save may not have landed there.\n'
+        fi
+        cp -- "$archive_snapshot" "$pdf" \
+            || fail "cannot plant snapshotted original archive bytes onto the live path"
+        commit_vault "acceptance restore original archived bytes onto live PDF"
     else
         plant_replaced_capture "$pdf" "$note"
         commit_vault "acceptance plant replaced_capture"
     fi
+    ask_detail "Step 15 same-tab URL for the late save"
+    ask_detail "Step 15 conflict dialog appeared"
+    ask_detail "Step 15 late save landed at"
     printf '\n%s\n' "$(paint 36 '$ bob ref scan -w (live bytes match archived digest)')"
     bobr ref scan --write-pdfs \
         --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
         || true
-    printf 'Live PDF digest before/after plant+scan: %s / %s\n' \
+    printf 'Live PDF digest before late save / after plant+scan: %s / %s\n' \
         "$live_before" "$(md5sum <"$pdf" 2>/dev/null || md5 -q "$pdf")"
     ask_outcome 15 replaced-capture || true
 
