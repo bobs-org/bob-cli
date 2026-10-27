@@ -993,13 +993,30 @@ pub(super) fn embed_marker(
 }
 
 /// Load a rendered PDF, count its pages, embed the marker, stamp the
-/// optional document Info fields, and atomically install it at `target`.
-/// Returns the page count.
+/// optional document Info fields, and install it at `target` through the
+/// guarded publication boundary. Returns the page count.
 pub(super) fn stamp_and_install(
     rendered_pdf: &Path,
     target: &Path,
     marker: &str,
     info: &PdfInfo,
+) -> Result<usize> {
+    let session = MarkerWriteSession::for_explicit_write()?;
+    stamp_and_install_with(&session, rendered_pdf, target, marker, info, None)
+}
+
+/// [`stamp_and_install`] with an injected coordination session and an
+/// optional companion-audio plan. Stamping stays private; the audio copy
+/// and the public save run only after the grant and destination recheck,
+/// so a hold installs neither. A save failure removes audio this call
+/// installed.
+pub(super) fn stamp_and_install_with(
+    session: &MarkerWriteSession,
+    rendered_pdf: &Path,
+    target: &Path,
+    marker: &str,
+    info: &PdfInfo,
+    audio: Option<&AudioCopyPlan>,
 ) -> Result<usize> {
     let mut document = Document::load(rendered_pdf).map_err(|error| {
         CommandError::new(format!(
@@ -1012,18 +1029,61 @@ pub(super) fn stamp_and_install(
     if info.title.is_some() || info.author.is_some() {
         set_pdf_info(&mut document, info)?;
     }
-    if let Some(parent) = target.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            CommandError::new(format!(
-                "create output directory {}: {error}",
-                parent.display()
-            ))
-        })?;
+    let snapshot = super::publish::capture_destination(target)?;
+    super::publish::publish_public_pdf(session, target, &snapshot, || {
+        let created = super::companion::copy_audio_for_install(audio)?;
+        let installed = if snapshot.is_absent() {
+            super::publish::save_pdf_no_clobber(target, &mut document)
+        } else {
+            atomic_save_pdf(target, &mut document)
+        };
+        if let Err(error) = installed {
+            super::companion::cleanup_audio_on_failure(created.as_ref());
+            return Err(error);
+        }
+        Ok(page_count)
+    })
+}
+
+/// [`stamp_and_install_with`] for a `--listen` episode: the narration
+/// output is installed inside the granted boundary with the same
+/// listen-audio checks the pre-grant sequence ran, so a hold installs
+/// neither the episode nor the PDF. A save failure removes the episode
+/// this call installed.
+pub(super) fn stamp_and_install_with_listen(
+    session: &MarkerWriteSession,
+    rendered_pdf: &Path,
+    target: &Path,
+    marker: &str,
+    info: &PdfInfo,
+    flow: &ListenFlow,
+    force: bool,
+) -> Result<usize> {
+    let mut document = Document::load(rendered_pdf).map_err(|error| {
+        CommandError::new(format!(
+            "read rendered PDF {}: {error}",
+            rendered_pdf.display()
+        ))
+    })?;
+    let page_count = document.get_pages().len();
+    embed_marker(&mut document, marker)?;
+    if info.title.is_some() || info.author.is_some() {
+        set_pdf_info(&mut document, info)?;
     }
-    atomic_save_pdf(target, &mut document)?;
-    Ok(page_count)
+    let snapshot = super::publish::capture_destination(target)?;
+    super::publish::publish_public_pdf(session, target, &snapshot, || {
+        let created = super::listen::install_listen_audio(flow, force)?;
+        let installed = if snapshot.is_absent() {
+            super::publish::save_pdf_no_clobber(target, &mut document)
+        } else {
+            atomic_save_pdf(target, &mut document)
+        };
+        if let Err(error) = installed {
+            super::companion::cleanup_audio_on_failure(created.as_ref());
+            return Err(error);
+        }
+        Ok(page_count)
+    })
 }
 
 pub(super) fn set_pdf_info_for_route(

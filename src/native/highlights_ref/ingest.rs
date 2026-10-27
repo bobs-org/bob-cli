@@ -22,7 +22,6 @@ use super::clip_adapter::{
     CaptureRequest, ClipAdapterClient, MetadataOverrides,
 };
 use super::clip_url::{humanize_stem, stem_from_url, title_stem, WebUrl};
-use super::companion::cleanup_audio_on_failure;
 use super::io::vault_relative_path_value;
 use super::listen::{ListenCommand, ListenError, ListenOutput, ListenValues};
 use super::model::MarkerValue;
@@ -508,8 +507,11 @@ fn stamp_listen_and_install_for_ingest(
             retryable_override: Some(false),
         });
     }
-    let created =
-        super::listen::install_listen_audio(&flow, false).map_err(|error| {
+    // The episode installs with the staged PDF inside the granted
+    // boundary, so a hold keeps the scratch audio with its rebind hint
+    // and publishes neither.
+    let session = super::marker_write::MarkerWriteSession::for_explicit_write()
+        .map_err(|error| {
             let cmd = command_error(error);
             let hint = bind_ingest_hint(cleaned_url, &flow.scratch_audio);
             let kept = super::listen::post_listen_error_quiet(
@@ -520,8 +522,6 @@ fn stamp_listen_and_install_for_ingest(
                 progress,
             );
             let (message, hint) = split_hint(&kept.message);
-            // Audio install collisions are non-retryable without --force,
-            // like the non-listen collision path.
             IngestError {
                 kind: IngestErrorKind::Collision,
                 message,
@@ -529,15 +529,17 @@ fn stamp_listen_and_install_for_ingest(
                 retryable_override: Some(false),
             }
         })?;
-    match super::pdf_target::install_stamped_pdf(
+    match super::publish::install_staged_pdf_with_listen(
+        &session,
         &stamped,
         &target_plan.target,
         None,
+        &flow,
+        false,
         page_count,
     ) {
         Ok(_) => Ok(page_count),
         Err(error) => {
-            cleanup_audio_on_failure(created.as_ref());
             let cmd = command_error(error);
             let hint = bind_ingest_hint(cleaned_url, &flow.scratch_audio);
             let kept = super::listen::post_listen_error_quiet(
@@ -548,6 +550,8 @@ fn stamp_listen_and_install_for_ingest(
                 progress,
             );
             let (message, hint) = split_hint(&kept.message);
+            // Audio and PDF install collisions are non-retryable without
+            // --force, like the non-listen collision path.
             Err(IngestError {
                 kind: IngestErrorKind::Collision,
                 message,

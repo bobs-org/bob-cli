@@ -15,8 +15,9 @@ use std::{
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use super::{
     compose_marker, current_local_date, plan_default_target, plan_exact_output,
-    stamp_and_install, CommandError, Config, DefaultTargetIdentity,
-    MarkerValue, PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
+    stamp_and_install_with, stamp_and_install_with_listen, CommandError,
+    Config, DefaultTargetIdentity, MarkerValue, PdfInfo, ScratchDir,
+    TargetPlan, TargetWorkflow,
 };
 use crate::native::style::Styler;
 
@@ -600,7 +601,7 @@ pub(super) fn capture_article(
     // With --listen the episode is produced in scratch first, then
     // installed after re-verifying the vault; anything else uses the
     // shared copy-audio/install-PDF sequence.
-    let (_created, page_count) = match (&listen_command, &listen_flow) {
+    let page_count = match (&listen_command, &listen_flow) {
         (Some(command), Some(flow)) => {
             let values = super::listen::ListenValues {
                 target: web_url.cleaned.clone(),
@@ -692,11 +693,32 @@ pub(super) fn capture_article(
                     ));
                 }
             }
-            let created = match super::listen::install_listen_audio(
+            // The episode installs with the stamped web PDF inside the
+            // granted boundary, so a hold keeps the scratch audio with its
+            // rebind hint and publishes neither.
+            let session =
+                super::marker_write::MarkerWriteSession::for_explicit_write()
+                    .map_err(|error| {
+                    post_listen_install_error(
+                        &mut workdir,
+                        &flow.scratch_audio,
+                        error.to_string(),
+                        bind_hint_for_clip(
+                            &web_url.cleaned,
+                            &flow.scratch_audio,
+                        ),
+                    )
+                })?;
+            match stamp_and_install_with_listen(
+                &session,
+                &out_pdf,
+                &plan.target,
+                &marker,
+                &info,
                 flow,
                 options.force.is_some(),
             ) {
-                Ok(created) => created,
+                Ok(page_count) => page_count,
                 Err(error) => {
                     return Err(post_listen_install_error(
                         &mut workdir,
@@ -708,43 +730,26 @@ pub(super) fn capture_article(
                         ),
                     ));
                 }
-            };
-            let page_count =
-                match stamp_and_install(&out_pdf, &plan.target, &marker, &info)
-                {
-                    Ok(page_count) => page_count,
-                    Err(error) => {
-                        super::companion::cleanup_audio_on_failure(
-                            created.as_ref(),
-                        );
-                        return Err(post_listen_install_error(
-                            &mut workdir,
-                            &flow.scratch_audio,
-                            error.to_string(),
-                            bind_hint_for_clip(
-                                &web_url.cleaned,
-                                &flow.scratch_audio,
-                            ),
-                        ));
-                    }
-                };
-            (created, page_count)
+            }
         }
         _ => {
-            let created =
-                super::companion::copy_audio_for_install(audio.as_ref())?;
-            let page_count =
-                match stamp_and_install(&out_pdf, &plan.target, &marker, &info)
-                {
-                    Ok(page_count) => page_count,
-                    Err(error) => {
-                        super::companion::cleanup_audio_on_failure(
-                            created.as_ref(),
-                        );
-                        return Err(ClipError::from(error));
-                    }
-                };
-            (created, page_count)
+            // Companion audio installs with the stamped web PDF inside the
+            // granted boundary, so a hold publishes neither.
+            let session =
+                super::marker_write::MarkerWriteSession::for_explicit_write()?;
+            match stamp_and_install_with(
+                &session,
+                &out_pdf,
+                &plan.target,
+                &marker,
+                &info,
+                audio.as_ref(),
+            ) {
+                Ok(page_count) => page_count,
+                Err(error) => {
+                    return Err(ClipError::from(error));
+                }
+            }
         }
     };
     let report_audio = audio.as_ref().or(listen_display_audio.as_ref());

@@ -15,6 +15,7 @@
 
 use super::*;
 use crate::native::file_coordination::Coordination;
+use lopdf::Document;
 use std::io::ErrorKind;
 use std::path::Path;
 
@@ -173,6 +174,105 @@ fn marker_changed_error(dest: &Path) -> CommandError {
         dest.display()
     ))
     .with_code("marker_changed")
+}
+
+/// Install an already-stamped scratch PDF plus its companion audio.
+/// Explicit audio and the `--listen` episode are copied only after the
+/// grant and destination recheck, so a hold installs neither. A PDF
+/// failure removes any audio this call installed.
+pub(super) fn install_staged_pdf_with_listen(
+    session: &MarkerWriteSession,
+    stamped: &Path,
+    target: &Path,
+    audio: Option<&AudioCopyPlan>,
+    flow: &ListenFlow,
+    force: bool,
+    page_count: usize,
+) -> Result<usize> {
+    let snapshot = capture_destination(target)?;
+    publish_public_pdf(session, target, &snapshot, || {
+        let created = super::companion::copy_audio_for_install(audio)?;
+        // A listen-audio refusal propagates like the pre-grant sequence
+        // did: explicit audio installed just above stays in place and only
+        // a later PDF failure removes audio this call installed.
+        let listened = super::listen::install_listen_audio(flow, force)?;
+        let installed = if snapshot.is_absent() {
+            copy_pdf_no_clobber(stamped, target)
+        } else {
+            atomic_copy(stamped, target)
+        };
+        if let Err(error) = installed {
+            super::companion::cleanup_audio_on_failure(created.as_ref());
+            if let Some(path) = listened.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            return Err(error);
+        }
+        Ok(page_count)
+    })
+}
+
+/// Save a stamped in-memory PDF onto an absent `dest`. An intervening
+/// occupant is a refusal, never a replacement.
+pub(super) fn save_pdf_no_clobber(
+    path: &Path,
+    document: &mut Document,
+) -> Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::new(format!(
+                "create parent directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    let temp_path = temporary_write_path(path)?;
+    let _ = fs::remove_file(&temp_path);
+    document.save(&temp_path).map_err(|error| {
+        CommandError::new(format!(
+            "write temporary PDF {}: {error}",
+            temp_path.display()
+        ))
+    })?;
+    fs::File::open(&temp_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            CommandError::new(format!(
+                "sync temporary PDF {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+    match rename_no_replace(&temp_path, path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                fs::File::open(parent)
+                    .and_then(|file| file.sync_all())
+                    .map_err(|error| {
+                        CommandError::new(format!(
+                            "sync directory {}: {error}",
+                            parent.display()
+                        ))
+                    })?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let _ = fs::remove_file(&temp_path);
+            Err(occupied_error(path))
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            Err(CommandError::new(format!(
+                "install PDF {}: {error}",
+                path.display()
+            )))
+        }
+    }
 }
 
 /// Copy `source` onto an absent `dest`. An intervening occupant is a

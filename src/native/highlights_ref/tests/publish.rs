@@ -1,9 +1,14 @@
 //! Guarded stamped-PDF publication tests. Linux uses `FakeCoordinator`.
+use super::super::listen::plan_listen_flow;
 use super::super::pdf_target::{
     install_stamped_pdf, install_stamped_pdf_with, stamp_pdf_to_scratch,
 };
 use super::super::publish::{
-    capture_destination, copy_pdf_no_clobber, publish_public_pdf,
+    capture_destination, copy_pdf_no_clobber, install_staged_pdf_with_listen,
+    publish_public_pdf, save_pdf_no_clobber,
+};
+use super::super::stamp::{
+    stamp_and_install_with, stamp_and_install_with_listen,
 };
 use super::*;
 use crate::native::config::HighlightsConfig;
@@ -95,6 +100,76 @@ fn pdf_bytes(marker: &str, pad: bool) -> Vec<u8> {
 
 fn bytes_of(path: &Path) -> Vec<u8> {
     fs::read(path).expect("read path")
+}
+
+/// Minimal one-page PDF without annotations: the private render input
+/// for `stamp_and_install_with` tests.
+fn write_unmarked_pdf(path: &Path) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create PDF parent");
+    }
+    let mut doc = Document::with_version("1.4");
+    let pages_id = doc.new_object_id();
+    let content_id = doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ],
+        "Contents" => content_id,
+    });
+    doc.set_object(
+        pages_id,
+        dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        },
+    );
+    let catalog_id = doc.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+    });
+    doc.trailer.set("Root", catalog_id);
+    doc.save(path).expect("write unmarked PDF");
+}
+
+fn stamp_info() -> PdfInfo {
+    PdfInfo {
+        title: Some("Paper".to_string()),
+        author: None,
+    }
+}
+
+fn external_target_plan(dest: &Path) -> TargetPlan {
+    TargetPlan {
+        target: dest.to_path_buf(),
+        sidecar: dest.with_extension("md"),
+        workflow: TargetWorkflow::External,
+        stem: "paper".to_string(),
+        renamed_from: None,
+    }
+}
+
+/// A `--listen` flow whose scratch episode already exists, as if the
+/// listen command had just produced it.
+fn listen_flow_with_episode(
+    plan: &TargetPlan,
+    scratch: &ScratchDir,
+    episode: &[u8],
+) -> ListenFlow {
+    let flow =
+        plan_listen_flow(plan, scratch, &plan.stem).expect("plan listen flow");
+    fs::write(&flow.scratch_audio, episode).expect("write scratch episode");
+    flow
+}
+
+fn installed_marker(path: &Path) -> String {
+    read_pdf_marker(path).expect("installed marker").contents
 }
 
 fn audio_plan(dir: &Path, dest_pdf: &Path) -> AudioCopyPlan {
@@ -463,4 +538,342 @@ fn copy_pdf_no_clobber_refuses_an_occupant() {
     let error = copy_pdf_no_clobber(&stamped, &dest).expect_err("occupant");
     assert_eq!(error.code, Some("preimage_changed"));
     assert_eq!(bytes_of(&dest), occupant);
+}
+
+#[test]
+fn save_pdf_no_clobber_refuses_an_occupant() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    let occupant = bytes_of(&dest);
+    let rendered = dir.path().join("render.pdf");
+    write_unmarked_pdf(&rendered);
+    let mut document = Document::load(&rendered).expect("load rendered PDF");
+    let error =
+        save_pdf_no_clobber(&dest, &mut document).expect_err("occupant");
+    assert_eq!(error.code, Some("preimage_changed"));
+    assert_eq!(bytes_of(&dest), occupant);
+}
+
+#[test]
+fn stamp_and_install_with_grant_installs_render_and_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let audio = audio_plan(dir.path(), &dest);
+    let fake = FakeCoordinator::grant(Duration::from_millis(11));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let pages = stamp_and_install_with(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        Some(&audio),
+    )
+    .expect("install");
+    assert_eq!(pages, 1);
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(
+        parse_marker(&installed_marker(&dest)).expect("parse"),
+        parse_marker(NEXT_MARKER).expect("expected")
+    );
+    assert_eq!(bytes_of(&audio.dest), b"new-audio");
+}
+
+#[test]
+fn stamp_and_install_with_hold_installs_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let audio = audio_plan(dir.path(), &dest);
+    let existing_audio = dest.with_extension("m4b");
+    fs::write(&existing_audio, b"existing-audio").expect("existing audio");
+    let dest_before = bytes_of(&dest);
+    let fake = FakeCoordinator::hold(Duration::from_secs(2));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let error = stamp_and_install_with(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        Some(&audio),
+    )
+    .expect_err("hold");
+    assert_eq!(error.code, Some("coordination_timeout"));
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), dest_before);
+    assert!(
+        !audio.dest.exists(),
+        "a hold must not install companion audio"
+    );
+    assert_eq!(bytes_of(&existing_audio), b"existing-audio");
+}
+
+#[test]
+fn stamp_and_install_with_changed_marker_hold_preserves_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let audio = audio_plan(dir.path(), &dest);
+    let saved = pdf_bytes(NEXT_MARKER, false);
+    let fake = FakeCoordinator::grant_after_save(
+        Duration::from_millis(6),
+        saved.clone(),
+    );
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let error = stamp_and_install_with(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        Some(&audio),
+    )
+    .expect_err("changed marker");
+    assert_eq!(error.code, Some("marker_changed"));
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), saved);
+    assert!(
+        !audio.dest.exists(),
+        "a hold must not install companion audio"
+    );
+}
+
+#[test]
+fn stamp_and_install_with_fresh_dest_installs_without_coordination() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("xlib/papers/paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_unmarked_pdf(&rendered);
+    let audio = audio_plan(dir.path(), &dest);
+    let fake = FakeCoordinator::fail("new dest must not coordinate");
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let pages = stamp_and_install_with(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        Some(&audio),
+    )
+    .expect("install");
+    assert_eq!(pages, 1);
+    assert_eq!(fake.call_count(), 0);
+    assert_eq!(
+        parse_marker(&installed_marker(&dest)).expect("parse"),
+        parse_marker(NEXT_MARKER).expect("expected")
+    );
+    assert_eq!(bytes_of(&audio.dest), b"new-audio");
+}
+
+#[test]
+fn stamp_and_install_with_key_off_replaces_without_coordination() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let audio = audio_plan(dir.path(), &dest);
+    let fake = FakeCoordinator::fail("key off must not coordinate");
+    let session = key_off_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    stamp_and_install_with(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        Some(&audio),
+    )
+    .expect("key-off install");
+    assert_eq!(fake.call_count(), 0);
+    assert_eq!(
+        parse_marker(&installed_marker(&dest)).expect("parse"),
+        parse_marker(NEXT_MARKER).expect("expected")
+    );
+    assert_eq!(bytes_of(&audio.dest), b"new-audio");
+}
+
+#[test]
+fn stamp_and_install_with_listen_grant_installs_episode_and_pdf() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let plan = external_target_plan(&dest);
+    let scratch = ScratchDir::create("publish-stamp-listen").expect("scratch");
+    let flow = listen_flow_with_episode(&plan, &scratch, b"episode-bytes");
+    let fake = FakeCoordinator::grant(Duration::from_millis(13));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let pages = stamp_and_install_with_listen(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        &flow,
+        false,
+    )
+    .expect("install");
+    assert_eq!(pages, 1);
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(
+        parse_marker(&installed_marker(&dest)).expect("parse"),
+        parse_marker(NEXT_MARKER).expect("expected")
+    );
+    assert_eq!(bytes_of(&flow.dest), b"episode-bytes");
+}
+
+#[test]
+fn stamp_and_install_with_listen_hold_installs_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let rendered = dir.path().join("render.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_unmarked_pdf(&rendered);
+    let dest_before = bytes_of(&dest);
+    let plan = external_target_plan(&dest);
+    let scratch =
+        ScratchDir::create("publish-stamp-listen-hold").expect("scratch");
+    let flow = listen_flow_with_episode(&plan, &scratch, b"episode-bytes");
+    let fake = FakeCoordinator::hold(Duration::from_secs(2));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let error = stamp_and_install_with_listen(
+        &session,
+        &rendered,
+        &dest,
+        NEXT_MARKER,
+        &stamp_info(),
+        &flow,
+        false,
+    )
+    .expect_err("hold");
+    assert_eq!(error.code, Some("coordination_timeout"));
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), dest_before);
+    assert!(!flow.dest.exists(), "a hold must not install the episode");
+}
+
+#[test]
+fn staged_listen_grant_installs_audio_episode_and_pdf() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let staged = dir.path().join("staged.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_pdf(&staged, NEXT_MARKER, false);
+    let audio = audio_plan(dir.path(), &dest);
+    let plan = external_target_plan(&dest);
+    let scratch = ScratchDir::create("publish-staged-listen").expect("scratch");
+    let flow = listen_flow_with_episode(&plan, &scratch, b"episode-bytes");
+    let fake = FakeCoordinator::grant(Duration::from_millis(7));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    // Both audios are present, so force applies: the episode lands after
+    // the explicit copy, inside the same grant.
+    let pages = install_staged_pdf_with_listen(
+        &session,
+        &staged,
+        &dest,
+        Some(&audio),
+        &flow,
+        true,
+        1,
+    )
+    .expect("install");
+    assert_eq!(pages, 1);
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), bytes_of(&staged));
+    assert_eq!(bytes_of(&flow.dest), b"episode-bytes");
+}
+
+#[test]
+fn staged_listen_hold_installs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let staged = dir.path().join("staged.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_pdf(&staged, NEXT_MARKER, false);
+    let audio = audio_plan(dir.path(), &dest);
+    let existing_audio = dest.with_extension("m4b");
+    fs::write(&existing_audio, b"existing-audio").expect("existing audio");
+    let dest_before = bytes_of(&dest);
+    let plan = external_target_plan(&dest);
+    let scratch =
+        ScratchDir::create("publish-staged-listen-hold").expect("scratch");
+    let flow = listen_flow_with_episode(&plan, &scratch, b"episode-bytes");
+    let fake = FakeCoordinator::hold(Duration::from_secs(2));
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let error = install_staged_pdf_with_listen(
+        &session,
+        &staged,
+        &dest,
+        Some(&audio),
+        &flow,
+        false,
+        1,
+    )
+    .expect_err("hold");
+    assert_eq!(error.code, Some("coordination_timeout"));
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), dest_before);
+    assert!(
+        !audio.dest.exists(),
+        "a hold must not install companion audio"
+    );
+    assert!(!flow.dest.exists(), "a hold must not install the episode");
+    assert_eq!(bytes_of(&existing_audio), b"existing-audio");
+}
+
+#[test]
+fn staged_listen_changed_marker_hold_preserves_save_and_audio() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("paper.pdf");
+    let staged = dir.path().join("staged.pdf");
+    write_pdf(&dest, WIP_MARKER, false);
+    write_pdf(&staged, NEXT_MARKER, false);
+    let audio = audio_plan(dir.path(), &dest);
+    let plan = external_target_plan(&dest);
+    let scratch =
+        ScratchDir::create("publish-staged-listen-marker").expect("scratch");
+    let flow = listen_flow_with_episode(&plan, &scratch, b"episode-bytes");
+    let saved = pdf_bytes(NEXT_MARKER, false);
+    let fake = FakeCoordinator::grant_after_save(
+        Duration::from_millis(5),
+        saved.clone(),
+    );
+    let session =
+        coordinated_session(MarkerWriteCoordinator::Fake(fake.clone()));
+    let error = install_staged_pdf_with_listen(
+        &session,
+        &staged,
+        &dest,
+        Some(&audio),
+        &flow,
+        false,
+        1,
+    )
+    .expect_err("changed marker");
+    assert_eq!(error.code, Some("marker_changed"));
+    assert_eq!(fake.call_count(), 1);
+    assert_eq!(bytes_of(&dest), saved);
+    assert!(
+        !audio.dest.exists(),
+        "a hold must not install companion audio"
+    );
+    assert!(!flow.dest.exists(), "a hold must not install the episode");
 }

@@ -35,10 +35,10 @@ use super::{
 };
 use super::{
     bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
-    plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
-    validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
-    DefaultTargetIdentity, MarkerValue, PdfInfo, RenamedFrom, Result,
-    TargetPlan, TargetWorkflow, COMMAND_NAME,
+    plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install_with,
+    stamp_and_install_with_listen, validate_ref_type, xlib_dir_arg,
+    AudioCopyPlan, CommandError, Config, DefaultTargetIdentity, MarkerValue,
+    PdfInfo, RenamedFrom, Result, TargetPlan, TargetWorkflow, COMMAND_NAME,
 };
 use super::{sources as sources_mod, target as target_mod};
 use super::{FIELD_CAPTURED, FIELD_SOURCE_NOTE};
@@ -1754,8 +1754,11 @@ fn stamp_listen_and_install_pdf(
             bind_create_hint(hint_source, &flow.scratch_audio),
         ));
     }
-    let created =
-        super::listen::install_listen_audio(flow, force).map_err(|error| {
+    // The episode and the staged PDF install together inside the granted
+    // boundary, so a hold keeps the scratch audio with its rebind hint
+    // and publishes neither.
+    let session = super::marker_write::MarkerWriteSession::for_explicit_write()
+        .map_err(|error| {
             super::listen::post_listen_error(
                 scratch,
                 &flow.scratch_audio,
@@ -1763,16 +1766,23 @@ fn stamp_listen_and_install_pdf(
                 bind_create_hint(hint_source, &flow.scratch_audio),
             )
         })?;
-    if let Err(error) = super::atomic_copy(&stamped, &target_plan.target) {
-        companion_mod::cleanup_audio_on_failure(created.as_ref());
-        return Err(super::listen::post_listen_error(
+    super::publish::install_staged_pdf_with_listen(
+        &session,
+        &stamped,
+        &target_plan.target,
+        None,
+        flow,
+        force,
+        page_count,
+    )
+    .map_err(|error| {
+        super::listen::post_listen_error(
             scratch,
             &flow.scratch_audio,
             error.to_string(),
             bind_create_hint(hint_source, &flow.scratch_audio),
-        ));
-    }
-    Ok(page_count)
+        )
+    })
 }
 
 fn overwrite_request(
@@ -3829,7 +3839,7 @@ fn create_markdown_plan(
         scratch.path(),
     );
     filters.diagrams = diagram_pass.filter.clone();
-    let (_audio_created, page_count, render_reports) = match &listen_setup {
+    let (page_count, render_reports) = match &listen_setup {
         Some((command, flow, _)) => {
             let render_reports = render_temp_pdf_from(
                 &pandoc,
@@ -3861,32 +3871,35 @@ fn create_markdown_plan(
                     bind_create_hint(&plan.source, &flow.scratch_audio),
                 ));
             }
-            let created = super::listen::install_listen_audio(
-                flow,
-                options.force.is_some(),
-            )
-            .map_err(|error| {
-                super::listen::post_listen_error(
-                    scratch,
-                    &flow.scratch_audio,
-                    error.to_string(),
-                    bind_create_hint(&plan.source, &flow.scratch_audio),
-                )
-            })?;
             let marker = stamp_marker_for_outcome(
                 &plan,
                 options,
                 &render_reports.return_links,
             )?;
-            let page_count = match stamp_and_install(
+            // The episode installs with the stamped render inside the
+            // granted boundary, so a hold keeps the scratch audio with its
+            // rebind hint and publishes neither.
+            let session =
+                super::marker_write::MarkerWriteSession::for_explicit_write()
+                    .map_err(|error| {
+                    super::listen::post_listen_error(
+                        scratch,
+                        &flow.scratch_audio,
+                        error.to_string(),
+                        bind_create_hint(&plan.source, &flow.scratch_audio),
+                    )
+                })?;
+            let page_count = match stamp_and_install_with_listen(
+                &session,
                 &render_path,
                 &plan.target,
                 &marker,
                 &PdfInfo::default(),
+                flow,
+                options.force.is_some(),
             ) {
                 Ok(page_count) => page_count,
                 Err(error) => {
-                    companion_mod::cleanup_audio_on_failure(created.as_ref());
                     return Err(super::listen::post_listen_error(
                         scratch,
                         &flow.scratch_audio,
@@ -3895,7 +3908,7 @@ fn create_markdown_plan(
                     ));
                 }
             };
-            (created, page_count, render_reports)
+            (page_count, render_reports)
         }
         None => {
             let render_result = render_temp_pdf_from(
@@ -3906,15 +3919,8 @@ fn create_markdown_plan(
                 audio_uri.as_deref(),
                 Some(&frozen_source),
             );
-            let audio_created = if render_result.is_ok() {
-                match companion_mod::copy_audio_for_install(plan.audio.as_ref())
-                {
-                    Ok(created) => created,
-                    Err(error) => return Err(error),
-                }
-            } else {
-                None
-            };
+            // Companion audio installs with the stamped render inside the
+            // granted boundary, so a hold publishes neither.
             let install_result = render_result.and_then(|render_reports| {
                 stamp_marker_for_outcome(
                     &plan,
@@ -3922,11 +3928,15 @@ fn create_markdown_plan(
                     &render_reports.return_links,
                 )
                 .and_then(|marker| {
-                    stamp_and_install(
+                    let session =
+                        super::marker_write::MarkerWriteSession::for_explicit_write()?;
+                    stamp_and_install_with(
+                        &session,
                         &render_path,
                         &plan.target,
                         &marker,
                         &PdfInfo::default(),
+                        plan.audio.as_ref(),
                     )
                     .map(|page_count| (render_reports, page_count))
                 })
@@ -3936,13 +3946,10 @@ fn create_markdown_plan(
                     (render_reports, page_count)
                 }
                 Err(error) => {
-                    companion_mod::cleanup_audio_on_failure(
-                        audio_created.as_ref(),
-                    );
                     return Err(error);
                 }
             };
-            (audio_created, page_count, render_reports)
+            (page_count, render_reports)
         }
     };
     println!(
@@ -5867,7 +5874,8 @@ fn print_plan(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        parse_marker_with_normalization, MarkerValue, FIELD_ID,
+        parse_marker_with_normalization, stamp_and_install, MarkerValue,
+        FIELD_ID,
     };
     use super::*;
 

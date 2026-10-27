@@ -1170,8 +1170,10 @@ fn capture_and_install(
     } else {
         None
     };
-    let created = super::companion::copy_audio_for_install(audio.as_ref())?;
-    let mut listened_audio_created: Option<Option<PathBuf>> = None;
+    // Companion audio and the episode install with the staged PDF inside
+    // the granted boundary below, so a hold publishes neither.
+    let session =
+        super::marker_write::MarkerWriteSession::for_explicit_write()?;
     if let (Some(command), Some(flow)) = (listen, &listen_flow) {
         let values = super::listen::ListenValues {
             target: composed_pdf.to_string_lossy().into_owned(),
@@ -1219,35 +1221,37 @@ fn capture_and_install(
                 ),
             ));
         }
-        listened_audio_created = Some(
-            super::listen::install_listen_audio(flow, options.force.is_some())
-                .map_err(|error| {
-                    super::listen::post_listen_error(
-                        &mut scratch,
-                        &flow.scratch_audio,
-                        error.to_string(),
-                        bind_listen_hint(
-                            &urls,
-                            &options,
-                            &resolved_name,
-                            &flow.scratch_audio,
-                        ),
-                    )
-                })?,
-        );
     }
-    let install_result = if let Some((stamped, page_count)) = &staged_stamp {
-        super::atomic_copy(stamped, &plan.target).map(|()| *page_count)
-    } else {
-        super::stamp_and_install(&composed_pdf, &plan.target, &marker, &info)
+    let install_result = match (listen, &listen_flow) {
+        (Some(_), Some(flow)) => {
+            let (stamped, staged_pages) =
+                staged_stamp.as_ref().ok_or_else(|| {
+                    CommandError::new(
+                        "internal: collection listen without a staged stamp",
+                    )
+                })?;
+            super::publish::install_staged_pdf_with_listen(
+                &session,
+                stamped,
+                &plan.target,
+                audio.as_ref(),
+                flow,
+                options.force.is_some(),
+                *staged_pages,
+            )
+        }
+        _ => super::stamp::stamp_and_install_with(
+            &session,
+            &composed_pdf,
+            &plan.target,
+            &marker,
+            &info,
+            audio.as_ref(),
+        ),
     };
     let page_count = match install_result {
         Ok(page_count) => page_count,
         Err(error) => {
-            super::companion::cleanup_audio_on_failure(created.as_ref());
-            if let Some(Some(path)) = listened_audio_created.as_ref() {
-                let _ = fs::remove_file(path);
-            }
             if let (Some(flow), Some(_)) = (&listen_flow, listen) {
                 return Err(super::listen::post_listen_error(
                     &mut scratch,
