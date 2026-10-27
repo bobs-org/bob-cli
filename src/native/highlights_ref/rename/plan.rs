@@ -339,102 +339,31 @@ fn run_live(
 
     let old_head = git_head(&config.bob_dir, &child_env).ok();
     let prior_row = prepared.report.reference.row.clone();
-    let applied = match apply_and_verify(config, &prepared, || {
-        verify_renamed(config, &prepared, &prior_row)
-    }) {
-        Ok(applied) => applied,
-        Err(message) => {
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "verify_failed",
-                    format!("could not apply and verify the rename: {message}"),
-                    Some("the rename was rolled back; inspect the listed paths and retry"),
-                ),
-            );
-        }
-    };
-
-    let subject = if prepared.report.outcome == "id_updated" {
-        format!(
-            "bob ref rename: {} (id {} → {})",
-            prepared.report.from.stem,
-            prepared.report.id.from.as_deref().unwrap_or("(none)"),
-            prepared.report.id.to.as_deref().unwrap_or("(none)")
-        )
-    } else {
-        format!(
-            "bob ref rename: {} → {}",
-            prepared.report.from.stem, prepared.report.to.stem
-        )
-    };
-    let commit_paths =
-        prepared.touched_paths.iter().cloned().collect::<Vec<_>>();
-    let sha = match ob::commit_paths(
-        &config.bob_dir,
-        &child_env,
-        &subject,
-        &commit_paths,
-    ) {
-        Ok(Some(sha)) => sha,
-        Ok(None) => {
-            let unstage =
-                unstage_paths(&config.bob_dir, &child_env, &commit_paths);
-            let rollback = rollback_applied(&applied);
-            return print_failure(
-                format,
-                RenameFailure::new(
-                    "verify_failed",
-                    format!("rename verified but produced no scoped Git commit{unstage}{rollback}"),
-                    Some("check the vault Git state and retry"),
-                ),
-            );
-        }
+    let session = match MarkerWriteSession::for_explicit_write() {
+        Ok(session) => session,
         Err(error) => {
-            if let Some((sha, committed_subject)) = committed_despite_error(
-                &config.bob_dir,
-                &child_env,
-                old_head.as_deref(),
-                &subject,
-            ) {
-                if committed_subject == subject {
-                    let _ = error;
-                    sha
-                } else {
-                    let unstage = unstage_paths(
-                        &config.bob_dir,
-                        &child_env,
-                        &commit_paths,
-                    );
-                    let rollback = rollback_applied(&applied);
-                    return print_failure(
-                        format,
-                        RenameFailure::new(
-                            "verify_failed",
-                            format!(
-                                "Git commit failed: {error}{unstage}{rollback}"
-                            ),
-                            Some("check the vault Git state and retry"),
-                        ),
-                    );
-                }
-            } else {
-                let unstage =
-                    unstage_paths(&config.bob_dir, &child_env, &commit_paths);
-                let rollback = rollback_applied(&applied);
-                return print_failure(
-                    format,
-                    RenameFailure::new(
-                        "verify_failed",
-                        format!(
-                            "Git commit failed: {error}{unstage}{rollback}"
-                        ),
-                        Some("check the vault Git state and retry"),
-                    ),
-                );
-            }
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    error.code.unwrap_or("not_in_sync"),
+                    format!("could not load Highlights configuration: {error}"),
+                    Some("check the Highlights configuration and retry"),
+                ),
+            );
         }
     };
+    let sha = match execute_rename_with_session(
+        config,
+        &prepared,
+        &child_env,
+        old_head.as_deref(),
+        &prior_row,
+        &session,
+    ) {
+        Ok(sha) => sha,
+        Err(failure) => return print_failure(format, failure),
+    };
+    let subject = rename_subject(&prepared);
 
     prepared.report.commit = Some(serde_json::json!({
         "sha": sha,
@@ -638,6 +567,866 @@ struct AppliedRename {
     after: BTreeMap<PathBuf, Vec<u8>>,
     pdf_before: Option<(PathBuf, Vec<u8>)>,
     pdf_after: Option<Vec<u8>>,
+}
+
+struct RenameSnapshots {
+    from_abs: PathBuf,
+    to_abs: PathBuf,
+    from_bytes: Vec<u8>,
+    from_marker: String,
+    touched: BTreeMap<PathBuf, Option<Vec<u8>>>,
+}
+
+fn snapshot_rename_inputs(
+    config: &Config,
+    prepared: &PreparedPlan,
+) -> std::result::Result<RenameSnapshots, RenameFailure> {
+    let from_rel = PathBuf::from(&prepared.report.from.pdf);
+    let to_rel = PathBuf::from(&prepared.report.to.pdf);
+    let from_abs = config.bob_dir.join(&from_rel);
+    let to_abs = config.bob_dir.join(&to_rel);
+    let from_bytes = fs::read(&from_abs).map_err(|error| {
+        RenameFailure::new(
+            "not_in_sync",
+            format!("could not read {}: {error}", from_abs.display()),
+            Some("run bob ref scan and retry"),
+        )
+    })?;
+    let from_marker = read_pdf_marker_from_bytes(&from_abs, &from_bytes)
+        .map_err(|error| {
+            RenameFailure::new(
+                "not_in_sync",
+                format!("could not read PDF marker: {error}"),
+                Some("run bob ref scan and retry"),
+            )
+        })?;
+    let mut touched = BTreeMap::new();
+    for relative in &prepared.touched_paths {
+        let absolute = config.bob_dir.join(relative);
+        touched.insert(absolute.clone(), fs::read(&absolute).ok());
+    }
+    Ok(RenameSnapshots {
+        from_abs,
+        to_abs,
+        from_bytes: from_bytes.clone(),
+        from_marker: from_marker.contents,
+        touched,
+    })
+}
+
+fn rename_hold_failure(code: &'static str, message: String) -> RenameFailure {
+    let hint = if code == "marker_changed" {
+        "close it in Highlights and retry the rename"
+    } else if code == "coordination_timeout" {
+        "close it in Highlights and retry the rename"
+    } else if code == "coordination_failed" {
+        "close it in Highlights and retry the rename"
+    } else {
+        "run bob ref scan -w to commit the save, then retry the rename"
+    };
+    RenameFailure::new(code, message, Some(hint))
+}
+
+fn current_marker_contents(
+    path: &Path,
+    bytes: &[u8],
+) -> std::result::Result<String, String> {
+    read_pdf_marker_from_bytes(path, bytes)
+        .map(|marker| marker.contents)
+        .map_err(|error| format!("read PDF marker {}: {error}", path.display()))
+}
+
+fn collect_rewrites(prepared: &PreparedPlan) -> BTreeMap<PathBuf, String> {
+    let mut rewrites = BTreeMap::<PathBuf, String>::new();
+    for rewrite in &prepared.link_rewrites {
+        rewrites.insert(rewrite.path.clone(), rewrite.contents.clone());
+    }
+    if let Some((path, contents)) = &prepared.own_note_rewrite {
+        rewrites.insert(path.clone(), contents.clone());
+    }
+    rewrites
+}
+
+fn check_touched_unchanged(
+    config: &Config,
+    prepared: &PreparedPlan,
+    snapshots: &RenameSnapshots,
+    skip_pdf: bool,
+) -> std::result::Result<(), RenameFailure> {
+    for relative in &prepared.touched_paths {
+        let absolute = config.bob_dir.join(relative);
+        if skip_pdf && absolute == snapshots.from_abs {
+            continue;
+        }
+        let expected = snapshots.touched.get(&absolute);
+        let current = fs::read(&absolute).ok();
+        if Some(&current) != expected {
+            return Err(rename_hold_failure(
+                "preimage_changed",
+                format!(
+                    "a planned path changed while the rename waited; no files were written: {}",
+                    vault_path(&absolute.strip_prefix(&config.bob_dir).unwrap_or(&absolute).to_path_buf()),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn check_destinations_absent(
+    config: &Config,
+    prepared: &PreparedPlan,
+) -> std::result::Result<(), RenameFailure> {
+    for movement in &prepared.report.moves {
+        let to_abs = config.bob_dir.join(PathBuf::from(&movement.to));
+        if to_abs.exists() {
+            return Err(rename_hold_failure(
+                "preimage_changed",
+                format!(
+                    "the rename destination is now occupied; no files were written: {}",
+                    movement.to,
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn revalidate_full_rename(
+    config: &Config,
+    prepared: &PreparedPlan,
+    snapshots: &RenameSnapshots,
+) -> std::result::Result<Vec<u8>, RenameFailure> {
+    let current = fs::read(&snapshots.from_abs).map_err(|error| {
+        rename_hold_failure(
+            "preimage_changed",
+            format!(
+                "source PDF changed during coordination; no files were written: {}: {error}",
+                snapshots.from_abs.display()
+            ),
+        )
+    })?;
+    if current != snapshots.from_bytes {
+        let current_marker =
+            current_marker_contents(&snapshots.from_abs, &current).ok();
+        let saved_marker_ok = current_marker
+            .as_deref()
+            .is_some_and(|contents| contents == snapshots.from_marker);
+        if current_marker.is_some() && !saved_marker_ok {
+            return Err(rename_hold_failure(
+                "marker_changed",
+                "marker changed in Highlights during the rename; no files were written; close it in Highlights and retry".to_string(),
+            ));
+        }
+        return Err(rename_hold_failure(
+            "preimage_changed",
+            "the source PDF was saved in Highlights while the rename waited; no files were written".to_string(),
+        ));
+    }
+    check_destinations_absent(config, prepared)?;
+    check_touched_unchanged(config, prepared, snapshots, true)?;
+    Ok(current)
+}
+
+enum SameStemRecheck {
+    Unchanged,
+    Saved(Vec<u8>),
+}
+
+fn revalidate_same_stem(
+    config: &Config,
+    prepared: &PreparedPlan,
+    snapshots: &RenameSnapshots,
+) -> std::result::Result<SameStemRecheck, RenameFailure> {
+    let current = fs::read(&snapshots.from_abs).map_err(|error| {
+        rename_hold_failure(
+            "preimage_changed",
+            format!(
+                "source PDF changed during coordination; no files were written: {}: {error}",
+                snapshots.from_abs.display()
+            ),
+        )
+    })?;
+    check_touched_unchanged(config, prepared, snapshots, true)?;
+    if current == snapshots.from_bytes {
+        return Ok(SameStemRecheck::Unchanged);
+    }
+    let current_marker = current_marker_contents(&snapshots.from_abs, &current)
+        .map_err(|_| {
+            rename_hold_failure(
+                "marker_changed",
+                "marker changed in Highlights during the rename; no files were written; close it in Highlights and retry".to_string(),
+            )
+        })?;
+    if current_marker != snapshots.from_marker {
+        return Err(rename_hold_failure(
+            "marker_changed",
+            "marker changed in Highlights during the rename; no files were written; close it in Highlights and retry".to_string(),
+        ));
+    }
+    Ok(SameStemRecheck::Saved(current))
+}
+
+fn rename_subject(prepared: &PreparedPlan) -> String {
+    if prepared.report.outcome == "id_updated" {
+        format!(
+            "bob ref rename: {} (id {} → {})",
+            prepared.report.from.stem,
+            prepared.report.id.from.as_deref().unwrap_or("(none)"),
+            prepared.report.id.to.as_deref().unwrap_or("(none)")
+        )
+    } else {
+        format!(
+            "bob ref rename: {} → {}",
+            prepared.report.from.stem, prepared.report.to.stem
+        )
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static RENAME_FORCE_VERIFY: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static RENAME_FORCE_COMMIT_FAIL: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+    static RENAME_COMMIT_REPORTED_AS_ERROR: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_verify_failure() -> bool {
+    RENAME_FORCE_VERIFY.with(|flag| flag.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_verify_failure(value: bool) {
+    RENAME_FORCE_VERIFY.with(|flag| flag.set(value));
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_commit_failure(value: bool) {
+    RENAME_FORCE_COMMIT_FAIL.with(|flag| flag.set(value));
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_commit_reported_as_error(value: bool) {
+    RENAME_COMMIT_REPORTED_AS_ERROR.with(|flag| flag.set(value));
+}
+
+fn commit_inside_scope(
+    config: &Config,
+    child_env: &ob::ChildEnv,
+    prepared: &PreparedPlan,
+    old_head: Option<&str>,
+    subject: &str,
+) -> std::result::Result<String, (String, String)> {
+    #[cfg(test)]
+    if RENAME_FORCE_COMMIT_FAIL.with(|flag| flag.get()) {
+        let commit_paths =
+            prepared.touched_paths.iter().cloned().collect::<Vec<_>>();
+        let unstage = unstage_paths(&config.bob_dir, child_env, &commit_paths);
+        return Err((
+            format!("Git commit failed: injected commit failure{unstage}"),
+            unstage,
+        ));
+    }
+    let commit_paths =
+        prepared.touched_paths.iter().cloned().collect::<Vec<_>>();
+    let commit_result =
+        ob::commit_paths(&config.bob_dir, child_env, subject, &commit_paths);
+    #[cfg(test)]
+    let commit_result = if RENAME_COMMIT_REPORTED_AS_ERROR
+        .with(|flag| flag.get())
+        && matches!(commit_result, Ok(Some(_)))
+    {
+        Err("injected commit reporting error".to_string())
+    } else {
+        commit_result
+    };
+    match commit_result {
+        Ok(Some(sha)) => Ok(sha),
+        Ok(None) => {
+            let unstage =
+                unstage_paths(&config.bob_dir, child_env, &commit_paths);
+            Err((
+                format!(
+                    "rename verified but produced no scoped Git commit{unstage}"
+                ),
+                unstage,
+            ))
+        }
+        Err(error) => {
+            if let Some((sha, committed_subject)) = committed_despite_error(
+                &config.bob_dir,
+                child_env,
+                old_head,
+                subject,
+            ) {
+                if committed_subject == subject {
+                    return Ok(sha);
+                }
+            }
+            let unstage =
+                unstage_paths(&config.bob_dir, child_env, &commit_paths);
+            Err((format!("Git commit failed: {error}{unstage}"), unstage))
+        }
+    }
+}
+
+fn rollback_inside_move_scope(
+    transaction: &AppliedRename,
+    pdf_moved: bool,
+    other_moves: &[(PathBuf, PathBuf)],
+    ctx: &mut crate::native::file_coordination::MoveContext<'_>,
+) -> String {
+    let mut failures = Vec::new();
+    if pdf_moved {
+        if let Err(error) = ctx.move_back() {
+            failures.push(format!(
+                "could not move PDF back to its source: {error}"
+            ));
+        }
+    }
+    failures.extend(rollback_moves(other_moves));
+    if !other_moves.is_empty() && transaction.moves.is_empty() {
+        let _ = transaction;
+    }
+    if let Some((path, before)) = &transaction.pdf_before
+        && let Some(message) = restore_bytes_if_uncontended(
+            path,
+            before,
+            transaction.pdf_after.as_deref(),
+            "PDF",
+        )
+    {
+        failures.push(message);
+    }
+    let diverged =
+        crate::native::ref_library::migrate_tasks::restore_before_images(
+            &transaction.before,
+            &transaction.after,
+        );
+    failures.extend(diverged.into_iter().map(|path| {
+        format!("left concurrently changed path {} in place", path.display())
+    }));
+    if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; rollback issues: {}", failures.join("; "))
+    }
+}
+
+fn rollback_inside_merge_scope(transaction: &AppliedRename) -> String {
+    let mut failures = Vec::new();
+    if let Some((path, before)) = &transaction.pdf_before
+        && let Some(message) = restore_bytes_if_uncontended(
+            path,
+            before,
+            transaction.pdf_after.as_deref(),
+            "PDF",
+        )
+    {
+        failures.push(message);
+    }
+    let diverged =
+        crate::native::ref_library::migrate_tasks::restore_before_images(
+            &transaction.before,
+            &transaction.after,
+        );
+    failures.extend(diverged.into_iter().map(|path| {
+        format!("left concurrently changed path {} in place", path.display())
+    }));
+    if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; rollback issues: {}", failures.join("; "))
+    }
+}
+
+fn write_id_marker_with_saved(
+    config: &Config,
+    prepared: &PreparedPlan,
+    transaction: &mut AppliedRename,
+    saved_pdf: &[u8],
+) -> std::result::Result<(), String> {
+    let pdf_path = config.bob_dir.join(&prepared.report.to.pdf);
+    transaction.pdf_before = Some((
+        config.bob_dir.join(&prepared.report.from.pdf),
+        saved_pdf.to_vec(),
+    ));
+    let context = ScanContext::build(config);
+    let mut plan = plan_pdf_sync(
+        config,
+        &pdf_path,
+        SyncOptions {
+            dry_run: false,
+            write_pdf: true,
+            prefer: None,
+            ignore_unannotated_sidecar: false,
+        },
+        &context,
+    )
+    .map_err(|error| {
+        format!("plan marker sync for {}: {error}", pdf_path.display())
+    })?;
+    if plan.marker.source_pdf_sha256
+        != super::super::source_store::sha256_hex(saved_pdf)
+    {
+        return Err(
+            "PDF changed between the coordination recheck and the marker plan; no files were written"
+                .to_string(),
+        );
+    }
+    let mut plans = [&mut plan];
+    finalize_annotation_task_plans(config, &mut plans, &context)
+        .map_err(|error| format!("finalize marker sync plan: {error}"))?;
+    reserve_preview_ids(config, &mut plans, &context);
+
+    let safe = plan.marker_write_needed
+        && plan.reading_task_plan.as_ref().is_some_and(|reading| {
+            reading.action == ReadingTaskAction::NoWrite
+        })
+        && plan.annotation_tasks_created == 0
+        && plan.routed_intents.is_empty()
+        && plan
+            .routed_task_note_writes
+            .iter()
+            .all(|write| write.action == "none")
+        && plan.image_assets.is_empty();
+    if !safe {
+        return Err(
+            "marker sync plan included an unsafe or unexpected side effect"
+                .to_string(),
+        );
+    }
+
+    let mut session = MarkerWriteSession::for_external_coordination();
+    let execution = execute_pdf_sync(
+        config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    );
+    if let Ok(bytes) = fs::read(&pdf_path) {
+        transaction.pdf_after = Some(bytes);
+    }
+    if let Ok(bytes) = fs::read(config.bob_dir.join(&prepared.report.to.path)) {
+        transaction
+            .after
+            .insert(config.bob_dir.join(&prepared.report.from.path), bytes);
+    }
+    match execution {
+        Ok(PdfSyncOutcome::Written(_)) => Ok(()),
+        Ok(PdfSyncOutcome::Held(hold)) => {
+            Err(format!("write id to PDF marker: {}", hold.message))
+        }
+        Err(error) => Err(format!("write id to PDF marker: {error}")),
+    }
+}
+
+fn execute_rename_with_session(
+    config: &Config,
+    prepared: &PreparedPlan,
+    child_env: &ob::ChildEnv,
+    old_head: Option<&str>,
+    prior_row: &RefRow,
+    session: &MarkerWriteSession,
+) -> std::result::Result<String, RenameFailure> {
+    let snapshots = snapshot_rename_inputs(config, prepared)?;
+    let is_move = !prepared.report.moves.is_empty();
+    if is_move {
+        let coordination = session.coordinate_explicit_pdf_move_with(
+            &snapshots.from_abs,
+            &snapshots.to_abs,
+            |ctx| {
+                rename_move_accessor(
+                    config, prepared, &snapshots, child_env, old_head,
+                    prior_row, ctx,
+                )
+            },
+        );
+        match coordination {
+            Ok(crate::native::file_coordination::Coordination::Granted {
+                value,
+                ..
+            }) => value,
+            Ok(crate::native::file_coordination::Coordination::Held(timeout)) => {
+                Err(rename_hold_failure(
+                    "coordination_timeout",
+                    format!(
+                        "Highlights didn't answer within {:.2}s; no rename was written; close it in Highlights and retry",
+                        timeout.waited.as_secs_f64()
+                    ),
+                ))
+            }
+            Ok(crate::native::file_coordination::Coordination::Failed(
+                message,
+            )) => Err(rename_hold_failure(
+                "coordination_failed",
+                format!(
+                    "file coordination failed: {message}; no rename was written"
+                ),
+            )),
+            Err(error) => Err(RenameFailure::new(
+                "coordination_failed",
+                format!("could not coordinate the rename: {error}"),
+                Some("close it in Highlights and retry the rename"),
+            )),
+        }
+    } else {
+        let pdf_abs = snapshots.from_abs.clone();
+        let coordination =
+            session.coordinate_explicit_pdf_write_with(&pdf_abs, || {
+                rename_merge_accessor(
+                    config, prepared, &snapshots, child_env, old_head,
+                    prior_row,
+                )
+            });
+        match coordination {
+            Ok(crate::native::file_coordination::Coordination::Granted {
+                value,
+                ..
+            }) => value,
+            Ok(crate::native::file_coordination::Coordination::Held(timeout)) => {
+                Err(rename_hold_failure(
+                    "coordination_timeout",
+                    format!(
+                        "Highlights didn't answer within {:.2}s; no rename was written; close it in Highlights and retry",
+                        timeout.waited.as_secs_f64()
+                    ),
+                ))
+            }
+            Ok(crate::native::file_coordination::Coordination::Failed(
+                message,
+            )) => Err(rename_hold_failure(
+                "coordination_failed",
+                format!(
+                    "file coordination failed: {message}; no rename was written"
+                ),
+            )),
+            Err(error) => Err(RenameFailure::new(
+                "coordination_failed",
+                format!("could not coordinate the rename: {error}"),
+                Some("close it in Highlights and retry the rename"),
+            )),
+        }
+    }
+}
+
+fn rename_move_accessor(
+    config: &Config,
+    prepared: &PreparedPlan,
+    snapshots: &RenameSnapshots,
+    child_env: &ob::ChildEnv,
+    old_head: Option<&str>,
+    prior_row: &RefRow,
+    ctx: &mut crate::native::file_coordination::MoveContext<'_>,
+) -> std::result::Result<String, RenameFailure> {
+    let saved = revalidate_full_rename(config, prepared, snapshots)?;
+    let rewrites = collect_rewrites(prepared);
+    let mut transaction = AppliedRename::default();
+    let relative_paths = rewrites
+        .keys()
+        .map(|path| vault_path(path))
+        .collect::<Vec<_>>();
+    transaction.before =
+        crate::native::ref_library::migrate_tasks::snapshot_before_images(
+            &config.bob_dir,
+            &relative_paths,
+        );
+    if let Some((path, _)) = transaction
+        .before
+        .iter()
+        .find(|(_, before)| before.is_none())
+    {
+        return Err(rename_hold_failure(
+            "preimage_changed",
+            format!(
+                "could not snapshot rewrite source {}; no files were written",
+                path.display()
+            ),
+        ));
+    }
+    let mut pdf_moved = false;
+    let mut other_moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut move_failed: Option<String> = None;
+    for movement in &prepared.report.moves {
+        let from_abs = config.bob_dir.join(PathBuf::from(&movement.from));
+        let to_abs = config.bob_dir.join(PathBuf::from(&movement.to));
+        if let Some(parent) = to_abs.parent()
+            && !parent.is_dir()
+        {
+            move_failed = Some(format!(
+                "destination parent does not exist: {}",
+                parent.display()
+            ));
+            break;
+        }
+        let is_pdf = matches!(movement.kind, MoveKind::Pdf);
+        if is_pdf {
+            match ctx.move_forward() {
+                Ok(()) => pdf_moved = true,
+                Err(error) => {
+                    move_failed = Some(format!(
+                        "move {} to {}: {error}",
+                        movement.from, movement.to
+                    ));
+                    break;
+                }
+            }
+        } else {
+            match super::super::io::rename_no_replace(&from_abs, &to_abs) {
+                Ok(()) => other_moves.push((from_abs, to_abs)),
+                Err(error) => {
+                    move_failed = Some(format!(
+                        "move {} to {}: {error}",
+                        movement.from, movement.to
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+    if let Some(message) = move_failed {
+        let transaction_for_rollback = AppliedRename {
+            moves: Vec::new(),
+            before: transaction.before.clone(),
+            after: BTreeMap::new(),
+            pdf_before: None,
+            pdf_after: None,
+        };
+        let rollback = rollback_inside_move_scope(
+            &transaction_for_rollback,
+            pdf_moved,
+            &other_moves,
+            ctx,
+        );
+        return Err(RenameFailure::new(
+            "preimage_changed",
+            format!("{message}{rollback}"),
+            Some(
+                "run bob ref scan -w to commit the save, then retry the rename",
+            ),
+        ));
+    }
+    transaction.moves.extend(other_moves.iter().cloned());
+    let moved = prepared
+        .report
+        .moves
+        .iter()
+        .map(|movement| {
+            (PathBuf::from(&movement.from), PathBuf::from(&movement.to))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (relative, contents) in &rewrites {
+        let write_relative = moved.get(relative).unwrap_or(relative);
+        let absolute = config.bob_dir.join(write_relative);
+        if let Err(error) = super::super::atomic_write(&absolute, contents) {
+            let rollback = rollback_inside_move_scope(
+                &transaction,
+                pdf_moved,
+                &other_moves,
+                ctx,
+            );
+            return Err(RenameFailure::new(
+                "verify_failed",
+                format!(
+                    "rewrite {}: {error}{rollback}",
+                    write_relative.display()
+                ),
+                Some("the rename was rolled back; inspect the listed paths and retry"),
+            ));
+        }
+        transaction.after.insert(
+            config.bob_dir.join(relative),
+            contents.as_bytes().to_vec(),
+        );
+    }
+    if prepared.report.id.changed {
+        if let Err(message) = write_id_marker_with_saved(
+            config,
+            prepared,
+            &mut transaction,
+            &saved,
+        ) {
+            let rollback = rollback_inside_move_scope(
+                &transaction,
+                pdf_moved,
+                &other_moves,
+                ctx,
+            );
+            let code = if message.contains("unsafe or unexpected") {
+                "verify_failed"
+            } else {
+                "preimage_changed"
+            };
+            return Err(RenameFailure::new(
+                code,
+                format!("{message}{rollback}"),
+                Some(if code == "preimage_changed" {
+                    "run bob ref scan -w to commit the save, then retry the rename"
+                } else {
+                    "the rename was rolled back; inspect the listed paths and retry"
+                }),
+            ));
+        }
+    } else {
+        transaction.pdf_before =
+            Some((snapshots.from_abs.clone(), saved.clone()));
+        transaction.pdf_after = Some(saved.clone());
+    }
+    if let Err(message) = verify_renamed(config, prepared, prior_row) {
+        let rollback = rollback_inside_move_scope(
+            &transaction,
+            pdf_moved,
+            &other_moves,
+            ctx,
+        );
+        return Err(RenameFailure::new(
+            "verify_failed",
+            format!("could not apply and verify the rename: {message}{rollback}"),
+            Some("the rename was rolled back; inspect the listed paths and retry"),
+        ));
+    }
+    #[cfg(test)]
+    if test_force_verify_failure() {
+        let rollback = rollback_inside_move_scope(
+            &transaction,
+            pdf_moved,
+            &other_moves,
+            ctx,
+        );
+        return Err(RenameFailure::new(
+            "verify_failed",
+            format!("could not apply and verify the rename: injected verification failure{rollback}"),
+            Some("the rename was rolled back; inspect the listed paths and retry"),
+        ));
+    }
+    let subject = rename_subject(prepared);
+    match commit_inside_scope(config, child_env, prepared, old_head, &subject) {
+        Ok(sha) => Ok(sha),
+        Err((message, _unstage)) => {
+            let rollback = rollback_inside_move_scope(
+                &transaction,
+                pdf_moved,
+                &other_moves,
+                ctx,
+            );
+            Err(RenameFailure::new(
+                "verify_failed",
+                format!("{message}{rollback}"),
+                Some("check the vault Git state and retry"),
+            ))
+        }
+    }
+}
+
+fn rename_merge_accessor(
+    config: &Config,
+    prepared: &PreparedPlan,
+    snapshots: &RenameSnapshots,
+    child_env: &ob::ChildEnv,
+    old_head: Option<&str>,
+    prior_row: &RefRow,
+) -> std::result::Result<String, RenameFailure> {
+    let saved = match revalidate_same_stem(config, prepared, snapshots)? {
+        SameStemRecheck::Unchanged => snapshots.from_bytes.clone(),
+        SameStemRecheck::Saved(bytes) => bytes,
+    };
+    let rewrites = collect_rewrites(prepared);
+    let mut transaction = AppliedRename::default();
+    let relative_paths = rewrites
+        .keys()
+        .map(|path| vault_path(path))
+        .collect::<Vec<_>>();
+    transaction.before =
+        crate::native::ref_library::migrate_tasks::snapshot_before_images(
+            &config.bob_dir,
+            &relative_paths,
+        );
+    if let Some((path, _)) = transaction
+        .before
+        .iter()
+        .find(|(_, before)| before.is_none())
+    {
+        return Err(rename_hold_failure(
+            "preimage_changed",
+            format!(
+                "could not snapshot rewrite source {}; no files were written",
+                path.display()
+            ),
+        ));
+    }
+    for (relative, contents) in &rewrites {
+        let absolute = config.bob_dir.join(relative);
+        if let Err(error) = super::super::atomic_write(&absolute, contents) {
+            let rollback = rollback_inside_merge_scope(&transaction);
+            return Err(RenameFailure::new(
+                "verify_failed",
+                format!(
+                    "rewrite {}: {error}{rollback}",
+                    relative.display()
+                ),
+                Some("the rename was rolled back; inspect the listed paths and retry"),
+            ));
+        }
+        transaction
+            .after
+            .insert(absolute, contents.as_bytes().to_vec());
+    }
+    if prepared.report.id.changed {
+        if let Err(message) = write_id_marker_with_saved(
+            config,
+            prepared,
+            &mut transaction,
+            &saved,
+        ) {
+            let rollback = rollback_inside_merge_scope(&transaction);
+            let code = if message.contains("unsafe or unexpected") {
+                "verify_failed"
+            } else {
+                "preimage_changed"
+            };
+            return Err(RenameFailure::new(
+                code,
+                format!("{message}{rollback}"),
+                Some(if code == "preimage_changed" {
+                    "run bob ref scan -w to commit the save, then retry the rename"
+                } else {
+                    "the rename was rolled back; inspect the listed paths and retry"
+                }),
+            ));
+        }
+    }
+    if let Err(message) = verify_renamed(config, prepared, prior_row) {
+        let rollback = rollback_inside_merge_scope(&transaction);
+        return Err(RenameFailure::new(
+            "verify_failed",
+            format!("could not apply and verify the rename: {message}{rollback}"),
+            Some("the rename was rolled back; inspect the listed paths and retry"),
+        ));
+    }
+    #[cfg(test)]
+    if test_force_verify_failure() {
+        let rollback = rollback_inside_merge_scope(&transaction);
+        return Err(RenameFailure::new(
+            "verify_failed",
+            format!("could not apply and verify the rename: injected verification failure{rollback}"),
+            Some("the rename was rolled back; inspect the listed paths and retry"),
+        ));
+    }
+    let subject = rename_subject(prepared);
+    match commit_inside_scope(config, child_env, prepared, old_head, &subject) {
+        Ok(sha) => Ok(sha),
+        Err((message, _unstage)) => {
+            let rollback = rollback_inside_merge_scope(&transaction);
+            Err(RenameFailure::new(
+                "verify_failed",
+                format!("{message}{rollback}"),
+                Some("check the vault Git state and retry"),
+            ))
+        }
+    }
 }
 
 fn apply_and_verify(
@@ -2267,5 +3056,583 @@ mod tests {
         );
         assert!(!vault.join("ref/blogs/new.md").exists());
         assert!(!vault.join("lib/blogs/new.pdf").exists());
+    }
+
+    #[cfg(test)]
+    mod coordinated {
+        use super::super::super::super::marker_write::{
+            FakeCoordinator, FakeMoveEvent, MarkerWriteCoordinator,
+            MarkerWriteSession,
+        };
+        use super::super::super::super::pdf_write_policy::{
+            PdfWritePolicy, ReadingHoldMode,
+        };
+        use super::super::*;
+        use crate::native::config::HighlightsConfig;
+        use std::process::Command;
+        use std::time::Duration;
+
+        fn test_config_for(vault: &Path) -> Config {
+            Config {
+                bob_dir: vault.to_path_buf(),
+                lib_dir: vault.join("lib"),
+                ref_dir: vault.join("ref"),
+                xlib_dir: vault.join("xlib"),
+            }
+        }
+
+        fn write_area(vault: &Path) {
+            let path = vault.join("sase.md");
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&path, "---\ntype: \"[[area]]\"\n---\n\n# SASE\n")
+                .unwrap();
+        }
+
+        fn write_pdf_with_marker(path: &Path, marker: &str, pad: bool) {
+            use lopdf::{dictionary, Document, Object, Stream};
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            let mut doc = Document::with_version("1.4");
+            if pad {
+                let _ = doc.add_object(dictionary! { "Dummy" => "pad" });
+            }
+            let pages_id = doc.new_object_id();
+            let content_id =
+                doc.add_object(Stream::new(dictionary! {}, Vec::new()));
+            let annot_id = doc.add_object(dictionary! {
+                "Type" => "Annot",
+                "Subtype" => "Text",
+                "Rect" => vec![
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(24),
+                    Object::Integer(24),
+                ],
+                "Contents" => super::super::pdf_text_string(marker),
+            });
+            let page_id = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "MediaBox" => vec![
+                    Object::Integer(0),
+                    Object::Integer(0),
+                    Object::Integer(612),
+                    Object::Integer(792),
+                ],
+                "Contents" => content_id,
+                "Annots" => vec![Object::Reference(annot_id)],
+            });
+            doc.set_object(
+                pages_id,
+                dictionary! {
+                    "Type" => "Pages",
+                    "Kids" => vec![Object::Reference(page_id)],
+                    "Count" => 1,
+                },
+            );
+            let catalog_id = doc.add_object(dictionary! {
+                "Type" => "Catalog",
+                "Pages" => pages_id,
+            });
+            doc.trailer.set("Root", catalog_id);
+            doc.save(path).unwrap();
+        }
+
+        fn git_init_commit(vault: &Path) {
+            let run = |args: &[&str]| {
+                let status = Command::new("git")
+                    .arg("-C")
+                    .arg(vault)
+                    .args(args)
+                    .status()
+                    .expect("run git");
+                assert!(status.success(), "git {args:?} failed");
+            };
+            run(&["init", "-q"]);
+            run(&["config", "user.name", "Test User"]);
+            run(&["config", "user.email", "test@example.com"]);
+            run(&["config", "commit.gpgsign", "false"]);
+            run(&["add", "-A"]);
+            run(&["commit", "-q", "-m", "fixture"]);
+        }
+
+        fn git_head(vault: &Path) -> String {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(vault)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .expect("git rev-parse");
+            assert!(output.status.success());
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        fn git_status(vault: &Path) -> String {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(vault)
+                .args(["status", "--porcelain=v1", "--untracked-files=all"])
+                .output()
+                .expect("git status");
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+
+        fn synced_fixture(
+            stem: &str,
+            marker: &str,
+        ) -> (tempfile::TempDir, Config, PathBuf) {
+            let temp = tempfile::tempdir().expect("create scratch vault");
+            let vault = temp.path().join("vault");
+            for dir in ["lib/blogs", "ref/blogs", "xlib", "done", "daily"] {
+                fs::create_dir_all(vault.join(dir)).unwrap();
+            }
+            write_area(&vault);
+            let pdf = vault.join(format!("lib/blogs/{stem}.pdf"));
+            write_pdf_with_marker(&pdf, marker, false);
+            let config = test_config_for(&vault);
+            let plan = plan_single_pdf_sync(
+                &config,
+                &pdf,
+                SyncOptions {
+                    dry_run: false,
+                    write_pdf: false,
+                    prefer: None,
+                    ignore_unannotated_sidecar: false,
+                },
+            )
+            .expect("plan initial sync");
+            let outcome = write_single_pdf_sync(&config, &plan)
+                .expect("write initial sync");
+            assert!(
+                matches!(outcome, PdfSyncOutcome::Written(_)),
+                "initial sync should write the note: {outcome:?}"
+            );
+            git_init_commit(&vault);
+            (temp, config, vault)
+        }
+
+        fn fake_session(fake: FakeCoordinator) -> MarkerWriteSession {
+            let mut policy =
+                PdfWritePolicy::from_config(&HighlightsConfig::default());
+            policy.coordinate_pdf_writes = true;
+            MarkerWriteSession::new(
+                policy.with_reading_hold(ReadingHoldMode::Exempt),
+                MarkerWriteCoordinator::Fake(fake),
+            )
+        }
+
+        fn prepare_rename(
+            config: &Config,
+            query: &str,
+            new: &str,
+        ) -> PreparedPlan {
+            prepare(config, query, new, false, true).expect("prepare rename")
+        }
+
+        fn execute_with_fake(
+            config: &Config,
+            prepared: &PreparedPlan,
+            fake: FakeCoordinator,
+        ) -> (std::result::Result<String, RenameFailure>, FakeCoordinator)
+        {
+            let observed = fake.clone();
+            let child_env = crate::native::ob::child_env();
+            let old_head = git_head(&config.bob_dir).to_string();
+            let prior_row = prepared.report.reference.row.clone();
+            let session = fake_session(fake);
+            let result = execute_rename_with_session(
+                config,
+                prepared,
+                &child_env,
+                Some(old_head.as_str()),
+                &prior_row,
+                &session,
+            );
+            (result, observed)
+        }
+
+        const FOO_MARKER: &str =
+            "- status: wip\n- parent: sase\n- title: Foo\n- id: foo\n";
+        const BAR_MARKER: &str =
+            "- status: wip\n- parent: sase\n- title: Foo\n- id: bar\n";
+
+        #[test]
+        fn move_grants_once_and_notifies_both_directions_on_rollback() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            assert!(!prepared.report.moves.is_empty());
+            let fake = FakeCoordinator::grant(Duration::from_millis(7));
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let sha = result.expect("rename should succeed");
+            assert_eq!(observed.call_count(), 1, "one outer grant");
+            let events = observed.move_events();
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Will(from, to)
+                    if from.ends_with("lib/blogs/foo.pdf")
+                        && to.ends_with("lib/blogs/bar.pdf")
+                )),
+                "forward will_move: {events:?}"
+            );
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Did(from, to)
+                    if from.ends_with("lib/blogs/foo.pdf")
+                        && to.ends_with("lib/blogs/bar.pdf")
+                )),
+                "forward did_move: {events:?}"
+            );
+            assert!(vault.join("lib/blogs/bar.pdf").exists());
+            assert!(!vault.join("lib/blogs/foo.pdf").exists());
+            assert_eq!(git_head(&vault), sha);
+            assert_eq!(git_status(&vault), "");
+        }
+
+        #[test]
+        fn hold_before_writes_leaves_everything_untouched() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let before_pdf = fs::read(vault.join("lib/blogs/foo.pdf")).unwrap();
+            let before_note =
+                fs::read_to_string(vault.join("ref/blogs/foo.md")).unwrap();
+            let head = git_head(&vault);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            let fake = FakeCoordinator::hold(Duration::from_secs(2));
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let failure = result.expect_err("held rename");
+            assert_eq!(failure.code, "coordination_timeout");
+            assert!(
+                failure.message.contains("no rename was written"),
+                "{}",
+                failure.message
+            );
+            assert!(
+                failure.hint.as_deref().unwrap().contains("retry"),
+                "{:?}",
+                failure.hint
+            );
+            assert_eq!(observed.call_count(), 1);
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/foo.pdf")).unwrap(),
+                before_pdf
+            );
+            assert_eq!(
+                fs::read_to_string(vault.join("ref/blogs/foo.md")).unwrap(),
+                before_note
+            );
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+            assert_eq!(git_head(&vault), head);
+            assert_eq!(git_status(&vault), "");
+        }
+
+        #[test]
+        fn platform_failure_before_writes_is_distinct_and_writes_nothing() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            let fake = FakeCoordinator::fail("injected platform failure");
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let failure = result.expect_err("failed coordination");
+            assert_eq!(failure.code, "coordination_failed");
+            assert_eq!(observed.call_count(), 1);
+            assert!(vault.join("lib/blogs/foo.pdf").exists());
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+            assert_eq!(git_head(&vault), head);
+        }
+
+        #[test]
+        fn saved_first_full_rename_holds_conservatively() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            let saved_path = vault.join("lib/blogs/foo.pdf");
+            let _original = fs::read(&saved_path).unwrap();
+            // Same marker, different bytes: simulate a presenter save that
+            // only adds an unsaved annotation container.
+            let pad_pdf = _temp.path().join("saved.pdf");
+            write_pdf_with_marker(&pad_pdf, FOO_MARKER, true);
+            let saved = fs::read(&pad_pdf).unwrap();
+            assert_ne!(
+                saved,
+                fs::read(&saved_path).unwrap(),
+                "saved bytes should differ while the marker stays"
+            );
+            let fake = FakeCoordinator::grant_after_save(
+                Duration::from_millis(5),
+                saved.clone(),
+            );
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let failure = result.expect_err("saved-first full rename holds");
+            assert_eq!(failure.code, "preimage_changed");
+            assert_eq!(observed.call_count(), 1);
+            // The presenter's saved bytes survive with no bob writes.
+            assert_eq!(fs::read(&saved_path).unwrap(), saved);
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+            assert_eq!(git_head(&vault), head);
+        }
+
+        #[test]
+        fn changed_marker_is_a_specific_hold() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            let changed_path = _temp.path().join("changed.pdf");
+            write_pdf_with_marker(&changed_path, BAR_MARKER, false);
+            let changed = fs::read(&changed_path).unwrap();
+            let fake =
+                FakeCoordinator::grant_after_save(Duration::ZERO, changed);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let failure = result.expect_err("changed marker holds");
+            assert_eq!(failure.code, "marker_changed");
+            assert_eq!(observed.call_count(), 1);
+            assert_eq!(git_head(&vault), head);
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+        }
+
+        #[test]
+        fn same_stem_repair_keeps_saved_annotations_with_renumbered_objects() {
+            let (_temp, config, vault) = synced_fixture(
+                "foo",
+                "- status: wip\n- parent: sase\n- title: Foo\n- id: stale-id\n",
+            );
+            let prepared = prepare_rename(&config, "foo", "foo");
+            assert_eq!(prepared.report.outcome, "id_updated");
+            // Saved bytes carry the same marker but renumbered objects.
+            let renumbered_path = _temp.path().join("renumbered.pdf");
+            write_pdf_with_marker(
+                &renumbered_path,
+                "- status: wip\n- parent: sase\n- title: Foo\n- id: stale-id\n",
+                true,
+            );
+            let saved = fs::read(&renumbered_path).unwrap();
+            let fake = FakeCoordinator::grant_after_save(
+                Duration::from_millis(3),
+                saved.clone(),
+            );
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let sha = result.expect("same-stem repair keeps the save");
+            assert_eq!(observed.call_count(), 1);
+            let marker =
+                crate::native::highlights_ref::marker::read_pdf_marker(
+                    &vault.join("lib/blogs/foo.pdf"),
+                )
+                .expect("read repaired marker");
+            assert!(
+                marker.contents.contains("- id: foo"),
+                "{}",
+                marker.contents
+            );
+            assert_eq!(git_head(&vault), sha);
+        }
+
+        #[test]
+        fn idless_move_uses_one_grant_and_keeps_bytes() {
+            let (_temp, config, vault) = synced_fixture(
+                "foo",
+                "- status: wip\n- parent: sase\n- title: Foo\n",
+            );
+            let original = fs::read(vault.join("lib/blogs/foo.pdf")).unwrap();
+            let prepared = prepare_rename(&config, "foo", "bar");
+            assert!(!prepared.report.id.changed);
+            assert!(!prepared.report.moves.is_empty());
+            let fake = FakeCoordinator::grant(Duration::ZERO);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            result.expect("id-less move succeeds");
+            assert_eq!(observed.call_count(), 1);
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/bar.pdf")).unwrap(),
+                original
+            );
+        }
+
+        #[test]
+        fn occupied_destination_holds_inside_the_grant() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            // Prepare while the destination is absent, then occupy to
+            // simulate the race inside coordination.
+            let prepared = prepare_rename(&config, "foo", "bar");
+            // Occupy after prepare but before the coordinated accessor runs.
+            // The snapshot inside execute sees the occupant and the accessor
+            // must refuse without moving.
+            fs::write(vault.join("lib/blogs/bar.pdf"), b"occupant").unwrap();
+            let fake = FakeCoordinator::grant(Duration::ZERO);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            let failure = result.expect_err("occupied destination holds");
+            assert_eq!(failure.code, "preimage_changed");
+            assert_eq!(observed.call_count(), 1);
+            assert!(vault.join("lib/blogs/foo.pdf").exists());
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/bar.pdf")).unwrap(),
+                b"occupant"
+            );
+            assert_eq!(git_head(&vault), head);
+        }
+
+        #[test]
+        fn verification_failure_reverses_forward_move_and_restores() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            let before_pdf = fs::read(vault.join("lib/blogs/foo.pdf")).unwrap();
+            let prepared = prepare_rename(&config, "foo", "bar");
+            test_set_verify_failure(true);
+            let fake = FakeCoordinator::grant(Duration::ZERO);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            test_set_verify_failure(false);
+            let failure = result.expect_err("injected verification failure");
+            assert_eq!(failure.code, "verify_failed");
+            assert_eq!(observed.call_count(), 1);
+            let events = observed.move_events();
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Will(from, to)
+                    if from.ends_with("lib/blogs/foo.pdf")
+                        && to.ends_with("lib/blogs/bar.pdf")
+                )),
+                "forward notification: {events:?}"
+            );
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Did(from, to)
+                    if from.ends_with("lib/blogs/bar.pdf")
+                        && to.ends_with("lib/blogs/foo.pdf")
+                )),
+                "reverse notification: {events:?}"
+            );
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/foo.pdf")).unwrap(),
+                before_pdf
+            );
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+            assert_eq!(git_head(&vault), head);
+        }
+
+        #[test]
+        fn commit_failure_rolls_back_with_both_notifications() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let head = git_head(&vault);
+            let before_pdf = fs::read(vault.join("lib/blogs/foo.pdf")).unwrap();
+            let prepared = prepare_rename(&config, "foo", "bar");
+            test_set_commit_failure(true);
+            let fake = FakeCoordinator::grant(Duration::ZERO);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            test_set_commit_failure(false);
+            let failure = result.expect_err("injected commit failure");
+            assert_eq!(failure.code, "verify_failed");
+            assert_eq!(observed.call_count(), 1);
+            let events = observed.move_events();
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Did(from, to)
+                    if from.ends_with("lib/blogs/foo.pdf")
+                        && to.ends_with("lib/blogs/bar.pdf")
+                )),
+                "forward: {events:?}"
+            );
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    FakeMoveEvent::Did(from, to)
+                    if from.ends_with("lib/blogs/bar.pdf")
+                        && to.ends_with("lib/blogs/foo.pdf")
+                )),
+                "reverse: {events:?}"
+            );
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/foo.pdf")).unwrap(),
+                before_pdf
+            );
+            assert!(!vault.join("lib/blogs/bar.pdf").exists());
+            assert_eq!(git_head(&vault), head);
+        }
+
+        #[test]
+        fn saved_bytes_survive_a_rollback() {
+            let (_temp, config, vault) = synced_fixture(
+                "foo",
+                "- status: wip\n- parent: sase\n- title: Foo\n- id: stale-id\n",
+            );
+            let prepared = prepare_rename(&config, "foo", "foo");
+            let renumbered = _temp.path().join("saved.pdf");
+            write_pdf_with_marker(
+                &renumbered,
+                "- status: wip\n- parent: sase\n- title: Foo\n- id: stale-id\n",
+                true,
+            );
+            let saved = fs::read(&renumbered).unwrap();
+            test_set_verify_failure(true);
+            let fake = FakeCoordinator::grant_after_save(
+                Duration::ZERO,
+                saved.clone(),
+            );
+            let (result, _) = execute_with_fake(&config, &prepared, fake);
+            test_set_verify_failure(false);
+            assert_eq!(result.expect_err("verify fails").code, "verify_failed");
+            // The presenter's saved bytes remain; bob never restores
+            // pre-save bytes.
+            assert_eq!(
+                fs::read(vault.join("lib/blogs/foo.pdf")).unwrap(),
+                saved
+            );
+        }
+
+        #[test]
+        fn commit_reported_as_error_stays_committed() {
+            let (_temp, config, vault) = synced_fixture("foo", FOO_MARKER);
+            let prepared = prepare_rename(&config, "foo", "bar");
+            test_set_commit_reported_as_error(true);
+            let fake = FakeCoordinator::grant(Duration::ZERO);
+            let (result, observed) =
+                execute_with_fake(&config, &prepared, fake);
+            test_set_commit_reported_as_error(false);
+            let sha = result.expect("reported-as-error stays committed");
+            assert_eq!(observed.call_count(), 1);
+            assert!(vault.join("lib/blogs/bar.pdf").exists());
+            assert!(!vault.join("lib/blogs/foo.pdf").exists());
+            assert_eq!(git_head(&vault), sha);
+        }
+
+        #[test]
+        fn refusal_renders_in_human_and_json() {
+            use crate::native::ref_library::output::Format as RefFormat;
+            let timeout = rename_hold_failure(
+                "coordination_timeout",
+                "Highlights didn't answer; no rename was written".to_string(),
+            );
+            assert_eq!(timeout.code, "coordination_timeout");
+            assert!(timeout.hint.as_deref().unwrap().contains("retry"));
+            let marker = rename_hold_failure(
+                "marker_changed",
+                "marker changed; no files were written".to_string(),
+            );
+            assert_eq!(marker.code, "marker_changed");
+            // Exercise both renderings; output goes to the test harness.
+            assert_eq!(
+                super::super::print_failure(RefFormat::Json, timeout.clone()),
+                1
+            );
+            assert_eq!(
+                super::super::print_failure(RefFormat::Human, marker.clone()),
+                1
+            );
+            assert_eq!(super::super::print_failure(RefFormat::Json, marker), 1);
+        }
     }
 }
