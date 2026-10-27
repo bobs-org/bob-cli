@@ -134,11 +134,11 @@ jobs:
         run: just lint
 
       - name: Run tests
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --locked --workspace --no-fail-fast
 
       - name: Run archive-move presenter cases
         if: runner.os == 'macOS'
-        run: cargo test --locked --lib archive_move_presenter -- --nocapture --test-threads=1
+        run: cargo test --locked --workspace --lib archive_move_presenter -- --nocapture --test-threads=1
 
   package:
     name: package

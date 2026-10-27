@@ -64,20 +64,20 @@ all: fmt lint test
     fi
 
 fmt: (_banner "34" "🎨" "FORMAT")
-    cargo fmt --check
+    cargo fmt --all -- --check
 
 lint: (_banner "33" "🔍" "LINT")
-    cargo clippy --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
+    cargo clippy --workspace --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
 
 test: (_banner "32" "🧪" "TEST")
-    cargo test --no-fail-fast
+    cargo test --workspace --no-fail-fast
 
 # Canonical verification gate: formatting, lints, then every test binary
 # (lib, all tests/* binaries, doctests) even when one binary fails.
 check: (_banner "32" "✅" "CHECK")
-    cargo fmt --check
-    cargo clippy --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
-    cargo test --no-fail-fast
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --all-features -- {{rustc_gate}} {{clippy_gate}}
+    cargo test --workspace --no-fail-fast
 
 # Render a themed section banner: blank line, bold colored title + icon, colored rule.
 # Emits ANSI styling on a TTY and clean plain text when output is piped/redirected.
@@ -109,7 +109,8 @@ check-web-clip-adapter:
     python3 -m py_compile scripts/web_clip/web_clip_adapter.py scripts/web_clip/web_clip_render.py scripts/web_clip/diagram_render.py && uv run --quiet --script scripts/web_clip/web_clip_adapter.py --self-test
 
 package-list:
-    cargo package --list
+    cargo package --locked --allow-dirty --list -p bob-obsidian
+    cargo package --locked --allow-dirty --list -p bob-obsidian-assets
 
 package-check *args:
     python3 tools/release/package_check.py {{args}}

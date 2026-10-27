@@ -11,8 +11,33 @@ import subprocess
 from typing import Any
 
 WEB_CLIP_DIR = os.path.dirname(os.path.abspath(__file__))
-MERMAID_JS_PATH = os.path.join(WEB_CLIP_DIR, "vendor", "mermaid.min.js")
-DIAGRAM_FONT_PATH = os.path.join(WEB_CLIP_DIR, "fonts", "DejaVuSans.ttf")
+# Byte-identical payloads moved to the `bob-obsidian-assets` crate. Installed
+# copies live next to this renderer; direct source execution falls back to
+# the crate's repository locations.
+ASSETS_CRATE_DIR = os.path.normpath(
+    os.path.join(WEB_CLIP_DIR, "..", "..", "crates", "bob-obsidian-assets"))
+ASSETS_VENDOR_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "scripts", "web_clip", "vendor")
+ASSETS_FONTS_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "scripts", "web_clip", "fonts")
+
+
+def _first_existing(*paths: str) -> str:
+    """Return the first existing path, or the installed candidate."""
+    for path in paths:
+        if os.path.isfile(path) or os.path.isdir(path):
+            return path
+    return paths[0] if paths else ""
+
+
+MERMAID_JS_PATH = _first_existing(
+    os.path.join(WEB_CLIP_DIR, "vendor", "mermaid.min.js"),
+    os.path.join(ASSETS_VENDOR_DIR, "mermaid.min.js"),
+)
+DIAGRAM_FONT_PATH = _first_existing(
+    os.path.join(WEB_CLIP_DIR, "fonts", "DejaVuSans.ttf"),
+    os.path.join(ASSETS_FONTS_DIR, "DejaVuSans.ttf"),
+)
 MAX_DIAGRAM_ITEMS = 200
 DIAGRAM_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 

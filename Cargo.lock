@@ -158,6 +158,7 @@ name = "bob-obsidian"
 version = "0.4.0"
 dependencies = [
  "block2",
+ "bob-obsidian-assets",
  "chrono",
  "chrono-tz",
  "clap",
@@ -184,6 +185,10 @@ dependencies = [
  "ttf-parser",
  "url",
 ]
+
+[[package]]
+name = "bob-obsidian-assets"
+version = "0.1.0"
 
 [[package]]
 name = "bumpalo"

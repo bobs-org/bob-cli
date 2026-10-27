@@ -69,8 +69,56 @@ MERMAID_SHA256 = "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b
 
 WEB_CLIP_DIR = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT_JS_PATH = os.path.join(WEB_CLIP_DIR, "snapshot.js")
-DEFUDDLE_JS_PATH = os.path.join(WEB_CLIP_DIR, "vendor", "defuddle.full.js")
-MERMAID_JS_PATH = os.path.join(WEB_CLIP_DIR, "vendor", "mermaid.min.js")
+# Byte-identical payloads moved to the `bob-obsidian-assets` crate. Installed
+# copies live next to this script; direct source execution falls back to the
+# crate's repository locations.
+ASSETS_CRATE_DIR = os.path.normpath(
+    os.path.join(WEB_CLIP_DIR, "..", "..", "crates", "bob-obsidian-assets"))
+ASSETS_VENDOR_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "scripts", "web_clip", "vendor")
+ASSETS_FONTS_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "scripts", "web_clip", "fonts")
+ASSETS_PRINT_FONTS_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "assets", "print_fonts")
+
+
+def _first_existing(*paths: str) -> str:
+    """Return the first existing path, or the installed candidate."""
+    for path in paths:
+        if os.path.isfile(path) or os.path.isdir(path):
+            return path
+    return paths[0] if paths else ""
+
+
+def vendor_path(name: str) -> str:
+    """Return the installed vendor file, falling back to the assets crate."""
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return os.path.join(WEB_CLIP_DIR, "vendor", name)
+    return _first_existing(
+        os.path.join(WEB_CLIP_DIR, "vendor", name),
+        os.path.join(ASSETS_VENDOR_DIR, name),
+    )
+
+
+def reader_font_source_path(name: str) -> str:
+    """Return the installed reader font, falling back to the assets crate."""
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return os.path.join(WEB_CLIP_DIR, "fonts", name)
+    return _first_existing(
+        os.path.join(WEB_CLIP_DIR, "fonts", name),
+        os.path.join(ASSETS_FONTS_DIR, name),
+        os.path.join(ASSETS_PRINT_FONTS_DIR, name),
+    )
+
+
+DEFUDDLE_JS_PATH = _first_existing(
+    os.path.join(WEB_CLIP_DIR, "vendor", "defuddle.full.js"),
+    os.path.join(ASSETS_VENDOR_DIR, "defuddle.full.js"),
+)
+MERMAID_JS_PATH = _first_existing(
+    os.path.join(WEB_CLIP_DIR, "vendor", "mermaid.min.js"),
+    os.path.join(ASSETS_VENDOR_DIR, "mermaid.min.js"),
+)
 
 OVERALL_TIMEOUT_SECS = 150
 GOTO_TIMEOUT_MS = 45000
@@ -668,15 +716,16 @@ def headed_capability() -> str | None:
 
 
 def _reader_font_dirs() -> list[str]:
-    """Installed ``fonts/`` plus the source-tree print-font directory."""
+    """Installed ``fonts/`` plus the assets-crate source directories."""
     dirs = []
-    fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
-    if os.path.isdir(fonts_dir):
-        dirs.append(fonts_dir)
-    print_fonts = os.path.normpath(
-        os.path.join(WEB_CLIP_DIR, "..", "..", "assets", "print_fonts"))
-    if os.path.isdir(print_fonts) and print_fonts not in dirs:
-        dirs.append(print_fonts)
+    for candidate in (
+        os.path.join(WEB_CLIP_DIR, "fonts"),
+        ASSETS_FONTS_DIR,
+        ASSETS_PRINT_FONTS_DIR,
+    ):
+        candidate = os.path.normpath(candidate)
+        if os.path.isdir(candidate) and candidate not in dirs:
+            dirs.append(candidate)
     return dirs
 
 
@@ -2704,7 +2753,7 @@ def self_test() -> int:
     check("snapshot.js present",
           os.path.isfile(SNAPSHOT_JS_PATH))
     check("vendor readme present",
-          os.path.isfile(os.path.join(WEB_CLIP_DIR, "vendor", "README.md")))
+          os.path.isfile(vendor_path("README.md")))
 
     # -- Mermaid request validation, entirely offline ---------------------
     if WEB_CLIP_DIR not in sys.path:
@@ -2743,11 +2792,11 @@ def self_test() -> int:
         except _diagram_render.DiagramRequestError:
             check(f"diagrams reject {label}", True)
     check("diagram font present",
-          os.path.isfile(os.path.join(WEB_CLIP_DIR, "fonts", "DejaVuSans.ttf")))
+          os.path.isfile(reader_font_source_path("DejaVuSans.ttf")))
     check("diagram font license present",
-          os.path.isfile(os.path.join(WEB_CLIP_DIR, "fonts", "DEJAVU_LICENSE.txt")))
+          os.path.isfile(reader_font_source_path("DEJAVU_LICENSE.txt")))
     check("Mermaid license present",
-          os.path.isfile(os.path.join(WEB_CLIP_DIR, "vendor", "MERMAID_LICENSE")))
+          os.path.isfile(vendor_path("MERMAID_LICENSE")))
 
     # -- Reader renderer: fonts, template, and pure assembly ----------------
     if WEB_CLIP_DIR not in sys.path:
@@ -2767,7 +2816,6 @@ def self_test() -> int:
         "JetBrainsMono-Regular.ttf",
         "JetBrainsMono-Bold.ttf",
     )
-    fonts_dir = os.path.join(WEB_CLIP_DIR, "fonts")
     for name in expected_fonts:
         check(f"reader font present {name}",
               _render.resolve_font_path(name) is not None)
@@ -2785,18 +2833,19 @@ def self_test() -> int:
     else:
         check("truetype print face is served as-is", False)
     leftover_woff2 = []
-    try:
-        leftover_woff2 = [
-            name for name in os.listdir(fonts_dir)
-            if name.endswith(".woff2")
-        ]
-    except OSError:
-        pass
+    for directory in _reader_font_dirs():
+        try:
+            leftover_woff2.extend(
+                name for name in os.listdir(directory)
+                if name.endswith(".woff2")
+            )
+        except OSError:
+            pass
     check("reader fonts have no variable woff2", leftover_woff2 == [])
     check("reader OFL present",
-          os.path.isfile(os.path.join(fonts_dir, "OFL.txt")))
+          os.path.isfile(reader_font_source_path("OFL.txt")))
     check("reader fonts readme present",
-          os.path.isfile(os.path.join(fonts_dir, "README.md")))
+          os.path.isfile(reader_font_source_path("README.md")))
     check("ping reports bundled fonts",
           available_fonts() == ["Source Serif 4", "Inter", "JetBrains Mono"])
     css_path = os.path.join(WEB_CLIP_DIR, "template", "reader.css")

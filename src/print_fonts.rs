@@ -1,8 +1,9 @@
 //! Pinned static print faces shared by note snapshots and the web-clip reader.
 //!
-//! Each file is `include_bytes!`'d once so the Bob binary holds a single copy.
-//! Note snapshots write the full set into the XeLaTeX scratch directory; the
-//! web-clip installer copies the reader subset next to the adapter.
+//! Each file is `include_bytes!`'d once inside `bob-obsidian-assets` so the
+//! Bob binary holds a single copy. Note snapshots write the full set into
+//! the XeLaTeX scratch directory; the web-clip installer copies the reader
+//! subset next to the adapter.
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13,97 +14,106 @@ struct PrintFont {
 }
 
 pub(crate) const SOURCE_SERIF4_SM_TEXT_REGULAR: &[u8] =
-    include_bytes!("../assets/print_fonts/SourceSerif4SmText-Regular.otf");
+    bob_obsidian_assets::SOURCE_SERIF4_SM_TEXT_REGULAR;
 pub(crate) const SOURCE_SERIF4_SM_TEXT_IT: &[u8] =
-    include_bytes!("../assets/print_fonts/SourceSerif4SmText-It.otf");
+    bob_obsidian_assets::SOURCE_SERIF4_SM_TEXT_IT;
 pub(crate) const SOURCE_SERIF4_SM_TEXT_SEMIBOLD: &[u8] =
-    include_bytes!("../assets/print_fonts/SourceSerif4SmText-Semibold.otf");
+    bob_obsidian_assets::SOURCE_SERIF4_SM_TEXT_SEMIBOLD;
 pub(crate) const SOURCE_SERIF4_SM_TEXT_SEMIBOLD_IT: &[u8] =
-    include_bytes!("../assets/print_fonts/SourceSerif4SmText-SemiboldIt.otf");
-pub(crate) const INTER_REGULAR: &[u8] =
-    include_bytes!("../assets/print_fonts/Inter-Regular.otf");
-pub(crate) const INTER_ITALIC: &[u8] =
-    include_bytes!("../assets/print_fonts/Inter-Italic.otf");
-pub(crate) const INTER_MEDIUM: &[u8] =
-    include_bytes!("../assets/print_fonts/Inter-Medium.otf");
-pub(crate) const INTER_SEMIBOLD: &[u8] =
-    include_bytes!("../assets/print_fonts/Inter-SemiBold.otf");
+    bob_obsidian_assets::SOURCE_SERIF4_SM_TEXT_SEMIBOLD_IT;
+pub(crate) const INTER_REGULAR: &[u8] = bob_obsidian_assets::INTER_REGULAR;
+pub(crate) const INTER_ITALIC: &[u8] = bob_obsidian_assets::INTER_ITALIC;
+pub(crate) const INTER_MEDIUM: &[u8] = bob_obsidian_assets::INTER_MEDIUM;
+pub(crate) const INTER_SEMIBOLD: &[u8] = bob_obsidian_assets::INTER_SEMIBOLD;
 pub(crate) const INTER_SEMIBOLD_ITALIC: &[u8] =
-    include_bytes!("../assets/print_fonts/Inter-SemiBoldItalic.otf");
+    bob_obsidian_assets::INTER_SEMIBOLD_ITALIC;
 pub(crate) const INTER_DISPLAY_SEMIBOLD: &[u8] =
-    include_bytes!("../assets/print_fonts/InterDisplay-SemiBold.otf");
+    bob_obsidian_assets::INTER_DISPLAY_SEMIBOLD;
 pub(crate) const JETBRAINS_MONO_REGULAR: &[u8] =
-    include_bytes!("../assets/print_fonts/JetBrainsMono-Regular.ttf");
+    bob_obsidian_assets::JETBRAINS_MONO_REGULAR;
 pub(crate) const JETBRAINS_MONO_BOLD: &[u8] =
-    include_bytes!("../assets/print_fonts/JetBrainsMono-Bold.ttf");
+    bob_obsidian_assets::JETBRAINS_MONO_BOLD;
 pub(crate) const NOTO_EMOJI_REGULAR: &[u8] =
-    include_bytes!("../assets/print_fonts/NotoEmoji-Regular.ttf");
+    bob_obsidian_assets::NOTO_EMOJI_REGULAR;
 
 #[cfg(test)]
 const PRINT_FONTS: &[PrintFont] = &[
     PrintFont {
         name: "SourceSerif4SmText-Regular.otf",
-        source_path: "assets/print_fonts/SourceSerif4SmText-Regular.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/SourceSerif4SmText-Regular.otf",
         bytes: SOURCE_SERIF4_SM_TEXT_REGULAR,
     },
     PrintFont {
         name: "SourceSerif4SmText-It.otf",
-        source_path: "assets/print_fonts/SourceSerif4SmText-It.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/SourceSerif4SmText-It.otf",
         bytes: SOURCE_SERIF4_SM_TEXT_IT,
     },
     PrintFont {
         name: "SourceSerif4SmText-Semibold.otf",
-        source_path: "assets/print_fonts/SourceSerif4SmText-Semibold.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/SourceSerif4SmText-Semibold.otf",
         bytes: SOURCE_SERIF4_SM_TEXT_SEMIBOLD,
     },
     PrintFont {
         name: "SourceSerif4SmText-SemiboldIt.otf",
-        source_path: "assets/print_fonts/SourceSerif4SmText-SemiboldIt.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/SourceSerif4SmText-SemiboldIt.otf",
         bytes: SOURCE_SERIF4_SM_TEXT_SEMIBOLD_IT,
     },
     PrintFont {
         name: "Inter-Regular.otf",
-        source_path: "assets/print_fonts/Inter-Regular.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/Inter-Regular.otf",
         bytes: INTER_REGULAR,
     },
     PrintFont {
         name: "Inter-Italic.otf",
-        source_path: "assets/print_fonts/Inter-Italic.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/Inter-Italic.otf",
         bytes: INTER_ITALIC,
     },
     PrintFont {
         name: "Inter-Medium.otf",
-        source_path: "assets/print_fonts/Inter-Medium.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/Inter-Medium.otf",
         bytes: INTER_MEDIUM,
     },
     PrintFont {
         name: "Inter-SemiBold.otf",
-        source_path: "assets/print_fonts/Inter-SemiBold.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/Inter-SemiBold.otf",
         bytes: INTER_SEMIBOLD,
     },
     PrintFont {
         name: "Inter-SemiBoldItalic.otf",
-        source_path: "assets/print_fonts/Inter-SemiBoldItalic.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/Inter-SemiBoldItalic.otf",
         bytes: INTER_SEMIBOLD_ITALIC,
     },
     PrintFont {
         name: "InterDisplay-SemiBold.otf",
-        source_path: "assets/print_fonts/InterDisplay-SemiBold.otf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/InterDisplay-SemiBold.otf",
         bytes: INTER_DISPLAY_SEMIBOLD,
     },
     PrintFont {
         name: "JetBrainsMono-Regular.ttf",
-        source_path: "assets/print_fonts/JetBrainsMono-Regular.ttf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/JetBrainsMono-Regular.ttf",
         bytes: JETBRAINS_MONO_REGULAR,
     },
     PrintFont {
         name: "JetBrainsMono-Bold.ttf",
-        source_path: "assets/print_fonts/JetBrainsMono-Bold.ttf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/JetBrainsMono-Bold.ttf",
         bytes: JETBRAINS_MONO_BOLD,
     },
     PrintFont {
         name: "NotoEmoji-Regular.ttf",
-        source_path: "assets/print_fonts/NotoEmoji-Regular.ttf",
+        source_path:
+            "crates/bob-obsidian-assets/assets/print_fonts/NotoEmoji-Regular.ttf",
         bytes: NOTO_EMOJI_REGULAR,
     },
 ];

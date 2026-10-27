@@ -80,10 +80,18 @@ def _render_social_card(path: Path, repo: Path) -> None:
     # Bundled fonts; fall back to default bitmap font if unavailable.
     try:
         title_font = ImageFont.truetype(
-            str(repo / "assets/print_fonts/InterDisplay-SemiBold.otf"), 96
+            str(
+                repo
+                / "crates/bob-obsidian-assets/assets/print_fonts/InterDisplay-SemiBold.otf"
+            ),
+            96,
         )
         body_font = ImageFont.truetype(
-            str(repo / "assets/print_fonts/Inter-Regular.otf"), 44
+            str(
+                repo
+                / "crates/bob-obsidian-assets/assets/print_fonts/Inter-Regular.otf"
+            ),
+            44,
         )
     except Exception:
         title_font = ImageFont.load_default()

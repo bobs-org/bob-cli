@@ -29,7 +29,9 @@ PTY_TIMEOUT_SECONDS = 40
 TERM = "xterm-256color"
 GENERATED_DATE = "2026-10-20"
 FONT_FAMILY = "JetBrains Mono"
-FONT_PATH = Path("assets/print_fonts/JetBrainsMono-Regular.ttf")
+FONT_PATH = Path(
+    "crates/bob-obsidian-assets/assets/print_fonts/JetBrainsMono-Regular.ttf"
+)
 FONT_FORMAT = "woff2"
 FONT_MIME = "font/woff2"
 # Fixed head.modified timestamp (2024-01-01T00:00:00Z), same as fonts.py.

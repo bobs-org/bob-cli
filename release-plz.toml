@@ -1,4 +1,4 @@
-# Release train configuration for bob-cli (package `bob-obsidian`).
+# Release train configuration for bob-cli (`bob-obsidian` plus `bob-obsidian-assets`).
 # Rehearsal mode: tags + GitHub Releases only. The train switches to crates.io
 # by landing `git_only = false`; the guard reads this file to pick its data
 # source, so `just release-preview` and CI stay consistent automatically.
@@ -10,6 +10,15 @@ dependencies_update = false
 publish_timeout = "30m"
 release_commits = "^(feat|fix|perf|revert)(\\(.+\\))?!?:|^[a-z]+(\\(.+\\))?!:"
 git_tag_name = "v{{ version }}"
+
+[[package]]
+name = "bob-obsidian"
+git_tag_name = "v{{ version }}"
+
+[[package]]
+name = "bob-obsidian-assets"
+git_tag_name = "bob-obsidian-assets-v{{ version }}"
+git_release_enable = false
 
 [changelog]
 protect_breaking_commits = true

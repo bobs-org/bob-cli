@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "crates/bob-obsidian-assets"]
+default-members = ["."]
+resolver = "3"
+
 [package]
 name = "bob-obsidian"
 version = "0.4.0"
@@ -18,7 +23,6 @@ include = [
     "/README.md",
     "/CHANGELOG.md",
     "/LICENSE*",
-    "/assets/**",
     "/src/**",
     "/scripts/bob_notify",
     "/scripts/bob_pomodoro",
@@ -29,13 +33,7 @@ include = [
     "/scripts/web_clip/snapshot.js",
     "/scripts/web_clip/web_clip_render.py",
     "/scripts/web_clip/diagram_render.py",
-    "/scripts/web_clip/vendor/defuddle.full.js",
-    "/scripts/web_clip/vendor/DEFUDDLE_LICENSE",
-    "/scripts/web_clip/vendor/mermaid.min.js",
-    "/scripts/web_clip/vendor/MERMAID_LICENSE",
-    "/scripts/web_clip/vendor/README.md",
     "/scripts/web_clip/template/reader.css",
-    "/scripts/web_clip/fonts/**",
 ]
 
 [package.metadata.binstall]
@@ -48,6 +46,7 @@ name = "bob_cli"
 path = "src/lib.rs"
 
 [dependencies]
+bob-obsidian-assets = { version = "0.1.0", path = "crates/bob-obsidian-assets" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = "0.10.4"
 clap = "4.6.6"

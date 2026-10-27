@@ -1,0 +1,26 @@
+[package]
+name = "bob-obsidian-assets"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Embedded font and vendor payloads for Bob (bob-obsidian)"
+repository = "https://github.com/bobs-org/bob-cli"
+homepage = "https://bobs-org.github.io/"
+documentation = "https://bobs-org.github.io/"
+readme = "README.md"
+license = "MIT"
+keywords = ["obsidian", "fonts", "assets"]
+categories = ["data-structures"]
+include = [
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE*",
+    "/src/**",
+    "/assets/print_fonts/**",
+    "/scripts/web_clip/fonts/**",
+    "/scripts/web_clip/vendor/**",
+]
+
+[lib]
+name = "bob_obsidian_assets"
+path = "src/lib.rs"

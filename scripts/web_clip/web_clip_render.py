@@ -29,8 +29,15 @@ from urllib.parse import urljoin, urlsplit
 
 RENDER_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(RENDER_DIR, "fonts")
+# Byte-identical payloads moved to the `bob-obsidian-assets` crate. Installed
+# copies live in `fonts/` next to this renderer; direct source execution
+# falls back to the crate's repository locations.
+ASSETS_CRATE_DIR = os.path.normpath(
+    os.path.join(RENDER_DIR, "..", "..", "crates", "bob-obsidian-assets"))
+ASSETS_FONTS_DIR = os.path.join(
+    ASSETS_CRATE_DIR, "scripts", "web_clip", "fonts")
 PRINT_FONTS_DIR = os.path.normpath(
-    os.path.join(RENDER_DIR, "..", "..", "assets", "print_fonts"))
+    os.path.join(ASSETS_CRATE_DIR, "assets", "print_fonts"))
 TEMPLATE_DIR = os.path.join(RENDER_DIR, "template")
 READER_CSS_PATH = os.path.join(TEMPLATE_DIR, "reader.css")
 
@@ -86,17 +93,18 @@ def resolve_font_path(name: str) -> str | None:
     """Return a readable font path, or ``None`` when ``name`` is unsafe.
 
     Installed copies live in ``fonts/`` next to this renderer. The source
-    tree reuses ``assets/print_fonts/`` so the crate does not ship a second
-    copy of the static faces.
+    tree falls back to the ``bob-obsidian-assets`` crate so the root package
+    does not ship a second copy of the static faces.
     """
     if not name or name in (".", "..") or "/" in name or "\\" in name:
         return None
-    local = os.path.join(FONTS_DIR, name)
-    if os.path.isfile(local):
-        return local
-    shared = os.path.join(PRINT_FONTS_DIR, name)
-    if os.path.isfile(shared):
-        return shared
+    for candidate in (
+        os.path.join(FONTS_DIR, name),
+        os.path.join(ASSETS_FONTS_DIR, name),
+        os.path.join(PRINT_FONTS_DIR, name),
+    ):
+        if os.path.isfile(candidate):
+            return candidate
     return None
 
 

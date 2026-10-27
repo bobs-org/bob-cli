@@ -184,11 +184,13 @@ def _verify_cmap(path: Path) -> None:
 def generate_fonts(root: Path, *, check: bool = False) -> int:
     _require_fonts_group()
     repo = Path(root).resolve()
-    src_dir = repo / "assets/print_fonts"
+    src_dir = repo / "crates/bob-obsidian-assets/assets/print_fonts"
     out_dir = repo / FONTS_OUT
     for _, src_name, _ in FACES:
         if not (src_dir / src_name).is_file():
-            raise DocsError(f"missing pinned source font: assets/print_fonts/{src_name}")
+            raise DocsError(
+                f"missing pinned source font: crates/bob-obsidian-assets/assets/print_fonts/{src_name}"
+            )
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="bob-fonts-") as tmp:

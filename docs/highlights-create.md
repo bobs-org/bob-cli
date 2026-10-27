@@ -332,8 +332,10 @@ reference manually when you want its existing PDF replaced. Set
 `BOB_HIGHLIGHTS_DIAGRAMS=off` to skip diagram rendering while debugging; the
 dry-run still counts the candidate fences and says rendering is disabled.
 
-To bump Mermaid, replace `scripts/web_clip/vendor/mermaid.min.js`, update its
-version and SHA-256 in `web_clip_adapter.py` and `vendor/README.md`, then run
+To bump Mermaid, replace
+`crates/bob-obsidian-assets/scripts/web_clip/vendor/mermaid.min.js`, update its
+version and SHA-256 in `web_clip_adapter.py` and the crate's `vendor/README.md`,
+then run
 `just check-web-clip-adapter` and the gated live Mermaid render test. Keep the
 bundle self-contained and verify the vector-font and no-raster checks before
 updating the pin. Other diagram languages, SVG image embeds, a listen-skip
