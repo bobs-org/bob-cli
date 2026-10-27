@@ -744,10 +744,8 @@ fn doctor_ref_sources_warns_on_dangling_mismatch_missing_and_orphan() {
     );
     assert!(report.contains("bob ref attach-source"), "{report}");
     assert!(
-        report.contains(
-            "inspect the orphan pairing; preview bob ref attach-source REF -s FILE -d"
-        ),
-        "{report}"
+        report.contains(" — bob ref attach-source)"),
+        "orphan repair hint: {report}"
     );
     assert!(report.contains("result: ok"), "{report}");
 }

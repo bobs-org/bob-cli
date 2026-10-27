@@ -3,6 +3,38 @@
 use crate::support::*;
 
 #[test]
+fn ref_attach_source_help_lists_options_alphabetically_and_explains_adoption() {
+    let output = bob_command()
+        .args(["ref", "attach-source", "--help"])
+        .output()
+        .expect("run bob ref attach-source --help");
+
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Adopt or attach verified Markdown sources")
+            && help.contains("Adoption runs first")
+            && help.contains("With no --search, only adoption runs")
+            && help.contains(
+                "bob ref attach-source -d  # adopt orphan saved sources"
+            ),
+        "expected attach-source adoption help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-d, --dry-run",
+            "-f, --format",
+            "-h, --help",
+            "-r, --ref-dir",
+            "-s, --search",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
 fn capture_help_lists_options_alphabetically() {
     let output = bob_command()
         .arg("capture")

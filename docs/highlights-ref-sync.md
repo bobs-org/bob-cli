@@ -2370,10 +2370,11 @@ MacBook validation checklist:
   `warn` for dangling pointers, digest mismatches, missing catalogs,
   orphans, and an ignored `code.json`). A missing `~/bob/xlib` is
   warning-only because `create` creates it on demand.
-  For an orphan, inspect whether the saved file belongs to that reference;
-  historical and pending stores can both appear as orphans. Preview any
-  repair with `bob ref attach-source REF -s FILE -d`. Doctor never attaches
-  or deletes source stores.
+  For an orphan, preview adoption with `bob ref attach-source -d`;
+  historical and pending stores can both appear as orphans. Bob adopts only
+  an unreferenced saved source that verifies against the reference's PDF.
+  Pass `-s` to search for a Markdown fallback. Doctor never attaches or
+  deletes source stores.
 - `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If

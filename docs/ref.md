@@ -28,7 +28,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Copy or inspect a saved code block | `bob ref code <REF> [N]` | Read exact block bytes, a block catalog, or the saved Markdown source |
 | Copy or inspect a recorded link | `bob ref links <REF> [N]` | Read exact URL bytes, a link catalog, or Markdown forms |
-| Backfill saved sources for filed references | `bob ref attach-source -s <PATH> [-d] [REF]...` | Verify same-stem Markdown against library PDFs and record only verified sources |
+| Backfill or adopt saved sources | `bob ref attach-source [-s <PATH>]... [-d] [REF]...` | Adopt verified orphan render-time stores, then search for Markdown candidates when requested |
 | Add links to older saved-source catalogs | `bob ref recatalog [REF]... [-d]` | Record links and map pages from existing PDF annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
@@ -709,6 +709,7 @@ atomically, and commit batches of up to 100 references with the subject
 ## `bob ref attach-source`
 
 ```bash
+bob ref attach-source -d
 bob ref attach-source -s ~/projects/bob-cli--research -d
 bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d
 bob ref attach-source -s ./sidecar-a -s ./sidecar-b
@@ -717,9 +718,25 @@ bob ref attach-source -s ./sidecar-a -s ./sidecar-b -f json
 
 Eligible references are PDF-backed, with no saved source and no live
 source note: snapshots are never attached from a live note, because the
-note has changed since. With no `REF`, every eligible reference is
-considered; named references resolve exactly like `bob ref show`, and an
-unknown or ambiguous name exits 1.
+note has changed since. Adoption runs first. Bob checks orphan stores under
+`.bob/ref-sources/<type>/<stem>--*/`, reusing the same live-pointer
+inspection as `bob ref doctor`. A store qualifies only when no current or
+frozen reference note points to it, its `code.json` names the note's exact
+`source_pdf`, and Bob verifies the source digest against the directory
+hash. A qualifying source must also pass the same PDF text
+verification described below. Adoption sets `source_markdown`, reports
+`adopted (saved at create)`, and leaves `code.json` byte-for-byte unchanged.
+More than one qualifying store reports `ambiguous saved sources` and stops
+for that reference.
+
+`--search` is optional. Without it, only adoption runs; with no `REF`, Bob
+considers only eligible references that have a matching orphan store and
+stays silent about the rest. A named reference with no store to adopt prints
+`skipped (no saved source; pass -s)`. If a saved source fails PDF
+verification, Bob reports the reason and continues into candidate search
+when `--search` was supplied. With `--search`, behavior remains the same
+after adoption is attempted. Named references resolve exactly like
+`bob ref show`, and an unknown or ambiguous name exits 1.
 
 Each `--search` path is either a directory, searched recursively for
 `<stem>.md` files while skipping dot-directories, or a single file,
@@ -741,13 +758,15 @@ pairing, so it skips the title check but still verifies the blocks.
 
 A stem with several candidates verifies each one and attaches only
 when exactly one passes; zero or several passes keep the skip. A
-verified source is written to
+verified search candidate is written to
 `.bob/ref-sources/<type>/<stem>--<hash>/` with route `attached`, the
 `verified` match counts, the current library PDF digest, and per-block
 pages from the match position (`page_source: text_match`). The note
-gains a `source_markdown` pointer. Every 100 references commit as one
-scoped, revertable `bob ref attach-source: N references` batch, under
-the reference-mutation session (`bob_sync.lock` then `scan.lock`).
+gains a `source_markdown` pointer. Adopted references and search
+attachments share the same batches of up to 100 references, each committed
+as `bob ref attach-source: N references` under the reference-mutation
+session (`bob_sync.lock` then `scan.lock`). Adopted stores are included in
+the staged paths as no-op entries; only the note changes.
 The catalog also records URI links, with pages from the existing PDF's
 annotations (`page_source: annotation`); unmatched links remain pageless.
 
@@ -760,6 +779,8 @@ one JSON envelope with the same per-reference rows and per-candidate
 verdicts plus the verified match counts. A summary ends the human run,
 and a dry run (`-d`) verifies and reports but writes nothing: stores,
 notes, and commits are untouched and the run ends with `writes: none`.
+If a saved source fails before search fallback, its failed verdict appears
+first in the JSON `candidates` array.
 
 ## `bob ref today`
 

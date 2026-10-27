@@ -920,12 +920,13 @@ prints a `ref sources` row for dangling pointers, digest mismatches,
 missing catalogs, orphans, and an ignored catalog. Clap's default `-s ready`
 is not an explicit reopen; pass `-s` to change the kept task. An explicit
 open status cannot reopen a task archived in `done/`; reopen it where it lives
-first. An orphan can be historical or still pending; inspect the source and
-reference pairing, then preview an explicit repair with
-`bob ref attach-source REF -s FILE -d`. Doctor never attaches or deletes an
-orphan. Any status overwrite cannot stamp is rejected before rendering. Exact-set
-collection overwrite follows the same identity, audio, and task-preservation
-rules; partial overlaps refuse under every mode. Without a filed match
+first. An orphan can be historical or still pending; preview adoption with
+`bob ref attach-source -d`. Bob adopts only an unreferenced saved source that
+matches the reference's PDF; pass `-s` to search for a Markdown fallback.
+Doctor never attaches or deletes an orphan. Any status overwrite that cannot
+stamp is rejected before rendering. Exact-set collection overwrite follows
+the same identity, audio, and task-preservation rules; partial overlaps refuse
+under every mode. Without a filed match
 overwrite exits 1. Annotated references — text highlights, image-only
 sidecars, `.assets`, or inbound `#^h-` links — overwrite only on macOS
 with `highlights.coordinate_pdf_writes: true`, enabled after the guided

@@ -46,17 +46,13 @@ const COVERAGE: f64 = 0.8;
 const PARAGRAPH_FALLBACK_COUNT: usize = 5;
 
 /// One verified candidate: its bytes plus the catalog with text-match pages.
+#[derive(Clone)]
 struct VerifiedCandidate {
     bytes: Vec<u8>,
     blocks: Vec<CodeBlock>,
     links: Vec<CatalogLink>,
     matched: usize,
     total: usize,
-}
-
-fn usage_error(message: &str) -> i32 {
-    eprintln!("{COMMAND_NAME}: error: {message}");
-    2
 }
 
 /// Resolve the pandoc binary exactly like `ref create`: an explicit
@@ -753,6 +749,7 @@ fn find_all_candidates(
 
 /// One candidate's verification verdict: the verified payload when the
 /// candidate passes, else the skip reason the human and JSON reports name.
+#[derive(Clone)]
 struct CandidateAttempt {
     path: PathBuf,
     verified: Option<VerifiedCandidate>,
@@ -805,6 +802,76 @@ fn attempt_candidate(
         },
         Err(reason) => failure(reason),
     }
+}
+
+/// Orphan stores whose path matches the reference type and stem. The
+/// inspection result is the same live-pointer set used by `ref doctor`, so
+/// stores named by either a current or frozen reference note are excluded.
+fn matching_orphan_stores(
+    row: &RefRow,
+    orphan_stores: &BTreeSet<String>,
+) -> Vec<String> {
+    let (Some(stem), Some(ref_type)) = (note_stem(row), store_type(row)) else {
+        return Vec::new();
+    };
+    let parent = Path::new(source_store::STORE_ROOT).join(ref_type);
+    let prefix = format!("{stem}--");
+    orphan_stores
+        .iter()
+        .filter(|store| {
+            let path = Path::new(store);
+            path.parent() == Some(parent.as_path())
+                && path.file_name().is_some_and(|name| {
+                    name.to_string_lossy().starts_with(&prefix)
+                })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Orphan stores that have a verified saved source and a catalog for this
+/// exact filed PDF. `read_store` checks both the directory hash and the
+/// catalog's source digest before returning either payload.
+fn qualifying_orphan_stores(
+    bob_dir: &Path,
+    row: &RefRow,
+    matching: &[String],
+) -> Vec<String> {
+    let Some(pdf) = row.source_pdf.as_deref().map(str::trim) else {
+        return Vec::new();
+    };
+    matching
+        .iter()
+        .filter(|store| {
+            let pointer = format!("{store}/source.md");
+            let read = source_store::read_store(bob_dir, &pointer);
+            read.bytes.is_some()
+                && read
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.pdf.path == pdf)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Adopt an already-written render-time store. The store files are included
+/// in the caller's commit set as harmless no-op paths; this function only
+/// changes the reference note.
+fn adopt_verified(
+    bob_dir: &Path,
+    row: &RefRow,
+    store: &str,
+) -> Result<Vec<PathBuf>, String> {
+    let pointer = format!("{store}/source.md");
+    let note_path = bob_dir.join(&row.path);
+    set_note_pointer(&note_path, &pointer)?;
+    let store_dir = bob_dir.join(store);
+    Ok(vec![
+        note_path,
+        store_dir.join("source.md"),
+        store_dir.join("code.json"),
+    ])
 }
 
 /// One row of the `attach-source` JSON envelope.
@@ -1037,9 +1104,6 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             .unwrap_or("human"),
     );
     let json_mode = format == Format::Json;
-    if search.is_empty() {
-        return usage_error("attach-source needs at least one --search PATH");
-    }
     for path in &search {
         if !path.exists() {
             eprintln!(
@@ -1119,6 +1183,15 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             }
         }
     };
+    let orphan_stores: BTreeSet<String> =
+        source_store::inspect_source_stores(&config.bob_dir, &index.rows)
+            .orphans
+            .into_iter()
+            .filter_map(|issue| match issue {
+                source_store::SourceStoreIssue::Orphan { store } => Some(store),
+                _ => None,
+            })
+            .collect();
     let mut attached = 0usize;
     let mut skipped: Vec<(&str, String)> = Vec::new();
     let mut batch_paths = BTreeSet::new();
@@ -1128,6 +1201,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
     let mut pdftotext_checked = false;
     let mut json_results: Vec<AttachResultJson> = Vec::new();
     let named_only = !queries.is_empty();
+    let automatic_adoption_only = search.is_empty() && queries.is_empty();
     // Report one row in human mode: the `attached`/`skipped` line, plus
     // one indented `candidate: verdict` line per candidate when the stem
     // resolved to several files. JSON mode collects the same rows and
@@ -1169,6 +1243,9 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 return;
             }
             match (status, reason) {
+                ("adopted", _) => {
+                    println!("{path}: adopted (saved at create)");
+                }
                 ("attached", Some(detail)) => {
                     println!("{path}: attached ({detail})");
                 }
@@ -1178,6 +1255,12 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             }
             if multi {
                 for attempt in attempts {
+                    if attempt
+                        .verdict
+                        .starts_with("saved source does not match:")
+                    {
+                        continue;
+                    }
                     println!(
                         "  {}: {}",
                         attempt.path.display(),
@@ -1188,6 +1271,10 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         };
     for row_index in selected {
         let row = &index.rows[row_index];
+        let matching_stores = matching_orphan_stores(row, &orphan_stores);
+        if automatic_adoption_only && matching_stores.is_empty() {
+            continue;
+        }
         if let Some(reason) = ineligibility(&config.bob_dir, row) {
             if named_only {
                 report_row(
@@ -1216,6 +1303,153 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             skipped.push((&row.path, reason));
             continue;
         };
+        let qualifying_stores =
+            qualifying_orphan_stores(&config.bob_dir, row, &matching_stores);
+        if qualifying_stores.len() > 1 {
+            let attempts: Vec<CandidateAttempt> = qualifying_stores
+                .iter()
+                .map(|store| CandidateAttempt {
+                    path: config.bob_dir.join(store).join("source.md"),
+                    verified: None,
+                    verdict: "qualifying saved source".to_string(),
+                })
+                .collect();
+            let reason = "ambiguous saved sources".to_string();
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &attempts,
+                false,
+                &mut json_results,
+            );
+            skipped.push((&row.path, reason));
+            continue;
+        }
+
+        let mut adoption_failure: Option<CandidateAttempt> = None;
+        if let Some(store) = qualifying_stores.first() {
+            let pdf_path = config
+                .bob_dir
+                .join(row.source_pdf.as_deref().unwrap_or_default());
+            let pages = match pdf_page_texts(&pdf_path, &mut pdftotext_checked)
+            {
+                Ok(pages) => pages,
+                Err(error) => {
+                    eprintln!("{COMMAND_NAME}: error: {error}");
+                    return 1;
+                }
+            };
+            let source_path = config.bob_dir.join(store).join("source.md");
+            let attempt = attempt_candidate(
+                &source_path,
+                &row.title,
+                false,
+                &pdf_path,
+                &pages,
+            );
+            if attempt.verified.is_some() {
+                if dry_run {
+                    report_row(
+                        &row.path,
+                        "adopted",
+                        None,
+                        &[],
+                        false,
+                        &mut json_results,
+                    );
+                    attached += 1;
+                    continue;
+                }
+                match adopt_verified(&config.bob_dir, row, store) {
+                    Ok(paths) => {
+                        report_row(
+                            &row.path,
+                            "adopted",
+                            None,
+                            &[],
+                            false,
+                            &mut json_results,
+                        );
+                        attached += 1;
+                        batch_paths.extend(paths);
+                        batch_count += 1;
+                        if batch_count >= ATTACH_BATCH_SIZE {
+                            if let Err(error) = commit_batch(
+                                &config.bob_dir,
+                                &batch_paths,
+                                batch_count,
+                                &mut commits,
+                            ) {
+                                eprintln!("{COMMAND_NAME}: error: {error}");
+                                return 1;
+                            }
+                            batch_paths.clear();
+                            batch_count = 0;
+                        }
+                        continue;
+                    }
+                    Err(error) => {
+                        report_row(
+                            &row.path,
+                            "skipped",
+                            Some(&error),
+                            &[],
+                            false,
+                            &mut json_results,
+                        );
+                        skipped.push((&row.path, error));
+                        failed = true;
+                        continue;
+                    }
+                }
+            }
+            let reason = attempt.verdict.clone();
+            if reason.starts_with("unreadable candidate")
+                || reason.starts_with("unreadable PDF annotations")
+                || reason.contains("pandoc")
+            {
+                failed = true;
+            }
+            if search.is_empty() {
+                let reason = format!("saved source does not match: {reason}");
+                report_row(
+                    &row.path,
+                    "skipped",
+                    Some(&reason),
+                    &[attempt],
+                    false,
+                    &mut json_results,
+                );
+                skipped.push((&row.path, reason));
+                continue;
+            }
+            if !json_mode {
+                println!(
+                    "{}: skipped (saved source does not match: {})",
+                    row.path, attempt.verdict
+                );
+            }
+            adoption_failure = Some(CandidateAttempt {
+                path: source_path,
+                verified: None,
+                verdict: format!("saved source does not match: {reason}"),
+            });
+        }
+
+        if search.is_empty() {
+            let reason = "no saved source; pass -s".to_string();
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &[],
+                false,
+                &mut json_results,
+            );
+            skipped.push((&row.path, reason));
+            continue;
+        }
         let candidates =
             find_all_candidates(&stem, &search, single_file_override);
         // An explicit `REF -s FILE` pair carries a human review of the
@@ -1224,11 +1458,13 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         let multi = candidates.len() > 1 && !explicit_pair;
         if candidates.is_empty() {
             let reason = "no candidate".to_string();
+            let failed_source: Vec<CandidateAttempt> =
+                adoption_failure.into_iter().collect();
             report_row(
                 &row.path,
                 "skipped",
                 Some(&reason),
-                &[],
+                &failed_source,
                 false,
                 &mut json_results,
             );
@@ -1257,6 +1493,9 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 )
             })
             .collect();
+        let mut reported_attempts: Vec<CandidateAttempt> =
+            adoption_failure.into_iter().collect();
+        reported_attempts.extend(attempts.iter().cloned());
         for attempt in &attempts {
             if attempt.verdict.starts_with("unreadable candidate")
                 || attempt.verdict.starts_with("unreadable PDF annotations")
@@ -1297,7 +1536,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 &row.path,
                 "skipped",
                 Some(&reason),
-                &attempts,
+                &reported_attempts,
                 multi,
                 &mut json_results,
             );
@@ -1322,7 +1561,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 &row.path,
                 "attached",
                 detail.as_deref(),
-                &attempts,
+                &reported_attempts,
                 multi,
                 &mut json_results,
             );
@@ -1337,7 +1576,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                     &row.path,
                     "skipped",
                     Some(&reason),
-                    &attempts,
+                    &reported_attempts,
                     multi,
                     &mut json_results,
                 );
@@ -1367,7 +1606,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                     &row.path,
                     "attached",
                     detail.as_deref(),
-                    &attempts,
+                    &reported_attempts,
                     multi,
                     &mut json_results,
                 );
@@ -1393,7 +1632,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                     &row.path,
                     "skipped",
                     Some(error.as_str()),
-                    &attempts,
+                    &reported_attempts,
                     multi,
                     &mut json_results,
                 );

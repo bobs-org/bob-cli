@@ -996,28 +996,17 @@ fn append_ref_sources_row(
         }
     }
     let mut hint = String::new();
-    if !health.dangling.is_empty() || !health.digest_mismatch.is_empty() {
-        hint.push_str(" — bob ref attach-source");
-    }
-    if !health.orphans.is_empty() {
-        if hint.is_empty() {
-            hint.push_str(" — ");
-        } else {
-            hint.push_str("; ");
-        }
-        hint.push_str(
-            "inspect the orphan pairing; preview bob ref attach-source REF -s FILE -d",
-        );
-    }
     if health.ignored_catalogs > 0 {
-        if hint.is_empty() {
-            hint.push_str(" — ");
-        } else {
-            hint.push_str("; ");
-        }
+        hint.push_str(" — ");
         hint.push_str(
             "add \"!/.bob/ref-sources/**/*.json\" (docs/vault-git-sync.md#reference-sources)",
         );
+    }
+    if !health.dangling.is_empty()
+        || !health.digest_mismatch.is_empty()
+        || !health.orphans.is_empty()
+    {
+        hint.push_str(" — bob ref attach-source");
     }
     let example_text = if examples.is_empty() {
         String::new()

@@ -259,7 +259,8 @@ pub(crate) fn show_command() -> ClapCommand {
 /// The `bob ref attach-source` verified source-backfill command.
 pub(crate) fn attach_source_command() -> ClapCommand {
     ClapCommand::new("attach-source")
-        .about("Attach verified Markdown sources to filed references")
+        .about("Adopt or attach verified Markdown sources to filed references")
+        .disable_help_flag(true)
         .arg(
             Arg::new("ref")
                 .value_name("REF")
@@ -274,7 +275,6 @@ pub(crate) fn attach_source_command() -> ClapCommand {
                 .action(ArgAction::SetTrue)
                 .help("Verify candidates and report, without writing stores, notes, or commits"),
         )
-        .arg(ref_dir_arg())
         .arg(
             Arg::new("format")
                 .long("format")
@@ -285,16 +285,23 @@ pub(crate) fn attach_source_command() -> ClapCommand {
                 .help("Output format"),
         )
         .arg(
+            Arg::new("help")
+                .long("help")
+                .short('h')
+                .action(ArgAction::Help)
+                .help("Print help"),
+        )
+        .arg(ref_dir_arg())
+        .arg(
             Arg::new("search")
                 .long("search")
                 .short('s')
                 .value_name("PATH")
                 .action(ArgAction::Append)
-                .required(true)
-                .help("Directory searched recursively for <stem>.md candidates (dot-directories skipped), or one file for one named REF; repeat for several roots"),
+                .help("Also search recursively for <stem>.md candidates (dot-directories skipped), or pair one file with one named REF; repeat for several roots"),
         )
         .after_help(
-            "Eligible references are PDF-backed, with no saved source and no live source note. Each candidate is verified against its library PDF text: the title must match, and at least 80% of matchable code blocks (12 or more normalized characters, never Mermaid) must match in order at 85% or better similarity, or else the five longest paragraphs must. A stem with several candidates verifies each one and attaches only when exactly one passes; zero or several passes keep the skip with every candidate named alongside its verdict. An explicit `REF -s FILE` pair skips the title check (a human reviewed the pairing) but still verifies the blocks. Verified sources are written to .bob/ref-sources/<type>/<stem>--<hash>/ with route \"attached\" plus the match counts, the note gains a source_markdown pointer, and every 100 references commit as one revertable batch. A dry run verifies and reports but ends with `writes: none`.\n\nExamples:\n  bob ref attach-source -s ~/projects/bob-cli--research -d\n  bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b -f json",
+            "Adoption runs first for eligible PDF-backed references with no saved source or live source note. An orphan store is adopted only when no note points to it, its catalog names the same PDF, its source digest matches its store path, and the saved Markdown verifies against the PDF. Adoption sets the note pointer and preserves the render-time code.json byte for byte. With no --search, only adoption runs; with no REF arguments, only references with orphan stores are considered. A named REF with nothing to adopt prints `skipped (no saved source; pass -s)`.\n\nEach --search candidate is verified against the library PDF text: the title must match, and at least 80% of matchable code blocks (12 or more normalized characters, never Mermaid) must match in order at 85% or better similarity, or else the five longest paragraphs must. A stem with several candidates verifies each one and attaches only when exactly one passes; zero or several passes keep the skip with every candidate named alongside its verdict. An explicit `REF -s FILE` pair skips the title check (a human reviewed the pairing) but still verifies the blocks. Verified sources are written to .bob/ref-sources/<type>/<stem>--<hash>/ with route \"attached\" plus the match counts, the note gains a source_markdown pointer, and every 100 adopted or attached references commit as one revertable batch. A dry run verifies and reports but ends with `writes: none`.\n\nExamples:\n  bob ref attach-source -d  # adopt orphan saved sources\n  bob ref attach-source -s ~/projects/bob-cli--research -d\n  bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b -f json",
         )
 }
 

@@ -939,7 +939,8 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     },
     Excluded {
         path: &["ref", "attach-source"],
-        reason: "Backfill that needs search paths; run it from a terminal",
+        reason:
+            "Saved-source repair and optional backfill; run it from a terminal",
     },
     Excluded {
         path: &["ref", "recatalog"],

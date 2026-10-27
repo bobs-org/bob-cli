@@ -102,6 +102,102 @@ fn attached_fixture(
     (temp, vault, search)
 }
 
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// Add an orphan render-time store for the fixture PDF and commit it as
+/// pre-existing vault data. The sentinel page metadata makes any catalog
+/// rewrite visible to the adoption test.
+fn write_orphan_store(
+    vault: &Path,
+    store_stem: &str,
+    source: &str,
+    pdf_path: &str,
+) -> (String, std::path::PathBuf, Vec<u8>) {
+    let digest = sha256(source.as_bytes());
+    let pointer = format!(
+        ".bob/ref-sources/chat/{store_stem}--{}/source.md",
+        &digest[..12]
+    );
+    let dir = vault
+        .join(&pointer)
+        .parent()
+        .expect("store directory")
+        .to_path_buf();
+    fs::create_dir_all(&dir).expect("create store directory");
+    write_file(&vault.join(&pointer), source);
+    let pdf_file = vault.join(pdf_path);
+    let pdf_bytes = if pdf_file.is_file() {
+        fs::read(pdf_file).expect("read fixture PDF")
+    } else {
+        fs::read(vault.join("lib/chat/report.pdf")).expect("read fixture PDF")
+    };
+    let pdf_sha = sha256(&pdf_bytes);
+    let code = serde_json::json!({
+        "version": 1,
+        "captured_at": "2026-10-26T12:00:00Z",
+        "route": "markdown",
+        "source": {
+            "sha256": digest,
+            "bytes": source.len(),
+            "origin": "/tmp/report.md"
+        },
+        "pdf": { "path": pdf_path, "sha256": pdf_sha },
+        "renderer": { "bob": "0.3.1", "pandoc": "test" },
+        "blocks": [
+            {
+                "n": 1,
+                "kind": "code",
+                "lang": "yaml",
+                "text": "refresh:\n  interval_ms: 250\n  jitter_ms: 40",
+                "classes": ["yaml"],
+                "attrs": {},
+                "page": 7,
+                "page_end": 7,
+                "page_source": "anchor"
+            },
+            {
+                "n": 2,
+                "kind": "code",
+                "lang": "rust",
+                "text": "fn refresh_loop(state: &mut AppState) {\n    state.tick();\n}",
+                "classes": ["rust"],
+                "attrs": {},
+                "page": 8,
+                "page_end": 8,
+                "page_source": "anchor"
+            }
+        ],
+        "links": []
+    });
+    let code_path = dir.join("code.json");
+    write_file(
+        &code_path,
+        &serde_json::to_string_pretty(&code).expect("serialize catalog"),
+    );
+    let bytes = fs::read(&code_path).expect("read seeded catalog");
+    (pointer, code_path, bytes)
+}
+
+fn orphan_fixture(
+    prefix: &str,
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    String,
+    std::path::PathBuf,
+    Vec<u8>,
+) {
+    let (temp, vault, search) = attached_fixture(prefix);
+    let (pointer, code_path, code_bytes) =
+        write_orphan_store(&vault, "report", REPORT, "lib/chat/report.pdf");
+    commit_all(&vault, "seed orphan saved source");
+    (temp, vault, search, pointer, code_path, code_bytes)
+}
+
 fn attach_command(
     temp: &TempDir,
     vault: &Path,
@@ -238,6 +334,293 @@ fn attach_dry_run_verifies_but_writes_nothing() {
         .expect("read note");
     assert!(!note.contains("source_markdown"), "note untouched");
     assert_eq!(head_subject(&vault), before, "no commit on dry run");
+}
+
+#[test]
+fn attach_adopts_an_orphan_without_search_and_preserves_catalog() {
+    if skip_without_render_tools("adopt orphan saved source") {
+        return;
+    }
+    let (temp, vault, _search, pointer, code_path, code_before) =
+        orphan_fixture("bob-cli-attach-adopt");
+    let output = run_attach(&temp, &vault, &[]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ref/chat/report.md: adopted (saved at create)"),
+        "adoption output:\n{report}"
+    );
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read adopted note");
+    assert!(
+        note.contains(&format!("source_markdown: {pointer}")),
+        "{note}"
+    );
+    assert_eq!(
+        fs::read(&code_path).expect("read code catalog after adoption"),
+        code_before,
+        "adoption must leave render-time code.json byte-identical"
+    );
+    assert_eq!(head_subject(&vault), "bob ref attach-source: 1 references");
+    let changed = git_in(&vault, ["show", "--format=", "--name-only", "HEAD"]);
+    let changed = String::from_utf8(changed.stdout).expect("commit paths utf8");
+    assert!(changed.contains("ref/chat/report.md"), "{changed}");
+    assert!(
+        !changed.contains("code.json"),
+        "catalog was rewritten: {changed}"
+    );
+    assert!(
+        !changed.contains("source.md"),
+        "source was rewritten: {changed}"
+    );
+
+    let code = bob_command()
+        .arg("ref")
+        .arg("code")
+        .arg("report")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("read adopted code catalog");
+    assert_success(&code);
+    let envelope: serde_json::Value =
+        serde_json::from_str(&stdout(&code)).expect("code JSON parses");
+    assert_eq!(envelope["status"], "available");
+    assert_eq!(envelope["source"]["route"], "markdown");
+    assert_eq!(envelope["blocks"][0]["page"], 7);
+    assert_eq!(envelope["blocks"][0]["page_source"], "anchor");
+}
+
+#[test]
+fn attach_adoption_dry_run_writes_nothing() {
+    if skip_without_render_tools("adopt orphan dry run") {
+        return;
+    }
+    let (temp, vault, _search, _pointer, code_path, code_before) =
+        orphan_fixture("bob-cli-attach-adopt-dry");
+    let before = head_subject(&vault);
+    let output = run_attach(&temp, &vault, &["-d"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ref/chat/report.md: adopted (saved at create)"),
+        "dry-run adoption:\n{report}"
+    );
+    assert!(report.contains("writes: none"), "{report}");
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read note");
+    assert!(!note.contains("source_markdown"), "dry run changed note");
+    assert_eq!(fs::read(&code_path).expect("read catalog"), code_before);
+    assert_eq!(head_subject(&vault), before, "dry run must not commit");
+}
+
+#[test]
+fn attach_named_reference_without_search_reports_no_saved_source() {
+    if skip_without_render_tools("named reference without saved source") {
+        return;
+    }
+    let (temp, vault, _search) = attached_fixture("bob-cli-attach-no-saved");
+    let output = run_attach(&temp, &vault, &["report"]);
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .contains("ref/chat/report.md: skipped (no saved source; pass -s)"),
+        "named no-source output:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn attach_without_refs_and_search_stays_silent_without_orphans() {
+    if skip_without_render_tools("search-free run without orphan stores") {
+        return;
+    }
+    let (temp, vault, _search) = attached_fixture("bob-cli-attach-adopt-empty");
+    let output = run_attach(&temp, &vault, &[]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(!report.contains("ref/chat/report.md"), "{report}");
+    assert!(
+        report.contains("summary: 0 attached, 0 skipped"),
+        "{report}"
+    );
+}
+
+#[test]
+fn attach_keeps_missing_search_path_as_a_usage_error() {
+    let temp = TempDir::new("bob-cli-attach-missing-search");
+    let vault = git_vault(&temp);
+    let missing = temp.path().join("does-not-exist");
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["-s", &missing.to_string_lossy(), "report"],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("search path not found"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn attach_ambiguous_saved_sources_never_fall_through_to_search() {
+    if skip_without_render_tools("ambiguous orphan saved sources") {
+        return;
+    }
+    let (temp, vault, search) = attached_fixture("bob-cli-attach-adopt-amb");
+    write_orphan_store(&vault, "report", REPORT, "lib/chat/report.pdf");
+    write_orphan_store(
+        &vault,
+        "report--alternate",
+        &format!("{REPORT}\nA second saved version.\n"),
+        "lib/chat/report.pdf",
+    );
+    commit_all(&vault, "seed ambiguous orphan stores");
+    let output =
+        run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report
+            .contains("ref/chat/report.md: skipped (ambiguous saved sources)"),
+        "ambiguous adoption:\n{report}"
+    );
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read note");
+    assert!(
+        !note.contains("source_markdown"),
+        "ambiguous source adopted"
+    );
+    assert_eq!(head_subject(&vault), "seed ambiguous orphan stores");
+}
+
+#[test]
+fn attach_rejects_a_saved_store_claimed_by_another_note() {
+    if skip_without_render_tools("saved store referenced by another note") {
+        return;
+    }
+    let (temp, vault, _search, pointer, _code_path, _code_before) =
+        orphan_fixture("bob-cli-attach-adopt-live-pointer");
+    write_file(
+        &vault.join("ref/chat/other.md"),
+        &format!(
+            "---\ntitle: Other\nsource_pdf: \"[[lib/chat/report.pdf]]\"\nsource_markdown: {pointer}\n---\n\n# Other\n"
+        ),
+    );
+    commit_all(&vault, "point another note at saved source");
+    let output = run_attach(&temp, &vault, &["report"]);
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .contains("ref/chat/report.md: skipped (no saved source; pass -s)"),
+        "live-pointer store must not be adopted:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn attach_saved_source_with_wrong_pdf_path_falls_back_to_search() {
+    if skip_without_render_tools("saved source with wrong PDF path") {
+        return;
+    }
+    let (temp, vault, search) =
+        attached_fixture("bob-cli-attach-adopt-pdf-path");
+    write_orphan_store(&vault, "report", REPORT, "lib/chat/other.pdf");
+    commit_all(&vault, "seed wrong-pdf orphan store");
+    let output =
+        run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("ref/chat/report.md: attached"), "{report}");
+    assert!(!report.contains("adopted (saved at create)"), "{report}");
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read attached note");
+    let pointer = note
+        .lines()
+        .find_map(|line| line.strip_prefix("source_markdown: "))
+        .expect("search fallback pointer");
+    assert!(
+        fs::read_to_string(vault.join(pointer))
+            .expect("read selected source")
+            .contains("fn refresh_loop"),
+        "search fallback stores the candidate source"
+    );
+}
+
+#[test]
+fn attach_unverified_saved_source_reports_failure_then_uses_search() {
+    if skip_without_render_tools("unverified saved source fallback") {
+        return;
+    }
+    let (temp, vault, search) =
+        attached_fixture("bob-cli-attach-adopt-mismatch");
+    write_orphan_store(&vault, "report", DECOY, "lib/chat/report.pdf");
+    commit_all(&vault, "seed mismatched orphan source");
+    let output =
+        run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "ref/chat/report.md: skipped (saved source does not match: low match"
+        ),
+        "saved-source verification failure:\n{report}"
+    );
+    assert!(report.contains("ref/chat/report.md: attached"), "{report}");
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read fallback note");
+    let pointer = note
+        .lines()
+        .find_map(|line| line.strip_prefix("source_markdown: "))
+        .expect("fallback pointer");
+    assert_eq!(
+        fs::read_to_string(vault.join(pointer)).expect("read attached source"),
+        REPORT
+    );
+}
+
+#[test]
+fn attach_json_reports_failed_saved_source_before_search_fallback() {
+    if skip_without_render_tools("JSON saved-source fallback") {
+        return;
+    }
+    let (temp, vault, search) =
+        attached_fixture("bob-cli-attach-adopt-json-fallback");
+    write_orphan_store(&vault, "report", DECOY, "lib/chat/report.pdf");
+    commit_all(&vault, "seed JSON mismatched orphan source");
+    let output = run_attach(
+        &temp,
+        &vault,
+        &[
+            "-s",
+            &search.to_string_lossy(),
+            "-f",
+            "json",
+            "-d",
+            "report",
+        ],
+    );
+    assert_success(&output);
+    let envelope: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("attach JSON parses");
+    assert_eq!(envelope["attached"], 1);
+    let results = envelope["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "attached");
+    let candidates = results[0]["candidates"]
+        .as_array()
+        .expect("candidate verdicts");
+    assert_eq!(candidates.len(), 2);
+    assert!(
+        candidates[0]["verdict"]
+            .as_str()
+            .is_some_and(|verdict| verdict.starts_with("saved source does not match: low match")),
+        "saved-source failure must be reported before the fallback: {candidates:?}"
+    );
+    assert_eq!(candidates[1]["verdict"], "verified");
 }
 
 #[test]
