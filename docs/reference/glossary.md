@@ -40,9 +40,8 @@ sub-project, the project) they belong to. Every `#task` belongs in exactly one a
 project note by residence, the file holding its checkbox line; a [Task Link](#task-link) or embed
 elsewhere never moves it. Area notes hold the ongoing tasks, usually under `## Tasks`,
 that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbox`) are
-area notes whose tasks await triage. The only exceptions are a reference note's own
-[Reference Task](#reference-task), each daily note's templated `^gtd` task, and closed tasks that
-`bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
+area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task and closed tasks
+that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping.
 
@@ -249,9 +248,14 @@ without that tag remain recognized. See `docs/projects.md` and
 
 A Bob vault Markdown file with frontmatter `type: "[[ref]]"` for a particular piece of
 external reference material, such as a book, article, or captured conversation. It
-gathers source links, notes or highlights, and any follow-up work. Its
-[Reference Task](#reference-task) (`^ref`) represents progress through that material. Highlights sync
-generates this form; legacy notes may lack the task. See `docs/highlights-ref-sync.md`.
+gathers source links plus notes or highlights. It holds no open tasks. It shows its
+reading task (`#task #ref`, living in the parent area, project, or inbox note's
+`## Tasks`) through the managed embed `![[<residence>#^<id>]]` one blank line below the
+H1. Frontmatter `parent` is projected from where that task lives (a `done/` archive maps
+to that file's `parent:`). Annotation follow-up tasks default to the parent note. A
+frozen in-note `^ref` tracker is the legacy v1 shape. Highlights sync generates this
+form; legacy notes may lack the task. See `docs/highlights-ref-sync.md` and
+[Reference Task](#reference-task).
 
 ### Reference Task {#reference-task}
 
@@ -357,7 +361,7 @@ targets, and dep links never count as Pomodoro Task Links. See
 
 *Aliases: freshness.*
 
-The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the [Morning GTD Review Footer](#morning-gtd-review-footer). It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness itself still never changes priority or schedule; the approved decision card invokes separate existing writers, and only on explicit approval — see [Rotten Keeps Decay Through The Priority Ladder](../develop/decisions.md#rotten-keeps-use-priority-decay) and [Keep Streak](#keep-streak).
+The local calendar date a human last confirmed that an open task still needs doing as written, stored as `[fresh:: YYYY-MM-DD]` before the task's trailing Tasks fields. Supported Bob keymaps, Alt+F, and `bob capture` edits of existing tasks stamp it; creation and automation never do. A visible, non-recurring Ready task is due for review when it is new (no stamp), a tickler (its `scheduled` date arrived after the stamp, or it was automatically unblocked (`[unblocked::]`); machine state `resurfaced`), or rotten (the stamp is at least its interval old; machine `ROTTEN` since schema 2). The interval comes from `[refresh:: N]`, then the note's `task_refresh`, then `freshness.interval` (7 days) — except a Pending (WIP) or Next task in a walked lane, whose lane interval (`pending_interval` / `next_interval`, default 1 day; `false` walks that lane off) overrides the whole chain. The `]s` walk visits one shared queue in tiers PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; only due tasks walk (a task stamped today drops out). PRE/POST `#gtd` checklist rows (often recurring) resolve by completion, never by a stamp. A non-checklist recurring task is never stamped; once its occurrence date (earliest of scheduled, due, start) arrives it walks in RECURRING until completed, rescheduled past today, linked to Today, or cancelled. NEW holds unconfirmed tasks on `dash`, READY holds only confirmed/exempt tasks, and `rotten.md` holds TICKLER plus expired ROTTEN; see [Recurring Occurrences Walk When Due](../develop/decisions.md#recurring-occurrences-walk-when-due), [Review Walk Is Tiered With Daily Lane Review](../develop/decisions.md#review-walk-is-tiered), [READY Is Freshness-Gated With NEW and ROTTEN Review](../develop/decisions.md#ready-is-freshness-gated), [Today Is Read From The Ledger, Never Written To Tasks](../develop/decisions.md#today-is-read-from-the-ledger), and [Unblocked Tasks Resurface As Ticklers](../develop/decisions.md#unblocked-tasks-resurface-as-ticklers). Freshness never changes a lane, Today, schedule, or priority. Its status-bar view is the [Morning GTD Review Footer](#morning-gtd-review-footer). It is not Zorg `@FRESHNESS`, `bob vault-sync` freshness, or P-level scheduling windows. Freshness itself still never changes priority or schedule; the approved decision card invokes separate existing writers, and only on explicit approval — see [Rotten Keeps Decay Through The Priority Ladder](../develop/decisions.md#rotten-keeps-use-priority-decay) and [Keep Streak](#keep-streak).
 
 ### Task Link {#task-link}
 

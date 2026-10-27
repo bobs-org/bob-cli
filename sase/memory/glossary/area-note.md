@@ -11,8 +11,7 @@ sub-project, the project) they belong to. Every `#task` belongs in exactly one a
 project note by residence, the file holding its checkbox line; a [[task-link]] or embed
 elsewhere never moves it. Area notes hold the ongoing tasks, usually under `## Tasks`,
 that belong to no finite project; the inboxes (`inbox`, `mac_inbox`, `gkeep_inbox`) are
-area notes whose tasks await triage. The only exceptions are a reference note's own
-[[reference-task]], each daily note's templated `^gtd` task, and closed tasks that
-`bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
+area notes whose tasks await triage. The only exceptions are each daily note's templated `^gtd` task and closed tasks
+that `bob task archive` moved into `done/`; move any other stray task with Ctrl+Shift+M.
 Root-level area notes are `@route` capture targets, and every area note gets the
 per-note Ready cap and `## Tasks` status grouping.

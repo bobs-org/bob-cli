@@ -13,8 +13,9 @@ summary:
   off); tiers never feed buckets or chips; upkeep outside the lanes counts the
   budget; stamps stay and the seed never re-runs."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-01
+  superseded_by: decisions/recurring-occurrences-walk-when-due
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -108,3 +109,5 @@ cost) and [[decisions/ready-is-freshness-gated]] (its partition, chips, and
 gating claims stand; only the review ritual order is superseded in part).
 
 Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.
+
+Superseded in part: the walk order PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST; "recurring, daily-note, hidden, dependency-blocked, future-scheduled, and Today-linked tasks are in no tier except as PRE/POST checklist rows"; the REFERENCES tier; occupancy and frontmatter-`scheduled` PROJECTS gating; and the rejected alternative "Lifting the recurring exclusion for every task", now narrowed so recurring rows still never enter NEW or ROTTEN — see [[decisions/recurring-occurrences-walk-when-due]].
