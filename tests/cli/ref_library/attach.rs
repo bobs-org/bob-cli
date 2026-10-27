@@ -198,6 +198,104 @@ fn orphan_fixture(
     (temp, vault, search, pointer, code_path, code_bytes)
 }
 
+/// Render and queue a real Markdown reference with `bob ref create`, then
+/// seed a pointerless filed note against that exact PDF. This keeps the
+/// render-time catalog and saved bytes produced by bob's normal toolchain.
+fn exact_render_orphan_fixture(
+    prefix: &str,
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    String,
+    std::path::PathBuf,
+    Vec<u8>,
+) {
+    let temp = TempDir::new(prefix);
+    let vault = git_vault(&temp);
+    write_file(&vault.join(".gitignore"), "/xlib/\n");
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: \"[[area]]\"\n---\n\n# SASE\n",
+    );
+    commit_all(&vault, "seed real-render attach fixture");
+    let stem = "machine_load_accounting_transparency";
+    let source = temp.path().join(format!("{stem}.md"));
+    let markdown = format!(
+        "# Machine Load Accounting Transparency\n\n```text\nstale:    ⌂athena cap 5/8 ⟳41s              snapshot older than ~2 refresh cycles\n```\n\n```text\nrunner slot accounting preserves stable claims\n```\n\n```text\ncapacity displays explain live reservations\n```\n"
+    );
+    write_file(&source, &markdown);
+    let output = bob_command()
+        .arg("ref")
+        .arg("create")
+        .arg(&source)
+        .arg("-P")
+        .arg("sase")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-N")
+        .arg(stem)
+        .arg("-k")
+        .env("BOB_DIR", &vault)
+        .env("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0")
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("run bob ref create with real renderer");
+    assert_success(&output);
+    let create_report = stdout(&output);
+    let pointer = create_report
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("source_markdown:")
+                .map(|value| value.trim().trim_matches('"').to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("create did not report source pointer:\n{create_report}")
+        });
+    let queued_pdf = vault.join(format!("xlib/chat/{stem}.pdf"));
+    assert!(queued_pdf.is_file(), "-k should leave a real PDF queued");
+    let pdf_rel = format!("lib/chat/{stem}.pdf");
+    let pdf_path = vault.join(&pdf_rel);
+    fs::create_dir_all(pdf_path.parent().expect("PDF parent"))
+        .expect("create library directory");
+    fs::rename(&queued_pdf, &pdf_path).expect("move rendered PDF into library");
+
+    let code_path = vault
+        .join(&pointer)
+        .parent()
+        .expect("source store parent")
+        .join("code.json");
+    let mut code: serde_json::Value = serde_json::from_slice(
+        &fs::read(&code_path).expect("read real render catalog"),
+    )
+    .expect("real render catalog parses");
+    code["pdf"]["path"] = serde_json::Value::String(pdf_rel.clone());
+    write_file(
+        &code_path,
+        serde_json::to_string_pretty(&code)
+            .expect("serialize catalog with filed PDF path")
+            .as_str(),
+    );
+    let code_before = fs::read(&code_path).expect("save catalog bytes");
+    write_file(
+        &vault.join(format!("ref/chat/{stem}.md")),
+        &format!(
+            "---\nid: {stem}\ntitle: Machine Load Accounting Transparency\nsource_pdf: \"[[{pdf_rel}]]\"\n---\n\n# Machine Load Accounting Transparency\n\n- [ ] Read [[{pdf_rel}]] #task ^ref-{stem}\n"
+        ),
+    );
+    commit_all(&vault, "seed pointerless real-render reference");
+    (temp, vault, pointer, code_path, code_before)
+}
+
 fn attach_command(
     temp: &TempDir,
     vault: &Path,
@@ -289,6 +387,10 @@ fn attach_verifies_and_records_a_fixture_source() {
         }
     }
     assert_eq!(head_subject(&vault), "bob ref attach-source: 1 references");
+    assert!(
+        report.contains("committed "),
+        "human commit diagnostic:\n{report}"
+    );
     // The saved source feeds the read surface byte for byte.
     let code_out = bob_command()
         .arg("ref")
@@ -390,6 +492,43 @@ fn attach_adopts_an_orphan_without_search_and_preserves_catalog() {
     assert_eq!(envelope["source"]["route"], "markdown");
     assert_eq!(envelope["blocks"][0]["page"], 7);
     assert_eq!(envelope["blocks"][0]["page_source"], "anchor");
+}
+
+#[test]
+fn attach_adopts_an_exact_render_with_one_lost_pdf_glyph() {
+    if skip_without_render_tools("real-render lost-glyph adoption") {
+        return;
+    }
+    let (temp, vault, pointer, code_path, code_before) =
+        exact_render_orphan_fixture("bob-cli-attach-real-render-glyph");
+    let output = run_attach(&temp, &vault, &[]);
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "ref/chat/machine_load_accounting_transparency.md: adopted (saved at create)"
+        ),
+        "real-render adoption should verify every block:\n{}",
+        stdout(&output)
+    );
+    let note = fs::read_to_string(
+        vault.join("ref/chat/machine_load_accounting_transparency.md"),
+    )
+    .expect("read adopted real-render note");
+    assert!(
+        note.contains(&format!("source_markdown: {pointer}")),
+        "{note}"
+    );
+    assert_eq!(
+        fs::read(&code_path).expect("read render catalog after adoption"),
+        code_before,
+        "adoption preserves bob's actual render-time catalog bytes"
+    );
+    let code: serde_json::Value =
+        serde_json::from_slice(&code_before).expect("real catalog JSON");
+    assert_eq!(code["route"], "markdown");
+    assert!(code["blocks"]
+        .as_array()
+        .is_some_and(|blocks| blocks.len() == 3));
 }
 
 #[test]
@@ -529,6 +668,13 @@ fn attach_saved_source_with_wrong_pdf_path_falls_back_to_search() {
     let (temp, vault, search) =
         attached_fixture("bob-cli-attach-adopt-pdf-path");
     write_orphan_store(&vault, "report", REPORT, "lib/chat/other.pdf");
+    // A distinct source digest gives the verified candidate a new
+    // content-addressed destination. The same-byte collision is refused in
+    // its own regression below instead of refreshing this wrong-PDF catalog.
+    write_file(
+        &search.join("report.md"),
+        format!("<!-- distinct source bytes -->\n{REPORT}").as_str(),
+    );
     commit_all(&vault, "seed wrong-pdf orphan store");
     let output =
         run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
@@ -815,11 +961,17 @@ fn attach_explicit_pair_attaches_despite_title_mismatch() {
         return;
     }
     let (temp, vault, search) = attached_fixture("bob-cli-attach-explicit");
-    let renamed = search.join("renamed.md");
+    let (pointer, code_path, code_before) =
+        write_orphan_store(&vault, "report", REPORT, "lib/chat/report.pdf");
+    let note_path = vault.join("ref/chat/report.md");
+    let note = fs::read_to_string(&note_path).expect("read fixture note");
     write_file(
-        &renamed,
-        REPORT.replace("Harbor Cranes", "Desert Owls").as_str(),
+        &note_path,
+        note.replace("Harbor Cranes", "Renamed Fixture").as_str(),
     );
+    let renamed = search.join("renamed.md");
+    write_file(&renamed, REPORT);
+    commit_all(&vault, "seed explicit-pair orphan catalog");
     // The renamed file alone is not a same-stem candidate, so the stem
     // search finds nothing; the explicit pair still attaches it.
     let output = run_attach(
@@ -830,16 +982,214 @@ fn attach_explicit_pair_attaches_despite_title_mismatch() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("ref/chat/report.md: attached"),
-        "explicit attach:\n{report}"
+        report.contains(
+            "ref/chat/report.md: skipped (saved source does not match: title mismatch)"
+        ),
+        "ordinary adoption should retain the note-title check:\n{report}"
     );
-    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
-        .expect("read note");
+    assert!(
+        report.contains("ref/chat/report.md: adopted (saved at create)"),
+        "the explicit pair should verify and reuse the render-time store:\n{report}"
+    );
+    assert!(
+        report.contains("summary: 1 attached, 0 skipped"),
+        "explicit pair should complete the attachment:\n{report}"
+    );
+    let note = fs::read_to_string(&note_path).expect("read note");
     assert!(
         note.lines()
-            .any(|line| line.starts_with("source_markdown: ")),
+            .any(|line| line == format!("source_markdown: {pointer}")),
         "note gains a pointer"
     );
+    assert_eq!(
+        fs::read(&code_path).expect("catalog remains render-time bytes"),
+        code_before,
+        "explicit same-byte fallback adopts without rewriting code.json"
+    );
+    let code = serde_json::from_slice::<serde_json::Value>(&code_before)
+        .expect("seed catalog JSON parses");
+    assert_eq!(code["route"], "markdown");
+    assert_eq!(code["blocks"][0]["page_source"], "anchor");
+    let changed = git_in(&vault, ["show", "--format=", "--name-only", "HEAD"]);
+    let changed = String::from_utf8(changed.stdout).expect("commit paths utf8");
+    assert!(changed.contains("ref/chat/report.md"), "{changed}");
+    assert!(!changed.contains("source.md"), "{changed}");
+    assert!(!changed.contains("code.json"), "{changed}");
+}
+
+#[test]
+fn attach_refuses_same_byte_candidate_when_existing_store_is_claimed() {
+    if skip_without_render_tools("claimed store destination collision") {
+        return;
+    }
+    let (temp, vault, _search) =
+        attached_fixture("bob-cli-attach-claimed-collision");
+    let (pointer, code_path, code_before) =
+        write_orphan_store(&vault, "report", REPORT, "lib/chat/report.pdf");
+    let note_path = vault.join("ref/chat/report.md");
+    let note = fs::read_to_string(&note_path).expect("read fixture note");
+    write_file(
+        &note_path,
+        note.replace("Harbor Cranes", "Renamed Fixture").as_str(),
+    );
+    write_file(
+        &vault.join("ref/chat/other.md"),
+        &format!(
+            "---\ntitle: Other\nsource_pdf: \"[[lib/chat/report.pdf]]\"\nsource_markdown: {pointer}\n---\n\n# Other\n"
+        ),
+    );
+    let candidate = temp.path().join("renamed.md");
+    write_file(&candidate, REPORT);
+    commit_all(&vault, "seed claimed destination collision");
+    let before = head_subject(&vault);
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["report", "-s", &candidate.to_string_lossy()],
+    );
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains(
+            "skipped (store destination collision: destination is claimed"
+        ),
+        "collision report:\n{}",
+        stdout(&output)
+    );
+    assert_eq!(head_subject(&vault), before);
+    assert_eq!(
+        fs::read(&code_path).expect("catalog unchanged"),
+        code_before
+    );
+    assert!(
+        !fs::read_to_string(&note_path)
+            .expect("read pointerless note")
+            .contains("source_markdown:"),
+        "refusal must not write the note"
+    );
+}
+
+#[test]
+fn attach_refuses_same_byte_candidate_when_existing_store_has_wrong_pdf() {
+    if skip_without_render_tools("wrong-PDF store destination collision") {
+        return;
+    }
+    let (temp, vault, _search) =
+        attached_fixture("bob-cli-attach-wrong-pdf-collision");
+    let (_pointer, code_path, code_before) =
+        write_orphan_store(&vault, "report", REPORT, "lib/chat/other.pdf");
+    let note_path = vault.join("ref/chat/report.md");
+    let note = fs::read_to_string(&note_path).expect("read fixture note");
+    write_file(
+        &note_path,
+        note.replace("Harbor Cranes", "Renamed Fixture").as_str(),
+    );
+    let candidate = temp.path().join("renamed.md");
+    write_file(&candidate, REPORT);
+    commit_all(&vault, "seed wrong-PDF destination collision");
+    let before = head_subject(&vault);
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["report", "-s", &candidate.to_string_lossy()],
+    );
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("skipped (store destination collision: destination belongs to a different PDF)"),
+        "collision report:\n{}",
+        stdout(&output)
+    );
+    assert_eq!(head_subject(&vault), before);
+    assert_eq!(
+        fs::read(&code_path).expect("catalog unchanged"),
+        code_before
+    );
+    assert!(
+        !fs::read_to_string(&note_path)
+            .expect("read pointerless note")
+            .contains("source_markdown:"),
+        "refusal must not write the note"
+    );
+}
+
+#[test]
+fn attach_refuses_same_byte_candidate_when_existing_catalog_is_invalid() {
+    if skip_without_render_tools("invalid store destination collision") {
+        return;
+    }
+    let (temp, vault, _search) =
+        attached_fixture("bob-cli-attach-invalid-collision");
+    let (_pointer, code_path, _code_before) =
+        write_orphan_store(&vault, "report", REPORT, "lib/chat/report.pdf");
+    write_file(&code_path, "{ invalid catalog");
+    let note_path = vault.join("ref/chat/report.md");
+    let note = fs::read_to_string(&note_path).expect("read fixture note");
+    write_file(
+        &note_path,
+        note.replace("Harbor Cranes", "Renamed Fixture").as_str(),
+    );
+    let candidate = temp.path().join("renamed.md");
+    write_file(&candidate, REPORT);
+    commit_all(&vault, "seed invalid destination collision");
+    let before = head_subject(&vault);
+    let code_before = fs::read(&code_path).expect("read invalid catalog");
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["report", "-s", &candidate.to_string_lossy()],
+    );
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("skipped (store destination collision:"),
+        "collision report:\n{}",
+        stdout(&output)
+    );
+    assert_eq!(head_subject(&vault), before);
+    assert_eq!(
+        fs::read(&code_path).expect("catalog unchanged"),
+        code_before
+    );
+    assert!(
+        !fs::read_to_string(&note_path)
+            .expect("read pointerless note")
+            .contains("source_markdown:"),
+        "refusal must not write the note"
+    );
+}
+
+#[test]
+fn attach_json_write_mode_keeps_adoption_stdout_parseable() {
+    if skip_without_render_tools("JSON adoption write") {
+        return;
+    }
+    let (temp, vault, _search, _pointer, _code_path, _code_before) =
+        orphan_fixture("bob-cli-attach-json-adopt-write");
+    let output = run_attach(&temp, &vault, &["-f", "json"]);
+    assert_success(&output);
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("entire stdout is JSON");
+    assert_eq!(envelope["attached"], 1);
+    assert_eq!(envelope["results"][0]["status"], "adopted");
+    assert!(stderr(&output).contains("committed "));
+}
+
+#[test]
+fn attach_json_write_mode_keeps_search_attachment_stdout_parseable() {
+    if skip_without_render_tools("JSON attachment write") {
+        return;
+    }
+    let (temp, vault, search) =
+        attached_fixture("bob-cli-attach-json-search-write");
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["-s", &search.to_string_lossy(), "-f", "json", "report"],
+    );
+    assert_success(&output);
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("entire stdout is JSON");
+    assert_eq!(envelope["attached"], 1);
+    assert_eq!(envelope["results"][0]["status"], "attached");
+    assert!(stderr(&output).contains("committed "));
 }
 
 #[test]

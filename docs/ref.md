@@ -753,8 +753,11 @@ glyphs, and `↩ p. N` pills before matching, fold compatibility
 punctuation to ASCII, and the candidate's prose sheds Markdown
 formatting (code spans, emphasis, headings, list markers, table pipes,
 links, tags) so typeset words compare; code-block bodies compare
-verbatim. An explicit `REF -s FILE` pair carries a human review of the
-pairing, so it skips the title check but still verifies the blocks.
+with bounded local character alignment, in document order, at the same
+85% floor. A failed unit does not move the match cursor, and a match cannot
+cross a PDF page boundary. An explicit `REF -s FILE` pair carries a human
+review of the pairing, so it skips the title check but still verifies the
+blocks.
 
 A stem with several candidates verifies each one and attaches only
 when exactly one passes; zero or several passes keep the skip. A
@@ -767,6 +770,10 @@ attachments share the same batches of up to 100 references, each committed
 as `bob ref attach-source: N references` under the reference-mutation
 session (`bob_sync.lock` then `scan.lock`). Adopted stores are included in
 the staged paths as no-op entries; only the note changes.
+If a verified candidate's content-addressed destination already exists, Bob
+reuses it only when it is an unclaimed, valid render-time store paired with
+the same PDF. A claimed, invalid, or differently paired destination is
+skipped without refreshing its catalog.
 The catalog also records URI links, with pages from the existing PDF's
 annotations (`page_source: annotation`); unmatched links remain pageless.
 
@@ -776,7 +783,8 @@ the reason is `no candidate`, `ambiguous: 0 of 2 verified`,
 `snapshot`. A stem with several candidates also prints one indented
 `<candidate>: <verdict>` line per candidate. With `-f json`, stdout is
 one JSON envelope with the same per-reference rows and per-candidate
-verdicts plus the verified match counts. A summary ends the human run,
+verdicts plus the verified match counts; commit diagnostics stay on stderr.
+A summary ends the human run,
 and a dry run (`-d`) verifies and reports but writes nothing: stores,
 notes, and commits are untouched and the run ends with `writes: none`.
 If a saved source fails before search fallback, its failed verdict appears

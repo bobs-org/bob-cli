@@ -7,7 +7,7 @@
 //! filed library PDF, and records only verified sources.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -40,10 +40,16 @@ const ATTACH_BATCH_SIZE: usize = 100;
 const MIN_MATCHABLE_CHARS: usize = 12;
 /// Per-unit similarity floor for an in-order match to count.
 const UNIT_SIMILARITY: f64 = 0.85;
+const UNIT_MAX_EDIT_PERCENT: usize = 15;
 /// Share of matchable units that must verify for a candidate to attach.
 const COVERAGE: f64 = 0.8;
 /// Paragraphs compared when a candidate carries no matchable code.
 const PARAGRAPH_FALLBACK_COUNT: usize = 5;
+// Exact matching remains available for every unit size. Fuzzy matching uses
+// bounded local work so a very long report cannot trigger an unbounded DP.
+const MAX_FUZZY_UNIT_CHARS: usize = 4096;
+const MAX_FUZZY_ALIGNMENT_CELLS: usize = 2_000_000;
+const MAX_FUZZY_ALIGNMENTS: usize = 16;
 
 /// One verified candidate: its bytes plus the catalog with text-match pages.
 #[derive(Clone)]
@@ -341,29 +347,333 @@ fn unit_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Greedily match normalized `lines` in order against `haystack` from
-/// `cursor`, returning matched/total characters plus the match span.
+fn byte_offset_for_char(text: &str, offset: usize) -> usize {
+    text.char_indices()
+        .nth(offset)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len())
+}
+
+fn prefer_alignment(
+    current: (usize, usize),
+    candidate: (usize, usize),
+) -> (usize, usize) {
+    if candidate.0 < current.0
+        || (candidate.0 == current.0 && candidate.1 < current.1)
+    {
+        candidate
+    } else {
+        current
+    }
+}
+
+/// Levenshtein-align all of `source` to a bounded substring of `target`.
+/// The target start may move by at most `2 * max_edits` characters from the
+/// estimated anchor location, and the alignment itself may spend at most
+/// `max_edits` insertions or deletions. Returning the chosen local span keeps
+/// unrelated words elsewhere in the document from combining into a match.
+fn bounded_substring_alignment(
+    source: &[char],
+    target: &[char],
+    max_edits: usize,
+) -> Option<(usize, usize, usize)> {
+    if source.is_empty() || max_edits == 0 {
+        return None;
+    }
+    let n = source.len();
+    let m = target.len();
+    let inf = usize::MAX / 4;
+    let mut previous = vec![inf; m + 1];
+    let mut previous_origin = vec![usize::MAX; m + 1];
+    for start in 0..=m.min(2 * max_edits) {
+        previous[start] = 0;
+        previous_origin[start] = start;
+    }
+
+    for (source_index, source_char) in source.iter().enumerate() {
+        let i = source_index + 1;
+        let mut current = vec![inf; m + 1];
+        let mut current_origin = vec![usize::MAX; m + 1];
+        let low = i.saturating_sub(max_edits);
+        let high = m.min(i.saturating_add(3 * max_edits));
+        if low <= high {
+            for j in low..=high {
+                let mut best = (inf, usize::MAX);
+                if previous[j] < inf {
+                    best = prefer_alignment(
+                        best,
+                        (previous[j] + 1, previous_origin[j]),
+                    );
+                }
+                if j > 0 && current[j - 1] < inf {
+                    best = prefer_alignment(
+                        best,
+                        (current[j - 1] + 1, current_origin[j - 1]),
+                    );
+                }
+                if j > 0 && previous[j - 1] < inf {
+                    best = prefer_alignment(
+                        best,
+                        (
+                            previous[j - 1]
+                                + usize::from(*source_char != target[j - 1]),
+                            previous_origin[j - 1],
+                        ),
+                    );
+                }
+                current[j] = best.0;
+                current_origin[j] = best.1;
+            }
+        }
+        previous = current;
+        previous_origin = current_origin;
+    }
+
+    let low = n.saturating_sub(max_edits);
+    let high = m.min(n.saturating_add(3 * max_edits));
+    if low > high {
+        return None;
+    }
+    let mut best = (inf, usize::MAX, usize::MAX);
+    for end in low..=high {
+        let distance = previous[end];
+        let start = previous_origin[end];
+        if distance <= max_edits
+            && start != usize::MAX
+            && start < end
+            && (distance, start) < (best.0, best.1)
+        {
+            best = (distance, start, end);
+        }
+    }
+    (best.0 <= max_edits).then_some(best)
+}
+
+/// Find exact anchor chunks for a source unit. With `k + 1` chunks, any
+/// edit distance of at most `k` leaves at least one chunk intact.
+fn source_anchors(
+    source: &[char],
+    max_edits: usize,
+) -> Vec<(usize, Vec<char>)> {
+    let partitions = max_edits + 1;
+    (0..partitions)
+        .filter_map(|index| {
+            let start = index * source.len() / partitions;
+            let end = (index + 1) * source.len() / partitions;
+            (start < end).then(|| (start, source[start..end].to_vec()))
+        })
+        .collect()
+}
+
+/// Index the bounded set of exact source chunks in one pass per chunk
+/// length. Rolling hashes keep repeated generic text cheap; slices are
+/// compared after a hash hit so a collision cannot create a match.
+fn anchor_occurrences(
+    page: &[char],
+    anchors: &[(usize, Vec<char>)],
+    page_cursor: usize,
+    max_edits: usize,
+) -> Vec<Vec<usize>> {
+    const BASE: u64 = 0x100000001b3;
+    let mut lookup_by_length: HashMap<usize, HashMap<u64, Vec<usize>>> =
+        HashMap::new();
+    for (index, (_, anchor)) in anchors.iter().enumerate() {
+        let hash = anchor.iter().fold(0u64, |hash, ch| {
+            hash.wrapping_mul(BASE).wrapping_add(*ch as u32 as u64 + 1)
+        });
+        lookup_by_length
+            .entry(anchor.len())
+            .or_default()
+            .entry(hash)
+            .or_default()
+            .push(index);
+    }
+    let minimum_positions: Vec<usize> = anchors
+        .iter()
+        .map(|(offset, _)| {
+            page_cursor.saturating_add(offset.saturating_sub(max_edits))
+        })
+        .collect();
+    let mut prefix = Vec::with_capacity(page.len() + 1);
+    prefix.push(0u64);
+    for ch in page {
+        prefix.push(
+            prefix
+                .last()
+                .copied()
+                .unwrap_or_default()
+                .wrapping_mul(BASE)
+                .wrapping_add(*ch as u32 as u64 + 1),
+        );
+    }
+    let mut occurrences = vec![Vec::new(); anchors.len()];
+    for (length, lookup) in lookup_by_length {
+        if length > page.len() {
+            continue;
+        }
+        let power = (0..length).fold(1u64, |value, _| value.wrapping_mul(BASE));
+        for start in 0..=page.len() - length {
+            let end = start + length;
+            let hash =
+                prefix[end].wrapping_sub(prefix[start].wrapping_mul(power));
+            let Some(anchor_indices) = lookup.get(&hash) else {
+                continue;
+            };
+            for anchor_index in anchor_indices {
+                let anchor = &anchors[*anchor_index].1;
+                if start >= minimum_positions[*anchor_index]
+                    && occurrences[*anchor_index].len() < MAX_FUZZY_ALIGNMENTS
+                    && page[start..end] == anchor[..]
+                {
+                    occurrences[*anchor_index].push(start);
+                }
+            }
+        }
+    }
+    occurrences
+}
+
+/// Locate a unit in one page with exact search first, then bounded local
+/// character alignment around intact source chunks. No alignment crosses a
+/// page boundary.
+fn match_unit_in_page(
+    source: &[char],
+    page: &str,
+    page_cursor: usize,
+) -> Option<(usize, usize, usize)> {
+    let page_chars: Vec<char> = page.chars().collect();
+    let start_at = page_cursor.min(page_chars.len());
+    if source.is_empty() || start_at >= page_chars.len() {
+        return None;
+    }
+    let source_text: String = source.iter().collect();
+    let byte_cursor = byte_offset_for_char(page, start_at);
+    if let Some(byte_start) = page[byte_cursor..].find(&source_text) {
+        let local_start = page[..byte_cursor + byte_start].chars().count();
+        return Some((0, local_start, local_start + source.len()));
+    }
+    if source.len() > MAX_FUZZY_UNIT_CHARS {
+        return None;
+    }
+    let max_edits = source.len() * UNIT_MAX_EDIT_PERCENT / 100;
+    if max_edits == 0 {
+        return None;
+    }
+
+    let anchors = source_anchors(source, max_edits);
+    let page_anchors =
+        anchor_occurrences(&page_chars, &anchors, start_at, max_edits);
+    let mut tried = BTreeSet::new();
+    let mut alignments = 0usize;
+    let mut best: Option<(usize, usize, usize)> = None;
+    for (anchor_index, (anchor_offset, anchor)) in anchors.iter().enumerate() {
+        if alignments >= MAX_FUZZY_ALIGNMENTS {
+            break;
+        }
+        for anchor_at in &page_anchors[anchor_index] {
+            let guess = *anchor_at as isize - *anchor_offset as isize;
+            if guess < start_at as isize - max_edits as isize {
+                continue;
+            }
+            if guess > page_chars.len() as isize {
+                break;
+            }
+            let guess = guess.max(0) as usize;
+            if !tried.insert(guess) {
+                continue;
+            }
+            let window_start = guess.saturating_sub(max_edits).max(start_at);
+            let window_end = page_chars.len().min(
+                guess
+                    .saturating_add(source.len())
+                    .saturating_add(2 * max_edits),
+            );
+            if window_start >= window_end
+                || *anchor_at < window_start
+                || *anchor_at + anchor.len() > window_end
+            {
+                continue;
+            }
+            let alignment_width =
+                (4 * max_edits + 1).min(window_end - window_start);
+            let estimated_cells = source.len().saturating_mul(alignment_width);
+            if estimated_cells > MAX_FUZZY_ALIGNMENT_CELLS
+                || estimated_cells.saturating_mul(alignments + 1)
+                    > MAX_FUZZY_ALIGNMENT_CELLS
+            {
+                return best;
+            }
+            let window = &page_chars[window_start..window_end];
+            let Some((distance, local_start, local_end)) =
+                bounded_substring_alignment(source, window, max_edits)
+            else {
+                alignments += 1;
+                continue;
+            };
+            let local_anchor = *anchor_at - window_start;
+            if local_start > local_anchor
+                || local_end < local_anchor + anchor.len()
+            {
+                alignments += 1;
+                continue;
+            }
+            let candidate = (
+                distance,
+                window_start + local_start,
+                window_start + local_end,
+            );
+            if best.is_none_or(|current| {
+                (candidate.0, candidate.1) < (current.0, current.1)
+            }) {
+                best = Some(candidate);
+            }
+            alignments += 1;
+            if alignments >= MAX_FUZZY_ALIGNMENTS {
+                break;
+            }
+        }
+    }
+    best
+}
+
+/// Match ordered units on page-local text. A failed unit leaves the cursor
+/// untouched, so it cannot skip later content that does match.
 fn match_lines(
     lines: &[String],
-    haystack: &str,
+    pages: &[String],
+    boundaries: &[usize],
     cursor: &mut usize,
 ) -> (usize, usize, Option<(usize, usize)>) {
-    let total: usize = lines.iter().map(String::len).sum();
-    let mut matched = 0usize;
-    let mut first: Option<usize> = None;
-    let mut last: Option<usize> = None;
-    for line in lines {
-        let from = (*cursor).min(haystack.len());
-        let Some(offset) = haystack[from..].find(line.as_str()) else {
-            continue;
-        };
-        let start = from + offset;
-        matched += line.len();
-        first.get_or_insert(start);
-        last = Some(start + line.len());
-        *cursor = start + line.len();
+    let expected: String = lines.concat();
+    let source: Vec<char> = expected.chars().collect();
+    let total = source.len();
+    if source.is_empty() {
+        return (0, 0, None);
     }
-    (matched, total, first.zip(last).map(|(s, e)| (s, e)))
+    for (index, page) in pages.iter().enumerate() {
+        let page_start = boundaries.get(index).copied().unwrap_or(0);
+        let page_len = page.chars().count();
+        let page_end = page_start + page_len;
+        if *cursor >= page_end {
+            continue;
+        }
+        let page_cursor = cursor.saturating_sub(page_start);
+        if let Some((distance, start, end)) =
+            match_unit_in_page(&source, page, page_cursor)
+        {
+            if distance as f64 / total as f64 <= 1.0 - UNIT_SIMILARITY {
+                let global_start = page_start + start;
+                let global_end = page_start + end;
+                *cursor = global_end;
+                return (
+                    total - distance,
+                    total,
+                    Some((global_start, global_end)),
+                );
+            }
+        }
+    }
+    (0, total, None)
 }
 
 /// A block verifies on its own when it carries enough normalized text
@@ -611,11 +921,13 @@ fn verify_candidate(
     catalog: code_catalog::CodeCatalog,
     pages: &[String],
 ) -> Result<VerifiedCandidate, String> {
-    let mut haystack = String::new();
-    let mut boundaries = Vec::with_capacity(pages.len());
-    for page in pages {
-        boundaries.push(haystack.len());
-        haystack.push_str(&normalize_text(page));
+    let normalized_pages: Vec<String> =
+        pages.iter().map(|page| normalize_text(page)).collect();
+    let mut boundaries = Vec::with_capacity(normalized_pages.len());
+    let mut page_offset = 0usize;
+    for page in &normalized_pages {
+        boundaries.push(page_offset);
+        page_offset += page.chars().count();
     }
     let code_catalog::CodeCatalog {
         version: _,
@@ -638,8 +950,12 @@ fn verify_candidate(
             if lines.is_empty() {
                 continue;
             }
-            let (matched, total, _) =
-                match_lines(&lines, &haystack, &mut cursor);
+            let (matched, total, _) = match_lines(
+                &lines,
+                &normalized_pages,
+                &boundaries,
+                &mut cursor,
+            );
             if total > 0 && (matched as f64) / (total as f64) >= UNIT_SIMILARITY
             {
                 matched_units += 1;
@@ -664,7 +980,7 @@ fn verify_candidate(
     for index in &matchable {
         let lines = unit_lines(&blocks[*index].text);
         let (matched, total, span) =
-            match_lines(&lines, &haystack, &mut cursor);
+            match_lines(&lines, &normalized_pages, &boundaries, &mut cursor);
         if total > 0 && (matched as f64) / (total as f64) >= UNIT_SIMILARITY {
             matched_units += 1;
             if let Some((start, end)) = span {
@@ -1058,12 +1374,78 @@ fn attach_verified(
     ])
 }
 
+enum StoreDestination {
+    New,
+    Adopt(String),
+    Refuse(String),
+}
+
+/// Resolve the content-addressed destination before `write_store` can refresh
+/// an existing catalog. Existing targets are reusable only when they are an
+/// unclaimed, valid store for these exact source bytes and this exact PDF.
+fn classify_store_destination(
+    bob_dir: &Path,
+    row: &RefRow,
+    stem: &str,
+    ref_type: &str,
+    source_bytes: &[u8],
+    pdf_sha256: &str,
+    orphan_stores: &BTreeSet<String>,
+) -> StoreDestination {
+    let hash12 = source_store::hash12_for(source_bytes);
+    let dir_rel = source_store::store_dir_rel(ref_type, stem, &hash12);
+    let dir_key = dir_rel.to_string_lossy().replace('\\', "/");
+    let dir_abs = bob_dir.join(&dir_rel);
+    if !dir_abs.exists() {
+        return StoreDestination::New;
+    }
+    if !orphan_stores.contains(&dir_key) {
+        return StoreDestination::Refuse(
+            "destination is claimed or otherwise ineligible".to_string(),
+        );
+    }
+    let pointer = format!("{dir_key}/source.md");
+    let read = source_store::read_store(bob_dir, &pointer);
+    if !matches!(
+        read.status,
+        source_store::StoreStatus::Available
+            | source_store::StoreStatus::NoCode
+    ) || read.bytes.as_deref() != Some(source_bytes)
+    {
+        return StoreDestination::Refuse(
+            "destination is not a valid store for these source bytes"
+                .to_string(),
+        );
+    }
+    let Some(catalog) = read.catalog else {
+        return StoreDestination::Refuse(
+            "destination has no valid render-time catalog".to_string(),
+        );
+    };
+    if !matches!(
+        catalog.route.as_str(),
+        "markdown" | "plain_note" | "note_snapshot"
+    ) {
+        return StoreDestination::Refuse(
+            "destination is not a render-time store".to_string(),
+        );
+    }
+    let pdf_rel = row.source_pdf.as_deref().map(str::trim).unwrap_or_default();
+    if catalog.pdf.path != pdf_rel || catalog.pdf.sha256 != pdf_sha256 {
+        return StoreDestination::Refuse(
+            "destination belongs to a different PDF".to_string(),
+        );
+    }
+    StoreDestination::Adopt(dir_key)
+}
+
 /// Commit one batch of attached references as a single revertable commit.
 fn commit_batch(
     bob_dir: &Path,
     paths: &BTreeSet<PathBuf>,
     count: usize,
     commits: &mut Vec<String>,
+    json_mode: bool,
 ) -> Result<(), String> {
     let (included, ignored) =
         reference_mutation::partition_ignored(bob_dir, paths);
@@ -1077,7 +1459,11 @@ fn commit_batch(
     let subject = format!("bob ref attach-source: {count} references");
     match reference_mutation::commit_paths(bob_dir, &subject, &included)? {
         Some(sha) => {
-            println!("committed {sha} ({count} references)");
+            if json_mode {
+                eprintln!("committed {sha} ({count} references)");
+            } else {
+                println!("committed {sha} ({count} references)");
+            }
             commits.push(sha);
         }
         None => eprintln!("warning: nothing to commit for {count} attach(s)"),
@@ -1380,6 +1766,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                                 &batch_paths,
                                 batch_count,
                                 &mut commits,
+                                json_mode,
                             ) {
                                 eprintln!("{COMMAND_NAME}: error: {error}");
                                 return 1;
@@ -1549,25 +1936,6 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             .verified
             .as_ref()
             .expect("chosen candidate verified");
-        if dry_run {
-            let detail = multi.then(|| {
-                format!(
-                    "1 of {} verified: {}",
-                    attempts.len(),
-                    candidate.display()
-                )
-            });
-            report_row(
-                &row.path,
-                "attached",
-                detail.as_deref(),
-                &reported_attempts,
-                multi,
-                &mut json_results,
-            );
-            attached += 1;
-            continue;
-        }
         let pdf_sha256 = match sha256_file(&pdf_path) {
             Ok(sha) => sha,
             Err(error) => {
@@ -1585,6 +1953,96 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 continue;
             }
         };
+        let destination = classify_store_destination(
+            &config.bob_dir,
+            row,
+            &stem,
+            &ref_type,
+            &verified.bytes,
+            &pdf_sha256,
+            &orphan_stores,
+        );
+        if let StoreDestination::Refuse(detail) = &destination {
+            let reason = format!("store destination collision: {detail}");
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &reported_attempts,
+                multi,
+                &mut json_results,
+            );
+            skipped.push((&row.path, reason));
+            continue;
+        }
+        if dry_run {
+            let status = if matches!(&destination, StoreDestination::Adopt(_)) {
+                "adopted"
+            } else {
+                "attached"
+            };
+            let detail = multi.then(|| {
+                format!(
+                    "1 of {} verified: {}",
+                    attempts.len(),
+                    candidate.display()
+                )
+            });
+            report_row(
+                &row.path,
+                status,
+                detail.as_deref(),
+                &reported_attempts,
+                multi,
+                &mut json_results,
+            );
+            attached += 1;
+            continue;
+        }
+        if let StoreDestination::Adopt(store) = destination {
+            match adopt_verified(&config.bob_dir, row, &store) {
+                Ok(paths) => {
+                    report_row(
+                        &row.path,
+                        "adopted",
+                        None,
+                        &reported_attempts,
+                        multi,
+                        &mut json_results,
+                    );
+                    attached += 1;
+                    batch_paths.extend(paths);
+                    batch_count += 1;
+                    if batch_count >= ATTACH_BATCH_SIZE {
+                        if let Err(error) = commit_batch(
+                            &config.bob_dir,
+                            &batch_paths,
+                            batch_count,
+                            &mut commits,
+                            json_mode,
+                        ) {
+                            eprintln!("{COMMAND_NAME}: error: {error}");
+                            return 1;
+                        }
+                        batch_paths.clear();
+                        batch_count = 0;
+                    }
+                }
+                Err(error) => {
+                    report_row(
+                        &row.path,
+                        "skipped",
+                        Some(&error),
+                        &reported_attempts,
+                        multi,
+                        &mut json_results,
+                    );
+                    skipped.push((&row.path, error));
+                    failed = true;
+                }
+            }
+            continue;
+        }
         match attach_verified(
             &config.bob_dir,
             row,
@@ -1619,6 +2077,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                         &batch_paths,
                         batch_count,
                         &mut commits,
+                        json_mode,
                     ) {
                         eprintln!("{COMMAND_NAME}: error: {error}");
                         return 1;
@@ -1647,6 +2106,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             &batch_paths,
             batch_count,
             &mut commits,
+            json_mode,
         ) {
             eprintln!("{COMMAND_NAME}: error: {error}");
             return 1;
@@ -1836,5 +2296,176 @@ mod tests {
         // Longest two, in document order.
         assert!(paragraphs[0].contains("longest paragraph"));
         assert!(paragraphs[1].contains("mid one"));
+    }
+
+    fn match_normalized_unit(
+        source: &str,
+        page: &str,
+        cursor: &mut usize,
+    ) -> (usize, usize, Option<(usize, usize)>) {
+        let page = normalize_text(page);
+        let boundaries = [0];
+        match_lines(&unit_lines(source), &[page], &boundaries, cursor)
+    }
+
+    #[test]
+    fn dropped_glyph_costs_one_character_inside_a_long_line() {
+        let source = "stale:    ⌂athena cap 5/8 ⟳41s              snapshot older than ~2 refresh cycles";
+        let extracted =
+            "stale:    ⌂athena cap 5/8 41s              snapshot older than ~2 refresh cycles";
+        let mut cursor = 0;
+        let (matched, total, span) =
+            match_normalized_unit(source, extracted, &mut cursor);
+        assert_eq!(total - matched, 1);
+        assert!(matched as f64 / total as f64 >= UNIT_SIMILARITY);
+        assert!(span.is_some());
+        assert!(cursor > 0);
+    }
+
+    #[test]
+    fn materially_changed_unit_below_threshold_does_not_match() {
+        let source = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu";
+        let changed = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo completely altered words replace much of the remaining source content";
+        let mut cursor = 0;
+        let (matched, total, span) =
+            match_normalized_unit(source, changed, &mut cursor);
+        assert_eq!(matched, 0);
+        assert!(total > 0);
+        assert!(span.is_none());
+        assert_eq!(cursor, 0, "failed units must not move the walk cursor");
+
+        let later_page = normalize_text(
+            "alpha bravo charlie delta echo foxtrot gulf hotel valid later unit stays in order",
+        );
+        let boundaries = [0];
+        let mut cursor = 0;
+        let failed = unit_lines(source);
+        assert_eq!(
+            match_lines(
+                &failed,
+                &[later_page.clone()],
+                &boundaries,
+                &mut cursor
+            )
+            .2,
+            None
+        );
+        let later = match_lines(
+            &unit_lines("valid later unit stays in order"),
+            &[later_page],
+            &boundaries,
+            &mut cursor,
+        );
+        assert!(
+            later.2.is_some(),
+            "the failed unit must not skip later text"
+        );
+    }
+
+    #[test]
+    fn out_of_order_lines_do_not_form_one_matching_unit() {
+        let source =
+            "first distinctive record line\nsecond distinctive record line";
+        let extracted =
+            "second distinctive record line\nfirst distinctive record line";
+        let mut cursor = 0;
+        let (matched, _, span) =
+            match_normalized_unit(source, extracted, &mut cursor);
+        assert_eq!(matched, 0);
+        assert!(span.is_none());
+    }
+
+    #[test]
+    fn repeated_generic_fragments_cannot_be_scattered_or_reused() {
+        let mut cursor = 0;
+        let (matched, _, _) = match_normalized_unit(
+            "task task task task",
+            "task alpha beta gamma task",
+            &mut cursor,
+        );
+        assert_eq!(matched, 0, "scattered words are not a local sequence");
+
+        let mut cursor = 0;
+        let first = match_normalized_unit(
+            "repeated generic text",
+            "repeated generic text",
+            &mut cursor,
+        );
+        assert!(first.2.is_some());
+        let second = match_normalized_unit(
+            "repeated generic text",
+            "repeated generic text",
+            &mut cursor,
+        );
+        assert!(second.2.is_none(), "a later unit cannot reuse earlier text");
+    }
+
+    #[test]
+    fn a_unit_cannot_match_across_a_page_boundary() {
+        let source = "distinctive content must remain on one physical page";
+        let pages = vec![
+            normalize_text("distinctive content must remain"),
+            normalize_text("on one physical page"),
+        ];
+        let boundaries = [0, pages[0].chars().count()];
+        let mut cursor = 0;
+        let (matched, total, span) =
+            match_lines(&unit_lines(source), &pages, &boundaries, &mut cursor);
+        assert_eq!(matched, 0);
+        assert_eq!(total, normalize_text(source).chars().count());
+        assert!(span.is_none());
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn verify_candidate_uses_character_matching_for_blocks_and_paragraphs() {
+        let source = "# Report\n\n```text\nstale:    ⌂athena cap 5/8 ⟳41s snapshot older than ~2 refresh cycles\n```\n".as_bytes();
+        let block_text = "stale:    ⌂athena cap 5/8 ⟳41s snapshot older than ~2 refresh cycles";
+        let catalog = code_catalog::CodeCatalog {
+            version: 1,
+            blocks: vec![CodeBlock {
+                n: 1,
+                kind: "code".to_string(),
+                lang: Some("text".to_string()),
+                classes: vec![],
+                attrs: Default::default(),
+                text: block_text.to_string(),
+                section: None,
+                page: None,
+                page_end: None,
+                page_source: None,
+            }],
+            links: None,
+        };
+        let pdf = "stale:    ⌂athena cap 5/8 41s snapshot older than ~2 refresh cycles";
+        let verified = verify_candidate(
+            Path::new("machine_load.md"),
+            source,
+            catalog,
+            &[pdf.to_string()],
+        )
+        .expect("one dropped glyph should verify the code block");
+        assert_eq!((verified.matched, verified.total), (1, 1));
+        assert_eq!(verified.blocks[0].page, Some(1));
+        assert_eq!(
+            verified.blocks[0].page_source.as_deref(),
+            Some("text_match")
+        );
+
+        let paragraphs = b"Opening paragraph has enough distinctive words to compare.\n\nSecond paragraph includes several recognizable terms and phrases.\n\nThird paragraph has another distinctive sequence of words.\n\nFourth paragraph is intentionally absent from the extracted PDF.\n\nClosing paragraph remains present in document order.\n";
+        let no_code = code_catalog::CodeCatalog {
+            version: 1,
+            blocks: vec![],
+            links: None,
+        };
+        let extracted = "Opening paragraph has enough distinctive words to compare.\n\nSecond paragraph includes several recognizable terms and phrases.\n\nThird paragraph has another distinctive sequence of words.\n\nClosing paragraph remains present in document order.";
+        let verified = verify_candidate(
+            Path::new("paragraphs.md"),
+            paragraphs,
+            no_code,
+            &[extracted.to_string()],
+        )
+        .expect("four of five paragraph fallback units meet coverage");
+        assert_eq!((verified.matched, verified.total), (4, 5));
     }
 }
