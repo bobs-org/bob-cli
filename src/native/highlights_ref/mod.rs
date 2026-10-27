@@ -73,6 +73,7 @@ mod pdf_meta;
 mod pdf_target;
 pub(crate) mod pdf_write_policy;
 mod projection;
+mod publish;
 mod reading_execute;
 mod reading_plan;
 // The family-planning seam: read-only recapture classification and

@@ -120,6 +120,7 @@ mod image_notes;
 mod marker;
 mod marker_write;
 mod projection;
+mod publish;
 mod reading_execute;
 mod reading_plan;
 mod region;

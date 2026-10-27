@@ -572,17 +572,41 @@ pub(super) fn compose_pdf_marker(
 }
 
 /// Install a stamped scratch PDF plus its companion audio.
+///
+/// Private stamping stays in scratch. Public installation goes through the
+/// guarded publication boundary in [`super::publish`]: companion audio is
+/// copied only after the grant and destination recheck.
 pub(super) fn install_stamped_pdf(
     stamped: &Path,
     target: &Path,
     audio: Option<&super::companion::AudioCopyPlan>,
     page_count: usize,
 ) -> Result<usize> {
-    let created = super::companion::copy_audio_for_install(audio)?;
-    let installed = atomic_copy(stamped, target);
-    if let Err(error) = installed {
-        super::companion::cleanup_audio_on_failure(created.as_ref());
-        return Err(error);
-    }
-    Ok(page_count)
+    let session =
+        super::marker_write::MarkerWriteSession::for_explicit_write()?;
+    install_stamped_pdf_with(&session, stamped, target, audio, page_count)
+}
+
+/// [`install_stamped_pdf`] with an injected coordination session.
+pub(super) fn install_stamped_pdf_with(
+    session: &super::marker_write::MarkerWriteSession,
+    stamped: &Path,
+    target: &Path,
+    audio: Option<&super::companion::AudioCopyPlan>,
+    page_count: usize,
+) -> Result<usize> {
+    let snapshot = super::publish::capture_destination(target)?;
+    super::publish::publish_public_pdf(session, target, &snapshot, || {
+        let created = super::companion::copy_audio_for_install(audio)?;
+        let installed = if snapshot.is_absent() {
+            super::publish::copy_pdf_no_clobber(stamped, target)
+        } else {
+            atomic_copy(stamped, target)
+        };
+        if let Err(error) = installed {
+            super::companion::cleanup_audio_on_failure(created.as_ref());
+            return Err(error);
+        }
+        Ok(page_count)
+    })
 }
