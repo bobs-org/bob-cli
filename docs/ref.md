@@ -712,6 +712,7 @@ atomically, and commit batches of up to 100 references with the subject
 bob ref attach-source -s ~/projects/bob-cli--research -d
 bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d
 bob ref attach-source -s ./sidecar-a -s ./sidecar-b
+bob ref attach-source -s ./sidecar-a -s ./sidecar-b -f json
 ```
 
 Eligible references are PDF-backed, with no saved source and no live
@@ -722,22 +723,25 @@ unknown or ambiguous name exits 1.
 
 Each `--search` path is either a directory, searched recursively for
 `<stem>.md` files while skipping dot-directories, or a single file,
-which is the candidate for one named `REF`. Two candidates for one stem
-skip as `ambiguous`. Each candidate is verified against its library PDF
-text (no XeLaTeX): the candidate title (frontmatter `title`, else the
-first H1 outside fenced blocks) must match the note title, and at least
-80% of matchable code blocks (12 or more normalized characters, never
-Mermaid) must match in order at 85% or better similarity. A candidate
-with no matchable blocks must instead match its five longest content
-paragraphs (listen-card divs, standalone images, and audio embeds are
-not content) in document order the same way. Both sides drop
-whitespace, fvextra wrap glyphs, return-link tag glyphs, and `↩ p. N`
-pills before matching, fold compatibility punctuation to ASCII, and
-the candidate's prose sheds Markdown formatting (code spans, emphasis,
-headings, list markers, table pipes, links, tags) so typeset words
-compare; code-block bodies compare verbatim.
+which is the candidate for one named `REF`. Each candidate is verified
+against its library PDF text (no XeLaTeX): the candidate title
+(frontmatter `title`, else the first H1 outside fenced blocks) must
+match the note title, and at least 80% of matchable code blocks (12 or
+more normalized characters, never Mermaid) must match in order at 85%
+or better similarity. A candidate with no matchable blocks must instead
+match its five longest content paragraphs (listen-card divs, standalone
+images, and audio embeds are not content) in document order the same
+way. Both sides drop whitespace, fvextra wrap glyphs, return-link tag
+glyphs, and `↩ p. N` pills before matching, fold compatibility
+punctuation to ASCII, and the candidate's prose sheds Markdown
+formatting (code spans, emphasis, headings, list markers, table pipes,
+links, tags) so typeset words compare; code-block bodies compare
+verbatim. An explicit `REF -s FILE` pair carries a human review of the
+pairing, so it skips the title check but still verifies the blocks.
 
-A verified source is written to
+A stem with several candidates verifies each one and attaches only
+when exactly one passes; zero or several passes keep the skip. A
+verified source is written to
 `.bob/ref-sources/<type>/<stem>--<hash>/` with route `attached`, the
 `verified` match counts, the current library PDF digest, and per-block
 pages from the match position (`page_source: text_match`). The note
@@ -748,11 +752,14 @@ The catalog also records URI links, with pages from the existing PDF's
 annotations (`page_source: annotation`); unmatched links remain pageless.
 
 One line prints per reference, `attached` or `skipped (<reason>)`, where
-the reason is `no candidate`, `ambiguous`, `title mismatch`,
-`low match 3/8 blocks`, `already attached`, or `snapshot`. A summary
-ends the run, and a dry run (`-d`) verifies and reports but writes
-nothing: stores, notes, and commits are untouched and the run ends with
-`writes: none`.
+the reason is `no candidate`, `ambiguous: 0 of 2 verified`,
+`title mismatch`, `low match 3/8 blocks`, `already attached`, or
+`snapshot`. A stem with several candidates also prints one indented
+`<candidate>: <verdict>` line per candidate. With `-f json`, stdout is
+one JSON envelope with the same per-reference rows and per-candidate
+verdicts plus the verified match counts. A summary ends the human run,
+and a dry run (`-d`) verifies and reports but writes nothing: stores,
+notes, and commits are untouched and the run ends with `writes: none`.
 
 ## `bob ref today`
 

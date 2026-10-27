@@ -279,7 +279,9 @@ fn attach_skips_ambiguous_and_title_mismatch_candidates() {
         run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
     assert_success(&output);
     assert!(
-        stdout(&output).contains("ref/chat/report.md: skipped (ambiguous)"),
+        stdout(&output).contains(
+            "ref/chat/report.md: skipped (ambiguous: 2 of 2 verified)"
+        ),
         "ambiguous skip:\n{}",
         stdout(&output)
     );
@@ -334,4 +336,165 @@ fn attach_reports_already_attached_and_snapshot_rows() {
         report.contains("ref/chat/live.md: skipped (snapshot)"),
         "snapshot skip:\n{report}"
     );
+}
+
+/// Same title as the fixture note, but rewritten code: the title check
+/// passes while block-match verification fails.
+const DECOY: &str = r#"# Harbor Cranes
+
+Intro paragraph about harbor cranes and shipping logistics in the bay
+area harbor district, with observers watching every container move.
+
+## Retrieval
+
+```yaml
+totally:
+  rewritten_config: true
+```
+
+Some connecting prose about crane scheduling systems across the terminal yards.
+
+```rust
+fn unrelated_decoy() {
+    println!("nothing like the source");
+}
+```
+
+Closing paragraph about deployment and monitoring of the harbor crane
+scheduler service through the night shift rotations.
+"#;
+
+#[test]
+fn attach_attaches_single_passing_ambiguous_candidate() {
+    if skip_without_render_tools("attach one-pass ambiguous stem") {
+        return;
+    }
+    let (temp, vault, search) = attached_fixture("bob-cli-attach-onepass");
+    fs::create_dir_all(search.join("other")).expect("other dir");
+    write_file(&search.join("other/report.md"), DECOY);
+    let output =
+        run_attach(&temp, &vault, &["-s", &search.to_string_lossy(), "report"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ref/chat/report.md: attached (1 of 2 verified:"),
+        "disambiguated attach:\n{report}"
+    );
+    assert!(
+        report.contains(": verified") && report.contains("low match"),
+        "per-candidate verdicts:\n{report}"
+    );
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read note");
+    let pointer = note
+        .lines()
+        .find_map(|line| line.strip_prefix("source_markdown: "))
+        .expect("pointer line");
+    let stored = fs::read_to_string(vault.join(pointer)).expect("source.md");
+    assert_eq!(stored, REPORT, "attaches the passing candidate's bytes");
+    assert_eq!(head_subject(&vault), "bob ref attach-source: 1 references");
+}
+
+#[test]
+fn attach_skips_ambiguous_stem_when_none_verify() {
+    if skip_without_render_tools("attach zero-pass ambiguous stem") {
+        return;
+    }
+    let (temp, vault, search) = attached_fixture("bob-cli-attach-zeropass");
+    fs::create_dir_all(search.join("other")).expect("other dir");
+    write_file(&search.join("report.md"), DECOY);
+    write_file(&search.join("other/report.md"), DECOY);
+    let before = head_subject(&vault);
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["-s", &search.to_string_lossy(), "-d", "report"],
+    );
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "ref/chat/report.md: skipped (ambiguous: 0 of 2 verified)"
+        ),
+        "zero-pass skip:\n{report}"
+    );
+    assert!(
+        report.contains("low match"),
+        "per-candidate verdicts:\n{report}"
+    );
+    assert!(report.contains("writes: none"), "dry-run writes:\n{report}");
+    assert_eq!(head_subject(&vault), before, "no commit on dry run");
+}
+
+#[test]
+fn attach_explicit_pair_attaches_despite_title_mismatch() {
+    if skip_without_render_tools("attach explicit pair") {
+        return;
+    }
+    let (temp, vault, search) = attached_fixture("bob-cli-attach-explicit");
+    let renamed = search.join("renamed.md");
+    write_file(
+        &renamed,
+        REPORT.replace("Harbor Cranes", "Desert Owls").as_str(),
+    );
+    // The renamed file alone is not a same-stem candidate, so the stem
+    // search finds nothing; the explicit pair still attaches it.
+    let output = run_attach(
+        &temp,
+        &vault,
+        &["report", "-s", &renamed.to_string_lossy()],
+    );
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("ref/chat/report.md: attached"),
+        "explicit attach:\n{report}"
+    );
+    let note = fs::read_to_string(vault.join("ref/chat/report.md"))
+        .expect("read note");
+    assert!(
+        note.lines()
+            .any(|line| line.starts_with("source_markdown: ")),
+        "note gains a pointer"
+    );
+}
+
+#[test]
+fn attach_json_names_every_candidate_verdict() {
+    if skip_without_render_tools("attach JSON verdicts") {
+        return;
+    }
+    let (temp, vault, search) = attached_fixture("bob-cli-attach-json");
+    fs::create_dir_all(search.join("other")).expect("other dir");
+    fs::copy(search.join("report.md"), search.join("other/report.md"))
+        .expect("copy candidate");
+    let output = run_attach(
+        &temp,
+        &vault,
+        &[
+            "-s",
+            &search.to_string_lossy(),
+            "-d",
+            "-f",
+            "json",
+            "report",
+        ],
+    );
+    assert_success(&output);
+    let envelope: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("attach JSON parses");
+    assert_eq!(envelope["command"], "ref attach-source");
+    assert_eq!(envelope["dry_run"], true);
+    assert_eq!(envelope["attached"], 0);
+    let results = envelope["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "skipped");
+    let candidates = results[0]["candidates"]
+        .as_array()
+        .expect("candidates array");
+    assert_eq!(candidates.len(), 2, "every candidate named");
+    for candidate in candidates {
+        assert_eq!(candidate["verdict"], "verified");
+        assert!(candidate["matched"].as_u64().unwrap_or(0) >= 1);
+    }
 }

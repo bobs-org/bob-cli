@@ -15,11 +15,15 @@ use std::{
 };
 
 use clap::ArgMatches;
+use serde::Serialize;
 
 use super::{
     build_index,
     cli::list_config_from_matches,
-    output::{print_find_error, print_show_error, Format},
+    output::{
+        generated_at, print_find_error, print_show_error, Format,
+        REF_SCHEMA_VERSION,
+    },
     show::{resolve_show, ShowFailure},
     RefRow,
 };
@@ -728,15 +732,15 @@ fn collect_under(path: &Path, stem: &str, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// Find the verification candidate for one note stem: every `<stem>.md`
+/// Every verification candidate for one note stem: each `<stem>.md`
 /// under the search paths, or the single named file for one named REF.
-fn find_candidates(
+fn find_all_candidates(
     stem: &str,
     search: &[PathBuf],
     single_file_override: Option<&Path>,
-) -> Result<PathBuf, String> {
+) -> Vec<PathBuf> {
     if let Some(file) = single_file_override {
-        return Ok(file.to_path_buf());
+        return vec![file.to_path_buf()];
     }
     let mut found = Vec::new();
     for path in search {
@@ -744,11 +748,97 @@ fn find_candidates(
     }
     found.sort();
     found.dedup();
-    match found.len() {
-        0 => Err("no candidate".to_string()),
-        1 => Ok(found.remove(0)),
-        _ => Err("ambiguous".to_string()),
+    found
+}
+
+/// One candidate's verification verdict: the verified payload when the
+/// candidate passes, else the skip reason the human and JSON reports name.
+struct CandidateAttempt {
+    path: PathBuf,
+    verified: Option<VerifiedCandidate>,
+    /// `verified` for a pass, else the skip reason (`title mismatch`,
+    /// `low match 3/8 blocks`, `unreadable candidate: …`, …).
+    verdict: String,
+}
+
+/// Verify one candidate file against the library PDF text: the title must
+/// match (unless a human reviewed the explicit `REF -s FILE` pairing),
+/// then the existing block-match verification runs unchanged.
+fn attempt_candidate(
+    candidate: &Path,
+    row_title: &str,
+    explicit_pair: bool,
+    pdf_path: &Path,
+    pages: &[String],
+) -> CandidateAttempt {
+    let failure = |verdict: String| CandidateAttempt {
+        path: candidate.to_path_buf(),
+        verified: None,
+        verdict,
+    };
+    let bytes = match fs::read(candidate) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return failure(format!("unreadable candidate: {error}"));
+        }
+    };
+    if !explicit_pair
+        && candidate_title(&bytes)
+            .is_none_or(|title| !titles_match(&title, row_title))
+    {
+        return failure("title mismatch".to_string());
     }
+    let mut catalog = match record_source_catalog(&bytes, "attached") {
+        Ok(catalog) => catalog,
+        Err(error) => return failure(error),
+    };
+    if let Some(links) = catalog.links.as_mut()
+        && let Err(error) = pdf_links::annotate_catalog_links(links, pdf_path)
+    {
+        return failure(format!("unreadable PDF annotations: {error}"));
+    }
+    match verify_candidate(candidate, &bytes, catalog, pages) {
+        Ok(verified) => CandidateAttempt {
+            path: candidate.to_path_buf(),
+            verified: Some(verified),
+            verdict: "verified".to_string(),
+        },
+        Err(reason) => failure(reason),
+    }
+}
+
+/// One row of the `attach-source` JSON envelope.
+#[derive(Debug, Clone, Serialize)]
+struct AttachCandidateJson {
+    path: String,
+    verdict: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matched: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<usize>,
+}
+
+/// One reference row of the `attach-source` JSON envelope.
+#[derive(Debug, Clone, Serialize)]
+struct AttachResultJson {
+    path: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    candidates: Vec<AttachCandidateJson>,
+}
+
+/// The `ref attach-source` success envelope.
+#[derive(Debug, Clone, Serialize)]
+struct AttachEnvelope {
+    ok: bool,
+    schema_version: u32,
+    command: &'static str,
+    generated_at: String,
+    dry_run: bool,
+    attached: usize,
+    skipped: usize,
+    results: Vec<AttachResultJson>,
 }
 
 /// Stem of a reference note path (`ref/chat/report.md` → `report`).
@@ -940,6 +1030,13 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         .map(|values| values.map(PathBuf::from).collect())
         .unwrap_or_default();
     let dry_run = matches.get_flag("dry-run");
+    let format = Format::from_name(
+        matches
+            .get_one::<String>("format")
+            .map(String::as_str)
+            .unwrap_or("human"),
+    );
+    let json_mode = format == Format::Json;
     if search.is_empty() {
         return usage_error("attach-source needs at least one --search PATH");
     }
@@ -962,7 +1059,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         Ok(index) => index,
         Err(error) => {
             print_find_error(
-                Format::Human,
+                format,
                 "ref attach-source",
                 "missing_ref_dir",
                 &error.to_string(),
@@ -981,7 +1078,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 Ok(resolved) => selected.push(resolved.row),
                 Err(ShowFailure::Ambiguous { query, candidates }) => {
                     print_show_error(
-                        Format::Human,
+                        format,
                         "ref attach-source",
                         "ambiguous_reference",
                         &format!("ambiguous reference: {query}"),
@@ -991,7 +1088,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 }
                 Err(ShowFailure::NotFound { query, candidates }) => {
                     print_show_error(
-                        Format::Human,
+                        format,
                         "ref attach-source",
                         "unknown_reference",
                         &format!("no reference note matches {query}"),
@@ -1029,12 +1126,78 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
     let mut commits = Vec::new();
     let mut failed = false;
     let mut pdftotext_checked = false;
+    let mut json_results: Vec<AttachResultJson> = Vec::new();
     let named_only = !queries.is_empty();
+    // Report one row in human mode: the `attached`/`skipped` line, plus
+    // one indented `candidate: verdict` line per candidate when the stem
+    // resolved to several files. JSON mode collects the same rows and
+    // prints a single envelope at the end, keeping stdout pure JSON.
+    let report_row =
+        |path: &str,
+         status: &str,
+         reason: Option<&str>,
+         attempts: &[CandidateAttempt],
+         multi: bool,
+         json_results: &mut Vec<AttachResultJson>| {
+            if json_mode {
+                json_results.push(AttachResultJson {
+                    path: path.to_string(),
+                    status: status.to_string(),
+                    reason: reason.map(str::to_string),
+                    candidates: attempts
+                        .iter()
+                        .map(|attempt| {
+                            let (matched, total) = attempt
+                                .verified
+                                .as_ref()
+                                .map(|verified| {
+                                    (
+                                        Some(verified.matched),
+                                        Some(verified.total),
+                                    )
+                                })
+                                .unwrap_or((None, None));
+                            AttachCandidateJson {
+                                path: attempt.path.display().to_string(),
+                                verdict: attempt.verdict.clone(),
+                                matched,
+                                total,
+                            }
+                        })
+                        .collect(),
+                });
+                return;
+            }
+            match (status, reason) {
+                ("attached", Some(detail)) => {
+                    println!("{path}: attached ({detail})");
+                }
+                ("attached", None) => println!("{path}: attached"),
+                (_, Some(skip)) => println!("{path}: skipped ({skip})"),
+                (_, None) => println!("{path}: skipped"),
+            }
+            if multi {
+                for attempt in attempts {
+                    println!(
+                        "  {}: {}",
+                        attempt.path.display(),
+                        attempt.verdict
+                    );
+                }
+            }
+        };
     for row_index in selected {
         let row = &index.rows[row_index];
         if let Some(reason) = ineligibility(&config.bob_dir, row) {
             if named_only {
-                println!("{}: skipped ({reason})", row.path);
+                report_row(
+                    &row.path,
+                    "skipped",
+                    Some(&reason),
+                    &[],
+                    false,
+                    &mut json_results,
+                );
                 skipped.push((&row.path, reason));
             }
             continue;
@@ -1042,62 +1205,39 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         let (Some(stem), Some(ref_type)) = (note_stem(row), store_type(row))
         else {
             let reason = "no candidate".to_string();
-            println!("{}: skipped ({reason})", row.path);
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &[],
+                false,
+                &mut json_results,
+            );
             skipped.push((&row.path, reason));
             continue;
         };
-        let candidate =
-            match find_candidates(&stem, &search, single_file_override) {
-                Ok(candidate) => candidate,
-                Err(reason) => {
-                    println!("{}: skipped ({reason})", row.path);
-                    skipped.push((&row.path, reason.clone()));
-                    continue;
-                }
-            };
-        let bytes = match fs::read(&candidate) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                let reason = format!("unreadable candidate: {error}");
-                println!("{}: skipped ({reason})", row.path);
-                skipped.push((&row.path, reason));
-                failed = true;
-                continue;
-            }
-        };
-        // The candidate must name this reference: frontmatter title,
-        // else the first H1 outside fenced blocks.
-        if candidate_title(&bytes)
-            .is_none_or(|title| !titles_match(&title, &row.title))
-        {
-            let reason = "title mismatch".to_string();
-            println!("{}: skipped ({reason})", row.path);
+        let candidates =
+            find_all_candidates(&stem, &search, single_file_override);
+        // An explicit `REF -s FILE` pair carries a human review of the
+        // pairing, so it skips the title check but still verifies.
+        let explicit_pair = single_file_override.is_some();
+        let multi = candidates.len() > 1 && !explicit_pair;
+        if candidates.is_empty() {
+            let reason = "no candidate".to_string();
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &[],
+                false,
+                &mut json_results,
+            );
             skipped.push((&row.path, reason));
             continue;
         }
-        let mut catalog = match record_source_catalog(&bytes, "attached") {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                println!("{}: skipped ({error})", row.path);
-                skipped.push((&row.path, error));
-                failed = true;
-                continue;
-            }
-        };
         let pdf_path = config
             .bob_dir
             .join(row.source_pdf.as_deref().unwrap_or_default());
-        if let Some(links) = catalog.links.as_mut() {
-            if let Err(error) =
-                pdf_links::annotate_catalog_links(links, &pdf_path)
-            {
-                let reason = format!("unreadable PDF annotations: {error}");
-                println!("{}: skipped ({reason})", row.path);
-                skipped.push((&row.path, reason));
-                failed = true;
-                continue;
-            }
-        }
         let pages = match pdf_page_texts(&pdf_path, &mut pdftotext_checked) {
             Ok(pages) => pages,
             Err(error) => {
@@ -1105,17 +1245,87 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 return 1;
             }
         };
-        let verified =
-            match verify_candidate(&candidate, &bytes, catalog, &pages) {
-                Ok(verified) => verified,
-                Err(reason) => {
-                    println!("{}: skipped ({reason})", row.path);
-                    skipped.push((&row.path, reason));
-                    continue;
-                }
+        let attempts: Vec<CandidateAttempt> = candidates
+            .iter()
+            .map(|candidate| {
+                attempt_candidate(
+                    candidate,
+                    &row.title,
+                    explicit_pair,
+                    &pdf_path,
+                    &pages,
+                )
+            })
+            .collect();
+        for attempt in &attempts {
+            if attempt.verdict.starts_with("unreadable candidate")
+                || attempt.verdict.starts_with("unreadable PDF annotations")
+                || attempt.verdict.contains("pandoc")
+            {
+                failed = true;
+                break;
+            }
+        }
+        let passing: Vec<usize> = attempts
+            .iter()
+            .enumerate()
+            .filter(|(_, attempt)| attempt.verified.is_some())
+            .map(|(index, _)| index)
+            .collect();
+        // Several candidates attach only through disambiguation: exactly
+        // one verified candidate wins; zero or several keep the skip.
+        let chosen = match (multi, passing.len()) {
+            (false, 1) => Some(passing[0]),
+            (false, 0) => None,
+            (true, 1) => Some(passing[0]),
+            _ => None,
+        };
+        let Some(chosen_index) = chosen else {
+            let reason = if multi {
+                format!(
+                    "ambiguous: {} of {} verified",
+                    passing.len(),
+                    attempts.len()
+                )
+            } else {
+                attempts
+                    .first()
+                    .map(|attempt| attempt.verdict.clone())
+                    .unwrap_or_else(|| "no candidate".to_string())
             };
+            report_row(
+                &row.path,
+                "skipped",
+                Some(&reason),
+                &attempts,
+                multi,
+                &mut json_results,
+            );
+            skipped.push((&row.path, reason));
+            continue;
+        };
+        let attempt = &attempts[chosen_index];
+        let candidate = attempt.path.clone();
+        let verified = attempt
+            .verified
+            .as_ref()
+            .expect("chosen candidate verified");
         if dry_run {
-            println!("{}: attached", row.path);
+            let detail = multi.then(|| {
+                format!(
+                    "1 of {} verified: {}",
+                    attempts.len(),
+                    candidate.display()
+                )
+            });
+            report_row(
+                &row.path,
+                "attached",
+                detail.as_deref(),
+                &attempts,
+                multi,
+                &mut json_results,
+            );
             attached += 1;
             continue;
         }
@@ -1123,7 +1333,14 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             Ok(sha) => sha,
             Err(error) => {
                 let reason = format!("unreadable pdf: {error}");
-                println!("{}: skipped ({reason})", row.path);
+                report_row(
+                    &row.path,
+                    "skipped",
+                    Some(&reason),
+                    &attempts,
+                    multi,
+                    &mut json_results,
+                );
                 skipped.push((&row.path, reason));
                 failed = true;
                 continue;
@@ -1135,11 +1352,25 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             &stem,
             &ref_type,
             &candidate,
-            &verified,
+            verified,
             &pdf_sha256,
         ) {
             Ok(paths) => {
-                println!("{}: attached", row.path);
+                let detail = multi.then(|| {
+                    format!(
+                        "1 of {} verified: {}",
+                        attempts.len(),
+                        candidate.display()
+                    )
+                });
+                report_row(
+                    &row.path,
+                    "attached",
+                    detail.as_deref(),
+                    &attempts,
+                    multi,
+                    &mut json_results,
+                );
                 attached += 1;
                 batch_paths.extend(paths);
                 batch_count += 1;
@@ -1158,7 +1389,14 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
                 }
             }
             Err(error) => {
-                println!("{}: skipped ({error})", row.path);
+                report_row(
+                    &row.path,
+                    "skipped",
+                    Some(error.as_str()),
+                    &attempts,
+                    multi,
+                    &mut json_results,
+                );
                 skipped.push((&row.path, error));
                 failed = true;
             }
@@ -1174,6 +1412,24 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             eprintln!("{COMMAND_NAME}: error: {error}");
             return 1;
         }
+    }
+    if json_mode {
+        let envelope = AttachEnvelope {
+            ok: !failed,
+            schema_version: REF_SCHEMA_VERSION,
+            command: "ref attach-source",
+            generated_at: generated_at(),
+            dry_run,
+            attached,
+            skipped: skipped.len(),
+            results: json_results,
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&envelope)
+                .expect("attach envelope serializes")
+        );
+        return if failed { 1 } else { 0 };
     }
     let mut reasons: BTreeSet<&str> = BTreeSet::new();
     for (_, reason) in &skipped {
@@ -1253,6 +1509,43 @@ mod tests {
         assert!(record_source_catalog(source, "unsupported")
             .unwrap_err()
             .contains("unsupported saved-source route"));
+    }
+
+    #[test]
+    fn attach_json_envelope_names_every_candidate() {
+        let envelope = AttachEnvelope {
+            ok: true,
+            schema_version: REF_SCHEMA_VERSION,
+            command: "ref attach-source",
+            generated_at: "2026-10-27T00:00:00".to_string(),
+            dry_run: true,
+            attached: 0,
+            skipped: 1,
+            results: vec![AttachResultJson {
+                path: "ref/chat/report.md".to_string(),
+                status: "skipped".to_string(),
+                reason: Some("ambiguous: 0 of 2 verified".to_string()),
+                candidates: vec![
+                    AttachCandidateJson {
+                        path: "/sidecar-a/report.md".to_string(),
+                        verdict: "title mismatch".to_string(),
+                        matched: None,
+                        total: None,
+                    },
+                    AttachCandidateJson {
+                        path: "/sidecar-b/report.md".to_string(),
+                        verdict: "verified".to_string(),
+                        matched: Some(2),
+                        total: Some(2),
+                    },
+                ],
+            }],
+        };
+        let json =
+            serde_json::to_string(&envelope).expect("envelope serializes");
+        assert!(json.contains("ambiguous: 0 of 2 verified"));
+        assert!(json.contains("/sidecar-a/report.md"));
+        assert!(json.contains("\"matched\":2"));
     }
 
     #[test]
