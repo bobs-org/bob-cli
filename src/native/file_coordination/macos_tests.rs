@@ -137,6 +137,32 @@ fn wait_for_document(
     }
 }
 
+/// Like `wait_for_document`, but also waits for the re-read NSDocument
+/// performs after a coordinated move. A move round trip leaves the URL and
+/// text unchanged, so they alone cannot tell whether the presenter has
+/// applied the moves yet. NSDocument applies them about half a second after
+/// the request ends, then re-reads the file. That re-read discards an edit
+/// made before it, so a later save must wait for it.
+fn wait_for_reloaded_document(
+    presenter: &mut Presenter,
+    expected_path: &Path,
+    expected_text: &str,
+    reads_before: u64,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = wait_for_document(presenter, expected_path, expected_text);
+        if state["reads"].as_u64().unwrap() > reads_before {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "presenter did not re-read after the move: {state}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[test]
 fn no_presenter_writes() {
     let dir = tempfile::tempdir().unwrap();
@@ -529,7 +555,7 @@ fn archive_move_presenter_rollback_inside_move_restores_live_save_target() {
     else {
         return;
     };
-    presenter.command("edit +user");
+    let edited = presenter.command("edit +user");
 
     assert_written(coordinate_moving_write(
         &live,
@@ -545,7 +571,12 @@ fn archive_move_presenter_rollback_inside_move_restores_live_save_target() {
     ));
     assert!(!archive.exists(), "rollback must not leave an archive");
     assert_eq!(fs::read_to_string(&live).unwrap(), "original+user");
-    wait_for_document(&mut presenter, &live, "original+user");
+    wait_for_reloaded_document(
+        &mut presenter,
+        &live,
+        "original+user",
+        edited["reads"].as_u64().unwrap(),
+    );
 
     assert_eq!(presenter.command("edit +rollback-save")["dirty"], true);
     assert_eq!(presenter.command("save")["event"], "saved");
