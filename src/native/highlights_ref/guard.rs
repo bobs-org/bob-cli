@@ -103,58 +103,127 @@ pub(super) fn ensure_safe_to_write<'a, I>(
 where
     I: IntoIterator<Item = &'a PdfSyncPlan>,
 {
-    let mut active_plans = Vec::new();
-    for plan in plans {
-        // A capture that was restored after planning is now a hold. Do not
-        // let its otherwise-planned note/task/assets target trigger a broad
-        // dirty-target refusal before execution can report that hold.
-        if super::sync::replaced_capture_hold(config, &plan.pdf)?.is_none() {
-            active_plans.push(plan);
-        }
-    }
-    let plans = active_plans;
-    let mut touched_paths = BTreeSet::new();
-    for plan in &plans {
-        let path_set = scoped_write_path_set(config, plan);
-        touched_paths.extend(
-            path_set
-                .write_paths
-                .difference(&path_set.veto_exempt_paths)
-                .cloned(),
-        );
-    }
-    let touched_paths = touched_paths
-        .into_iter()
-        .filter(|path| path.exists())
-        .filter(|path| path.strip_prefix(&config.bob_dir).is_ok())
-        .collect::<Vec<_>>();
-    if touched_paths.is_empty() {
+    let plans = plans.into_iter().collect::<Vec<_>>();
+    let preflight = scan_dirty_preflight(config, plans.iter().copied())?;
+    let refused_paths = preflight
+        .held_targets_by_pdf
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if refused_paths.is_empty() {
         return Ok(());
     }
+    let display_paths = refused_paths
+        .iter()
+        .map(|path| display_vault_path(config, path))
+        .collect::<Vec<_>>();
+    Err(CommandError::new(format!(
+        "refusing to modify dirty vault files:\n  {}\ncommit, stash, or clean these files before rerunning",
+        display_paths.join("\n  ")
+    ))
+    .with_code("dirty_targets")
+    .with_paths(refused_paths.into_iter().collect()))
+}
 
-    match git_status(config, &touched_paths)? {
-        GitStatus::Worktree { entries } if !entries.is_empty() => {
-            let mut refused = Vec::new();
-            let mut refused_paths = Vec::new();
-            for entry in &entries {
-                if !dirty_entry_allowed_for_plans(config, &plans, entry)? {
-                    refused.push(entry.raw.clone());
-                    refused_paths.push(config.bob_dir.join(&entry.path));
-                }
-            }
-            if refused.is_empty() {
-                Ok(())
-            } else {
-                Err(CommandError::new(format!(
-                    "refusing to modify dirty vault files:\n  {}\ncommit, stash, or clean these files before rerunning",
-                    refused.join("\n  ")
-                ))
-                .with_code("dirty_targets")
-                .with_paths(refused_paths))
+/// A scan-wide, pre-write snapshot of dirty targets grouped by the PDF plans
+/// whose own write policy rejects each target.
+pub(super) struct ScanDirtyPreflight {
+    pub(super) held_targets_by_pdf: BTreeMap<PathBuf, Vec<PathBuf>>,
+}
+
+/// Classify dirty targets once, before any PDF executes. Keeping the snapshot
+/// here prevents an earlier plan's writes from changing the status seen by a
+/// later plan, and evaluating allowances per owner prevents one plan's note
+/// allowance from authorizing another plan's explicit routed write.
+pub(super) fn scan_dirty_preflight<'a, I>(
+    config: &Config,
+    plans: I,
+) -> Result<ScanDirtyPreflight>
+where
+    I: IntoIterator<Item = &'a PdfSyncPlan>,
+{
+    let mut owners: BTreeMap<PathBuf, Vec<&PdfSyncPlan>> = BTreeMap::new();
+    for plan in plans {
+        // Preserve replaced-capture precedence: the plan will report that
+        // hold in the executor and must not be vetoed by its other targets.
+        if super::sync::replaced_capture_hold(config, &plan.pdf)?.is_some() {
+            continue;
+        }
+        let path_set = scoped_write_path_set(config, plan);
+        for path in path_set.write_paths.difference(&path_set.veto_exempt_paths)
+        {
+            if path.exists() && path.strip_prefix(&config.bob_dir).is_ok() {
+                owners.entry(path.clone()).or_default().push(plan);
             }
         }
-        _ => Ok(()),
     }
+
+    if owners.is_empty() {
+        return Ok(ScanDirtyPreflight {
+            held_targets_by_pdf: BTreeMap::new(),
+        });
+    }
+
+    let touched_paths = owners.keys().cloned().collect::<Vec<_>>();
+    let mut held: BTreeMap<PathBuf, BTreeSet<PathBuf>> = BTreeMap::new();
+    if let GitStatus::Worktree { entries } = git_status(config, &touched_paths)?
+    {
+        for entry in &entries {
+            let mut entry_paths = vec![entry.path.clone()];
+            if let Some(original_path) = &entry.original_path {
+                entry_paths.push(original_path.clone());
+            }
+            for relative_path in entry_paths {
+                let target = config.bob_dir.join(&relative_path);
+                let Some(target_owners) = owners.get(&target) else {
+                    continue;
+                };
+                for plan in target_owners {
+                    if dirty_entry_allowed_for_plan(config, plan, entry)? {
+                        continue;
+                    }
+                    held.entry(plan.pdf.clone())
+                        .or_default()
+                        .insert(target.clone());
+                }
+            }
+        }
+    }
+
+    Ok(ScanDirtyPreflight {
+        held_targets_by_pdf: held
+            .into_iter()
+            .map(|(pdf, paths)| (pdf, paths.into_iter().collect()))
+            .collect(),
+    })
+}
+
+pub(super) fn dirty_targets_hold(
+    config: &Config,
+    plan: &PdfSyncPlan,
+    targets: &[PathBuf],
+) -> ScanHold {
+    let paths = targets
+        .iter()
+        .map(|path| display_vault_path(config, path))
+        .collect::<Vec<_>>();
+    scan_hold_for(
+        plan,
+        HoldReason::DirtyTargets,
+        format!(
+            "dirty vault targets: {} · retrying next scan",
+            paths.join(" · ")
+        ),
+    )
+}
+
+fn display_vault_path(config: &Config, path: &Path) -> String {
+    path.strip_prefix(&config.bob_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .escape_debug()
+        .to_string()
 }
 
 /// Complete path set for a one-PDF write. The exempt set contains the
@@ -259,19 +328,22 @@ pub(super) fn intent_write_planned(
     })
 }
 
-pub(super) fn dirty_entry_allowed_for_plans(
+pub(super) fn dirty_entry_allowed_for_plan(
     config: &Config,
-    plans: &[&PdfSyncPlan],
+    plan: &PdfSyncPlan,
     entry: &GitStatusEntry,
 ) -> Result<bool> {
-    if entry.index_status != ' ' || entry.worktree_status != 'M' {
+    if entry.index_status != ' '
+        || entry.worktree_status != 'M'
+        || entry.original_path.is_some()
+    {
         return Ok(false);
     }
 
     let path = config.bob_dir.join(&entry.path);
-    let Some(plan) = plans.iter().find(|plan| plan.note_path == path) else {
+    if plan.note_path != path {
         return Ok(false);
-    };
+    }
     if !note_write_planned(plan) {
         return Ok(false);
     }
@@ -486,8 +558,10 @@ pub(super) fn git_status(
     command
         .arg("-c")
         .arg("color.status=false")
+        .arg("--literal-pathspecs")
         .arg("status")
-        .arg("--short")
+        .arg("--porcelain=v1")
+        .arg("-z")
         .arg("--untracked-files=all")
         .arg("--");
     for path in paths {
@@ -508,30 +582,120 @@ pub(super) fn git_status(
         )));
     }
 
-    Ok(GitStatus::Worktree {
-        entries: String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(parse_git_status_entry)
-            .collect(),
-    })
+    let entries =
+        parse_git_status_entries(&output.stdout).map_err(|reason| {
+            CommandError::new(format!(
+                "could not classify Git status in {}: {reason}",
+                config.bob_dir.display()
+            ))
+        })?;
+    Ok(GitStatus::Worktree { entries })
 }
 
-pub(super) fn parse_git_status_entry(line: &str) -> Option<GitStatusEntry> {
-    if line.len() < 4 {
-        return None;
+fn parse_git_status_entries(
+    bytes: &[u8],
+) -> std::result::Result<Vec<GitStatusEntry>, String> {
+    let mut records = bytes.split(|byte| *byte == 0).peekable();
+    let mut entries = Vec::new();
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            if records.peek().is_none() {
+                break;
+            }
+            return Err(
+                "unexpected empty NUL-delimited status record".to_string()
+            );
+        }
+        if record.len() < 4 || record[2] != b' ' {
+            return Err("status record has no XY/path separator".to_string());
+        }
+        let index_status = status_char(record[0])?;
+        let worktree_status = status_char(record[1])?;
+        if !valid_status_char(index_status)
+            || !valid_status_char(worktree_status)
+        {
+            return Err(format!(
+                "unknown porcelain status {:?}{:?}",
+                index_status, worktree_status
+            ));
+        }
+        let path = path_from_git_bytes(&record[3..])?;
+        let has_rename_source = matches!(index_status, 'R' | 'C')
+            || matches!(worktree_status, 'R' | 'C');
+        let original_path = if has_rename_source {
+            let source = records.next().ok_or_else(|| {
+                "rename/copy status has no source path".to_string()
+            })?;
+            if source.is_empty() {
+                return Err(
+                    "rename/copy status has an empty source path".to_string()
+                );
+            }
+            Some(path_from_git_bytes(source)?)
+        } else {
+            None
+        };
+        let raw = match &original_path {
+            Some(original_path) => format!(
+                "{}{} {} (from {})",
+                index_status,
+                worktree_status,
+                escaped_path(&path),
+                escaped_path(original_path)
+            ),
+            None => format!(
+                "{}{} {}",
+                index_status,
+                worktree_status,
+                escaped_path(&path)
+            ),
+        };
+        entries.push(GitStatusEntry {
+            index_status,
+            worktree_status,
+            path,
+            original_path,
+            raw,
+        });
     }
-    let mut chars = line.chars();
-    let index_status = chars.next()?;
-    let worktree_status = chars.next()?;
-    if chars.next()? != ' ' {
-        return None;
+    Ok(entries)
+}
+
+fn status_char(byte: u8) -> std::result::Result<char, String> {
+    if byte.is_ascii() {
+        Ok(char::from(byte))
+    } else {
+        Err("porcelain status contains a non-ASCII status byte".to_string())
     }
-    Some(GitStatusEntry {
-        index_status,
-        worktree_status,
-        path: PathBuf::from(&line[3..]),
-        raw: line.to_string(),
-    })
+}
+
+fn valid_status_char(status: char) -> bool {
+    matches!(
+        status,
+        ' ' | 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | '?' | '!' | 'T'
+    )
+}
+
+fn path_from_git_bytes(bytes: &[u8]) -> std::result::Result<PathBuf, String> {
+    if bytes.is_empty() {
+        return Err("status record has an empty path".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+    }
+    #[cfg(not(unix))]
+    {
+        let path = std::str::from_utf8(bytes).map_err(|_| {
+            "status path is not valid UTF-8 on this platform".to_string()
+        })?;
+        Ok(PathBuf::from(path))
+    }
+}
+
+fn escaped_path(path: &Path) -> String {
+    path.to_string_lossy().escape_debug().to_string()
 }
 
 pub(super) fn command_output(output: &Output) -> String {
@@ -544,6 +708,128 @@ pub(super) fn command_output(output: &Output) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn porcelain_status_parser_preserves_quoted_and_non_ascii_paths() {
+        let path = "ref/chat/space \"and é\nline.md";
+        let bytes = format!(" M {path}\0").into_bytes();
+        let entries = parse_git_status_entries(&bytes).expect("parse status");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index_status, ' ');
+        assert_eq!(entries[0].worktree_status, 'M');
+        assert_eq!(entries[0].path, PathBuf::from(path));
+        assert!(entries[0].original_path.is_none());
+        assert!(!entries[0].raw.contains('\n'));
+    }
+
+    #[test]
+    fn porcelain_status_parser_keeps_both_rename_paths() {
+        let entries = parse_git_status_entries(
+            b"R  ref/chat/new name.md\0ref/chat/old name.md\0",
+        )
+        .expect("parse rename status");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].index_status, 'R');
+        assert_eq!(entries[0].path, PathBuf::from("ref/chat/new name.md"));
+        assert_eq!(
+            entries[0].original_path,
+            Some(PathBuf::from("ref/chat/old name.md"))
+        );
+    }
+
+    #[test]
+    fn porcelain_status_parser_fails_closed_on_unclassifiable_records() {
+        assert!(parse_git_status_entries(b" M\0").is_err());
+        assert!(parse_git_status_entries(b"XZ path.md\0").is_err());
+        assert!(parse_git_status_entries(b"R  new.md\0").is_err());
+    }
+
+    #[test]
+    fn git_status_keeps_staged_untracked_quoted_and_renamed_targets_exact() {
+        let temp = tempfile::tempdir().expect("create vault");
+        let bob_dir = temp.path();
+        let ref_dir = bob_dir.join("ref/chat");
+        fs::create_dir_all(&ref_dir).expect("create ref directory");
+        let staged = PathBuf::from("ref/chat/staged \"é.md");
+        let old_name = PathBuf::from("ref/chat/old \"é.md");
+        let new_name = PathBuf::from("ref/chat/new \"é.md");
+        let untracked = PathBuf::from("ref/chat/untracked \"é\n.md");
+        fs::write(bob_dir.join(&staged), "base staged\n")
+            .expect("write staged");
+        fs::write(bob_dir.join(&old_name), "rename me\n")
+            .expect("write rename source");
+
+        let run_git = |args: &[&str]| {
+            let output = process::Command::new("git")
+                .current_dir(bob_dir)
+                .args(args)
+                .output()
+                .expect("run Git fixture command");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run_git(&["init", "-q"]);
+        run_git(&["config", "user.name", "Test User"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["add", "."]);
+        run_git(&["commit", "-q", "-m", "initial"]);
+
+        fs::write(bob_dir.join(&staged), "staged change\n")
+            .expect("modify staged");
+        run_git(&["add", "--", "ref/chat/staged \"é.md"]);
+        fs::rename(bob_dir.join(&old_name), bob_dir.join(&new_name))
+            .expect("rename tracked file");
+        run_git(&["add", "-A"]);
+        fs::write(bob_dir.join(&untracked), "untracked\n")
+            .expect("write untracked");
+
+        let config = Config::for_vault(bob_dir);
+        let paths = [staged, old_name, new_name, untracked]
+            .iter()
+            .map(|path| bob_dir.join(path))
+            .collect::<Vec<_>>();
+        let GitStatus::Worktree { entries } =
+            git_status(&config, &paths).expect("structured Git status")
+        else {
+            panic!("fixture vault must be a Git worktree");
+        };
+
+        let staged_entry = entries
+            .iter()
+            .find(|entry| entry.path == PathBuf::from("ref/chat/staged \"é.md"))
+            .expect("staged path preserved");
+        assert_eq!(
+            (staged_entry.index_status, staged_entry.worktree_status),
+            ('M', ' ')
+        );
+        let untracked_entry = entries
+            .iter()
+            .find(|entry| {
+                entry.path == PathBuf::from("ref/chat/untracked \"é\n.md")
+            })
+            .expect("untracked path preserved");
+        assert_eq!(
+            (
+                untracked_entry.index_status,
+                untracked_entry.worktree_status
+            ),
+            ('?', '?')
+        );
+        let rename_entry = entries
+            .iter()
+            .find(|entry| entry.path == PathBuf::from("ref/chat/new \"é.md"))
+            .expect("rename destination preserved");
+        assert_eq!(rename_entry.index_status, 'R');
+        assert_eq!(
+            rename_entry.original_path,
+            Some(PathBuf::from("ref/chat/old \"é.md"))
+        );
+    }
 
     fn routed_intent(path: PathBuf) -> RoutedInsertionIntent {
         RoutedInsertionIntent {

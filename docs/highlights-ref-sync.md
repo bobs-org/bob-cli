@@ -43,7 +43,7 @@ sidecar parsing, generated note rendering, TextBundle image selection asset
 copying, image notes (a screenshot path pasted into a highlight comment),
 continuation highlights (a `<` note groups a highlight with the one before it),
 recursive library scan with `xlib` intake, prerequisite checks, output
-collision detection, dirty-target refusal, and atomic note writes.
+collision detection, per-PDF dirty-target holds, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
 `/Text` annotation on page 1 as the marker note, parses the marker list,
@@ -812,6 +812,16 @@ scan exits 0, and the next scan retries. A hold is not a failure.
 | `coordination_timeout` | Access not granted within 10 s, or the scan's 30 s cap is spent | `Highlights didn't answer within 10 s (a dialog may be open) · retrying next scan` (cap variant: `Highlights didn't answer this scan (30 s spent) · retrying next scan`) |
 | `marker_changed` | Fresh bytes carry a marker other than the planned one | `marker changed in Highlights during the scan · retrying next scan` |
 | `replaced_capture` | The live PDF's SHA-256 matches an annotated PDF archived by this reference's `earlier:` lineage | `Highlights wrote the replaced capture back` |
+| `dirty_targets` | A writing full scan found protected dirty vault paths in this PDF plan; those paths are listed in scan order | `dirty vault targets: ref/... · retrying next scan` |
+
+`dirty_targets` holds the whole PDF: the scan writes none of its reference
+note, marker, annotation or reading tasks, or image assets. Other clean plans
+continue. A scan containing only dirty holds succeeds with exit 0, including
+when every planned PDF is held. The next writing scan retries each hold. This
+policy applies to `ref scan --write-pdfs`, attended scans, and the
+`highlights scan` alias. The Git status snapshot is taken once after plans are
+finalized and before any PDF writes; a dirty shared destination holds every
+plan whose own policy rejects it.
 
 The `replaced_capture` guard applies on every host, with or without PDF
 write-back. It runs before marker reconciliation, annotation-task intake, or
@@ -823,8 +833,10 @@ capture can be restored before another scan.
 Concise scan output prints a yellow `held` line and a `N held` summary count.
 Verbose scan (`-v`) prints `pdf_write_coordination: on` and a `reading_hold`
 line when the key is on, then `pdf_marker_action: updated (coordinated in 0.42
-s)` or `held (<reason>; retrying next scan)`. `bob ref sync` uses the same
-phrases and still exits 0 on a hold.
+s)` or `held (<reason>; retrying next scan)`. Dirty-target holds name the
+vault-relative rejected paths in deterministic order. Targeted `bob ref sync`
+keeps its existing dirty-target refusal; this per-PDF hold policy is only for
+writing full scans.
 
 ### Explicit rename and capture publication
 
@@ -1032,13 +1044,14 @@ Intake runs before the dirty-target Git check because a newly rendered intake
 PDF is normally untracked, and the move never overwrites an existing path; a
 tracked synced PDF behaves as an ordinary Git rename.
 
-After intake, the command rejects duplicate output paths, builds per-PDF plans,
-and checks Git status for existing vault files that successfully planned PDFs
-would modify. If a target ref note or PDF marker target is dirty, it fails
-before any note/PDF write, except for a tracked target ref note whose only body
-change is the exact generated `^ref` checkbox toggle, optionally combined with
-frontmatter edits. There is no force mode for scan; commit, stash, or clean
-unrelated dirty files before rerunning.
+After intake, the command rejects duplicate output paths, finalizes per-PDF
+plans, and takes one structured Git status snapshot of their existing write
+targets before executing any PDF. A dirty protected target holds each plan
+whose own write policy rejects that path; clean independent plans still run.
+The existing allowance for eligible tracked reference-note edits and the
+reading/default-task destination exemptions remain plan-specific. There is no
+force mode or dirty-target exemption. A held PDF receives no note, marker,
+annotation-task, reading-task, or image-asset writes.
 
 Image assets copied from TextBundle sidecars are treated as note-side writes.
 They are planned during dry runs, checked by the same dirty-target preflight
@@ -1047,9 +1060,10 @@ Scan output includes image totals when a planned PDF contains image selections.
 
 Planning failures for one PDF do not stop valid plans from writing. Write-time
 failures such as a changed note/PDF or temporary save failure are reported as
-`write_failure` entries, and later valid PDFs continue. The scan summary reports
-`plan_failures`, `write_failures`, and `scan_failures`; any non-zero failure
-count makes the command exit non-zero even when other PDFs were processed.
+`write_failure` entries, and later valid PDFs continue. Dirty-target holds are
+reported separately and do not contribute successful write counts or `notes`
+rows. Any genuine plan or write failure still makes the command exit non-zero,
+even when other PDFs were held or processed.
 
 Reference note writes and image asset copies are atomic temporary-file renames
 and are skipped when the rendered note or content-addressed asset is
@@ -1145,7 +1159,7 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 
 | Field | Meaning |
 | --- | --- |
-| `ok` | `true` exactly when `failures` is empty and there is no `error`. With `--intake-only`, a writing drain is also `false` when `queued` is nonempty; a dry run ignores `queued` |
+| `ok` | `true` exactly when `failures` is empty and there is no `error`. Dirty holds do not make it false. With `--intake-only`, a writing drain is also `false` when `queued` is nonempty; a dry run ignores `queued` |
 | `schema_version` | `1`; clients reject any other version |
 | `command` | `"ref scan"` |
 | `generated_at` | Local-time stamp, pinned by `BOB_NOW` in tests |
@@ -1172,17 +1186,19 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
 | `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
 | `preview_holds` | Present only when a dry-run can diagnose a hold before writes; rows have the same `{pdf, note, title, reason, message}` shape as `held`. `held` and `summary.held` remain empty/zero in dry-run output |
-| `held` | PDFs held instead of written, always last and `[]` for dry runs: `{pdf, note, title, reason, message}` with vault-relative `pdf`/`note`, a stable `reason` slug (`editor_active`, `coordination_timeout`, `marker_changed`, `replaced_capture`), and the same message the human `held` line prints. The error envelope has no `held` field |
+| `held` | PDFs held instead of written, always last and `[]` for dry runs: `{pdf, note, title, reason, message}` with vault-relative `pdf`/`note`, a stable `reason` slug (`editor_active`, `coordination_timeout`, `marker_changed`, `replaced_capture`, `dirty_targets`), and the same message the human `held` line prints. `dirty_targets` lists rejected vault-relative paths and ends with `retrying next scan`. The error envelope has no `held` field |
 
 A hard failure prints the error envelope instead (`ok`, `schema_version`,
 `command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`,
 `intake_only`, `queued`), where `intake` lists any moves that already happened
 before the failure. `queued` is always `[]` there.
 `error.hint` is a string or `null`; `error.paths` is always an array of
-vault-relative paths. Exit codes: 0 means `ok: true`; 1 means per-PDF
-failures (the full envelope above, `ok: false`) or a hard failure (the error
-envelope below, with JSON on stdout either way); 2 is a clap usage error with
-no JSON on stdout.
+vault-relative paths. Exit codes: 0 means `ok: true`, including all-held
+writing scans; 1 means per-PDF failures (the full envelope above, `ok: false`)
+or a hard failure (the error envelope below, with JSON on stdout either way);
+2 is a clap usage error with no JSON on stdout. Changing full writing scans
+from a dirty-target error/exit 1 to per-PDF holds/exit 0 is a schema-1 command
+contract migration.
 
 | `error.code` | Raised by |
 | --- | --- |
@@ -1193,7 +1209,7 @@ no JSON on stdout.
 | `hook_failed` | The pre-scan hook failed to spawn or exited non-zero |
 | `intake_collision` | An intake destination already exists (`paths`: the colliding destinations) |
 | `output_collision` | Two PDFs map to one note or asset path (`paths`: the colliding targets) |
-| `dirty_targets` | The dirty-target git preflight refused (`paths`: the dirty files) |
+| `dirty_targets` | A targeted `ref sync` refused a protected dirty write target, or an older bob version returned its scan-wide dirty-preflight error (`paths`: the dirty files). Current writing full scans report this reason in `held[]` and succeed when no genuine failures occur |
 | `scan_failed` | Every other hard failure |
 
 ### Writer lock
@@ -1245,7 +1261,9 @@ exact envelope line JSON mode would print to
 `~/.local/state`). That covers human and JSON modes, full and
 `--intake-only` drains, success, partial success, and hard failures after
 the lock (where the receipt holds the error envelope). In JSON mode the
-receipt bytes are identical to stdout. Dry runs, `ref sync`, and scans that
+receipt bytes are identical to stdout. Per-PDF dirty holds appear in the
+normal completed-scan receipt, including when every PDF is held; they do not
+replace it with a scan-wide error. Dry runs, `ref sync`, and scans that
 never got the lock write no receipt. The receipt is written by temp file
 plus rename, mode 0600, in a 0700 directory. A receipt failure prints one
 `bob ref: could not write scan receipt: …` line to stderr and never changes
@@ -2640,8 +2658,12 @@ During `scan`, marker validation, sidecar validation, managed-region
 validation, `--write-pdf` refusals, and per-PDF write races are reported for the
 affected PDF while unrelated valid PDFs may still be planned or written. The
 summary shows `result: partial-failure` and the command exits non-zero when any
-PDF fails. Library discovery errors, output path collisions, and dirty target
-preflight failures remain hard global failures before writes.
+PDF fails. Library discovery errors, output path collisions, and Git status or
+preflight infrastructure errors remain hard global failures before writes.
+For writing full scans, a dirty protected target is instead a per-PDF hold;
+the scan continues with clean plans and exits 0 if there are no genuine
+failures. Targeted `ref sync`, create-time intake, `scan --intake-only`, and
+overwrite keep their existing refusal or queue behavior.
 
 | Message snippet | Meaning | Fix |
 | --- | --- | --- |
@@ -2659,7 +2681,8 @@ preflight failures remain hard global failures before writes.
 | `output path collision(s) detected before writes` | Multiple PDFs would write the same reference note path, such as `ref/books/example.md`, or the same planned image asset destination. | Rename or move one PDF before scanning. |
 | `image asset not found` | The sidecar references an image file that is not present relative to the sidecar text file. This usually means the PDF was exported as plain Markdown, or Highlights failed to create the TextBundle for a PDF with image/area annotations. | Manually create/export the TextBundle once, beside the PDF and with the exact PDF basename, so `assets/...` files are included, then rerun. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |
 | `image asset destination exists with different bytes` | A content-addressed `ref/.../*.assets/h-<id>.<ext>` destination already exists but its bytes do not match the source asset. | Inspect the existing asset, then remove or restore it before rerunning. |
-| `refusing to modify dirty vault files` | Git reports dirty touched paths outside the allowed frontmatter and generated-task checkbox write-back case. | Commit, stash, or clean those paths. |
+| `dirty vault targets: ref/... · retrying next scan` | A writing full scan held the PDF because Git reports a protected dirty target; its other plans may still complete. | Review the named paths, then commit, stash, or clean them. The next scan retries the held PDF. |
+| `refusing to modify dirty vault files` | Targeted `ref sync` (or an older bob full-scan preflight) refuses dirty touched paths outside the allowed note-edit case. | For targeted sync, commit, stash, or clean those paths. For a current full scan, read the per-PDF `held` rows instead. |
 | `reference note changed but --write-pdf was not supplied` | Frontmatter or the generated task contributes a lifecycle status to the selected projection, so the PDF marker needs an opt-in write. | Back up the PDF, then run targeted `sync --write-pdf` or reviewed bulk `scan --write-pdfs`. |
 | `checked PDF task conflicts` | The generated task says `status: read`, but marker or frontmatter changed `status` to another value from the stored base. | Uncheck the task or set the marker/frontmatter status to `read`. |
 | `cancelled PDF task conflicts` | The generated task says `status: abandoned`, but marker or frontmatter changed `status` to another value from the stored base. | Uncancel the task or set the marker/frontmatter status to `abandoned`. |

@@ -260,6 +260,9 @@ pub(super) fn hold_message(
         HoldReason::ReplacedCapture => {
             "Highlights wrote the replaced capture back".to_string()
         }
+        HoldReason::DirtyTargets => {
+            "dirty vault targets · retrying next scan".to_string()
+        }
     }
 }
 

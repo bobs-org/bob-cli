@@ -315,14 +315,24 @@ fn scan_library_write(
         print_scan_header(config, pdfs.len(), options.dry_run, &styler);
     }
 
-    if let Err(error) = ensure_safe_to_write(config, plans.iter().copied()) {
-        receipt.write_error(&error);
-        return Err(error);
-    }
+    let dirty_preflight =
+        match scan_dirty_preflight(config, plans.iter().copied()) {
+            Ok(preflight) => preflight,
+            Err(error) => {
+                receipt.write_error(&error);
+                return Err(error);
+            }
+        };
     let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
-        match execute_pdf_sync(config, plan, &mut run_state, &mut session) {
+        match execute_scan_plan(
+            config,
+            plan,
+            &dirty_preflight,
+            &mut run_state,
+            &mut session,
+        ) {
             Ok(PdfSyncOutcome::Written(report)) => {
                 write_outcomes.push(ScanWriteOutcome::Written(report))
             }
@@ -1683,6 +1693,23 @@ pub(super) fn finalize_annotation_task_plans(
     }
 
     Ok(())
+}
+
+/// Shared full-scan branch: a dirty plan becomes a whole-PDF hold without
+/// entering the executor or reserving any run-state dedupe entries.
+pub(super) fn execute_scan_plan(
+    config: &Config,
+    plan: &PdfSyncPlan,
+    dirty_preflight: &ScanDirtyPreflight,
+    run_state: &mut RunWriteState,
+    session: &mut MarkerWriteSession,
+) -> Result<PdfSyncOutcome> {
+    if let Some(targets) = dirty_preflight.held_targets_by_pdf.get(&plan.pdf) {
+        return Ok(PdfSyncOutcome::Held(dirty_targets_hold(
+            config, plan, targets,
+        )));
+    }
+    execute_pdf_sync(config, plan, run_state, session)
 }
 
 /// Retarget a v2 unqualified follow-up (local `ReferenceNote`) to the live

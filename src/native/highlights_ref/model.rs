@@ -691,13 +691,14 @@ pub(super) struct MarkerWriteInfo {
     pub(super) restored: bool,
 }
 
-/// Why a coordinated marker write held instead of writing.
+/// Why a full-PDF sync held instead of writing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HoldReason {
     EditorActive,
     CoordinationTimeout,
     MarkerChanged,
     ReplacedCapture,
+    DirtyTargets,
 }
 
 impl HoldReason {
@@ -707,11 +708,12 @@ impl HoldReason {
             Self::CoordinationTimeout => "coordination_timeout",
             Self::MarkerChanged => "marker_changed",
             Self::ReplacedCapture => "replaced_capture",
+            Self::DirtyTargets => "dirty_targets",
         }
     }
 }
 
-/// One PDF whose marker write was held: nothing for that PDF was written.
+/// One PDF held as a whole: no output owned by that plan was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ScanHold {
     pub(super) pdf: PathBuf,
@@ -797,6 +799,9 @@ pub(super) struct GitStatusEntry {
     pub(super) index_status: char,
     pub(super) worktree_status: char,
     pub(super) path: PathBuf,
+    /// The source path for porcelain rename/copy entries. Git emits this as
+    /// a second NUL-delimited path in `--porcelain=v1 -z` mode.
+    pub(super) original_path: Option<PathBuf>,
     pub(super) raw: String,
 }
 

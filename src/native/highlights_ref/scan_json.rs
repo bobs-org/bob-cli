@@ -619,17 +619,21 @@ pub(super) fn scan_library_json(
         );
     }
 
-    if let Err(error) = ensure_safe_to_write(config, plans.iter().copied()) {
-        return print_scan_error_envelope(
-            config,
-            options,
-            mode,
-            &intake,
-            completed_intake,
-            &error,
-            true,
-        );
-    }
+    let dirty_preflight =
+        match scan_dirty_preflight(config, plans.iter().copied()) {
+            Ok(preflight) => preflight,
+            Err(error) => {
+                return print_scan_error_envelope(
+                    config,
+                    options,
+                    mode,
+                    &intake,
+                    completed_intake,
+                    &error,
+                    true,
+                );
+            }
+        };
     let mut session = match MarkerWriteSession::for_scan(attended) {
         Ok(session) => session,
         Err(error) => {
@@ -647,7 +651,13 @@ pub(super) fn scan_library_json(
     let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
-        match execute_pdf_sync(config, plan, &mut run_state, &mut session) {
+        match execute_scan_plan(
+            config,
+            plan,
+            &dirty_preflight,
+            &mut run_state,
+            &mut session,
+        ) {
             Ok(PdfSyncOutcome::Written(report)) => {
                 write_outcomes.push(ScanWriteOutcome::Written(report))
             }

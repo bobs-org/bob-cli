@@ -963,7 +963,7 @@ fn highlights_ref_scan_groups_routed_tasks_with_parallel_jobs() {
     let temp = TempDir::new("bob-cli-highlights-ref-routed-scan");
     let vault = temp.path().join("vault");
     let route_note = vault.join("alice.md");
-    write_file(&route_note, "---\nparent: \"[[people]]\"\n---\n\n# Alice\n");
+    write_file(&route_note, "---\ntype: [[area]]\n---\n\n# Alice\n");
     for (name, title, task) in [
         ("alpha", "Alpha", "Ask Alice about alpha."),
         ("beta", "Beta", "Ask Alice about beta."),
@@ -1019,6 +1019,158 @@ fn highlights_ref_scan_groups_routed_tasks_with_parallel_jobs() {
             "#task Ask Alice about alpha.",
             "#task Ask Alice about beta.",
         ],
+    );
+}
+
+#[test]
+fn ref_scan_holds_every_plan_rejecting_a_shared_dirty_route() {
+    let temp = TempDir::new("bob-cli-ref-scan-shared-dirty-route");
+    let vault = temp.path().join("vault");
+    let route_note = vault.join("alice.md");
+    write_file(&route_note, "---\nparent: \"[[people]]\"\n---\n\n# Alice\n");
+    for (name, title, task) in [
+        ("alpha", "Alpha", "Ask Alice about alpha."),
+        ("beta", "Beta", "Ask Alice about beta."),
+    ] {
+        let pdf = vault.join(format!("lib/books/{name}.pdf"));
+        write_highlights_pdf(
+            &pdf,
+            &format!("- status: wip\n- parent: obsidian\n- title: {title}\n"),
+        );
+        write_file(
+            &pdf.with_extension("md"),
+            &format!(
+                "\
+## Page 1
+
+- status: wip
+- parent: obsidian
+
+---
+
+> {title} claim.
+
+- #task {task} @alice
+"
+            ),
+        );
+    }
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let route_before = fs::read_to_string(&route_note).expect("route note");
+    let dirty_route =
+        route_before.replace("# Alice\n", "# Alice\n\nLocal route edit.\n");
+    write_file(&route_note, &dirty_route);
+
+    let output = run_ref_scan(&vault, &["--jobs", "2", "-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "both plans should hold their shared dirty route and succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["summary"]["held"], 2);
+    assert_eq!(document["summary"]["tasks"], 0);
+    assert_eq!(document["notes"], serde_json::json!([]));
+    let held = document["held"].as_array().expect("held array");
+    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(held[0]["pdf"], "lib/books/alpha.pdf");
+    assert_eq!(held[1]["pdf"], "lib/books/beta.pdf");
+    assert!(held.iter().all(|row| {
+        row["reason"] == "dirty_targets"
+            && row["message"]
+                == "dirty vault targets: alice.md · retrying next scan"
+    }));
+    assert_eq!(
+        fs::read_to_string(&route_note).expect("dirty route remains"),
+        dirty_route
+    );
+    assert!(!vault.join("ref/books/alpha.md").exists());
+    assert!(!vault.join("ref/books/beta.md").exists());
+}
+
+#[test]
+fn ref_scan_default_destination_exemption_is_not_shared_with_explicit_route() {
+    let temp = TempDir::new("bob-cli-ref-scan-shared-default-explicit");
+    let vault = temp.path().join("vault");
+    let route_note = vault.join("alice.md");
+    let default_pdf = vault.join("lib/books/alpha.pdf");
+    let explicit_pdf = vault.join("lib/books/beta.pdf");
+    write_file(&route_note, "---\ntype: [[area]]\n---\n\n# Alice\n");
+    write_highlights_pdf(
+        &default_pdf,
+        "- status: wip\n- parent: alice\n- title: Alpha\n",
+    );
+    write_highlights_pdf(
+        &explicit_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Beta\n",
+    );
+    write_file(
+        &explicit_pdf.with_extension("md"),
+        "\
+## Page 1
+
+- status: wip
+- parent: obsidian
+
+---
+
+> Beta claim.
+
+- #task Send this to Alice. @alice
+",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_route = "---\ntype: [[area]]\n---\n\n# Alice\n\nLocal edit.\n";
+    write_file(&route_note, dirty_route);
+
+    let output = run_ref_scan(&vault, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "only the plan with the explicit route should be held:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["summary"]["held"], 1);
+    assert_eq!(document["held"][0]["pdf"], "lib/books/beta.pdf");
+    assert_eq!(document["held"][0]["reason"], "dirty_targets");
+    assert_eq!(
+        document["held"][0]["message"],
+        "dirty vault targets: alice.md · retrying next scan"
+    );
+    let notes = document["notes"].as_array().expect("successful note rows");
+    assert_eq!(
+        notes.len(),
+        1,
+        "the default-destination plan executes: {notes:?}"
+    );
+    assert_eq!(notes[0]["path"], "ref/books/alpha.md");
+    assert!(!vault.join("ref/books/beta.md").exists());
+    let route_after =
+        fs::read_to_string(&route_note).expect("read route destination");
+    assert!(
+        route_after.contains("Local edit."),
+        "authored text survives:\n{route_after}"
+    );
+    assert!(
+        route_after != dirty_route,
+        "the exempt default-task plan writes to its own shared destination:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !route_after.contains("Send this to Alice."),
+        "the held plan's explicit route must not write into the dirty destination:\n{route_after}"
     );
 }
 
@@ -1712,9 +1864,24 @@ fn ref_scan_json_partial_failure_reports_pdf_stage_and_message() {
         &valid_pdf,
         "- status: wip\n- parent: obsidian\n- title: Valid PDF\n",
     );
+    assert_success(&run_ref_scan(&vault, &[]));
     write_highlights_pdf(
         &invalid_pdf,
         "- parent: obsidian\n- title: Missing Status\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_note = fs::read_to_string(&valid_note)
+        .expect("read valid note")
+        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
+    write_file(&valid_note, &dirty_note);
+    git_in(&vault, ["add", "ref/books/valid.md"]);
+    set_pdf_marker_contents(
+        &valid_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Valid PDF Revised\n",
     );
 
     let output = run_ref_scan(&vault, &["-f", "json"]);
@@ -1730,16 +1897,18 @@ fn ref_scan_json_partial_failure_reports_pdf_stage_and_message() {
         document["summary"],
         serde_json::json!({
             "pdfs": 2,
-            "created": 1,
+            "created": 0,
             "updated": 0,
             "unchanged": 0,
             "markers": 0,
             "tasks": 0,
             "failures": 1,
-            "held": 0,
+            "held": 1,
         })
     );
-    assert_eq!(document["held"], serde_json::json!([]));
+    assert_eq!(document["held"].as_array().expect("held array").len(), 1);
+    assert_eq!(document["held"][0]["pdf"], "lib/books/valid.pdf");
+    assert_eq!(document["held"][0]["reason"], "dirty_targets");
     let failures = document["failures"].as_array().expect("failures array");
     assert_eq!(failures.len(), 1, "{failures:?}");
     assert_scan_json_key_order(
@@ -1760,12 +1929,15 @@ fn ref_scan_json_partial_failure_reports_pdf_stage_and_message() {
     let notes = document["notes"]
         .as_array()
         .expect("notes must be an array");
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    assert_eq!(notes[0]["action"], "create");
-    assert_eq!(notes[0]["path"], "ref/books/valid.md");
     assert!(
-        valid_note.is_file(),
-        "the created note must still be listed and written"
+        notes.is_empty(),
+        "the held PDF contributes no note row: {notes:?}"
+    );
+    assert!(
+        valid_note.is_file()
+            && fs::read(&valid_note).expect("held note bytes")
+                == dirty_note.as_bytes(),
+        "the held note must stay untouched"
     );
 }
 
@@ -1855,14 +2027,20 @@ fn ref_scan_json_dry_run_plans_intake_without_writing() {
 }
 
 #[test]
-fn ref_scan_json_dirty_targets_error_envelope() {
+fn ref_scan_json_dirty_note_is_a_successful_hold() {
     let temp = TempDir::new("bob-cli-ref-scan-json-dirty");
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/chat/memo.pdf");
+    let second_pdf = vault.join("lib/chat/other.pdf");
     let note = vault.join("ref/chat/memo.md");
+    let second_note = vault.join("ref/chat/other.md");
     write_highlights_pdf(
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Memo\n",
+    );
+    write_highlights_pdf(
+        &second_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Other\n",
     );
     assert_success(&run_ref_scan(&vault, &[]));
     git_in(&vault, ["init", "-q"]);
@@ -1874,21 +2052,43 @@ fn ref_scan_json_dirty_targets_error_envelope() {
         .expect("read note")
         .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
     write_file(&note, &dirty_note);
+    git_in(&vault, ["add", "ref/chat/memo.md"]);
+    let dirty_second_note = fs::read_to_string(&second_note)
+        .expect("read second note")
+        .replace(
+            "## Highlights\n\n",
+            "Second local edit.\n\n## Highlights\n\n",
+        );
+    write_file(&second_note, &dirty_second_note);
     set_pdf_marker_contents(
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
     );
+    set_pdf_marker_contents(
+        &second_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Other Revised\n",
+    );
 
-    let output = run_ref_scan(&vault, &["-f", "json"]);
+    let state_dir = temp.path().join("state");
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .output()
+        .expect("dirty json scan");
     assert_eq!(
         output.status.code(),
-        Some(1),
-        "dirty json scan should exit 1:\n{}",
+        Some(0),
+        "dirty json scan should hold only this PDF and succeed:\n{}",
         format_output(&output)
     );
     assert!(
         !stderr(&output).contains("bob ref:"),
-        "json hard failures carry no `bob ref:` stderr line:\n{}",
+        "JSON scan output is carried by stdout:\n{}",
         format_output(&output)
     );
     let document = scan_json_stdout(&output);
@@ -1902,30 +2102,195 @@ fn ref_scan_json_dirty_targets_error_envelope() {
             "generated_at",
             "mode",
             "write_pdfs",
+            "hook",
             "intake",
-            "error",
+            "summary",
+            "notes",
+            "failures",
             "intake_only",
             "queued",
+            "held",
         ],
     );
-    assert_eq!(document["ok"], false);
+    assert_eq!(document["ok"], true);
     assert_eq!(document["mode"], "write");
     assert_eq!(document["intake"], serde_json::json!([]));
     assert_eq!(document["intake_only"], false);
     assert_eq!(document["queued"], serde_json::json!([]));
-    let error = &document["error"];
+    assert!(document.get("error").is_none());
+    assert_eq!(document["failures"], serde_json::json!([]));
+    assert_eq!(document["notes"], serde_json::json!([]));
+    assert_eq!(
+        document["summary"],
+        serde_json::json!({
+            "pdfs": 2,
+            "created": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "markers": 0,
+            "tasks": 0,
+            "failures": 0,
+            "held": 2,
+        })
+    );
+    let held = document["held"].as_array().expect("held array");
+    assert_eq!(held.len(), 2, "{held:?}");
     assert_scan_json_key_order(
         &output,
-        "\"error\":",
-        &["code", "message", "hint", "paths"],
+        "\"held\":[",
+        &["pdf", "note", "title", "reason", "message"],
     );
-    assert_eq!(error["code"], "dirty_targets");
-    assert_eq!(error["message"], "refusing to modify dirty vault files");
     assert_eq!(
-        error["hint"],
-        "commit, stash, or clean those paths, then scan again"
+        document["held"],
+        serde_json::json!([
+            {
+                "pdf": "lib/chat/memo.pdf",
+                "note": "ref/chat/memo.md",
+                "title": "Memo Revised",
+                "reason": "dirty_targets",
+                "message": "dirty vault targets: ref/chat/memo.md · retrying next scan",
+            },
+            {
+                "pdf": "lib/chat/other.pdf",
+                "note": "ref/chat/other.md",
+                "title": "Other Revised",
+                "reason": "dirty_targets",
+                "message": "dirty vault targets: ref/chat/other.md · retrying next scan",
+            }
+        ])
     );
-    assert_eq!(error["paths"], serde_json::json!(["ref/chat/memo.md"]));
+    assert_eq!(
+        fs::read(scan_receipt_path(&state_dir))
+            .expect("successful scan receipt"),
+        stdout(&output).as_bytes(),
+        "JSON stdout and the completed-scan receipt must be byte-identical"
+    );
+    assert_eq!(
+        fs::read(&note).expect("dirty note stays unchanged"),
+        dirty_note.as_bytes()
+    );
+    assert_eq!(
+        fs::read(&second_note).expect("second dirty note stays unchanged"),
+        dirty_second_note.as_bytes()
+    );
+
+    let concise = run_ref_scan(&vault, &[]);
+    assert_success(&concise);
+    assert!(
+        stdout(&concise).contains("held"),
+        "{}",
+        format_output(&concise)
+    );
+    assert!(
+        stdout(&concise).contains("memo"),
+        "{}",
+        format_output(&concise)
+    );
+    assert!(
+        stdout(&concise).contains("other"),
+        "{}",
+        format_output(&concise)
+    );
+    assert!(
+        stdout(&concise).contains("retrying next scan"),
+        "{}",
+        format_output(&concise)
+    );
+    let verbose = run_ref_scan(&vault, &["--verbose"]);
+    assert_success(&verbose);
+    assert!(
+        stdout(&verbose).contains(&format!("pdf: {}", pdf.display()))
+            && stdout(&verbose)
+                .contains(&format!("pdf: {}", second_pdf.display()))
+            && stdout(&verbose).contains("retrying next scan"),
+        "verbose output should name the held PDF and retry:\n{}",
+        format_output(&verbose)
+    );
+}
+
+#[test]
+fn ref_scan_json_holds_dirty_pdf_and_writes_clean_independent_pdf() {
+    let temp = TempDir::new("bob-cli-ref-scan-dirty-pdf-hold");
+    let vault = temp.path().join("vault");
+    let dirty_pdf = vault.join("lib/chat/dirty.pdf");
+    let clean_pdf = vault.join("lib/chat/clean.pdf");
+    let dirty_note = vault.join("ref/chat/dirty.md");
+    let clean_note = vault.join("ref/chat/clean.md");
+    let ready_marker = "- status: ready\n- parent: obsidian\n";
+    write_highlights_pdf(
+        &dirty_pdf,
+        &format!("{ready_marker}- title: Dirty\n"),
+    );
+    write_highlights_pdf(
+        &clean_pdf,
+        &format!("{ready_marker}- title: Clean\n"),
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+
+    for note in [&dirty_note, &clean_note] {
+        let contents = fs::read_to_string(note).expect("read generated note");
+        write_file(
+            note,
+            &contents.replacen("status: ready", "status: next", 1),
+        );
+    }
+    // Keep the marker intact but add a local annotation page. The plan needs
+    // to update the marker from the note, so the dirty PDF itself is a target.
+    write_highlights_pdf_pages(
+        &dirty_pdf,
+        &[
+            &[&format!("{ready_marker}- title: Dirty\n")],
+            &["Local annotation"],
+        ],
+    );
+    let dirty_pdf_before = fs::read(&dirty_pdf).expect("dirty PDF bytes");
+    let dirty_note_before = fs::read(&dirty_note).expect("dirty note bytes");
+    let clean_pdf_before = fs::read(&clean_pdf).expect("clean PDF bytes");
+
+    let output = run_ref_scan(&vault, &["-a", "-w", "-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a dirty PDF must not stop independent scan plans:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert!(document.get("error").is_none());
+    assert_eq!(document["summary"]["held"], 1);
+    assert_eq!(document["summary"]["failures"], 0);
+    assert_eq!(document["held"].as_array().expect("held rows").len(), 1);
+    assert_eq!(document["held"][0]["pdf"], "lib/chat/dirty.pdf");
+    assert_eq!(document["held"][0]["reason"], "dirty_targets");
+    assert!(document["held"][0]["message"]
+        .as_str()
+        .expect("hold message")
+        .contains("retrying next scan"));
+    let notes = document["notes"].as_array().expect("notes rows");
+    assert_eq!(
+        notes.len(),
+        1,
+        "only clean PDF contributes a note row: {notes:?}"
+    );
+    assert_eq!(notes[0]["path"], "ref/chat/clean.md");
+    assert_eq!(
+        fs::read(&dirty_pdf).expect("held PDF unchanged"),
+        dirty_pdf_before
+    );
+    assert_eq!(
+        fs::read(&dirty_note).expect("held note unchanged"),
+        dirty_note_before
+    );
+    assert_ne!(
+        fs::read(&clean_pdf).expect("clean PDF updated"),
+        clean_pdf_before
+    );
+    assert!(pdf_marker_contents(&clean_pdf).contains("- status: next\n"));
 }
 
 #[test]
@@ -2599,28 +2964,18 @@ fn ref_scan_json_lock_busy_writes_no_receipt() {
 
 #[test]
 fn ref_scan_json_hard_failure_writes_error_receipt() {
-    let temp = TempDir::new("bob-cli-ref-scan-json-dirty-receipt");
+    let temp = TempDir::new("bob-cli-ref-scan-json-collision-receipt");
     let vault = temp.path().join("vault");
-    let pdf = vault.join("lib/chat/memo.pdf");
-    let note = vault.join("ref/chat/memo.md");
-    write_highlights_pdf(
-        &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Memo\n",
-    );
-    assert_success(&run_ref_scan(&vault, &[]));
-    git_in(&vault, ["init", "-q"]);
-    git_in(&vault, ["config", "user.name", "Test User"]);
-    git_in(&vault, ["config", "user.email", "test@example.com"]);
-    git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
-    let dirty_note = fs::read_to_string(&note)
-        .expect("read note")
-        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
-    write_file(&note, &dirty_note);
-    set_pdf_marker_contents(
-        &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
-    );
+    let first_pdf = vault.join("lib/chat/memo.pdf");
+    let second_pdf = vault.join("lib/chat/memo.PDF");
+    write_highlights_pdf(&first_pdf, "- status: wip\n- parent: obsidian\n");
+    write_highlights_pdf(&second_pdf, "- status: ready\n- parent: obsidian\n");
+    if fs::canonicalize(&first_pdf).ok() == fs::canonicalize(&second_pdf).ok() {
+        println!(
+            "skipped: filesystem treats memo.pdf and memo.PDF as one file"
+        );
+        return;
+    }
     let state_dir = temp.path().join("state");
 
     let output = bob_command()
@@ -2632,11 +2987,11 @@ fn ref_scan_json_hard_failure_writes_error_receipt() {
         .env("BOB_NOW", SCAN_JSON_NOW)
         .env("XDG_STATE_HOME", &state_dir)
         .output()
-        .expect("dirty json scan");
+        .expect("collision json scan");
     assert_eq!(
         output.status.code(),
         Some(1),
-        "dirty json scan should exit 1:\n{}",
+        "collision json scan should exit 1:\n{}",
         format_output(&output)
     );
     let text = stdout(&output);
@@ -2650,7 +3005,7 @@ fn ref_scan_json_hard_failure_writes_error_receipt() {
     let document: serde_json::Value =
         serde_json::from_str(text.trim()).expect("stdout parses as JSON");
     assert_eq!(document["ok"], false);
-    assert_eq!(document["error"]["code"], "dirty_targets");
+    assert_eq!(document["error"]["code"], "output_collision");
     assert!(
         document.get("held").is_none(),
         "the error envelope has no held field:\n{text}"
@@ -2659,28 +3014,18 @@ fn ref_scan_json_hard_failure_writes_error_receipt() {
 
 #[test]
 fn ref_scan_human_hard_failure_writes_error_receipt() {
-    let temp = TempDir::new("bob-cli-ref-scan-human-dirty-receipt");
+    let temp = TempDir::new("bob-cli-ref-scan-human-collision-receipt");
     let vault = temp.path().join("vault");
-    let pdf = vault.join("lib/chat/memo.pdf");
-    let note = vault.join("ref/chat/memo.md");
-    write_highlights_pdf(
-        &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Memo\n",
-    );
-    assert_success(&run_ref_scan(&vault, &[]));
-    git_in(&vault, ["init", "-q"]);
-    git_in(&vault, ["config", "user.name", "Test User"]);
-    git_in(&vault, ["config", "user.email", "test@example.com"]);
-    git_in(&vault, ["add", "."]);
-    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
-    let dirty_note = fs::read_to_string(&note)
-        .expect("read note")
-        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
-    write_file(&note, &dirty_note);
-    set_pdf_marker_contents(
-        &pdf,
-        "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
-    );
+    let first_pdf = vault.join("lib/chat/memo.pdf");
+    let second_pdf = vault.join("lib/chat/memo.PDF");
+    write_highlights_pdf(&first_pdf, "- status: wip\n- parent: obsidian\n");
+    write_highlights_pdf(&second_pdf, "- status: ready\n- parent: obsidian\n");
+    if fs::canonicalize(&first_pdf).ok() == fs::canonicalize(&second_pdf).ok() {
+        println!(
+            "skipped: filesystem treats memo.pdf and memo.PDF as one file"
+        );
+        return;
+    }
     let state_dir = temp.path().join("state");
 
     let output = bob_command()
@@ -2690,11 +3035,11 @@ fn ref_scan_human_hard_failure_writes_error_receipt() {
         .env("BOB_NOW", SCAN_JSON_NOW)
         .env("XDG_STATE_HOME", &state_dir)
         .output()
-        .expect("dirty human scan");
+        .expect("collision human scan");
     assert_eq!(
         output.status.code(),
         Some(1),
-        "dirty human scan should exit 1:\n{}",
+        "collision human scan should exit 1:\n{}",
         format_output(&output)
     );
     let receipt: serde_json::Value = serde_json::from_str(
@@ -2706,7 +3051,7 @@ fn ref_scan_human_hard_failure_writes_error_receipt() {
     assert_eq!(receipt["command"], "ref scan");
     assert_eq!(receipt["mode"], "write");
     assert_eq!(receipt["intake_only"], false);
-    assert_eq!(receipt["error"]["code"], "dirty_targets");
+    assert_eq!(receipt["error"]["code"], "output_collision");
     assert!(
         receipt.get("held").is_none(),
         "the error envelope has no held field"
