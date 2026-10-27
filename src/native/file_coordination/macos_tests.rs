@@ -2,6 +2,7 @@ use super::*;
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -115,7 +116,7 @@ fn compile_presenter(dir: &Path) -> Option<PathBuf> {
 }
 
 fn wait_for_document(
-    presenter: &Presenter,
+    presenter: &mut Presenter,
     expected_path: &Path,
     expected_text: &str,
 ) -> Value {
@@ -199,7 +200,7 @@ fn moving_scope_keeps_presenter_at_new_url_for_later_saves() {
     ));
     assert!(!from.exists());
     assert_eq!(fs::read_to_string(&to).unwrap(), "original+user+bob");
-    let moved = wait_for_document(&presenter, &to, "original+user+bob");
+    let moved = wait_for_document(&mut presenter, &to, "original+user+bob");
     assert!(
         moved["reads"].as_u64().unwrap() > edited["reads"].as_u64().unwrap()
     );
@@ -239,7 +240,7 @@ fn inverse_move_notification_restores_presenter_url_for_rollback() {
     ));
     assert!(!to.exists());
     assert_eq!(fs::read_to_string(&from).unwrap(), "original+user+bob");
-    wait_for_document(&presenter, &from, "original+user+bob");
+    wait_for_document(&mut presenter, &from, "original+user+bob");
 
     assert_eq!(presenter.command("edit +rollback-save")["dirty"], true);
     assert_eq!(presenter.command("save")["event"], "saved");
@@ -280,7 +281,7 @@ fn moving_scope_keeps_accessor_errors_inside_the_grant() {
     let outcome =
         coordinate_moving_write(&from, &to, Duration::from_secs(2), |scope| {
             scope.move_forward()?;
-            Err(std::io::Error::other("verification failed"))
+            Err::<(), _>(std::io::Error::other("verification failed"))
         });
     let Coordination::Granted { value, .. } = outcome else {
         panic!("accessor error must remain a granted value")
