@@ -277,6 +277,9 @@ def load_deadlines() -> dict[str, float]:
 
 
 MIN_COMMAND_SECONDS = 1.0
+# GitHub can mark a run completed while its jobs still read in_progress; poll
+# this many more times (capped by the total deadline) for them to catch up.
+JOB_SETTLE_POLLS = 12
 
 
 def remaining(deadline: float) -> float:
@@ -1012,21 +1015,42 @@ def wait_for_completion(
 ) -> dict[str, Any]:
     run_id = str(run.get("databaseId") or "")
     current = run
+    settle_deadline: float | None = None
     while True:
         if runner.stop.is_set():
             raise Unrun(_interrupt_message(runner))
         status = str(current.get("status") or "")
         if status == "completed":
-            return current
-        if remaining(overall_deadline) <= 0:
-            raise Unrun(f"run {run_id} did not complete within the total deadline")
-        elapsed = time.monotonic() - started
-        left = remaining(overall_deadline)
-        log(
-            f"run {run_id} is {status or 'pending'} "
-            f"({elapsed:.0f}s elapsed, {left:.0f}s left)"
-        )
-        sleep_for(runner, min(deadlines["poll"], remaining(overall_deadline)), overall_deadline)
+            unsettled = [
+                str(job.get("name") or "")
+                for job in jobs_of(current)
+                if str(job.get("status") or "") != "completed"
+            ]
+            if not unsettled:
+                return current
+            if settle_deadline is None:
+                settle_deadline = min(
+                    time.monotonic() + JOB_SETTLE_POLLS * deadlines["poll"],
+                    overall_deadline,
+                )
+            if remaining(settle_deadline) <= 0:
+                # evaluate_run reports a still-unfinished job as unrun.
+                return current
+            log(
+                f"run {run_id} is completed; waiting for job status: "
+                + ", ".join(unsettled)
+            )
+            sleep_for(runner, min(deadlines["poll"], remaining(settle_deadline)), settle_deadline)
+        else:
+            if remaining(overall_deadline) <= 0:
+                raise Unrun(f"run {run_id} did not complete within the total deadline")
+            elapsed = time.monotonic() - started
+            left = remaining(overall_deadline)
+            log(
+                f"run {run_id} is {status or 'pending'} "
+                f"({elapsed:.0f}s elapsed, {left:.0f}s left)"
+            )
+            sleep_for(runner, min(deadlines["poll"], remaining(overall_deadline)), overall_deadline)
         viewed = gh_json(
             runner,
             ["gh", "run", "view", run_id, "--repo", repo, "--json", RUN_VIEW_FIELDS],

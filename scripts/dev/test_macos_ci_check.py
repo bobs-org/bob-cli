@@ -255,6 +255,16 @@ if args[:2] == ["run", "view"]:
         payload = run_payload(head_branch=branch, status="in_progress", conclusion="", jobs=[
             macos_job(conclusion="", status="in_progress", steps=[step("Set up job", "", "in_progress")]),
         ])
+    elif mode in ("job-lag", "job-stuck"):
+        state["view_count"] = state.get("view_count", 0) + 1
+        state_path.write_text(json.dumps(state))
+        if mode == "job-stuck" or state["view_count"] <= int(os.environ.get("JOB_LAG_COUNT", "2")):
+            payload = run_payload(head_branch=branch, jobs=[
+                {"name": "lint", "conclusion": "success", "status": "completed", "steps": []},
+                macos_job(conclusion="", status="in_progress"),
+            ])
+        else:
+            payload = run_payload(head_branch=branch)
     elif mode == "cancelled":
         payload = run_payload(head_branch=branch, conclusion="cancelled", jobs=[
             macos_job("cancelled", required_steps({name: "cancelled" for name in required})),
@@ -655,6 +665,25 @@ class GateTests(unittest.TestCase):
         result = self.run_gate(GH_MODE="cancelled")
         self.assertEqual(result.returncode, 2)
         self.assertIn("cancelled", result.stderr + result.stdout)
+        self.assert_cleanup_delete()
+
+    def test_completed_run_waits_for_lagging_job_status(self) -> None:
+        result = self.run_gate(GH_MODE="job-lag", JOB_LAG_COUNT="2")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("waiting for job status", output)
+        views = [
+            call for call in self.gh_calls()
+            if call[:2] == ["run", "view"] and "--log-failed" not in call
+        ]
+        self.assertGreaterEqual(len(views), 3)
+        self.assert_cleanup_delete()
+
+    def test_job_status_that_never_settles_is_unrun(self) -> None:
+        result = self.run_gate(GH_MODE="job-stuck")
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, output)
+        self.assertIn("macOS job ended in_progress", output)
         self.assert_cleanup_delete()
 
     def test_missing_required_job_and_step(self) -> None:
