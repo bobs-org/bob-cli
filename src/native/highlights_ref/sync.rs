@@ -574,6 +574,21 @@ fn derive_birth_source_markdown(
     Some(pointer)
 }
 
+/// Carry a plan's birth-only state into execution metadata for a new
+/// note: the reread `earlier:` lineage and the saved-source
+/// `source_markdown` pointer. Both derive once at planning time; the
+/// executor's fresh `pipeline_metadata(…)` starts with neither, so a
+/// newborn re-render must copy them or the filed note loses them. For
+/// existing notes the plan holds no birth state (`None`), and the
+/// authored lines survive through frontmatter preservation.
+fn carry_birth_only_metadata(
+    metadata: &mut PipelineMetadata,
+    stable: &PipelineMetadata,
+) {
+    metadata.birth_lineage = stable.birth_lineage.clone();
+    metadata.source_markdown = stable.source_markdown.clone();
+}
+
 pub(super) fn plan_pdf_sync(
     config: &Config,
     pdf: &Path,
@@ -1809,7 +1824,7 @@ fn execute_pdf_sync_v1(
         if is_new_note {
             metadata.created = Some(new_note_created_timestamp());
         }
-        metadata.source_markdown = plan.stable_metadata.source_markdown.clone();
+        carry_birth_only_metadata(&mut metadata, &plan.stable_metadata);
         plan.note.render_with_projection(
             &plan.synced_projection,
             &plan.synced_hash,
@@ -2170,11 +2185,11 @@ fn execute_pdf_sync_v2(
         } else if let Some(parent) = plan.note.frontmatter_value(FIELD_PARENT) {
             render_projection.insert(FIELD_PARENT.to_string(), parent);
         }
-        // Newborn reread lineage is birth-only plan state: the execution
-        // re-render must carry the same `earlier:` the dry-run preview
-        // showed, so repeat syncs preserve it byte-for-byte.
-        metadata.birth_lineage = plan.stable_metadata.birth_lineage.clone();
-        metadata.source_markdown = plan.stable_metadata.source_markdown.clone();
+        // Newborn reread lineage and the saved-source pointer are
+        // birth-only plan state: the execution re-render must carry the
+        // same `earlier:` and `source_markdown:` the dry-run preview
+        // showed, so repeat syncs preserve them byte-for-byte.
+        carry_birth_only_metadata(&mut metadata, &plan.stable_metadata);
         let body = execution_body.as_deref().unwrap_or(&plan.rendered_body);
         let rendered = plan.note.render_with_projection(
             &render_projection,

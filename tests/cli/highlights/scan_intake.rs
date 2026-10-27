@@ -57,7 +57,7 @@ pub(super) fn queue_pdf(
     fixture: &Path,
     pandoc: &Path,
     name: &str,
-) {
+) -> String {
     let source = temp.path().join(format!("{name}.md"));
     write_file(&source, &format!("# {name}\n\nQueued reference.\n"));
     let output = create_command(temp, vault, &source, fixture, pandoc)
@@ -71,6 +71,16 @@ pub(super) fn queue_pdf(
         vault.join(format!("xlib/chat/{name}.pdf")).is_file(),
         "create -k must leave the PDF queued"
     );
+    stdout(&output)
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("source_markdown:")
+                .map(|pointer| pointer.trim().trim_matches('"').to_string())
+        })
+        .unwrap_or_else(|| {
+            panic!("no source_markdown in -k report:\n{}", stdout(&output))
+        })
 }
 
 fn assert_scan_json_key_order(output: &Output, start: &str, keys: &[&str]) {
@@ -92,7 +102,8 @@ fn intake_only_drains_a_queued_pdf_into_one_pushed_commit() {
     let temp = TempDir::new("bob-cli-scan-intake-one");
     let (vault, peer) = seed_synced_vault(&temp);
     let (fixture, pandoc) = create_fixture(&temp);
-    queue_pdf(&temp, &vault, &fixture, &pandoc, "queued_one");
+    let birth_pointer =
+        queue_pdf(&temp, &vault, &fixture, &pandoc, "queued_one");
     let before = head(&vault);
 
     let output = scan_command(&temp, &vault, &["-i"])
@@ -113,6 +124,28 @@ fn intake_only_drains_a_queued_pdf_into_one_pushed_commit() {
     assert!(vault.join("lib/chat/queued_one.pdf").is_file());
     assert!(vault.join("ref/chat/queued_one.md").is_file());
     assert!(!vault.join("xlib/chat/queued_one.pdf").exists());
+    // The `-i` drain must file the newborn note with the exact birth
+    // pointer the `-k` create reported, exactly once.
+    let filed_note = fs::read_to_string(vault.join("ref/chat/queued_one.md"))
+        .expect("read drained note");
+    assert!(
+        filed_note.lines().any(|line| {
+            line.strip_prefix("source_markdown:").is_some_and(|value| {
+                value.trim().trim_matches('"') == birth_pointer
+            })
+        }),
+        "drained note must carry the birth pointer:\n{filed_note}"
+    );
+    assert_eq!(
+        filed_note.matches("source_markdown:").count(),
+        1,
+        "drained note must not duplicate the pointer:\n{filed_note}"
+    );
+    assert_eq!(
+        fs::read(vault.join(&birth_pointer)).expect("read saved Markdown"),
+        format!("# queued_one\n\nQueued reference.\n").into_bytes(),
+        "the drain must commit the saved source bytes"
+    );
     let subjects = subjects_since(&vault, &before);
     assert!(
         subjects.contains(&"bob ref scan: ingest chat/queued_one".to_string()),
