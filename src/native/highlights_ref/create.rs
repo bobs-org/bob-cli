@@ -1811,9 +1811,9 @@ fn overwrite_request(
 
 /// How an overwrite treats the write-once source store.
 pub(super) enum OverwriteSourcePolicy<'a> {
-    /// Markdown-rendered replacement: stage a new or reused store.
+    /// Markdown or web-article replacement: stage a new or reused store.
     Save { bytes: &'a [u8] },
-    /// Non-Markdown replacement: clear `source_markdown` on the live note.
+    /// PDF URL, arXiv, local PDF, or web fallback: clear `source_markdown`.
     Clear,
 }
 
@@ -2549,8 +2549,8 @@ fn create_article_route(
             &clip_options,
             companion,
             &selection,
-            &request,
-            &plan,
+            request,
+            plan,
             replacing,
             options.explicit_status.as_deref(),
         )
@@ -3549,6 +3549,70 @@ fn print_dry_run_snapshot_store(
         snapshot.projected_markdown.as_bytes(),
     );
     println!("source_markdown: {pointer}");
+}
+
+/// Convert a captured web source view and stage it into the overwrite
+/// transaction. Eligibility was proven before the fetch; this only
+/// decides the source policy. A missing view or conversion failure
+/// keeps Clear and warns.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stage_web_overwrite_store(
+    config: &Config,
+    selection: &OverwriteSelection,
+    request: &mut OverwriteRequest,
+    plan: OverwritePreflight,
+    scratch: &Path,
+    staged_pdf: &Path,
+    rendered_pdf: &Path,
+    source_html: Option<&str>,
+    code_anchors: Option<&str>,
+    origin: String,
+    route: &str,
+) -> Result<(
+    OverwritePreflight,
+    Option<super::source_store::StagedStoreFiles>,
+)> {
+    match super::web_source::prepare_web_store(
+        source_html,
+        code_anchors,
+        rendered_pdf,
+        route,
+    ) {
+        Ok(prepared) => {
+            prepared.print_warnings();
+            request.clear_source_markdown = false;
+            request.planned_source_store =
+                Some(super::source_store::PlannedSourceStore::for_bytes(
+                    &plan.ref_type,
+                    &plan.member.stem,
+                    &prepared.source_bytes,
+                ));
+            let plan = super::overwrite::prepare(
+                config,
+                selection.family.selected_member(),
+                request,
+                &plan.planned_date,
+            )
+            .map_err(|refusal| refusal.command_error())?;
+            let staged = stage_overwrite_source_store(
+                config,
+                &plan,
+                scratch,
+                &prepared.source_bytes,
+                route,
+                origin,
+                None,
+                None,
+                staged_pdf,
+                &prepared.catalog,
+            )?;
+            Ok((plan, Some(staged)))
+        }
+        Err(skip) => {
+            super::web_source::print_web_overwrite_skip(&skip);
+            Ok((plan, None))
+        }
+    }
 }
 
 /// Stage `source.md` and `code.json` in scratch for an overwrite. The

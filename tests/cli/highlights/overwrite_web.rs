@@ -4,7 +4,9 @@
 //! overwrite transaction as local routes, preserving redirect,
 //! duplicate-before-fetch, and listen semantics.
 
-use super::fake_clip::FakeClip;
+use super::fake_clip::{
+    web_fixture_pdf, web_fixture_pdf_with_blocks, FakeClip,
+};
 use super::overwrite_local::snapshot_tree;
 use crate::support::*;
 use std::fs;
@@ -1113,5 +1115,696 @@ fn web_overwrite_selects_older_member_with_name() {
         fs::read(&newer_pdf).expect("newer PDF after"),
         newer_pdf_before,
         "the unselected newer PDF stays byte-identical"
+    );
+}
+
+const ARTICLE_URL: &str = "https://example.com/article/hello";
+const LINK_URI: &str = "https://example.com/docs";
+const SOURCE_HTML_V1: &str = r#"<!DOCTYPE html>
+<html>
+<head><title>Fixture Article</title></head>
+<body>
+<article>
+<h1>Fixture Article</h1>
+<p>Read the <a href="https://example.com/docs">docs</a> first.</p>
+<pre><code class="language-rust">fn main() {
+	println!("hello");
+}
+</code></pre>
+</article>
+</body>
+</html>
+"#;
+const SOURCE_HTML_V2: &str = r#"<!DOCTYPE html>
+<html>
+<head><title>Revised Article</title></head>
+<body>
+<article>
+<h1>Revised Article</h1>
+<p>Read the <a href="https://example.com/docs">docs</a> first.</p>
+<pre><code class="language-rust">fn main() {
+	println!("revised");
+}
+</code></pre>
+</article>
+</body>
+</html>
+"#;
+const ANCHOR_TEXT_V1: &str = "fn main() {\n\tprintln!(\"hello\");\n}\n";
+const ANCHOR_TEXT_V2: &str = "fn main() {\n\tprintln!(\"revised\");\n}\n";
+const COLLECTION_URL_1: &str = "https://example.com/article/part-one";
+const COLLECTION_URL_2: &str = "https://example.com/article/part-two";
+const COLLECTION_HTML_V1: &str = r#"<!DOCTYPE html>
+<html>
+<body>
+<h1>Reading Packet</h1>
+<h2>Part One</h2>
+<pre><code class="language-rust">fn one() {
+	println!("one");
+}
+</code></pre>
+<h2>Part Two</h2>
+<pre><code class="language-python">def two():
+    pass
+</code></pre>
+</body>
+</html>
+"#;
+const COLLECTION_HTML_V2: &str = r#"<!DOCTYPE html>
+<html>
+<body>
+<h1>Reading Packet Revised</h1>
+<h2>Part One</h2>
+<pre><code class="language-rust">fn one() {
+	println!("uno");
+}
+</code></pre>
+<h2>Part Two</h2>
+<pre><code class="language-python">def two():
+    pass
+</code></pre>
+</body>
+</html>
+"#;
+const COLLECTION_ANCHOR_1: &str = "fn one() {\n\tprintln!(\"one\");\n}\n";
+const COLLECTION_ANCHOR_1_V2: &str = "fn one() {\n\tprintln!(\"uno\");\n}\n";
+const COLLECTION_ANCHOR_2: &str = "def two():\n    pass\n";
+
+fn skip_unless_pandoc(test_name: &str) -> bool {
+    if Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        return false;
+    }
+    eprintln!("skipping {test_name}: pandoc is required");
+    true
+}
+
+fn note_source_markdown(vault: &Path, note: &str) -> Option<String> {
+    let body = fs::read_to_string(vault.join(note)).expect("read note");
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("source_markdown:") {
+            let value = rest.trim().trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn blog_stores(vault: &Path, stem: &str) -> Vec<PathBuf> {
+    let parent = vault.join(".bob/ref-sources/blogs");
+    let mut dirs = Vec::new();
+    if let Ok(entries) = fs::read_dir(&parent) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(&format!("{stem}--")) {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs.sort();
+    dirs
+}
+
+fn article_capture_with_source(
+    title: &str,
+    final_url: &str,
+    source_html: &Path,
+    code_anchors: &Path,
+) -> String {
+    serde_json::json!({
+        "protocol": 1,
+        "ok": true,
+        "op": "capture",
+        "kind": "article",
+        "final_url": final_url,
+        "title": title,
+        "author": "Jane Doe",
+        "published": "2026-04-27",
+        "site": "Example",
+        "description": "",
+        "metadata_sources": {},
+        "word_count": 42,
+        "capture": {
+            "browser": "chrome",
+            "browser_version": "154.0.0",
+            "mode": "headless",
+            "retried_after_challenge": false,
+        },
+        "fidelity": {"status": "ok"},
+        "images": {"total": 0, "kept": 0, "skipped_small": 0, "failed": 0},
+        "pdf_bytes": null,
+        "source_html": source_html,
+        "code_anchors": code_anchors,
+        "warnings": [],
+    })
+    .to_string()
+}
+
+fn stage_article_view(
+    temp: &TempDir,
+    fake: &FakeClip,
+    html: &str,
+    anchor: &str,
+    title: &str,
+    url: &str,
+) {
+    let render = temp.path().join("render");
+    fs::create_dir_all(&render).expect("create render dir");
+    let source_html = render.join("source.html");
+    let code_anchors = render.join("code-anchors.json");
+    fs::write(&source_html, html).expect("write source view");
+    let anchors = serde_json::json!({
+        "version": 1,
+        "blocks": [{"k": 1, "text": anchor}],
+    });
+    fs::write(
+        &code_anchors,
+        serde_json::to_string(&anchors).expect("anchors JSON"),
+    )
+    .expect("write code anchors");
+    fs::write(fake.root.join("fixture.pdf"), web_fixture_pdf(LINK_URI))
+        .expect("write web fixture PDF");
+    fake.respond(&article_capture_with_source(
+        title,
+        url,
+        &source_html,
+        &code_anchors,
+    ));
+}
+
+fn stage_collection_view(
+    temp: &TempDir,
+    fake: &FakeClip,
+    html: &str,
+    anchor_1: &str,
+    anchor_2: &str,
+) {
+    let render = temp.path().join("render");
+    fs::create_dir_all(&render).expect("create render dir");
+    let source_html = render.join("source.html");
+    let code_anchors = render.join("code-anchors.json");
+    fs::write(&source_html, html).expect("write composed source view");
+    let anchors = serde_json::json!({
+        "version": 1,
+        "blocks": [
+            {"k": 1, "text": anchor_1},
+            {"k": 2, "text": anchor_2},
+        ],
+    });
+    fs::write(
+        &code_anchors,
+        serde_json::to_string(&anchors).expect("anchors JSON"),
+    )
+    .expect("write code anchors");
+    fs::write(
+        fake.root.join("fixture.pdf"),
+        web_fixture_pdf_with_blocks(LINK_URI, 2),
+    )
+    .expect("write collection fixture PDF");
+    let compose = serde_json::json!({
+        "protocol": 1,
+        "ok": true,
+        "op": "compose",
+        "pdf_bytes": 2400,
+        "source_html": source_html,
+        "code_anchors": code_anchors,
+        "images": {"total": 0, "kept": 0, "skipped_small": 0, "failed": 0},
+        "warnings": [],
+    });
+    fs::write(
+        fake.root.join("compose.json"),
+        serde_json::to_string(&compose).expect("compose JSON"),
+    )
+    .expect("write fake compose response");
+}
+
+fn network_command(
+    fixture: &WebVault,
+    args: &[&str],
+    fake: &FakeClip,
+    curl: &Path,
+) -> Command {
+    let root = fixture.temp.path().join("curl-root");
+    fs::create_dir_all(&root).expect("create curl root");
+    let log = fixture.temp.path().join("curl.log");
+    if !log.exists() {
+        fs::write(&log, "").expect("init log");
+    }
+    let mut command = web_command(fixture, args);
+    with_network(&mut command, &fake.path, curl, &root, &log);
+    command
+}
+
+fn create_web_article(fixture: &WebVault, fake: &FakeClip, curl: &Path) {
+    let output =
+        network_command(fixture, &[ARTICLE_URL, "-P", "sase"], fake, curl)
+            .output()
+            .expect("create web article");
+    assert_success(&output);
+    commit_if_dirty(&fixture.vault, "file web article");
+}
+
+#[test]
+fn web_overwrite_repoints_and_reuses_unchanged_bytes() {
+    if skip_unless_pandoc("web overwrite source store") {
+        return;
+    }
+    let fixture = web_vault("bob-cli-overwrite-web-store");
+    let curl = write_fake_curl(fixture.temp.path());
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V1,
+        ANCHOR_TEXT_V1,
+        "Fixture Article",
+        ARTICLE_URL,
+    );
+    create_web_article(&fixture, &fake, &curl);
+    let pointer = note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+        .expect("create sets source_markdown");
+    assert!(
+        pointer.starts_with(".bob/ref-sources/blogs/hello--")
+            && pointer.ends_with("/source.md"),
+        "pointer: {pointer}"
+    );
+    assert_eq!(blog_stores(&fixture.vault, "hello").len(), 1);
+
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V2,
+        ANCHOR_TEXT_V2,
+        "Revised Article",
+        ARTICLE_URL,
+    );
+    let first = network_command(
+        &fixture,
+        &[ARTICLE_URL, "-P", "sase", "-f", "overwrite"],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("overwrite with new bytes");
+    assert_success(&first);
+    let new_pointer =
+        note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+            .expect("new bytes repoint");
+    assert_ne!(new_pointer, pointer);
+    assert_eq!(blog_stores(&fixture.vault, "hello").len(), 2);
+    assert!(
+        fixture.vault.join(&pointer).is_file(),
+        "old store stays as history"
+    );
+    let saved = fs::read_to_string(fixture.vault.join(&new_pointer))
+        .expect("read new source.md");
+    assert!(
+        saved.contains("# Revised Article")
+            && saved.contains("\tprintln!(\"revised\");"),
+        "unexpected saved GFM:\n{saved}"
+    );
+
+    let again = network_command(
+        &fixture,
+        &[
+            ARTICLE_URL,
+            "-P",
+            "sase",
+            "-f",
+            "overwrite",
+            "-T",
+            "A Better Title",
+        ],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("overwrite with same bytes");
+    assert_success(&again);
+    assert_eq!(
+        note_source_markdown(&fixture.vault, "ref/blogs/hello.md").as_deref(),
+        Some(new_pointer.as_str())
+    );
+    assert_eq!(
+        blog_stores(&fixture.vault, "hello").len(),
+        2,
+        "unchanged bytes reuse the directory"
+    );
+}
+
+#[test]
+fn web_overwrite_without_source_view_clears_pointer() {
+    if skip_unless_pandoc("web overwrite clear fallback") {
+        return;
+    }
+    let fixture = web_vault("bob-cli-overwrite-web-clear");
+    let curl = write_fake_curl(fixture.temp.path());
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V1,
+        ANCHOR_TEXT_V1,
+        "Fixture Article",
+        ARTICLE_URL,
+    );
+    create_web_article(&fixture, &fake, &curl);
+    let pointer = note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+        .expect("create sets source_markdown");
+    let stores_before = blog_stores(&fixture.vault, "hello");
+    assert_eq!(stores_before.len(), 1);
+
+    fake.respond(&article_capture("Symphony Spec Revised", ARTICLE_URL));
+    let output = network_command(
+        &fixture,
+        &[ARTICLE_URL, "-P", "sase", "-f", "overwrite"],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("overwrite without source view");
+    assert_success(&output);
+    let combined = format_output(&output);
+    assert!(
+        combined.contains("adapter reported no source view")
+            && combined.contains("clearing source_markdown"),
+        "missing clear fallback warning:\n{combined}"
+    );
+    assert_eq!(
+        note_source_markdown(&fixture.vault, "ref/blogs/hello.md"),
+        None,
+        "unavailable source view keeps Clear:\n{}",
+        fs::read_to_string(fixture.vault.join("ref/blogs/hello.md"))
+            .expect("note")
+    );
+    assert!(
+        stores_before[0].join("source.md").is_file(),
+        "old store stays as history: {pointer}"
+    );
+}
+
+#[test]
+fn web_overwrite_frozen_note_keeps_old_pointer() {
+    if skip_unless_pandoc("web overwrite frozen pointer") {
+        return;
+    }
+    let fixture = web_vault("bob-cli-overwrite-web-frozen");
+    let curl = write_fake_curl(fixture.temp.path());
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V1,
+        ANCHOR_TEXT_V1,
+        "Fixture Article",
+        ARTICLE_URL,
+    );
+    create_web_article(&fixture, &fake, &curl);
+    let pointer = note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+        .expect("create sets source_markdown");
+    let note = fixture.vault.join("ref/blogs/hello.md");
+    let mut body = fs::read_to_string(&note).expect("read filed note");
+    body.push_str("\nAuthored paragraph that must freeze.\n");
+    fs::write(&note, body).expect("write authored prose");
+    commit_vault(&fixture.vault, "add authored prose");
+
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V2,
+        ANCHOR_TEXT_V2,
+        "Revised Article",
+        ARTICLE_URL,
+    );
+    let output = network_command(
+        &fixture,
+        &[ARTICLE_URL, "-P", "sase", "-f", "overwrite"],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("overwrite authored web note");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("earlier: ref_history/blogs/hello__2026-10-16.md"),
+        "prose must freeze into ref_history:\n{report}"
+    );
+    let archive = fs::read_to_string(
+        fixture.vault.join("ref_history/blogs/hello__2026-10-16.md"),
+    )
+    .expect("read archive");
+    assert!(
+        archive.contains(&format!("source_markdown: {pointer}")),
+        "frozen note keeps the old pointer:\n{archive}"
+    );
+    let live = note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+        .expect("live note repoints");
+    assert_ne!(live, pointer);
+}
+
+#[test]
+fn web_overwrite_rollback_removes_new_store() {
+    if skip_unless_pandoc("web overwrite store rollback") {
+        return;
+    }
+    let fixture = web_vault("bob-cli-overwrite-web-rollback");
+    let curl = write_fake_curl(fixture.temp.path());
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    stage_article_view(
+        &fixture.temp,
+        &fake,
+        SOURCE_HTML_V1,
+        ANCHOR_TEXT_V1,
+        "Fixture Article",
+        ARTICLE_URL,
+    );
+    create_web_article(&fixture, &fake, &curl);
+    let pointer = note_source_markdown(&fixture.vault, "ref/blogs/hello.md")
+        .expect("create sets source_markdown");
+    let base = stdout(&git_in(&fixture.vault, ["rev-parse", "HEAD"]))
+        .trim()
+        .to_string();
+
+    let new_rel = ".bob/ref-sources/blogs/hello--bbbbbbbbbbbb";
+    let new_source = format!("{new_rel}/source.md");
+    let new_code = format!("{new_rel}/code.json");
+    fs::create_dir_all(fixture.vault.join(new_rel)).expect("new store dir");
+    fs::write(fixture.vault.join(&new_source), "# crashed replacement\n")
+        .expect("new source.md");
+    fs::write(fixture.vault.join(&new_code), "{}\n").expect("new code.json");
+    let mut note = fs::read_to_string(fixture.vault.join("ref/blogs/hello.md"))
+        .expect("live note");
+    note = note.replace(
+        &format!("source_markdown: {pointer}"),
+        &format!("source_markdown: {new_source}"),
+    );
+    fs::write(fixture.vault.join("ref/blogs/hello.md"), note)
+        .expect("repoint crashed note");
+
+    let canonical = fs::canonicalize(&fixture.vault)
+        .expect("canonical vault")
+        .to_string_lossy()
+        .into_owned();
+    let intent = super::overwrite_recovery::intent_path(
+        &fixture.temp.path().join("state"),
+        &fixture.vault,
+    );
+    fs::create_dir_all(intent.parent().expect("intent parent"))
+        .expect("intent dirs");
+    let document = serde_json::json!({
+        "schema_version": 2,
+        "vault": canonical,
+        "stem": "hello",
+        "ref_type": "blogs",
+        "base_head": base,
+        "expected_subject": "bob ref create: overwrite blogs/hello",
+        "expected_head": serde_json::Value::Null,
+        "touched": ["ref/blogs/hello.md"],
+        "created": [new_source, new_code],
+        "moves": [],
+        "writes": [],
+    });
+    fs::write(
+        &intent,
+        serde_json::to_string(&document).expect("intent json"),
+    )
+    .expect("write intent");
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &fixture.vault)
+        .env("NO_COLOR", "1")
+        .env("XDG_STATE_HOME", fixture.temp.path().join("state"))
+        .output()
+        .expect("recover crashed web overwrite");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "rollback then a clean scan exits 0:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        note_source_markdown(&fixture.vault, "ref/blogs/hello.md").as_deref(),
+        Some(pointer.as_str()),
+        "rollback restores the old pointer"
+    );
+    assert!(
+        fixture.vault.join(&pointer).is_file(),
+        "old store survives rollback"
+    );
+    assert!(
+        !fixture.vault.join(new_rel).exists(),
+        "new store must be removed on rollback"
+    );
+}
+
+#[test]
+fn pdf_url_overwrite_clears_source_markdown() {
+    let fixture = web_vault("bob-cli-overwrite-pdf-url-clear");
+    file_web_ref(
+        &fixture.vault,
+        "paper",
+        "papers",
+        "Remote Paper Title",
+        "https://example.com/paper.pdf",
+    );
+    let store = fixture
+        .vault
+        .join(".bob/ref-sources/papers/paper--aaaaaaaaaaaa");
+    fs::create_dir_all(&store).expect("seed store");
+    fs::write(store.join("source.md"), "# Saved markdown.\n")
+        .expect("seed source.md");
+    fs::write(store.join("code.json"), "{}\n").expect("seed code.json");
+    let note = fixture.vault.join("ref/papers/paper.md");
+    let mut body = fs::read_to_string(&note).expect("read filed note");
+    let line =
+        "source_markdown: .bob/ref-sources/papers/paper--aaaaaaaaaaaa/source.md\n";
+    body = if let Some(idx) = body.find("source_pdf:") {
+        format!("{}{}{}", &body[..idx], line, &body[idx..])
+    } else {
+        body.replacen("---\n", &format!("---\n{line}"), 1)
+    };
+    fs::write(&note, body).expect("inject pointer");
+    commit_vault(&fixture.vault, "file reference with pointer");
+
+    let root = fixture.temp.path().join("curl-root");
+    fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(
+        &root.join("paper.pdf"),
+        Some("Remote Paper Title Revised"),
+        Some("Jane Doe"),
+    );
+    let curl = write_fake_curl(fixture.temp.path());
+    let log = fixture.temp.path().join("curl.log");
+    fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    let mut command = web_command(
+        &fixture,
+        &[
+            "https://example.com/paper.pdf",
+            "-P",
+            "sase",
+            "-f",
+            "overwrite",
+        ],
+    );
+    with_network(&mut command, &fake.path, &curl, &root, &log);
+    let output = command.output().expect("overwrite PDF URL");
+    assert_success(&output);
+    assert_eq!(
+        note_source_markdown(&fixture.vault, "ref/papers/paper.md"),
+        None,
+        "PDF URL overwrite keeps Clear:\n{}",
+        fs::read_to_string(fixture.vault.join("ref/papers/paper.md"))
+            .expect("note")
+    );
+    assert!(
+        store.join("source.md").is_file(),
+        "old store stays as history"
+    );
+}
+
+#[test]
+fn web_collection_overwrite_repoints_new_bytes() {
+    if skip_unless_pandoc("web collection overwrite store") {
+        return;
+    }
+    let fixture = web_vault("bob-cli-overwrite-web-collection");
+    let curl = write_fake_curl(fixture.temp.path());
+    let fake = FakeClip::new(&fixture.temp, "adapter");
+    stage_collection_view(
+        &fixture.temp,
+        &fake,
+        COLLECTION_HTML_V1,
+        COLLECTION_ANCHOR_1,
+        COLLECTION_ANCHOR_2,
+    );
+    let create = network_command(
+        &fixture,
+        &[
+            COLLECTION_URL_1,
+            COLLECTION_URL_2,
+            "-N",
+            "packet",
+            "-P",
+            "sase",
+        ],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("create collection");
+    assert_success(&create);
+    commit_if_dirty(&fixture.vault, "file collection");
+    let pointer = note_source_markdown(&fixture.vault, "ref/blogs/packet.md")
+        .expect("collection create sets source_markdown");
+    assert!(
+        pointer.starts_with(".bob/ref-sources/blogs/packet--"),
+        "pointer: {pointer}"
+    );
+
+    stage_collection_view(
+        &fixture.temp,
+        &fake,
+        COLLECTION_HTML_V2,
+        COLLECTION_ANCHOR_1_V2,
+        COLLECTION_ANCHOR_2,
+    );
+    let output = network_command(
+        &fixture,
+        &[
+            COLLECTION_URL_1,
+            COLLECTION_URL_2,
+            "-N",
+            "packet",
+            "-P",
+            "sase",
+            "-f",
+            "overwrite",
+        ],
+        &fake,
+        &curl,
+    )
+    .output()
+    .expect("overwrite collection");
+    assert_success(&output);
+    let new_pointer =
+        note_source_markdown(&fixture.vault, "ref/blogs/packet.md")
+            .expect("collection overwrite repoints");
+    assert_ne!(new_pointer, pointer);
+    assert_eq!(blog_stores(&fixture.vault, "packet").len(), 2);
+    assert!(fixture.vault.join(&pointer).is_file(), "old store stays");
+    let saved = fs::read_to_string(fixture.vault.join(&new_pointer))
+        .expect("read collection source.md");
+    assert!(
+        saved.contains("println!(\"uno\");") && saved.contains("## Part Two"),
+        "one store must hold both revised parts:\n{saved}"
     );
 }

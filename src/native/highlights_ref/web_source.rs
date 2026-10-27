@@ -7,6 +7,8 @@
 //! pages from Chrome's print-time anchor destinations and link pages
 //! from the rendered PDF's URI annotations, and writes the `web_article`
 //! store plus its note pointer on every single-article create path.
+//! Overwrites reuse [`prepare_web_store`] and stage the bytes into the
+//! same transaction as Markdown.
 
 use std::{collections::BTreeMap, fs, path::Path, process::Command};
 
@@ -42,9 +44,17 @@ struct AnchorReport {
 
 /// A converted web source with its catalog, ready to persist.
 pub(super) struct PreparedWebStore {
-    source_bytes: Vec<u8>,
-    catalog: CatalogOutcome,
+    pub(super) source_bytes: Vec<u8>,
+    pub(super) catalog: CatalogOutcome,
     warnings: Vec<String>,
+}
+
+impl PreparedWebStore {
+    pub(super) fn print_warnings(&self) {
+        for warning in &self.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
 }
 
 /// Why no web store is written: the short label goes in the
@@ -307,6 +317,15 @@ pub(super) fn print_web_store_skip(skip: &WebStoreSkip) {
         skip.detail
     );
     println!("source_markdown: none ({})", skip.short);
+}
+
+/// Overwrite fallback when the source view or conversion is unavailable:
+/// keep Clear and warn. The success report does not print a `none` line.
+pub(super) fn print_web_overwrite_skip(skip: &WebStoreSkip) {
+    eprintln!(
+        "warning: {}; skipping source store (clearing source_markdown)",
+        skip.detail
+    );
 }
 
 /// Convert, catalog, map, and persist the `web_collection` store for

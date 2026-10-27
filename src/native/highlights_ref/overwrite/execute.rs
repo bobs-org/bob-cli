@@ -102,7 +102,7 @@ pub(in crate::native::highlights_ref) struct StagedOverwrite {
     pub(crate) private_pdf: PathBuf,
     pub(crate) audio: Option<StagedAudio>,
     pub(crate) marker: FinalMarkerMetadata,
-    /// Markdown-rendered replacement: staged `source.md` + `code.json`.
+    /// Markdown or web replacement: staged `source.md` + `code.json`.
     pub(crate) source_store: Option<source_store::StagedStoreFiles>,
 }
 

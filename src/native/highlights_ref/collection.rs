@@ -1290,8 +1290,8 @@ fn capture_and_install_overwrite(
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<(), CommandError> {
     let PreparedOverwrite {
-        preflight,
-        request,
+        mut preflight,
+        mut request,
         replacing_audio,
     } = overwrite;
     if options.dry_run {
@@ -1396,6 +1396,25 @@ fn capture_and_install_overwrite(
     // Narration consumes the staged replacement PDF and remains private
     // until the same transaction publishes the PDF and episode together.
     recheck_collection_overwrite(config, &urls, &options, &preflight)?;
+    let origin = urls
+        .iter()
+        .map(|url| url.cleaned.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (updated, source_store) = super::create::stage_web_overwrite_store(
+        config,
+        selection,
+        &mut request,
+        preflight,
+        scratch.path(),
+        &staged_pdf,
+        &composed_pdf,
+        compose.source_html.as_deref(),
+        compose.code_anchors.as_deref(),
+        origin,
+        super::web_source::WEB_COLLECTION_ROUTE,
+    )?;
+    preflight = updated;
     let staged_audio = super::create::stage_overwrite_audio(
         &options,
         &preflight,
@@ -1433,7 +1452,7 @@ fn capture_and_install_overwrite(
                 private_pdf: staged_pdf_path,
                 audio: staged_audio,
                 marker,
-                source_store: None,
+                source_store,
             },
         )
     })();

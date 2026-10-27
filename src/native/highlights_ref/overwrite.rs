@@ -56,12 +56,13 @@ pub(super) struct OverwriteRequest {
     /// Dry runs may render an annotated archive preview on any host. Real
     /// annotated execution is gated by macOS file coordination in preflight.
     pub(super) dry_run: bool,
-    /// Planned write-once source store for a Markdown-rendered overwrite.
+    /// Planned write-once source store for a Markdown or web overwrite.
     /// Prepare records these as created/touched paths so apply, rollback,
     /// and the scoped commit include them.
     pub(super) planned_source_store:
         Option<super::source_store::PlannedSourceStore>,
-    /// Non-Markdown overwrite: drop `source_markdown` from the live note.
+    /// PDF URL, arXiv, local PDF, or web fallback: drop `source_markdown`
+    /// from the live note.
     pub(super) clear_source_markdown: bool,
 }
 

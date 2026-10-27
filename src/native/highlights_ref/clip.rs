@@ -837,14 +837,14 @@ pub(super) fn capture_article_overwrite(
     options: &ClipOptions,
     companion: Companion,
     selection: &super::recapture::OverwriteSelection,
-    request: &super::overwrite::OverwriteRequest,
-    plan: &super::overwrite::OverwritePreflight,
+    mut request: super::overwrite::OverwriteRequest,
+    plan: super::overwrite::OverwritePreflight,
     replacing: bool,
     explicit_status: Option<&str>,
 ) -> std::result::Result<(), ClipError> {
     if options.dry_run {
         super::overwrite::local::print_dry_run(
-            plan,
+            &plan,
             &plan.title,
             replacing,
             explicit_status,
@@ -923,7 +923,7 @@ pub(super) fn capture_article_overwrite(
     .ok()
     .map(|marker| marker.status);
     let status = super::overwrite::local::stamp_status(
-        plan,
+        &plan,
         explicit_status,
         existing_status.as_deref(),
     );
@@ -963,8 +963,27 @@ pub(super) fn capture_article_overwrite(
         &out_pdf, &workdir, &marker, &info,
     )
     .map_err(ClipError::from)?;
+    let origin = response
+        .final_url
+        .clone()
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| url.cleaned.clone());
+    let (plan, source_store) = super::create::stage_web_overwrite_store(
+        config,
+        selection,
+        &mut request,
+        plan,
+        workdir.path(),
+        &staged_pdf,
+        &out_pdf,
+        response.source_html.as_deref(),
+        response.code_anchors.as_deref(),
+        origin,
+        super::web_source::WEB_ARTICLE_ROUTE,
+    )
+    .map_err(ClipError::from)?;
     let audio = stage_article_overwrite_audio(
-        request,
+        &request,
         &companion,
         &workdir,
         &stem,
@@ -989,13 +1008,13 @@ pub(super) fn capture_article_overwrite(
                 .map_err(ClipError::from)?;
         super::overwrite::execute::execute(
             config,
-            plan,
-            request,
+            &plan,
+            &request,
             super::overwrite::execute::StagedOverwrite {
                 private_pdf: staged_path,
                 audio,
                 marker: final_marker,
-                source_store: None,
+                source_store,
             },
         )
         .map_err(ClipError::from)
@@ -1016,7 +1035,7 @@ pub(super) fn capture_article_overwrite(
         (result, _) => result?,
     };
     super::overwrite::local::print_success(
-        plan,
+        &plan,
         &result,
         &title,
         replacing
@@ -1027,7 +1046,7 @@ pub(super) fn capture_article_overwrite(
                     .or(plan.audio_path.as_deref()),
             )
             .flatten(),
-        super::overwrite::local::kept_closed_task(plan, explicit_status),
+        super::overwrite::local::kept_closed_task(&plan, explicit_status),
     );
     Ok(())
 }

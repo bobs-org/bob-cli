@@ -912,17 +912,21 @@ PDF, same-day vault-note snapshot, or single-URL web capture (article,
 saved HTML, PDF URL, arXiv) replaces that reading in place: the note
 path, stem, id, and reading task stay, companion audio is preserved
 unless `-a` or `-L` (which narrates the replacement) replaces it, and
-`--no-audio` leaves an existing episode in place. Markdown-rendered
-overwrites stage, install, and repoint the write-once source store
-inside the same transaction; a non-Markdown overwrite clears
-`source_markdown` on the live note.
+`--no-audio` leaves an existing episode in place. Markdown-rendered and
+web-article overwrites stage, install, and repoint the write-once source
+store inside the same transaction; a PDF URL, arXiv, or local PDF
+overwrite clears `source_markdown` on the live note. A web overwrite
+whose source view or conversion is unavailable keeps that clearing
+fallback and warns.
 
 | Overwrite input | Live `source_markdown` | Store |
 | --- | --- | --- |
 | Markdown, new bytes | Repoints at the new `source.md` | New directory; old directory stays as history |
 | Markdown, same bytes | Keeps the existing pointer | Reuses the directory; refreshes `code.json` if it differs |
-| Non-Markdown | Cleared | Existing directory stays as history |
-| Annotated Markdown | Live note as above | Frozen note keeps the old pointer |
+| Web article/collection, new bytes | Repoints at the new `source.md` | New directory; old directory stays as history |
+| Web article/collection, same bytes | Keeps the existing pointer | Reuses the directory; refreshes `code.json` if it differs |
+| PDF URL, arXiv, local PDF | Cleared | Existing directory stays as history |
+| Annotated Markdown or web | Live note as above | Frozen note keeps the old pointer |
 | Rollback before commit | Restored | New directory removed |
 
 If this host still ignores `code.json`, overwrite commits `source.md`,
