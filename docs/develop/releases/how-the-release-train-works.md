@@ -7,9 +7,11 @@ search:
 
 # How the release train works
 
-The release train turns one eligible master revision into a versioned GitHub Release.
-It runs in rehearsal mode today; a later configuration change switches the same
-workflow to crates.io.
+The release train manages the independently versioned `bob-obsidian` and
+`bob-obsidian-assets` workspace packages. A `bob-obsidian` release creates the GitHub
+Release and selects its binary build; the assets package gets its own version tag and
+does not create a GitHub Release. The train runs in rehearsal mode today; changing the
+same workflow configuration switches it to crates.io.
 
 ## A train day
 
@@ -52,17 +54,20 @@ Green means the reusable CI workflow passed in full for the exact SHA selected b
 guard. The release workflow passes that SHA to CI and checks Linux and macOS. It does
 not accept an earlier green master run as evidence for a newer revision.
 
-The rehearsal guard uses the newest GitHub Release creation time. Live mode uses the
-crates.io sparse index publication time, including yanked versions. The registry
-timestamp matters because a successful publish is permanent even if creating its tag
-or GitHub Release later fails.
+The rehearsal guard uses the newest `bob-obsidian` GitHub Release creation time. Live
+mode uses `bob-obsidian`'s crates.io sparse-index publication time, including yanked
+versions. The registry timestamp matters because a successful publish is permanent even
+if creating its tag or GitHub Release later fails.
 
 ## The bump commit and the push race
 
-After full CI passes, release-plz updates Cargo.toml and CHANGELOG.md. The workflow
-commits those generated changes with the GitHub Actions bot identity and pushes with
-fast-forward-only semantics. The commit contains version and changelog metadata; the
-source revision that was checked remains the code being released.
+After full CI passes, release-plz updates the manifest and changelog for each package
+whose version changes. The packages are versioned independently, so a run can update
+`bob-obsidian`, `bob-obsidian-assets`, or both. The workflow commits those generated
+changes with the GitHub Actions bot identity and pushes with fast-forward-only semantics.
+The commit contains version and changelog metadata; the source revision that was checked
+remains the code being released. Only a `bob-obsidian` release selects the binary build;
+an assets-only release does not.
 
 An agent can push to master after CI starts. If that makes the release bump no longer a
 fast-forward, Git rejects the push and the run ships nothing. The later schedule slot
@@ -70,17 +75,18 @@ then plans from the newer master revision and runs CI for that SHA.
 
 ## Rehearsal, live publishing, and Trusted Publishing
 
-release-plz.toml currently sets git_only to true. Rehearsal creates Git tags and GitHub
-Releases, but does not publish to crates.io. To go live, the configuration changes to
+release-plz.toml currently sets git_only to true. Rehearsal creates package Git tags and
+`bob-obsidian` GitHub Releases, but does not publish to crates.io. The assets package
+uses a distinct tag and has no GitHub Release. To go live, the configuration changes to
 git_only = false. The guard then reads crates.io publication times instead of GitHub
 Release times.
 
 The live workflow grants the release job contents write and id-token write in the
 release environment. release-plz performs the Trusted Publishing OIDC exchange; the
 workflow does not store or pass a crates.io API token. Trusted Publishing must be
-configured for owner bobs-org, repository bob-cli, workflow release.yml, and environment
-release. The first crate publication must be done manually because Trusted Publishing
-cannot create a new crate.
+configured for both crates with owner bobs-org, repository bob-cli, workflow release.yml,
+and environment release. The first publication of each crate must be done manually
+because Trusted Publishing cannot create a new crate.
 
 ## One-way doors and operating costs
 
@@ -93,10 +99,12 @@ bob-cli master, so a release may lag their source by up to a day. The train also
 push race and waits for the full Linux and macOS gate, which takes about 20 minutes
 including workflow overhead.
 
-About one month after the first live release, review crates.io downloads. If there are
-no outside users, consider a slower crates.io cadence while keeping GitHub Releases
-useful. If the package reaches the 8 MiB warning threshold, review its contents; splitting
-large embedded assets into a separate crate is an explicit future design choice.
+The Cargo workspace packages `bob-obsidian` and `bob-obsidian-assets` separately, and
+checks each archive against its own 8 MiB warning and 9 MiB failure thresholds. The
+embedded-assets split is implemented. See [Keep the package under the size cap](keep-the-package-under-the-size-cap.md)
+for current package contents, measurements, and size guidance. About one month after the
+first live release, review crates.io downloads. If there are no outside users, consider
+a slower crates.io cadence while keeping GitHub Releases useful.
 
 ## Related
 

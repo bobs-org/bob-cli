@@ -55,8 +55,9 @@ paused. Neither state proceeds to release.
 
 The release job needs CI and a GO verdict. The preview job needs a dry-run verdict.
 `binaries` and `binaries-retry` call `.github/workflows/release-binaries.yml`. They run
-only when release-plz's JSON reported a release (or a `binaries_tag` was given), and
-they build from the release tag with `--locked`.
+only when release-plz's JSON reports a `bob-obsidian` release or a `binaries_tag` was
+given. An assets-only result does not trigger a binary build. They build from the root
+package's release tag with `--locked`.
 
 ## Daily guard
 

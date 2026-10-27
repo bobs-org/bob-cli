@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 import tarfile
@@ -26,6 +27,84 @@ from package_check import (
 
 
 class PackageCheckTests(unittest.TestCase):
+    def _run_main_with_archives(
+        self,
+        *,
+        archive_contents: dict[str, bytes] | None = None,
+        missing_archives: set[str] | None = None,
+        warning_threshold: int | None = None,
+        failure_threshold: int | None = None,
+        argv: list[str] | None = None,
+    ) -> tuple[int, str, str, list[list[str]], dict[str, int]]:
+        """Run main with fake Cargo and small, real temporary package archives."""
+        archive_contents = archive_contents or {}
+        missing_archives = missing_archives or set()
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], *, capture: bool = False):
+            commands.append(list(command))
+            result = mock.Mock(returncode=0, stdout="", stderr="")
+            if "--list" in command:
+                name = command[-1]
+                if name == "bob-obsidian":
+                    result.stdout = "\n".join(
+                        [*ROOT_REQUIRED_NOTICES, "src/lib.rs"]
+                    )
+                else:
+                    result.stdout = "\n".join(
+                        [
+                            *ASSETS_REQUIRED_NOTICES,
+                            "assets/print_fonts/Inter-Regular.otf",
+                            "scripts/web_clip/fonts/DejaVuSans.ttf",
+                            "scripts/web_clip/vendor/mermaid.min.js",
+                            "src/lib.rs",
+                        ]
+                    )
+            return result
+
+        with tempfile.TemporaryDirectory() as temp:
+            package_dir = Path(temp) / "package"
+            package_dir.mkdir()
+            archive_sizes: dict[str, int] = {}
+            for name in EXPECTED_PACKAGES:
+                if name in missing_archives:
+                    continue
+                crate_path = package_dir / f"{name}-0.0.0.crate"
+                content = archive_contents.get(name, b"abc")
+                with tarfile.open(crate_path, mode="w:gz") as archive:
+                    member = tarfile.TarInfo(f"{name}-0.0.0/src/lib.rs")
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
+                archive_sizes[name] = crate_path.stat().st_size
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch("package_check._run", side_effect=fake_run))
+                stack.enter_context(
+                    mock.patch(
+                        "package_check._workspace_packages",
+                        return_value={
+                            name: ("0.0.0", Path(temp)) for name in EXPECTED_PACKAGES
+                        },
+                    )
+                )
+                stack.enter_context(
+                    mock.patch("package_check.root_include_bytes_inputs", return_value=[])
+                )
+                if warning_threshold is not None:
+                    stack.enter_context(
+                        mock.patch("package_check.WARN_BYTES", warning_threshold)
+                    )
+                if failure_threshold is not None:
+                    stack.enter_context(
+                        mock.patch("package_check.FAIL_BYTES", failure_threshold)
+                    )
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    exit_code = main(argv if argv is not None else [])
+
+            return exit_code, stdout.getvalue(), stderr.getvalue(), commands, archive_sizes
+
     def test_normalizes_package_list_paths(self) -> None:
         self.assertEqual(normalize_package_path("./src\\lib.rs"), "src/lib.rs")
         self.assertEqual(normalize_package_path("/Cargo.toml"), "Cargo.toml")
@@ -122,8 +201,61 @@ class PackageCheckTests(unittest.TestCase):
         self.assertEqual(size_level(FAIL_BYTES + 1), "error")
 
     def test_size_failure_applies_to_either_archive(self) -> None:
-        self.assertEqual(size_level(FAIL_BYTES + 1), "error")
-        self.assertEqual(size_level(WARN_BYTES + 1), "warning")
+        oversized = bytes(range(256)) * 16
+        for failing_package in EXPECTED_PACKAGES:
+            with self.subTest(package=failing_package):
+                other_package = next(
+                    name for name in EXPECTED_PACKAGES if name != failing_package
+                )
+                contents = {failing_package: oversized}
+                _, _, _, _, sizes = self._run_main_with_archives(
+                    archive_contents=contents
+                )
+                healthy_size = sizes[other_package]
+                code, stdout, stderr, commands, sizes = self._run_main_with_archives(
+                    archive_contents=contents,
+                    warning_threshold=healthy_size,
+                    failure_threshold=healthy_size,
+                )
+                # Thresholds are set from the actual small healthy archive, so the
+                # other package remains under budget and the larger archive crosses it.
+                self.assertGreater(sizes[failing_package], healthy_size)
+                self.assertEqual(code, 1)
+                self.assertIn(f"ERROR [{failing_package}]", stderr)
+                self.assertIn(f"Package: {other_package} 0.0.0", stdout)
+                self.assertIn(f"Package: {failing_package} 0.0.0", stdout)
+                list_commands = [c for c in commands if "--list" in c]
+                self.assertEqual([c[-1] for c in list_commands], list(EXPECTED_PACKAGES))
+
+    def test_main_reports_a_missing_archive_for_each_package(self) -> None:
+        for missing_package in EXPECTED_PACKAGES:
+            with self.subTest(package=missing_package):
+                code, _, stderr, commands, _ = self._run_main_with_archives(
+                    missing_archives={missing_package}
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(f"{missing_package}-0.0.0.crate", stderr)
+                self.assertTrue(
+                    any(c[:2] == ["cargo", "package"] and "--list" not in c for c in commands),
+                    "Cargo packaging should have succeeded before the missing archive check",
+                )
+
+    def test_main_warns_above_warning_threshold_but_succeeds_under_failure_threshold(
+        self,
+    ) -> None:
+        _, _, _, _, sizes = self._run_main_with_archives()
+        warning_threshold = min(sizes.values()) - 1
+        failure_threshold = max(sizes.values())
+        code, stdout, stderr, _, checked_sizes = self._run_main_with_archives(
+            warning_threshold=warning_threshold,
+            failure_threshold=failure_threshold,
+        )
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("WARNING: bob-obsidian is above the 8 MiB warning threshold", stdout)
+        self.assertIn(
+            "WARNING: bob-obsidian-assets is above the 8 MiB warning threshold", stdout
+        )
+        self.assertTrue(all(size <= failure_threshold for size in checked_sizes.values()))
 
     def test_largest_contributors_group_tar_members_by_top_level_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -143,96 +275,39 @@ class PackageCheckTests(unittest.TestCase):
             )
 
     def test_main_packages_workspace_with_full_verification_by_default(self) -> None:
-        commands: list[list[str]] = []
+        code, _, stderr, commands, _ = self._run_main_with_archives()
+        self.assertEqual(code, 0, stderr)
+        package_commands = [c for c in commands if c[:2] == ["cargo", "package"]]
+        package_command = next(c for c in package_commands if "--list" not in c)
+        self.assertEqual(
+            package_command,
+            ["cargo", "package", "--workspace", "--locked", "--allow-dirty"],
+        )
+        list_commands = [c for c in package_commands if "--list" in c]
+        self.assertEqual(len(list_commands), len(EXPECTED_PACKAGES))
+        self.assertEqual([c[-1] for c in list_commands], list(EXPECTED_PACKAGES))
+        self.assertFalse(
+            any("--message-format" in c or "json" in c for c in list_commands),
+            "must use stable Cargo output, not unstable JSON",
+        )
 
-        def fake_run(command: list[str], *, capture: bool = False):
-            commands.append(list(command))
-            result = mock.Mock()
-            if command[:2] == ["cargo", "metadata"]:
-                import json
-
-                result.returncode = 0
-                result.stdout = json.dumps(
-                    {
-                        "packages": [
-                            {"name": name, "version": "0.0.0", "publish": None}
-                            for name in EXPECTED_PACKAGES
-                        ],
-                        "target_directory": tempfile.gettempdir(),
-                    }
-                )
-                result.stderr = ""
-                return result
-            if "--list" in command:
-                result.returncode = 0
-                name = command[-1]
-                if name == "bob-obsidian":
-                    result.stdout = "\n".join([*ROOT_REQUIRED_NOTICES, "src/lib.rs"])
-                else:
-                    result.stdout = "\n".join(
-                        [
-                            *ASSETS_REQUIRED_NOTICES,
-                            "assets/print_fonts/Inter-Regular.otf",
-                            "scripts/web_clip/fonts/DejaVuSans.ttf",
-                            "scripts/web_clip/vendor/mermaid.min.js",
-                            "src/lib.rs",
-                        ]
-                    )
-                result.stderr = ""
-                return result
-            result.returncode = 0
-            result.stdout = ""
-            result.stderr = ""
-            return result
-
-        with tempfile.TemporaryDirectory() as temp:
-            package_dir = Path(temp) / "package"
-            package_dir.mkdir()
-            archives = []
-            for name in EXPECTED_PACKAGES:
-                crate_path = package_dir / f"{name}-0.0.0.crate"
-                with tarfile.open(crate_path, mode="w:gz") as archive:
-                    member = tarfile.TarInfo(f"{name}-0.0.0/src/lib.rs")
-                    member.size = 3
-                    archive.addfile(member, io.BytesIO(b"abc"))
-                archives.append(crate_path)
-            with (
-                mock.patch("package_check._run", side_effect=fake_run),
-                mock.patch(
-                    "package_check._workspace_packages",
-                    return_value={
-                        name: ("0.0.0", Path(temp)) for name in EXPECTED_PACKAGES
-                    },
-                ),
-                mock.patch(
-                    "package_check.root_include_bytes_inputs", return_value=[]
-                ),
-            ):
-                self.assertEqual(main([]), 0)
-                first_commands = [c for c in commands if c[:2] == ["cargo", "package"]]
-                self.assertTrue(
-                    any("--workspace" in c for c in first_commands),
-                    f"expected --workspace packaging, got {first_commands}",
-                )
-                self.assertFalse(
-                    any("--no-verify" in c for c in first_commands),
-                    f"full verification must be the default, got {first_commands}",
-                )
-                list_commands = [c for c in first_commands if "--list" in c]
-                self.assertEqual(len(list_commands), len(EXPECTED_PACKAGES))
-                for name in EXPECTED_PACKAGES:
-                    self.assertTrue(
-                        any(c[-1] == name and "-p" in c for c in list_commands),
-                        f"expected stable per-package listing for {name}",
-                    )
-                self.assertFalse(
-                    any("--message-format" in c or "json" in c for c in list_commands),
-                    "must use stable Cargo output, not unstable JSON",
-                )
-                commands.clear()
-                self.assertEqual(main(["--no-verify"]), 0)
-                second_commands = [c for c in commands if c[:2] == ["cargo", "package"]]
-                self.assertTrue(any("--no-verify" in c for c in second_commands))
+        code, _, stderr, commands, _ = self._run_main_with_archives(
+            argv=["--no-verify"]
+        )
+        self.assertEqual(code, 0, stderr)
+        package_commands = [c for c in commands if c[:2] == ["cargo", "package"]]
+        package_command = next(c for c in package_commands if "--list" not in c)
+        self.assertEqual(
+            package_command,
+            [
+                "cargo",
+                "package",
+                "--workspace",
+                "--locked",
+                "--allow-dirty",
+                "--no-verify",
+            ],
+        )
 
     def test_main_fails_on_missing_expected_package(self) -> None:
         with mock.patch(
