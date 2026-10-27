@@ -81,7 +81,9 @@ refuses to overwrite another checkout's uncommitted or non-ancestor deploy \
 unless --force is given, and it also refuses to overwrite a vault file that \
 has uncommitted changes in the vault Git repo unless --force is given. For \
 files that would change, sync prints a diff, and every overwritten vault file \
-is backed up before it is replaced.",
+is backed up before it is replaced. In a Git vault, sync and list also warn \
+when a plugin's whole vault folder is not ignored or holds tracked files; \
+the warning rides along in table and JSON output and never edits .gitignore.",
         )
         .after_help(
             "Examples:\n  bob plugins\n  bob plugins list\n  bob plugins list -f json\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks",
@@ -97,6 +99,13 @@ is backed up before it is replaced.",
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
         .about("List Bob plugins with repo version and vault sync state (default)")
+        .long_about(
+            "List Bob plugins with repo version and vault sync state.\n\n\
+In a Git vault, list also warns when a plugin's whole vault folder \
+(.obsidian/plugins/<id>/) is not ignored or holds tracked files. The warning \
+prints under the plugin row and appears as `vault_ignore` in JSON output; it \
+never edits .gitignore and never changes the SYNC/VAULT columns.",
+        )
         .after_help(
             "Examples:\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list --no-pull\n  bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
@@ -125,7 +134,11 @@ in the vault Git repo is left alone with a warning unless --force is given, \
 so local edits are never clobbered silently. Files that would change are \
 shown as unified diffs; overwritten vault files are copied to a timestamped \
 backup directory first. Files that already match the repo are reported as \
-unchanged. The plugins repo is refreshed with a non-interactive `git pull` \
+unchanged. In a Git vault, sync also warns when a plugin's whole vault folder \
+(.obsidian/plugins/<id>/) is not ignored or holds tracked files; the warning \
+prints under the plugin row and appears as `vault_ignore` in JSON output, in \
+dry-run too, and never blocks the copy, edits .gitignore, or untracks files. \
+The plugins repo is refreshed with a non-interactive `git pull` \
 before analysis unless --no-pull is given. Pass `-f json` to print a single \
 machine-readable object instead of the table and diffs. A bare sync (no \
 --repo) run from inside a different bob-plugins checkout refuses before any \

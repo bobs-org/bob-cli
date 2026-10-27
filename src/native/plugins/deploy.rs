@@ -352,13 +352,31 @@ provenance stays out of version control. --force does not bypass this.",
     }
 }
 
-enum VaultGit {
+/// Vault-ignore finding for one plugin's whole vault folder.
+///
+/// Carried by sync and list output (table and JSON) as a warning only.
+/// Nothing refuses on it and nothing edits `.gitignore` or the index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct VaultIgnoreInfo {
+    pub(super) status: VaultIgnoreStatus,
+    pub(super) warning: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum VaultIgnoreStatus {
+    Tracked,
+    NotIgnored,
+    Unknown,
+}
+
+pub(super) enum VaultGit {
     Git,
     NonGit,
     ProbeFailed(String),
 }
 
-fn inspect_vault_git(bob_dir: &Path) -> VaultGit {
+pub(super) fn inspect_vault_git(bob_dir: &Path) -> VaultGit {
     if !bob_dir.exists() {
         return VaultGit::NonGit;
     }
@@ -419,6 +437,157 @@ fn stamp_is_tracked(bob_dir: &Path, rel: &Path) -> bool {
         .output()
         .ok()
         .is_some_and(|output| output.status.success())
+}
+
+/// Vault-relative directory for one plugin's whole vault folder.
+pub(super) fn plugin_rel_dir(plugin_id: &str) -> PathBuf {
+    PathBuf::from(VAULT_PLUGINS_SUBDIR).join(plugin_id)
+}
+
+/// Warn when a deployed plugin's whole vault folder is not git-ignored or
+/// holds tracked files.
+///
+/// Reuses the stamp-storage Git probes (`git ls-files` / `git check-ignore`)
+/// but covers the plugin folder and every managed file instead of only the
+/// `.bob-deploy.json` stamp. Never refuses: callers carry the finding as a
+/// warning in sync output, list output, and both JSON shapes. A non-Git
+/// vault needs no ignore rule, so there is no warning. Never edits
+/// `.gitignore` and never untracks files: untracking on one host deletes the
+/// files on the others at their next pull.
+pub(super) fn check_plugin_ignore(
+    bob_dir: &Path,
+    plugin_id: &str,
+) -> Option<VaultIgnoreInfo> {
+    let dir_rel = plugin_rel_dir(plugin_id);
+    match inspect_vault_git(bob_dir) {
+        VaultGit::NonGit => None,
+        VaultGit::ProbeFailed(message) => Some(VaultIgnoreInfo {
+            status: VaultIgnoreStatus::Unknown,
+            warning: format!(
+                "cannot verify vault Git ignore rules for plugin \
+{plugin_id}: {message}"
+            ),
+        }),
+        VaultGit::Git => {
+            match tracked_files_under(bob_dir, &dir_rel) {
+                Err(error) => {
+                    return Some(VaultIgnoreInfo {
+                        status: VaultIgnoreStatus::Unknown,
+                        warning: format!(
+                            "cannot verify vault Git ignore rules for plugin \
+{plugin_id}: {error}"
+                        ),
+                    });
+                }
+                Ok(tracked) if !tracked.is_empty() => {
+                    return Some(VaultIgnoreInfo {
+                        status: VaultIgnoreStatus::Tracked,
+                        warning: tracked_warning(plugin_id, &dir_rel, &tracked),
+                    });
+                }
+                Ok(_) => {}
+            }
+            let child_env = ob::child_env();
+            let mut unignored = Vec::new();
+            for rel in plugin_ignore_probe_paths(plugin_id) {
+                match vault_git::check_ignore_quiet(bob_dir, &child_env, &rel) {
+                    Ok(vault_git::IgnoreQuiet::Ignored) => {}
+                    Ok(vault_git::IgnoreQuiet::Trackable) => {
+                        unignored.push(rel.display().to_string());
+                    }
+                    Err(error) => {
+                        return Some(VaultIgnoreInfo {
+                            status: VaultIgnoreStatus::Unknown,
+                            warning: format!(
+                                "cannot verify vault Git ignore rules for \
+plugin {plugin_id}: {error}"
+                            ),
+                        });
+                    }
+                }
+            }
+            if unignored.is_empty() {
+                None
+            } else {
+                Some(VaultIgnoreInfo {
+                    status: VaultIgnoreStatus::NotIgnored,
+                    warning: format!(
+                        "plugin {plugin_id} vault folder {} is not ignored \
+by vault Git ({}). Add `.obsidian/plugins/{plugin_id}/` to the vault \
+.gitignore so deploys stay out of version control. bob never edits \
+.gitignore.",
+                        dir_rel.display(),
+                        unignored.join(", "),
+                    ),
+                })
+            }
+        }
+    }
+}
+
+/// The folder itself plus every managed file: all of them must be ignored.
+fn plugin_ignore_probe_paths(plugin_id: &str) -> Vec<PathBuf> {
+    let dir_rel = plugin_rel_dir(plugin_id);
+    let mut paths = vec![dir_rel.clone()];
+    for &name in MANAGED_FILES {
+        paths.push(dir_rel.join(name));
+    }
+    paths
+}
+
+fn tracked_files_under(
+    bob_dir: &Path,
+    dir_rel: &Path,
+) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(bob_dir)
+        .arg("ls-files")
+        .arg("--")
+        .arg(dir_rel)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|error| format!("failed to run git ls-files: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot list tracked vault files under {}: {}",
+            dir_rel.display(),
+            one_line(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn tracked_warning(
+    plugin_id: &str,
+    dir_rel: &Path,
+    tracked: &[String],
+) -> String {
+    let shown = tracked
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let count = tracked.len();
+    let files = if count == 1 {
+        format!("1 tracked file ({shown})")
+    } else {
+        format!("{count} tracked files ({shown})")
+    };
+    format!(
+        "plugin {plugin_id} vault folder {} has {files} in vault Git. Remove \
+them from the index and add `.obsidian/plugins/{plugin_id}/` to the vault \
+.gitignore so deploys stay out of version control. bob never runs `git rm \
+--cached`: untracking on one host deletes the files on the others at their \
+next pull.",
+        dir_rel.display()
+    )
 }
 
 fn has_git_ancestor(dir: &Path) -> bool {

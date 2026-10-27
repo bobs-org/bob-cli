@@ -3,12 +3,12 @@ use std::{fs, path::Path, path::PathBuf};
 use super::{
     deploy::{
         allocate_backup_run_dir, backup_prior_stamp, build_stamp,
-        capture_plugin, check_stamp_storage, current_agent, current_host,
-        deploy_timestamp, deployment_info, deployment_info_from_prior,
-        evaluate_guard, read_prior_stamp, snapshot_vault, stamp_path,
-        vault_bytes, verify_copied_bytes, write_stamp_atomic, CapturedPlugin,
-        DeployLock, GuardDecision, PriorStamp, StampAction, StampState,
-        VaultBundle, STAMP_FILE,
+        capture_plugin, check_plugin_ignore, check_stamp_storage,
+        current_agent, current_host, deploy_timestamp, deployment_info,
+        deployment_info_from_prior, evaluate_guard, read_prior_stamp,
+        snapshot_vault, stamp_path, vault_bytes, verify_copied_bytes,
+        write_stamp_atomic, CapturedPlugin, DeployLock, GuardDecision,
+        PriorStamp, StampAction, StampState, VaultBundle, STAMP_FILE,
     },
     diff::{byte_line_count, diff_existing_file},
     git::vault_file_is_dirty,
@@ -153,6 +153,10 @@ fn sync_one_plugin(
         .join(super::model::VAULT_PLUGINS_SUBDIR)
         .join(id);
 
+    // A vault-ignore warning never blocks: it rides along on every outcome,
+    // including dry-run previews and stamp/guard refusals.
+    let vault_ignore = check_plugin_ignore(&options.bob_dir, id);
+
     if !options.dry_run
         && let Err(message) = check_stamp_storage(&options.bob_dir, id)
     {
@@ -161,6 +165,7 @@ fn sync_one_plugin(
             id: id.to_string(),
             files: Vec::new(),
             deployment: super::deploy::scan_deployment(&vault_plugin_dir),
+            vault_ignore,
             blocked: Some(message),
         };
     }
@@ -173,6 +178,7 @@ fn sync_one_plugin(
                 id: id.to_string(),
                 files: Vec::new(),
                 deployment: super::deploy::scan_deployment(&vault_plugin_dir),
+                vault_ignore,
                 blocked: Some(message),
             };
         }
@@ -198,6 +204,7 @@ fn sync_one_plugin(
                 id: id.to_string(),
                 files: Vec::new(),
                 deployment: deployment_info_from_prior(&prior),
+                vault_ignore,
                 blocked: Some(message),
             }
         }
@@ -215,6 +222,7 @@ fn sync_one_plugin(
             deployed_at,
             backup_run_dir,
             backup_dir_allocated,
+            vault_ignore,
             issues,
         ),
     }
@@ -234,6 +242,7 @@ fn apply_plugin(
     deployed_at: &str,
     backup_run_dir: &mut PathBuf,
     backup_dir_allocated: &mut bool,
+    vault_ignore: Option<super::deploy::VaultIgnoreInfo>,
     issues: &mut Vec<String>,
 ) -> PluginSync {
     let mut files = Vec::new();
@@ -284,6 +293,7 @@ fn apply_plugin(
                     id: id.to_string(),
                     files: Vec::new(),
                     deployment: deployment_info_from_prior(prior),
+                    vault_ignore: vault_ignore.clone(),
                     blocked: Some(message),
                 };
             }
@@ -295,6 +305,7 @@ fn apply_plugin(
                     id: id.to_string(),
                     files: Vec::new(),
                     deployment: deployment_info_from_prior(prior),
+                    vault_ignore: vault_ignore.clone(),
                     blocked: Some(message),
                 };
             }
@@ -315,6 +326,7 @@ fn apply_plugin(
                 id: id.to_string(),
                 files: Vec::new(),
                 deployment: deployment_info_from_prior(prior),
+                vault_ignore: vault_ignore.clone(),
                 blocked: Some(message),
             };
         }
@@ -396,6 +408,7 @@ fn apply_plugin(
             id: id.to_string(),
             files,
             deployment,
+            vault_ignore,
             blocked: None,
         };
     }
@@ -426,6 +439,7 @@ fn apply_plugin(
         id: id.to_string(),
         files,
         deployment,
+        vault_ignore,
         blocked: None,
     }
 }

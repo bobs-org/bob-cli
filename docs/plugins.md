@@ -35,6 +35,10 @@ the same options. `sync` deploys the repo into the vault (see [Sync](#sync)).
 When a plugin has a `.bob-deploy.json` stamp, list prints a dimmed provenance
 line under the row — including the exact phrase `deployed from uncommitted build`
 for a dirty source checkout — without changing the SYNC/VAULT columns or counts.
+In a Git vault, list also prints a `warning` line under the row when the
+plugin's whole vault folder is not ignored or holds tracked files (see
+[Vault-ignore warnings](#vault-ignore-warnings)); the warning never changes
+the SYNC/VAULT columns or counts.
 
 ## Repo Refresh
 
@@ -154,7 +158,10 @@ plugin has no stamp (legacy installs and plugins that have never been synced
 by a stamp-aware `bob`). When present it includes `status`, `source_root`,
 `source_head`, `host`, and `deployed_at`. `status` is `clean`, `uncommitted`,
 `unknown`, `incomplete`, or `mismatched`. A missing stamp is an ordinary
-state, not a list error. On error, JSON mode prints `{"ok": false, "error": "..."}` instead.
+state, not a list error. `vault_ignore` is omitted when the vault is not a
+Git repo or the plugin folder is fully ignored and untracked; otherwise it
+carries the warning as `{"status": "tracked" | "not_ignored" | "unknown",
+"warning": "..."}`. On error, JSON mode prints `{"ok": false, "error": "..."}` instead.
 
 ## Sync
 
@@ -302,6 +309,21 @@ skipped with a warning so local edits are never clobbered silently; pass
 committed state to protect, so the copy proceeds. A file that already matches
 the repo is reported as unchanged and never triggers the guard.
 
+### Vault-ignore warnings
+
+In a Git vault, `sync` and `list` check every plugin's whole vault folder
+(`.obsidian/plugins/<id>/`) plus each managed file against the vault's ignore
+rules with `git check-ignore`, and list tracked files under the folder with
+`git ls-files` — the same probes the deploy-stamp storage check uses. When the
+folder is not ignored or holds tracked files, the command prints a `warning`
+line under the plugin row and sets `vault_ignore` in JSON output (`sync` and
+`list`, including `--dry-run` previews). The warning never blocks the copy,
+never changes the exit status, and never edits `.gitignore` or the index:
+add `.obsidian/plugins/<id>/` to the vault `.gitignore` yourself, and untrack
+with care — bob never runs `git rm --cached` automatically, because untracking
+on one host deletes the files on the others at their next pull. A vault that
+is not a Git repo needs no ignore rule, so there is no warning.
+
 Dry-run mode follows the same decision path and prints the same diffs, but it
 uses `would copy` and `would back up to` wording and writes nothing. This makes
 `bob plugins sync -d` the review step before a real sync.
@@ -357,7 +379,9 @@ on stderr.
 run, would be), otherwise `null`. `copied` counts managed assets, not stamp
 writes, so installer restart detection is unchanged for stamp-only
 reconciliation. In a dry run, `copied` counts the files that would be copied.
-On error, including a deploy-protection refusal, JSON mode prints
+Each plugin entry also carries `vault_ignore` when its vault folder is not
+ignored or holds tracked files (see [Vault-ignore warnings](#vault-ignore-warnings));
+it is omitted otherwise. On error, including a deploy-protection refusal, JSON mode prints
 `{"ok": false, "error": "..."}` instead of echoing issues to stderr.
 
 ## Examples

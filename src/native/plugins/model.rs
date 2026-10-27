@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::deploy::DeploymentInfo;
+use super::deploy::{DeploymentInfo, VaultIgnoreInfo};
 
 pub(super) const COMMAND_NAME: &str = "bob plugins";
 pub(super) const REPO_PLUGINS_SUBDIR: &str = "plugins";
@@ -90,6 +90,7 @@ impl SyncReport {
                         })
                         .collect(),
                     deployment: plugin.deployment.clone(),
+                    vault_ignore: plugin.vault_ignore.clone(),
                 })
                 .collect(),
         }
@@ -118,6 +119,8 @@ pub(super) struct PluginSyncResult {
     pub(super) files: Vec<FileSyncResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) deployment: Option<DeploymentInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) vault_ignore: Option<VaultIgnoreInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -132,6 +135,7 @@ pub(super) struct PluginSync {
     pub(super) id: String,
     pub(super) files: Vec<FileSync>,
     pub(super) deployment: Option<DeploymentInfo>,
+    pub(super) vault_ignore: Option<VaultIgnoreInfo>,
     pub(super) blocked: Option<String>,
 }
 
@@ -276,6 +280,8 @@ pub(super) struct PluginEntry {
     pub(super) vault: VaultState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) deployment: Option<DeploymentInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) vault_ignore: Option<VaultIgnoreInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

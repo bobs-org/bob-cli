@@ -3,7 +3,7 @@ use crate::native::style::{
 };
 
 use super::{
-    deploy::uncommitted_detail,
+    deploy::{uncommitted_detail, VaultIgnoreInfo},
     model::{
         DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
         SyncReport, SyncResult, SyncState, VaultState,
@@ -91,6 +91,7 @@ pub(super) fn print_sync_report(
         if let Some(blocked) = &plugin.blocked {
             let prefix = styler.warning_prefix();
             println!("  {prefix} {id}  {blocked}");
+            print_vault_ignore(&plugin.vault_ignore, styler);
             continue;
         }
 
@@ -102,6 +103,7 @@ pub(super) fn print_sync_report(
             {
                 println!("{DETAIL_INDENT}{}", styler.dim(&detail));
             }
+            print_vault_ignore(&plugin.vault_ignore, styler);
             continue;
         }
 
@@ -121,6 +123,7 @@ pub(super) fn print_sync_report(
         {
             println!("{DETAIL_INDENT}{}", styler.dim(&detail));
         }
+        print_vault_ignore(&plugin.vault_ignore, styler);
     }
 
     println!();
@@ -261,6 +264,14 @@ fn print_backup_outcome(file: &FileSync, dry_run: bool, styler: &Styler) {
     println!("{DETAIL_INDENT}{rendered}");
 }
 
+fn print_vault_ignore(ignore: &Option<VaultIgnoreInfo>, styler: &Styler) {
+    let Some(info) = ignore else {
+        return;
+    };
+    let prefix = styler.warning_prefix();
+    println!("{DETAIL_INDENT}{prefix} {}", styler.yellow(&info.warning));
+}
+
 fn pluralize(count: usize, singular: &str) -> String {
     if count == 1 {
         format!("1 {singular}")
@@ -322,6 +333,7 @@ pub(super) fn print_plugins_table(report: &PluginsReport, styler: &Styler) {
         {
             println!("{DETAIL_INDENT}{}", styler.dim(&detail));
         }
+        print_vault_ignore(&plugin.vault_ignore, styler);
     }
 
     println!();

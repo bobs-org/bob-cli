@@ -68,7 +68,10 @@ exits 2 and prints the `--repo` command to run instead. Sync also refuses
 another checkout's uncommitted or non-ancestor deploy (exit 1) and prints
 preview and force recovery commands. In a Git vault, ignore
 `.obsidian/plugins/*/.bob-deploy.json` so the provenance stamp stays out of
-version control.
+version control. When a plugin's whole vault folder (`.obsidian/plugins/<id>/`)
+is not ignored or holds tracked files, sync and list print a `warning` line
+and set `vault_ignore` in JSON without blocking the copy: add the folder line
+to the vault `.gitignore` yourself — bob never edits it or untracks files.
 
 ## Related
 

@@ -12,8 +12,9 @@ use crate::native::{env::TestEnvGuard, style::truncate};
 
 use super::{
     deploy::{
-        acquire_deploy_lock, deploy_lock_path, scan_deployment, stamp_path,
-        DeployStatus, STAMP_FILE, STAMP_IGNORE_HINT,
+        acquire_deploy_lock, check_plugin_ignore, deploy_lock_path,
+        scan_deployment, stamp_path, DeployStatus, VaultIgnoreStatus,
+        STAMP_FILE, STAMP_IGNORE_HINT,
     },
     diff::{diff_existing_file, diff_text, MINIFIED_BYTE_THRESHOLD},
     git::{pull_repo, PullOutcome},
@@ -972,6 +973,198 @@ fn git_vault_requires_ignored_untracked_stamp() {
 }
 
 #[test]
+fn nongit_vault_has_no_ignore_warning() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-nongit");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "stale");
+
+    assert_eq!(check_plugin_ignore(&vault, "alpha"), None);
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(report.plugins[0].vault_ignore, None);
+
+    let scanned = scan_plugins(&repo, &vault);
+    assert!(scanned.issues.is_empty(), "{:?}", scanned.issues);
+    assert_eq!(scanned.plugins[0].vault_ignore, None);
+}
+
+#[test]
+fn ignored_folder_has_no_warning_in_git_vault() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-clean");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "stale");
+    write_full_ignore(&vault, "alpha");
+    run_git(&vault, &["init", "-q"]);
+
+    assert_eq!(check_plugin_ignore(&vault, "alpha"), None);
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(report.plugins[0].vault_ignore, None);
+
+    let scanned = scan_plugins(&repo, &vault);
+    assert_eq!(scanned.plugins[0].vault_ignore, None);
+}
+
+#[test]
+fn unignored_folder_warns_but_still_syncs() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-unignored");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    // A missing vault folder keeps the dirty-file guard out of the way, so
+    // the test proves the warning itself never blocks the copy. (An existing
+    // but untracked vault file reports dirty under `git status --porcelain`,
+    // so it skips independently of this warning.)
+    write_file(&vault.join("README.md"), "vault\n");
+    // The stamp hint alone keeps stamp storage passing while the plugin
+    // folder itself stays unignored.
+    write_stamp_ignore(&vault);
+    run_git(&vault, &["init", "-q"]);
+
+    let ignore = check_plugin_ignore(&vault, "alpha")
+        .expect("unignored folder must warn");
+    assert_eq!(ignore.status, VaultIgnoreStatus::NotIgnored);
+    assert!(
+        ignore.warning.contains("not ignored")
+            && ignore.warning.contains(".obsidian/plugins/alpha/"),
+        "unexpected warning: {}",
+        ignore.warning
+    );
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    // A warning never blocks the copy.
+    assert_eq!(
+        action_for(&report, "alpha", "main.js"),
+        Some(FileAction::Created)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// alpha\n"
+    );
+    let warned = report.plugins[0].vault_ignore.as_ref().expect("warning");
+    assert_eq!(warned.status, VaultIgnoreStatus::NotIgnored);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&sync_success_json(&report.result(false)))
+            .expect("json");
+    assert_eq!(value["plugins"][0]["vault_ignore"]["status"], "not_ignored");
+    assert!(
+        value["plugins"][0]["vault_ignore"]["warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains(".obsidian/plugins/alpha/")),
+        "json must carry the warning: {value}"
+    );
+}
+
+#[test]
+fn tracked_folder_warns_but_still_syncs() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-tracked");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "new");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "old");
+    write_stamp_ignore(&vault);
+    git_init_commit(&vault);
+
+    let ignore =
+        check_plugin_ignore(&vault, "alpha").expect("tracked folder must warn");
+    assert_eq!(ignore.status, VaultIgnoreStatus::Tracked);
+    assert!(
+        ignore.warning.contains("tracked")
+            && ignore.warning.contains("git rm --cached"),
+        "unexpected warning: {}",
+        ignore.warning
+    );
+
+    let (opts, _guard) = options(&repo, &vault);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    assert_eq!(
+        action_for(&report, "alpha", "main.js"),
+        Some(FileAction::Updated)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// new\n"
+    );
+    assert_eq!(
+        report.plugins[0]
+            .vault_ignore
+            .as_ref()
+            .expect("warning")
+            .status,
+        VaultIgnoreStatus::Tracked
+    );
+}
+
+#[test]
+fn dry_run_carries_ignore_warning_without_writing() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-dry");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha", "stale");
+    write_stamp_ignore(&vault);
+    run_git(&vault, &["init", "-q"]);
+
+    let (mut opts, _guard) = options(&repo, &vault);
+    opts.dry_run = true;
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    let warned = report.plugins[0].vault_ignore.as_ref().expect("warning");
+    assert_eq!(warned.status, VaultIgnoreStatus::NotIgnored);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// stale\n",
+        "dry-run must not write the vault file"
+    );
+    assert!(
+        !vault
+            .join(".obsidian/plugins/alpha/.bob-deploy.json")
+            .exists(),
+        "dry-run must not write the stamp"
+    );
+}
+
+#[test]
+fn list_carries_ignore_warning_without_changing_columns() {
+    let temp = TempDir::new("bob-cli-plugins-ignore-list");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha plugin", "alpha");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha plugin", "alpha");
+    write_stamp_ignore(&vault);
+    run_git(&vault, &["init", "-q"]);
+
+    let report = scan_plugins(&repo, &vault);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    let entry = &report.plugins[0];
+    // The warning rides along without changing the sync/vault columns.
+    assert_eq!(entry.sync, SyncState::Synced);
+    assert_eq!(entry.vault, VaultState::Disabled);
+    let warned = entry.vault_ignore.as_ref().expect("warning");
+    assert_eq!(warned.status, VaultIgnoreStatus::NotIgnored);
+
+    let value: serde_json::Value =
+        serde_json::from_str(&success_json(&report.result())).expect("json");
+    assert_eq!(value["plugins"][0]["sync"], "synced");
+    assert_eq!(value["plugins"][0]["vault_ignore"]["status"], "not_ignored");
+}
+
+#[test]
 fn dry_run_refuses_without_writing() {
     let temp = TempDir::new("bob-cli-plugins-dry-refuse");
     let seed = temp.path().join("seed");
@@ -1233,6 +1426,13 @@ fn options(repo: &Path, vault: &Path) -> (SyncOptions, TestEnvGuard) {
 
 fn write_stamp_ignore(vault: &Path) {
     write_file(&vault.join(".gitignore"), &format!("{STAMP_IGNORE_HINT}\n"));
+}
+
+fn write_full_ignore(vault: &Path, id: &str) {
+    write_file(
+        &vault.join(".gitignore"),
+        &format!("{STAMP_IGNORE_HINT}\n.obsidian/plugins/{id}/\n"),
+    );
 }
 
 fn action_for(report: &SyncReport, id: &str, name: &str) -> Option<FileAction> {
