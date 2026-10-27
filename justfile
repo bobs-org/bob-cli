@@ -42,6 +42,7 @@ check-scripts:
     bash scripts/dev/note_snapshot_corpus_gate_test
     bash scripts/dev/capture_related_calibrate_test
     bash scripts/dev/highlights_coordination_acceptance --self-test
+    python3 -B scripts/dev/test_macos_ci_check.py
 
 # Type-check the pinned Keep adapter and run its offline self-test.
 # Not part of `all`: the first run fetches the pinned Python deps.

@@ -1,0 +1,1329 @@
+#!/usr/bin/env python3
+"""Push the current working tree to a throwaway ci/precommit/* branch and wait for macOS CI.
+
+Keep this file byte-identical to bob-mac-capture's Scripts/macos-ci-check. The
+supported GitHub repositories are selected from this file's checkout and the
+validated origin push URL.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+from pathlib import Path
+import re
+import secrets
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+
+HELP = """\
+Usage: {invocation}
+
+Snapshot this checkout's current files into a throwaway commit object, push that
+object only to a unique ci/precommit/* branch, wait for the GitHub Actions run
+for that exact SHA, and print every macOS step's verdict. HEAD, local branches,
+the caller's index, and working files are left unchanged. The remote branch is
+deleted on every exit path, including failure, timeout, and interrupt.
+
+This is a developer check, not a bob CLI command. It never pushes master and
+never creates a local branch.
+
+What is uploaded
+  Tracked modifications and deletions plus non-ignored untracked files, as they
+  currently exist in the working tree. Partially staged files contribute their
+  worktree contents, not the staged-only bytes. Ignored files are omitted,
+  including bob-cli linked repositories. Dirty or conflicted submodules are
+  refused rather than silently omitted from the snapshot.
+
+Prerequisites
+  python3, git, authenticated gh, repository push access, and a supported
+  GitHub origin push URL identifying exactly one of:
+    github.com/bobs-org/bob-cli
+    github.com/bobs-org/bob-mac-capture
+  The push destination and every gh --repo target must name that same
+  repository. This command never logs in or prints credentials.
+
+Deadlines (positive finite BOB_MACOS_CI_*_SECONDS overrides)
+  discovery  300   seconds to find the first matching run after push
+  total      5400  seconds for the overall check (push, discovery, wait)
+  command    60    seconds per git/gh call, capped by remaining time;
+                   leftover below 1s (or the command cap, if smaller)
+                   is treated as the deadline
+  cleanup    120   seconds to cancel an unfinished run and delete the ref
+  poll       10    seconds between status polls
+  The selected workflow must pass, including non-macOS jobs, and the required
+  macOS job/steps must complete successfully. Known conditional diagnostic,
+  upload, and Linux-only steps may be skipped.
+
+Result codes
+  0  the selected workflow and required macOS checks passed, and remote branch
+     deletion was verified
+  1  the selected run completed with a real CI failure (kept even if optional
+     failure-log retrieval is unavailable)
+  2  verification is incomplete or could not run: missing prerequisites, auth
+     or push errors, no matching run, deadline, cancellation/interruption,
+     malformed or missing coverage, or cleanup failure. Cleanup failure takes
+     precedence and returns 2 while still reporting any observed CI failure.
+
+Cleanup and interruption
+  SIGINT and SIGTERM stop child processes, then cleanup runs. A second ordinary
+  termination signal does not skip cleanup. Cleanup deletes only this
+  invocation's refs/heads/ci/precommit/<id>, retries transient errors within
+  the cleanup budget, treats an already-absent ref as success, and refuses to
+  delete a ref that now points at a different SHA. On timeout or interrupt it
+  also best-effort cancels the selected unfinished run before deleting the
+  ref. If deletion cannot be verified, the printed repository/ref and the
+  exact deletion command are the recovery path. SIGKILL, network loss, and
+  revoked credentials cannot be made into an absolute remote-deletion
+  guarantee.
+
+Offline tests (never invoke this live gate)
+  python3 -B {test_path}
+"""
+
+
+PROFILES: dict[str, dict[str, Any]] = {
+    "bobs-org/bob-cli": {
+        "job": "test (macos-latest)",
+        "required_steps": (
+            "Lint macOS-only targets",
+            "Run tests",
+            "Run archive-move presenter cases",
+        ),
+        "invocation": "scripts/dev/macos-ci-check",
+        "test_path": "scripts/dev/test_macos_ci_check.py",
+        "failure_kind": "rust",
+    },
+    "bobs-org/bob-mac-capture": {
+        "job": "macOS 26 SwiftPM",
+        "required_steps": (
+            "Lint Swift formatting",
+            "Build",
+            "Test",
+            "Bundle",
+            "Verify plist and signature",
+            "Launch smoke test",
+            "Install and reinstall",
+        ),
+        "invocation": "Scripts/macos-ci-check",
+        "test_path": "Scripts/test_macos_ci_check.py",
+        "failure_kind": "swift",
+    },
+}
+
+RUN_LIST_FIELDS = (
+    "databaseId,headSha,headBranch,event,status,conclusion,url,name,workflowName"
+)
+RUN_VIEW_FIELDS = (
+    "databaseId,headSha,headBranch,event,status,conclusion,url,name,workflowName,jobs"
+)
+OPTIONAL_STEP_MARKERS = (
+    "upload",
+    "artifact",
+    "diagnostic",
+    "full-test",
+    "linux",
+)
+TRANSIENT_MARKERS = (
+    "http 5",
+    "timeout",
+    "temporar",
+    "connection reset",
+    "network",
+    "eof",
+    "i/o timeout",
+    "tls",
+    "server error",
+    "502",
+    "503",
+    "504",
+    "429",
+)
+AUTH_MARKERS = (
+    "authentication required",
+    "gh auth login",
+    "not logged in",
+    "bad credentials",
+    "http 401",
+    "http 403",
+    "resource not accessible",
+)
+RUST_FAILED_LINE = re.compile(
+    r"^test\s+(\S+)\s+\.\.\.\s+FAILED\b", re.MULTILINE
+)
+RUST_FAILURE_LIST = re.compile(
+    r"^failures:\s*\n((?:\s+\S+\s*\n)+)", re.MULTILINE
+)
+SWIFT_XCTEST = re.compile(
+    r"Test Case\s+'-\[([^\]]+)\]'\s+failed", re.IGNORECASE
+)
+SWIFT_TESTING = re.compile(
+    r"(?:✘|✗|X)\s+Test\s+\"([^\"]+)\"\s+failed", re.IGNORECASE
+)
+SWIFT_TESTING_IDENT = re.compile(
+    r"^Test\s+(\S+)\(\)\s+failed\b", re.MULTILINE | re.IGNORECASE
+)
+COMPILER_ERROR = re.compile(
+    r"^(?:error(?:\[E\d+\])?:|\S+:\d+:\d+:\s+error:)\s+.*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+WATCHDOG = re.compile(
+    r"(swift test ran longer than|sampling xctest|test-hang|watchdog)",
+    re.IGNORECASE,
+)
+
+
+class Unrun(Exception):
+    """Verification could not finish."""
+
+
+class Fail(Exception):
+    """The selected CI run completed with a real failure."""
+
+
+class Runner:
+    def __init__(self) -> None:
+        self.procs: list[subprocess.Popen[str]] = []
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.cleaning = False
+        self.interrupt_name = ""
+
+    def handle_signal(self, signum: int, _frame: Any) -> None:
+        name = signal.Signals(signum).name
+        self.interrupt_name = name
+        self.stop.set()
+        if not self.cleaning:
+            self.kill_children()
+
+    def add(self, proc: subprocess.Popen[str]) -> None:
+        with self.lock:
+            self.procs.append(proc)
+
+    def drop(self, proc: subprocess.Popen[str]) -> None:
+        with self.lock:
+            if proc in self.procs:
+                self.procs.remove(proc)
+
+    def kill_children(self, grace: float = 1.5) -> None:
+        with self.lock:
+            procs = list(self.procs)
+        for proc in procs:
+            _terminate_group(proc, grace)
+        with self.lock:
+            self.procs = [proc for proc in self.procs if proc.poll() is None]
+
+
+def _terminate_group(proc: subprocess.Popen[str], grace: float) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+    deadline = time.monotonic() + max(0.05, grace)
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def env_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise Unrun(f"{name} must be a positive finite number, got {raw!r}") from error
+    if not math.isfinite(value) or value <= 0:
+        raise Unrun(f"{name} must be a positive finite number, got {raw!r}")
+    return value
+
+
+def load_deadlines() -> dict[str, float]:
+    return {
+        "discovery": env_seconds("BOB_MACOS_CI_DISCOVERY_SECONDS", 300),
+        "total": env_seconds("BOB_MACOS_CI_TOTAL_SECONDS", 5400),
+        "command": env_seconds("BOB_MACOS_CI_COMMAND_SECONDS", 60),
+        "cleanup": env_seconds("BOB_MACOS_CI_CLEANUP_SECONDS", 120),
+        "poll": env_seconds("BOB_MACOS_CI_POLL_SECONDS", 10),
+    }
+
+
+MIN_COMMAND_SECONDS = 1.0
+
+
+def remaining(deadline: float) -> float:
+    return deadline - time.monotonic()
+
+
+def command_timeout(deadlines: dict[str, float], deadline: float) -> float:
+    left = remaining(deadline)
+    if left <= 0:
+        raise Unrun("deadline reached before starting an external command")
+    spawn = min(MIN_COMMAND_SECONDS, deadlines["command"])
+    timeout = min(deadlines["command"], left)
+    if timeout < spawn:
+        raise Unrun("deadline reached before starting an external command")
+    return timeout
+
+
+def sleep_for(runner: Runner, seconds: float, deadline: float) -> None:
+    end = min(time.monotonic() + max(0.0, seconds), deadline)
+    while time.monotonic() < end:
+        if runner.stop.is_set() and not runner.cleaning:
+            raise Unrun(_interrupt_message(runner))
+        if runner.cleaning:
+            time.sleep(min(0.1, end - time.monotonic()))
+        else:
+            runner.stop.wait(min(0.1, end - time.monotonic()))
+    if runner.stop.is_set() and not runner.cleaning:
+        raise Unrun(_interrupt_message(runner))
+
+
+def _interrupt_message(runner: Runner) -> str:
+    name = runner.interrupt_name or "signal"
+    return f"interrupted by {name}"
+
+
+def child_env(index_file: str | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = ""
+    env["SSH_ASKPASS"] = ""
+    env["GCM_INTERACTIVE"] = "never"
+    env["GIT_PAGER"] = "cat"
+    env["GH_PAGER"] = "cat"
+    env["GH_PROMPT_DISABLED"] = "1"
+    env["PAGER"] = "cat"
+    # gh 2.103 still colorizes --json when CLICOLOR_FORCE/FORCE_COLOR is set,
+    # even with a pipe and NO_COLOR=1. Parent agent shells often export both.
+    env["NO_COLOR"] = "1"
+    env["CLICOLOR"] = "0"
+    env["CLICOLOR_FORCE"] = "0"
+    env["FORCE_COLOR"] = "0"
+    env.pop("GH_FORCE_TTY", None)
+    if index_file:
+        env["GIT_INDEX_FILE"] = index_file
+    elif "GIT_INDEX_FILE" in env:
+        del env["GIT_INDEX_FILE"]
+    return env
+
+
+def which_or_unrun(name: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        raise Unrun(f"required command not found on PATH: {name}")
+    return path
+
+
+def run_command(
+    runner: Runner,
+    argv: list[str],
+    *,
+    timeout: float,
+    cwd: Path | None = None,
+    index_file: str | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if runner.stop.is_set() and not runner.cleaning:
+        raise Unrun(_interrupt_message(runner))
+    merged = child_env(index_file)
+    if env:
+        merged.update(env)
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            env=merged,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise Unrun(f"could not start {argv[0]}: {error}") from error
+    runner.add(proc)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        _terminate_group(proc, grace=1.0)
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = "", ""
+        raise Unrun(
+            f"command timed out after {timeout:.1f}s: {format_cmd(argv)}"
+        ) from error
+    finally:
+        runner.drop(proc)
+    if runner.stop.is_set() and not runner.cleaning:
+        raise Unrun(_interrupt_message(runner))
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
+def format_cmd(argv: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in argv)
+
+
+def log(message: str) -> None:
+    print(f"macos-ci-check: {message}", flush=True)
+
+
+def log_err(message: str) -> None:
+    print(f"macos-ci-check: {message}", file=sys.stderr, flush=True)
+
+
+def strip_credentials(url: str) -> str:
+    raw = url.strip()
+    if "://" in raw:
+        parsed = urlparse(raw)
+        host = parsed.hostname or ""
+        path = parsed.path
+        netloc = host
+        if parsed.port:
+            netloc = f"{host}:{parsed.port}"
+        cleaned = f"{parsed.scheme}://{netloc}{path}"
+        if parsed.query:
+            cleaned += f"?{parsed.query}"
+        return cleaned
+    if "@" in raw and ":" in raw.split("@", 1)[0]:
+        return raw.split("@", 1)[1]
+    return raw
+
+
+def github_repo_from_url(url: str) -> str | None:
+    raw = strip_credentials(url).rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    owner = repo = ""
+    if raw.startswith("git@github.com:"):
+        owner, _, repo = raw[len("git@github.com:") :].partition("/")
+    elif raw.startswith("ssh://git@github.com/"):
+        owner, _, repo = raw[len("ssh://git@github.com/") :].partition("/")
+    elif "github.com" in raw:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        if parsed.hostname != "github.com":
+            return None
+        parts = [part for part in unquote(parsed.path).split("/") if part]
+        if len(parts) < 2:
+            return None
+        owner, repo = parts[0], parts[1]
+    else:
+        return None
+    owner = owner.strip()
+    repo = repo.strip()
+    if not owner or not repo or "/" in owner:
+        return None
+    name = f"{owner}/{repo}"
+    return name if name in PROFILES else None
+
+
+def invocation_paths(script_path: Path) -> tuple[str, str]:
+    posix = script_path.resolve().as_posix()
+    for repo, profile in PROFILES.items():
+        invocation = str(profile["invocation"])
+        if posix.endswith("/" + invocation) or posix.endswith(invocation):
+            return invocation, str(profile["test_path"])
+    name = script_path.name
+    return name, "test_macos_ci_check.py"
+
+
+def help_text(script_path: Path) -> str:
+    invocation, test_path = invocation_paths(script_path)
+    return HELP.format(invocation=invocation, test_path=test_path)
+
+
+def git_output(
+    runner: Runner,
+    root: Path,
+    args: list[str],
+    *,
+    timeout: float,
+    index_file: str | None = None,
+    check: bool = True,
+) -> str:
+    result = run_command(
+        runner,
+        ["git", "-C", str(root), *args],
+        timeout=timeout,
+        index_file=index_file,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        raise Unrun(f"git {args[0]} failed: {detail}")
+    return (result.stdout or "").strip()
+
+
+def git_config_all(
+    runner: Runner, root: Path, key: str, timeout: float
+) -> list[str]:
+    result = run_command(
+        runner,
+        ["git", "-C", str(root), "config", "--get-all", key],
+        timeout=timeout,
+    )
+    if result.returncode not in {0, 1}:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        raise Unrun(f"cannot read {key}: {detail}")
+    return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+
+
+def origin_repo(runner: Runner, root: Path, timeout: float) -> str:
+    urls = git_config_all(runner, root, "remote.origin.pushurl", timeout)
+    if not urls:
+        urls = git_config_all(runner, root, "remote.origin.url", timeout)
+    if not urls:
+        raise Unrun("origin has no push URL")
+    repos = []
+    for url in urls:
+        repo = github_repo_from_url(url)
+        if repo is None:
+            raise Unrun(
+                "origin push URL is not a supported GitHub repository: "
+                f"{strip_credentials(url)}"
+            )
+        repos.append(repo)
+    unique = sorted(set(repos))
+    if len(unique) != 1:
+        raise Unrun(
+            "origin has multiple supported GitHub push URLs: " + ", ".join(unique)
+        )
+    return unique[0]
+
+
+def require_clean_merge_and_submodules(
+    runner: Runner, root: Path, timeout: float
+) -> None:
+    merge = run_command(
+        runner,
+        ["git", "-C", str(root), "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        timeout=timeout,
+    )
+    if merge.returncode == 0:
+        raise Unrun("refusing to snapshot an unresolved merge")
+    status = git_output(
+        runner,
+        root,
+        ["status", "--porcelain=v2", "--untracked-files=all"],
+        timeout=timeout,
+    )
+    for line in status.splitlines():
+        if line.startswith("u "):
+            raise Unrun("refusing to snapshot unmerged paths")
+        if line.startswith(("1 ", "2 ")):
+            parts = line.split(" ", 4)
+            if len(parts) < 3:
+                continue
+            sub = parts[2]
+            if len(sub) >= 4 and sub[0] == "S" and sub[1:] != "...":
+                path = line.split(" ", 8)[-1] if " " in line else line
+                raise Unrun(
+                    "refusing to snapshot a dirty submodule; its uncommitted "
+                    f"content would not be tested: {path}"
+                )
+
+
+def snapshot_tree(
+    runner: Runner,
+    root: Path,
+    head: str,
+    invocation: str,
+    index_file: Path,
+    timeout: float,
+) -> str:
+    git_output(
+        runner, root, ["read-tree", head], timeout=timeout, index_file=str(index_file)
+    )
+    git_output(
+        runner, root, ["add", "-A"], timeout=timeout, index_file=str(index_file)
+    )
+    tree = git_output(
+        runner, root, ["write-tree"], timeout=timeout, index_file=str(index_file)
+    )
+    if not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        raise Unrun(f"git write-tree returned an invalid tree SHA: {tree!r}")
+    message = (
+        f"macos-ci-check verification snapshot\n\ninvocation: {invocation}\nbase: {head}\n"
+    )
+    commit = git_output(
+        runner,
+        root,
+        ["commit-tree", tree, "-p", head, "-m", message],
+        timeout=timeout,
+        index_file=str(index_file),
+    )
+    if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+        raise Unrun(f"git commit-tree returned an invalid commit SHA: {commit!r}")
+    return commit
+
+
+def classify_gh_error(result: subprocess.CompletedProcess[str]) -> str:
+    if result.returncode == 0:
+        return "ok"
+    text = f"{result.stderr}\n{result.stdout}".lower()
+    if result.returncode in {4, 127} or any(marker in text for marker in AUTH_MARKERS):
+        return "auth"
+    if "invalid" in text and "json" in text:
+        return "json"
+    if any(marker in text for marker in TRANSIENT_MARKERS):
+        return "transient"
+    return "error"
+
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def parse_json(payload: str, what: str) -> Any:
+    text = ANSI_ESCAPE.sub("", payload or "")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as error:
+        raise Unrun(f"{what} returned invalid JSON: {error}") from error
+
+
+def gh_json(
+    runner: Runner,
+    argv: list[str],
+    *,
+    timeout: float,
+    retry_deadline: float | None,
+    poll: float,
+    what: str,
+) -> Any:
+    last = "no response"
+    while True:
+        result = run_command(runner, argv, timeout=timeout)
+        kind = classify_gh_error(result)
+        if kind == "auth":
+            raise Unrun(
+                "gh is not authenticated for this repository; run gh auth login"
+            )
+        if kind == "ok":
+            data = parse_json(result.stdout, what)
+            return data
+        last = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        if kind == "json" or kind == "error":
+            if retry_deadline is None or remaining(retry_deadline) <= 0:
+                raise Unrun(f"{what} failed: {last}")
+        if retry_deadline is None or remaining(retry_deadline) <= 0:
+            raise Unrun(f"{what} failed: {last}")
+        log(f"retrying {what} after transient error")
+        sleep_for(runner, min(poll, remaining(retry_deadline)), retry_deadline)
+
+
+def identity_matches(payload: dict[str, Any], sha: str, branch: str) -> bool:
+    head = str(payload.get("headSha") or "")
+    got_branch = str(payload.get("headBranch") or "")
+    event = str(payload.get("event") or "")
+    return head == sha and got_branch == branch and event == "push"
+
+
+def select_run(runs: Any, sha: str, branch: str) -> dict[str, Any] | None:
+    if not isinstance(runs, list):
+        raise Unrun("gh run list returned JSON that is not a list")
+    for item in runs:
+        if isinstance(item, dict) and identity_matches(item, sha, branch):
+            return item
+    return None
+
+
+def step_name(step: dict[str, Any]) -> str:
+    return str(step.get("name") or "").strip()
+
+
+def step_verdict(step: dict[str, Any]) -> str:
+    status = str(step.get("status") or "unknown")
+    conclusion = str(step.get("conclusion") or "")
+    if status != "completed":
+        return status
+    return conclusion or status
+
+
+def is_success(status: str, conclusion: str) -> bool:
+    return status == "completed" and conclusion == "success"
+
+
+def find_job(jobs: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    for job in jobs:
+        if str(job.get("name") or "") == name:
+            return job
+    return None
+
+
+def jobs_of(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    jobs = payload.get("jobs") or []
+    if not isinstance(jobs, list):
+        raise Unrun("gh run view jobs field is not a list")
+    return [job for job in jobs if isinstance(job, dict)]
+
+
+def print_macos_steps(job: dict[str, Any]) -> None:
+    steps = job.get("steps") or []
+    if not isinstance(steps, list) or not steps:
+        log(f"macOS job {job.get('name')}: no steps reported")
+        return
+    log(f"macOS job {job.get('name')}")
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        name = step_name(step) or "(unnamed step)"
+        verdict = step_verdict(step)
+        mark = "ok" if verdict == "success" else verdict
+        print(f"  [{mark}] {name}", flush=True)
+
+
+def required_coverage(
+    job: dict[str, Any] | None, required: tuple[str, ...]
+) -> tuple[list[str], list[str]]:
+    if job is None:
+        return list(required), []
+    steps = [step for step in (job.get("steps") or []) if isinstance(step, dict)]
+    by_name = {step_name(step): step for step in steps if step_name(step)}
+    missing: list[str] = []
+    failed: list[str] = []
+    for name in required:
+        step = by_name.get(name)
+        if step is None:
+            missing.append(name)
+            continue
+        status = str(step.get("status") or "")
+        conclusion = str(step.get("conclusion") or "")
+        if is_success(status, conclusion):
+            continue
+        if conclusion in {"failure", "timed_out"}:
+            failed.append(f"{name} ({conclusion})")
+        else:
+            missing.append(f"{name} ({conclusion or status})")
+    return missing, failed
+
+
+def failed_other_jobs(jobs: list[dict[str, Any]], macos_name: str) -> list[str]:
+    names = []
+    for job in jobs:
+        name = str(job.get("name") or "(unnamed job)")
+        if name == macos_name:
+            continue
+        status = str(job.get("status") or "")
+        conclusion = str(job.get("conclusion") or "")
+        if conclusion in {"failure", "timed_out"} or (
+            status == "completed" and conclusion not in {"success", "skipped", "cancelled", ""}
+        ):
+            names.append(f"{name} ({conclusion or status})")
+    return names
+
+
+def extract_rust_failures(log_text: str) -> list[str]:
+    names = list(RUST_FAILED_LINE.findall(log_text))
+    listed = RUST_FAILURE_LIST.findall(log_text)
+    for block in listed:
+        for line in block.splitlines():
+            name = line.strip()
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def extract_swift_failures(log_text: str) -> list[str]:
+    names = list(SWIFT_XCTEST.findall(log_text))
+    names.extend(SWIFT_TESTING.findall(log_text))
+    names.extend(SWIFT_TESTING_IDENT.findall(log_text))
+    unique: list[str] = []
+    for name in names:
+        if name not in unique:
+            unique.append(name)
+    return unique
+
+
+def extract_diagnostics(log_text: str) -> list[str]:
+    errors = COMPILER_ERROR.findall(log_text)
+    dogs = [line.strip() for line in log_text.splitlines() if WATCHDOG.search(line)]
+    seen: list[str] = []
+    for item in [*errors, *dogs]:
+        text = item.strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen[:40]
+
+
+def print_failure_names(kind: str, log_text: str) -> None:
+    names = extract_rust_failures(log_text) if kind == "rust" else extract_swift_failures(log_text)
+    if names:
+        label = "failed Rust tests" if kind == "rust" else "failed Swift tests"
+        log(label)
+        for name in names:
+            print(f"  {name}", flush=True)
+        return
+    extras = extract_diagnostics(log_text)
+    if extras:
+        log("no test names could be extracted; relevant diagnostics follow")
+        for line in extras:
+            print(f"  {line}", flush=True)
+        return
+    log("no test names could be extracted from the failed-job logs")
+
+
+def remote_sha(
+    runner: Runner,
+    root: Path,
+    branch: str,
+    timeout: float,
+) -> str | None:
+    ref = f"refs/heads/{branch}"
+    result = run_command(
+        runner,
+        ["git", "-C", str(root), "ls-remote", "--heads", "origin", ref],
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        raise Unrun(f"git ls-remote failed: {detail}")
+    output = (result.stdout or "").strip()
+    if not output:
+        return None
+    result_line = output.splitlines()[0]
+    sha = result_line.split()[0]
+    if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        raise Unrun(f"ls-remote returned an invalid SHA: {result_line!r}")
+    return sha
+
+
+def delete_remote_ref(
+    runner: Runner,
+    root: Path,
+    branch: str,
+    snapshot: str,
+    deadlines: dict[str, float],
+    deadline: float,
+) -> None:
+    ref = f"refs/heads/{branch}"
+    last_error = "delete did not run"
+    while remaining(deadline) > 0:
+        timeout = command_timeout(deadlines, deadline)
+        current = remote_sha(runner, root, branch, timeout)
+        if current is None:
+            return
+        if current != snapshot:
+            raise Unrun(
+                f"refusing to delete {ref}: origin now points at {current}, "
+                f"not this snapshot {snapshot}"
+            )
+        timeout = command_timeout(deadlines, deadline)
+        result = run_command(
+            runner,
+            ["git", "-C", str(root), "push", "origin", f":{ref}"],
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            timeout = command_timeout(deadlines, deadline)
+            if remote_sha(runner, root, branch, timeout) is None:
+                return
+            last_error = f"{ref} still present on origin after delete"
+        else:
+            text = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+            lowered = text.lower()
+            if "remote ref does not exist" in lowered or "does not exist" in lowered:
+                return
+            last_error = text
+            if not any(marker in lowered for marker in TRANSIENT_MARKERS):
+                # Still retry within the cleanup budget: delete races are common.
+                pass
+        if remaining(deadline) <= 0:
+            break
+        sleep_for(runner, min(deadlines["poll"], remaining(deadline)), deadline)
+    raise Unrun(f"could not verify deletion of {ref}: {last_error}")
+
+
+def cancel_run(
+    runner: Runner,
+    repo: str,
+    run_id: str,
+    deadlines: dict[str, float],
+    deadline: float,
+) -> None:
+    try:
+        timeout = command_timeout(deadlines, deadline)
+    except Unrun:
+        return
+    result = run_command(
+        runner,
+        ["gh", "run", "cancel", str(run_id), "--repo", repo],
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        log_err(f"could not cancel run {run_id}: {detail}")
+
+
+def fetch_failed_logs(
+    runner: Runner,
+    repo: str,
+    run_id: str,
+    deadlines: dict[str, float],
+    deadline: float,
+) -> str | None:
+    try:
+        timeout = command_timeout(deadlines, deadline)
+    except Unrun as error:
+        log_err(f"failed-job logs unavailable: {error}")
+        return None
+    result = run_command(
+        runner,
+        ["gh", "run", "view", str(run_id), "--repo", repo, "--log-failed"],
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        log_err(f"failed-job logs unavailable: {detail}")
+        return None
+    return result.stdout or ""
+
+
+def wait_for_matching_run(
+    runner: Runner,
+    repo: str,
+    sha: str,
+    branch: str,
+    deadlines: dict[str, float],
+    overall_deadline: float,
+    started: float,
+) -> dict[str, Any]:
+    discovery_deadline = min(time.monotonic() + deadlines["discovery"], overall_deadline)
+    last_note = "no matching run yet"
+    missing = (
+        f"no matching push run for {sha} on {branch} within the discovery deadline"
+    )
+    while True:
+        if runner.stop.is_set():
+            raise Unrun(_interrupt_message(runner))
+        now = time.monotonic()
+        if now >= discovery_deadline:
+            raise Unrun(missing)
+        try:
+            timeout = command_timeout(deadlines, discovery_deadline)
+        except Unrun:
+            raise Unrun(missing)
+        argv = [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--workflow",
+            "ci.yml",
+            "--event",
+            "push",
+            "--branch",
+            branch,
+            "--commit",
+            sha,
+            "--json",
+            RUN_LIST_FIELDS,
+        ]
+        try:
+            runs = gh_json(
+                runner,
+                argv,
+                timeout=timeout,
+                retry_deadline=discovery_deadline,
+                poll=deadlines["poll"],
+                what="gh run list",
+            )
+            match = select_run(runs, sha, branch)
+            if match is not None:
+                run_id = str(match.get("databaseId") or "")
+                if not run_id:
+                    raise Unrun("matching run is missing databaseId")
+                viewed = gh_json(
+                    runner,
+                    [
+                        "gh",
+                        "run",
+                        "view",
+                        run_id,
+                        "--repo",
+                        repo,
+                        "--json",
+                        RUN_VIEW_FIELDS,
+                    ],
+                    timeout=command_timeout(deadlines, overall_deadline),
+                    retry_deadline=overall_deadline,
+                    poll=deadlines["poll"],
+                    what="gh run view",
+                )
+                if not isinstance(viewed, dict):
+                    raise Unrun("gh run view returned JSON that is not an object")
+                if not identity_matches(viewed, sha, branch):
+                    last_note = "gh run view identity did not match; ignoring"
+                else:
+                    return viewed
+            else:
+                last_note = "listed runs did not match SHA/branch/event"
+        except Unrun as error:
+            if "not authenticated" in str(error) or "invalid JSON" in str(error):
+                raise
+            last_note = str(error)
+            if remaining(discovery_deadline) <= 0:
+                message = str(error)
+                if "timed out" in message or "deadline reached" in message:
+                    raise Unrun(missing) from error
+                raise
+        elapsed = time.monotonic() - started
+        left = remaining(discovery_deadline)
+        log(f"waiting for matching run ({elapsed:.0f}s elapsed, {left:.0f}s discovery left; {last_note})")
+        sleep_for(runner, min(deadlines["poll"], remaining(discovery_deadline)), discovery_deadline)
+
+
+def wait_for_completion(
+    runner: Runner,
+    repo: str,
+    run: dict[str, Any],
+    sha: str,
+    branch: str,
+    deadlines: dict[str, float],
+    overall_deadline: float,
+    started: float,
+) -> dict[str, Any]:
+    run_id = str(run.get("databaseId") or "")
+    current = run
+    while True:
+        if runner.stop.is_set():
+            raise Unrun(_interrupt_message(runner))
+        status = str(current.get("status") or "")
+        if status == "completed":
+            return current
+        if remaining(overall_deadline) <= 0:
+            raise Unrun(f"run {run_id} did not complete within the total deadline")
+        elapsed = time.monotonic() - started
+        left = remaining(overall_deadline)
+        log(
+            f"run {run_id} is {status or 'pending'} "
+            f"({elapsed:.0f}s elapsed, {left:.0f}s left)"
+        )
+        sleep_for(runner, min(deadlines["poll"], remaining(overall_deadline)), overall_deadline)
+        viewed = gh_json(
+            runner,
+            ["gh", "run", "view", run_id, "--repo", repo, "--json", RUN_VIEW_FIELDS],
+            timeout=command_timeout(deadlines, overall_deadline),
+            retry_deadline=overall_deadline,
+            poll=deadlines["poll"],
+            what="gh run view",
+        )
+        if not isinstance(viewed, dict):
+            raise Unrun("gh run view returned JSON that is not an object")
+        if not identity_matches(viewed, sha, branch):
+            raise Unrun(
+                f"run {run_id} changed identity (SHA/branch/event) while waiting"
+            )
+        current = viewed
+
+
+def evaluate_run(
+    payload: dict[str, Any],
+    profile: dict[str, Any],
+) -> tuple[int, str]:
+    """Return (code, summary) where code is 0, 1, or 2 before cleanup."""
+    jobs = jobs_of(payload)
+    macos_name = str(profile["job"])
+    job = find_job(jobs, macos_name)
+    print_macos_steps(job or {"name": macos_name, "steps": []})
+    others = failed_other_jobs(jobs, macos_name)
+    if others:
+        log("failed non-macOS jobs")
+        for name in others:
+            print(f"  {name}", flush=True)
+    status = str(payload.get("status") or "")
+    conclusion = str(payload.get("conclusion") or "")
+    if status != "completed":
+        return 2, f"selected run did not complete (status {status or 'unknown'})"
+    if conclusion in {"cancelled", "skipped"}:
+        return 2, f"selected run was {conclusion}"
+    missing, failed_steps = required_coverage(job, tuple(profile["required_steps"]))
+    known_failure = bool(failed_steps or others or conclusion in {"failure", "timed_out"})
+    if job is None:
+        if known_failure:
+            return 1, "required macOS job is missing and the workflow reported a failure"
+        return 2, f"required macOS job not present: {macos_name}"
+    job_conclusion = str(job.get("conclusion") or "")
+    job_status = str(job.get("status") or "")
+    if failed_steps:
+        return 1, "required macOS steps failed: " + ", ".join(failed_steps)
+    if known_failure and missing:
+        return 1, (
+            "workflow failed; later required macOS steps did not run: "
+            + ", ".join(missing)
+        )
+    if missing:
+        return 2, "required macOS coverage is missing or skipped: " + ", ".join(missing)
+    if not is_success(job_status, job_conclusion):
+        if job_conclusion in {"failure", "timed_out"} or conclusion in {"failure", "timed_out"}:
+            return 1, f"macOS job ended {job_conclusion or job_status}"
+        return 2, f"macOS job ended {job_conclusion or job_status}"
+    if conclusion != "success" or others:
+        return 1, f"selected workflow ended {conclusion or 'unsuccessfully'}"
+    return 0, "selected workflow and required macOS checks passed"
+
+
+def push_snapshot(
+    runner: Runner,
+    root: Path,
+    snapshot: str,
+    branch: str,
+    deadlines: dict[str, float],
+    overall_deadline: float,
+) -> None:
+    ref = f"refs/heads/{branch}"
+    if branch == "master" or ref == "refs/heads/master":
+        raise Unrun("internal error: refusing to push master")
+    argv = [
+        "git",
+        "-C",
+        str(root),
+        "push",
+        "--porcelain",
+        f"--force-with-lease={ref}:",
+        "origin",
+        f"{snapshot}:{ref}",
+    ]
+    timeout = command_timeout(deadlines, overall_deadline)
+    result = run_command(runner, argv, timeout=timeout)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
+        raise Unrun(f"create-only push of {ref} failed: {detail}")
+
+
+def install_signal_handlers(runner: Runner) -> None:
+    signal.signal(signal.SIGINT, runner.handle_signal)
+    signal.signal(signal.SIGTERM, runner.handle_signal)
+
+
+def recover_command(branch: str) -> str:
+    ref = f"refs/heads/{branch}"
+    return (
+        f"git ls-remote --heads origin {ref} && git push origin :{ref} && "
+        f"git ls-remote --heads origin {ref}"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    script_path = Path(__file__).resolve()
+    if argv and argv[0] in {"-h", "--help"}:
+        sys.stdout.write(help_text(script_path))
+        return 0
+    if argv:
+        log_err(f"unexpected argument: {argv[0]}")
+        sys.stdout.write(help_text(script_path))
+        return 2
+
+    runner = Runner()
+    install_signal_handlers(runner)
+    tempdir: tempfile.TemporaryDirectory[str] | None = None
+    root: Path | None = None
+    repo = ""
+    branch = ""
+    snapshot = ""
+    run_id = ""
+    run_status = ""
+    ci_code = 2
+    pushed = False
+    observed_failure = False
+    cleanup_error = ""
+
+    try:
+        deadlines = load_deadlines()
+        overall_deadline = time.monotonic() + deadlines["total"]
+        which_or_unrun("python3")
+        which_or_unrun("git")
+        which_or_unrun("gh")
+        timeout = command_timeout(deadlines, overall_deadline)
+        resolved = git_output(
+            runner,
+            script_path.parent,
+            ["rev-parse", "--show-toplevel"],
+            timeout=timeout,
+        )
+        # git may print a logical path (/var/folders) while Path.resolve()
+        # follows the macOS /private/var symlink; compare resolved paths.
+        root = Path(resolved).resolve()
+        try:
+            script_path.relative_to(root)
+        except ValueError:
+            raise Unrun(f"script {script_path} is not inside git checkout {root}")
+        repo = origin_repo(runner, root, command_timeout(deadlines, overall_deadline))
+        profile = PROFILES[repo]
+        expected = root / Path(str(profile["invocation"]))
+        if script_path != expected.resolve():
+            log(
+                f"warning: running {script_path} for {repo}; expected {expected}"
+            )
+        auth = run_command(
+            runner,
+            ["gh", "auth", "status", "--hostname", "github.com"],
+            timeout=command_timeout(deadlines, overall_deadline),
+        )
+        if classify_gh_error(auth) == "auth" or auth.returncode != 0:
+            raise Unrun(
+                "gh is not authenticated for github.com; run gh auth login"
+            )
+        require_clean_merge_and_submodules(
+            runner, root, command_timeout(deadlines, overall_deadline)
+        )
+        head = git_output(
+            runner, root, ["rev-parse", "HEAD"], timeout=command_timeout(deadlines, overall_deadline)
+        )
+        if not re.fullmatch(r"[0-9a-f]{40,64}", head):
+            raise Unrun(f"HEAD is not a SHA: {head!r}")
+        invocation = secrets.token_hex(16)
+        branch = f"ci/precommit/{invocation}"
+        tempdir = tempfile.TemporaryDirectory(prefix="macos-ci-check-")
+        temp_path = Path(tempdir.name)
+        try:
+            temp_path.resolve().relative_to(root)
+        except ValueError:
+            pass
+        else:
+            raise Unrun("refusing to put the temporary index inside the checkout")
+        index_file = temp_path / "index"
+        snapshot = snapshot_tree(
+            runner,
+            root,
+            head,
+            invocation,
+            index_file,
+            command_timeout(deadlines, overall_deadline),
+        )
+        log(f"repository {repo}")
+        log(f"base SHA {head}")
+        log(f"snapshot SHA {snapshot}")
+        log(f"remote branch {branch}")
+        log("pushing create-only ref (checkout, HEAD, and index are unchanged)")
+        pushed = True
+        push_snapshot(runner, root, snapshot, branch, deadlines, overall_deadline)
+        started_wait = time.monotonic()
+        run = wait_for_matching_run(
+            runner, repo, snapshot, branch, deadlines, overall_deadline, started_wait
+        )
+        run_id = str(run.get("databaseId") or "")
+        run = wait_for_completion(
+            runner, repo, run, snapshot, branch, deadlines, overall_deadline, started_wait
+        )
+        run_status = str(run.get("status") or "")
+        url = str(run.get("url") or "")
+        log(f"run {url or run_id}")
+        log(f"snapshot SHA {snapshot}")
+        ci_code, summary = evaluate_run(run, profile)
+        log(summary)
+        if ci_code == 1:
+            observed_failure = True
+            logs = fetch_failed_logs(
+                runner, repo, run_id, deadlines, overall_deadline
+            )
+            if logs is None:
+                log_err("preserving the CI failure verdict without failed-job logs")
+            elif logs.strip():
+                print_failure_names(str(profile["failure_kind"]), logs)
+            else:
+                log("failed-job logs were empty")
+        elif ci_code != 0:
+            raise Unrun(summary)
+    except Fail as error:
+        observed_failure = True
+        ci_code = 1
+        log_err(str(error))
+    except Unrun as error:
+        ci_code = 2
+        log_err(str(error))
+    except Exception as error:  # noqa: BLE001 - convert unexpected errors to exit 2
+        ci_code = 2
+        log_err(f"unexpected error: {error}")
+        traceback.print_exc(file=sys.stderr)
+    finally:
+        runner.cleaning = True
+        runner.kill_children()
+        cleanup_deadlines = deadlines if "deadlines" in locals() else {
+            "discovery": 300,
+            "total": 5400,
+            "command": 60,
+            "cleanup": 120,
+            "poll": 10,
+        }
+        cleanup_deadline = time.monotonic() + cleanup_deadlines["cleanup"]
+        try:
+            if pushed and root is not None and branch and snapshot:
+                unfinished = bool(run_id) and run_status not in {"completed"}
+                interrupted = runner.stop.is_set() or ci_code == 2
+                if unfinished and interrupted:
+                    cancel_run(
+                        runner, repo, run_id, cleanup_deadlines, cleanup_deadline
+                    )
+                delete_remote_ref(
+                    runner,
+                    root,
+                    branch,
+                    snapshot,
+                    cleanup_deadlines,
+                    cleanup_deadline,
+                )
+                log(f"deleted remote branch {branch}")
+            elif pushed and branch:
+                cleanup_error = "cleanup skipped: missing checkout or snapshot SHA"
+        except Unrun as error:
+            cleanup_error = str(error)
+        except Exception as error:  # noqa: BLE001
+            cleanup_error = f"cleanup failed: {error}"
+        if tempdir is not None:
+            try:
+                tempdir.cleanup()
+            except OSError as error:
+                log_err(f"could not remove temporary directory: {error}")
+        if cleanup_error:
+            log_err(cleanup_error)
+            if repo and branch:
+                log_err(f"repository {repo}")
+                log_err(f"remote branch {branch}")
+                if snapshot:
+                    log_err(f"snapshot SHA {snapshot}")
+                log_err("unverified cleanup; recover with:")
+                log_err(recover_command(branch))
+            if observed_failure:
+                log_err("CI failed; cleanup failure takes precedence (exit 2)")
+            ci_code = 2
+
+    if cleanup_error:
+        return 2
+    if observed_failure or ci_code == 1:
+        return 1
+    if ci_code == 0:
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

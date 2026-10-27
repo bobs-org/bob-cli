@@ -58,6 +58,61 @@ starting with ci/full to run the extra Linux tools. Remove the scratch branch af
 review. For release workflow changes, use ci/release/**; those runs are always dry
 runs.
 
+## Precommit macOS check
+
+`scripts/dev/macos-ci-check` snapshots this checkout's current working tree into a
+throwaway commit object through a temporary index, pushes it only to
+`refs/heads/ci/precommit/<id>`, waits for the GitHub Actions run for that exact SHA,
+prints every macOS step's verdict, and deletes the remote branch. HEAD, local
+branches, the caller's index, and working files stay unchanged. The snapshot includes
+tracked modifications, deletions, and non-ignored untracked files as they exist on
+disk, including partially staged files' worktree contents. Ignored files and dirty
+submodules are not uploaded; dirty submodules are refused.
+
+Prerequisites: `python3`, `git`, authenticated `gh`, push access, and a GitHub origin
+that identifies `bobs-org/bob-cli`. The command never prints credentials or logs in
+for you.
+
+Default deadlines, overridable with positive finite `BOB_MACOS_CI_*_SECONDS` values:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BOB_MACOS_CI_DISCOVERY_SECONDS` | 300 | Find the first matching run after push |
+| `BOB_MACOS_CI_TOTAL_SECONDS` | 5400 | Overall check, including push and wait |
+| `BOB_MACOS_CI_COMMAND_SECONDS` | 60 | Each git/gh call, capped by remaining time; leftover below 1s (or the command cap) is the deadline |
+| `BOB_MACOS_CI_CLEANUP_SECONDS` | 120 | Cancel an unfinished run and delete the ref |
+| `BOB_MACOS_CI_POLL_SECONDS` | 10 | Interval between status polls |
+
+The selected `ci.yml` push run must pass, including non-macOS jobs. Required macOS
+coverage is job `test (macos-latest)` with steps `Lint macOS-only targets`,
+`Run tests`, and `Run archive-move presenter cases`. Conditional diagnostic, upload,
+and Linux-only steps may be skipped.
+
+Exit codes: `0` the workflow and required macOS checks passed and remote branch
+deletion was verified; `1` the selected run completed with a real CI failure; `2`
+verification could not finish (missing prerequisites, no matching run, deadline,
+cancellation, missing coverage, or cleanup failure). Cleanup failure takes
+precedence and returns `2` while still reporting any observed CI failure.
+
+SIGINT and SIGTERM stop child processes, cancel an unfinished selected run when
+possible, delete only this invocation's ref, and verify it is gone. An already-absent
+ref is success. A ref that now points at a different SHA is not deleted. If deletion
+cannot be verified, the printed repository, ref, snapshot SHA, and deletion command
+are the recovery path.
+
+Offline tests, which never invoke the live gate:
+
+```sh
+python3 -B scripts/dev/test_macos_ci_check.py
+```
+
+From a SASE agent, run the live gate through `sase monitor start` with profile
+`verify` and a timeout longer than 90 minutes plus the two-minute cleanup budget
+(for example `--timeout 95m`). The command snapshots and pushes before waiting, so
+`verify` is the right profile. `--next` should inspect the result, repair if needed,
+record verification evidence, and close the assigned bead. Wait for
+`sase monitor start` itself to exit.
+
 ## Related
 
 - [Release train reference](releases/reference.md)
