@@ -66,13 +66,19 @@ pub(super) struct WebStoreSkip {
 
 /// Normalize anchor and catalog block text the same way before comparing:
 /// Chrome's DOM text and pandoc's GFM round-trip agree up to line-ending
-/// style and trailing newlines.
+/// style and leading/trailing newlines (pandoc drops the newline that
+/// often follows `<pre><code>`; `textContent` keeps it).
 fn normalize_anchor_text(text: &str) -> String {
     text.replace("\r\n", "\n")
         .replace('\r', "\n")
-        .trim_end_matches('\n')
+        .trim_matches('\n')
         .to_string()
 }
+
+/// Unwraps `<figure>` before the GFM writer runs: GFM cannot express a
+/// figure, so pandoc would otherwise emit a figure-wrapped code block or
+/// image as raw HTML that the catalog never sees.
+const UNWRAP_FIGURES_FILTER: &str = include_str!("web_source_figures.lua");
 
 /// Convert the renderer's source view to GFM with the shared pandoc
 /// command, exactly like the Markdown route converts with its reader.
@@ -81,31 +87,53 @@ fn convert_source_view(source_html: &Path) -> Result<Vec<u8>, String> {
         "pandoc command not found; install pandoc or set BOB_PANDOC_COMMAND"
             .to_string()
     })?;
-    let output = Command::new(&pandoc)
-        .arg(source_html)
-        .arg("-f")
-        .arg("html")
-        .arg("-t")
-        .arg("gfm")
-        .arg("--wrap=none")
-        .arg("--preserve-tabs")
-        .output()
-        .map_err(|error| {
-            format!("run pandoc for {}: {error}", source_html.display())
+    let scratch = std::env::temp_dir().join(format!(
+        "bob-web-source-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    fs::create_dir_all(&scratch).map_err(|error| {
+        format!("create web source scratch {}: {error}", scratch.display())
+    })?;
+    let result = (|| {
+        let filter = scratch.join("unwrap-figures.lua");
+        fs::write(&filter, UNWRAP_FIGURES_FILTER).map_err(|error| {
+            format!("write figure filter {}: {error}", filter.display())
         })?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!(
-            "pandoc failed on {}: {}",
-            source_html.display(),
-            if detail.is_empty() {
-                "pandoc produced no diagnostic output".to_string()
-            } else {
-                detail
-            }
-        ));
-    }
-    Ok(output.stdout)
+        let output = Command::new(&pandoc)
+            .arg(source_html)
+            .arg("-f")
+            .arg("html")
+            .arg("-t")
+            .arg("gfm")
+            .arg("--wrap=none")
+            .arg("--preserve-tabs")
+            .arg("--lua-filter")
+            .arg(&filter)
+            .output()
+            .map_err(|error| {
+                format!("run pandoc for {}: {error}", source_html.display())
+            })?;
+        if !output.status.success() {
+            let detail =
+                String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(format!(
+                "pandoc failed on {}: {}",
+                source_html.display(),
+                if detail.is_empty() {
+                    "pandoc produced no diagnostic output".to_string()
+                } else {
+                    detail
+                }
+            ));
+        }
+        Ok(output.stdout)
+    })();
+    let _ = fs::remove_dir_all(&scratch);
+    result
 }
 
 /// Read the adapter's anchor report. A missing or unreadable report
@@ -130,8 +158,9 @@ fn read_anchor_texts(code_anchors: Option<&str>) -> Vec<String> {
 /// normalized equal text. A text match takes its page range from the
 /// `bob-code-k` / `bob-code-k-end` destinations with `page_source:
 /// "anchor"`; every other block keeps `page: None` and stays copyable.
-/// Returns the count of pageless blocks and of printed anchors that
-/// never matched the saved Markdown.
+/// A block with no match consumes no anchors, so one mismatch never
+/// strips pages from the blocks after it. Returns the count of pageless
+/// blocks and of printed anchors that never matched the saved Markdown.
 fn assign_anchor_pages(
     blocks: &mut [CodeBlock],
     anchors: &[String],
@@ -146,20 +175,16 @@ fn assign_anchor_pages(
     let mut unpaged = 0;
     for block in blocks.iter_mut() {
         let wanted = normalize_anchor_text(&block.text);
-        let mut anchor = None;
-        while cursor < normalized.len() {
-            let candidate = cursor;
-            cursor += 1;
-            if normalized[candidate] == wanted {
-                anchor = Some(candidate);
-                matched_anchors += 1;
-                break;
-            }
-        }
-        let Some(index) = anchor else {
+        let Some(index) = normalized[cursor..]
+            .iter()
+            .position(|text| *text == wanted)
+            .map(|offset| cursor + offset)
+        else {
             unpaged += 1;
             continue;
         };
+        cursor = index + 1;
+        matched_anchors += 1;
         let key = index + 1;
         let page = dests.get(&format!("bob-code-{key}")).copied();
         let page_end = dests.get(&format!("bob-code-{key}-end")).copied();
@@ -408,10 +433,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anchor_normalization_ignores_endings_and_trailing_newlines() {
+    fn figure_wrapped_code_and_images_convert_to_markdown() {
+        if super::super::create::pandoc_command().is_none() {
+            eprintln!("skipping figure conversion: pandoc is required");
+            return;
+        }
+        let dir = std::env::temp_dir()
+            .join(format!("bob-web-source-figure-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create test dir");
+        let source = dir.join("source.html");
+        fs::write(
+            &source,
+            "<p>Intro.</p>\n<figure><pre><code>let x = 1;</code></pre>\n\
+             <figcaption>Listing one</figcaption></figure>\n\
+             <figure><img src=\"https://example.test/a.png\" alt=\"chart\">\
+             </figure>\n",
+        )
+        .expect("write source view");
+        let converted = convert_source_view(&source);
+        let _ = fs::remove_dir_all(&dir);
+        let markdown =
+            String::from_utf8(converted.expect("convert")).expect("utf-8");
+        assert!(!markdown.contains("<figure"), "{markdown}");
+        assert!(!markdown.contains("<pre"), "{markdown}");
+        assert!(markdown.contains("    let x = 1;"), "{markdown}");
+        assert!(markdown.contains("Listing one"), "{markdown}");
+        assert!(
+            markdown.contains("![chart](https://example.test/a.png)"),
+            "{markdown}"
+        );
+        let catalog =
+            crate::native::ref_library::attach::record_source_catalog(
+                markdown.as_bytes(),
+                WEB_ARTICLE_ROUTE,
+            )
+            .expect("catalog");
+        assert_eq!(catalog.blocks.len(), 1);
+        assert_eq!(catalog.blocks[0].text, "let x = 1;");
+    }
+
+    #[test]
+    fn anchor_normalization_ignores_endings_and_edge_newlines() {
         assert_eq!(normalize_anchor_text("let x = 1;\r\n"), "let x = 1;");
         assert_eq!(normalize_anchor_text("let x = 1;\r"), "let x = 1;");
         assert_eq!(normalize_anchor_text("let x = 1;\n\n"), "let x = 1;");
+        assert_eq!(normalize_anchor_text("\nlet x = 1;\n"), "let x = 1;");
         assert_eq!(
             normalize_anchor_text("a\nb\n"),
             normalize_anchor_text("a\r\nb")
@@ -457,5 +523,39 @@ mod tests {
         assert_eq!(blocks[2].page, None);
         assert_eq!(blocks[2].page_source, None);
         assert_eq!((unpaged, unmatched), (1, 1));
+    }
+
+    #[test]
+    fn unmatched_block_keeps_later_anchors() {
+        fn block(text: &str) -> CodeBlock {
+            CodeBlock {
+                n: 0,
+                kind: "code".to_string(),
+                lang: None,
+                classes: Vec::new(),
+                attrs: BTreeMap::new(),
+                text: text.to_string(),
+                section: None,
+                page: None,
+                page_end: None,
+                page_source: None,
+            }
+        }
+        // Pandoc drops the newline after `<pre><code>`; Chrome's
+        // `textContent` keeps it. The middle block exists only in the
+        // saved Markdown, yet the block after it still finds its anchor.
+        let mut blocks =
+            vec![block("first"), block("markdown only"), block("third")];
+        let anchors = vec!["\nfirst\n".to_string(), "third".to_string()];
+        let mut dests = BTreeMap::new();
+        dests.insert("bob-code-1".to_string(), 1);
+        dests.insert("bob-code-2".to_string(), 2);
+        let (unpaged, unmatched) =
+            assign_anchor_pages(&mut blocks, &anchors, &dests);
+        assert_eq!(blocks[0].page, Some(1));
+        assert_eq!(blocks[1].page, None);
+        assert_eq!(blocks[2].page, Some(2));
+        assert_eq!(blocks[2].page_source.as_deref(), Some("anchor"));
+        assert_eq!((unpaged, unmatched), (1, 0));
     }
 }

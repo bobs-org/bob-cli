@@ -507,7 +507,10 @@ its rendered block becomes an image.
 Web articles record the same `code.json` shape from converted source:
 `pandoc -f html -t gfm --wrap=none --preserve-tabs` turns the adapter's
 printed article HTML into the saved `source.md`, and the record filters
-run over that GFM with the `gfm` reader. Code pages come from Chrome's
+run over that GFM with the `gfm` reader. A small Lua filter first unwraps
+each `<figure>` into its content and caption, because GFM has no figure
+syntax and would otherwise keep a figure's code block or image as raw
+HTML that the catalog cannot see. Code pages come from Chrome's
 print-time named destinations (one `bob-code-N` anchor pair per printed
 code block, `page_source: anchor`) instead of TeX destinations; blocks
 with no anchor stay pageless but copyable. Link pages come from the
