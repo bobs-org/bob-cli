@@ -57,6 +57,23 @@ pub(crate) struct StartTaskRow {
     pub warning: Option<String>,
 }
 
+/// Immutable per-note line and fence tables for [`session_links`]. Stats
+/// prepares this once per daily note and reuses it across completed
+/// sessions so each call does not rebuild the whole-note scan.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedSessionScan<'a> {
+    line_text: Vec<&'a str>,
+    fenced: BTreeSet<usize>,
+}
+
+/// Build the shared per-note scan used by [`session_links_from_scan`].
+pub(crate) fn prepare_session_scan(contents: &str) -> PreparedSessionScan<'_> {
+    let spans = line_spans(contents);
+    let line_text: Vec<&str> = spans.iter().map(|span| span.text).collect();
+    let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
+    PreparedSessionScan { line_text, fenced }
+}
+
 /// List the started entry's direct-child Task Links in ledger order.
 ///
 /// A listed line is an indented bullet at the entry's first child
@@ -68,7 +85,7 @@ pub(crate) fn list_queued_links(
     contents: &str,
     entry_index: usize,
 ) -> Vec<StartLink> {
-    list_session_links(contents, entry_index, false)
+    list_session_links(&prepare_session_scan(contents), entry_index, false)
 }
 
 /// List the same direct-child Task Links as [`list_queued_links`], including
@@ -79,28 +96,34 @@ pub(crate) fn session_links(
     contents: &str,
     entry_index: usize,
 ) -> Vec<StartLink> {
-    list_session_links(contents, entry_index, true)
+    session_links_from_scan(&prepare_session_scan(contents), entry_index)
+}
+
+/// List struck-inclusive session links from a prepared per-note scan.
+pub(crate) fn session_links_from_scan(
+    scan: &PreparedSessionScan<'_>,
+    entry_index: usize,
+) -> Vec<StartLink> {
+    list_session_links(scan, entry_index, true)
 }
 
 fn list_session_links(
-    contents: &str,
+    scan: &PreparedSessionScan<'_>,
     entry_index: usize,
     include_struck: bool,
 ) -> Vec<StartLink> {
-    let spans = line_spans(contents);
-    let line_text: Vec<&str> = spans.iter().map(|span| span.text).collect();
+    let line_text = &scan.line_text;
     if line_text.get(entry_index).is_none() {
         return Vec::new();
     }
-    let range = sub_bullet_range(&line_text, entry_index);
+    let range = sub_bullet_range(line_text, entry_index);
     let Some(first) = range.clone().next() else {
         return Vec::new();
     };
     let child_indent = leading_spaces_or_tabs_len(line_text[first]);
-    let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
     let mut links = Vec::new();
     for index in range {
-        if fenced.contains(&index) {
+        if scan.fenced.contains(&index) {
             continue;
         }
         let line = line_text[index];
@@ -682,6 +705,89 @@ mod lineup_tests {
             Some("[[missing#^nowhere]] does not resolve to a vault note")
         );
         assert!(rows[2].relative_target.is_none());
+    }
+
+    fn multi_session_note() -> String {
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0900-0925** [t:: 25m]) — FIRST ☕\n",
+            "\t- [[café#^plain]]\n",
+            "\t- ~~[[café#^struck]]~~\n",
+            "\t- ![[café#^embed]]\n",
+            "\t- prose [[café#^mixed]]\n",
+            "\t\t- [[café#^nested]]\n",
+            "\t```\n",
+            "\t- [[café#^fenced]]\n",
+            "\t```\n",
+            "- [x] (**0930-0955** [t:: 25m]) — SECOND\n",
+            "\t- [[area#^later]]\n",
+            "\t- 🍅 [[area#^marked]]\n",
+            "- [ ] () — OPEN\n",
+            "\t- [[area#^open]]\n",
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn prepared_scan_matches_wrapper_across_sessions() {
+        let contents = multi_session_note();
+        let scan = prepare_session_scan(&contents);
+        for entry_index in [1usize, 10, 13] {
+            assert_eq!(
+                session_links_from_scan(&scan, entry_index),
+                session_links(&contents, entry_index),
+                "entry {entry_index}"
+            );
+        }
+        let first = session_links_from_scan(&scan, 1);
+        assert_eq!(
+            first
+                .iter()
+                .map(|link| (
+                    link.ledger_line,
+                    link.path_part.as_str(),
+                    link.block_id.as_str(),
+                    link.embedded
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (3, "café", "plain", false),
+                (4, "café", "struck", false),
+                (5, "café", "embed", true),
+            ]
+        );
+        let second = session_links_from_scan(&scan, 10);
+        assert_eq!(
+            second
+                .iter()
+                .map(|link| (link.ledger_line, link.block_id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(12, "later"), (13, "marked")]
+        );
+        assert!(session_links_from_scan(&scan, 13)
+            .iter()
+            .any(|link| link.block_id == "open"));
+        assert!(list_queued_links(&contents, 1)
+            .iter()
+            .all(|link| link.block_id != "struck"));
+    }
+
+    #[test]
+    fn prepared_scan_preserves_crlf_line_numbers() {
+        let lf = multi_session_note();
+        let crlf = lf.replace('\n', "\r\n");
+        let lf_scan = prepare_session_scan(&lf);
+        let crlf_scan = prepare_session_scan(&crlf);
+        for entry_index in [1usize, 10] {
+            let lf_links = session_links_from_scan(&lf_scan, entry_index);
+            let crlf_links = session_links_from_scan(&crlf_scan, entry_index);
+            assert_eq!(lf_links, crlf_links, "entry {entry_index}");
+            assert_eq!(
+                session_links(&crlf, entry_index),
+                crlf_links,
+                "wrapper entry {entry_index}"
+            );
+        }
     }
 }
 

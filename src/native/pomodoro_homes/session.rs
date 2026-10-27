@@ -4,7 +4,8 @@ use std::{
 };
 
 use crate::native::{
-    capture_pomodoro_start::StartLink, vault_links::LinkResolution,
+    capture_pomodoro_start::{self, PreparedSessionScan, StartLink},
+    vault_links::LinkResolution,
 };
 
 use super::{
@@ -29,11 +30,32 @@ pub(crate) struct SessionHomes {
     pub(crate) lead_home: Option<Home>,
 }
 
+pub(crate) fn prepare_session_scan(contents: &str) -> PreparedSessionScan<'_> {
+    capture_pomodoro_start::prepare_session_scan(contents)
+}
+
 pub(crate) fn session_links(
     contents: &str,
     entry_index: usize,
 ) -> Vec<SessionLink> {
-    crate::native::capture_pomodoro_start::session_links(contents, entry_index)
+    map_session_links(capture_pomodoro_start::session_links(
+        contents,
+        entry_index,
+    ))
+}
+
+pub(crate) fn session_links_from_scan(
+    scan: &PreparedSessionScan<'_>,
+    entry_index: usize,
+) -> Vec<SessionLink> {
+    map_session_links(capture_pomodoro_start::session_links_from_scan(
+        scan,
+        entry_index,
+    ))
+}
+
+fn map_session_links(links: Vec<StartLink>) -> Vec<SessionLink> {
+    links
         .into_iter()
         .map(|link: StartLink| SessionLink {
             target: link.path_part,

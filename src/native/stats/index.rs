@@ -163,103 +163,20 @@ impl StatsIndex {
             .map(|(path, _)| PathBuf::from(path))
             .collect::<Vec<_>>();
         let note_index = NoteIndex::from_paths(relative_paths);
+        let parsed =
+            parse_markdown_files_parallel(&buffers, &parser, now, &note_index);
         let mut index = Self::default();
         let mut parent_candidates = Vec::new();
-
-        for (relative, contents) in &buffers {
-            let task_rows: Vec<dataview::StatsTaskRecord> =
-                parser.parse_file(contents, relative.clone());
-            for task in task_rows {
-                let actual_path = task.path;
-                let archive_source =
-                    collect_done::source_relative_path_from_archive(Path::new(
-                        &actual_path,
-                    ))
-                    .map(|path| path_string(&path));
-                let source_path = archive_source
-                    .clone()
-                    .unwrap_or_else(|| actual_path.clone());
-                let created = dated_value(task.created, now.date());
-                let done = dated_value(task.done, now.date());
-                let cancelled = dated_value(task.cancelled, now.date());
-                let scheduled = dated_value(task.scheduled, now.date());
-
-                if date_counts_as_invalid(
-                    &created, &done, &cancelled, &scheduled,
-                ) {
-                    index.health.invalid_dates += 1;
-                }
-                if task.status_type == "DONE" && done.raw.is_none()
-                    || task.status_type == "CANCELLED"
-                        && cancelled.raw.is_none()
-                {
-                    index.health.closed_without_date += 1;
-                }
-                if created.raw.is_none() {
-                    index.health.missing_created += 1;
-                }
-
-                let task_kind = if task
-                    .block_id
-                    .as_deref()
-                    .is_some_and(|id| id.eq_ignore_ascii_case("prj"))
-                {
-                    TaskKindPart::Prj
-                } else if task
-                    .block_id
-                    .as_deref()
-                    .is_some_and(|id| id.eq_ignore_ascii_case("ref"))
-                    || task.tags.iter().any(|tag| {
-                        tag.trim_start_matches('#').eq_ignore_ascii_case("ref")
-                    })
-                {
-                    TaskKindPart::Ref
-                } else {
-                    TaskKindPart::Task
-                };
-
-                index.tasks.push(IndexedTask {
-                    source_path,
-                    archive_path: archive_source.map(|_| actual_path),
-                    status_type: task.status_type,
-                    created,
-                    done,
-                    cancelled,
-                    scheduled,
-                    recurring: task.recurring,
-                    tags: task.tags,
-                    block_id: task.block_id,
-                    description: task.description,
-                    task_kind,
-                });
+        for file in parsed {
+            index.health.invalid_dates += file.invalid_dates;
+            index.health.closed_without_date += file.closed_without_date;
+            index.health.missing_created += file.missing_created;
+            index.tasks.extend(file.tasks);
+            if let Some((date, daily)) = file.daily {
+                index.daily_notes.insert(date, daily);
             }
-
-            if let Some(date) = canonical_daily_date(relative) {
-                index
-                    .daily_notes
-                    .insert(date, parse_daily_note(relative, contents));
-            }
-
-            if let Some(target) = parent_target(contents)
-                && let Some(parent) =
-                    note_index.resolve(Some(Path::new(relative)), &target)
-            {
-                let actual_child = Path::new(relative);
-                let source_child =
-                    collect_done::source_relative_path_from_archive(
-                        actual_child,
-                    )
-                    .unwrap_or_else(|| actual_child.to_path_buf());
-                let source_parent =
-                    collect_done::source_relative_path_from_archive(&parent)
-                        .unwrap_or(parent);
-                let is_archive = source_child.as_path() != actual_child;
-                parent_candidates.push((
-                    is_archive,
-                    path_string(&source_child),
-                    path_string(&source_parent),
-                    relative.clone(),
-                ));
+            if let Some(parent) = file.parent {
+                parent_candidates.push(parent);
             }
         }
 
@@ -427,6 +344,164 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+struct ParsedMarkdownFile {
+    tasks: Vec<IndexedTask>,
+    invalid_dates: u32,
+    closed_without_date: u32,
+    missing_created: u32,
+    daily: Option<(NaiveDate, DailyNoteInputs)>,
+    parent: Option<(bool, String, String, String)>,
+}
+
+fn parse_markdown_files_parallel(
+    buffers: &[(String, String)],
+    parser: &dataview::StatsTaskParser,
+    now: NaiveDateTime,
+    note_index: &NoteIndex,
+) -> Vec<ParsedMarkdownFile> {
+    if buffers.is_empty() {
+        return Vec::new();
+    }
+    let worker_count = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(4)
+        .min(buffers.len())
+        .max(1);
+    let next = AtomicUsize::new(0);
+    let chunks = std::thread::scope(|scope| {
+        let handles = (0..worker_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut local = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((relative, contents)) = buffers.get(index)
+                        else {
+                            break;
+                        };
+                        local.push((
+                            index,
+                            parse_markdown_file(
+                                relative, contents, parser, now, note_index,
+                            ),
+                        ));
+                    }
+                    local
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("stats parse worker panicked"))
+            .collect::<Vec<_>>()
+    });
+    let mut results = chunks.into_iter().flatten().collect::<Vec<_>>();
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, file)| file).collect()
+}
+
+fn parse_markdown_file(
+    relative: &str,
+    contents: &str,
+    parser: &dataview::StatsTaskParser,
+    now: NaiveDateTime,
+    note_index: &NoteIndex,
+) -> ParsedMarkdownFile {
+    let task_rows = parser.parse_file(contents, relative.to_string());
+    let mut tasks = Vec::with_capacity(task_rows.len());
+    let mut invalid_dates = 0;
+    let mut closed_without_date = 0;
+    let mut missing_created = 0;
+    for task in task_rows {
+        let actual_path = task.path;
+        let archive_source = collect_done::source_relative_path_from_archive(
+            Path::new(&actual_path),
+        )
+        .map(|path| path_string(&path));
+        let source_path = archive_source
+            .clone()
+            .unwrap_or_else(|| actual_path.clone());
+        let created = dated_value(task.created, now.date());
+        let done = dated_value(task.done, now.date());
+        let cancelled = dated_value(task.cancelled, now.date());
+        let scheduled = dated_value(task.scheduled, now.date());
+
+        if date_counts_as_invalid(&created, &done, &cancelled, &scheduled) {
+            invalid_dates += 1;
+        }
+        if task.status_type == "DONE" && done.raw.is_none()
+            || task.status_type == "CANCELLED" && cancelled.raw.is_none()
+        {
+            closed_without_date += 1;
+        }
+        if created.raw.is_none() {
+            missing_created += 1;
+        }
+
+        let task_kind = if task
+            .block_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("prj"))
+        {
+            TaskKindPart::Prj
+        } else if task
+            .block_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("ref"))
+            || task.tags.iter().any(|tag| {
+                tag.trim_start_matches('#').eq_ignore_ascii_case("ref")
+            })
+        {
+            TaskKindPart::Ref
+        } else {
+            TaskKindPart::Task
+        };
+
+        tasks.push(IndexedTask {
+            source_path,
+            archive_path: archive_source.map(|_| actual_path),
+            status_type: task.status_type,
+            created,
+            done,
+            cancelled,
+            scheduled,
+            recurring: task.recurring,
+            tags: task.tags,
+            block_id: task.block_id,
+            description: task.description,
+            task_kind,
+        });
+    }
+
+    let daily = canonical_daily_date(relative)
+        .map(|date| (date, parse_daily_note(relative, contents)));
+    let parent = parent_target(contents).and_then(|target| {
+        let parent = note_index.resolve(Some(Path::new(relative)), &target)?;
+        let actual_child = Path::new(relative);
+        let source_child =
+            collect_done::source_relative_path_from_archive(actual_child)
+                .unwrap_or_else(|| actual_child.to_path_buf());
+        let source_parent =
+            collect_done::source_relative_path_from_archive(&parent)
+                .unwrap_or(parent);
+        let is_archive = source_child.as_path() != actual_child;
+        Some((
+            is_archive,
+            path_string(&source_child),
+            path_string(&source_parent),
+            relative.to_string(),
+        ))
+    });
+    ParsedMarkdownFile {
+        tasks,
+        invalid_dates,
+        closed_without_date,
+        missing_created,
+        daily,
+        parent,
+    }
+}
+
 fn date_counts_as_invalid(
     created: &DatedValue,
     done: &DatedValue,
@@ -490,6 +565,7 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
     let inline_fields = parse_inline_fields(&body_lines);
     let scan = capture_pomodoros::scan(contents);
     let lines = contents.lines().collect::<Vec<_>>();
+    let prepared = pomodoro_homes::prepare_session_scan(contents);
     let closed_pomodoros = scan
         .entries
         .iter()
@@ -516,8 +592,8 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 range_minutes: range,
                 time_range: entry.time_range.clone(),
                 line: u32::try_from(entry.line).unwrap_or(u32::MAX),
-                links: pomodoro_homes::session_links(
-                    contents,
+                links: pomodoro_homes::session_links_from_scan(
+                    &prepared,
                     entry.line.saturating_sub(1),
                 ),
             }

@@ -21,7 +21,7 @@ mod result;
 mod settings;
 mod task;
 
-pub(crate) use index::{StatsTaskParser, StatsTaskRecord};
+pub(crate) use index::StatsTaskParser;
 pub(crate) use settings::TaskFormat;
 pub(crate) use task::tasks_fingerprint;
 #[cfg(test)]

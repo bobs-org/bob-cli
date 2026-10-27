@@ -766,7 +766,57 @@ independent line-regex oracles on every live run and also runs
 `done` Oct 10 exactly (engine 37 = Dataview 45 − 7 recurring − 1 daily
 `^gtd` row).
 
-### Current-source measurement (2026-10-27)
+### Index implement measurement (2026-10-27)
+
+The original target is ≤300 ms for the single-pass index. Sequential
+baseline and the retained improvement were built in release mode from
+source `6dea0058` and measured against the read-only live vault with
+`BOB_NOW='2026-10-11 12:00:00'`, `NO_COLOR=1`, and `BOB_DIR=~/bob`.
+Overview is `bob stats -f json`. All metrics is
+`bob stats show -a -f json -r 4w`; `bob stats -f json -r 4w` is overview
+with a range, not all metrics. The first run is shown separately; each
+warm result is the median of nine interleaved runs. Temporary
+`Instant` stage counters split the index from remaining compute; they
+were removed from production before correctness checks.
+
+The sequential baseline executable SHA-256 is
+`2d77c64f8614657bbeb2cd828721f60c5a8885a9f73b924fd5338d0341e913a2`.
+The retained improvement — order-preserving parallel per-file parse
+plus a shared per-note session scan — is
+`586de4571bc285a18ff4ae78fc4f1f791bae9a7de92027828765cfba6b1012d6`.
+Athena load averages were 12.51 / 13.51 / 14.10 before and
+12.52 / 13.48 / 14.08 after. Apollo load averages were
+13.13 / 14.70 / 12.53 before and 13.62 / 14.71 / 12.58 after.
+
+| Host / command | Sequential index (min–max) | Sequential wall | Parallel index (min–max) | Parallel wall | Parallel files_ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Athena · overview | 168.70 (164.66–173.67) | 219.01 | 56.35 (55.52–64.31) | 114.35 | 19.77 |
+| Athena · all metrics, 4w | 168.05 (164.92–172.74) | 234.84 | 59.65 (56.56–69.78) | 137.51 | 22.69 |
+| Apollo · overview | 395.10 (335.57–463.70) | 499.16 | 169.40 (150.21–196.16) | 293.33 | 67.79 |
+| Apollo · all metrics, 4w | 432.04 (404.09–502.56) | 580.57 | 187.09 (172.92–205.25) | 333.83 | 75.97 |
+
+Both hosts meet the 300 ms index target. Apollo all-metrics wall time
+stays around 334 ms because remaining compute sits outside the index;
+the target is the index, not wall time. Sequential Apollo index was
+CPU-heavy parse (Tasks 169.83–179.00 ms, daily 107.28–119.26 ms), not
+irreducible I/O (reads 41.44–49.14 ms). Sharing the per-note session
+scan did not move Apollo on its own; order-preserving parallel
+per-file parse is the measured win. The shared scan stays as
+behavior-preserving reuse on the daily-note path.
+
+JSON baseline / final / baseline brackets were byte-identical:
+
+| Input | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Live overview (`bob stats -f json`) | 246,785 | `950b733fbb9de4894e407671d6a8f4c4ea4d13ec7257d26e11b450a840ec41bd` |
+| Live worked comparison (`bob stats show worked -c -f json`) | 161,011 | `3b9ad19d62a7064bd1ab0dd5ef5b7398a28ee542a5b02cdbdb7c576cea095c72` |
+| Live all metrics, 4w (`bob stats show -a -f json -r 4w`) | 332,396 | `d19e07796808709d25ad998f35887f7af7b8586cd933bdbdbe56245b7f9efce3` |
+| Stable fixture all metrics, 4w (`bob stats show -a -f json -r 4w`) | 119,672 | `43132814e3f399e9eb266a31ac4927de05f982dd94b16b208db3a3e233467ae5` |
+
+These hashes differ from the earlier `4a43170b` closeout as the live
+vault changed; each bracket in this pass is stable.
+
+### Prior closeout measurement (2026-10-27)
 
 The unchanged release source at `b4a5850d` was built on Athena and measured
 against the read-only live vault with `BOB_NOW='2026-10-11 12:00:00'`,
@@ -777,11 +827,13 @@ same 246,785-byte JSON and SHA-256
 `db224db9ba66d3085b73e9918d5d1a04e707bd91be80d9a2c0bb1102954f44ca` on every
 run. A later closeout parity bracket returned the hashes listed below; its
 baseline-before, final, and baseline-after outputs matched for every input.
+The second Athena row used `bob stats -f json -r 4w` (overview with a
+range), not `bob stats show -a -f json -r 4w`.
 
 | Host / command | Initial | Warm median | Warm min–max |
 | --- | ---: | ---: | ---: |
 | Athena · `bob stats -f json` | 264.51 ms | 228.09 ms | 218.23–240.50 ms |
-| Athena · `bob stats -f json -r 4w` | 277.16 ms | 237.85 ms | 225.61–261.24 ms |
+| Athena · `bob stats -f json -r 4w` (overview with range) | 277.16 ms | 237.85 ms | 225.61–261.24 ms |
 
 Temporary release-only `Instant` counters split the index and compute stages;
 the instrumentation was removed before correctness checks. Each cell below is
@@ -789,7 +841,7 @@ the median of five profiled runs. The measured 5,354 Markdown files were read
 once in sorted order. Stage totals are aggregate timings and expose no note
 contents.
 
-| Stage | Overview JSON | All metrics, 4w |
+| Stage | Overview JSON | Overview with `-r 4w` |
 | --- | ---: | ---: |
 | Settings read | 0.11 ms | 0.10 ms |
 | Directory walk | 6.92 ms | 7.10 ms |
@@ -806,14 +858,10 @@ contents.
 | Profiled command wall time | 243.03 ms | 256.85 ms |
 
 The per-task archive-to-source conversion is about 4 ms for the whole vault.
-Tasks parsing and daily-note scanning are the largest measured stages, but the
-unmodified index is already below the original 300 ms target on Athena. No
-rewrite or new parser shortcut was retained; reducing those stages would add
-behavioral risk without a demonstrated need on this host.
-
-Apollo was reachable on the same Linux x86_64 architecture. A repeated
-interleaved run on 2026-10-27 used temporary baseline and final copies (source
-`b4a5850d`, SHA-256
+That pass's unmodified Athena index was already below 300 ms. Apollo was
+reachable on the same Linux x86_64 architecture. A repeated interleaved run
+on 2026-10-27 used temporary baseline and final copies (source `b4a5850d`,
+SHA-256
 `05c2d41622b13b454eba317385dbc39931c9f1e1c48a8e029a47129a1f52b3db`) against
 Apollo's read-only `~/bob`, with the same clock and environment. Each command
 had one initial run and nine warm runs; execution order alternated between
@@ -821,12 +869,14 @@ baseline/final and final/baseline. Load averages were 5.5 / 7.6 / 10.4 before
 and 5.2 / 7.4 / 10.3 after. Every run returned the same 246,785-byte JSON
 with SHA-256
 `a388d3916bd835c938e00d2c370e92297a4916468df574b3955582837ae81358` for each
-binary.
+binary. The second Apollo row is also overview with a range, not all metrics.
+Identical baseline/final executable hashes show that pass retained no
+optimization.
 
 | Apollo command | Baseline initial / warm median (min–max; n=9) | Final-copy initial / warm median (min–max; n=9) |
 | --- | ---: | ---: |
 | `bob stats -f json` | 666.05 / 345.99 ms (320.13–435.31) | 427.37 / 345.16 ms (310.21–384.05) |
-| `bob stats -f json -r 4w` | 367.47 / 349.24 ms (307.65–478.03) | 327.42 / 333.67 ms (303.16–422.46) |
+| `bob stats -f json -r 4w` (overview with range) | 367.47 / 349.24 ms (307.65–478.03) | 327.42 / 333.67 ms (303.16–422.46) |
 
 Raw baseline/final JSON comparisons were bracketed by repeated baseline runs
 on Athena. All three outputs matched for each input:
@@ -843,8 +893,8 @@ vault changed. Each Athena baseline-before/rebuilt-release/baseline-after
 bracket is stable and byte-identical. The preserved baseline, rebuilt release
 executable, and final copy all have identical SHA-256
 `05c2d41622b13b454eba317385dbc39931c9f1e1c48a8e029a47129a1f52b3db`. The
-current comparisons confirm unchanged overview, worked-comparison, full
-four-week, and stable-fixture outputs.
+implement measurement above supersedes this pass for the 300 ms index
+budget.
 
 ### Historical rollout measurement (2026-10-11)
 
@@ -865,10 +915,8 @@ debug-test numbers (~2.4 s) and a landing-fixes 573 ms read were measurement
 artifacts; the land-agent release figure at `f9324da` was 365–378 ms
 and matches this rollout. The original ≤300 ms target is not met on
 that host's reported full-command wall time in this historical run. The
-October 27 current-source Athena measurement above supersedes it for the
-current budget: the index and both measured command paths are below 300 ms on
-Athena. Apollo's current full-command medians remain above 300 ms; its
-index-only stage was not separately instrumented in this pass.
+October 27 implement measurement above supersedes it for the current
+budget: both Athena and Apollo indexes are below 300 ms.
 
 Homes-parts measurement (athena, live `~/bob`, this checkout,
 `BOB_NOW=2026-10-18T12:00:00`, `NO_COLOR=1`, release
