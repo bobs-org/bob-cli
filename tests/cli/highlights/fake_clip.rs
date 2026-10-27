@@ -226,6 +226,16 @@ fn json_string(value: &str) -> String {
 /// annotation. Mirrors the adapter's print output for a source view with
 /// one fenced block and one hyperlink.
 pub(crate) fn web_fixture_pdf(link_uri: &str) -> Vec<u8> {
+    web_fixture_pdf_with_blocks(link_uri, 1)
+}
+
+/// A one-page PDF carrying Chrome-style catalog `/Dests` for `count`
+/// anchor pairs (`bob-code-k` / `bob-code-k-end`) plus one URI link
+/// annotation, standing in for a composed multi-part web render.
+pub(crate) fn web_fixture_pdf_with_blocks(
+    link_uri: &str,
+    count: usize,
+) -> Vec<u8> {
     use lopdf::{dictionary, Document, Object, Stream};
 
     let mut document = Document::with_version("1.4");
@@ -275,15 +285,20 @@ pub(crate) fn web_fixture_pdf(link_uri: &str) -> Vec<u8> {
             Object::Null,
         ]
     };
+    let mut dests = lopdf::Dictionary::new();
+    for key in 1..=count.max(1) {
+        dests.set(format!("bob-code-{key}"), Object::Array(xyz()));
+        dests.set(
+            format!("bob-code-{key}-end"),
+            dictionary! {
+                "D" => Object::Array(xyz()),
+            },
+        );
+    }
     let catalog_id = document.add_object(dictionary! {
         "Type" => "Catalog",
         "Pages" => pages_id,
-        "Dests" => dictionary! {
-            "bob-code-1" => Object::Array(xyz()),
-            "bob-code-1-end" => dictionary! {
-                "D" => Object::Array(xyz()),
-            },
-        },
+        "Dests" => Object::Dictionary(dests),
     });
     document.trailer.set("Root", catalog_id);
     let mut bytes = Vec::new();

@@ -20,6 +20,11 @@ use super::stamp::{TargetPlan, TargetWorkflow};
 /// Route recorded in `code.json` for single-URL web-article captures.
 pub(crate) const WEB_ARTICLE_ROUTE: &str = "web_article";
 
+/// Route recorded in `code.json` for multi-URL web-collection captures.
+/// Anchors number across all parts in document order, so one composed
+/// source view yields one store.
+pub(crate) const WEB_COLLECTION_ROUTE: &str = "web_collection";
+
 /// One printed code block reported by the adapter's anchor pass, in
 /// document order.
 #[derive(Debug, Deserialize)]
@@ -302,6 +307,44 @@ pub(super) fn print_web_store_skip(skip: &WebStoreSkip) {
         skip.detail
     );
     println!("source_markdown: none ({})", skip.short);
+}
+
+/// Convert, catalog, map, and persist the `web_collection` store for
+/// one finished collection compose. `origin` is the cleaned URLs in
+/// argument order, one per line. Returns the verified pointer for
+/// intake, or `None` when no store was written.
+pub(super) fn persist_collection_store(
+    config: &Config,
+    plan: &TargetPlan,
+    rendered_pdf: &Path,
+    installed_pdf: &Path,
+    source_html: Option<&str>,
+    code_anchors: Option<&str>,
+    origin: String,
+) -> Option<String> {
+    match prepare_web_store(
+        source_html,
+        code_anchors,
+        rendered_pdf,
+        WEB_COLLECTION_ROUTE,
+    ) {
+        Ok(prepared) => persist_prepared_store(
+            config,
+            plan,
+            installed_pdf,
+            origin,
+            WEB_COLLECTION_ROUTE,
+            &prepared,
+        ),
+        Err(skip) => {
+            if !matches!(plan.workflow, TargetWorkflow::External) {
+                print_web_store_skip(&skip);
+            } else {
+                println!("source_markdown: none (output outside the library)");
+            }
+            None
+        }
+    }
 }
 
 /// Convert, catalog, map, and persist the `web_article` store for one

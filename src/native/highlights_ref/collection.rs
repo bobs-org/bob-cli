@@ -1272,6 +1272,7 @@ fn capture_and_install(
         &resolved_name,
         &derived,
         &compose,
+        &composed_pdf,
         audio.as_ref(),
         &captured,
         page_count,
@@ -1850,6 +1851,7 @@ fn print_success(
     resolved_name: &collection_name::ResolvedName,
     derived: &DerivedMeta,
     compose: &ComposeSuccess,
+    rendered_pdf: &Path,
     audio: Option<&super::companion::AudioCopyPlan>,
     captured: &str,
     page_count: usize,
@@ -1893,11 +1895,30 @@ fn print_success(
         compose.images.total,
         format_bytes(installed_bytes),
     );
+    // The composed source view is stored write-once with its catalog on
+    // the fresh-install path: anchors already number across all parts in
+    // document order, so one compose response yields one store whose
+    // pointer rides intake, and a queued (`-k`) birth adopts it by PDF
+    // digest when `bob ref scan` files the note.
+    let origin = urls
+        .iter()
+        .map(|url| url.cleaned.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let source_pointer = super::web_source::persist_collection_store(
+        config,
+        plan,
+        rendered_pdf,
+        &plan.target,
+        compose.source_html.as_deref(),
+        compose.code_anchors.as_deref(),
+        origin,
+    );
     super::create::finish_create_intake(
         config,
         plan,
         options.keep_intake_reason.as_deref(),
-        None,
+        source_pointer.as_deref(),
     )?;
     print_part_warnings(styler, parts);
     print_warnings(styler, &compose.warnings);

@@ -538,8 +538,8 @@ older parser could treat it as two.
 
 ## Saved Markdown
 
-Every new Markdown-born or single-URL web-article reference keeps the
-exact cataloged bytes under
+Every new Markdown-born, single-URL web-article, or multi-URL
+web-collection reference keeps the exact cataloged bytes under
 `.bob/ref-sources/<ref_type>/<stem>--<hash12>/source.md` plus its
 render-time catalog `code.json` (version 1). `hash12` is the first 12 hex
 digits of SHA-256(`source.md`); `<stem>` is the final target stem and
@@ -555,6 +555,7 @@ atomically. Writes hold `bob_sync.lock`, and readers treat a missing
 | `-M` vault note | `plain_note` | Original note bytes | Note route + digest |
 | Snapshot | `note_snapshot` | Projected Markdown bytes | Note route + digest |
 | Web article | `web_article` | pandoc GFM of the printed article HTML | — |
+| Web collection | `web_collection` | pandoc GFM of the composed collection HTML | — |
 
 `code.json` keeps `"version": 1` with `blocks` and an additive `links` array
 (`n`, `url`, `text`, `title`, `autolink`, `context`, `section`, `page`,
