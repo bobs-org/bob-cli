@@ -249,12 +249,19 @@ fn real_vault_parity_is_opt_in() {
     if std::env::var_os("BOB_STATS_REAL_VAULT_PARITY").is_none() {
         return;
     }
+    let vault = std::env::var_os("BOB_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join("bob"))
+        })
+        .expect("BOB_STATS_REAL_VAULT_PARITY=1 requires BOB_DIR or HOME");
     let now = std::env::var("BOB_NOW").unwrap_or_else(|_| {
         panic!("BOB_STATS_REAL_VAULT_PARITY=1 requires BOB_NOW")
     });
     let started = Instant::now();
     let output = bob_command()
         .args(["stats", "show", "worked", "-c", "-r", "7d", "-f", "json"])
+        .env("BOB_DIR", &vault)
         .env("BOB_NOW", &now)
         .output()
         .expect("run bob stats show worked against the real vault");
@@ -272,6 +279,7 @@ fn real_vault_parity_is_opt_in() {
 
     let overview = bob_command()
         .args(["stats", "-f", "json"])
+        .env("BOB_DIR", &vault)
         .env("BOB_NOW", &now)
         .output()
         .expect("run bob stats -f json against the real vault");
@@ -282,6 +290,7 @@ fn real_vault_parity_is_opt_in() {
 
     let catalog = bob_command()
         .args(["stats", "metrics", "-f", "json"])
+        .env("BOB_DIR", &vault)
         .env("BOB_NOW", &now)
         .output()
         .expect("run bob stats metrics against the real vault");

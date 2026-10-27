@@ -766,7 +766,89 @@ independent line-regex oracles on every live run and also runs
 `done` Oct 10 exactly (engine 37 = Dataview 45 − 7 recurring − 1 daily
 `^gtd` row).
 
-Rollout measurement (apollo, live `~/bob`, HEAD `efc5593`,
+### Current-source measurement (2026-10-27)
+
+The unchanged release source at `b4a5850d` was built on Athena and measured
+against the read-only live vault with `BOB_NOW='2026-10-11 12:00:00'`,
+`NO_COLOR=1`, and `BOB_DIR=~/bob`. The first run is shown separately; each
+warm result is the median of nine runs. Athena's load averages at collection
+were 44.5 / 39.3 / 32.5. At that timing capture, both commands returned the
+same 246,785-byte JSON and SHA-256
+`db224db9ba66d3085b73e9918d5d1a04e707bd91be80d9a2c0bb1102954f44ca` on every
+run. A later closeout parity bracket returned the hashes listed below; its
+baseline-before, final, and baseline-after outputs matched for every input.
+
+| Host / command | Initial | Warm median | Warm min–max |
+| --- | ---: | ---: | ---: |
+| Athena · `bob stats -f json` | 264.51 ms | 228.09 ms | 218.23–240.50 ms |
+| Athena · `bob stats -f json -r 4w` | 277.16 ms | 237.85 ms | 225.61–261.24 ms |
+
+Temporary release-only `Instant` counters split the index and compute stages;
+the instrumentation was removed before correctness checks. Each cell below is
+the median of five profiled runs. The measured 5,354 Markdown files were read
+once in sorted order. Stage totals are aggregate timings and expose no note
+contents.
+
+| Stage | Overview JSON | All metrics, 4w |
+| --- | ---: | ---: |
+| Settings read | 0.11 ms | 0.10 ms |
+| Directory walk | 6.92 ms | 7.10 ms |
+| Parallel Markdown reads | 14.79 ms | 13.74 ms |
+| Note index construction | 9.48 ms | 13.15 ms |
+| Shared Tasks parsing | 76.65 ms | 81.14 ms |
+| Task and archive projection | 4.19 ms | 4.37 ms |
+| Daily ledger and field scans | 46.73 ms | 50.32 ms |
+| Parent-link scan | 10.67 ms | 11.06 ms |
+| Parent resolution | 1.52 ms | 1.63 ms |
+| Journal read | 2.64 ms | 2.66 ms |
+| **Index pass** | **178.73 ms** | **190.89 ms** |
+| Remaining compute and report | 34.37 ms | 33.13 ms |
+| Profiled command wall time | 243.03 ms | 256.85 ms |
+
+The per-task archive-to-source conversion is about 4 ms for the whole vault.
+Tasks parsing and daily-note scanning are the largest measured stages, but the
+unmodified index is already below the original 300 ms target on Athena. No
+rewrite or new parser shortcut was retained; reducing those stages would add
+behavioral risk without a demonstrated need on this host.
+
+Apollo was reachable on the same Linux x86_64 architecture. A repeated
+interleaved run on 2026-10-27 used temporary baseline and final copies (source
+`b4a5850d`, SHA-256
+`05c2d41622b13b454eba317385dbc39931c9f1e1c48a8e029a47129a1f52b3db`) against
+Apollo's read-only `~/bob`, with the same clock and environment. Each command
+had one initial run and nine warm runs; execution order alternated between
+baseline/final and final/baseline. Load averages were 5.5 / 7.6 / 10.4 before
+and 5.2 / 7.4 / 10.3 after. Every run returned the same 246,785-byte JSON
+with SHA-256
+`a388d3916bd835c938e00d2c370e92297a4916468df574b3955582837ae81358` for each
+binary.
+
+| Apollo command | Baseline initial / warm median (min–max; n=9) | Final-copy initial / warm median (min–max; n=9) |
+| --- | ---: | ---: |
+| `bob stats -f json` | 666.05 / 345.99 ms (320.13–435.31) | 427.37 / 345.16 ms (310.21–384.05) |
+| `bob stats -f json -r 4w` | 367.47 / 349.24 ms (307.65–478.03) | 327.42 / 333.67 ms (303.16–422.46) |
+
+Raw baseline/final JSON comparisons were bracketed by repeated baseline runs
+on Athena. All three outputs matched for each input:
+
+| Input | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Live overview (`bob stats -f json`) | 246,785 | `a388d3916bd835c938e00d2c370e92297a4916468df574b3955582837ae81358` |
+| Live worked comparison (`bob stats show worked -c -f json`) | 161,011 | `06c3cf8f561707a76c7c05e4f158a172897ad9e5ce106474c292a1125ed6c584` |
+| Live all metrics, 4w (`bob stats show -a -f json -r 4w`) | 332,396 | `992df6218c91e9327c37ea2b31e756e71627a6681cf0eca84e9de53d22b44383` |
+| Stable fixture all metrics, 4w (`bob stats show -a -f json -r 4w`) | 119,672 | `43132814e3f399e9eb266a31ac4927de05f982dd94b16b208db3a3e233467ae5` |
+
+The later October 27 closeout hashes differ from the timing capture as the live
+vault changed. Each Athena baseline-before/rebuilt-release/baseline-after
+bracket is stable and byte-identical. The preserved baseline, rebuilt release
+executable, and final copy all have identical SHA-256
+`05c2d41622b13b454eba317385dbc39931c9f1e1c48a8e029a47129a1f52b3db`. The
+current comparisons confirm unchanged overview, worked-comparison, full
+four-week, and stable-fixture outputs.
+
+### Historical rollout measurement (2026-10-11)
+
+This earlier measurement (apollo, live `~/bob`, HEAD `efc5593`,
 `BOB_NOW=2026-10-11 12:00:00`, `NO_COLOR=1`, release binary):
 
 | Path | Time |
@@ -778,13 +860,15 @@ Rollout measurement (apollo, live `~/bob`, HEAD `efc5593`,
 | `bob stats metrics` | 340 ms |
 | `bob stats -f csv` | 360 ms |
 
-CLI wall time is within ~20 ms of the engine pass. Earlier debug-test
-numbers (~2.4 s) and a landing-fixes 573 ms read were measurement
+At that rollout, CLI wall time was within ~20 ms of the engine pass. Earlier
+debug-test numbers (~2.4 s) and a landing-fixes 573 ms read were measurement
 artifacts; the land-agent release figure at `f9324da` was 365–378 ms
 and matches this rollout. The original ≤300 ms target is not met on
-this vault (~15–25% over). The extra time is the Markdown pass, not
-journal I/O (no journal files exist yet). Treat 370 ms as the recorded
-budget unless a later pass shrinks the index.
+that host's reported full-command wall time in this historical run. The
+October 27 current-source Athena measurement above supersedes it for the
+current budget: the index and both measured command paths are below 300 ms on
+Athena. Apollo's current full-command medians remain above 300 ms; its
+index-only stage was not separately instrumented in this pass.
 
 Homes-parts measurement (athena, live `~/bob`, this checkout,
 `BOB_NOW=2026-10-18T12:00:00`, `NO_COLOR=1`, release
