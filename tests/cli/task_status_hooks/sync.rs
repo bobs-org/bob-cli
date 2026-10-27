@@ -176,7 +176,10 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert_eq!(json["references"], 4);
     assert_eq!(json["dependency_references"], 3);
     assert_eq!(json["scanned_files"], 3);
-    assert_eq!(json["legacy_dependency_children"], 0);
+    assert!(
+        json.get("legacy_dependency_children").is_none(),
+        "legacy_dependency_children key was removed from hooks JSON"
+    );
     assert_eq!(json["marked_next"].as_array().unwrap().len(), 1);
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
     assert!(json["cleared"].as_array().unwrap().is_empty());

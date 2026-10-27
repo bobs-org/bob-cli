@@ -988,8 +988,6 @@ pub(super) fn sync_task_statuses(
         adopted_dependency_lines: reconcile.adopted,
         healed_dependency_links: reconcile.healed,
         canonicalized_dependency_lines: reconcile.canonicalized,
-        // Kept at zero for one release to preserve the hooks JSON contract.
-        legacy_dependency_children: 0,
         dependency_warnings,
         blocks_line_updates: blocks.updates,
         minted_dependent_block_ids: blocks.mints,

@@ -314,7 +314,10 @@ fn reconcile_adopts_field_ids_into_canonical_line() {
         adopted[0]["detail"],
         "  - ⛓️ **DEPENDS ON:** [[#^one]] • [[#^two]]"
     );
-    assert_eq!(json["legacy_dependency_children"], 0);
+    assert!(
+        json.get("legacy_dependency_children").is_none(),
+        "legacy_dependency_children key was removed from hooks JSON"
+    );
 
     let applied = bob_command()
         .args(["task", "reconcile"])
@@ -977,7 +980,10 @@ fn reconcile_ignores_archive_children_outside_the_depends_on_line() {
     write_blocked_tasks_settings(&vault);
 
     let json = dry_run_json(&vault, &daily);
-    assert_eq!(json["legacy_dependency_children"], 0);
+    assert!(
+        json.get("legacy_dependency_children").is_none(),
+        "legacy_dependency_children key was removed from hooks JSON"
+    );
     assert_eq!(
         warning_kinds(&json),
         ["dependency_field_ids_dropped", "unadoptable_dependency_id"]
@@ -1321,7 +1327,10 @@ fn reconcile_does_not_read_child_links_as_dependencies() {
     write_blocked_tasks_settings(&vault);
 
     let json = dry_run_json(&vault, &daily);
-    assert_eq!(json["legacy_dependency_children"], 0);
+    assert!(
+        json.get("legacy_dependency_children").is_none(),
+        "legacy_dependency_children key was removed from hooks JSON"
+    );
     assert_eq!(warning_kinds(&json), ["dependency_field_ids_dropped"]);
 
     let applied = bob_command()

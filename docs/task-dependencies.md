@@ -204,8 +204,6 @@ with no R0 or D3.
   - `adopted_dependency_lines`;
   - `healed_dependency_links`;
   - `canonicalized_dependency_lines`;
-  - JSON `legacy_dependency_children` (pinned to `0` for one release
-    after retiring child readers);
   - `dependency_warnings`, entries of `{kind, path, line, detail}`.
     Kinds are `unresolved_dependency_link`, `unadoptable_dependency_id`,
     `non_task_dependency`, `self_dependency`, `dependency_cycle`,
@@ -647,8 +645,9 @@ api.blocks?.version >= 1):
   edges only from the managed Depends-On line. Existing child links
   remain untouched and are not promoted, reconciled, or folded into the
   line.
-- **Compatibility output.** JSON `legacy_dependency_children` remains
-  pinned to zero for one release, then can be removed.
+- **Compatibility output.** The `legacy_dependency_children` JSON key
+  shipped pinned to zero in v0.4.0 for one release and was removed
+  afterward; it no longer appears in hooks JSON output.
 - **Chips and compat ship before any writer emits lines.** That is why
   `nav-model` depends on `chips` and `compat`.
 - **Fleet before migration.** `fleet-rollout` installs everywhere

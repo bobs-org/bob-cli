@@ -281,8 +281,6 @@ mod tests {
             adopted_dependency_lines: Vec::new(),
             healed_dependency_links: Vec::new(),
             canonicalized_dependency_lines: Vec::new(),
-            // Kept at zero for one release after retiring R8 child readers.
-            legacy_dependency_children: 0,
             dependency_warnings: Vec::new(),
             blocks_line_updates: Vec::new(),
             minted_dependent_block_ids: Vec::new(),

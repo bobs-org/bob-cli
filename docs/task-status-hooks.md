@@ -352,8 +352,7 @@ notes modified less than 2 s ago.
 Every run reports `dependency_projection_updates` (kinds
 `dependent_field`, `target_id`, `line_removed`),
 `adopted_dependency_lines`, `healed_dependency_links`,
-`canonicalized_dependency_lines`, JSON `legacy_dependency_children`
-(pinned to zero for one release after reader retirement), and
+`canonicalized_dependency_lines`, and
 `dependency_warnings` (`{kind, path, line, detail}`) in JSON, with
 matching human sections, a `Dependencies:` summary line, dependency
 counts appended to the `Summary:` line, and stderr warnings. A second
@@ -1196,7 +1195,6 @@ JSON mode prints one object on stdout with these stable fields:
   "adopted_dependency_lines": [],
   "healed_dependency_links": [],
   "canonicalized_dependency_lines": [],
-  "legacy_dependency_children": 0,
   "dependency_warnings": [
     {
       "kind": "unresolved_dependency_link",
@@ -1342,8 +1340,7 @@ not by themselves make `ok` false.
 line-removal edit with its `kind`, `path`, one-based `line`, and `detail`;
 `adopted_dependency_lines`, `healed_dependency_links`, and
 `canonicalized_dependency_lines` list the adopted, healed, and canonicalized
-lines in the same shape, JSON `legacy_dependency_children` stays zero for one
-release for compatibility, and `dependency_warnings` lists
+lines in the same shape, and `dependency_warnings` lists
 `{kind, path, line, detail}` rows (for example `unresolved_dependency_link`,
 `previous_daily_target`, `unencodable_dependency_target`,
 `dependency_field_ids_dropped`, `malformed_blocks_line`).

@@ -319,7 +319,10 @@ fn summary_reports_dependency_counts() {
         .as_array()
         .unwrap()
         .is_empty());
-    assert_eq!(json["legacy_dependency_children"], 0);
+    assert!(
+        json.get("legacy_dependency_children").is_none(),
+        "legacy_dependency_children key was removed from hooks JSON"
+    );
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
