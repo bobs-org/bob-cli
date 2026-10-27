@@ -106,7 +106,7 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 | `plan.max_ready_per_note` | Integer, 1–999 | `5` | Soft cap for the Ready lane in each area or project note; note frontmatter may override it with `ready_cap`. |
 | `plan.strict` | Boolean | `false` | When true, refuse a `#NAME` capture that would add a theme past `max_themes`. |
 | `plan.link_unblocked` | Boolean | `true` | Offer recovered dependents as successor choices after a managed close; false recovers without offering links. |
-| `plan.exempt` | Sequence of nonempty strings | `[GTD]` | Themes excluded from theme and link budgets. |
+| `plan.exempt` | Sequence of nonempty strings | `[PLAN]` | Themes excluded from theme and link budgets. |
 | `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Pomodoro themes. |
 
 See the [plan configuration contract](../plan.md#config) and

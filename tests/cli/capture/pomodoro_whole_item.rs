@@ -1161,7 +1161,7 @@ fn capture_pomodoro_whole_item_start_reports_moved_block() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
             "\t- more context\n",
             "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
@@ -1183,17 +1183,17 @@ fn capture_pomodoro_whole_item_start_reports_moved_block() {
             {
                 "relative_target": "day.md",
                 "line": 3,
-                "name": "GTD",
+                "name": "PLAN",
                 "time_range": "0945-1010",
                 "status": "running",
                 "created": false,
                 "roles": ["started"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0945-1010** [t:: 25m]) — GTD",
+                        "text": "- [ ] (**0945-1010** [t:: 25m]) — PLAN",
                         "depth": 0,
                         "change": "changed",
-                        "before": "- [ ] () — GTD",
+                        "before": "- [ ] () — PLAN",
                     },
                     {
                         "text": "\t- [[#^gtd]]",

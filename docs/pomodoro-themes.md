@@ -96,13 +96,13 @@ In order:
 
 1. A journal pin wins (`hue_source: "pin"`).
 2. Else a key in normalized `plan.exempt` is muted: `hue: null`,
-   `hue_source: "exempt"` (GTD by default).
+   `hue_source: "exempt"` (PLAN by default).
 3. Else a key equal to a **top-level area note's stem** (an area whose
    `parent` is `[[area]]`) wears that area's resolved hue
    (`hue_source: "area"`): a frontmatter `color:` slot, else the stem hash.
 4. Else `Hue::ALL[fnv1a32(key) % 8]` (`hue_source: "hash"`).
 
-Results: JOB → aqua, DEV → blue, LOVE → yellow, GTD → muted. Palette: the
+Results: JOB → aqua, DEV → blue, LOVE → yellow, PLAN → muted. Palette: the
 eight existing slots (blue, orange, aqua, yellow, magenta, green, violet,
 red), with their light/dark hex values and xterm-256 codes. Colors are
 stable, not unique; pins fix recurring collisions. Rust computes the hue.
@@ -117,7 +117,7 @@ Names wear a tint; places wear a dot.
   text (16 % light / 24 % dark; hover 24 % / 32 %). Corner radius 4 px,
   horizontal padding about 0.3 em, no border, `box-decoration-break: clone`.
   The hue is never the text color.
-- **Muted pill:** exempt themes such as GTD. Hover background, muted text.
+- **Muted pill:** exempt themes such as PLAN. Hover background, muted text.
 - **Swatch:** in dense rows, an 8 pt rounded square (radius 2) before the
   name. The Day strip theme legend uses the same rounded square at the
   legend-dot footprint. Area homes keep their ● circle. The Day strip
@@ -329,7 +329,7 @@ THEMES  81 known · 4 today · 2 hidden · last 90 days
   ■ BOB        today     26 days   magenta
   ■ JOB        Oct 23    24 days   aqua · area
   ■ BLOG       Oct 23    14 days   red · pinned
-  □ GTD        today     51 days   muted · exempt
+  □ PLAN       today     51 days   muted · exempt
   hint  SASE and BLOG share orange and met on 6 days → bob themes color BLOG red
 ```
 

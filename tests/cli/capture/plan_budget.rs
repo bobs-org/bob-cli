@@ -546,7 +546,7 @@ fn capture_complete_start_name_again_row_reports_plan_themes() {
         .find(|candidate| candidate["replacement"] == "plan")
         .expect("an again PLAN row");
     assert_eq!(again["creates_pomodoro"], true);
-    assert_eq!(again["plan_themes_after"], 4);
+    assert_eq!(again["plan_themes_after"], 3);
     assert_eq!(again["plan_themes_cap"], 3);
     for candidate in candidates {
         if candidate["creates_pomodoro"] != true {

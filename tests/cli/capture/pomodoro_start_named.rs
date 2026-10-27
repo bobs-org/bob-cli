@@ -266,7 +266,7 @@ fn named_start_created_reports_added_block() {
         concat!(
             "## Pomodoros\n",
             "- [x] (**0620-0710** [t:: 50m]) — CLEANUP\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
         ),
     );

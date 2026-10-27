@@ -208,7 +208,7 @@ One `+`-separated component of a [Pomodoro](#pomodoro)'s ` — NAME` suffix, key
 budget's component normalization and displayed in the most recently authored spelling.
 Pomodoro names are written in ALL CAPS: `— BOB + DECKS` is one name with two themes.
 `plan.max_themes` counts distinct non-exempt components across today's open entries;
-components in `plan.exempt` (default `[GTD]`) do not count. The Stats `theme`
+components in `plan.exempt` (default `[PLAN]`) do not count. The Stats `theme`
 dimension splits a named session into the same components. The catalog is derived
 from canonical daily notes plus `.bob/themes/<host>.jsonl`; `bob themes` lists,
 hides/unhides from Recent suggestions, pins/unpins colors, and renames components
@@ -278,8 +278,9 @@ without that tag remain recognized. Follow-up tasks track separate work. See
 The [Area Note](#area-note) a task lives in, else the nearest project marked
 `root: true` on the walk up to that area, else the [Top-Level Project](#top-level-project)
 above its project note. Archive and reference wrappers are walked through, and
-an area-less walk falls back to the outermost project. Buckets `GTD
-review`, `unlinked`, and `unfiled` stay buckets. Derived at read time
+an area-less walk falls back to the outermost project. Review buckets and tasks
+defined in canonical daily notes group under the `<daily>` bucket; `unlinked`
+and `unfiled` stay buckets. Derived at read time
 from today's note tree and never written; `rollup:` no longer exists. The
 [Day Strip](#day-strip)'s root-parent bar and the default [Stats Dash](#stats-dash) view group by it; Stats
 JSON calls the dimension `root_parent`. It is not the nearest home

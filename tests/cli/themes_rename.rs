@@ -280,8 +280,16 @@ fn themes_rename_refusals_are_json_on_nonzero_exit() {
     assert_eq!(value["ok"], false);
     assert_eq!(value["code"], "theme_exists");
 
-    // config_reference: GTD is exempt by default
-    let (output, value) = rename_json(&vault, &cache, &["GTD", "NEWGTD", "-d"]);
+    // config_reference: GTD is explicitly exempt in this config.
+    let config = cache.join("gtd-exempt.yml");
+    write_file(&config, "plan:\n  exempt: [GTD]\n");
+    let mut command = rename_command(&vault, &cache);
+    command
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["themes", "rename", "GTD", "NEWGTD", "-d", "-f", "json"]);
+    let output = command.output().expect("GTD config-reference JSON");
+    let value: Value = serde_json::from_str(stdout(&output).trim())
+        .expect("GTD config-reference JSON parses");
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(value["ok"], false);
     assert_eq!(value["code"], "config_reference");

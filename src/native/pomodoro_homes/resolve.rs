@@ -10,6 +10,8 @@ use crate::native::vault_links::{
 };
 
 const MAX_PROJECT_DEPTH: usize = 16;
+pub(crate) const DAILY_KEY: &str = "@daily";
+pub(crate) const DAILY_LABEL: &str = "<daily>";
 
 pub(crate) trait HomeSource {
     fn resolve(&self, current: &Path, target: &str) -> LinkResolution;
@@ -109,7 +111,7 @@ pub(crate) struct Home {
     /// Root parent grouping for stats: the area the task lives in, else
     /// the nearest project marked `root: true` on the walk up to that area,
     /// else the top-level project above its project note. Buckets are their
-    /// own root.
+    /// own root, except review buckets, which roll up to `@daily`.
     pub(crate) root_parent: String,
 }
 
@@ -178,7 +180,7 @@ impl<S: HomeSource> HomeResolver<S> {
                     .is_some()
                 {
                     return self
-                        .review_home(bridge_name.unwrap_or("GTD"), current);
+                        .review_home(bridge_name.unwrap_or("PLAN"), current);
                 }
                 let home = self.resolve_note(&path);
                 if home.key == "@unfiled" {
@@ -200,6 +202,13 @@ impl<S: HomeSource> HomeResolver<S> {
     }
 
     pub(crate) fn resolve_note(&mut self, path: &Path) -> Home {
+        if crate::native::task_status_hooks::canonical_daily_date(path)
+            .is_some()
+        {
+            let home = daily_home();
+            self.homes.insert(path.to_path_buf(), home.clone());
+            return home;
+        }
         if let Some(home) = self.homes.get(path) {
             return home.clone();
         }
@@ -348,7 +357,7 @@ impl<S: HomeSource> HomeResolver<S> {
             subarea: None,
             hue,
             residence_chain,
-            root_parent: bucket,
+            root_parent: DAILY_KEY.to_string(),
         }
     }
 
@@ -411,5 +420,19 @@ pub(crate) fn unlinked_home() -> Home {
         hue: None,
         residence_chain: Vec::new(),
         root_parent: "@unlinked".to_string(),
+    }
+}
+
+pub(crate) fn daily_home() -> Home {
+    Home {
+        key: DAILY_KEY.to_string(),
+        label: DAILY_LABEL.to_string(),
+        kind: super::HomeKind::Bucket,
+        area: DAILY_KEY.to_string(),
+        area_label: DAILY_LABEL.to_string(),
+        subarea: None,
+        hue: None,
+        residence_chain: Vec::new(),
+        root_parent: DAILY_KEY.to_string(),
     }
 }

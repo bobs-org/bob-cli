@@ -1409,7 +1409,7 @@ fn capture_pomodoro_close_reports_unchanged_next_block() {
         "## Pomodoros\n",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
         "\t- quick note\n",
-        "- [ ] () — GTD\n",
+        "- [ ] () — PLAN\n",
         "\t- [[#^gtd]]\n",
     );
     write_file(&day_file, day_before);
@@ -1450,13 +1450,13 @@ fn capture_pomodoro_close_reports_unchanged_next_block() {
             {
                 "relative_target": "2026/20260928.md",
                 "line": 4,
-                "name": "GTD",
+                "name": "PLAN",
                 "status": "queued",
                 "created": false,
                 "roles": ["next"],
                 "lines": [
                     {
-                        "text": "- [ ] () — GTD",
+                        "text": "- [ ] () — PLAN",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -1490,7 +1490,7 @@ fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
             "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
             "\t- [[#^build]]\n",
             "\t\t- did stuff\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
         ),
     );

@@ -264,7 +264,7 @@ mod tests {
         }
     }
 
-    /// T1 GTD: an exempt entry's empty-target link resolves to the
+    /// T1 PLAN: an exempt entry's empty-target link resolves to the
     /// daily note itself.
     #[test]
     fn gtd_empty_target_resolves_to_the_daily_note() {
@@ -274,7 +274,7 @@ mod tests {
             \n\
             ## Pomodoros\n\
             \n\
-            - [ ] () — GTD\n\
+            - [ ] () — PLAN\n\
             \t- [[#^gtd]]\n\
             \n\
             ## Tasks\n\
@@ -284,7 +284,7 @@ mod tests {
         let result = vault.result(daily, contents);
         assert_eq!(keys(&result), vec!["2026/20261001.md#gtd"]);
         assert!(result.warnings.is_empty());
-        assert_eq!(result.tasks[0].entry_name, "GTD");
+        assert_eq!(result.tasks[0].entry_name, "PLAN");
         assert_eq!(result.tasks[0].status_symbol, " ");
     }
 

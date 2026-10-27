@@ -19,7 +19,7 @@ const DAILY_NOTE: &str = "# 2026-09-30\n\
 - [ ] () — BOB\n\
 \x20   - [[sase#^fix-it]]\n\
 \x20   - [[missing#^q]]\n\
-- [ ] () — GTD\n\
+- [ ] () — PLAN\n\
 \x20   - [[#^gtd]]\n\
 \n\
 ## Tasks\n\
@@ -163,13 +163,13 @@ fn plan_reports_full_budget_as_json() {
     assert_eq!(entries[0]["running"], Value::Bool(true));
     assert_eq!(entries[0]["time_range"], Value::from("0945-1015"));
     assert_eq!(entries[0]["links"], Value::from(3));
-    assert_eq!(entries[3]["name"], Value::from("GTD"));
+    assert_eq!(entries[3]["name"], Value::from("PLAN"));
     assert_eq!(entries[3]["exempt"], Value::Bool(true));
     assert_eq!(entries[0]["homes"]["state"], Value::from("forecast"));
     assert_eq!(entries[0]["homes"]["kind"], Value::from("work"));
     assert!(entries[0]["homes"]["parts"].as_array().is_some());
     assert_eq!(entries[3]["homes"]["kind"], Value::from("review"));
-    assert_eq!(entries[3]["homes"]["label"], Value::from("GTD review"));
+    assert_eq!(entries[3]["homes"]["label"], Value::from("PLAN review"));
     assert_eq!(entries[3]["homes"]["chip"], Value::Null);
 
     let codes: Vec<&str> = value["warnings"]
@@ -314,7 +314,7 @@ fn plan_reports_human_budget_without_ansi_when_piped() {
         "expected highlight and running rows:\n{human}"
     );
     assert!(
-        human.contains("exempt") && human.contains("GTD"),
+        human.contains("exempt") && human.contains("PLAN"),
         "expected exempt row:\n{human}"
     );
     assert!(

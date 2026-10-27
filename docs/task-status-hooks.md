@@ -1154,7 +1154,7 @@ JSON mode prints one object on stdout with these stable fields:
   "removed_empty_pomodoros": [
     {
       "line_number": 12,
-      "line": "- [ ] () — GTD"
+      "line": "- [ ] () — PLAN"
     }
   ],
   "grouped_task_sections": [

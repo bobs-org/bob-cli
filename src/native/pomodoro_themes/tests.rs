@@ -421,7 +421,7 @@ fn catalog_loads_scratch_vault_and_applies_area_hue() {
     .unwrap();
     fs::write(
         vault.join("2026/20261024.md"),
-        "## Pomodoros\n- [ ] () — BOB\n- [x] (0800-0830 30m) — GTD\n- [ ] () — FIX\n",
+        "## Pomodoros\n- [ ] () — BOB\n- [x] (0800-0830 30m) — PLAN\n- [ ] () — FIX\n",
     )
     .unwrap();
     let cache = tempfile::tempdir().expect("cache");
@@ -435,9 +435,9 @@ fn catalog_loads_scratch_vault_and_applies_area_hue() {
     let job = catalog.theme_ref("job", "JOB");
     assert_eq!(job.hue, Some(Hue::Aqua));
     assert_eq!(job.hue_source, HueSource::Area);
-    let gtd = catalog.theme_ref("gtd", "GTD");
-    assert_eq!(gtd.hue, None);
-    assert_eq!(gtd.hue_source, HueSource::Exempt);
+    let plan = catalog.theme_ref("plan", "PLAN");
+    assert_eq!(plan.hue, None);
+    assert_eq!(plan.hue_source, HueSource::Exempt);
     let ranked = catalog.rank_for_query("fix", &Default::default());
     assert_eq!(
         ranked

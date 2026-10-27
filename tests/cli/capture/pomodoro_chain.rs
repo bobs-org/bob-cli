@@ -262,7 +262,7 @@ fn chain_blocks_vault(
             "## Pomodoros\n",
             "- [ ] (**0620-0710** [t:: 50m]) — CLEANUP\n",
             "\t- quick note\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
         ),
     );
@@ -312,13 +312,13 @@ fn chain_adjust_then_close_reports_one_cumulative_block() {
             {
                 "relative_target": "2026/20260930.md",
                 "line": 4,
-                "name": "GTD",
+                "name": "PLAN",
                 "status": "queued",
                 "created": false,
                 "roles": ["next"],
                 "lines": [
                     {
-                        "text": "- [ ] () — GTD",
+                        "text": "- [ ] () — PLAN",
                         "depth": 0,
                         "change": "unchanged",
                     },
@@ -376,17 +376,17 @@ fn chain_close_then_start_reports_next_started_block() {
             {
                 "relative_target": "2026/20260930.md",
                 "line": 4,
-                "name": "GTD",
+                "name": "PLAN",
                 "time_range": "0720-0745",
                 "status": "running",
                 "created": false,
                 "roles": ["next", "started"],
                 "lines": [
                     {
-                        "text": "- [ ] (**0720-0745** [t:: 25m]) — GTD",
+                        "text": "- [ ] (**0720-0745** [t:: 25m]) — PLAN",
                         "depth": 0,
                         "change": "changed",
-                        "before": "- [ ] () — GTD",
+                        "before": "- [ ] () — PLAN",
                     },
                     {
                         "text": "\t- [[#^gtd]]",

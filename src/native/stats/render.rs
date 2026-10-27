@@ -1318,7 +1318,7 @@ mod tests {
                 hue: Some(Hue::Orange),
                 project_label: None,
                 short_label: None,
-                root_parent: "@review:GTD".to_string(),
+                root_parent: "@daily".to_string(),
             },
         );
         report.homes.insert(

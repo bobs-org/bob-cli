@@ -439,6 +439,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::compute;
+    use crate::native::env::TestEnvGuard;
     use crate::native::stats::report::SeriesPoint;
     use crate::native::stats::request::{
         Grouping, MetricSelection, StatsRequest,
@@ -550,6 +551,8 @@ mod tests {
     fn golden_report() -> crate::native::stats::report::StatsReport {
         let dir = TempDir::new().unwrap();
         let config = write_config(&dir, &golden_config());
+        let _config_guard =
+            TestEnvGuard::set(&[("BOB_CONFIG_FILE", Some(config.as_os_str()))]);
         let request = golden_request(fixture_vault(), config);
         compute(&request).expect("golden fixture computes")
     }
@@ -598,9 +601,9 @@ mod tests {
         assert!(report.ok);
         assert_eq!(report.schema_version, 1);
         assert_eq!(report.today, day(11));
-        assert_eq!(report.theme_hues["gtd"].hue, None);
+        assert_eq!(report.theme_hues["plan"].hue, None);
         assert_eq!(
-            report.theme_hues["gtd"].hue_source,
+            report.theme_hues["plan"].hue_source,
             crate::native::pomodoro_themes::HueSource::Exempt
         );
         assert!(report.theme_hues["sase"].known);
@@ -651,7 +654,7 @@ mod tests {
             ]
         );
 
-        // M1 worked: 25m GTD plus the odd 7m GTD+SASE composite (4m GTD,
+        // M1 worked: 25m PLAN plus the odd 7m PLAN+SASE composite (4m PLAN,
         // 3m SASE); Oct 8 predates Pomodoro tracking; Oct 10's open-only
         // section is a real zero; today is provisional.
         let worked = metric(&report, "worked");
@@ -691,7 +694,7 @@ mod tests {
         );
         assert_eq!(worked.points[1].display, "32m");
         assert_eq!(worked.points[3].display, "10m");
-        assert_eq!(worked.points[1].parts["theme"]["GTD"], 29);
+        assert_eq!(worked.points[1].parts["theme"]["PLAN"], 29);
         assert_eq!(worked.points[1].parts["theme"]["SASE"], 3);
         assert_eq!(worked.summary.headline.value, Some(16));
         assert_eq!(worked.summary.headline.display, "16m");
@@ -708,10 +711,10 @@ mod tests {
         assert_eq!(worked.chart.p25, worked.summary.p25);
         assert_eq!(worked.chart.p75, worked.summary.p75);
         assert!(worked.daily_points.is_empty());
-        assert_eq!(worked.points[1].parts_display["theme"]["GTD"], "29m");
+        assert_eq!(worked.points[1].parts_display["theme"]["PLAN"], "29m");
         assert_eq!(worked.points[1].parts_display["theme"]["SASE"], "3m");
         let theme = &worked.parts_summary["theme"];
-        assert_eq!(theme[0].key, "GTD");
+        assert_eq!(theme[0].key, "PLAN");
         assert_eq!(theme[0].value, 29);
         assert_eq!(theme[0].share, "91%");
         assert_eq!(theme[1].key, "SASE");
@@ -1123,7 +1126,7 @@ mod tests {
         assert_eq!(keep.warnings.len(), 1);
         assert_eq!(keep.warnings[0].code, "journal_gap");
 
-        // M10 review_time: review sessions only. The Oct 9 GTD + SASE
+        // M10 review_time: review sessions only. The Oct 9 PLAN + SASE
         // composite is not a review session, so it no longer counts;
         // SASE-only today is a provisional zero rather than missing.
         let review_time = metric(&report, "review_time");
@@ -1174,17 +1177,17 @@ mod tests {
         assert_eq!(review_time.summary.p75, Some(19));
 
         assert_eq!(report.sessions.len(), 3);
-        assert_eq!(report.sessions[0].name.as_deref(), Some("GTD"));
+        assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));
         assert_eq!(report.sessions[0].minutes, Some(25));
         assert_eq!(report.sessions[0].quality, DataQuality::Ok);
-        assert_eq!(report.sessions[1].name.as_deref(), Some("GTD + SASE"));
+        assert_eq!(report.sessions[1].name.as_deref(), Some("PLAN + SASE"));
         assert_eq!(report.sessions[1].minutes, Some(7));
         assert_eq!(report.sessions[2].name.as_deref(), Some("SASE"));
         assert_eq!(report.sessions[2].minutes, Some(10));
         assert_eq!(report.sessions[2].date, day(11));
 
         // M11 sessions: count mode counts each closed row once even when it
-        // carries two themes; parts still attribute the row to GTD.
+        // carries two themes; parts still attribute the row to PLAN.
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.since, Some(day(9)));
         expect_point(
@@ -1215,7 +1218,7 @@ mod tests {
             DataQuality::Ok,
             true,
         );
-        assert_eq!(sessions.points[1].parts["theme"]["GTD"], 2);
+        assert_eq!(sessions.points[1].parts["theme"]["PLAN"], 2);
         assert_eq!(sessions.summary.headline.value, Some(1));
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(2));
 
@@ -1490,7 +1493,7 @@ mod tests {
         assert!(worked["points"][0].get("parts").is_none());
         assert_eq!(worked["points"][0]["value"], serde_json::Value::Null);
         assert_eq!(worked["points"][0]["quality"], "not_tracked");
-        assert_eq!(worked["points"][1]["parts"]["theme"]["GTD"], 29);
+        assert_eq!(worked["points"][1]["parts"]["theme"]["PLAN"], 29);
         assert_eq!(
             worked["points"][3]["rolling_median"],
             serde_json::Value::Null
@@ -1500,7 +1503,10 @@ mod tests {
         assert_eq!(worked["chart"]["p25"], 8);
         assert_eq!(worked["chart"]["p75"], 24);
         assert!(worked.get("daily_points").is_none());
-        assert_eq!(worked["points"][1]["parts_display"]["theme"]["GTD"], "29m");
+        assert_eq!(
+            worked["points"][1]["parts_display"]["theme"]["PLAN"],
+            "29m"
+        );
 
         // Ratio points carry pooled num/den; bool points read as met days.
         let habits = &json["metrics"][7];
@@ -1750,9 +1756,9 @@ mod tests {
         assert_eq!(worked.points.len(), 2);
         assert_eq!(worked.points[0].value, Some(32));
         assert_eq!(worked.points[0].display, "32m");
-        assert_eq!(worked.points[0].parts["theme"]["GTD"], 29);
+        assert_eq!(worked.points[0].parts["theme"]["PLAN"], 29);
         assert!(worked.points[0].checklist_state.is_none());
-        assert_eq!(worked.points[0].parts_display["theme"]["GTD"], "29m");
+        assert_eq!(worked.points[0].parts_display["theme"]["PLAN"], "29m");
         assert_eq!(
             worked.chart.group,
             crate::native::stats::report::GroupName::Month

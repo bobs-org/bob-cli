@@ -725,7 +725,7 @@ mod tests {
             \x20   - [[mark#^mmm]]#\n\
             - [ ] () — DECKS\n\
             \x20   - [[task#^aaa]]\n\
-            - [ ] () — GTD\n\
+            - [ ] () — PLAN\n\
             \x20   - [[#^gtd]]\n",
         );
         assert_eq!(ledger.theme_names, vec!["GOALS", "DECKS"]);
@@ -734,8 +734,8 @@ mod tests {
         let gtd = ledger
             .entries
             .iter()
-            .find(|entry| entry.name == "GTD")
-            .expect("GTD row");
+            .find(|entry| entry.name == "PLAN")
+            .expect("PLAN row");
         assert!(gtd.exempt);
         assert_eq!(gtd.links, 0);
         assert_eq!(ledger.entries[0].links, 3);

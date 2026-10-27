@@ -28,7 +28,7 @@ impl Default for PlanConfig {
             max_ready_per_note: 5,
             strict: false,
             link_unblocked: true,
-            exempt: vec!["GTD".to_string()],
+            exempt: vec!["PLAN".to_string()],
             inventory_labels: vec![
                 "LATER".to_string(),
                 "MISC".to_string(),
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(config.max_ready(), 100);
         assert_eq!(config.max_ready_per_note(), 5);
         assert!(!config.strict());
-        assert_eq!(config.exempt(), ["GTD"]);
+        assert_eq!(config.exempt(), ["PLAN"]);
         assert_eq!(
             config.inventory_labels(),
             ["LATER", "MISC", "NEW FEATURES", "SASE"]

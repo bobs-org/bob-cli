@@ -1,7 +1,7 @@
 # Plan budget, Today, and lanes
 
 By default, the plan budget allows 3 themes and 10 distinct Task Links
-under today's open Pomodoros. GTD is exempt. The first open, non-exempt
+under today's open Pomodoros. PLAN is exempt. The first open, non-exempt
 Pomodoro is the highlight. Separately, Today lists the open tasks with
 a dedicated Task Link under today's open Pomodoros, and the NEXT and
 PENDING lanes count every `[*]` and `[/]` task visible today (caps 15
@@ -42,7 +42,7 @@ unnamed entry still shows its derived homes.
 
 ## Exempt entries
 
-Components listed in `plan.exempt` (default `[GTD]`) are never
+Components listed in `plan.exempt` (default `[PLAN]`) are never
 themes. An entry whose components are all exempt is ignored for
 links too.
 
@@ -114,7 +114,7 @@ task-line field, or a file-path filter.
    today's daily note (`YYYY/YYYYMMDD.md`), its `## Pomodoros…`
    section, column-0 checkbox entries; an entry is open unless its
    status is `x`, `X`, or `-`.
-2. **Every open entry counts**, including exempt ones (GTD) and
+2. **Every open entry counts**, including exempt ones (PLAN) and
    unnamed placeholders.
 3. **Only dedicated Task Links count:** a direct child bullet, at
    the entry's first child indentation, whose body after stripping
@@ -603,7 +603,7 @@ plan:
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a theme past max_themes
   link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
-  exempt: [GTD] # open entries that never count as themes
+  exempt: [PLAN] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
 ```
 
@@ -698,8 +698,8 @@ shows all report fields for one open theme and one exempt entry:
     },
     {
       "line": 30,
-      "name": "GTD",
-      "components": ["GTD"],
+      "name": "PLAN",
+      "components": ["PLAN"],
       "exempt": true,
       "running": false,
       "highlight": false,
@@ -707,13 +707,13 @@ shows all report fields for one open theme and one exempt entry:
       "homes": {
         "state": "forecast",
         "kind": "review",
-        "label": "GTD review",
+        "label": "PLAN review",
         "chip": null,
         "hue": "orange",
         "parts": [
           {
-            "key": "@review:GTD",
-            "label": "GTD review",
+            "key": "@review:PLAN",
+            "label": "PLAN review",
             "kind": "bucket",
             "area": "gtd.md",
             "area_label": "gtd",
@@ -884,7 +884,7 @@ unless noted.
    Themes are `BOB`, `DECKS` (2/3); links are 2/10; one
    `duplicate_open_pomodoro_name` at the second entry's line.
 
-2. **Link forms and exclusions.** A struck link, GTD's `[[#^gtd]]`,
+2. **Link forms and exclusions.** A struck link, the `^gtd` bridge,
    a link planned twice, an embedded link, and a `#`-marked link:
 
    ```markdown
@@ -896,13 +896,13 @@ unless noted.
        - [[mark#^mmm]]#
    - [ ] () — DECKS
        - [[task#^aaa]]
-   - [ ] () — GTD
+   - [ ] () — PLAN
        - [[#^gtd]]
    ```
 
    Links are `(task, aaa)`, `(emb, eee)`, `(mark, mmm)`: 3/10. The
    struck link never counts, the twice-planned link counts once,
-   and GTD's link is ignored with the entry.
+   and the exempt entry's bridge link is ignored with the entry.
 
 3. **Unnamed placeholders.** An unnamed entry with links counts as
    one `(unnamed)` theme; one without links never counts:
@@ -998,13 +998,13 @@ the expected ordered Today keys (`"<vault path with .md>#<block
 id>"`). Caps are the defaults unless noted. The vectors are shared
 with the `bob-ledger-tools` JavaScript mirror as its test vectors.
 
-- **T1 GTD.** An exempt entry's empty-target link resolves to the
+- **T1 PLAN.** An exempt entry's empty-target link resolves to the
   daily note itself:
 
   ```markdown
   ## Pomodoros
 
-  - [ ] () — GTD
+  - [ ] () — PLAN
       - [[#^gtd]]
   ```
 

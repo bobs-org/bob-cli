@@ -14,7 +14,7 @@ use crate::native::{
 };
 
 use super::{
-    attribute_session, fallback_hue, session_links, split_minutes,
+    attribute_session, daily_home, fallback_hue, session_links, split_minutes,
     DiskHomeSource, HomeResolver, HomeSource, Hue, IndexedHomeSource,
 };
 
@@ -293,7 +293,33 @@ fn root_parent_follows_the_examples_table() {
     assert_eq!(unfiled_home_root(), "@unfiled");
     let review = resolver.review_home("GTD", Path::new("dev.md"));
     assert_eq!(review.key, "@review:GTD");
-    assert_eq!(review.root_parent, "@review:GTD");
+    assert_eq!(review.root_parent, "@daily");
+    assert_eq!(review.area, "gtd.md");
+}
+
+#[test]
+fn canonical_daily_notes_resolve_to_daily_bucket_only() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("2026/20261017.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("2026/2026-10-17.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+
+    assert_eq!(
+        resolver.resolve_note(Path::new("2026/20261017.md")),
+        daily_home()
+    );
+    assert_eq!(
+        resolver.resolve_note(Path::new("2026/2026-10-17.md")).key,
+        "2026/2026-10-17.md"
+    );
 }
 
 #[test]

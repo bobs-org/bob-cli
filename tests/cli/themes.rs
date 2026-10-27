@@ -26,14 +26,14 @@ fn write_theme_vault(root: &Path) {
 - [x] (0800-0830 30m) — BOB\n\
 - [x] (0900-0930 30m) — JOB\n\
 - [x] (1000-1030 30m) — BLOG\n\
-- [x] (1100-1130 30m) — GTD\n\
+- [x] (1100-1130 30m) — PLAN\n\
 - [x] (1200-1230 30m) — FIXES\n",
     );
     write_file(
         &root.join("2026/20261024.md"),
         "## Pomodoros\n\
 - [ ] () — BOB\n\
-- [x] (0800-0830 30m) — GTD\n\
+- [x] (0800-0830 30m) — PLAN\n\
 - [ ] () — FIX\n",
     );
 }
@@ -165,8 +165,8 @@ fn themes_lists_expected_hues_on_scratch_vault() {
         "JOB:\n{text}"
     );
     assert!(
-        text.contains("GTD") && text.contains("muted"),
-        "GTD:\n{text}"
+        text.contains("PLAN") && text.contains("muted"),
+        "PLAN:\n{text}"
     );
     assert!(text.contains("BLOG"), "BLOG:\n{text}");
 }

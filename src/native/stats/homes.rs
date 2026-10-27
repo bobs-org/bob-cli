@@ -17,13 +17,15 @@ use super::{
     session_facts::session_fact,
 };
 use crate::native::pomodoro_homes::{
-    attribute_session, path_string, unfiled_home, unlinked_home, Home,
-    HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind, ResolverHealth,
-    SessionHomes, SessionKind,
+    attribute_session, daily_home, path_string, unfiled_home, unlinked_home,
+    Home, HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind,
+    ResolverHealth, SessionHomes, SessionKind, DAILY_KEY,
 };
 
 pub(crate) fn default_exempt() -> Vec<String> {
-    vec!["GTD".to_string()]
+    crate::native::config::PlanConfig::default()
+        .exempt()
+        .to_vec()
 }
 
 pub(crate) struct HomesEngine<'a> {
@@ -258,6 +260,13 @@ impl<'a> HomesEngine<'a> {
     }
 
     fn ensure_root(&self, home: &Home) {
+        if home.root_parent == DAILY_KEY {
+            self.seen
+                .borrow_mut()
+                .entry(DAILY_KEY.to_string())
+                .or_insert_with(daily_home);
+            return;
+        }
         if home.root_parent == home.key || home.root_parent.starts_with('@') {
             return;
         }
@@ -307,6 +316,7 @@ fn yaml_frontmatter_head(contents: &str) -> Option<&str> {
 
 fn bucket_home(key: &str, label: &str) -> Home {
     match key {
+        "@daily" => daily_home(),
         "@unlinked" => unlinked_home(),
         "@unfiled" => unfiled_home(),
         _ => Home {
@@ -524,10 +534,15 @@ pub(crate) fn split_from_homes(
     } else if minutes_mode {
         for part in &attributed.homes.parts {
             let minutes = i64::from(part.minutes.unwrap_or(0));
-            add_named(&mut root_parent, &part.key, minutes);
+            let root_key = attributed
+                .lead_home
+                .as_ref()
+                .map_or(part.key.as_str(), |home| home.root_parent.as_str());
+            add_named(&mut root_parent, root_key, minutes);
             let first = root_counts.len();
-            let entry =
-                root_counts.entry(part.key.clone()).or_insert((0, first));
+            let entry = root_counts
+                .entry(root_key.to_string())
+                .or_insert((0, first));
             entry.0 += 1;
         }
     } else if let Some(lead) = attributed.lead_home.as_ref() {
@@ -735,6 +750,7 @@ mod tests {
     use chrono::NaiveDate;
     use tempfile::TempDir;
 
+    use super::HomeKind;
     use crate::native::pomodoro_homes::SessionKind;
     use crate::native::stats::compute::compute;
     use crate::native::stats::request::{
@@ -878,7 +894,7 @@ mod tests {
 
         assert_eq!(part_value(worked, "project", "sase.md"), 30);
         assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "project", "@review:PLAN"), 35);
         assert_eq!(part_value(worked, "project", "bob.md"), 10);
         assert_eq!(part_value(worked, "project", "dev.md"), 10);
         assert_eq!(part_value(worked, "project", "job.md"), 4);
@@ -890,7 +906,7 @@ mod tests {
         // into their top-level root.
         assert_eq!(dimension_total(worked, "root_parent"), 167);
         assert_eq!(part_value(worked, "root_parent", "sase.md"), 80);
-        assert_eq!(part_value(worked, "root_parent", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "root_parent", "@daily"), 35);
         assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
@@ -943,12 +959,12 @@ mod tests {
         assert_eq!(job_apply_root.apportioned, Some(3));
         let review_root = worked.parts_summary["root_parent"]
             .iter()
-            .find(|part| part.key == "@review:GTD")
+            .find(|part| part.key == "@daily")
             .unwrap();
         assert_eq!(review_root.apportioned, None);
         // Root labels are bare catalog labels.
         assert_eq!(sase_root.label.as_deref(), Some("sase"));
-        assert_eq!(review_root.label.as_deref(), Some("GTD review"));
+        assert_eq!(review_root.label.as_deref(), Some("<daily>"));
 
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
@@ -957,10 +973,10 @@ mod tests {
         assert_eq!(dimension_total(sessions, "root_parent"), 8);
         assert_eq!(part_value(sessions, "project", "sase.md"), 1);
         assert_eq!(part_value(sessions, "project", "sase_blog.md"), 1);
-        assert_eq!(part_value(sessions, "project", "@review:GTD"), 2);
+        assert_eq!(part_value(sessions, "project", "@review:PLAN"), 2);
         // Count-mode lead roots group distinct tasks by root.
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 2);
-        assert_eq!(part_value(sessions, "root_parent", "@review:GTD"), 2);
+        assert_eq!(part_value(sessions, "root_parent", "@daily"), 2);
 
         let done = metric(&report, "done");
         assert_eq!(done.summary.total.as_ref().unwrap().value, Some(7));
@@ -1034,8 +1050,8 @@ mod tests {
         );
         assert_eq!(report.homes["sase.md"].root_parent, "sase.md".to_string());
         assert_eq!(
-            report.homes["@review:GTD"].root_parent,
-            "@review:GTD".to_string()
+            report.homes["@review:PLAN"].root_parent,
+            "@daily".to_string()
         );
 
         // H11 exclude_in:[sase] never drops review/unlinked; work tasks
@@ -1046,17 +1062,17 @@ mod tests {
             Some(87)
         );
         assert_eq!(dimension_total(exclude_sase, "project"), 87);
-        assert_eq!(part_value(exclude_sase, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(exclude_sase, "project", "@review:PLAN"), 35);
         assert_eq!(part_value(exclude_sase, "project", "@unlinked"), 10);
 
-        // H12 review: only is the GTD review row (named + unnamed bridge).
+        // H12 review: only is the PLAN review row (named + unnamed bridge).
         let review_only = metric(&report, "review_only");
         assert_eq!(review_only.summary.total.as_ref().unwrap().value, Some(35));
-        assert_eq!(part_value(review_only, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(review_only, "project", "@review:PLAN"), 35);
 
         // H13 sessions list: facts for every closed row, today included.
         assert_eq!(report.sessions.len(), 9);
-        assert_eq!(report.sessions[0].name.as_deref(), Some("GTD"));
+        assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));
         assert_eq!(report.sessions[0].minutes, Some(25));
         assert_eq!(report.sessions[0].homes.kind, SessionKind::Review);
         assert_eq!(report.sessions[1].name.as_deref(), Some("HACK"));
@@ -1111,11 +1127,11 @@ mod tests {
         let review_time = metric(&report, "review_time");
         let review_count = metric(&report, "review_count");
         assert_eq!(worked.summary.total.as_ref().unwrap().value, Some(50));
-        assert_eq!(part_value(worked, "project", "@review:GTD"), 25);
+        assert_eq!(part_value(worked, "project", "@review:PLAN"), 25);
         assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
-        assert_eq!(part_value(review_time, "project", "@review:GTD"), 25);
+        assert_eq!(part_value(review_time, "project", "@review:PLAN"), 25);
         assert_eq!(review_count.summary.total.as_ref().unwrap().value, Some(1));
-        assert_eq!(part_value(review_count, "project", "@review:GTD"), 1);
+        assert_eq!(part_value(review_count, "project", "@review:PLAN"), 1);
     }
 
     #[test]
@@ -1301,7 +1317,7 @@ mod tests {
         assert_eq!(dimension_total(worked, "root_parent"), 167);
         assert_eq!(part_value(worked, "root_parent", "sase.md"), 30);
         assert_eq!(part_value(worked, "root_parent", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "root_parent", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "root_parent", "@daily"), 35);
         assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
@@ -1316,7 +1332,7 @@ mod tests {
         assert_eq!(part_value(worked, "area", "@unfiled"), 15);
         assert_eq!(part_value(worked, "project", "sase.md"), 30);
         assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(worked, "project", "@review:PLAN"), 35);
         assert_eq!(part_value(worked, "project", "bob.md"), 10);
         assert_eq!(part_value(worked, "project", "dev.md"), 10);
         assert_eq!(part_value(worked, "project", "job.md"), 4);
@@ -1335,13 +1351,13 @@ mod tests {
             "sase_blog.md".to_string()
         );
         assert_eq!(report.homes["sase.md"].root_parent, "sase.md".to_string());
-        // Count mode: the BLOG session leads sase_blog, GTD+SASE leads sase.
+        // Count mode: the BLOG session leads sase_blog, PLAN+SASE leads sase.
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
         assert_eq!(dimension_total(sessions, "root_parent"), 8);
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "sase_blog.md"), 1);
-        assert_eq!(part_value(sessions, "root_parent", "@review:GTD"), 2);
+        assert_eq!(part_value(sessions, "root_parent", "@daily"), 2);
     }
 
     #[test]
@@ -1351,10 +1367,18 @@ mod tests {
             .expect("homes fixture computes");
         let review = report
             .homes
-            .get("@review:GTD")
+            .get("@review:PLAN")
             .expect("review bucket catalog entry");
-        assert_eq!(review.label, "GTD review");
-        assert_eq!(review.short_label.as_deref(), Some("GTD"));
+        assert_eq!(review.label, "PLAN review");
+        assert_eq!(review.short_label.as_deref(), Some("PLAN"));
+        let daily = report
+            .homes
+            .get("@daily")
+            .expect("daily root catalog entry");
+        assert_eq!(daily.label, "<daily>");
+        assert_eq!(daily.kind, HomeKind::Bucket);
+        assert_eq!(daily.hue, None);
+        assert_eq!(daily.short_label, None);
         for (key, entry) in &report.homes {
             if key.starts_with("@review:") {
                 continue;
@@ -1366,7 +1390,11 @@ mod tests {
         }
         let value = serde_json::to_value(&report).expect("report serializes");
         let catalog = value["homes"].as_object().unwrap();
-        assert_eq!(catalog["@review:GTD"]["short_label"], "GTD");
+        assert_eq!(catalog["@review:PLAN"]["short_label"], "PLAN");
+        assert_eq!(catalog["@daily"]["label"], "<daily>");
+        assert_eq!(catalog["@daily"]["kind"], "bucket");
+        assert!(catalog["@daily"]["hue"].is_null());
+        assert!(catalog["@daily"].get("short_label").is_none());
         assert!(
             catalog["sase.md"].get("short_label").is_none(),
             "non-review entries omit short_label"

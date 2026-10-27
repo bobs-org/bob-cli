@@ -1518,7 +1518,7 @@ mod tests {
                 has_pomodoros_heading: true,
                 closed_pomodoros: vec![
                     super::super::index::PomodoroSession {
-                        name: Some("GTD".to_string()),
+                        name: Some("PLAN".to_string()),
                         recorded_minutes: Some(25),
                         range_minutes: Some(25),
                         time_range: Some("0800-0825".to_string()),
@@ -1526,7 +1526,7 @@ mod tests {
                         links: Vec::new(),
                     },
                     super::super::index::PomodoroSession {
-                        name: Some("GTD + SASE".to_string()),
+                        name: Some("PLAN + SASE".to_string()),
                         recorded_minutes: Some(7),
                         range_minutes: Some(7),
                         time_range: Some("0900-0907".to_string()),
@@ -1542,7 +1542,7 @@ mod tests {
             evaluate_metric(&metric, &index, &[date(10)], date(11), None)
                 .unwrap();
         assert_eq!(result.values[0].value, Some(25));
-        assert_eq!(result.values[0].parts["theme"]["GTD"], 25);
+        assert_eq!(result.values[0].parts["theme"]["PLAN"], 25);
     }
 
     #[test]

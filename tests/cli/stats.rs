@@ -62,7 +62,7 @@ fn overview_json_is_ok_schema_one() {
         .expect("worked");
     assert_eq!(worked["chart"]["group"], "day");
     assert!(worked.get("daily_points").is_none());
-    assert_eq!(worked["points"][1]["parts_display"]["theme"]["GTD"], "29m");
+    assert_eq!(worked["points"][1]["parts_display"]["theme"]["PLAN"], "29m");
     let review_closed = metrics
         .iter()
         .find(|metric| metric["id"] == "review_closed")

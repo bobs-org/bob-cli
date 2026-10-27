@@ -116,7 +116,7 @@ Dataview re-scans `innerHTML`.
   otherwise it is `Today · queued in <session>`. If more than one open entry
   links the task, the primary entry is the running one, otherwise the first in
   ledger order, and the line ends in ` +N more`.
-- A named entry gives its name and, when timed, its range: `GTD 0725–0815` or
+- A named entry gives its name and, when timed, its range: `PLAN 0725–0815` or
   `BLOG`. An unnamed entry gives its derived Pomodoro home label (for example
   `bob · dev +1`) and its range when timed. If it has no derived label, use its
   range alone (`0940–1010`), or `unnamed Pomodoro` when untimed. Ranges use an
@@ -177,7 +177,7 @@ stated.
 
 | ID | Setup | Mark on T? |
 | --- | --- | --- |
-| TM1 | `\t- [[T#^fix]]` under the unique open timed entry `- [ ] (**0725-0815** [t:: 50m]) — GTD`, `s=*` | yes; tooltip `Today · running in GTD 0725–0815` |
+| TM1 | `\t- [[T#^fix]]` under the unique open timed entry `- [ ] (**0725-0815** [t:: 50m]) — PLAN`, `s=*` | yes; tooltip `Today · running in PLAN 0725–0815` |
 | TM2 | same link under placeholder `- [ ] () — BLOG`, `s=/` | yes; `Today · queued in BLOG` |
 | TM3 | `s=*` or `/`, no link in `D` (sticky lane) | no |
 | TM4 | only `\t- 🍅 [[T#^fix]]` under a closed `- [x]` entry | no |

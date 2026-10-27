@@ -625,7 +625,7 @@ fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
             "- [ ] () — BETA / ALPHA\n",
             "  - [[tasks#^shared]]\n",
             "  - [[tasks#^second]]\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "  - [[tasks#^exempt]]\n",
             "- [x] (0700-0730) — CLOSED\n",
             "  - [[tasks#^closed]]\n",

@@ -189,7 +189,7 @@ fn capture_pomodoro_start_creates_unnamed_when_no_placeholder() {
 #[test]
 fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
     let day_before =
-        "# Day\n\n## Pomodoros\n\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n";
+        "# Day\n\n## Pomodoros\n\n- [ ] () — PLAN\n\t- [[#^gtd]]\n\n## Tasks\n";
     let temp = TempDir::new("bob-cli-capture-start-named-new-placement");
     let vault = temp.path().join("vault");
     let target = vault.join("sase.md");
@@ -215,7 +215,7 @@ fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
     assert_eq!(json["pomodoro_start"]["pomodoro_line"], 5);
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
-        "# Day\n\n## Pomodoros\n\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\n\t- [[sase#^relaunch]]\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n",
+        "# Day\n\n## Pomodoros\n\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\n\t- [[sase#^relaunch]]\n- [ ] () — PLAN\n\t- [[#^gtd]]\n\n## Tasks\n",
     );
 
     let unnamed_before =
@@ -248,7 +248,7 @@ fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
     );
 
     let crlf_before =
-        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] () — GTD\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n";
+        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] () — PLAN\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n";
     let temp3 = TempDir::new("bob-cli-capture-start-crlf-placement");
     let vault3 = temp3.path().join("vault");
     write_file(&vault3.join("sase.md"), "# S\n## Tasks\n");
@@ -269,7 +269,7 @@ fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
     assert_success(&output3);
     assert_eq!(
         fs::read_to_string(&day3).expect("read day3"),
-        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\r\n\t- [[sase#^relaunch]]\r\n- [ ] () — GTD\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n",
+        "# Day\r\n\r\n## Pomodoros\r\n\r\n- [ ] (**0715-0805** [t:: 50m]) — RELAUNCH\r\n\t- [[sase#^relaunch]]\r\n- [ ] () — PLAN\r\n\t- [[#^gtd]]\r\n\r\n## Tasks\r\n",
     );
 
     let temp4 = TempDir::new("bob-cli-capture-named-create-placement");
@@ -292,7 +292,7 @@ fn capture_pomodoro_start_new_entry_uses_first_open_placement() {
     assert_success(&output4);
     assert_eq!(
         fs::read_to_string(&day4).expect("read day4"),
-        "# Day\n\n## Pomodoros\n\n- [ ] () — RELAUNCH\n\t- [[sase#^n1]]\n- [ ] () — GTD\n\t- [[#^gtd]]\n\n## Tasks\n",
+        "# Day\n\n## Pomodoros\n\n- [ ] () — RELAUNCH\n\t- [[sase#^n1]]\n- [ ] () — PLAN\n\t- [[#^gtd]]\n\n## Tasks\n",
     );
 }
 
@@ -602,7 +602,7 @@ fn capture_pomodoro_start_moves_to_current_slot_screenshot_repro() {
                 "\t\t- Started 0t4!\n",
                 "- [ ] () — SUBTABS\n",
                 "\t- [[sase#^agents-sub-tabs]]\n",
-                "- [ ] () — GTD\n",
+                "- [ ] () — PLAN\n",
                 "\t- [[#^gtd]]\n",
                 "- [ ] () — GOALS\n",
                 "\t- [[sase_goals#^research]]\n",
@@ -624,7 +624,7 @@ fn capture_pomodoro_start_moves_to_current_slot_screenshot_repro() {
             "\t- [[sase_goals#^research]]\n",
             "- [ ] () — SUBTABS\n",
             "\t- [[sase#^agents-sub-tabs]]\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
             "- [ ] () — SASE\n",
             "\t- [[sase#^recovery-panel]]\n",
@@ -729,7 +729,7 @@ fn capture_pomodoro_start_moves_named_destination_before_link_move() {
         concat!(
             "## Pomodoros\n",
             "- [x] (**0800-0825** [t:: 25m]) — DONE\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[sase_goals#^research]]\n",
             "\t\t- notes\n",
             "- [ ] () — GOALS\n",
@@ -754,7 +754,7 @@ fn capture_pomodoro_start_moves_named_destination_before_link_move() {
         serde_json::from_str(stdout(&output).trim()).expect("move JSON");
     assert_eq!(json["pomodoro_link_action"], "moved");
     assert_eq!(json["pomodoro_link_source"]["line"], 3);
-    assert_eq!(json["pomodoro_link_source"]["name"], "GTD");
+    assert_eq!(json["pomodoro_link_source"]["name"], "PLAN");
     assert_eq!(json["pomodoro_link_destination"]["name"], "GOALS");
     assert_eq!(
         json["pomodoro_link_destination"]["line"],
@@ -769,7 +769,7 @@ fn capture_pomodoro_start_moves_named_destination_before_link_move() {
             "- [ ] (**0905-0930** [t:: 25m]) — GOALS\n",
             "\t- [[sase_goals#^research]]\n",
             "\t\t- notes\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "- [ ] () — AFTER\n",
         )
     );
@@ -822,7 +822,7 @@ fn capture_pomodoro_start_unnamed_moves_between_done_and_review() {
     write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
     write_file(
         &day_file,
-        "## Pomodoros\n- [x] Done\n- [ ] Review inbox\n- [ ] () — GTD\n",
+        "## Pomodoros\n- [x] Done\n- [ ] Review inbox\n- [ ] () — PLAN\n",
     );
     let output = bob_command()
         .arg("capture")
@@ -845,7 +845,7 @@ fn capture_pomodoro_start_unnamed_moves_between_done_and_review() {
         concat!(
             "## Pomodoros\n",
             "- [x] Done\n",
-            "- [ ] (**0905-0930** [t:: 25m]) — GTD\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — PLAN\n",
             "  - [[sase#^w2]]\n",
             "- [ ] Review inbox\n",
         )
@@ -855,7 +855,7 @@ fn capture_pomodoro_start_unnamed_moves_between_done_and_review() {
     let vault2 = temp2.path().join("vault");
     let day2 = vault2.join("day.md");
     write_file(&vault2.join("sase.md"), "# S\n## Tasks\n");
-    write_file(&day2, "## Pomodoros\n- [ ] Review inbox\n- [ ] () — GTD\n");
+    write_file(&day2, "## Pomodoros\n- [ ] Review inbox\n- [ ] () — PLAN\n");
     let output2 = bob_command()
         .arg("capture")
         .arg("-b")
@@ -876,7 +876,7 @@ fn capture_pomodoro_start_unnamed_moves_between_done_and_review() {
         fs::read_to_string(&day2).expect("read day2"),
         concat!(
             "## Pomodoros\n",
-            "- [ ] (**0905-0930** [t:: 25m]) — GTD\n",
+            "- [ ] (**0905-0930** [t:: 25m]) — PLAN\n",
             "  - [[sase#^w2]]\n",
             "- [ ] Review inbox\n",
         )
@@ -984,7 +984,7 @@ fn capture_pomodoro_start_batch_adjusts_moved_entry() {
             "\t\t- Started 0t4!\n",
             "- [ ] () — SUBTABS\n",
             "\t- [[sase#^agents-sub-tabs]]\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
             "- [ ] () — GOALS\n",
             "\t- [[sase_goals#^research]]\n",
@@ -1018,7 +1018,7 @@ fn capture_pomodoro_start_batch_adjusts_moved_entry() {
             "\t- [[sase_goals#^research]]\n",
             "- [ ] () — SUBTABS\n",
             "\t- [[sase#^agents-sub-tabs]]\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
             "- [ ] () — SASE\n",
             "\t- [[sase#^recovery-panel]]\n",

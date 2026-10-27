@@ -807,7 +807,7 @@ fn capture_pomodoro_shift_reports_full_block() {
             "\t- [[sase#^re-launch-failed]]\n",
             "\t- [[sase#^clean-prompt-history]]\n",
             "\t- [[bob#^decision-web]]\n",
-            "- [ ] () — GTD\n",
+            "- [ ] () — PLAN\n",
             "\t- [[#^gtd]]\n",
         ),
     );
