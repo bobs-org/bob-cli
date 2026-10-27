@@ -188,10 +188,27 @@ pub(super) fn current_agent() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The stamp's `deployed_at` in real UTC, so the `Z` suffix is true on
+/// every host. `BOB_NOW` pins Bob's day-zone clock (tests), so a pinned
+/// time converts through the configured zone.
 pub(super) fn deploy_timestamp() -> String {
-    bob_env::current_datetime()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
+    use chrono::{Local, TimeZone, Utc};
+    let pinned = bob_env::var("BOB_NOW")
+        .ok()
+        .and_then(|value| bob_env::parse_datetime_override(&value));
+    let now = pinned
+        .and_then(|local| match bob_env::configured_timezone() {
+            Some(zone) => zone
+                .from_local_datetime(&local)
+                .earliest()
+                .map(|time| time.with_timezone(&Utc)),
+            None => Local
+                .from_local_datetime(&local)
+                .earliest()
+                .map(|time| time.with_timezone(&Utc)),
+        })
+        .unwrap_or_else(Utc::now);
+    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 pub(super) fn canonical_path(path: &Path) -> PathBuf {

@@ -779,6 +779,27 @@ fn repeat_noop_leaves_stamp_untouched() {
 }
 
 #[test]
+fn stamp_deployed_at_is_utc_not_the_day_zone_clock() {
+    let temp = TempDir::new("bob-cli-plugins-stamp-utc");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "timezone: America/New_York\n");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha", "alpha");
+    let (opts, _guard) = options(&repo, &vault);
+    let _zone =
+        TestEnvGuard::set(&[("BOB_CONFIG_FILE", Some(config.as_os_str()))]);
+    let report = sync_plugins(&opts);
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    let stamp: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(stamp_path(&vault, "alpha")).unwrap(),
+    )
+    .unwrap();
+    // BOB_NOW 14:30 in New York (EDT) is 18:30 UTC.
+    assert_eq!(stamp["deployed_at"], "2026-06-26T18:30:00Z");
+}
+
+#[test]
 fn malformed_stamp_refuses_changing_assets() {
     let temp = TempDir::new("bob-cli-plugins-stamp-bad");
     let repo = temp.path().join("repo");
