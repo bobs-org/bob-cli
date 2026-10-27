@@ -36,36 +36,6 @@ fn skip_pdf_text_render(test_name: &str) -> bool {
     false
 }
 
-fn skip_if_missing_note_profile_packages(vault: &std::path::Path) -> bool {
-    let output = bob_command()
-        .arg("highlights")
-        .arg("doctor")
-        .arg("--no-hooks")
-        .env("BOB_DIR", vault)
-        .output();
-    let Ok(output) = output else {
-        eprintln!("skipping vault-note diagram test: doctor failed to run");
-        return true;
-    };
-    let report = stdout(&output);
-    let Some(row) = report
-        .lines()
-        .find(|line| line.starts_with("latex_packages: "))
-    else {
-        return false;
-    };
-    if let Some(missing) = row
-        .strip_prefix("latex_packages: warn (missing ")
-        .and_then(|row| row.strip_suffix(')'))
-    {
-        eprintln!(
-            "skipping vault-note diagram test: missing TeX packages: {missing}"
-        );
-        return true;
-    }
-    false
-}
-
 fn pdf_haystack(path: &std::path::Path) -> String {
     // Callers gate on `skip_pdf_text_render`, which requires pdftotext.
     // There is no raw-bytes fallback: searching compressed PDF bytes for
@@ -421,7 +391,8 @@ fn highlights_create_snapshot_mermaid_success_and_failure_shape() {
         &vault.join("diagrams_area.md"),
         "---\ntype: [[area]]\n---\n# Diagrams Area\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
     );
-    if skip_if_missing_note_profile_packages(&vault) {
+    if skip_if_missing_note_profile_packages(&vault, "vault-note diagram test")
+    {
         return;
     }
     let fake = FakeDiagrams::new(&temp, "fake-diagrams");

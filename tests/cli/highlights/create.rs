@@ -8,53 +8,6 @@ use std::fs;
 use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
-/// `bob highlights doctor` runs `kpsewhich` over the same declared package
-/// list used by the note profile and reports any files it cannot find.
-fn note_profile_package_skip(
-    vault: &std::path::Path,
-) -> Result<Option<String>, String> {
-    let output = bob_command()
-        .arg("highlights")
-        .arg("doctor")
-        .arg("--no-hooks")
-        .env("BOB_DIR", vault)
-        .output()
-        .map_err(|error| format!("run highlights doctor: {error}"))?;
-    let report = stdout(&output);
-    let Some(row) = report
-        .lines()
-        .find(|line| line.starts_with("latex_packages: "))
-    else {
-        return Err(format!("doctor omitted latex_packages row:\n{report}"));
-    };
-    if let Some(missing) = row
-        .strip_prefix("latex_packages: warn (missing ")
-        .and_then(|row| row.strip_suffix(')'))
-    {
-        return Ok(Some(missing.to_string()));
-    }
-    if row.contains("kpsewhich not found") || row.contains("kpsewhich failed") {
-        return Err(row.to_string());
-    }
-    Ok(None)
-}
-
-fn skip_if_missing_note_profile_packages(vault: &std::path::Path) -> bool {
-    match note_profile_package_skip(vault) {
-        Ok(Some(missing)) => {
-            eprintln!(
-                "skipping vault-note real-render CLI test: missing TeX packages: {missing}"
-            );
-            true
-        }
-        Ok(None) => false,
-        Err(reason) => {
-            eprintln!("skipping vault-note real-render CLI test: {reason}");
-            true
-        }
-    }
-}
-
 /// The vault holds exactly these top-level entries, in sorted order.
 /// `-P` resolution requires a parent note, so dry-run and rejection
 /// tests seed `sase.md` and then prove nothing else was written.
@@ -7014,7 +6967,10 @@ fn highlights_create_renders_vault_note_snapshot_when_available() {
         &vault.join("harbor_area.md"),
         "---\ntype: [[area]]\n---\n# Harbor Area\n\n## Tasks\n\n- [ ] #task Write a short project brief\n",
     );
-    if skip_if_missing_note_profile_packages(&vault) {
+    if skip_if_missing_note_profile_packages(
+        &vault,
+        "vault-note real-render CLI test",
+    ) {
         return;
     }
 

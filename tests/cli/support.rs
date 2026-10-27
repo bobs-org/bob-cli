@@ -60,6 +60,75 @@ pub(crate) fn bob_command() -> Command {
     command
 }
 
+/// Return missing packages from `bob highlights doctor`, or an error when
+/// the package check itself cannot be trusted.
+pub(crate) fn note_profile_package_skip(
+    vault: &Path,
+) -> Result<Option<String>, String> {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", vault)
+        .output()
+        .map_err(|error| format!("run highlights doctor: {error}"))?;
+    let report = stdout(&output);
+    note_profile_package_skip_report(&report)
+}
+
+fn note_profile_package_skip_report(
+    report: &str,
+) -> Result<Option<String>, String> {
+    let Some(row) = report
+        .lines()
+        .find(|line| line.starts_with("latex_packages: "))
+    else {
+        return Err(format!("doctor omitted latex_packages row:\n{report}"));
+    };
+    if let Some(missing) = row
+        .strip_prefix("latex_packages: warn (missing ")
+        .and_then(|row| row.strip_suffix(')'))
+    {
+        return Ok(Some(missing.to_string()));
+    }
+    if row.contains("kpsewhich not found") || row.contains("kpsewhich failed") {
+        return Err(row.to_string());
+    }
+    Ok(None)
+}
+
+pub(crate) fn skip_if_missing_note_profile_packages(
+    vault: &Path,
+    test_name: &str,
+) -> bool {
+    match note_profile_package_skip(vault) {
+        Ok(Some(missing)) => {
+            eprintln!("skipping {test_name}: missing TeX packages: {missing}");
+            true
+        }
+        Ok(None) => false,
+        Err(reason) => {
+            eprintln!("skipping {test_name}: {reason}");
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod note_profile_package_skip_tests {
+    use super::note_profile_package_skip_report;
+
+    #[test]
+    fn note_profile_package_skip_reports_missing_packages() {
+        assert_eq!(
+            note_profile_package_skip_report(
+                "latex_packages: warn (missing titlesec.sty, needspace.sty)\n"
+            ),
+            Ok(Some("titlesec.sty, needspace.sty".to_string()))
+        );
+    }
+}
+
 pub(crate) fn write_capture_task_settings(vault: &Path) {
     write_file(
         &vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),

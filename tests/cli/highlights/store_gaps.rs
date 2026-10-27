@@ -218,6 +218,9 @@ fn store_snapshot_create_records_note_snapshot_route() {
         &vault.join("zk/harbor_cranes.md"),
         "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA source note.\n",
     );
+    if skip_if_missing_note_profile_packages(&vault, "snapshot route test") {
+        return;
+    }
     git_in(&vault, ["add", "-A"]);
     git_in(&vault, ["commit", "-q", "-m", "seed notes"]);
     git_in(&vault, ["push", "-q", "origin", "master"]);
