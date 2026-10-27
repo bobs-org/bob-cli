@@ -36,7 +36,9 @@ Usage: scripts/dev/highlights_coordination_acceptance [--self-test]
 No arguments: interactive guided run on the Mac (needs Highlights and two
 library PDFs you pick to copy; nothing is ever written outside $TMPDIR).
 After the original enablement verdict, a separate annotated-overwrite
-checklist records its own outcomes and never enables the key.
+checklist records its own outcomes and never enables the key. A third,
+separate checklist exercises rename and forced PDF publication in another
+scratch vault.
 
 --self-test: non-interactive plumbing check on any OS using the bob from
 this checkout (set BOB_BIN to use an installed bob instead).
@@ -135,6 +137,8 @@ bobr() {
 }
 
 init_git_vault() {
+    local vault_name=${vault##*/}
+    local origin=$root/$vault_name.origin.git
     git -C "$vault" init -q \
         || fail "cannot git-init scratch vault"
     # bob's vault-sync commits read the repository config; per-command -c
@@ -145,9 +149,9 @@ init_git_vault() {
         || fail "cannot configure scratch vault git identity"
     git -C "$vault" commit -q --allow-empty -m init \
         || fail "cannot seed scratch vault git history"
-    git init -q --bare "$root/origin.git" \
+    git init -q --bare "$origin" \
         || fail "cannot create scratch origin"
-    git -C "$vault" remote add origin "$root/origin.git" \
+    git -C "$vault" remote add origin "$origin" \
         || fail "cannot add scratch origin"
     git -C "$vault" push -q origin HEAD:refs/heads/master \
         || fail "cannot push scratch vault to scratch origin"
@@ -176,6 +180,104 @@ note_status() {
 marker_status() {
     bobr ref marker "$1" --bob-dir "$vault" 2>/dev/null \
         | sed -n 's/^- status: //p' | head -n 1
+}
+
+marker_id() {
+    bobr ref marker "$1" --bob-dir "$vault" 2>/dev/null \
+        | sed -n '/^marker_rendered:$/,$s/^- id: //p' \
+        | head -n 1 | tr -d '"\r'
+}
+
+ask_detail() {
+    # $1 = label recorded verbatim in the scratch results file.
+    local answer
+    printf '\n%s: ' "$1" >/dev/tty
+    read -r answer </dev/tty || fail "cannot read acceptance detail"
+    printf -- '- %s: %s\n' "$1" "${answer:-not recorded}" >>"$results"
+}
+
+set_note_id() {
+    # $1 = scratch note, $2 = intentionally stale id for repair coverage.
+    python3 -I - "$1" "$2" <<'EOF' || fail "cannot set scratch reference id"
+import pathlib, re, sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+parts = text.split("---", 2)
+if len(parts) != 3 or not text.startswith("---"):
+    raise SystemExit("note has no YAML frontmatter")
+front, count = re.subn(
+    r"(?m)^id:\s*.*$", f'id: "{sys.argv[2]}"', parts[1], count=1
+)
+if count == 0:
+    front = front.rstrip("\r\n") + f'\nid: "{sys.argv[2]}"\n'
+path.write_text("---" + front + "---" + parts[2], encoding="utf-8")
+EOF
+}
+
+setup_rename_install_vault() {
+    vault=$root/rename-install-vault
+    state_home=$root/rename-install-state
+    config_on=$root/rename-install-config-on.yml
+    config_off=$root/rename-install-config-off.yml
+    mkdir -p "$vault/lib" "$vault/ref" "$vault/xlib" "$state_home" \
+        || fail "cannot create rename/install scratch vault"
+    write_configs
+    init_git_vault
+    {
+        printf '\n## Rename and forced-publication scratch environment\n\n'
+        printf -- '- vault: `%s`\n- BOB_DIR: `%s`\n' "$vault" "$BOB_DIR"
+        printf -- '- config: `%s`\n- state: `%s`\n' "$BOB_CONFIG_FILE" "$XDG_STATE_HOME"
+        printf -- '- renames use `--offline` and the scratch vault only\n'
+    } >>"$results"
+}
+
+create_scratch_reference() {
+    # $1 = unique filename stem, $2 = title, optional $3 = marker id.
+    # Sets globals pdf and note.
+    local stem=$1 title=$2 marker_id=${3-} source=$root/$1.pdf
+    write_seed_pdf "$source"
+    bobr ref create "$source" --no-audio \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        --ref-type chat --title "$title" -P obsidian \
+        >>"$log" 2>&1 \
+        || { tail -n 60 "$log" >&2; fail "ref create for $stem failed (see $log)"; }
+    if [[ -f $vault/xlib/chat/$stem.pdf ]]; then
+        bobr ref scan --intake-only \
+            --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+            >>"$log" 2>&1 \
+            || fail "intake drain for $stem failed (see $log)"
+    fi
+    pdf=$vault/lib/chat/$stem.pdf
+    note=$vault/ref/chat/$stem.md
+    [[ -f $pdf && -f $note ]] \
+        || fail "ref create did not file $stem"
+    if [[ -n $marker_id ]]; then
+        set_note_id "$note" "$marker_id"
+        bobr ref sync "$pdf" --write-pdf --prefer frontmatter \
+            --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+            >>"$log" 2>&1 \
+            || { tail -n 60 "$log" >&2; fail "cannot seed marker id for $stem (see $log)"; }
+    fi
+    commit_vault "self-test create $stem"
+}
+
+create_force_output() {
+    # $1 = basename without extension. Sets pdf and companion_audio globals.
+    local stem=$1
+    mkdir -p "$root/publication" || fail "cannot create publication fixture dir"
+    pdf=$root/publication/$stem.pdf
+    companion_audio=$root/publication/$stem.mp3
+    write_seed_pdf "$root/$stem-initial.pdf"
+    printf 'acceptance audio before replacement: %s\n' "$stem" \
+        >"$root/$stem-initial.mp3" \
+        || fail "cannot write initial audio fixture"
+    bobr ref create "$root/$stem-initial.pdf" --output "$pdf" \
+        --audio "$root/$stem-initial.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || fail "cannot create forced-output fixture $stem (see $log)"
+    commit_vault "acceptance forced-output fixture $stem"
 }
 
 # --- --self-test (non-GUI plumbing, any OS) ---------------------------------
@@ -559,6 +661,97 @@ EOF
         || self_test_fail "replaced_capture hold wrote the PDF"
     checks=$((checks + 1)); self_test_ok "scan holds replaced_capture, writes nothing"
 
+    # 11. Clean full rename updates both the marker id and inbound links.
+    local rename_old=rename_acceptance rename_new=renamed_acceptance
+    create_scratch_reference "$rename_old" "Rename Acceptance" "$rename_old"
+    mkdir -p "$vault/zk" || self_test_fail "cannot create rename link directory"
+    printf '# Rename link\n\nSee [[ref/chat/%s]].\n' "$rename_old" \
+        >"$vault/zk/rename-pointer.md" \
+        || self_test_fail "cannot write rename pointer"
+    commit_vault "self-test rename pointer"
+    bobr ref rename "ref/chat/$rename_old" "$rename_new" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/rename.json" 2>>"$log" \
+        || { cat "$root/rename.json" >&2; self_test_fail "clean offline rename failed (see $log)"; }
+    [[ ! -e $vault/lib/chat/$rename_old.pdf && ! -e $vault/ref/chat/$rename_old.md ]] \
+        || self_test_fail "rename left the old PDF or note path"
+    [[ -f $vault/lib/chat/$rename_new.pdf && -f $vault/ref/chat/$rename_new.md ]] \
+        || self_test_fail "rename did not create the new PDF and note paths"
+    local renamed_marker_id
+    renamed_marker_id=$(marker_id "$vault/lib/chat/$rename_new.pdf")
+    if [[ $renamed_marker_id != "$rename_new" ]]; then
+        bobr ref marker "$vault/lib/chat/$rename_new.pdf" --bob-dir "$vault" >&2
+        self_test_fail "rename did not update the PDF marker id (expected $rename_new, found ${renamed_marker_id:-<missing>})"
+    fi
+    grep -Fq "[[ref/chat/$rename_new]]" "$vault/zk/rename-pointer.md" \
+        || self_test_fail "rename did not rewrite its inbound link"
+    grep -Fq "[[ref/chat/$rename_old]]" "$vault/zk/rename-pointer.md" \
+        && self_test_fail "rename left its old inbound link"
+    checks=$((checks + 1)); self_test_ok "rename moves the bundle, marker id, and inbound link"
+
+    # 12. Same-stem repair remains available on an annotated reference.
+    local repair_stem=id_repair_acceptance
+    create_scratch_reference "$repair_stem" "Id Repair Acceptance" \
+        stale_id_for_acceptance
+    cat >"$vault/lib/chat/$repair_stem.md" <<'EOF'
+## Page 1
+
+> Stable quote for id repair acceptance.
+EOF
+    bobr ref sync "$pdf" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "cannot import the id-repair annotation"
+    grep -Fq 'Stable quote for id repair acceptance.' "$note" \
+        || self_test_fail "id-repair fixture was not annotated"
+    commit_vault "self-test annotated reference before id repair"
+    bobr ref rename "ref/chat/$repair_stem" "$repair_stem" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/id-repair.json" 2>>"$log" \
+        || { cat "$root/id-repair.json" >&2; self_test_fail "same-stem id repair failed (see $log)"; }
+    python3 -I - "$root/id-repair.json" <<'EOF' \
+        || self_test_fail "id repair returned the wrong outcome"
+import json, sys
+response = json.load(open(sys.argv[1], encoding="utf-8"))
+assert response["ok"] is True, response
+assert response["outcome"] == "id_updated", response
+EOF
+    [[ $(marker_id "$pdf") == "$repair_stem" ]] \
+        || self_test_fail "id repair did not leave the PDF marker at the stem id"
+    grep -Eq "^id: [\"']?${repair_stem}[\"']?$" "$note" \
+        || self_test_fail "id repair did not restore the note id"
+    grep -Fq 'Stable quote for id repair acceptance.' "$note" \
+        || self_test_fail "id repair lost the existing annotation"
+    checks=$((checks + 1)); self_test_ok "same-stem repair updates an annotated reference id"
+
+    # 13. Forced exact-output publication replaces a PDF and its audio.
+    mkdir -p "$root/forced-output" || self_test_fail "cannot create output fixture dir"
+    local output_pdf=$root/forced-output/target.pdf
+    local output_audio=$root/forced-output/target.mp3
+    write_seed_pdf "$root/forced-initial.pdf"
+    write_titled_pdf "$root/forced-replacement.pdf" "Forced Replacement"
+    printf 'acceptance audio version one\n' >"$root/audio-one.mp3"
+    printf 'acceptance audio version two\n' >"$root/audio-two.mp3"
+    bobr ref create "$root/forced-initial.pdf" --output "$output_pdf" \
+        --audio "$root/audio-one.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "cannot create the forced-output fixture"
+    local old_output_digest
+    old_output_digest=$(md5sum <"$output_pdf" 2>/dev/null || md5 -q "$output_pdf")
+    cmp -s "$output_audio" "$root/audio-one.mp3" \
+        || self_test_fail "initial companion audio was not installed"
+    bobr ref create "$root/forced-replacement.pdf" --force --output "$output_pdf" \
+        --audio "$root/audio-two.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || self_test_fail "forced exact-output replacement failed (see $log)"
+    [[ $(md5sum <"$output_pdf" 2>/dev/null || md5 -q "$output_pdf") != "$old_output_digest" ]] \
+        || self_test_fail "forced publication did not replace the PDF"
+    cmp -s "$output_audio" "$root/audio-two.mp3" \
+        || self_test_fail "forced publication did not replace companion audio"
+    checks=$((checks + 1)); self_test_ok "forced exact-output publication replaces PDF and audio"
+
     banner 32 "✓" "SELF-TEST: $checks checks passed"
 }
 
@@ -744,7 +937,7 @@ EOF
 Pass when the background tab reloads in place with the highlight kept.
 Then bring it frontmost and repeat once more if you like; both must land.
 EOF
-    ask_outcome 3 tabs && pass_3=1 || true
+    if ask_outcome 3 tabs; then pass_3=1; fi
 
     # -- Step 4: half-typed popover ------------------------------------------
     banner 33 "4" "Step 4 — Half-typed popover"
@@ -775,7 +968,7 @@ Pass when bob HOLDS with "Highlights didn't answer within 10 s (a dialog
 may be open) · retrying next scan", writes nothing, and exits 0. Close
 the sheet afterwards; the next scan retries.
 EOF
-    ask_outcome 5 sheet && pass_5=1 || true
+    if ask_outcome 5 sheet; then pass_5=1; fi
 
     # -- Step 6: from SSH or cron ----------------------------------------------
     banner 33 "6" "Step 6 — From SSH or cron (no terminal)"
@@ -791,7 +984,7 @@ EOF
 Pass when the detached run reports the same outcome you would get here
 (write or a named hold) — the probe works without your login session.
 EOF
-    ask_outcome 6 remote && pass_6=1 || true
+    if ask_outcome 6 remote; then pass_6=1; fi
 
     # -- Step 7: large-PDF timing ----------------------------------------------
     banner 33 "7" "Step 7 — Large-PDF timing (~20 MB)"
@@ -1049,6 +1242,327 @@ EOF
         printf 'Full log: %s\n' "$root"
     } | tee -a "$results"
     banner 32 "✓" "Annotated overwrite checks complete — results in $results"
+    guided_rename_install
+}
+
+guided_rename_install() {
+    local log=$root/rename-install.log
+    : >"$log" || fail "cannot write rename/install log"
+    setup_rename_install_vault
+    {
+        printf '\n## Rename and forced-publication acceptance\n\n'
+        printf 'This is separate from the marker-write verdict and annotated-overwrite checklist.\n'
+        printf 'Only the second scratch vault, its config, and its state are used below.\n'
+    } >>"$results"
+
+    # -- Step 16: clean open-document rename -------------------------------
+    local old_stem=clean_rename new_stem=clean_rename_destination
+    create_scratch_reference "$old_stem" "Clean Rename Acceptance" "$old_stem"
+    local clean_pdf=$pdf clean_note=$note
+    mkdir -p "$vault/zk" || fail "cannot create rename pointer directory"
+    printf '# Rename pointer\n\nSee [[ref/chat/%s]].\n' "$old_stem" \
+        >"$vault/zk/rename-pointer.md" \
+        || fail "cannot create rename pointer"
+    commit_vault "acceptance clean rename pointer"
+    banner 33 "16" "Step 16 — Clean rename while the PDF is open"
+    cat <<EOF
+1. Open this scratch PDF in Highlights and note its current page:
+   $clean_pdf
+2. Keep the same tab open. Do not add an annotation for this clean case.
+3. Bob will rename it with --offline in the isolated scratch vault.
+4. After the rename, edit and save the open document, then confirm the old
+   PDF path is not recreated. Check that the inbound link and PDF marker id
+   use $new_stem.
+EOF
+    pause_enter
+    ask_detail "Clean rename page before"
+    printf '\n%s\n' "$(paint 36 "$ bob ref rename ref/chat/$old_stem $new_stem --offline")"
+    if bobr ref rename "ref/chat/$old_stem" "$new_stem" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/clean-rename.json" 2>>"$log"; then
+        cat "$root/clean-rename.json"
+    else
+        cat "$root/clean-rename.json" "$log"
+        fail "clean offline rename failed"
+    fi
+    local clean_new_pdf=$vault/lib/chat/$new_stem.pdf
+    local clean_new_note=$vault/ref/chat/$new_stem.md
+    [[ -f $clean_new_pdf && -f $clean_new_note \
+        && ! -e $clean_pdf && ! -e $clean_note ]] \
+        || fail "clean rename did not move the scratch bundle"
+    [[ $(marker_id "$clean_new_pdf") == "$new_stem" ]] \
+        || fail "clean rename did not update the PDF marker id"
+    grep -Fq "[[ref/chat/$new_stem]]" "$vault/zk/rename-pointer.md" \
+        || fail "clean rename did not update the inbound link"
+    printf 'New PDF: %s\nMarker id: %s\nInbound link: ' \
+        "$clean_new_pdf" "$(marker_id "$clean_new_pdf")"
+    sed -n 's/^See //p' "$vault/zk/rename-pointer.md"
+    cat <<'EOF'
+After saving from Highlights, inspect the scratch vault: the new PDF must
+contain the edit and there must be no old PDF path.
+EOF
+    pause_enter
+    ask_detail "Clean rename page after"
+    ask_detail "Clean rename same tab followed the move"
+    ask_detail "Clean rename conflict dialog appeared"
+    ask_detail "Clean rename later save landed at the new path"
+    ask_detail "Clean rename old PDF was not recreated"
+    ask_outcome 16 clean-open-document-rename || true
+
+    # -- Step 17: saved-first full-rename hold -----------------------------
+    local hold_stem=rename_saved_annotation
+    create_scratch_reference "$hold_stem" "Full Rename Hold Acceptance"
+    local hold_pdf=$pdf hold_note=$note hold_new=$vault/lib/chat/${hold_stem}_renamed.pdf
+    local note_before head_before pdf_before
+    note_before=$(md5sum <"$hold_note" 2>/dev/null || md5 -q "$hold_note")
+    head_before=$(git -C "$vault" rev-parse HEAD)
+    pdf_before=$(md5sum <"$hold_pdf" 2>/dev/null || md5 -q "$hold_pdf")
+    banner 33 "17" "Step 17 — Saved annotation holds a full rename"
+    cat <<EOF
+1. Open this clean scratch PDF in Highlights:
+   $hold_pdf
+2. Add an annotation and leave it unsaved.
+3. Bob will request a save during the rename. The newly saved PDF must stay
+   at its old path; Bob must not move the bundle, rewrite the note/link, or
+   commit a partial rename. The error should offer a manual sync/retry.
+EOF
+    pause_enter
+    printf '\n%s\n' "$(paint 36 "$ bob ref rename ref/chat/$hold_stem ${hold_stem}_renamed --offline")"
+    if bobr ref rename "ref/chat/$hold_stem" "${hold_stem}_renamed" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/full-rename-hold.json" 2>>"$log"; then
+        fail "full rename unexpectedly succeeded after a saved annotation"
+    fi
+    cat "$root/full-rename-hold.json"
+    python3 -I - "$root/full-rename-hold.json" <<'EOF' \
+        || fail "full rename returned no retryable preimage error"
+import json, sys
+response = json.load(open(sys.argv[1], encoding="utf-8"))
+assert response.get("ok") is False, response
+assert response.get("error", {}).get("code") in {
+    "preimage_changed", "marker_changed"
+}, response
+assert response["error"].get("hint"), response
+EOF
+    [[ -f $hold_pdf && ! -e $hold_new ]] \
+        || fail "held full rename moved or removed its PDF"
+    [[ $(md5sum <"$hold_pdf" 2>/dev/null || md5 -q "$hold_pdf") != "$pdf_before" ]] \
+        || fail "Highlights did not save an observable PDF change before the hold"
+    [[ $(md5sum <"$hold_note" 2>/dev/null || md5 -q "$hold_note") == "$note_before" ]] \
+        || fail "held full rename changed the reference note"
+    [[ $(git -C "$vault" rev-parse HEAD) == "$head_before" ]] \
+        || fail "held full rename committed a Bob change"
+    printf 'The source remains at %s; destination is absent; Git HEAD is unchanged.\n' "$hold_pdf"
+    cat <<'EOF'
+Now sync the saved annotation, then retry the full filename rename. The
+existing annotated-reference refusal should remain in force.
+EOF
+    pause_enter
+    bobr ref sync "$hold_pdf" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || fail "could not sync the annotation saved during rename"
+    commit_vault "acceptance sync saved rename annotation"
+    if bobr ref rename "ref/chat/$hold_stem" "${hold_stem}_renamed" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/annotated-rename-refusal.json" 2>>"$log"; then
+        fail "full rename unexpectedly accepted the now-annotated reference"
+    fi
+    cat "$root/annotated-rename-refusal.json"
+    python3 -I - "$root/annotated-rename-refusal.json" <<'EOF' \
+        || fail "synced annotation did not receive the existing rename refusal"
+import json, sys
+response = json.load(open(sys.argv[1], encoding="utf-8"))
+assert response.get("ok") is False, response
+assert response.get("error", {}).get("code") == "has_highlights", response
+EOF
+    [[ -f $hold_pdf && ! -e $hold_new ]] \
+        || fail "annotated rename refusal changed the bundle paths"
+    ask_outcome 17 full-rename-saved-first-hold || true
+
+    # -- Step 18: same-stem repair keeps a saved annotation -----------------
+    local repair_stem=annotated_id_repair
+    create_scratch_reference "$repair_stem" "Annotated Id Repair Acceptance" \
+        stale_id_for_open_pdf_repair
+    local repair_pdf=$pdf repair_note=$note
+    cat >"$vault/lib/chat/$repair_stem.md" <<'EOF'
+## Page 1
+
+> Existing annotation retained during id repair.
+EOF
+    bobr ref sync "$repair_pdf" \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >>"$log" 2>&1 \
+        || fail "cannot prepare the annotated id-repair fixture"
+    grep -Fq 'Existing annotation retained during id repair.' "$repair_note" \
+        || fail "id-repair fixture did not import its existing annotation"
+    commit_vault "acceptance annotated stale-id fixture"
+    banner 33 "18" "Step 18 — Same-stem id repair keeps saved annotations"
+    cat <<EOF
+1. Open this already-annotated scratch PDF in Highlights:
+   $repair_pdf
+2. Add another annotation and leave it unsaved.
+3. Bob will run: bob ref rename ref/chat/$repair_stem $repair_stem --offline.
+   The note and PDF marker start with a stale id; the filename's expected id
+   is $repair_stem. Highlights must save first, Bob must repair the id and
+   keep the saved annotation, and a later edit/save must not restore the old id.
+EOF
+    pause_enter
+    printf '\n%s\n' "$(paint 36 "$ bob ref rename ref/chat/$repair_stem $repair_stem --offline")"
+    if bobr ref rename "ref/chat/$repair_stem" "$repair_stem" --offline \
+        --format json --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/id-repair-acceptance.json" 2>>"$log"; then
+        cat "$root/id-repair-acceptance.json"
+    else
+        cat "$root/id-repair-acceptance.json" "$log"
+        fail "same-stem annotated id repair failed"
+    fi
+    python3 -I - "$root/id-repair-acceptance.json" <<'EOF' \
+        || fail "same-stem repair returned the wrong outcome"
+import json, sys
+response = json.load(open(sys.argv[1], encoding="utf-8"))
+assert response.get("ok") is True, response
+assert response.get("outcome") == "id_updated", response
+EOF
+    [[ $(marker_id "$repair_pdf") == "$repair_stem" ]] \
+        || fail "same-stem repair did not write the filename id"
+    grep -Eq "^id: [\"']?${repair_stem}[\"']?$" "$repair_note" \
+        || fail "same-stem repair did not restore the note id"
+    printf 'Marker id after repair: %s\n' "$(marker_id "$repair_pdf")"
+    printf 'The note still contains: '
+    grep -F 'Existing annotation retained during id repair.' "$repair_note"
+    cat <<'EOF'
+Now make a later edit in Highlights and save. Press Enter after the save so
+the kit can read the marker again and confirm the id still follows the stem.
+EOF
+    pause_enter
+    [[ $(marker_id "$repair_pdf") == "$repair_stem" ]] \
+        || fail "a later Highlights save reverted the repaired id"
+    ask_detail "Same-stem id repair later save preserved the annotation"
+    ask_outcome 18 annotated-same-stem-id-repair || true
+
+    # -- Step 19: changed destination holds before PDF/audio publication ----
+    create_force_output forced_hold
+    local force_hold_pdf=$pdf force_hold_audio=$companion_audio
+    write_titled_pdf "$root/forced_hold-replacement.pdf" "Forced Hold Replacement"
+    printf 'replacement audio: forced hold\n' >"$root/forced_hold-replacement.mp3" \
+        || fail "cannot write replacement audio fixture"
+    local force_hold_pdf_before force_hold_head force_hold_status
+    force_hold_pdf_before=$(md5sum <"$force_hold_pdf" 2>/dev/null || md5 -q "$force_hold_pdf")
+    force_hold_head=$(git -C "$vault" rev-parse HEAD)
+    force_hold_status=$(git -C "$vault" status --porcelain=v1 --untracked-files=all)
+    banner 33 "19" "Step 19 — Forced replacement holds after a saved edit"
+    cat <<EOF
+1. Open this scratch output in Highlights:
+   $force_hold_pdf
+2. Add an annotation and leave it unsaved. Bob will attempt a forced
+   replacement with new companion audio. Highlights should save first, then
+   Bob should hold without replacing either the PDF or audio.
+EOF
+    pause_enter
+    if bobr ref create "$root/forced_hold-replacement.pdf" --force \
+        --output "$force_hold_pdf" --audio "$root/forced_hold-replacement.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/forced-hold.out" 2>"$root/forced-hold.err"; then
+        fail "forced replacement unexpectedly overwrote a changed destination"
+    fi
+    cat "$root/forced-hold.out" "$root/forced-hold.err"
+    [[ $(md5sum <"$force_hold_pdf" 2>/dev/null || md5 -q "$force_hold_pdf") != "$force_hold_pdf_before" ]] \
+        || fail "Highlights did not save an observable change before the replacement hold"
+    cmp -s "$force_hold_audio" "$root/forced_hold-initial.mp3" \
+        || fail "held forced replacement changed companion audio"
+    [[ $(git -C "$vault" rev-parse HEAD) == "$force_hold_head" ]] \
+        || fail "held forced replacement committed a Bob change"
+    [[ $(git -C "$vault" status --porcelain=v1 --untracked-files=all) == "$force_hold_status" ]] \
+        || fail "held forced replacement changed vault metadata or queue state"
+    ask_outcome 19 forced-replacement-saved-change-hold || true
+
+    # -- Step 20: unchanged existing output replaces and reloads ------------
+    create_force_output forced_success
+    local force_success_pdf=$pdf force_success_audio=$companion_audio
+    write_titled_pdf "$root/forced_success-replacement.pdf" "Forced Success Replacement"
+    printf 'replacement audio: forced success\n' >"$root/forced_success-replacement.mp3" \
+        || fail "cannot write successful replacement audio fixture"
+    local force_success_pdf_before
+    force_success_pdf_before=$(md5sum <"$force_success_pdf" 2>/dev/null || md5 -q "$force_success_pdf")
+    banner 33 "20" "Step 20 — Unchanged forced replacement reloads the open tab"
+    cat <<EOF
+1. Open this scratch output in Highlights and note its page:
+   $force_success_pdf
+2. Do not edit it. Bob will replace it and its audio under coordination.
+3. Pass when the same tab reloads with the replacement, no conflict appears,
+   and a later save stays at this output path.
+EOF
+    pause_enter
+    ask_detail "Forced replacement page before"
+    bobr ref create "$root/forced_success-replacement.pdf" --force \
+        --output "$force_success_pdf" --audio "$root/forced_success-replacement.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/forced-success.out" 2>"$root/forced-success.err" \
+        || { cat "$root/forced-success.out" "$root/forced-success.err"; fail "unchanged forced replacement failed"; }
+    cat "$root/forced-success.out" "$root/forced-success.err"
+    [[ $(md5sum <"$force_success_pdf" 2>/dev/null || md5 -q "$force_success_pdf") != "$force_success_pdf_before" ]] \
+        || fail "forced replacement did not change the PDF"
+    cmp -s "$force_success_audio" "$root/forced_success-replacement.mp3" \
+        || fail "forced replacement did not publish its companion audio"
+    cat <<'EOF'
+Edit and save the reloaded document, then confirm no conflict dialog and
+that the replacement still exists at the output path.
+EOF
+    pause_enter
+    ask_detail "Forced replacement page after"
+    ask_detail "Forced replacement same tab reloaded"
+    ask_detail "Forced replacement conflict dialog appeared"
+    ask_detail "Forced replacement later save stayed at the output path"
+    ask_outcome 20 forced-replacement-reloads || true
+
+    # -- Step 21: blocked presenter times out without publication -----------
+    create_force_output forced_blocked
+    local blocked_pdf=$pdf blocked_audio=$companion_audio
+    write_titled_pdf "$root/forced_blocked-replacement.pdf" "Forced Timeout Replacement"
+    printf 'replacement audio: forced timeout\n' >"$root/forced_blocked-replacement.mp3" \
+        || fail "cannot write timeout replacement audio fixture"
+    local blocked_pdf_before blocked_audio_before blocked_head blocked_status
+    blocked_pdf_before=$(md5sum <"$blocked_pdf" 2>/dev/null || md5 -q "$blocked_pdf")
+    blocked_audio_before=$(md5sum <"$blocked_audio" 2>/dev/null || md5 -q "$blocked_audio")
+    blocked_head=$(git -C "$vault" rev-parse HEAD)
+    blocked_status=$(git -C "$vault" status --porcelain=v1 --untracked-files=all)
+    banner 33 "21" "Step 21 — Blocked Highlights save times out cleanly"
+    cat <<EOF
+1. Open this scratch output in Highlights:
+   $blocked_pdf
+2. Open a modal sheet that prevents the document from saving (for example,
+   Preferences or File > Print) and leave it open.
+3. Run the forced replacement. It should time out with no PDF, audio, or
+   scratch-vault publication. Close the sheet after the result.
+EOF
+    pause_enter
+    if bobr ref create "$root/forced_blocked-replacement.pdf" --force \
+        --output "$blocked_pdf" --audio "$root/forced_blocked-replacement.mp3" -P obsidian \
+        --bob-dir "$vault" --lib-dir lib --ref-dir ref --xlib-dir xlib \
+        >"$root/forced-timeout.out" 2>"$root/forced-timeout.err"; then
+        fail "blocked forced replacement unexpectedly succeeded"
+    fi
+    cat "$root/forced-timeout.out" "$root/forced-timeout.err"
+    grep -Eqi 'coordination_timeout|didn.t answer|timed out' \
+        "$root/forced-timeout.out" "$root/forced-timeout.err" \
+        || fail "blocked replacement did not report a coordination timeout"
+    [[ $(md5sum <"$blocked_pdf" 2>/dev/null || md5 -q "$blocked_pdf") == "$blocked_pdf_before" ]] \
+        || fail "blocked forced replacement changed the PDF"
+    [[ $(md5sum <"$blocked_audio" 2>/dev/null || md5 -q "$blocked_audio") == "$blocked_audio_before" ]] \
+        || fail "blocked forced replacement changed companion audio"
+    [[ $(git -C "$vault" rev-parse HEAD) == "$blocked_head" ]] \
+        || fail "blocked forced replacement committed a Bob change"
+    [[ $(git -C "$vault" status --porcelain=v1 --untracked-files=all) == "$blocked_status" ]] \
+        || fail "blocked forced replacement changed vault metadata or queue state"
+    ask_outcome 21 blocked-forced-replacement-timeout || true
+
+    {
+        printf '\nThis checklist records only rename and forced-publication behavior.\n'
+        printf 'It does not change the original marker-write enablement verdict or annotated-overwrite results.\n'
+        printf 'Full log: %s\n' "$log"
+    } | tee -a "$results"
+    banner 32 "✓" "Rename and forced-publication acceptance complete — results in $results"
 }
 
 if [[ ${1-} == --self-test ]]; then

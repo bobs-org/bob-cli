@@ -766,16 +766,20 @@ for how marker writes behave when a PDF is open.
 
 ## PDFs open in Highlights
 
-When `highlights.coordinate_pdf_writes` is on, `bob ref scan --write-pdfs` and
-`bob ref sync --write-pdf` wrap each PDF whose plan needs a marker write in one
-bounded macOS file-coordination write (`NSFileCoordinator`, `.forMerging`).
-Highlights saves unsaved annotations first, bob re-checks the marker in those
-fresh bytes, writes on top of them, and Highlights reloads the same tab in
-place. Create-time ingest uses the same executor.
+When `highlights.coordinate_pdf_writes` is on, marker-writing scans and syncs
+wrap each PDF write in one bounded macOS file-coordination request
+(`NSFileCoordinator`, `.forMerging`). Highlights saves unsaved annotations
+first, bob re-checks the marker in those fresh bytes, writes on top of them,
+and Highlights reloads the same tab in place. Create-time ingest and public
+PDF installation use the same guarded publication boundary.
 
 The key defaults to off until a guided acceptance test on the Mac passes. On
 Linux the key is accepted and inert: there is no OS coordination, and the
 reading probe always reports not reading unless an internal override is set.
+With the key off or on a non-Mac host, explicit rename and create keep their
+direct-write behavior; that does not guarantee safety for an open PDF. When
+coordination is enabled on macOS, a timeout or error never authorizes a direct
+write.
 
 ### Holds
 
@@ -801,6 +805,39 @@ Verbose scan (`-v`) prints `pdf_write_coordination: on` and a `reading_hold`
 line when the key is on, then `pdf_marker_action: updated (coordinated in 0.42
 s)` or `held (<reason>; retrying next scan)`. `bob ref sync` uses the same
 phrases and still exits 0 on a hold.
+
+### Explicit rename and capture publication
+
+`bob ref rename` and capture commands that publish a PDF use error results for
+coordination holds and exit nonzero. JSON-mode `bob ref rename` keeps its
+schema-version-1 envelope with `ok: false` and
+`error: {code, message, hint}`; a hold cannot appear as `unchanged`,
+`id_updated`, or a successful move. Capture commands use their existing
+message and hint. The hint asks for a manual retry or sync. A later scan does
+not retry an explicit rename or create.
+
+On an enabled Mac, a full filename rename uses one bounded move request for
+the whole transaction. Highlights saves first, then Bob checks the saved PDF
+and notifies the open document of a successful move (and any rollback move).
+If the PDF changed while Bob waited, the full rename conservatively holds with
+`preimage_changed` or `marker_changed`, even when the marker stayed the same.
+Bob leaves its note, links, moves, and commit untouched. Run `bob ref scan -w`
+to sync the saved annotations, then retry if the reference remains eligible;
+the existing full-rename rule still refuses annotated references.
+
+A same-stem `bob ref rename <REF> <current-stem>` id repair uses a merging
+request instead. It can retain annotations Highlights saves while Bob waits,
+then re-reads the saved PDF and repairs the id only when the marker and narrow
+sync plan remain safe. A changed marker or unsafe plan holds without Bob writes.
+This does not make a full filename rename eligible for annotated references.
+
+When a capture replaces an existing public PDF, Bob checks the destination
+again inside one bounded request before publishing the PDF and companion
+audio. A newly saved destination holds with `preimage_changed` or
+`marker_changed`; `--force` grants overwrite permission for the planned target
+but does not discard a change saved while Bob waited. A hold publishes no PDF,
+audio, source pointer, or ingest/queue entry. New destinations publish with
+no-clobber semantics.
 
 ### `-a, --attended`
 
@@ -869,10 +906,13 @@ pass/fail in `results.md`. The closing verdict prints the enable line
 above when steps 2, 3, 5, and 6 pass; it keeps the key off and flags
 Plan B if annotations are lost or a dialog appears.
 
-`--self-test` runs the non-GUI plumbing anywhere without Highlights
-(scratch vault, coordinated write, receipt, hold, `-a`, dry-run rule,
-annotated overwrite refusal or dry-run preview, and a simulated
-`replaced_capture` hold) and is wired into `just check-scripts`.
+`--self-test` runs non-GUI plumbing anywhere without Highlights. It also
+checks a clean reference rename (including its marker id and an inbound link),
+same-stem id repair on an annotated reference, and forced publication to an
+existing output. These exercise the CLI routes in an isolated scratch vault;
+on non-Mac hosts the coordination key is inert, so they do not verify
+open-document behavior. The self-test remains wired into
+`just check-scripts`.
 
 The same kit then walks annotated overwrite as a second, separate
 checklist. Those steps do not certify the original enablement verdict.
@@ -885,6 +925,19 @@ mutations; a late save into the still-open archived PDF; and scan holding
 when the exact old bytes reappear at the live path. Record outcomes in
 the scratch `results.md`. Bryan performs the real Highlights steps on the
 Mac; Linux self-test covers only the offline plumbing.
+
+The kit then runs a third checklist in a separate scratch vault, config, and
+state directory, with `BOB_DIR` matching that vault and every rename using
+`--offline`. It records clean open-document rename (including a later save to
+the new path, marker id, inbound links, same-tab behavior, and page position),
+the saved-first hold for a full rename followed by the existing annotated
+rename refusal, same-stem id repair with unsaved annotations, and forced
+replacement of an existing output. The replacement checks cover an unsaved
+change holding before PDF/audio publication, an unchanged destination being
+replaced and reloaded, and a blocked save timing out without Bob changes. This
+checklist has its own results section; it does not change the marker-write
+enablement verdict or annotated-overwrite results. Real Highlights acceptance
+requires Bryan's interactive Mac session.
 
 ### Mac notification
 

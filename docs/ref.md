@@ -863,21 +863,38 @@ companions; it updates inbound vault links and the note's `source_pdf`,
 follow the new stem. If another reference already records that id, Bob picks
 the first free `<stem>_2`, `<stem>_3`, and so on; the bare stem is checked
 against other ids, and suffixed ids are checked against other ids and stems.
-Id-less references stay id-less. An id change rewrites the PDF marker, so close
-the PDF in Highlights first. The title, `source_url`, dates, and reading task
-block ID stay. Same-stem `bob ref rename <REF> <current-stem>` repairs a
-mismatched id, including on annotated references, and reports
-`outcome: "id_updated"`; an already-correct id returns `unchanged`. After an
-id change, `bob ref find <old id>` no longer resolves. Links in browser
-bookmarks and copied `obsidian://` or `highlights://` URIs are outside the
-vault and cannot be updated.
+Id-less references stay id-less. An id change rewrites the PDF marker. On
+macOS with `highlights.coordinate_pdf_writes: true`, rename asks Highlights to
+save first and keeps an open document following the move. With the key off, or
+on other hosts, rename keeps its direct-write behavior and does not guarantee
+safety for an open PDF. The title, `source_url`, dates, and reading task block
+ID stay. Same-stem `bob ref rename <REF> <current-stem>` repairs a mismatched
+id, including on annotated references, and reports `outcome: "id_updated"`; an
+already-correct id returns `unchanged`. On an enabled Mac, same-stem repair
+also saves first and retains newly saved annotations when the marker is
+unchanged. After an id change, `bob ref find <old id>` no longer resolves.
+Links in browser bookmarks and copied `obsidian://` or `highlights://` URIs
+are outside the vault and cannot be updated.
 
 Machine-readable refusal codes are `unknown_reference`,
 `ambiguous_reference`, `legacy_reference`, `intake_reference`, `invalid_name`,
 `name_taken`, `has_highlights`, `listen_card_link`, `not_in_sync`,
 `dirty_paths`, `not_a_worktree`, `vault_mismatch`, `lock_busy`, `scan_busy`,
-`sync_failed`, and `verify_failed`. JSON errors use the shared schema-version-1 envelope with an
-`error` object containing `code`, `message`, and optional `hint`.
+`coordination_timeout`, `coordination_failed`, `marker_changed`,
+`preimage_changed`, `sync_failed`, and `verify_failed`. Coordination and
+preimage refusals exit nonzero and return the schema-version-1 error envelope;
+they never report a hold as `unchanged`, `id_updated`, or a successful move.
+For a full filename rename, any PDF save while Bob waits is held
+conservatively, even if its marker is unchanged. Run `bob ref scan -w` to sync
+the saved annotations, then retry only if the reference remains eligible; an
+annotated reference continues to receive the existing full-rename refusal.
+Error hints give a manual retry or sync action. Rename and create do not retry
+automatically on a later scan. With the key off or on a non-Mac host, these
+commands retain direct-write behavior. If enabled macOS coordination fails or
+holds, Bob does not fall back to a direct write.
+
+JSON errors use the shared schema-version-1 envelope with an `error` object
+containing `code`, `message`, and optional `hint`.
 
 ### Live write flow
 
@@ -921,14 +938,16 @@ rewrites.
 
 ### Renaming while the PDF is open in Highlights
 
-Acceptance (Mac, 2026-10-15): a scratch-vault script renamed a PDF while it was
-open in Highlights. Result: PASS — Highlights did not recreate the old PDF or
-note path, so the `confirm` fallback never triggers. The motivating live rename
+**Historical acceptance (Mac, 2026-10-15; before id rewriting and coordinated
+PDF writes):** a scratch-vault script renamed a PDF while it was open in
+Highlights. Result: PASS — Highlights did not recreate the old PDF or note
+path, so the `confirm` fallback never triggered. The motivating live rename
 (`442a6bf555914893e9891c11519de94f` → `karpathy_llm_wiki`) then committed
 cleanly in the live vault with pre/post sync OK; verification confirmed the old
 paths absent, the new paths present, and a follow-up dry run unchanged with the
-frontmatter `id` and reading-task `^ref` preserved. Recorded from
-`bob-cli-7x.6`.
+reading-task `^ref` preserved. This run does not verify id rewriting or the
+current coordination contract. Use the [coordination acceptance
+kit](highlights-ref-sync.md#acceptance-kit) for those checks.
 
 ### Rollback runbook
 
