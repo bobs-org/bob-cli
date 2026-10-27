@@ -529,16 +529,14 @@ fn real_zsh_first_tab_completes() {
     write_file(&dir.join("driver.zsh"), driver);
     let mut command = Command::new("zsh");
     command.arg("-f").arg(dir.join("driver.zsh")).arg(dir);
+    command.env("BOB_COMPLETE_DEADLINE_MS", BOB_COMPLETION_TEST_DEADLINE_MS);
     let output = match try_output_with_timeout(command, 30) {
         Ok(output) => output,
-        Err(error) => {
-            println!("skipped: zpty hung ({error})");
-            return;
-        }
+        Err(error) => panic!("zpty readiness deadline exceeded: {error}"),
     };
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if stdout.contains("ZPTY-MISSING") || stdout.contains("SETUP-READ-FAILED") {
+    if stdout.contains("ZPTY-MISSING") {
         println!("skipped: zsh/zpty not usable on this host");
         return;
     }
@@ -569,33 +567,50 @@ fn real_zsh_first_tab_completes() {
 /// the two.)
 const ZPTY_DRIVER: &str = r#"
 zmodload zsh/zpty || { print "ZPTY-MISSING"; exit 2 }
+zmodload zsh/zselect || { print "ZSELECT-MISSING"; exit 2 }
 TMP=$1
 shift
+typeset -i deadline=$((SECONDS + 25))
+READ_RESULT=
+PTY_FD=
+wait_for() {
+  local expected=$1 expected2=$2 remaining chunk
+  READ_RESULT=
+  while true; do
+    if chunk=$(zpty -rt pb); then
+      READ_RESULT+=$chunk
+      if [[ $READ_RESULT == *"$expected"* && ( -z "$expected2" || $READ_RESULT == *"$expected2"* ) ]]; then
+        return 0
+      fi
+    fi
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || { print -r -- "READINESS TIMEOUT: $READ_RESULT"; return 1; }
+    zselect -t 10 "$PTY_FD" || true
+  done
+}
 zpty -d pb 2>/dev/null
-zpty pb zsh -f
-sleep 1
-zpty -w pb "export PATH=\"$TMP:$PATH\""
-sleep 0.3
+zpty -b pb zsh -f
+PTY_FD=$REPLY
+zpty -w pb "PS1='ZP> '; export PATH=\"$TMP:$PATH\""
 zpty -w pb "fpath=($TMP \$fpath)"
-sleep 0.3
 # -i skips compaudit's interactive insecure-directory prompt so the test is
 # hermetic on any host; it does not change how completion renders.
-zpty -w pb "autoload -Uz compinit && compinit -D -i && echo COMPINIT-DONE"
-zpty -r -t 15 pb setup '*COMPINIT-DONE*' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 0 }
+zpty -w pb "autoload -Uz compinit && compinit -D -i && print -r -- COMPINIT-DONE"
+wait_for COMPINIT-DONE '' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 1 }
 print -r -- "SETUP OK"
 zpty -w -n pb $'bob capture-task\t'
-if zpty -r -t 10 pb tab1 '*capture-task-sections*' 2>/dev/null; then print -r -- "FIRST-TAB OK"; else print -r -- "FIRST-TAB MISS"; fi
+if wait_for capture-task-sections ''; then print -r -- "FIRST-TAB OK"; else print -r -- "FIRST-TAB MISS"; fi
 zpty -w -n pb $'\x03'
-sleep 0.5
+wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture -\t'
-if zpty -r -t 10 pb tab2 '*--route*' 2>/dev/null; then print -r -- "DASH-TAB OK"; else print -r -- "DASH-TAB MISS"; fi
+if wait_for --route ''; then print -r -- "DASH-TAB OK"; else print -r -- "DASH-TAB MISS"; fi
 zpty -w -n pb $'\x03'
-sleep 0.5
+wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture --format \t'
-if zpty -r -t 10 pb tab3 '*human*' 2>/dev/null; then print -r -- "FORMAT-TAB OK"; else print -r -- "FORMAT-TAB MISS"; fi
+if wait_for human ''; then print -r -- "FORMAT-TAB OK"; else print -r -- "FORMAT-TAB MISS"; fi
 zpty -w -n pb $'\x03'
-sleep 0.5
+wait_for 'ZP>' '' || { print -r -- "PROMPT-READ-FAILED"; zpty -d pb; exit 1 }
 zpty -w -n pb $'bob capture --format \t'
-if zpty -r -t 10 pb tab4 '*format*' 2>/dev/null; then print -r -- "FORMAT-HEADER OK"; else print -r -- "FORMAT-HEADER MISS"; fi
+if wait_for format ''; then print -r -- "FORMAT-HEADER OK"; else print -r -- "FORMAT-HEADER MISS"; fi
 zpty -d pb
 "#;

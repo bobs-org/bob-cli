@@ -115,7 +115,7 @@ fn complete_with_env(
     words: &[&str],
     env: &[(&str, &str)],
 ) -> Output {
-    let mut command = bob_command();
+    let mut command = bob_completion_command();
     command
         .arg("__complete")
         .arg("zsh")
@@ -586,7 +586,7 @@ fn completion_is_read_only() {
 
     for words in &slots {
         let word_refs: Vec<&str> = words.iter().map(String::as_str).collect();
-        let mut command = bob_command();
+        let mut command = bob_completion_command();
         command
             .arg("__complete")
             .arg("zsh")

@@ -29,6 +29,7 @@ pub(crate) const TEST_MISSING_CONFIG_FILE: &str =
 /// web-article tests override it with their fake adapter.
 pub(crate) const TEST_MISSING_WEB_CLIP_ADAPTER: &str =
     "/definitely/missing/bob-cli-test-web-clip-adapter";
+pub(crate) const BOB_COMPLETION_TEST_DEADLINE_MS: &str = "10000";
 
 pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
@@ -127,6 +128,14 @@ mod note_profile_package_skip_tests {
             Ok(Some("titlesec.sty, needspace.sty".to_string()))
         );
     }
+}
+
+/// Build a `bob` command for shell completion tests with a deadline that
+/// tolerates machine load without changing the production default.
+pub(crate) fn bob_completion_command() -> Command {
+    let mut command = bob_command();
+    command.env("BOB_COMPLETE_DEADLINE_MS", BOB_COMPLETION_TEST_DEADLINE_MS);
+    command
 }
 
 pub(crate) fn write_capture_task_settings(vault: &Path) {

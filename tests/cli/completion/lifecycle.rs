@@ -1595,7 +1595,6 @@ fn probe_without_controlling_terminal_via_zpty() {
         .push_str("zmodload zsh/zpty || { print \"ZPTY-MISSING\"; exit 2 }\n");
     driver.push_str("zpty -d pb 2>/dev/null\n");
     driver.push_str(&format!("zpty pb {} -f\n", q(&real_zsh)));
-    driver.push_str("sleep 1\n");
     driver.push_str(&format!(
         "zpty -w pb {}",
         q(&format!(
@@ -1606,7 +1605,7 @@ fn probe_without_controlling_terminal_via_zpty() {
     ));
     driver.push('\n');
     driver.push_str(
-        "if zpty -r -t 20 pb done '*BOB-DONE-[0-9]*' 2>/dev/null; then print \"DRIVER-DONE\"; else print \"DRIVER-READ-FAILED\"; fi\n",
+        "if zpty -r -m pb done '*BOB-DONE-[0-9]*'; then print \"DRIVER-DONE\"; else print \"DRIVER-READ-FAILED\"; fi\n",
     );
     driver.push_str("zpty -d pb\n");
     let driver_path = dir.join("driver.zsh");
@@ -1627,15 +1626,11 @@ fn probe_without_controlling_terminal_via_zpty() {
         .env("BOB_COMPLETION_PROBE_TIMEOUT_MS", "20000");
     let output = match try_output_with_timeout(command, 30) {
         Ok(output) => output,
-        Err(error) => {
-            println!("skipped: zpty hung ({error})");
-            return;
-        }
+        Err(error) => panic!("zpty readiness deadline exceeded: {error}"),
     };
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if stdout.contains("ZPTY-MISSING") || stdout.contains("DRIVER-READ-FAILED")
-    {
+    if stdout.contains("ZPTY-MISSING") {
         println!("skipped: zsh/zpty not usable on this host");
         return;
     }

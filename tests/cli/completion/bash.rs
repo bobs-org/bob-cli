@@ -130,6 +130,10 @@ fn run_bash_case(
         q(&bin.display().to_string())
     ));
     script.push_str(&format!(
+        "export BOB_COMPLETE_DEADLINE_MS={}\n",
+        BOB_COMPLETION_TEST_DEADLINE_MS
+    ));
+    script.push_str(&format!(
         "export BOB_DIR={}\n",
         q(&vault.display().to_string())
     ));
@@ -426,6 +430,10 @@ fn bash_maps_dirs_directive() {
         q(&bin.display().to_string())
     ));
     script.push_str(&format!(
+        "export BOB_COMPLETE_DEADLINE_MS={}\n",
+        BOB_COMPLETION_TEST_DEADLINE_MS
+    ));
+    script.push_str(&format!(
         "export BOB_DIR={}\n",
         q(&vault.display().to_string())
     ));
@@ -558,18 +566,16 @@ fn bash_readline_inserts_what_bob_returned() {
         .env("BOB_NOW", BOB_NOW)
         .env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE)
         .env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER)
+        .env("BOB_COMPLETE_DEADLINE_MS", BOB_COMPLETION_TEST_DEADLINE_MS)
         .env("INPUTRC", "/dev/null")
         .env("TERM", "dumb");
     let output = match try_output_with_timeout(command, 40) {
         Ok(output) => output,
-        Err(error) => {
-            println!("skipped: zpty hung ({error})");
-            return;
-        }
+        Err(error) => panic!("readline readiness deadline exceeded: {error}"),
     };
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if stdout.contains("ZPTY-MISSING") || stdout.contains("SETUP-READ-FAILED") {
+    if stdout.contains("ZPTY-MISSING") {
         println!("skipped: zsh/zpty not usable on this host");
         return;
     }
@@ -600,112 +606,58 @@ fn bash_readline_inserts_what_bob_returned() {
 /// literal, so the assertions see completion, not shell parsing.
 const READLINE_DRIVER: &str = r#"
 zmodload zsh/zpty || { print "ZPTY-MISSING"; exit 2 }
+zmodload zsh/zselect || { print "ZSELECT-MISSING"; exit 2 }
 TMP=$1
 ADAPTER=$2
 shift 2
+typeset -i deadline=$((SECONDS + 30))
+READ_RESULT=
+PTY_FD=
+wait_for() {
+  local expected=$1 expected2=$2 remaining chunk
+  READ_RESULT=
+  while true; do
+    if chunk=$(zpty -rt pb); then
+      READ_RESULT+=$chunk
+      if [[ $READ_RESULT == *"$expected"* && ( -z "$expected2" || $READ_RESULT == *"$expected2"* ) ]]; then
+        return 0
+      fi
+    fi
+    remaining=$((deadline - SECONDS))
+    (( remaining > 0 )) || { print -r -- "READINESS TIMEOUT: $READ_RESULT"; return 1; }
+    zselect -t 10 "$PTY_FD" || true
+  done
+}
+readline_case() {
+  local label=$1 input=$2 expected=$3 expected2=$4
+  zpty -w -n pb "$input"
+  zpty -w -n pb $'\x01'
+  zpty -w -n pb "printf '<%s>\\n' "
+  zpty -w -n pb $'\r'
+  if wait_for "$expected" 'PB>' && [[ -z "$expected2" || "$READ_RESULT" == *"$expected2"* ]]; then
+    print -r -- "$label OK"
+  else
+    print -r -- "$label MISS"
+  fi
+}
 zpty -d pb 2>/dev/null
-zpty pb bash --norc --noprofile -i
-sleep 1
-zpty -w pb "PS1='PB> '"
-sleep 0.3
-zpty -w pb "set +H; shopt -u interactive_comments; source \"$ADAPTER\""
-sleep 0.3
-zpty -r -t 15 pb setup '*PB>*' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 0 }
+zpty -b pb bash --norc --noprofile -i
+PTY_FD=$REPLY
+zpty -w pb "PS1='PB> '; set +H; shopt -u interactive_comments; source \"$ADAPTER\"; printf 'SETUP-DONE\\n'"
+wait_for 'SETUP-DONE' 'PB>' || { print -r -- "SETUP-READ-FAILED"; zpty -d pb; exit 1 }
 print -r -- "SETUP OK"
 # `bob capture =#` inserts the named start without doubling `=`.
-zpty -w -n pb $'bob capture =#\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb equals '*<=#deep-work>*' 2>/dev/null; then print -r -- "EQUALS OK"; else print -r -- "EQUALS MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
+readline_case EQUALS $'bob capture =#\t' '<=#deep-work>' ''
 # An open quote completes inside the quotes; readline closes them.
-zpty -w -n pb $'bob capture \'fix it @ca\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb quote '*<fix it @cash>*' 2>/dev/null; then print -r -- "QUOTE OK"; else print -r -- "QUOTE MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
+readline_case QUOTE $'bob capture \'fix it @ca\t' '<fix it @cash>' ''
 # A value with a space stays one argument.
-zpty -w -n pb $'bob capture --route cash --task fix-sink --task-section F\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb spaces '*<FIRST STEPS>*' 2>/dev/null; then print -r -- "SPACES OK"; else print -r -- "SPACES MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
+readline_case SPACES $'bob capture --route cash --task fix-sink --task-section F\t' '<FIRST STEPS>' ''
 # An attached `!files-in` value completes the note name.
-zpty -w -n pb $'bob query --tasks-note=c\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb filesin '*<--tasks-note=cash.md>*' 2>/dev/null; then print -r -- "FILESIN OK"; else print -r -- "FILESIN MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
+readline_case FILESIN $'bob query --tasks-note=c\t' '<--tasks-note=cash.md>' ''
 # Attached option values keep working, as does the solo link form.
-zpty -w -n pb $'bob capture --format=j\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb format '*<--format=json>*' 2>/dev/null; then print -r -- "FORMAT OK"; else print -r -- "FORMAT MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
-zpty -w -n pb $'bob capture @dev:\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb link '*<@dev:ship-it>*' 2>/dev/null; then print -r -- "LINK OK"; else print -r -- "LINK MISS"; fi
-zpty -w -n pb $'\x03'
-sleep 0.5
-zpty -w -n pb $'bob capture --route ca\t'
-sleep 1
-zpty -w -n pb $'\x01'
-sleep 0.3
-zpty -w -n pb "printf '<%s>\\n' "
-sleep 0.3
-zpty -w -n pb $'\r'
-sleep 0.5
-zpty -w -n pb $'\x03'
-sleep 0.3
-if zpty -r -t 10 pb route1 '*<--route>*' 2>/dev/null && zpty -r -t 10 pb route2 '*<cash>*' 2>/dev/null; then print -r -- "ROUTE OK"; else print -r -- "ROUTE MISS"; fi
+readline_case FORMAT $'bob capture --format=j\t' '<--format=json>' ''
+readline_case LINK $'bob capture @dev:\t' '<@dev:ship-it>' ''
+readline_case ROUTE $'bob capture --route ca\t' '<--route>' '<cash>'
 zpty -d pb
 "#;
 
@@ -925,6 +877,10 @@ fn bash_filters_create_target_by_extension() {
     script.push_str(&format!(
         "export PATH={}:${{PATH}}\n",
         q(&bin.display().to_string())
+    ));
+    script.push_str(&format!(
+        "export BOB_COMPLETE_DEADLINE_MS={}\n",
+        BOB_COMPLETION_TEST_DEADLINE_MS
     ));
     script.push_str(&format!(
         "export BOB_DIR={}\n",

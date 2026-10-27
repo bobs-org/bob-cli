@@ -91,7 +91,7 @@ where
 }
 
 fn complete(words: &[&str]) -> Output {
-    let mut command = bob_command();
+    let mut command = bob_completion_command();
     command
         .arg("__complete")
         .arg("zsh")

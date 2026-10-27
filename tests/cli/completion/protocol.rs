@@ -14,7 +14,7 @@ fn complete_with_protocol(
     protocol: &str,
     debug_file: Option<&std::path::Path>,
 ) -> Output {
-    let mut command = bob_command();
+    let mut command = bob_completion_command();
     command
         .arg("__complete")
         .arg("zsh")
@@ -446,7 +446,7 @@ fn protocol_skew_reports_both_directions() {
 
 #[test]
 fn malformed_request_exits_two() {
-    let output = bob_command()
+    let output = bob_completion_command()
         .arg("__complete")
         .output()
         .expect("run bare __complete");
