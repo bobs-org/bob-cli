@@ -53,6 +53,8 @@ pub(crate) fn migrate_zorg_command() -> ClapCommand {
             \n\
             With --write the same plan is applied as one scoped commit between two vault-sync cycles; undo it with `git revert`. See the migration section of docs/ref.md for the rollback runbook.\n\
             \n\
+            Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.\n\
+            \n\
             Examples:\n  \
             bob ref migrate-zorg\n  \
             bob ref migrate-zorg -f json\n  \

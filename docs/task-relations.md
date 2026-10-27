@@ -816,7 +816,8 @@ Every `schema_version` stays 1; JSON grows additively.
   label · undo: bob relations unhide implements`.
 - **Refusal codes:** `unknown_label`, `invalid_label`, `unchanged`,
   `label_exists`, `malformed_links_line`, `lock_busy`, `dirty_paths`,
-  `not_a_worktree`, `sync_failed`, `verify_failed`, and `stale_note`.
+  `not_a_worktree`, `vault_mismatch`, `sync_failed`, `verify_failed`, and
+  `stale_note`.
 - **`capture-complete` `relation_label`**: rows come from the fast relation-label
   catalog, use canonical keys and display spelling, include inverse phrases and
   counts, omit hidden rows, expose exact typed matches (including hidden state),
@@ -850,6 +851,11 @@ NEW unless NEW already has explicit state. The preview lists each file
 and changed line, link and mirror counts (including `done/`), state and
 inverse changes, and NEW's `replacement` and `hide_replacement` forms.
 
+Before taking a lock, an online rename requires `-b/--bob-dir` and
+`BOB_DIR` (default `~/bob`) to resolve to the same directory. A mismatch or
+unresolved path refuses without syncing either vault. Previews and offline
+writes do not require this match; symlink aliases work.
+
 | Refusal | Meaning | Recovery |
 | --- | --- | --- |
 | `unknown_label` | OLD is absent from the current catalog | Choose a listed label |
@@ -862,6 +868,7 @@ inverse changes, and NEW's `replacement` and `hide_replacement` forms.
 | `verify_failed` | Rescan found a mismatch; the transaction restores its before-images | Inspect the reported note, then retry |
 | `lock_busy` | Another vault maintenance run holds the lock | Wait for it to finish |
 | `not_a_worktree` | The vault is not a Git worktree | Open or initialize the vault worktree |
+| `vault_mismatch` | The selected vault differs from `BOB_DIR`, or a path cannot be resolved | Set `BOB_DIR` to the selected vault, or use `--offline` |
 | `sync_failed` | Pre-sync failed or conflicted | Resolve sync, or intentionally use `--offline` |
 
 Undo a successful rename with `git revert <rename-commit>`; the commit

@@ -154,6 +154,8 @@ Rename one relation label across every task note, including done/ and the previo
 
 The preview scans the current vault. A write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again before writing, appends one relation_label.rename event, verifies the result, makes one commit, then post-syncs. Undo with git revert.
 
+Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.
+
 Usage: bob relations rename [OPTIONS] <OLD> <NEW>
 
 Arguments:

@@ -190,6 +190,19 @@ fn run_live(
     offline: bool,
     format: Format,
 ) -> i32 {
+    if !offline
+        && let Some(detail) =
+            super::super::intake::vault_identity_problem(config)
+    {
+        return print_failure(
+            format,
+            RenameFailure::new(
+                "vault_mismatch",
+                detail,
+                Some("point BOB_DIR at the vault passed with -b, or use --offline"),
+            ),
+        );
+    }
     let child_env = ob::child_env();
     let json_mode = format == Format::Json;
     let _locks = match acquire_mutation_session(

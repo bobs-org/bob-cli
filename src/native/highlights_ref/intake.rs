@@ -604,24 +604,8 @@ fn validate_vault_identity(
             format!("resolve vault {}: {error}", config.bob_dir.display()),
         )
     })?;
-    let selected = fs::canonicalize(bob_env::bob_dir()).map_err(|error| {
-        QueueFailure::new(
-            QueueReason::OtherVault,
-            format!(
-                "resolve BOB_DIR {}: {error}",
-                bob_env::bob_dir().display()
-            ),
-        )
-    })?;
-    if actual != selected {
-        return Err(QueueFailure::new(
-            QueueReason::OtherVault,
-            format!(
-                "selected vault {} differs from BOB_DIR {}",
-                actual.display(),
-                selected.display()
-            ),
-        ));
+    if let Some(detail) = vault_sync::vault_identity_problem(&actual) {
+        return Err(QueueFailure::new(QueueReason::OtherVault, detail));
     }
     for (name, path) in [
         ("lib_dir", &config.lib_dir),

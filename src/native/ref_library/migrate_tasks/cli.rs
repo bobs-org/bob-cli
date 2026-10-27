@@ -56,6 +56,8 @@ pub(crate) fn migrate_tasks_command() -> ClapCommand {
         .after_help(
             "The bare command only plans: it prints where every open v1 ref task would move and changes nothing. Pass -m map.tsv to override parents, -f tsv to edit the map round trip, and --write to apply the plan as one scoped commit; undo it with `git revert`.\n\
             \n\
+            Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.\n\
+            \n\
             Examples:\n  \
             bob ref migrate-tasks\n  \
             bob ref migrate-tasks -f tsv\n  \

@@ -226,6 +226,34 @@ pub(crate) fn run_cycle_with_existing_lock(child_env: &ChildEnv) -> i32 {
     run_cycle_with_env(RunOptions::default(), child_env)
 }
 
+/// Refuse an override that would sync a different vault. Call before taking
+/// locks for an online mutation; offline writes and previews need no sync.
+pub(crate) fn vault_identity_problem(vault: &Path) -> Option<String> {
+    let actual = match fs::canonicalize(vault) {
+        Ok(path) => path,
+        Err(error) => {
+            return Some(format!("resolve vault {}: {error}", vault.display()));
+        }
+    };
+    let default = bob_env::bob_dir();
+    let selected = match fs::canonicalize(&default) {
+        Ok(path) => path,
+        Err(error) => {
+            return Some(format!(
+                "resolve BOB_DIR {}: {error}",
+                default.display()
+            ));
+        }
+    };
+    (actual != selected).then(|| {
+        format!(
+            "selected vault {} differs from BOB_DIR {}",
+            actual.display(),
+            selected.display()
+        )
+    })
+}
+
 /// Outcome of one in-process vault-sync cycle for programmatic callers.
 pub(crate) struct CycleReport {
     pub ok: bool,
@@ -1781,6 +1809,45 @@ fn display_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vault_identity_checks_default_fallback_and_missing_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("bob");
+        let other = temp.path().join("other");
+        fs::create_dir(&vault).unwrap();
+        fs::create_dir(&other).unwrap();
+        let _guard = bob_env::TestEnvGuard::set(&[
+            ("BOB_DIR", None),
+            ("HOME", Some(temp.path().as_os_str())),
+        ]);
+        assert_eq!(vault_identity_problem(&vault), None);
+        assert_eq!(vault_identity_problem(&vault.join(".")), None);
+        assert!(vault_identity_problem(&other)
+            .unwrap()
+            .contains("differs from BOB_DIR"));
+        assert!(vault_identity_problem(&temp.path().join("missing"))
+            .unwrap()
+            .starts_with("resolve vault"));
+        fs::remove_dir(&vault).unwrap();
+        assert!(vault_identity_problem(&other)
+            .unwrap()
+            .starts_with("resolve BOB_DIR"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_identity_accepts_symlink_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&vault).unwrap();
+        std::os::unix::fs::symlink(&vault, &alias).unwrap();
+        let _guard =
+            bob_env::TestEnvGuard::set(&[("BOB_DIR", Some(alias.as_os_str()))]);
+        assert_eq!(vault_identity_problem(&vault), None);
+        assert_eq!(vault_identity_problem(&alias), None);
+    }
 
     fn fatal(message: &str) -> CycleError {
         CycleError::fatal(message)

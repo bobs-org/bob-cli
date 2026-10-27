@@ -6,6 +6,16 @@ use std::fs;
 
 const NOW: &str = "2026-10-24 12:00:00";
 
+#[test]
+fn wrong_vault_refuses_before_syncing_or_renaming() {
+    let temp = TempDir::new("bob-cli-themes-rename-wrong-vault");
+    let (vault, _) = rename_vault(temp.path());
+    assert_vault_override_refused(
+        bob_command().args(["themes", "rename", "FIXES", "REPAIRS"]),
+        &vault,
+    );
+}
+
 fn rename_vault(
     root: &std::path::Path,
 ) -> (std::path::PathBuf, std::path::PathBuf) {

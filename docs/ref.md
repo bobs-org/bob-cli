@@ -875,11 +875,17 @@ vault and cannot be updated.
 Machine-readable refusal codes are `unknown_reference`,
 `ambiguous_reference`, `legacy_reference`, `intake_reference`, `invalid_name`,
 `name_taken`, `has_highlights`, `listen_card_link`, `not_in_sync`,
-`dirty_paths`, `not_a_worktree`, `lock_busy`, `scan_busy`, `sync_failed`, and
-`verify_failed`. JSON errors use the shared schema-version-1 envelope with an
+`dirty_paths`, `not_a_worktree`, `vault_mismatch`, `lock_busy`, `scan_busy`,
+`sync_failed`, and `verify_failed`. JSON errors use the shared schema-version-1 envelope with an
 `error` object containing `code`, `message`, and optional `hint`.
 
 ### Live write flow
+
+Before taking either lock, an online rename refuses with `vault_mismatch` if
+the selected `-b/--bob-dir` vault and `BOB_DIR` (default `~/bob`) do not
+resolve to the same directory, or either path cannot be resolved. Set
+`BOB_DIR` to the selected vault or use `--offline`; previews and offline
+writes do not require that match. Symlink aliases of the same vault work.
 
 The live command takes the shared `bob_sync.lock` first (60 second wait), then
 the reference scan writer lock (30 second wait). It requires a Git worktree so
@@ -951,6 +957,12 @@ plans one legacy note per unmirrored zorg-era `status::` record and
 prints the plan as a human or JSON report. With `-w/--write` the
 same plan is applied as one scoped commit between two vault-sync
 cycles. A rerun afterwards reports `nothing to migrate`.
+
+An online write checks vault identity before taking the lock: `-b/--bob-dir`
+must resolve to the same directory as `BOB_DIR` (default `~/bob`). A mismatch
+or unresolved path refuses with `vault_mismatch` without syncing either vault.
+Set `BOB_DIR` to the selected vault or use `--offline`. The read-only preview
+does not require this match.
 
 The write flow, mirroring `bob task reroll`:
 
@@ -1080,6 +1092,11 @@ What is preserved and dropped: the mark stays, `[fresh::]`,
 `#hide` and the PDF wikilink are dropped. The new line carries
 `#task #ref`, a path-qualified `[[ref/<type>/<stem>|<title>]]` link,
 `[created::YYYY-MM-DD]` when missing, and `^ref-<slug>` at the end.
+
+Before an online write takes the lock, `-b/--bob-dir` must resolve to the
+same directory as `BOB_DIR` (default `~/bob`). A mismatch or unresolved path
+refuses with `vault_mismatch` without syncing either vault. Set `BOB_DIR`
+to the selected vault or use `--offline`; previews do not require this match.
 
 The write flow, mirroring `bob task reroll`:
 

@@ -216,6 +216,8 @@ Only the theme component in ` — NAME` tails changes: separators keep their `+`
 
 The preview always rescans from source. The write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again right before writing, writes atomically, appends one theme.rename journal event, verifies by rescanning, makes one commit, then post-syncs. Undo is `git revert`.
 
+Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.
+
 Usage: bob themes rename [OPTIONS] <OLD> <NEW>
 
 Arguments:

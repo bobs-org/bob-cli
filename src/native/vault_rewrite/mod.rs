@@ -2,7 +2,8 @@
 //!
 //! Extracted from `bob themes rename` (`src/native/pomodoro_themes/rename.rs`)
 //! so every vocabulary rename — themes today, relation labels next — runs the
-//! same steps: bounded lock wait (`lock_busy`), the worktree check
+//! same steps: online vault identity check (`vault_mismatch`), bounded
+//! lock wait (`lock_busy`), the worktree check
 //! (`not_a_worktree`), pre-sync unless offline (`sync_failed`), planning
 //! through a caller closure over the synced files, before-image snapshots and
 //! the stale check (`stale_note`), dirty-path rules (offline refuses with
@@ -38,7 +39,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(3);
 
 /// One transaction failure: a stable machine-readable code, the human
 /// message, and an optional retry hint. Codes are the rename contract
-/// (`lock_busy`, `not_a_worktree`, `sync_failed`, `stale_note`,
+/// (`vault_mismatch`, `lock_busy`, `not_a_worktree`, `sync_failed`, `stale_note`,
 /// `dirty_paths`, `verify_failed`, plus `io` for the Git status read).
 #[derive(Debug, Clone)]
 pub(crate) struct TxnFailure {
@@ -114,6 +115,14 @@ pub(crate) fn run<C>(
     json_mode: bool,
     plan: impl FnOnce() -> Result<ReadyPlan<C>, TxnFailure>,
 ) -> Result<TxnOutcome<C>, TxnFailure> {
+    if !offline && let Some(detail) = vault_sync::vault_identity_problem(vault)
+    {
+        return Err(TxnFailure::new(
+            "vault_mismatch",
+            detail,
+            Some("point BOB_DIR at the vault passed with -b, or use --offline"),
+        ));
+    }
     // Take bob_sync.lock first (wait at most 3s like the other writers).
     let _lock = {
         let on_first_wait = move || {

@@ -51,6 +51,9 @@ pub(crate) fn bob_command() -> Command {
     let isolation = std::env::temp_dir()
         .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));
     let _ = fs::create_dir_all(&isolation);
+    // A test that supplies only -b must never fall back to the real vault.
+    // Online writers must explicitly select the same fixture in BOB_DIR.
+    command.env("BOB_DIR", isolation.join("unused-vault"));
     command.env("BOB_VAULT_SYNC_LOCK_FILE", isolation.join("bob_sync.lock"));
     command.env("XDG_STATE_HOME", isolation.join("state"));
     command.env("XDG_CACHE_HOME", isolation.join("cache"));
@@ -170,6 +173,69 @@ pub(crate) fn init_vault_sync_pair(
     git(["clone", "-q", path_str(&remote), path_str(&peer)]);
     configure_test_git_identity(&peer);
     (vault, remote, peer)
+}
+
+/// A wrong-vault write must refuse before locks, sync state, or Git changes.
+pub(crate) fn assert_vault_override_refused(
+    command: &mut Command,
+    selected: &Path,
+) {
+    let temp = TempDir::new("bob-cli-wrong-vault");
+    let (default, remote, _) = init_vault_sync_pair(&temp);
+    write_file(&default.join("pending.md"), "must remain uncommitted\n");
+    let heads = [&default, selected, &remote]
+        .map(|path| stdout(&git_in(path, ["rev-parse", "HEAD"])));
+    let status = [&default, selected]
+        .map(|path| stdout(&git_in(path, ["status", "--porcelain"])));
+    fn snapshot(path: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut files = std::collections::BTreeMap::new();
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(snapshot(&path));
+            } else {
+                files.insert(path.clone(), fs::read(path).unwrap());
+            }
+        }
+        files
+    }
+    let before = [snapshot(&default), snapshot(selected)];
+    let lock = temp.path().join("sync.lock");
+    let state = temp.path().join("sync.json");
+    let output = command
+        .args(["-b", path_str(selected), "-f", "json"])
+        .env("BOB_DIR", &default)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("BOB_VAULT_SYNC_STATE_FILE", &state)
+        .output()
+        .expect("run wrong-vault write");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    // Reference commands nest failures; vocabulary renames use top-level fields.
+    let error = json.get("error").unwrap_or(&json);
+    assert_eq!(error["code"], "vault_mismatch", "{json}");
+    assert!(error["message"]
+        .as_str()
+        .unwrap()
+        .contains("differs from BOB_DIR"));
+    assert!(!lock.exists(), "refusal must precede lock acquisition");
+    assert!(!state.exists(), "refusal must precede sync state writes");
+    assert_eq!(before, [snapshot(&default), snapshot(selected)]);
+    assert_eq!(
+        heads,
+        [&default, selected, &remote]
+            .map(|path| { stdout(&git_in(path, ["rev-parse", "HEAD"])) })
+    );
+    assert_eq!(
+        status,
+        [&default, selected]
+            .map(|path| { stdout(&git_in(path, ["status", "--porcelain"])) })
+    );
 }
 
 pub(crate) fn vault_sync_command(vault: &Path, temp: &TempDir) -> Command {

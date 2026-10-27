@@ -206,6 +206,11 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
 - **Byte preservation:** separators keep their `+` spelling. A resulting
   duplicate collapses (`FIX + FIXES` → `FIX`). Every other byte is preserved.
 - **NEW** must be a valid single theme. A NEW containing `+` is `invalid_name`.
+- **Vault selection:** before taking a lock, an online write requires
+  `-b/--bob-dir` and `BOB_DIR` (default `~/bob`) to resolve to the same
+  directory. A mismatch or unresolved path refuses with `vault_mismatch`.
+  Set `BOB_DIR` to the selected vault or use `--offline`. Previews and
+  offline writes do not require this match; symlink aliases work.
 - **Flow:** take `bob_sync.lock`, then pre-sync unless `--offline`, then
   replan from the synced files. Snapshot each target and compare again right
   before writing (a change aborts with `stale_note`). Write each file
@@ -219,7 +224,7 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
   (OLD is in `plan.exempt`, `plan.inventory_labels`, or a Stats metric filter
   and NEW is not — edit the chezmoi config to add NEW first), plus
   `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
-  `sync_failed`, `verify_failed`, and `stale_note`.
+  `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
 - **Color and state:** the color follows the new name, and the preview says
   so. Hidden state and pins move with the rename per PT4.
 - **Reappearance:** if OLD's spelling reappears after a rename event (an

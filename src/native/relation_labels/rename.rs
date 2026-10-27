@@ -179,7 +179,8 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
             "Rename one relation label across every task note, including done/ and the previous daily note, in one verified Git commit. ",
             "Only label spans on LINKS and LINKED FROM lines change; entries keep their order and every other byte is preserved.\n\n",
             "The preview scans the current vault. A write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again before writing, ",
-            "appends one relation_label.rename event, verifies the result, makes one commit, then post-syncs. Undo with git revert."
+            "appends one relation_label.rename event, verifies the result, makes one commit, then post-syncs. Undo with git revert.\n\n",
+            "Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match."
         ))
         .after_help(concat!(
             "Examples:\n",

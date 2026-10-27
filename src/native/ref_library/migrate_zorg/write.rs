@@ -31,6 +31,18 @@ pub(crate) fn run_migrate_zorg_write(
     let offline = matches.get_flag("offline");
     let config = migrate_config_from_matches(matches);
 
+    if !offline
+        && let Some(detail) =
+            vault_sync::vault_identity_problem(&config.bob_dir)
+    {
+        return fail(
+            format,
+            "vault_mismatch",
+            &detail,
+            Some("point BOB_DIR at the vault passed with -b, or use --offline"),
+        );
+    }
+
     // 1. Hold the shared vault-maintenance lock for the whole write.
     let _lock = {
         let json_mode = format == Format::Json;

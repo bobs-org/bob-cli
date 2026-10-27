@@ -67,6 +67,18 @@ fn run_write(vault: &Path, args: &[&str]) -> Output {
         .expect("run bob ref migrate-zorg --write")
 }
 
+#[test]
+fn wrong_vault_refuses_before_syncing_or_migrating() {
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-zorg-wrong-vault",
+        &[("initial.md", "fixture\n")],
+    );
+    assert_vault_override_refused(
+        bob_command().args(["ref", "migrate-zorg", "--write"]),
+        &vault,
+    );
+}
+
 fn run_write_json(vault: &Path, args: &[&str]) -> serde_json::Value {
     let mut full = args.to_vec();
     full.extend(["-f", "json"]);

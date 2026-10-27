@@ -4,6 +4,16 @@ use crate::support::*;
 use serde_json::Value;
 use std::{collections::BTreeMap, fs, path::Path};
 
+#[test]
+fn wrong_vault_refuses_before_syncing_or_renaming() {
+    let temp = TempDir::new("bob-cli-relations-rename-wrong-vault");
+    let (vault, _) = seed_vault(temp.path());
+    assert_vault_override_refused(
+        bob_command().args(["relations", "rename", "old", "new"]),
+        &vault,
+    );
+}
+
 fn seed_vault(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let vault = root.join("vault");
     let cache = root.join("cache");

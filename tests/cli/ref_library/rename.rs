@@ -119,6 +119,51 @@ fn git_commit_all(vault: &Path) {
     git_in(vault, ["commit", "-q", "-m", "fixture"]);
 }
 
+#[test]
+fn wrong_vault_refuses_before_syncing_or_renaming() {
+    let (_temp, vault) = gist_vault("bob-cli-ref-rename-wrong-vault");
+    git_commit_all(&vault);
+    assert_vault_override_refused(
+        bob_command().args([
+            "ref",
+            "rename",
+            "442a6bf555914893e9891c11519de94f",
+            "new-name",
+        ]),
+        &vault,
+    );
+}
+
+#[test]
+fn other_vault_preview_and_offline_rename_remain_available() {
+    for mode in ["-d", "-o"] {
+        let (temp, vault) = gist_vault("bob-cli-ref-rename-other-offline");
+        git_commit_all(&vault);
+        let default = temp.path().join("default");
+        fs::create_dir(&default).unwrap();
+        let state = temp.path().join("sync.json");
+        let output = bob_command()
+            .args([
+                "ref",
+                "rename",
+                "442a6bf555914893e9891c11519de94f",
+                "new-name",
+                mode,
+                "-b",
+            ])
+            .arg(&vault)
+            .env("BOB_DIR", &default)
+            .env("BOB_NOW", FIXED_NOW)
+            .env("BOB_VAULT_SYNC_STATE_FILE", &state)
+            .output()
+            .unwrap();
+        assert_success(&output);
+        assert!(!state.exists());
+        assert_eq!(fs::read_dir(&default).unwrap().count(), 0);
+        assert_eq!(vault.join("lib/blogs/new-name.pdf").exists(), mode == "-o");
+    }
+}
+
 fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
     fn walk(root: &Path, current: &Path, out: &mut Vec<(String, Vec<u8>)>) {
         for entry in fs::read_dir(current).expect("read snapshot directory") {
