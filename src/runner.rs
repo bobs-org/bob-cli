@@ -367,6 +367,14 @@ const THEMES_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "split",
+        about: "Split one Pomodoro theme across selected entries in one commit",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesSplit,
+            script_command: None,
+        },
+    },
+    Member {
         name: "unhide",
         about: "Show hidden themes in Recent suggestion rows again",
         leaf: Leaf {
@@ -387,6 +395,8 @@ Examples:
   bob themes color BLOG red    Pin BLOG to red
   bob themes color BLOG auto   Drop the BLOG pin
   bob themes rename FIXES FIX -d   Preview a global rename
+  bob themes split JOB -t > job.tsv
+  bob themes split JOB -m job.tsv -d
 
 See docs/pomodoro-themes.md for identity, cache, hue, journal, and JSON.
 Run 'bob themes <command> --help' for more information on a command.";
@@ -552,7 +562,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "themes",
-        about: "List, hide, unhide, color, and rename Pomodoro themes",
+        about: "List, hide, unhide, color, rename, and split Pomodoro themes",
         section: Section::DailyWorkflow,
         target: Target::Group(Group {
             members: THEMES_MEMBERS,
@@ -2053,6 +2063,7 @@ mod tests {
             NativeCommand::ThemesHide,
             NativeCommand::ThemesList,
             NativeCommand::ThemesRename,
+            NativeCommand::ThemesSplit,
             NativeCommand::ThemesUnhide,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,

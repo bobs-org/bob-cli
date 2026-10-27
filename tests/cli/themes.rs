@@ -85,6 +85,7 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
     assert!(help.contains("color"), "member color:\n{help}");
     assert!(help.contains("hide"), "member hide:\n{help}");
     assert!(help.contains("rename"), "member rename:\n{help}");
+    assert!(help.contains("split"), "member split:\n{help}");
     assert!(help.contains("unhide"), "member unhide:\n{help}");
     assert!(
         help.contains("docs/pomodoro-themes.md"),
@@ -130,6 +131,18 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
                 "-h, --help",
                 "-m, --merge",
                 "-o, --offline",
+            ][..],
+        ),
+        (
+            "split",
+            &[
+                "-b, --bob-dir",
+                "-d, --dry-run",
+                "-f, --format",
+                "-h, --help",
+                "-m, --map",
+                "-o, --offline",
+                "-t, --template",
             ][..],
         ),
     ] {

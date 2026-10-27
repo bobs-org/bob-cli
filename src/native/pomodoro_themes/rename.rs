@@ -12,6 +12,7 @@ use std::{
     rc::Rc,
 };
 
+use chrono::{DateTime, FixedOffset};
 use clap::{
     builder::OsStringValueParser, Arg, ArgAction, ArgMatches,
     Command as ClapCommand,
@@ -33,15 +34,15 @@ use super::{
 };
 
 const COMMAND_NAME: &str = "bob themes rename";
-const SCHEMA_VERSION: u32 = 1;
+pub(super) const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
+pub(super) enum OutputFormat {
     Human,
     Json,
 }
 
 impl OutputFormat {
-    fn from_matches(matches: &ArgMatches) -> Self {
+    pub(super) fn from_matches(matches: &ArgMatches) -> Self {
         match matches
             .get_one::<String>("format")
             .map(String::as_str)
@@ -101,7 +102,7 @@ See docs/pomodoro-themes.md for the rename contract, refusal table, and revert r
         .arg(new_arg())
 }
 
-fn bob_dir_arg() -> Arg {
+pub(super) fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
         .short('b')
@@ -118,7 +119,7 @@ fn dry_run_arg() -> Arg {
         .help("Preview the rename without writing, committing, or syncing")
 }
 
-fn format_arg() -> Arg {
+pub(super) fn format_arg() -> Arg {
     Arg::new("format")
         .long("format")
         .short('f')
@@ -128,7 +129,7 @@ fn format_arg() -> Arg {
         .help("Output format: human or json")
 }
 
-fn help_arg() -> Arg {
+pub(super) fn help_arg() -> Arg {
     Arg::new("help")
         .long("help")
         .short('h')
@@ -144,7 +145,7 @@ fn merge_arg() -> Arg {
         .help("Merge OLD into NEW when NEW is already used")
 }
 
-fn offline_arg() -> Arg {
+pub(super) fn offline_arg() -> Arg {
     Arg::new("offline")
         .long("offline")
         .short('o')
@@ -180,20 +181,7 @@ pub(crate) fn run_rename(args: Vec<OsString>) -> i32 {
         std::iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
         Ok(matches) => matches,
-        Err(error) => {
-            let exit_code = error.exit_code();
-            if let Err(print_error) = error.print() {
-                // A closed pipe renders nothing: stay quiet instead of
-                // reporting the failed render, but keep clap's own exit
-                // code so a usage error never reports success.
-                if print_error.kind() != std::io::ErrorKind::BrokenPipe {
-                    eprintln!(
-                        "{COMMAND_NAME}: failed to print command-line error: {print_error}"
-                    );
-                }
-            }
-            return exit_code;
-        }
+        Err(error) => return print_clap_error(COMMAND_NAME, error),
     };
     let format = OutputFormat::from_matches(&matches);
     let dry_run = matches.get_flag("dry-run");
@@ -203,21 +191,21 @@ pub(crate) fn run_rename(args: Vec<OsString>) -> i32 {
                 print_success(&prepared.report(), format);
                 0
             }
-            Err(failure) => print_failure(format, failure),
+            Err(failure) => print_failure(COMMAND_NAME, format, failure),
         };
     }
     run_live(&matches, format)
 }
 
 #[derive(Debug, Clone)]
-struct RenameFailure {
-    code: &'static str,
-    message: String,
-    hint: Option<String>,
+pub(super) struct RenameFailure {
+    pub(super) code: &'static str,
+    pub(super) message: String,
+    pub(super) hint: Option<String>,
 }
 
 impl RenameFailure {
-    fn new(
+    pub(super) fn new(
         code: &'static str,
         message: impl Into<String>,
         hint: Option<impl Into<String>>,
@@ -799,7 +787,7 @@ fn rewrite_file_contents(
 
 /// Replace matching `+` components with the new display spelling,
 /// collapsing resulting duplicates. `None` when nothing matches.
-fn rewrite_name(
+pub(super) fn rewrite_name(
     old_name: &str,
     old_key: &str,
     new_display_trimmed: &str,
@@ -847,7 +835,7 @@ fn rewrite_name(
 
 /// Replace the trimmed NAME tail in one ledger line, preserving every
 /// other byte (the ` — ` separator spelling and trailing spaces).
-fn replace_name_tail(
+pub(super) fn replace_name_tail(
     line: &str,
     old_name_trimmed: &str,
     new_name: &str,
@@ -1027,6 +1015,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
             0
         }
         Err(failure) => print_failure(
+            COMMAND_NAME,
             format,
             RenameFailure::new(failure.code, failure.message, failure.hint),
         ),
@@ -1185,31 +1174,78 @@ fn print_human(report: &RenameReport) {
     }
 }
 
-fn print_failure(format: OutputFormat, failure: RenameFailure) -> i32 {
+pub(super) fn print_clap_error(command_name: &str, error: clap::Error) -> i32 {
+    let exit_code = error.exit_code();
+    if let Err(print_error) = error.print() {
+        // A closed pipe renders nothing: stay quiet instead of
+        // reporting the failed render, but keep clap's own exit
+        // code so a usage error never reports success.
+        if print_error.kind() != std::io::ErrorKind::BrokenPipe {
+            eprintln!(
+                "{command_name}: failed to print command-line error: {print_error}"
+            );
+        }
+    }
+    exit_code
+}
+
+pub(super) fn print_failure(
+    command_name: &str,
+    format: OutputFormat,
+    failure: RenameFailure,
+) -> i32 {
     let exit = match failure.code {
-        "usage" => 2,
+        "usage" | "invalid_map" => 2,
         _ => 1,
     };
     match format {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                json!({
-                    "schema_version": SCHEMA_VERSION,
-                    "ok": false,
-                    "code": failure.code,
-                    "message": failure.message,
-                })
-            );
+            let mut value = json!({
+                "schema_version": SCHEMA_VERSION,
+                "ok": false,
+                "code": failure.code,
+                "message": failure.message,
+            });
+            if let Some(hint) = failure.hint {
+                value["hint"] = json!(hint);
+            }
+            println!("{value}");
         }
         OutputFormat::Human => {
-            eprintln!("{COMMAND_NAME}: {}", failure.message);
+            eprintln!("{command_name}: {}", failure.message);
             if let Some(hint) = failure.hint {
                 eprintln!("hint: {hint}");
             }
         }
     }
     exit
+}
+
+fn writer_order(
+    event: &journal::JournalEvent,
+) -> (DateTime<FixedOffset>, &str, u32) {
+    (event.ts, event.host.as_str(), event.line)
+}
+
+/// A later rename *to* this key, or a later color/unhide naming it,
+/// means the name was deliberately re-adopted. A later hide does not.
+fn re_adopted_later(
+    events: &[journal::JournalEvent],
+    rename: &journal::JournalEvent,
+    key: &str,
+) -> bool {
+    let order = writer_order(rename);
+    events.iter().any(|event| {
+        if writer_order(event) <= order {
+            return false;
+        }
+        match &event.payload {
+            EventPayload::Rename { to, .. } => to == key,
+            EventPayload::Color { key: named_key, .. }
+            | EventPayload::Unhide { key: named_key, .. } => named_key == key,
+            EventPayload::Hide { .. } => false,
+        }
+    })
 }
 
 /// `renamed_reappeared` for `bob themes list`: every rename source key
@@ -1226,10 +1262,7 @@ pub(crate) fn renamed_reappeared(
     for event in &events {
         if let EventPayload::Rename { from, .. } = &event.payload {
             let replace = match latest.get(from) {
-                Some(current) => {
-                    (event.ts, &event.host, event.line)
-                        > (current.ts, &current.host, current.line)
-                }
+                Some(current) => writer_order(event) > writer_order(current),
                 None => true,
             };
             if replace {
@@ -1239,6 +1272,9 @@ pub(crate) fn renamed_reappeared(
     }
     let mut reappeared = Vec::new();
     for (from, event) in latest {
+        if re_adopted_later(&events, event, &from) {
+            continue;
+        }
         let Some(record) = catalog.get(&from) else {
             continue;
         };

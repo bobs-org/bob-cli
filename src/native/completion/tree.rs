@@ -135,6 +135,9 @@ impl NativeCommand {
             NativeCommand::ThemesRename => {
                 crate::native::pomodoro_themes::build_cli_rename()
             }
+            NativeCommand::ThemesSplit => {
+                crate::native::pomodoro_themes::build_cli_split()
+            }
             NativeCommand::ThemesUnhide => {
                 crate::native::pomodoro_themes::write::build_cli_unhide()
             }

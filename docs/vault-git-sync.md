@@ -325,6 +325,10 @@ lives in [pomodoro-themes.md](pomodoro-themes.md#pt4-preferences-journal).
 post-syncs; undo is `git revert` per the
 [pomodoro-themes rename runbook](pomodoro-themes.md#pt10-global-rename).
 
+`bob themes split` commits once (`bob themes split: OLD → T1, T2, …`) and
+post-syncs; it writes no journal event. Undo is `git revert` per the
+[pomodoro-themes split runbook](pomodoro-themes.md#pt11-split-by-entry).
+
 `bob relations rename` also commits once (`bob relations rename: OLD → NEW`)
 and post-syncs. Its verified rewrite changes relation-label spans only,
 including `done/` and the previous daily note. Undo the whole operation,

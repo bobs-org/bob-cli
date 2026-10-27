@@ -8,7 +8,7 @@ compute a hue of their own.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, Bob Mac
 Capture, and the CLI. Rust owns the meaning. JSON grows additively at
-`schema_version` 1. PT1–PT10 describe shipped behavior across the catalog,
+`schema_version` 1. PT1–PT11 describe shipped behavior across the catalog,
 capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 ## PT1 — Vocabulary and identity
@@ -82,8 +82,9 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
   Events after the rename on the old key apply to the old key.
 - **Writers:** bob is the only writer. `bob themes hide`, `unhide`,
   `color`, and `rename` append under `bob_sync.lock` (wait at most 3 s; a busy
-  lock is `lock_busy`). Each event is one `O_APPEND` write. The directory is
-  created on first use.
+  lock is `lock_busy`). `bob themes split` rewrites daily notes under the same
+  lock and writes no journal event. Each event is one `O_APPEND` write. The
+  directory is created on first use.
 - **Allowlist:** the vault tracks `.bob/themes/*.jsonl` (`!/.bob/themes/*.jsonl`
   in `.gitignore`) and unions concurrent appends
   (`.bob/themes/*.jsonl merge=union`). A host that has not synced the
@@ -229,10 +230,71 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
   so. Hidden state and pins move with the rename per PT4.
 - **Reappearance:** if OLD's spelling reappears after a rename event (an
   offline host, muscle memory), `bob themes list` reports it in
-  `renamed_reappeared`. It only reports; it never rewrites on its own.
+  `renamed_reappeared`. It only reports; it never rewrites on its own. The
+  latest rename *from* each key is the candidate, using the fold's
+  `(ts, host, line)` writer order. A later event in that order that
+  re-adopts the key clears the report: a `theme.rename` whose `to` is the
+  key, or a `theme.color` (pin or unpin) or `theme.unhide` naming the key.
+  A later `theme.hide` does not re-adopt a name.
 
 Runbook: `git log --oneline -3`, confirm the `bob themes rename: OLD → NEW`
 commit, then `git revert <sha>` and `bob vault-sync` to restore every byte.
+
+## PT11 — Split by entry
+
+```text
+bob themes split OLD (-m/--map FILE | -t/--template) [-b/--bob-dir DIR] [-d/--dry-run]
+                     [-f/--format human|json] [-o/--offline]
+```
+
+Rewrite selected Pomodoro theme components in ` — NAME` tails of canonical
+daily notes (past, today, and future, open and closed). `_templates/daily.md`
+is out of scope. Exactly one of `-m` and `-t` is required. `-m -` reads the
+map from stdin. OLD must be a known theme.
+
+- **Template (`-t`):** read-only; never takes the lock. Lists every entry
+  where some `+` component normalizes to OLD's key, ordered by date then
+  line. Human output is TSV the map parser accepts unchanged: `#` comment
+  lines naming the columns and the fill-in rule, then
+  `DATE<TAB>REF<TAB>THEME<TAB>NOTE`. DATE is `YYYY-MM-DD`. REF is
+  `LINE:DIGEST`. THEME is prefilled with OLD's display name (an untouched
+  row is a keep). NOTE is `[x]`/`[ ]`, the time range or `()`, the full
+  current name, and the Task Link targets from the entry's child lines,
+  joined with `, `. Plain-text children with no link appear as their first
+  60 characters. `-f json` emits `{schema_version: 1, ok: true,
+  mode: "template", theme: {key, name}, entries: [{date, path, ref, line,
+  state, time_range, name, links, notes}]}`.
+- **Map (`-m FILE`):** rows are `DATE<TAB>REF<TAB>THEME[<TAB>NOTE]`. Blank
+  lines and lines starting with `#` are skipped; NOTE is ignored. Refuse
+  with `invalid_map` (a usage error), citing the map line number, when a
+  row has fewer than three columns, the date is malformed or has no
+  canonical daily note, the ref is malformed, or two rows resolve to the
+  same entry. A blank THEME or one containing `+` is `invalid_name`.
+  Resolve each row with `PomodoroScan::by_ref`. `Stale` or `Ambiguous`, or
+  an entry with no OLD component, is `stale_entry` (hint: regenerate with
+  `-t`). A row whose THEME key equals OLD's key is a keep. Otherwise
+  replace the OLD component with THEME's trimmed spelling; separators keep
+  their `+` spelling and a resulting duplicate collapses. OLD entries with
+  no row are left alone and counted as `unmapped`. If every row is a keep,
+  refuse with `unchanged`. THEME may not exist yet (`new` in the preview).
+  Targets in normalized `plan.exempt` are `exempt`.
+- **Writing:** `-d` prints the plan and changes nothing. A write runs
+  through the shared vault-rewrite transaction (`command_name` `bob themes
+  split`, worktree subject "theme splits"). Split writes **no journal
+  event**. OLD keeps its hidden state and pin, and every target keeps its
+  own. The commit subject is `bob themes split: OLD → T1, T2, …` with the
+  changed target display names in alphabetical order. Verify: reread
+  contents equal the planned after-image, line count unchanged, the set of
+  changed lines equals the planned set, every changed line differs only in
+  its name tail, each planned line now carries its planned name, and the
+  scanned entry count is unchanged. Undo is `git revert`.
+- **Refusals:** `unknown_theme`, `invalid_name`, `unchanged`, `invalid_map`,
+  `stale_entry`, plus `lock_busy`, `dirty_paths`, `not_a_worktree`,
+  `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
+
+Runbook: `bob themes split JOB -t > job.tsv`, edit THEME, preview with
+`bob themes split JOB -m job.tsv -d`, apply with `bob themes split JOB -m
+job.tsv`. Undo with `git revert <sha>` and `bob vault-sync`.
 
 ## JSON contract
 
@@ -295,17 +357,19 @@ and met on at least 2 of the last 30 days. The theme with fewer `days_used`
 is the one to move. The suggested slot is the least used by the last 30
 days' themes, excluding hues of themes that met the moved theme in that
 window; ties follow palette order. `renamed_reappeared` lists every rename
-source key that still has occurrences after its rename event, as
+source key that still has occurrences after its latest rename-from event
+and that a later rename-to, color, or unhide has not re-adopted, as
 `{key, name, renamed_to, renamed_to_name}`.
 
-**Writers** (`hide`, `unhide`, `color`, `rename`) emit
-`{schema_version, ok, ...}` on success and `{ok:false, code, message}` on
-refusal, even on a nonzero exit. Refusal codes: `unknown_theme`,
+**Writers** (`hide`, `unhide`, `color`, `rename`, `split`) emit
+`{schema_version, ok, ...}` on success and `{ok:false, code, message, hint?}`
+on refusal, even on a nonzero exit. Refusal codes: `unknown_theme`,
 `invalid_hue`, `invalid_name`, `unchanged` (no journal write), `theme_exists`,
-`config_reference`, `lock_busy`, `dirty_paths`, `not_a_worktree`,
-`sync_failed`, `verify_failed`, `stale_note`. The Obsidian manager previews
-with `rename -d -f json` (files, entries, before/after tails, state and color
-change) and confirms with `--merge` when needed.
+`config_reference`, `invalid_map`, `stale_entry`, `lock_busy`, `dirty_paths`,
+`not_a_worktree`, `vault_mismatch`, `sync_failed`, `verify_failed`,
+`stale_note`. The Obsidian manager previews with `rename -d -f json` (files,
+entries, before/after tails, state and color change) and confirms with
+`--merge` when needed.
 
 ## `bob themes` CLI
 
@@ -316,6 +380,7 @@ The group is `bob themes`, a top-level catalog noun in Daily workflow after
 - `hide NAME…`
 - `list [-a/--all] [-F/--fresh] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]`
 - `rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]`
+- `split OLD (-m/--map FILE | -t/--template) [-d/--dry-run] [-f/--format human|json] [-o/--offline]`
 - `unhide NAME…`
 
 List defaults: visible themes used in the last 90 days or today, newest

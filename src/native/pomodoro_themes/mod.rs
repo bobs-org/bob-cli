@@ -24,6 +24,7 @@ mod rank;
 pub(crate) mod rename;
 mod scan;
 mod similar;
+pub(crate) mod split;
 #[cfg(test)]
 mod tests;
 pub(crate) mod write;
@@ -34,6 +35,7 @@ pub(crate) use hue::resolve_hue;
 pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
 pub(crate) use rename::{build_cli_rename, renamed_reappeared, run_rename};
+pub(crate) use split::{build_cli_split, run_split};
 pub(crate) use write::{run_color, run_hide, run_unhide};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

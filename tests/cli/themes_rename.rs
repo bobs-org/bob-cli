@@ -344,6 +344,121 @@ fn themes_rename_lock_busy_when_maintenance_lock_held() {
     drop(held);
 }
 
+fn listed_reappeared(
+    vault: &std::path::Path,
+    cache: &std::path::Path,
+) -> Vec<Value> {
+    let output = rename_command(vault, cache)
+        .args(["themes", "-a", "-f", "json"])
+        .output()
+        .expect("list reappeared");
+    assert_success(&output);
+    let value: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    value["renamed_reappeared"].as_array().unwrap().clone()
+}
+
+fn add_old_theme_back(vault: &std::path::Path) {
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — FIX\n- [x] (0800-0830 30m) — GTD\n- [ ] () — FIXES\n",
+    );
+}
+
+#[test]
+fn themes_rename_cycle_does_not_report_reappearance() {
+    let temp = TempDir::new("bob-cli-themes-rename-cycle");
+    let (vault, cache) = rename_vault(temp.path());
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "rename", "FIXES", "FIX", "--merge", "-o"])
+            .output()
+            .expect("rename out"),
+    );
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "rename", "FIX", "FIXES", "--merge", "-o"])
+            .output()
+            .expect("rename back"),
+    );
+    let flagged = listed_reappeared(&vault, &cache);
+    assert!(flagged.is_empty(), "{flagged:?}");
+}
+
+#[test]
+fn themes_rename_later_color_or_unhide_clears_reappearance() {
+    let temp = TempDir::new("bob-cli-themes-rename-readopt-color");
+    let (vault, cache) = rename_vault(temp.path());
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "rename", "FIXES", "FIX", "--merge", "-o"])
+            .output()
+            .expect("rename"),
+    );
+    add_old_theme_back(&vault);
+    let flagged = listed_reappeared(&vault, &cache);
+    assert_eq!(flagged.len(), 1, "{flagged:?}");
+
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "color", "FIXES", "red"])
+            .output()
+            .expect("color"),
+    );
+    let flagged = listed_reappeared(&vault, &cache);
+    assert!(flagged.is_empty(), "color should re-adopt: {flagged:?}");
+}
+
+#[test]
+fn themes_rename_later_unhide_clears_reappearance() {
+    let temp = TempDir::new("bob-cli-themes-rename-readopt-unhide");
+    let (vault, cache) = rename_vault(temp.path());
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "rename", "FIXES", "FIX", "--merge", "-o"])
+            .output()
+            .expect("rename"),
+    );
+    add_old_theme_back(&vault);
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "hide", "FIXES"])
+            .output()
+            .expect("hide"),
+    );
+    let flagged = listed_reappeared(&vault, &cache);
+    assert_eq!(flagged.len(), 1, "hide must not re-adopt: {flagged:?}");
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "unhide", "FIXES"])
+            .output()
+            .expect("unhide"),
+    );
+    let flagged = listed_reappeared(&vault, &cache);
+    assert!(flagged.is_empty(), "unhide should re-adopt: {flagged:?}");
+}
+
+#[test]
+fn themes_rename_later_hide_does_not_clear_reappearance() {
+    let temp = TempDir::new("bob-cli-themes-rename-hide");
+    let (vault, cache) = rename_vault(temp.path());
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "rename", "FIXES", "FIX", "--merge", "-o"])
+            .output()
+            .expect("rename"),
+    );
+    add_old_theme_back(&vault);
+    assert_success(
+        &rename_command(&vault, &cache)
+            .args(["themes", "hide", "FIXES"])
+            .output()
+            .expect("hide"),
+    );
+    let flagged = listed_reappeared(&vault, &cache);
+    assert_eq!(flagged.len(), 1, "{flagged:?}");
+    assert_eq!(flagged[0]["key"], "fixes");
+}
+
 fn hold_vault_lock(path: &std::path::Path) -> fs::File {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("lock dir");

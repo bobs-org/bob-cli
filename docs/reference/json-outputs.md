@@ -187,8 +187,8 @@ Day strip is a plugin view, not a `day_strip` field in CLI JSON. See
 
 Bare `bob themes` and `bob relations` run their `list` command. Lists read
 the vault and may update disposable local caches. Hide, unhide, and color
-commands write preference journals; rename previews with `-d` and otherwise
-rewrites matching vault content in a verified transaction.
+commands write preference journals; rename and split preview with `-d` and
+otherwise rewrite matching vault content in a verified transaction.
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
@@ -196,6 +196,7 @@ rewrites matching vault content in a verified transaction.
 | `bob themes hide`, `bob themes unhide` | `-f json` | `ok`, `hidden` or `unhidden` names, and `via` | `schema_version: 1` | [Pomodoro themes](../pomodoro-themes.md#json-contract) |
 | `bob themes color` | `-f json` | `ok`, `name`, `hue`, `pinned`, and `via`; `auto` returns `hue: null` and `pinned: false` | `schema_version: 1` | [Pomodoro themes](../pomodoro-themes.md#json-contract) |
 | `bob themes rename` | `-f json` | `mode`, `changed`, `from`, `to`, `merge`, affected `files` and `entries`, `state`, `color`, `commit`, `sync`, and `warnings` | `schema_version: 1` | [Global rename](../pomodoro-themes.md#pt10-global-rename) |
+| `bob themes split` | `-f json` | template: `mode: "template"`, `theme`, `entries`; preview/write: `mode`, `theme`, `targets` (`new`, `exempt`), `kept`, `unmapped`, `remaining`, `files` with `{line, ref, before, after}`, `commit`, `sync`, and `warnings` | `schema_version: 1` | [Split by entry](../pomodoro-themes.md#pt11-split-by-entry) |
 | `bob relations list` | `-f json` | `ok`, `counts`, `labels` with spelling variants and replacement strings, `renamed_reappeared`, and `warnings` | `schema_version: 1` | [Relation vocabulary](../task-relations.md#rv7-contracts) |
 | `bob relations hide`, `bob relations unhide` | `-f json` | `ok`, `hidden` or `unhidden` names, and `via` | `schema_version: 1` | [Relation vocabulary](../task-relations.md#rv7-contracts) |
 | `bob relations rename` | `-f json` | `mode`, `changed`, `from`, `to`, `merge`, affected `files`, `counts`, `state`, `inverse`, replacement strings, `commit`, `sync`, and `warnings` | `schema_version: 1` | [Rename transaction](../task-relations.md#rv8-the-rename-transaction) |
