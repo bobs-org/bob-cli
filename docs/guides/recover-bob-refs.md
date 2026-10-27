@@ -15,7 +15,7 @@ Reuse the vault and ref-job guides below for shared CLI failures.
 
 ## Before you start
 
-Install the CLI and Bob Mac Capture. Open Bob Refs (Control-Shift-Command-O).
+Install the CLI and Bob Mac Capture. Open Bob Refs (Control-Shift-Command-O or `Command-/`).
 These commands are read-only:
 
 ```bash
