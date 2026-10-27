@@ -88,7 +88,6 @@ pub(crate) mod reference_mutation;
 pub(crate) mod overwrite;
 // `ref rename` consumes the shared mutation helpers and recovers a pending
 // overwrite intent before its pre-sync.
-#[allow(dead_code)]
 pub(crate) mod rename;
 mod render_tex;
 mod report;

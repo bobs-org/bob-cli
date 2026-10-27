@@ -562,7 +562,6 @@ fn old_stem_from_query(query: &str) -> Option<String> {
 
 #[derive(Debug, Default)]
 struct AppliedRename {
-    moves: Vec<(PathBuf, PathBuf)>,
     before: crate::native::ref_library::migrate_tasks::BeforeImages,
     after: BTreeMap<PathBuf, Vec<u8>>,
     pdf_before: Option<(PathBuf, Vec<u8>)>,
@@ -615,11 +614,10 @@ fn snapshot_rename_inputs(
 }
 
 fn rename_hold_failure(code: &'static str, message: String) -> RenameFailure {
-    let hint = if code == "marker_changed" {
-        "close it in Highlights and retry the rename"
-    } else if code == "coordination_timeout" {
-        "close it in Highlights and retry the rename"
-    } else if code == "coordination_failed" {
+    let hint = if matches!(
+        code,
+        "marker_changed" | "coordination_timeout" | "coordination_failed"
+    ) {
         "close it in Highlights and retry the rename"
     } else {
         "run bob ref scan -w to commit the save, then retry the rename"
@@ -665,7 +663,7 @@ fn check_touched_unchanged(
                 "preimage_changed",
                 format!(
                     "a planned path changed while the rename waited; no files were written: {}",
-                    vault_path(&absolute.strip_prefix(&config.bob_dir).unwrap_or(&absolute).to_path_buf()),
+                    vault_path(absolute.strip_prefix(&config.bob_dir).unwrap_or(&absolute)),
                 ),
             ));
         }
@@ -861,10 +859,9 @@ fn commit_inside_scope(
                 child_env,
                 old_head,
                 subject,
-            ) {
-                if committed_subject == subject {
-                    return Ok(sha);
-                }
+            ) && committed_subject == subject
+            {
+                return Ok(sha);
             }
             let unstage =
                 unstage_paths(&config.bob_dir, child_env, &commit_paths);
@@ -880,17 +877,11 @@ fn rollback_inside_move_scope(
     ctx: &mut crate::native::file_coordination::MoveContext<'_>,
 ) -> String {
     let mut failures = Vec::new();
-    if pdf_moved {
-        if let Err(error) = ctx.move_back() {
-            failures.push(format!(
-                "could not move PDF back to its source: {error}"
-            ));
-        }
+    if pdf_moved && let Err(error) = ctx.move_back() {
+        failures
+            .push(format!("could not move PDF back to its source: {error}"));
     }
     failures.extend(rollback_moves(other_moves));
-    if !other_moves.is_empty() && transaction.moves.is_empty() {
-        let _ = transaction;
-    }
     if let Some((path, before)) = &transaction.pdf_before
         && let Some(message) = restore_bytes_if_uncontended(
             path,
@@ -1189,7 +1180,6 @@ fn rename_move_accessor(
     }
     if let Some(message) = move_failed {
         let transaction_for_rollback = AppliedRename {
-            moves: Vec::new(),
             before: transaction.before.clone(),
             after: BTreeMap::new(),
             pdf_before: None,
@@ -1209,7 +1199,6 @@ fn rename_move_accessor(
             ),
         ));
     }
-    transaction.moves.extend(other_moves.iter().cloned());
     let moved = prepared
         .report
         .moves
@@ -1374,29 +1363,29 @@ fn rename_merge_accessor(
             .after
             .insert(absolute, contents.as_bytes().to_vec());
     }
-    if prepared.report.id.changed {
-        if let Err(message) = write_id_marker_with_saved(
+    if prepared.report.id.changed
+        && let Err(message) = write_id_marker_with_saved(
             config,
             prepared,
             &mut transaction,
             &saved,
-        ) {
-            let rollback = rollback_inside_merge_scope(&transaction);
-            let code = if message.contains("unsafe or unexpected") {
-                "verify_failed"
+        )
+    {
+        let rollback = rollback_inside_merge_scope(&transaction);
+        let code = if message.contains("unsafe or unexpected") {
+            "verify_failed"
+        } else {
+            "preimage_changed"
+        };
+        return Err(RenameFailure::new(
+            code,
+            format!("{message}{rollback}"),
+            Some(if code == "preimage_changed" {
+                "run bob ref scan -w to commit the save, then retry the rename"
             } else {
-                "preimage_changed"
-            };
-            return Err(RenameFailure::new(
-                code,
-                format!("{message}{rollback}"),
-                Some(if code == "preimage_changed" {
-                    "run bob ref scan -w to commit the save, then retry the rename"
-                } else {
-                    "the rename was rolled back; inspect the listed paths and retry"
-                }),
-            ));
-        }
+                "the rename was rolled back; inspect the listed paths and retry"
+            }),
+        ));
     }
     if let Err(message) = verify_renamed(config, prepared, prior_row) {
         let rollback = rollback_inside_merge_scope(&transaction);
@@ -1426,215 +1415,6 @@ fn rename_merge_accessor(
                 Some("check the vault Git state and retry"),
             ))
         }
-    }
-}
-
-fn apply_and_verify(
-    config: &Config,
-    prepared: &PreparedPlan,
-    verify: impl FnOnce() -> std::result::Result<(), String>,
-) -> std::result::Result<AppliedRename, String> {
-    let mut rewrites = BTreeMap::<PathBuf, String>::new();
-    for rewrite in &prepared.link_rewrites {
-        rewrites.insert(rewrite.path.clone(), rewrite.contents.clone());
-    }
-    if let Some((path, contents)) = &prepared.own_note_rewrite {
-        rewrites.insert(path.clone(), contents.clone());
-    }
-    apply_transaction(
-        &config.bob_dir,
-        &prepared.report.moves,
-        &rewrites,
-        |transaction| {
-            if prepared.report.id.changed {
-                write_id_marker(config, prepared, transaction)?;
-            }
-            Ok(())
-        },
-        verify,
-    )
-}
-
-fn apply_transaction(
-    bob_dir: &Path,
-    moves: &[MoveInfo],
-    rewrites: &BTreeMap<PathBuf, String>,
-    post_write: impl FnOnce(&mut AppliedRename) -> std::result::Result<(), String>,
-    verify: impl FnOnce() -> std::result::Result<(), String>,
-) -> std::result::Result<AppliedRename, String> {
-    let mut transaction = AppliedRename::default();
-    let relative_paths = rewrites
-        .keys()
-        .map(|path| vault_path(path))
-        .collect::<Vec<_>>();
-    transaction.before =
-        crate::native::ref_library::migrate_tasks::snapshot_before_images(
-            bob_dir,
-            &relative_paths,
-        );
-    if let Some((path, _)) = transaction
-        .before
-        .iter()
-        .find(|(_, before)| before.is_none())
-    {
-        return Err(format!(
-            "could not snapshot rewrite source {}",
-            path.display()
-        ));
-    }
-
-    let result = (|| {
-        for movement in moves {
-            let from = PathBuf::from(&movement.from);
-            let to = PathBuf::from(&movement.to);
-            let from_absolute = bob_dir.join(&from);
-            let to_absolute = bob_dir.join(&to);
-            if let Some(parent) = to_absolute.parent()
-                && !parent.is_dir()
-            {
-                return Err(format!(
-                    "destination parent does not exist: {}",
-                    parent.display()
-                ));
-            }
-            super::super::io::rename_no_replace(&from_absolute, &to_absolute)
-                .map_err(|error| {
-                format!("move {} to {}: {error}", from.display(), to.display())
-            })?;
-            transaction.moves.push((from_absolute, to_absolute));
-        }
-
-        let moved = transaction
-            .moves
-            .iter()
-            .map(|(from, to)| {
-                (
-                    from.strip_prefix(bob_dir).unwrap_or(from).to_path_buf(),
-                    to.strip_prefix(bob_dir).unwrap_or(to).to_path_buf(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        for (relative, contents) in rewrites {
-            let write_relative = moved.get(relative).unwrap_or(relative);
-            let absolute = bob_dir.join(write_relative);
-            super::super::atomic_write(&absolute, contents).map_err(
-                |error| {
-                    format!("rewrite {}: {error}", write_relative.display())
-                },
-            )?;
-            transaction
-                .after
-                .insert(bob_dir.join(relative), contents.as_bytes().to_vec());
-        }
-        post_write(&mut transaction)?;
-        verify()
-    })();
-
-    if let Err(message) = result {
-        let rollback = rollback_applied(&transaction);
-        return Err(format!("{message}{rollback}"));
-    }
-    Ok(transaction)
-}
-
-fn rollback_applied(transaction: &AppliedRename) -> String {
-    let mut failures = rollback_moves(&transaction.moves);
-    if let Some((path, before)) = &transaction.pdf_before
-        && let Some(message) = restore_bytes_if_uncontended(
-            path,
-            before,
-            transaction.pdf_after.as_deref(),
-            "PDF",
-        )
-    {
-        failures.push(message);
-    }
-    let diverged =
-        crate::native::ref_library::migrate_tasks::restore_before_images(
-            &transaction.before,
-            &transaction.after,
-        );
-    failures.extend(diverged.into_iter().map(|path| {
-        format!("left concurrently changed path {} in place", path.display())
-    }));
-    if failures.is_empty() {
-        String::new()
-    } else {
-        format!("; rollback issues: {}", failures.join("; "))
-    }
-}
-
-fn write_id_marker(
-    config: &Config,
-    prepared: &PreparedPlan,
-    transaction: &mut AppliedRename,
-) -> std::result::Result<(), String> {
-    let pdf_path = config.bob_dir.join(&prepared.report.to.pdf);
-    let original_pdf = fs::read(&pdf_path).map_err(|error| {
-        format!("snapshot PDF {}: {error}", pdf_path.display())
-    })?;
-    transaction.pdf_before =
-        Some((config.bob_dir.join(&prepared.report.from.pdf), original_pdf));
-
-    let context = ScanContext::build(config);
-    let mut plan = plan_pdf_sync(
-        config,
-        &pdf_path,
-        SyncOptions {
-            dry_run: false,
-            write_pdf: true,
-            prefer: None,
-            ignore_unannotated_sidecar: false,
-        },
-        &context,
-    )
-    .map_err(|error| {
-        format!("plan marker sync for {}: {error}", pdf_path.display())
-    })?;
-    let mut plans = [&mut plan];
-    finalize_annotation_task_plans(config, &mut plans, &context)
-        .map_err(|error| format!("finalize marker sync plan: {error}"))?;
-    reserve_preview_ids(config, &mut plans, &context);
-
-    let safe = plan.marker_write_needed
-        && plan.reading_task_plan.as_ref().is_some_and(|reading| {
-            reading.action == ReadingTaskAction::NoWrite
-        })
-        && plan.annotation_tasks_created == 0
-        && plan.routed_intents.is_empty()
-        && plan
-            .routed_task_note_writes
-            .iter()
-            .all(|write| write.action == "none")
-        && plan.image_assets.is_empty();
-    if !safe {
-        return Err(
-            "marker sync plan included an unsafe or unexpected side effect"
-                .to_string(),
-        );
-    }
-
-    let mut session = MarkerWriteSession::uncoordinated();
-    let execution = execute_pdf_sync(
-        config,
-        &plan,
-        &mut RunWriteState::default(),
-        &mut session,
-    );
-    if let Ok(bytes) = fs::read(&pdf_path) {
-        transaction.pdf_after = Some(bytes);
-    }
-    if let Ok(bytes) = fs::read(config.bob_dir.join(&prepared.report.to.path)) {
-        transaction
-            .after
-            .insert(config.bob_dir.join(&prepared.report.from.path), bytes);
-    }
-    match execution {
-        Ok(PdfSyncOutcome::Written(_)) => Ok(()),
-        Ok(PdfSyncOutcome::Held(hold)) => {
-            Err(format!("write id to PDF marker: {}", hold.message))
-        }
-        Err(error) => Err(format!("write id to PDF marker: {error}")),
     }
 }
 
@@ -2987,75 +2767,6 @@ mod tests {
             "---\ntitle: A\nid: \"2024\"\nsource_url: https://example.test\n---\nbody\n"
         );
         assert_eq!(fields, ["id"]);
-    }
-
-    #[test]
-    fn forced_verify_failure_reverses_moves_and_restores_rewrites() {
-        let temp = tempfile::tempdir().expect("create scratch vault");
-        let vault = temp.path();
-        fs::create_dir_all(vault.join("ref/blogs")).unwrap();
-        fs::create_dir_all(vault.join("lib/blogs")).unwrap();
-        let old_note = vault.join("ref/blogs/old.md");
-        let old_pdf = vault.join("lib/blogs/old.pdf");
-        let linked_note = vault.join("sase.md");
-        fs::write(&old_note, "original reference\n").unwrap();
-        fs::write(&old_pdf, b"original PDF bytes").unwrap();
-        fs::write(&linked_note, "[[ref/blogs/old]]\n").unwrap();
-
-        let mut rewrites = BTreeMap::new();
-        rewrites.insert(
-            PathBuf::from("ref/blogs/old.md"),
-            "rewritten reference\n".to_string(),
-        );
-        rewrites.insert(
-            PathBuf::from("sase.md"),
-            "[[ref/blogs/new]]\n".to_string(),
-        );
-        let result = apply_transaction(
-            vault,
-            &[
-                MoveInfo {
-                    kind: MoveKind::Note,
-                    from: "ref/blogs/old.md".to_string(),
-                    to: "ref/blogs/new.md".to_string(),
-                },
-                MoveInfo {
-                    kind: MoveKind::Pdf,
-                    from: "lib/blogs/old.pdf".to_string(),
-                    to: "lib/blogs/new.pdf".to_string(),
-                },
-            ],
-            &rewrites,
-            |transaction| {
-                let new_pdf = vault.join("lib/blogs/new.pdf");
-                let original = fs::read(&new_pdf).unwrap();
-                transaction.pdf_before =
-                    Some((vault.join("lib/blogs/old.pdf"), original));
-                fs::write(&new_pdf, b"rewritten PDF marker").unwrap();
-                transaction.pdf_after = Some(fs::read(&new_pdf).unwrap());
-                let new_note = vault.join("ref/blogs/new.md");
-                fs::write(&new_note, b"rewritten reference\n").unwrap();
-                transaction.after.insert(
-                    vault.join("ref/blogs/old.md"),
-                    b"rewritten reference\n".to_vec(),
-                );
-                Ok(())
-            },
-            || Err("forced verifier failure".to_string()),
-        );
-
-        assert!(result.unwrap_err().contains("forced verifier failure"));
-        assert_eq!(
-            fs::read_to_string(old_note).unwrap(),
-            "original reference\n"
-        );
-        assert_eq!(fs::read(old_pdf).unwrap(), b"original PDF bytes");
-        assert_eq!(
-            fs::read_to_string(linked_note).unwrap(),
-            "[[ref/blogs/old]]\n"
-        );
-        assert!(!vault.join("ref/blogs/new.md").exists());
-        assert!(!vault.join("lib/blogs/new.pdf").exists());
     }
 
     #[cfg(test)]

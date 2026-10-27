@@ -132,6 +132,7 @@ impl MarkerWriteSession {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn uncoordinated() -> Self {
         Self::new(
             PdfWritePolicy::from_config(
@@ -179,7 +180,6 @@ impl MarkerWriteSession {
     /// Use this session's policy and coordinator for one planned, reversible
     /// move. The context is valid only inside the accessor, so both forward
     /// and rollback moves share one bounded coordination request.
-    #[allow(dead_code)] // Used by the dependent rename transaction phase.
     pub(super) fn coordinate_explicit_pdf_move_with<T>(
         &self,
         from: &Path,
