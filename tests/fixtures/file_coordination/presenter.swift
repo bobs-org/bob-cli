@@ -28,7 +28,13 @@ final class Document: NSDocument {
     }
 
     func state() -> [String: Any] {
-        ["event": "state", "text": text, "dirty": isDocumentEdited, "reads": reads]
+        [
+            "event": "state",
+            "text": text,
+            "dirty": isDocumentEdited,
+            "reads": reads,
+            "url": fileURL?.path ?? "",
+        ]
     }
 }
 

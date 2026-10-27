@@ -4,7 +4,9 @@ use super::pdf_write_policy::{
 };
 use super::*;
 use crate::native::config as bob_config;
-use crate::native::file_coordination::{self, Coordination};
+#[cfg(test)]
+use crate::native::file_coordination::MoveNotifier;
+use crate::native::file_coordination::{self, Coordination, MoveContext};
 use std::time::Duration;
 
 #[cfg(test)]
@@ -51,6 +53,25 @@ impl MarkerWriteCoordinator {
             }
             #[cfg(test)]
             Self::Fake(fake) => fake.run(path, budget, accessor),
+        }
+    }
+
+    pub(super) fn run_move<T>(
+        &self,
+        from: &Path,
+        to: &Path,
+        budget: Duration,
+        accessor: impl FnOnce(&mut MoveContext<'_>) -> T,
+    ) -> Coordination<T> {
+        match self {
+            Self::Platform => file_coordination::coordinate_moving_write(
+                from, to, budget, accessor,
+            ),
+            Self::Direct => {
+                file_coordination::move_directly(from, to, accessor)
+            }
+            #[cfg(test)]
+            Self::Fake(fake) => fake.run_move(from, to, budget, accessor),
         }
     }
 }
@@ -153,6 +174,27 @@ impl MarkerWriteSession {
             }));
         };
         Ok(self.coordinator.run(pdf, budget, accessor))
+    }
+
+    /// Use this session's policy and coordinator for one planned, reversible
+    /// move. The context is valid only inside the accessor, so both forward
+    /// and rollback moves share one bounded coordination request.
+    #[allow(dead_code)] // Used by the dependent rename transaction phase.
+    pub(super) fn coordinate_explicit_pdf_move_with<T>(
+        &self,
+        from: &Path,
+        to: &Path,
+        accessor: impl FnOnce(&mut MoveContext<'_>) -> T,
+    ) -> Result<Coordination<T>> {
+        if !self.policy.coordinate_pdf_writes || !self.coordinates() {
+            return Ok(file_coordination::move_directly(from, to, accessor));
+        }
+        let Some(budget) = self.next_budget() else {
+            return Ok(Coordination::Held(file_coordination::TimedOut {
+                waited: Duration::ZERO,
+            }));
+        };
+        Ok(self.coordinator.run_move(from, to, budget, accessor))
     }
 
     fn record_wait(&mut self, waited: Duration) {
@@ -483,6 +525,34 @@ pub(super) fn execute_pdf_sync(
 pub(super) struct FakeCoordinator {
     action: FakeAction,
     calls: Arc<Mutex<usize>>,
+    move_events: Arc<Mutex<Vec<FakeMoveEvent>>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum FakeMoveEvent {
+    Will(PathBuf, PathBuf),
+    Did(PathBuf, PathBuf),
+}
+
+#[cfg(test)]
+struct FakeMoveNotifier(Arc<Mutex<Vec<FakeMoveEvent>>>);
+
+#[cfg(test)]
+impl MoveNotifier for FakeMoveNotifier {
+    fn will_move(&self, from: &Path, to: &Path) {
+        self.0
+            .lock()
+            .expect("fake move events")
+            .push(FakeMoveEvent::Will(from.to_path_buf(), to.to_path_buf()));
+    }
+
+    fn did_move(&self, from: &Path, to: &Path) {
+        self.0
+            .lock()
+            .expect("fake move events")
+            .push(FakeMoveEvent::Did(from.to_path_buf(), to.to_path_buf()));
+    }
 }
 
 #[cfg(test)]
@@ -500,6 +570,7 @@ impl FakeCoordinator {
         Self {
             action: FakeAction::Grant { waited },
             calls: Arc::new(Mutex::new(0)),
+            move_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -507,6 +578,7 @@ impl FakeCoordinator {
         Self {
             action: FakeAction::GrantAfterSave { waited, bytes },
             calls: Arc::new(Mutex::new(0)),
+            move_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -514,6 +586,7 @@ impl FakeCoordinator {
         Self {
             action: FakeAction::Hold { waited },
             calls: Arc::new(Mutex::new(0)),
+            move_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -523,11 +596,16 @@ impl FakeCoordinator {
                 message: message.into(),
             },
             calls: Arc::new(Mutex::new(0)),
+            move_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub(super) fn call_count(&self) -> usize {
         *self.calls.lock().expect("fake coordinator calls")
+    }
+
+    pub(super) fn move_events(&self) -> Vec<FakeMoveEvent> {
+        self.move_events.lock().expect("fake move events").clone()
     }
 
     fn run<T>(
@@ -548,6 +626,47 @@ impl FakeCoordinator {
                     .expect("simulate Highlights saving before access");
                 Coordination::Granted {
                     value: accessor(),
+                    waited: *waited,
+                }
+            }
+            FakeAction::Hold { waited } => {
+                Coordination::Held(file_coordination::TimedOut {
+                    waited: *waited,
+                })
+            }
+            FakeAction::Fail { message } => {
+                Coordination::Failed(message.clone())
+            }
+        }
+    }
+
+    fn run_move<T>(
+        &self,
+        from: &Path,
+        to: &Path,
+        budget: Duration,
+        accessor: impl FnOnce(&mut MoveContext<'_>) -> T,
+    ) -> Coordination<T> {
+        let _ = (to, budget);
+        *self.calls.lock().expect("fake coordinator calls") += 1;
+        match &self.action {
+            FakeAction::Grant { waited } => {
+                let notifier = FakeMoveNotifier(Arc::clone(&self.move_events));
+                Coordination::Granted {
+                    value: file_coordination::move_with_notifier_for_test(
+                        from, to, &notifier, accessor,
+                    ),
+                    waited: *waited,
+                }
+            }
+            FakeAction::GrantAfterSave { waited, bytes } => {
+                std::fs::write(from, bytes)
+                    .expect("simulate presenter saving before move access");
+                let notifier = FakeMoveNotifier(Arc::clone(&self.move_events));
+                Coordination::Granted {
+                    value: file_coordination::move_with_notifier_for_test(
+                        from, to, &notifier, accessor,
+                    ),
                     waited: *waited,
                 }
             }

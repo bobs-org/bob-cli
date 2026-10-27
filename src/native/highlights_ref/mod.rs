@@ -56,6 +56,7 @@ mod hooks;
 mod image_notes;
 mod intake_status;
 mod io;
+pub(crate) use io::rename_no_replace;
 mod listen;
 mod listen_feed;
 mod marker;

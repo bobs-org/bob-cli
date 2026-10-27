@@ -3,7 +3,7 @@ use super::*;
 
 /// Rename without replacing an existing destination on the supported
 /// platforms. Shared by reference rename and the create-time intake session.
-pub(super) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};

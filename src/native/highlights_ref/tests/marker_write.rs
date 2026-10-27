@@ -2,6 +2,7 @@
 use super::*;
 use crate::native::config::parse_highlights_config;
 use crate::native::env::TestEnvGuard;
+use crate::native::file_coordination::Coordination;
 use crate::native::highlights_ref::pdf_write_policy::{
     PdfWritePolicy, ReadingHoldMode,
 };
@@ -199,6 +200,122 @@ fn assert_unchanged(
 ) {
     assert_eq!(bytes_of(pdf), pdf_before, "PDF should stay untouched");
     assert_eq!(text_of(note), note_before, "note should stay untouched");
+}
+
+#[test]
+fn explicit_move_session_saves_first_and_notifies_forward_and_inverse() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("source.pdf");
+    let to = dir.path().join("destination.pdf");
+    fs::write(&from, b"disk preimage").unwrap();
+    let fake = FakeCoordinator::grant_after_save(
+        Duration::from_millis(25),
+        b"presenter save".to_vec(),
+    );
+    let session = write_session(
+        MarkerWriteCoordinator::Fake(fake.clone()),
+        ReadingHoldMode::Exempt,
+    );
+
+    let result = session
+        .coordinate_explicit_pdf_move_with(&from, &to, |scope| {
+            assert_eq!(fs::read(&from).unwrap(), b"presenter save");
+            scope.move_forward().unwrap();
+            assert!(!from.exists());
+            assert_eq!(fs::read(&to).unwrap(), b"presenter save");
+            scope.move_back().unwrap();
+            assert!(!to.exists());
+            fs::read(&from).unwrap()
+        })
+        .expect("move session");
+
+    assert_eq!(
+        result,
+        Coordination::Granted {
+            value: b"presenter save".to_vec(),
+            waited: Duration::from_millis(25),
+        }
+    );
+    assert_eq!(fake.call_count(), 1, "one move scope covers both moves");
+    assert_eq!(
+        fake.move_events(),
+        vec![
+            FakeMoveEvent::Will(from.clone(), to.clone()),
+            FakeMoveEvent::Did(from.clone(), to.clone()),
+            FakeMoveEvent::Will(to.clone(), from.clone()),
+            FakeMoveEvent::Did(to, from),
+        ]
+    );
+}
+
+#[test]
+fn explicit_move_hold_and_platform_error_never_run_the_accessor() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("source.pdf");
+    let to = dir.path().join("destination.pdf");
+    fs::write(&from, b"source").unwrap();
+
+    for (fake, expected) in [
+        (FakeCoordinator::hold(Duration::from_millis(10)), "held"),
+        (FakeCoordinator::fail("permission denied"), "failed"),
+    ] {
+        let session = write_session(
+            MarkerWriteCoordinator::Fake(fake.clone()),
+            ReadingHoldMode::Exempt,
+        );
+        let mut ran = false;
+        let result = session
+            .coordinate_explicit_pdf_move_with(&from, &to, |_| {
+                ran = true;
+            })
+            .expect("move session");
+        assert!(!ran);
+        match (expected, result) {
+            ("held", Coordination::Held(_)) => {}
+            ("failed", Coordination::Failed(message)) => {
+                assert_eq!(message, "permission denied");
+            }
+            other => panic!("unexpected move result: {other:?}"),
+        }
+        assert_eq!(fake.call_count(), 1);
+        assert!(fake.move_events().is_empty());
+    }
+
+    assert_eq!(fs::read(&from).unwrap(), b"source");
+    assert!(!to.exists());
+}
+
+#[test]
+fn explicit_move_collision_balances_notification_without_claiming_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let from = dir.path().join("source.pdf");
+    let to = dir.path().join("destination.pdf");
+    fs::write(&from, b"source").unwrap();
+    fs::write(&to, b"occupant").unwrap();
+    let fake = FakeCoordinator::grant(Duration::ZERO);
+    let session = write_session(
+        MarkerWriteCoordinator::Fake(fake.clone()),
+        ReadingHoldMode::Exempt,
+    );
+
+    let result = session
+        .coordinate_explicit_pdf_move_with(&from, &to, |scope| {
+            scope.move_forward()
+        })
+        .expect("move session");
+    let Coordination::Granted { value, .. } = result else {
+        panic!("fake grant should run")
+    };
+    assert_eq!(value.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(&from).unwrap(), b"source");
+    assert_eq!(fs::read(&to).unwrap(), b"occupant");
+    assert_eq!(
+        fake.move_events(),
+        vec![
+            FakeMoveEvent::Will(from.clone(), to),
+            FakeMoveEvent::Did(from.clone(), from),
+        ]
+    );
 }
 
 #[test]
