@@ -59,6 +59,29 @@ Tools** and **Bob Navigation Hotkeys** in Obsidian's Community plugins
 settings, then reload Obsidian. Open a task note and confirm the task card
 renders.
 
+## 4. Run the rollout smoke gate
+
+Plugin rollouts finish with the packaged Obsidian startup smoke check from
+the `bob-plugins` checkout. It launches an isolated scratch vault and profile
+under Xvfb, never the live vault. The fixture verifies the managed Bob plugin
+build, not the user's full third-party plugin/settings combination.
+
+```bash
+npm run smoke:obsidian -- --self-test
+xvfb-run -a npm run smoke:obsidian -- --report /tmp/obsidian-smoke.json
+npm run smoke:obsidian -- --deployed-vault /path/to/vault --report /tmp/obsidian-smoke.json
+```
+
+The first command is an offline check only, never an Obsidian pass. The
+mandatory post-sync command verifies every expected repository plugin is
+present in the deployed vault at the expected version with `sync: synced`;
+`bob plugins list` exits 0 on drift, so the gate reads the JSON rows itself.
+Fixed defaults apply: layout-ready within 30 seconds, sampled peak JS heap
+below 1.5 GiB, the fixture relation indexed with zero non-Markdown reads, all
+four editor mounts (daily plus ordinary note, Live Preview plus Source), and
+no renderer crashes, plugin-load failures, or uncaught exceptions. On a
+skipped, unrun, or failing check, do not claim rollout success.
+
 ## If it goes wrong
 
 Uncommitted vault edits are skipped with `skipped <file> (dirty in vault; use
