@@ -504,6 +504,15 @@ and the PDF pages marked by invisible destinations; it does not change the
 PDF's visible or selectable text. Mermaid source remains in the catalog when
 its rendered block becomes an image.
 
+Web articles record the same `code.json` shape from converted source:
+`pandoc -f html -t gfm --wrap=none --preserve-tabs` turns the adapter's
+printed article HTML into the saved `source.md`, and the record filters
+run over that GFM with the `gfm` reader. Code pages come from Chrome's
+print-time named destinations (one `bob-code-N` anchor pair per printed
+code block, `page_source: anchor`) instead of TeX destinations; blocks
+with no anchor stay pageless but copyable. Link pages come from the
+printed PDF's URI annotations (`page_source: annotation`).
+
 The same render records every URI link in document order: written links,
 reference-style and titled links, `<…>` autolinks, `mailto:` autolinks, bare
 URLs, and linked images (text is the alt text). Internal `#` links, relative
@@ -529,7 +538,8 @@ older parser could treat it as two.
 
 ## Saved Markdown
 
-Every new Markdown-born reference keeps the exact bytes pandoc read under
+Every new Markdown-born or single-URL web-article reference keeps the
+exact cataloged bytes under
 `.bob/ref-sources/<ref_type>/<stem>--<hash12>/source.md` plus its
 render-time catalog `code.json` (version 1). `hash12` is the first 12 hex
 digits of SHA-256(`source.md`); `<stem>` is the final target stem and
@@ -544,6 +554,7 @@ atomically. Writes hold `bob_sync.lock`, and readers treat a missing
 | Plain `.md` | `markdown` | Input file bytes | — |
 | `-M` vault note | `plain_note` | Original note bytes | Note route + digest |
 | Snapshot | `note_snapshot` | Projected Markdown bytes | Note route + digest |
+| Web article | `web_article` | pandoc GFM of the printed article HTML | — |
 
 `code.json` keeps `"version": 1` with `blocks` and an additive `links` array
 (`n`, `url`, `text`, `title`, `autolink`, `context`, `section`, `page`,

@@ -796,11 +796,28 @@ pub(super) fn capture_article(
         format_bytes(installed_bytes),
         response.fidelity.status.as_deref().unwrap_or("unknown"),
     );
+    // The converted source view is stored write-once with its catalog on
+    // every branch (plain, companion audio, listen episode, reread): the
+    // verified pointer rides intake, and a queued (`-k`) birth adopts it
+    // by PDF digest when `bob ref scan` files the note.
+    let source_pointer = super::web_source::persist_article_store(
+        config,
+        &plan,
+        &out_pdf,
+        &plan.target,
+        response.source_html.as_deref(),
+        response.code_anchors.as_deref(),
+        response
+            .final_url
+            .clone()
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| web_url.cleaned.clone()),
+    );
     super::create::finish_create_intake(
         config,
         &plan,
         options.keep_intake_reason.as_deref(),
-        None,
+        source_pointer.as_deref(),
     )
     .map_err(ClipError::from)?;
     print_warnings(&styler, &response.warnings);

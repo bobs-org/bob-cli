@@ -22,6 +22,9 @@ pub(crate) const REPORT_METADATA_KEY: &str = "bob-code-report";
 /// Pandoc infers `markdown` from the file extension today; the explicit flag
 /// also enables bare-URL autolinks so new PDFs make them clickable.
 pub(crate) const MARKDOWN_PANDOC_READER: &str = "markdown+autolink_bare_uris";
+/// Reader for the web-article and web-collection saved sources, which are
+/// pandoc GFM converted from the printed article HTML (no extensions).
+pub(crate) const WEB_PANDOC_READER: &str = "gfm";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CodeSection {

@@ -78,7 +78,14 @@ plus the episode instead.
 5. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`, `id`,
    `source_url`, plus `author`, `published`, and `captured` when known) and staged
    under `xlib/<ref-type>/<stem>.pdf` for intake.
-6. Unless intake is kept or cannot safely run, `create` moves the PDF into `lib/`,
+6. The adapter's source view is converted to GFM and saved with its code/link
+   catalog: `pandoc` turns the printed article HTML into the write-once
+   `.bob/ref-sources/<ref-type>/<stem>--<hash12>/source.md`, the catalog
+   records each code block and link, Chrome's print destinations supply code
+   pages and the printed PDF's link annotations supply link pages, and the
+   note files with a `source_markdown` pointer. Without a source view (or
+   with `-o`) the reference files with `source_markdown: none`.
+7. Unless intake is kept or cannot safely run, `create` moves the PDF into `lib/`,
    writes the `ref/` note and reading task, and commits those paths together. A
    queued PDF is drained locally by `bob ref scan -i` or the host's intake timer.
 

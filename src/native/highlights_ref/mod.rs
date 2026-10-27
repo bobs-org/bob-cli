@@ -107,6 +107,7 @@ mod target;
 mod tests;
 pub(crate) mod text;
 mod underline;
+mod web_source;
 mod workdir;
 
 use annotation_tasks::*;

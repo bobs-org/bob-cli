@@ -220,6 +220,79 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("quote python path")
 }
 
+/// Fixture PDF for web-source tests: one page whose catalog `/Dests`
+/// names the first printed code block Chrome-style (explicit destination
+/// arrays, plus a `/D` dictionary for the end anchor), with one URI link
+/// annotation. Mirrors the adapter's print output for a source view with
+/// one fenced block and one hyperlink.
+pub(crate) fn web_fixture_pdf(link_uri: &str) -> Vec<u8> {
+    use lopdf::{dictionary, Document, Object, Stream};
+
+    let mut document = Document::with_version("1.4");
+    let pages_id = document.new_object_id();
+    let content_id =
+        document.add_object(Stream::new(dictionary! {}, Vec::new()));
+    let annotation_id = document.add_object(dictionary! {
+        "Type" => "Annot",
+        "Subtype" => "Link",
+        "Rect" => vec![
+            Object::Integer(72),
+            Object::Integer(700),
+            Object::Integer(200),
+            Object::Integer(712),
+        ],
+        "A" => dictionary! {
+            "S" => "URI",
+            "URI" => Object::string_literal(link_uri),
+        },
+    });
+    let page_id = document.add_object(dictionary! {
+        "Type" => "Page",
+        "Parent" => pages_id,
+        "MediaBox" => vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ],
+        "Contents" => content_id,
+        "Annots" => vec![Object::Reference(annotation_id)],
+    });
+    document.set_object(
+        pages_id,
+        dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![Object::Reference(page_id)],
+            "Count" => 1,
+        },
+    );
+    let xyz = || {
+        vec![
+            Object::Reference(page_id),
+            Object::Name(b"XYZ".to_vec()),
+            Object::Null,
+            Object::Null,
+            Object::Null,
+        ]
+    };
+    let catalog_id = document.add_object(dictionary! {
+        "Type" => "Catalog",
+        "Pages" => pages_id,
+        "Dests" => dictionary! {
+            "bob-code-1" => Object::Array(xyz()),
+            "bob-code-1-end" => dictionary! {
+                "D" => Object::Array(xyz()),
+            },
+        },
+    });
+    document.trailer.set("Root", catalog_id);
+    let mut bytes = Vec::new();
+    document
+        .save_to(&mut bytes)
+        .expect("serialize web fixture PDF");
+    bytes
+}
+
 /// A one-page PDF with no annotations, standing in for the adapter's
 /// fresh render.
 fn write_bare_pdf(path: &std::path::Path) {

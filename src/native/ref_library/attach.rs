@@ -695,6 +695,7 @@ pub(crate) fn record_source_catalog(
         "markdown" | "plain_note" | "attached" => {
             code_catalog::MARKDOWN_PANDOC_READER
         }
+        "web_article" | "web_collection" => code_catalog::WEB_PANDOC_READER,
         "note_snapshot" => {
             crate::native::highlights_ref::note_snapshot::profile::SNAPSHOT_PANDOC_READER
         }
@@ -1424,7 +1425,11 @@ fn classify_store_destination(
     };
     if !matches!(
         catalog.route.as_str(),
-        "markdown" | "plain_note" | "note_snapshot"
+        "markdown"
+            | "plain_note"
+            | "note_snapshot"
+            | "web_article"
+            | "web_collection"
     ) {
         return StoreDestination::Refuse(
             "destination is not a render-time store".to_string(),
@@ -2193,7 +2198,14 @@ mod tests {
             return;
         }
         let source = b"# Report\n\n## Details\n\nSee [link](https://example.test).\n\n```rust\nlet saved = 1;\n```\n";
-        for route in ["markdown", "plain_note", "attached", "note_snapshot"] {
+        for route in [
+            "markdown",
+            "plain_note",
+            "attached",
+            "note_snapshot",
+            "web_article",
+            "web_collection",
+        ] {
             let catalog =
                 record_source_catalog(source, route).expect("record pass");
             let expected_number = (route != "note_snapshot").then_some("1");
