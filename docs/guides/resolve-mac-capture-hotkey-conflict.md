@@ -18,6 +18,7 @@ Install Bob Mac Capture and open Settings. Default chords:
 
 - Capture: Control-Shift-Command-I (production) or
   Control-Shift-Command-R (development)
+- Capture alias: `Command-\` (on by default; Settings › Hotkey)
 - Bob Refs: Control-Shift-Command-O
 - Highlights-frontmost open: Command-O (configurable)
 
@@ -27,7 +28,8 @@ Settings › Hotkey shows the live capture chord as **Active binding**.
 
 Open Settings › Diagnostics. A failed capture registration reports
 `Hotkey conflict` with the Carbon status. A failed Refs binding reports
-`Refs hotkey conflict: …`. The same event is in Recent Activity
+`Refs hotkey conflict: …`. A failed Command-\ alias reports
+`Capture alias hotkey conflict: …`. The same event is in Recent Activity
 (`HH:mm:ss  message`). Confirm that status string before changing a
 binding.
 
@@ -45,8 +47,9 @@ Control-Shift-Command-R. Turn the production toggle off only when you
 need that development binding.
 
 Refs chords re-register as soon as you toggle **Open Bob Refs with
-Control-Shift-Command-O** or the Highlights-frontmost open key. Each
-action registers independently.
+Control-Shift-Command-O** or the Highlights-frontmost open key. The
+Capture alias toggle **Also open Capture with Command-\\** re-registers
+immediately. Each action registers independently.
 
 ## 3. Confirm the live chord
 
@@ -60,8 +63,9 @@ longer shows `Hotkey conflict` or `Refs hotkey conflict`.
 If Recheck Bob still reports the conflict, another process still owns
 that exact chord. Check Shortcuts, other menu-bar apps, and the
 Highlights-frontmost open key (Command-O or Control-O) separately from
-the global Refs toggle. Launch-at-login approval is a different
-permission; use
+the global Refs toggle. Apps such as 1Password, whose autofill shortcut
+defaults to `Command-\`, commonly claim the Capture alias. Launch-at-login
+approval is a different permission; use
 [Restore Mac Capture permissions](restore-mac-capture-permissions.md)
 when Settings › Launch reads `Requires approval in System Settings`.
 

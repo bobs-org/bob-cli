@@ -39,7 +39,8 @@ Accessibility grant; that grant is only for Highlights tabs.
 ## 2. Invoke the global shortcut and read the preview
 
 The production shortcut is Control-Shift-Command-I. A development shortcut
-Control-Shift-Command-R is selectable in Settings. See
+Control-Shift-Command-R is selectable in Settings. `Command-\` opens the
+same panel unless it is turned off in Settings › Hotkey. See
 [Keyboard](../reference/mac-capture/keyboard.md)
 for the current menu and shortcut list.
 
