@@ -510,20 +510,21 @@ fn apply_links_to(
     } else {
         action
     };
-    if action != RelationAction::Unchanged && existing_owner {
-        if let Some(block_id) = owner.block_id.as_deref() {
-            let located = locate_task_by_block_id(
-                ctx,
-                planner,
-                bob_dir,
-                &owner.relative,
-                block_id,
-            )?;
-            reports.source_refs.push(TaskBlockRef {
-                role: TaskBlockRole::RelationSource,
-                ..located
-            });
-        }
+    if action != RelationAction::Unchanged
+        && existing_owner
+        && let Some(block_id) = owner.block_id.as_deref()
+    {
+        let located = locate_task_by_block_id(
+            ctx,
+            planner,
+            bob_dir,
+            &owner.relative,
+            block_id,
+        )?;
+        reports.source_refs.push(TaskBlockRef {
+            role: TaskBlockRole::RelationSource,
+            ..located
+        });
     }
     reports.updates.push(relation_update_json(
         RelationDirection::To,

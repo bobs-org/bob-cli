@@ -1942,9 +1942,7 @@ fn markdown_overwrite_keeps_play_link_for_kept_audio() {
     let source = fixture.temp.path().join(format!("{STEM}.md"));
     write_file(
         &source,
-        concat!(
-            "# Report\n\n<div class=\"listen\">\n\n♫ **Brief audio edition** · 1 min · 1 chapter\n\n</div>\n\nReplacement body.\n",
-        ),
+        "# Report\n\n<div class=\"listen\">\n\n♫ **Brief audio edition** · 1 min · 1 chapter\n\n</div>\n\nReplacement body.\n",
     );
     let output = overwrite_command(&fixture, &source)
         .output()

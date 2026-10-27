@@ -66,7 +66,7 @@ fn read_history_candidates(count: usize) -> Result<Vec<String>, String> {
     {
         let database = bob_env::home_dir()
             .join("Library/Application Support/com.clipy-app.Clipy/sqlite.db");
-        return read_clipy_history(&database, count);
+        read_clipy_history(&database, count)
     }
 
     #[cfg(not(target_os = "macos"))]

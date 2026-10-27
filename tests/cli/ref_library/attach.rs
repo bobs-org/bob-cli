@@ -54,8 +54,8 @@ fn git_vault(temp: &TempDir) -> std::path::PathBuf {
 }
 
 fn commit_all(vault: &Path, message: &str) {
-    git_in(&vault, ["add", "-A"]);
-    git_in(&vault, ["commit", "-q", "-m", message]);
+    git_in(vault, ["add", "-A"]);
+    git_in(vault, ["commit", "-q", "-m", message]);
 }
 
 fn render_library_pdf(report: &Path, pdf: &Path) {
@@ -220,9 +220,7 @@ fn exact_render_orphan_fixture(
     commit_all(&vault, "seed real-render attach fixture");
     let stem = "machine_load_accounting_transparency";
     let source = temp.path().join(format!("{stem}.md"));
-    let markdown = format!(
-        "# Machine Load Accounting Transparency\n\n```text\nstale:    ⌂athena cap 5/8 ⟳41s              snapshot older than ~2 refresh cycles\n```\n\n```text\nrunner slot accounting preserves stable claims\n```\n\n```text\ncapacity displays explain live reservations\n```\n"
-    );
+    let markdown = "# Machine Load Accounting Transparency\n\n```text\nstale:    ⌂athena cap 5/8 ⟳41s              snapshot older than ~2 refresh cycles\n```\n\n```text\nrunner slot accounting preserves stable claims\n```\n\n```text\ncapacity displays explain live reservations\n```\n".to_string();
     write_file(&source, &markdown);
     let output = bob_command()
         .arg("ref")
@@ -327,7 +325,7 @@ fn run_attach(temp: &TempDir, vault: &Path, args: &[&str]) -> Output {
 }
 
 fn head_subject(vault: &Path) -> String {
-    let log = git_in(&vault, ["log", "--format=%s", "-1"]);
+    let log = git_in(vault, ["log", "--format=%s", "-1"]);
     String::from_utf8(log.stdout)
         .expect("log utf8")
         .trim()

@@ -418,10 +418,11 @@ pub(crate) fn relation_label_token_at(
         .find(|line| separator >= line.start && separator <= line.end)?;
     for scanned in scan_line_relations(line.text, line.start) {
         match &scanned {
-            ScannedRelation::Complete(entry) => {
-                if entry.separator.map(|(start, _)| start) == Some(separator) {
-                    return Some((entry.start, entry.direction, entry.hidden));
-                }
+            ScannedRelation::Complete(entry)
+                if entry.separator.map(|(start, _)| start)
+                    == Some(separator) =>
+            {
+                return Some((entry.start, entry.direction, entry.hidden));
             }
             ScannedRelation::PartialLabel {
                 raw, start, hidden, ..

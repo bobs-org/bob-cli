@@ -801,11 +801,11 @@ pub(crate) fn apply_v2_migration_note(
     let lines: Vec<&str> = body.lines().collect();
     let mut tracker_idx: Option<usize> = None;
     for (i, line) in lines.iter().enumerate() {
-        if let Some(hit) = crate::native::ref_tasks::parse_tracker_line(line) {
-            if crate::native::ref_tasks::is_open_mark(hit.mark) {
-                tracker_idx = Some(i);
-                break;
-            }
+        if let Some(hit) = crate::native::ref_tasks::parse_tracker_line(line)
+            && crate::native::ref_tasks::is_open_mark(hit.mark)
+        {
+            tracker_idx = Some(i);
+            break;
         }
     }
     let mut body_lines: Vec<String> =
@@ -880,10 +880,11 @@ pub(crate) fn apply_v2_migration_note(
         l.split_once(':')
             .is_some_and(|(k, _)| k.trim() == "highlights_marker_base")
     });
-    if has_hash && has_base {
-        if let Some(updated) = recompute_parent_free_hash(&front_lines) {
-            front_lines = updated;
-        }
+    if has_hash
+        && has_base
+        && let Some(updated) = recompute_parent_free_hash(&front_lines)
+    {
+        front_lines = updated;
     }
     let front_joined = front_lines.join("\n");
     Ok(format!("---\n{front_joined}\n---\n{healed}"))
@@ -893,18 +894,18 @@ pub(crate) fn apply_v2_migration_note(
 fn recompute_parent_free_hash(front_lines: &[String]) -> Option<Vec<String>> {
     let mut base_json: Option<String> = None;
     for line in front_lines {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim() == "highlights_marker_base" {
-                let mut v = v.trim().to_string();
-                if (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2)
-                    || (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
-                {
-                    v = v[1..v.len() - 1].to_string();
-                }
-                // Unescape single-quoted YAML escaping.
-                v = v.replace("''", "'");
-                base_json = Some(v);
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim() == "highlights_marker_base"
+        {
+            let mut v = v.trim().to_string();
+            if (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2)
+                || (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+            {
+                v = v[1..v.len() - 1].to_string();
             }
+            // Unescape single-quoted YAML escaping.
+            v = v.replace("''", "'");
+            base_json = Some(v);
         }
     }
     let base_json = base_json?;
@@ -918,12 +919,12 @@ fn recompute_parent_free_hash(front_lines: &[String]) -> Option<Vec<String>> {
     let hash = hex::encode(sha2::Sha256::digest(canonical.as_bytes()));
     let mut out: Vec<String> = Vec::new();
     for line in front_lines {
-        if let Some((k, _)) = line.split_once(':') {
-            if k.trim() == "highlights_marker_hash" {
-                // Preserve quoting style: single-quoted string.
-                out.push(format!("highlights_marker_hash: '{hash}'"));
-                continue;
-            }
+        if let Some((k, _)) = line.split_once(':')
+            && k.trim() == "highlights_marker_hash"
+        {
+            // Preserve quoting style: single-quoted string.
+            out.push(format!("highlights_marker_hash: '{hash}'"));
+            continue;
         }
         out.push(line.clone());
     }

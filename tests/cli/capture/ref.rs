@@ -1267,11 +1267,10 @@ fn percent_listen_reference_never_reads_clipboard_and_queues_listen_job() {
     let mixed_json: serde_json::Value = serde_json::from_slice(&parsed.stdout)
         .expect("mixed capture-parse JSON");
     assert_eq!(mixed_json["items"][0]["ref_listen"], true, "{mixed_json}");
-    assert_eq!(
-        mixed_json["items"][1]["ref_listen"]
+    assert!(
+        !mixed_json["items"][1]["ref_listen"]
             .as_bool()
             .unwrap_or(false),
-        false,
         "{mixed_json}"
     );
     assert_eq!(mixed_json["items"][0]["mode"], "ref", "{mixed_json}");

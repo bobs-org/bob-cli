@@ -591,7 +591,7 @@ fn partial_template_header(
     let content = &line[trimmed_start..];
     if !"@@template:".starts_with(&content.to_ascii_lowercase())
         || content.len() < 2
-        || content.to_ascii_lowercase() == "@@template:"
+        || content.eq_ignore_ascii_case("@@template:")
     {
         return None;
     }

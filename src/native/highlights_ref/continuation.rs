@@ -189,7 +189,7 @@ pub(crate) fn group_page_label(labels: &[Option<&str>]) -> Option<String> {
         let Some(label) = *label else {
             return Some(head.to_string());
         };
-        if !distinct.iter().any(|seen| *seen == label) {
+        if !distinct.contains(&label) {
             distinct.push(label);
         }
     }

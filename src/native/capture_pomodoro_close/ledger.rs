@@ -911,38 +911,6 @@ fn collect_descendant_tree(
     stack.pop().map(|frame| frame.nodes).unwrap_or_default()
 }
 
-#[cfg(test)]
-mod managed_dependency_tests {
-    use super::*;
-
-    #[test]
-    fn dependency_lines_are_notes_not_close_targets() {
-        let lines = [
-            "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
-            "  - 🧱 **BLOCKS:** ![[#^dependent]]",
-            "  - 🪢 **LINKS:** [[#^related]]",
-            "  - 🪢 **LINKED FROM:** ![[#^source]]",
-        ];
-        let bullets =
-            classify_sub_bullets(&lines, &(0..lines.len()), &BTreeSet::new());
-        let mut classified_links = Vec::new();
-        let mut startable_targets = Vec::new();
-        let mut embedded_targets = Vec::new();
-        for bullet in &bullets {
-            assert_eq!(bullet.kind, BulletKind::Note);
-            collect_links_from_bullet(
-                bullet,
-                &mut classified_links,
-                &mut startable_targets,
-                &mut embedded_targets,
-            );
-        }
-        assert!(classified_links.is_empty());
-        assert!(startable_targets.is_empty());
-        assert!(embedded_targets.is_empty());
-    }
-}
-
 fn collect_work_log_note_groups(
     spans: &[LineSpan<'_>],
     entry_index: usize,
@@ -975,4 +943,36 @@ fn collect_work_log_note_groups(
         });
     }
     groups
+}
+
+#[cfg(test)]
+mod managed_dependency_tests {
+    use super::*;
+
+    #[test]
+    fn dependency_lines_are_notes_not_close_targets() {
+        let lines = [
+            "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
+            "  - 🧱 **BLOCKS:** ![[#^dependent]]",
+            "  - 🪢 **LINKS:** [[#^related]]",
+            "  - 🪢 **LINKED FROM:** ![[#^source]]",
+        ];
+        let bullets =
+            classify_sub_bullets(&lines, &(0..lines.len()), &BTreeSet::new());
+        let mut classified_links = Vec::new();
+        let mut startable_targets = Vec::new();
+        let mut embedded_targets = Vec::new();
+        for bullet in &bullets {
+            assert_eq!(bullet.kind, BulletKind::Note);
+            collect_links_from_bullet(
+                bullet,
+                &mut classified_links,
+                &mut startable_targets,
+                &mut embedded_targets,
+            );
+        }
+        assert!(classified_links.is_empty());
+        assert!(startable_targets.is_empty());
+        assert!(embedded_targets.is_empty());
+    }
 }

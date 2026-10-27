@@ -514,9 +514,9 @@ fn highlight_identity_handles_duplicates_comments_legacy_and_folds() {
     .expect("idempotent after removal");
     assert_eq!(rerender.content, removed.content);
 
-    let legacy_prior = region_note(&format!(
-        "### Page 4\n\n> [!quote] legacy quote\n\n^h-aaaaaaaaaaaaaaaa\n"
-    ));
+    let legacy_prior = region_note(
+        "### Page 4\n\n> [!quote] legacy quote\n\n^h-aaaaaaaaaaaaaaaa\n",
+    );
     let legacy_sidecar = SidecarInput {
         path: dup_sidecar.path.clone(),
         annotations: parse_sidecar_markdown("## Page 4\n\n> legacy quote\n"),

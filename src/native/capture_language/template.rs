@@ -178,10 +178,10 @@ pub(crate) fn masked(raw: &str) -> String {
     let lines = split_physical_lines(raw);
     let mut bytes = raw.as_bytes().to_vec();
 
-    if let Some((_, line_number)) = analysis.header.as_ref() {
-        if let Some(line) = lines.get(line_number.saturating_sub(1)) {
-            bytes[line.start..line.end].fill(b' ');
-        }
+    if let Some((_, line_number)) = analysis.header.as_ref()
+        && let Some(line) = lines.get(line_number.saturating_sub(1))
+    {
+        bytes[line.start..line.end].fill(b' ');
     }
     for row in &analysis.rows {
         if let Some(line) = lines.get(row.line.saturating_sub(1)) {
@@ -384,40 +384,40 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
         .map(|placeholder| placeholder.field)
         .collect::<BTreeSet<_>>();
     let field_count = fields_used.iter().next_back().map_or(0, |last| last + 1);
-    if !fields_used.is_empty() {
-        if fields_used.iter().copied().ne(0..field_count) {
-            let missing = (0..field_count)
-                .find(|index| !fields_used.contains(index))
-                .expect("non-dense set has a missing value");
-            let description = if fields_used.first() == Some(&1)
-                && fields_used.iter().copied().eq(1..field_count)
-            {
-                if field_count == 2 {
-                    "{1}".to_string()
-                } else {
-                    format!("{{1}}–{{{}}}", field_count - 1)
-                }
+    if !fields_used.is_empty() && fields_used.iter().copied().ne(0..field_count)
+    {
+        let missing = (0..field_count)
+            .find(|index| !fields_used.contains(index))
+            .expect("non-dense set has a missing value");
+        let description = if fields_used.first() == Some(&1)
+            && fields_used.iter().copied().eq(1..field_count)
+        {
+            if field_count == 2 {
+                "{1}".to_string()
             } else {
-                let shown = fields_used
-                    .iter()
-                    .map(|field| format!("{{{field}}}"))
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                shown
-            };
-            let message = if fields_used.first() == Some(&1)
-                && fields_used.iter().copied().eq(1..field_count)
-            {
-                format!("placeholders start at {{0}}; this template uses {description}")
-            } else {
-                format!("this template uses {description} but not {{{missing}}}; number placeholders {{0}}–{{{}}} without gaps", field_count - 1)
-            };
-            issues.push(issue(
-                "template_placeholder_gap",
-                format!("template line {}: {message}", block.line_start),
-                block.range.clone(),
-            ));
-        }
+                format!("{{1}}–{{{}}}", field_count - 1)
+            }
+        } else {
+            fields_used
+                .iter()
+                .map(|field| format!("{{{field}}}"))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        };
+        let message = if fields_used.first() == Some(&1)
+            && fields_used.iter().copied().eq(1..field_count)
+        {
+            format!(
+                "placeholders start at {{0}}; this template uses {description}"
+            )
+        } else {
+            format!("this template uses {description} but not {{{missing}}}; number placeholders {{0}}–{{{}}} without gaps", field_count - 1)
+        };
+        issues.push(issue(
+            "template_placeholder_gap",
+            format!("template line {}: {message}", block.line_start),
+            block.range.clone(),
+        ));
     }
 
     let mut rows = Vec::new();

@@ -334,12 +334,7 @@ fn capture_parse_does_not_apply_the_separator_toggle() {
         .iter()
         .filter_map(|diagnostic| diagnostic["code"].as_str())
         .collect();
-    assert!(
-        codes
-            .iter()
-            .any(|code| *code == "invalid_pomodoro_block_id"),
-        "{json}"
-    );
+    assert!(codes.contains(&"invalid_pomodoro_block_id"), "{json}");
 }
 
 #[test]

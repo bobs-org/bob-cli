@@ -1440,7 +1440,7 @@ Body.
     let result = grouped(crlf);
     assert!(result.contents.contains("- [*] #task next\r\n\r\n## Notes"));
     assert!(result.contents.contains("\r\n"));
-    assert_idempotent(&crlf);
+    assert_idempotent(crlf);
 }
 
 #[test]

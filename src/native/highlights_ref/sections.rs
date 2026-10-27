@@ -500,9 +500,7 @@ fn token_at(line: &str, at: usize, sigil: char) -> Option<RawTagHit> {
         }
         let tag_name =
             line[at + 1..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        if hash_tag_key(tag_name).is_none() {
-            return None;
-        }
+        hash_tag_key(tag_name)?;
     }
     Some(RawTagHit {
         span: at..end,
@@ -691,12 +689,12 @@ pub(super) fn display_source(
                 {
                     edits.push((hit.span.clone(), ""));
                 }
-                SectionTagHitKind::Escaped if hit.sigil == '@' => {
-                    if hit.span.start > 0
-                        && line.as_bytes()[hit.span.start - 1] == b'\\'
-                    {
-                        edits.push((hit.span.start - 1..hit.span.start, ""));
-                    }
+                SectionTagHitKind::Escaped
+                    if hit.sigil == '@'
+                        && hit.span.start > 0
+                        && line.as_bytes()[hit.span.start - 1] == b'\\' =>
+                {
+                    edits.push((hit.span.start - 1..hit.span.start, ""));
                 }
                 SectionTagHitKind::Escaped => {
                     // `\#name` stays verbatim: stripping the slash would turn
@@ -1387,26 +1385,25 @@ pub(super) fn plan_sections(
                     let _ = annotation;
                 }
             }
-        } else if sticky_only_tags {
-            if let Some((_, annotation, _, hit)) =
+        } else if sticky_only_tags
+            && let Some((_, annotation, _, hit)) =
                 tag_hits.iter().find(|(_, _, _, hit)| {
                     hit.kind == SectionTagHitKind::Positional
                         && key_to_section.contains_key(&hit.key)
                 })
-            {
-                let display_tag = key_to_section
-                    .get(&hit.key)
-                    .map(|index| plan.sections[*index].tag.as_str())
-                    .unwrap_or(&hit.raw);
-                plan.diagnostics.push(SectionDiagnostic {
-                    kind: SectionDiagnosticKind::TagOnlyNote,
-                    page_label: annotation.page_label.clone(),
-                    detail: format!(
-                        "{} (a note needs text to join a section)",
-                        display_tag
-                    ),
-                });
-            }
+        {
+            let display_tag = key_to_section
+                .get(&hit.key)
+                .map(|index| plan.sections[*index].tag.as_str())
+                .unwrap_or(&hit.raw);
+            plan.diagnostics.push(SectionDiagnostic {
+                kind: SectionDiagnosticKind::TagOnlyNote,
+                page_label: annotation.page_label.clone(),
+                detail: format!(
+                    "{} (a note needs text to join a section)",
+                    display_tag
+                ),
+            });
         }
     }
 

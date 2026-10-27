@@ -73,13 +73,12 @@ fn assert_task(raw: &str, policy: Option<&UrlRoutingPolicy>) {
 }
 
 fn assert_not_ref(raw: &str, policy: Option<&UrlRoutingPolicy>) {
-    match execute_routing(raw, policy) {
-        Ok(parsed) => assert!(
+    if let Ok(parsed) = execute_routing(raw, policy) {
+        assert!(
             !matches!(parsed.kind, CaptureKind::Ref(_)),
             "{raw}: must not claim a reference item, got {:?}",
             parsed.kind
-        ),
-        Err(_) => {}
+        );
     }
 }
 

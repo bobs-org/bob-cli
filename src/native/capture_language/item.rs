@@ -181,40 +181,20 @@ fn claim_reference_item<'a>(
         // `URL %` / `URL @`: listen with default/global/forced parent. The marker
         // is item-local and whitespace-delimited; attached `@` stays part
         // of the URL and never claims here.
-        if is_standalone_listen_marker(tokens[1].text) {
-            if let Some(intent) = classify_token(tokens[0].text) {
-                if !policy.admits(&intent, RoutingEntry::Capture) {
-                    return None;
-                }
-                if let Some(forced) = forced_route {
-                    let route = normalize_forced_route(forced).ok()?;
-                    return Some(parsed_capture_item_outcome(
-                        item,
-                        ParsedCaptureText {
-                            body: tokens[0].text.to_string(),
-                            clip: None,
-                            route: Some(route),
-                            kind: CaptureKind::Ref(RefIntent::with_listen(
-                                intent,
-                            )),
-                            scheduled_offset: None,
-                            priority_level: None,
-                            sub_bullets: Vec::new(),
-                            dependencies: Vec::new(),
-                            blocked_tasks: Vec::new(),
-                            relations: Vec::new(),
-                            dependency_target: None,
-                        },
-                        Vec::new(),
-                        Some(format!("--route {forced}")),
-                    ));
-                }
+        if is_standalone_listen_marker(tokens[1].text)
+            && let Some(intent) = classify_token(tokens[0].text)
+        {
+            if !policy.admits(&intent, RoutingEntry::Capture) {
+                return None;
+            }
+            if let Some(forced) = forced_route {
+                let route = normalize_forced_route(forced).ok()?;
                 return Some(parsed_capture_item_outcome(
                     item,
                     ParsedCaptureText {
                         body: tokens[0].text.to_string(),
                         clip: None,
-                        route: None,
+                        route: Some(route),
                         kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
                         scheduled_offset: None,
                         priority_level: None,
@@ -225,9 +205,27 @@ fn claim_reference_item<'a>(
                         dependency_target: None,
                     },
                     Vec::new(),
-                    None,
+                    Some(format!("--route {forced}")),
                 ));
             }
+            return Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: tokens[0].text.to_string(),
+                    clip: None,
+                    route: None,
+                    kind: CaptureKind::Ref(RefIntent::with_listen(intent)),
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
+                    dependency_target: None,
+                },
+                Vec::new(),
+                None,
+            ));
         }
         if forced_route.is_some() {
             return None;
@@ -1346,12 +1344,13 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
             name_spelling = Some(NameSpelling::Hash);
             token_len += 1 + name_len;
         }
-    } else if !doubled && suffix.is_empty() {
-        if let Some(name_len) = bare_start_name_len(rest) {
-            name = Some(rest[..name_len].to_string());
-            name_spelling = Some(NameSpelling::Bare);
-            token_len += name_len;
-        }
+    } else if !doubled
+        && suffix.is_empty()
+        && let Some(name_len) = bare_start_name_len(rest)
+    {
+        name = Some(rest[..name_len].to_string());
+        name_spelling = Some(NameSpelling::Bare);
+        token_len += name_len;
     }
     let mut drop: Option<(usize, String)> = None;
     let mut timing: Option<(usize, String)> = None;
@@ -1850,19 +1849,17 @@ pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
     {
         return false;
     }
-    if let Some((_, after_tilde)) = drop {
-        if lex_start_drop(&after_tilde, 0, nospace)
+    if let Some((_, after_tilde)) = drop
+        && !lex_start_drop(&after_tilde, 0, nospace)
             .is_ok_and(|outcome| matches!(outcome, StartDropOutcome::Valid(_)))
-            == false
-        {
-            return false;
-        }
+    {
+        return false;
     }
     // A timing part, when present, must itself be a valid `<X>`.
-    if let Some((_, after_at)) = timing {
-        if parse_pomodoro_start_suffix(&after_at).is_err() {
-            return false;
-        }
+    if let Some((_, after_at)) = timing
+        && parse_pomodoro_start_suffix(&after_at).is_err()
+    {
+        return false;
     }
     true
 }
@@ -2189,7 +2186,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 lexed_selection.park_all,
                 lexed_selection.complete_all,
             ) {
-                Err(error) => return Err(error.message),
+                Err(error) => Err(error.message),
                 Ok(CloseInlineLex::Dangling { index, .. }) => {
                     if has_bullet_child {
                         let bullet = format!("- {index}");
@@ -2197,9 +2194,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                     let head = format!("{first} {index}");
                     let plain = is_plain_whole_item_close(first);
-                    return Err(close_inline_dangling_error(
-                        &head, index, plain,
-                    ));
+                    Err(close_inline_dangling_error(&head, index, plain))
                 }
                 Ok(entry @ CloseInlineLex::Entry { .. }) => {
                     let (index, index_range, text) = match &entry {
@@ -2235,7 +2230,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         default_index,
                     )];
                     let body = first.to_string();
-                    return Ok(Some(parsed_capture_item_outcome(
+                    Ok(Some(parsed_capture_item_outcome(
                         item,
                         ParsedCaptureText {
                             body,
@@ -2252,7 +2247,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         },
                         Vec::new(),
                         None,
-                    )));
+                    )))
                 }
             }
         }

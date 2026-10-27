@@ -449,26 +449,22 @@ fn rewrite_markdown_links(
                 let target = out[start..start + end_rel].to_string();
                 if target.contains("#^ref") {
                     let (tpart, frag) = split_md_target(&target);
-                    if frag == "^ref" {
-                        if let LinkResolution::Migrated(ref_note) =
+                    if frag == "^ref"
+                        && let LinkResolution::Migrated(ref_note) =
                             resolve_link_target(
                                 &tpart,
                                 path_to_ref,
                                 stem_to_ref,
                                 &empty_counts,
                             )
-                        {
-                            if let Some((route, new_id)) =
-                                final_map.get(&ref_note)
-                            {
-                                occurrences.push((
-                                    start,
-                                    start + end_rel,
-                                    target,
-                                    format!("{route}#^{new_id}"),
-                                ));
-                            }
-                        }
+                        && let Some((route, new_id)) = final_map.get(&ref_note)
+                    {
+                        occurrences.push((
+                            start,
+                            start + end_rel,
+                            target,
+                            format!("{route}#^{new_id}"),
+                        ));
                     }
                 }
                 i = start + end_rel + 1;

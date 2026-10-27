@@ -653,28 +653,6 @@ fn display_path(path: &std::path::Path) -> String {
     text.into_owned()
 }
 
-#[cfg(test)]
-mod source_link_tests {
-    use super::collapse_keep_source_link;
-
-    #[test]
-    fn collapses_only_the_generated_keep_link_shape() {
-        assert_eq!(
-            collapse_keep_source_link(
-                "Call [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") then [site](https://example.test)"
-            ),
-            "Call 💡 then [site](https://example.test)",
-        );
-        for lookalike in [
-            "[💡](https://example.test \"Open in Keep\")",
-            "[💡](https://example.test \"Open in Google Keep\"",
-            "[💡](https://example.test (broken) \"Open in Google Keep\")",
-        ] {
-            assert_eq!(collapse_keep_source_link(lookalike), lookalike);
-        }
-    }
-}
-
 /// The footer: non-zero state counts, then the next command when
 /// anything is actionable, else the all-clear line.
 fn footer(plan: &Plan) -> String {
@@ -882,4 +860,26 @@ fn print_json(
         },
     });
     println!("{document}");
+}
+
+#[cfg(test)]
+mod source_link_tests {
+    use super::collapse_keep_source_link;
+
+    #[test]
+    fn collapses_only_the_generated_keep_link_shape() {
+        assert_eq!(
+            collapse_keep_source_link(
+                "Call [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") then [site](https://example.test)"
+            ),
+            "Call 💡 then [site](https://example.test)",
+        );
+        for lookalike in [
+            "[💡](https://example.test \"Open in Keep\")",
+            "[💡](https://example.test \"Open in Google Keep\"",
+            "[💡](https://example.test (broken) \"Open in Google Keep\")",
+        ] {
+            assert_eq!(collapse_keep_source_link(lookalike), lookalike);
+        }
+    }
 }

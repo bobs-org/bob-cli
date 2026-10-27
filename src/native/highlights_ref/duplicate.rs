@@ -168,18 +168,18 @@ impl AlreadyCaptured {
             }
             if hit.is_ref_note {
                 let copy = copy_from_ref_note(config, &hit.path);
-                if title == title_fallback || title.is_empty() {
-                    if let Some(note_title) = note_title(&hit.path) {
-                        title = note_title;
-                    }
+                if (title == title_fallback || title.is_empty())
+                    && let Some(note_title) = note_title(&hit.path)
+                {
+                    title = note_title;
                 }
                 copies.push(copy);
             } else {
                 let copy = copy_from_queued(config, &hit.path);
-                if title == title_fallback || title.is_empty() {
-                    if let Some(marker_title) = queued_title(&hit.path) {
-                        title = marker_title;
-                    }
+                if (title == title_fallback || title.is_empty())
+                    && let Some(marker_title) = queued_title(&hit.path)
+                {
+                    title = marker_title;
                 }
                 copies.push(copy);
             }

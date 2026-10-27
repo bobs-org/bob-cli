@@ -687,7 +687,7 @@ fn placeholder_at(template: &str, open: usize) -> Option<(&str, usize)> {
         }
         length += character.len_utf8();
     }
-    if length == 0 || rest[length..].chars().next() != Some('}') {
+    if length == 0 || !rest[length..].starts_with('}') {
         return None;
     }
     Some((&rest[..length], open + 1 + length + 1))

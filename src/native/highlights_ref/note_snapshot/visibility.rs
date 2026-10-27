@@ -447,7 +447,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                         let (content, mut nested) =
                             self.filter_inlines(item.content);
                         item.content = content;
-                        extracted.extend(nested.drain(..));
+                        extracted.append(&mut nested);
                         let (children, nested) =
                             self.filter_blocks(item.children);
                         item.children = children;
@@ -474,7 +474,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                     let (label_filtered, mut nested) =
                         self.filter_inlines(label);
                     label = label_filtered;
-                    extracted.extend(nested.drain(..));
+                    extracted.append(&mut nested);
                     let mut filtered_items = Vec::with_capacity(items.len());
                     for item in items {
                         let (item_filtered, nested) = self.filter_inlines(item);
@@ -494,7 +494,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                 } => {
                     let (filtered, mut nested) = self.filter_inlines(label);
                     label = filtered;
-                    extracted.extend(nested.drain(..));
+                    extracted.append(&mut nested);
                     if let Some(date_inlines) = date {
                         let (filtered, nested) =
                             self.filter_inlines(date_inlines);

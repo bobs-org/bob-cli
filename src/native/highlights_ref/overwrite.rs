@@ -1079,7 +1079,7 @@ fn locate_task_fingerprint(
         .get(line_index)
         .ok_or_else(|| task_refusal(row))?
         .to_string();
-    let mark = ref_tasks::task_mark(&ref_tasks::strip_blockquote_prefix(&line))
+    let mark = ref_tasks::task_mark(ref_tasks::strip_blockquote_prefix(&line))
         .ok_or_else(|| task_refusal(row))?;
     let end = task_subtree_end(&lines, line_index);
     let segments = contents.split_inclusive('\n').collect::<Vec<_>>();

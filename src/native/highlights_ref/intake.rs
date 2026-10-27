@@ -276,14 +276,14 @@ fn file_unit(
         }
     };
 
-    if !unit.is_library_pdf() {
-        if let Err(failure) = session.pre_sync() {
-            return IntakeOutcome::Queued {
-                path,
-                reason: failure.reason,
-                detail: failure.detail,
-            };
-        }
+    if !unit.is_library_pdf()
+        && let Err(failure) = session.pre_sync()
+    {
+        return IntakeOutcome::Queued {
+            path,
+            reason: failure.reason,
+            detail: failure.detail,
+        };
     }
 
     match session.ingest(
@@ -894,16 +894,16 @@ fn validate_unit_collisions(
             }
         }
     }
-    if let IntakeUnit::Audio { .. } = unit {
-        if !pdf.with_extension("pdf").is_file() {
-            return Err(QueueFailure::new(
-                QueueReason::Collision,
-                format!(
-                    "matching library PDF is missing: {}",
-                    pdf.with_extension("pdf").display()
-                ),
-            ));
-        }
+    if let IntakeUnit::Audio { .. } = unit
+        && !pdf.with_extension("pdf").is_file()
+    {
+        return Err(QueueFailure::new(
+            QueueReason::Collision,
+            format!(
+                "matching library PDF is missing: {}",
+                pdf.with_extension("pdf").display()
+            ),
+        ));
     }
     let note = ref_note_path(config, pdf).map_err(|error| {
         QueueFailure::new(QueueReason::Refused, error.to_string())
@@ -943,11 +943,11 @@ fn perform_moves(
 ) -> std::result::Result<(), QueueFailure> {
     let mut completed = Vec::new();
     for moved in moves.iter() {
-        if let Some(parent) = moved.to.parent() {
-            if let Err(error) = fs::create_dir_all(parent) {
-                let detail = format!("create {}: {error}", parent.display());
-                return Err(rollback_moves(&mut completed, detail));
-            }
+        if let Some(parent) = moved.to.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            let detail = format!("create {}: {error}", parent.display());
+            return Err(rollback_moves(&mut completed, detail));
         }
         if let Err(error) = super::io::rename_no_replace(&moved.from, &moved.to)
         {
@@ -1303,12 +1303,11 @@ fn record_drain_status(run: &Result<IntakeOnlyRun>) {
             }
         }
         Ok(IntakeOnlyRun::Drained(report)) => {
-            if report.filed_count() > 0 {
-                if let Some(warning) =
+            if report.filed_count() > 0
+                && let Some(warning) =
                     intake_status::record_success(COMMAND, report.filed_count())
-                {
-                    eprintln!("{warning}");
-                }
+            {
+                eprintln!("{warning}");
             }
             let stuck = report.items.iter().find_map(|item| match item {
                 DrainItem::Filed { .. } => None,
@@ -1319,12 +1318,11 @@ fn record_drain_status(run: &Result<IntakeOnlyRun>) {
                     Some(("incomplete", error.as_str()))
                 }
             });
-            if let Some((reason, detail)) = stuck {
-                if let Some(warning) =
+            if let Some((reason, detail)) = stuck
+                && let Some(warning) =
                     intake_status::record_failure(COMMAND, reason, detail)
-                {
-                    eprintln!("{warning}");
-                }
+            {
+                eprintln!("{warning}");
             }
         }
         Ok(IntakeOnlyRun::Empty | IntakeOnlyRun::Preview(_)) => {}

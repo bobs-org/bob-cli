@@ -464,13 +464,13 @@ pub(crate) fn restore_bytes_if_uncontended(
             if after.is_some_and(|after| after == current.as_slice())
                 || current == before =>
         {
-            if current != before {
-                if let Err(error) = atomic_write_bytes(path, before) {
-                    return Some(format!(
-                        "could not restore {kind} bytes at {}: {error}",
-                        path.display()
-                    ));
-                }
+            if current != before
+                && let Err(error) = atomic_write_bytes(path, before)
+            {
+                return Some(format!(
+                    "could not restore {kind} bytes at {}: {error}",
+                    path.display()
+                ));
             }
             None
         }

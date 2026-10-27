@@ -654,9 +654,7 @@ pub(crate) fn parse_adjustment_range(line: &str) -> Option<AdjustRange> {
     let mut search = 0;
     while let Some(relative_open) = line[search..].find('(') {
         let open = search + relative_open;
-        let Some(relative_close) = line[open..].find(')') else {
-            return None;
-        };
+        let relative_close = line[open..].find(')')?;
         let close = open + relative_close;
         if let Some(range) = parse_adjustment_inner(line, open, close) {
             return Some(range);
@@ -1009,5 +1007,5 @@ pub(crate) fn format_adjusted_range(
 }
 
 pub(crate) fn normalize_minutes(value: i64) -> u64 {
-    (((value % 1440) + 1440) % 1440) as u64
+    value.rem_euclid(1440) as u64
 }

@@ -246,14 +246,14 @@ pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
                 &mut sections,
                 &note.identity,
             );
-            if let Some(outcome) = &mut project_outcome {
-                if !outcome.history.is_empty() {
-                    sections.push(outcome_history_section(
-                        &note.identity,
-                        std::mem::take(&mut outcome.history),
-                        &expander.used_anchor_ids,
-                    ));
-                }
+            if let Some(outcome) = &mut project_outcome
+                && !outcome.history.is_empty()
+            {
+                sections.push(outcome_history_section(
+                    &note.identity,
+                    std::mem::take(&mut outcome.history),
+                    &expander.used_anchor_ids,
+                ));
             }
             bob_outcome = project_outcome;
         }
@@ -1257,19 +1257,19 @@ fn compose_bob_masthead<L: SourceLoader>(
         ))]);
     }
 
-    if outcome.is_none() && *kind == NoteKind::TerminalProject {
-        if let Some(status) = metadata
+    if outcome.is_none()
+        && *kind == NoteKind::TerminalProject
+        && let Some(status) = metadata
             .and_then(|metadata| metadata_value(metadata, "status"))
             .and_then(yaml_scalar_text)
-        {
-            let status = ProjectStatus::parse(Some(&status));
-            if matches!(status, ProjectStatus::Done | ProjectStatus::Canceled) {
-                masthead.meta.push(vec![Inline::Chip(Chip {
-                    content: vec![Inline::Text(status.label().to_string())],
-                    kind: ChipKind::Normal,
-                    target: None,
-                })]);
-            }
+    {
+        let status = ProjectStatus::parse(Some(&status));
+        if matches!(status, ProjectStatus::Done | ProjectStatus::Canceled) {
+            masthead.meta.push(vec![Inline::Chip(Chip {
+                content: vec![Inline::Text(status.label().to_string())],
+                kind: ChipKind::Normal,
+                target: None,
+            })]);
         }
     }
 
@@ -2163,12 +2163,11 @@ fn remap_block_anchors(
                 remap_inline_anchors(&mut heading.content, mapping);
             }
             Block::Task(task) => {
-                if let Some(original) = &task.anchor {
-                    if let Some(anchor) = mapping
+                if let Some(original) = &task.anchor
+                    && let Some(anchor) = mapping
                         .get(&(original.identity.clone(), original.id.clone()))
-                    {
-                        task.anchor = Some(anchor.clone());
-                    }
+                {
+                    task.anchor = Some(anchor.clone());
                 }
                 remap_inline_anchors(&mut task.content, mapping);
                 for chip in &mut task.chips {

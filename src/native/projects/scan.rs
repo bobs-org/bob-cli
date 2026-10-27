@@ -223,9 +223,7 @@ pub(super) fn parse_project_schedule(
         })
         .collect::<Vec<_>>();
 
-    let Some(&(line_number, raw_value)) = fields.first() else {
-        return None;
-    };
+    let &(line_number, raw_value) = fields.first()?;
     if fields.len() > 1 {
         issues.push(ScanIssue::line(
             relative_path,

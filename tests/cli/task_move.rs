@@ -340,12 +340,9 @@ fn offline_git_move_commits_only_repaired_paths_and_preserves_task_state() {
         paths.last().and_then(|value| value.as_str()),
         Some("source.md")
     );
-    assert_eq!(
-        fs::read_to_string(vault.join("source.md"))
-            .unwrap()
-            .contains("Move this task"),
-        false
-    );
+    assert!(!fs::read_to_string(vault.join("source.md"))
+        .unwrap()
+        .contains("Move this task"));
     let dest =
         fs::read_to_string(vault.join("dest.md")).expect("read destination");
     assert!(dest.contains("[id:: dest__move-me-1]"), "{dest}");

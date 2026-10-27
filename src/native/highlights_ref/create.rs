@@ -627,27 +627,27 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     let target_os = targets.into_iter().next().expect("required by clap");
     // Validate -N early for a clean error even though the planner
     // validates again.
-    if let Some(name) = matches.get_one::<String>("name") {
-        if let Err(error) = super::clip_url::validate_name(name) {
-            let styler = Styler::detect();
-            eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
-            return 1;
-        }
+    if let Some(name) = matches.get_one::<String>("name")
+        && let Err(error) = super::clip_url::validate_name(name)
+    {
+        let styler = Styler::detect();
+        eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
+        return 1;
     }
     let ref_type = matches.get_one::<String>("ref-type").cloned();
-    if let Some(ref_type) = &ref_type {
-        if let Err(error) = validate_ref_type(ref_type) {
-            let styler = Styler::detect();
-            eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
-            return 1;
-        }
+    if let Some(ref_type) = &ref_type
+        && let Err(error) = validate_ref_type(ref_type)
+    {
+        let styler = Styler::detect();
+        eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
+        return 1;
     }
-    if let Some(published) = matches.get_one::<String>("published") {
-        if let Err(error) = super::clip_url::validate_published(published) {
-            let styler = Styler::detect();
-            eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
-            return 1;
-        }
+    if let Some(published) = matches.get_one::<String>("published")
+        && let Err(error) = super::clip_url::validate_published(published)
+    {
+        let styler = Styler::detect();
+        eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
+        return 1;
     }
     if matches.contains_id("html")
         && matches.get_one::<OsString>("html").is_some()
@@ -704,12 +704,11 @@ fn run_create(matches: &ArgMatches, raw: &[OsString]) -> i32 {
     if !matches!(prepared, PreparedTarget::VaultNote { .. })
         && parent_input.is_none()
         && matches!(capture, CaptureOutcome::Fresh)
-    {
-        if let Some(code) = check_duplicate_before_parent(
+        && let Some(code) = check_duplicate_before_parent(
             &config, &target_os, &prepared, matches, force,
-        ) {
-            return code;
-        }
+        )
+    {
+        return code;
     }
     let parent_input = matches.get_one::<String>("parent").cloned();
     let (parent, resolved_parent, parent_default_reason) =
@@ -1221,60 +1220,56 @@ fn check_duplicate_before_parent(
                 Some(paper) => paper.dedupe_key(),
                 None => url.dedupe_key.clone(),
             };
-            if listen {
-                if let Some(hit) = sources_mod::find_refusing_hit(
+            if listen
+                && let Some(hit) = sources_mod::find_refusing_hit(
                     &recorded,
                     &dedupe_key,
                     None,
                     force_flag,
+                )
+            {
+                let hit = super::recapture::newest_reading_hit(
+                    config, &recorded, &hit,
+                );
+                let command = match super::listen::require_validated() {
+                    Ok(command) => command,
+                    Err(error) => {
+                        return Some(report_create_error(
+                            error.into_command_error(),
+                        ));
+                    }
+                };
+                let attach =
+                    match attach_mod::attach_for_dedupe_hit(config, &hit) {
+                        Ok(attach) => attach,
+                        Err(error) => return Some(report_create_error(error)),
+                    };
+                let (source_line, target_value) =
+                    url_attach_lines(&url, &arxiv);
+                let mut scratch =
+                    match super::ScratchDir::create("create-attach") {
+                        Ok(scratch) => scratch,
+                        Err(error) => return Some(report_create_error(error)),
+                    };
+                let keep = if matches.get_flag("keep-intake") {
+                    Some("requested with -k".to_string())
+                } else {
+                    None
+                };
+                let dry_run = matches.get_flag("dry-run");
+                match attach_mod::run_attach(
+                    config,
+                    &command,
+                    &attach,
+                    &source_line,
+                    &target_value,
+                    dry_run,
+                    keep.as_deref(),
+                    &mut scratch,
                 ) {
-                    let hit = super::recapture::newest_reading_hit(
-                        config, &recorded, &hit,
-                    );
-                    let command = match super::listen::require_validated() {
-                        Ok(command) => command,
-                        Err(error) => {
-                            return Some(report_create_error(
-                                error.into_command_error(),
-                            ));
-                        }
-                    };
-                    let attach =
-                        match attach_mod::attach_for_dedupe_hit(config, &hit) {
-                            Ok(attach) => attach,
-                            Err(error) => {
-                                return Some(report_create_error(error))
-                            }
-                        };
-                    let (source_line, target_value) =
-                        url_attach_lines(&url, &arxiv);
-                    let mut scratch =
-                        match super::ScratchDir::create("create-attach") {
-                            Ok(scratch) => scratch,
-                            Err(error) => {
-                                return Some(report_create_error(error))
-                            }
-                        };
-                    let keep = if matches.get_flag("keep-intake") {
-                        Some("requested with -k".to_string())
-                    } else {
-                        None
-                    };
-                    let dry_run = matches.get_flag("dry-run");
-                    match attach_mod::run_attach(
-                        config,
-                        &command,
-                        &attach,
-                        &source_line,
-                        &target_value,
-                        dry_run,
-                        keep.as_deref(),
-                        &mut scratch,
-                    ) {
-                        Ok(()) => return Some(0),
-                        Err(error) => {
-                            return Some(report_create_error(error));
-                        }
+                    Ok(()) => return Some(0),
+                    Err(error) => {
+                        return Some(report_create_error(error));
                     }
                 }
             }
@@ -7932,10 +7927,8 @@ fn main() {}
             if text.contains("Data model") {
                 heading_page = page;
             }
-            if text.contains('↩') {
-                if pill_page == 0 {
-                    pill_page = page;
-                }
+            if text.contains('↩') && pill_page == 0 {
+                pill_page = page;
             }
             if text.contains("diagramtop") {
                 top_page = page;

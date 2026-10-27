@@ -159,7 +159,7 @@ pub(crate) fn completion_command() -> ClapCommand {
         .args_conflicts_with_subcommands(true)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct RunOptions {
     dry_run: bool,
     message: Option<String>,
@@ -169,17 +169,6 @@ struct RunOptions {
     /// callers refuse to stage while an intent is pending, except those
     /// that already recovered before invoking the cycle.
     recover_overwrite_intent: bool,
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        Self {
-            dry_run: false,
-            message: None,
-            quiet: false,
-            recover_overwrite_intent: false,
-        }
-    }
 }
 
 impl RunOptions {

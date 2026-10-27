@@ -819,7 +819,7 @@ fn highlights_create_live_mermaid_pdf_is_highlights_safe() {
         .path()
         .join("long temporary directory with spaces and 日本語");
     std::fs::create_dir_all(&long_tmpdir).expect("create long TMPDIR");
-    assert!(long_tmpdir.to_string_lossy().as_bytes().len() > 40);
+    assert!(long_tmpdir.to_string_lossy().len() > 40);
 
     let vault = temp.path().join("scratch vault");
     seed_parent(&vault);

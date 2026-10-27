@@ -578,7 +578,7 @@ fn capture_pomodoro_shift_rejects_bad_grammar_and_targets() {
     }
     let (shape_out, _, _) = run("++3 more", day_contents);
     let shape_err = String::from_utf8_lossy(&shape_out.stderr).to_string()
-        + &String::from_utf8_lossy(&shape_out.stdout).to_string();
+        + String::from_utf8_lossy(&shape_out.stdout).as_ref();
     assert!(shape_err.contains("only the operator"), "{shape_err}");
     // Oversized magnitudes fail checked parsing before any write.
     let (output, before, after) =

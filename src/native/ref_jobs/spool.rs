@@ -413,13 +413,13 @@ fn enqueue_at(
 pub(crate) fn remove_created(paths: &[PathBuf]) -> Vec<String> {
     let mut failures = Vec::new();
     for path in paths {
-        if let Err(error) = fs::remove_file(path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                failures.push(format!(
-                    "remove staged ref job {}: {error}",
-                    path.display()
-                ));
-            }
+        if let Err(error) = fs::remove_file(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            failures.push(format!(
+                "remove staged ref job {}: {error}",
+                path.display()
+            ));
         }
     }
     failures

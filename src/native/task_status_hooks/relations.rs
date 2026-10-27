@@ -132,7 +132,7 @@ fn collect_explicit_archive_targets(
             continue;
         }
         let lines = logical_lines(&file.contents);
-        let line_refs: Vec<&str> = lines.iter().copied().collect();
+        let line_refs: Vec<&str> = lines.to_vec();
         let fenced = fenced_lines(&line_refs, 0..line_refs.len());
         for task in &file.tasks {
             for child in links_children_of(&line_refs, &fenced, task.line_index)
@@ -309,7 +309,7 @@ impl RelationsPass<'_> {
         };
         let duplicates = duplicate_block_ids(&tasks);
         let lines = logical_lines(&contents);
-        let line_refs: Vec<&str> = lines.iter().copied().collect();
+        let line_refs: Vec<&str> = lines.to_vec();
         let fenced = fenced_lines(&line_refs, 0..line_refs.len());
         for (task_index, task) in tasks.iter().enumerate() {
             let children =
@@ -348,9 +348,8 @@ impl RelationsPass<'_> {
                 .block_id
                 .as_ref()
                 .is_some_and(|id| duplicates.contains(id));
-            if duplicated {
-                if let Some(block_id) = &task.block_id {
-                    self.outcome.warnings.push(RelationWarning {
+            if duplicated && let Some(block_id) = &task.block_id {
+                self.outcome.warnings.push(RelationWarning {
                         kind: "duplicate_block_id".to_string(),
                         path: display_path(&relative),
                         line: task.line_index + 1,
@@ -358,10 +357,9 @@ impl RelationsPass<'_> {
                             "note has more than one ^{block_id}; source not listed this run"
                         ),
                     });
-                    collected
-                        .uncertain
-                        .insert((relative.clone(), block_id.clone()));
-                }
+                collected
+                    .uncertain
+                    .insert((relative.clone(), block_id.clone()));
             }
             if malformed {
                 if let Some(block_id) = &task.block_id {
@@ -589,7 +587,7 @@ impl RelationsPass<'_> {
     ) -> BTreeSet<(usize, usize)> {
         let mut owners = BTreeSet::new();
         if self.enabled {
-            for (target, _) in &collected.by_target {
+            for target in collected.by_target.keys() {
                 if let Some(TaskRef::Active { file, task }) =
                     self.lookup_task(&target.0, &target.1)
                     && self.writable(file)
@@ -608,7 +606,7 @@ impl RelationsPass<'_> {
                 continue;
             }
             let lines = logical_lines(&file.contents);
-            let line_refs: Vec<&str> = lines.iter().copied().collect();
+            let line_refs: Vec<&str> = lines.to_vec();
             let fenced = fenced_lines(&line_refs, 0..line_refs.len());
             for (task_index, task) in file.tasks.iter().enumerate() {
                 if !linked_from_children_of(

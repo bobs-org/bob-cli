@@ -200,7 +200,7 @@ json.dump({{
     "warnings": [],
 }}, sys.stdout)
 "#,
-            root = json_string(&path_str(&root)),
+            root = json_string(path_str(&root)),
         );
         write_executable(&path, &script);
         Self { root, path }

@@ -179,18 +179,17 @@ fn strip_prose_formatting(line: &str) -> String {
             break;
         }
     }
-    if let Some(rest) = stripped.strip_prefix(['-', '*', '+']) {
-        if rest.starts_with([' ', '\t']) {
-            stripped = rest.trim_start();
-        }
+    if let Some(rest) = stripped.strip_prefix(['-', '*', '+'])
+        && rest.starts_with([' ', '\t'])
+    {
+        stripped = rest.trim_start();
     }
-    if let Some((number, rest)) = stripped.split_once(['.', ')']) {
-        if !number.is_empty()
-            && number.chars().all(|ch| ch.is_ascii_digit())
-            && rest.starts_with([' ', '\t'])
-        {
-            stripped = rest.trim_start();
-        }
+    if let Some((number, rest)) = stripped.split_once(['.', ')'])
+        && !number.is_empty()
+        && number.chars().all(|ch| ch.is_ascii_digit())
+        && rest.starts_with([' ', '\t'])
+    {
+        stripped = rest.trim_start();
     }
     stripped
         .replace('|', "")
@@ -660,17 +659,12 @@ fn match_lines(
         let page_cursor = cursor.saturating_sub(page_start);
         if let Some((distance, start, end)) =
             match_unit_in_page(&source, page, page_cursor)
+            && distance as f64 / total as f64 <= 1.0 - UNIT_SIMILARITY
         {
-            if distance as f64 / total as f64 <= 1.0 - UNIT_SIMILARITY {
-                let global_start = page_start + start;
-                let global_end = page_start + end;
-                *cursor = global_end;
-                return (
-                    total - distance,
-                    total,
-                    Some((global_start, global_end)),
-                );
-            }
+            let global_start = page_start + start;
+            let global_end = page_start + end;
+            *cursor = global_end;
+            return (total - distance, total, Some((global_start, global_end)));
         }
     }
     (0, total, None)
@@ -2105,17 +2099,18 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             }
         }
     }
-    if !dry_run && batch_count > 0 {
-        if let Err(error) = commit_batch(
+    if !dry_run
+        && batch_count > 0
+        && let Err(error) = commit_batch(
             &config.bob_dir,
             &batch_paths,
             batch_count,
             &mut commits,
             json_mode,
-        ) {
-            eprintln!("{COMMAND_NAME}: error: {error}");
-            return 1;
-        }
+        )
+    {
+        eprintln!("{COMMAND_NAME}: error: {error}");
+        return 1;
     }
     if json_mode {
         let envelope = AttachEnvelope {

@@ -221,7 +221,8 @@ fn vector_folds_match_last_writer_wins() {
         let prefs = journal::fold_events(&parsed);
         let mut hidden: Vec<String> = prefs
             .names()
-            .filter_map(|(key, _)| prefs.hidden(key).then(|| key.clone()))
+            .filter(|(key, _)| prefs.hidden(key))
+            .map(|(key, _)| key.clone())
             .collect();
         hidden.sort();
         let mut expected_hidden = case.expected_hidden.clone();

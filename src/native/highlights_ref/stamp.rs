@@ -447,7 +447,7 @@ pub(super) fn plan_default_target(
                     ),
                     super::duplicate::Remedy::new(
                         "-L",
-                        &format!(
+                        format!(
                             "add audio with bob ref create {} --listen",
                             library_destination.display()
                         ),
@@ -479,7 +479,7 @@ pub(super) fn plan_default_target(
                     ),
                     super::duplicate::Remedy::new(
                         "-L",
-                        &format!(
+                        format!(
                             "add audio with bob ref create {} --listen",
                             library_destination.display()
                         ),
@@ -813,10 +813,9 @@ pub(super) fn relative_inside_canonical(
 ) -> Option<PathBuf> {
     if let (Ok(child_c), Ok(parent_c)) =
         (std::fs::canonicalize(child), std::fs::canonicalize(parent))
+        && let Some(rel) = relative_inside(&child_c, &parent_c)
     {
-        if let Some(rel) = relative_inside(&child_c, &parent_c) {
-            return Some(rel);
-        }
+        return Some(rel);
     }
     relative_inside(child, parent)
 }

@@ -103,7 +103,7 @@ fn print_clap_error(kind: WriteKind, error: clap::Error) -> i32 {
 }
 
 fn build_cli(kind: WriteKind) -> ClapCommand {
-    let command = ClapCommand::new(command_name(kind))
+    ClapCommand::new(command_name(kind))
         .about(about(kind))
         .long_about(long_about(kind))
         .after_help(after_help(kind))
@@ -113,8 +113,7 @@ fn build_cli(kind: WriteKind) -> ClapCommand {
         .arg(format_arg())
         .arg(help_arg())
         .arg(via_arg())
-        .arg(label_arg());
-    command
+        .arg(label_arg())
 }
 
 fn about(kind: WriteKind) -> &'static str {

@@ -384,15 +384,14 @@ fn load_records(
     BTreeMap<NaiveDate, BTreeSet<String>>,
 ) {
     let years = scan::year_dir_fingerprints(vault);
-    if completion {
-        if let Some((mut records, mut days, cached_warnings)) =
+    if completion
+        && let Some((mut records, mut days, cached_warnings)) =
             cache::load_completion(vault, today, &years)
-        {
-            warnings.extend(cached_warnings);
-            let live = read_today_summary(vault, today, live, warnings);
-            merge_today(&mut records, &mut days, today, live.as_ref());
-            return (records, days);
-        }
+    {
+        warnings.extend(cached_warnings);
+        let live = read_today_summary(vault, today, live, warnings);
+        merge_today(&mut records, &mut days, today, live.as_ref());
+        return (records, days);
     }
     let key = cache::vault_key(vault);
     let mut cache_file = cache::load();
@@ -459,17 +458,17 @@ fn load_records(
     let today_path = vault.join(&today_relative);
     let history_warnings = warnings.clone();
     let today_summary = read_today_summary(vault, today, live, warnings);
-    if let Some(summary) = today_summary.as_ref() {
-        if let Some((mtime_ns, size)) = cache::fingerprint(&today_path) {
-            vault_cache.files.insert(
-                today_relative,
-                cache::CachedFile {
-                    mtime_ns,
-                    size,
-                    summary: summary.clone(),
-                },
-            );
-        }
+    if let Some(summary) = today_summary.as_ref()
+        && let Some((mtime_ns, size)) = cache::fingerprint(&today_path)
+    {
+        vault_cache.files.insert(
+            today_relative,
+            cache::CachedFile {
+                mtime_ns,
+                size,
+                summary: summary.clone(),
+            },
+        );
     }
 
     let (records, days) =
@@ -542,7 +541,7 @@ fn aggregate_records(
         let Some(date) = scan::parse_summary_date(&cached.summary.date) else {
             continue;
         };
-        if date > today || date == today {
+        if date >= today {
             continue;
         }
         merge_file(&mut records, &mut days, date, &cached.summary.themes);

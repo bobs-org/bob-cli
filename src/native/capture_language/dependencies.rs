@@ -683,7 +683,7 @@ fn extract_line_relation<'a>(
         match &scanned[scan_index] {
             ScannedDependency::Escaped { .. } => false,
             ScannedDependency::Partial { raw, .. }
-                if raw.as_bytes() == &[sigil] =>
+                if raw.as_bytes() == [sigil] =>
             {
                 bare_directive(token_index)
             }

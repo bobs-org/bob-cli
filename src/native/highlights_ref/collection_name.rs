@@ -155,13 +155,12 @@ pub(super) fn derive_collection_name(urls: &[WebUrl]) -> NameOutcome {
         return NameOutcome::NoName(NoNameReason::NoSlug(1));
     }
 
-    let slugs: Vec<Vec<String>> =
-        parsed.iter().map(|url| slug_words(url)).collect();
+    let slugs: Vec<Vec<String>> = parsed.iter().map(slug_words).collect();
     let Some((missing_index, _)) =
         slugs.iter().enumerate().find(|(_, words)| words.is_empty())
     else {
         let shared = shared_words(&slugs);
-        if is_useful_name(&shared.words, allows_one_word_series(&urls, &parsed))
+        if is_useful_name(&shared.words, allows_one_word_series(urls, &parsed))
             && let Some(name) = checked_derived_name(&shared.words)
         {
             return NameOutcome::Derived {
@@ -219,7 +218,7 @@ pub(super) fn resolve_collection_name(
 
     match derive_collection_name(urls) {
         NameOutcome::Derived { name, source } => {
-            return Ok(ResolvedName { name, source });
+            Ok(ResolvedName { name, source })
         }
         NameOutcome::NoName(reason) => {
             if let Some(title) = title_flag {
@@ -231,8 +230,8 @@ pub(super) fn resolve_collection_name(
                     });
                 }
             }
-            return Err(CommandError::new(name_error_message(urls, &reason))
-                .with_exit_code(2));
+            Err(CommandError::new(name_error_message(urls, &reason))
+                .with_exit_code(2))
         }
     }
 }
@@ -669,8 +668,8 @@ fn shared_title_prefix(titles: &[String]) -> String {
         return String::new();
     }
     let mut common_len = 0;
-    let mut chars = first.char_indices().peekable();
-    while let Some((byte_index, first_char)) = chars.next() {
+    let chars = first.char_indices().peekable();
+    for (byte_index, first_char) in chars {
         let char_len = first_char.len_utf8();
         let offset = byte_index + char_len;
         if titles.iter().skip(1).all(|title| {

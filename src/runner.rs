@@ -1822,10 +1822,7 @@ mod tests {
                         panic!("{MESSAGE}");
                     })
                 });
-                let code = match outcome {
-                    Ok(code) => code,
-                    Err(_) => 101,
-                };
+                let code = outcome.unwrap_or(101);
                 std::process::exit(code);
             }
             return;
@@ -1864,10 +1861,7 @@ mod tests {
                         0
                     })
                 });
-                let code = match outcome {
-                    Ok(code) => code,
-                    Err(_) => 101,
-                };
+                let code = outcome.unwrap_or(101);
                 std::process::exit(code);
             }
             return;
@@ -1895,10 +1889,7 @@ mod tests {
                         ))
                     })
                 });
-                let code = match outcome {
-                    Ok(code) => code,
-                    Err(_) => 101,
-                };
+                let code = outcome.unwrap_or(101);
                 std::process::exit(code);
             }
             return;

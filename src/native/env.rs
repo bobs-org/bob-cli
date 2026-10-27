@@ -301,7 +301,7 @@ pub(crate) fn create_state_lock_file(
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(
-            &dir.join(file_name),
+            dir.join(file_name),
             std::fs::Permissions::from_mode(0o600),
         );
     }

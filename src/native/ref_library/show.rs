@@ -978,29 +978,28 @@ fn styler_quote_lines(
                         continue;
                     }
                 }
-                if character == '*' {
-                    if let Some(first) = source {
-                        if paired_firsts.contains(&first) {
-                            flush_quote_segment(
-                                &mut rendered,
-                                &mut segment,
-                                active,
-                                styler,
-                            );
-                            active = !active;
-                            cursor += 1;
-                            if cursor < chars.len()
-                                && chars[cursor] == '*'
-                                && sources.get(cursor).copied().flatten()
-                                    == Some(first + 1)
-                            {
-                                cursor += 1;
-                            } else {
-                                consume_second = true;
-                            }
-                            continue;
-                        }
+                if character == '*'
+                    && let Some(first) = source
+                    && paired_firsts.contains(&first)
+                {
+                    flush_quote_segment(
+                        &mut rendered,
+                        &mut segment,
+                        active,
+                        styler,
+                    );
+                    active = !active;
+                    cursor += 1;
+                    if cursor < chars.len()
+                        && chars[cursor] == '*'
+                        && sources.get(cursor).copied().flatten()
+                            == Some(first + 1)
+                    {
+                        cursor += 1;
+                    } else {
+                        consume_second = true;
                     }
+                    continue;
                 }
                 segment.push(character);
                 cursor += 1;

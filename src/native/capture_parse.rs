@@ -1181,10 +1181,9 @@ impl CaptureParseResult {
             &parsed.pomodoro_close,
             &parsed.items,
             (template_range.start, template_range.end),
-        ) {
-            if diagnostic.code != "template_clipboard" {
-                refusal_diagnostics.push(diagnostic);
-            }
+        ) && diagnostic.code != "template_clipboard"
+        {
+            refusal_diagnostics.push(diagnostic);
         }
         diagnostics.extend(refusal_diagnostics);
         diagnostics.extend(incomplete_diagnostics);
@@ -1201,7 +1200,7 @@ impl CaptureParseResult {
             .items
             .first()
             .map(wire_item)
-            .unwrap_or_else(|| empty_wire_item());
+            .unwrap_or_else(empty_wire_item);
         template_item.index = 1;
         template_item.range = SourceRange {
             start: template_range.start,
@@ -2750,12 +2749,11 @@ mod tests {
             "invalid_pomodoro_close"
         );
 
-        for raw in ["Plan x"] {
-            let prose = json(raw);
-            assert_eq!(prose["mode"], "task", "{raw}");
-            assert!(prose.get("pomodoro_close").is_none(), "{raw}");
-            assert!(prose.get("pomodoro_start").is_none(), "{raw}");
-        }
+        let raw = "Plan x";
+        let prose = json(raw);
+        assert_eq!(prose["mode"], "task", "{raw}");
+        assert!(prose.get("pomodoro_close").is_none(), "{raw}");
+        assert!(prose.get("pomodoro_start").is_none(), "{raw}");
 
         let raw = "+5\n\nx\n\nCall bank @Cash+";
         let mixed = json(raw);

@@ -1123,54 +1123,54 @@ fn parse_editor_ref_item<'a>(
     }
     if tokens.len() == 2 {
         // `URL %` / `URL @`: listen with default/global parent.
-        if is_standalone_listen_marker(tokens[1].text) {
-            if let Some(intent) = classify_token(tokens[0].text) {
-                if !policy.admits(&intent, RoutingEntry::Capture) {
-                    return None;
-                }
-                return Some(EditorItemOutcome {
-                    item: EditorItemParse {
-                        index: item.index,
-                        start: item.start,
-                        end: item.end,
-                        line_start: item.line_start,
-                        line_end: item.line_end,
-                        body: tokens[0].text.to_string(),
-                        mode: EditorMode::Ref,
-                        route: None,
-                        section: None,
-                        block_id: None,
-                        needs: Vec::new(),
-                        ref_listen: true,
-                        pomodoro_start: None,
-                        pomodoro_adjust: None,
-                        pomodoro_shift: None,
-                        pomodoro_close: None,
-                        dependencies: Vec::new(),
-                        blocked_tasks: Vec::new(),
-                        relations: Vec::new(),
-                        dependency_target: None,
-                        task_complete: None,
-                        spans: vec![
-                            Span {
-                                start: tokens[0].start,
-                                end: tokens[0].end,
-                                kind: SpanKind::RefUrl,
-                            },
-                            Span {
-                                start: tokens[1].start,
-                                end: tokens[1].end,
-                                kind: SpanKind::RefListen,
-                            },
-                        ],
-                        diagnostics: Vec::new(),
-                        sub_bullets: Vec::new(),
-                        has_local_destination: false,
-                        local_destination_markers: Vec::new(),
-                    },
-                    declarations: Vec::new(),
-                });
+        if is_standalone_listen_marker(tokens[1].text)
+            && let Some(intent) = classify_token(tokens[0].text)
+        {
+            if !policy.admits(&intent, RoutingEntry::Capture) {
+                return None;
             }
+            return Some(EditorItemOutcome {
+                item: EditorItemParse {
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    body: tokens[0].text.to_string(),
+                    mode: EditorMode::Ref,
+                    route: None,
+                    section: None,
+                    block_id: None,
+                    needs: Vec::new(),
+                    ref_listen: true,
+                    pomodoro_start: None,
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_close: None,
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    relations: Vec::new(),
+                    dependency_target: None,
+                    task_complete: None,
+                    spans: vec![
+                        Span {
+                            start: tokens[0].start,
+                            end: tokens[0].end,
+                            kind: SpanKind::RefUrl,
+                        },
+                        Span {
+                            start: tokens[1].start,
+                            end: tokens[1].end,
+                            kind: SpanKind::RefListen,
+                        },
+                    ],
+                    diagnostics: Vec::new(),
+                    sub_bullets: Vec::new(),
+                    has_local_destination: false,
+                    local_destination_markers: Vec::new(),
+                },
+                declarations: Vec::new(),
+            });
         }
         if tokens
             .iter()

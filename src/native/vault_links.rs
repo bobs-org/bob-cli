@@ -349,10 +349,7 @@ fn strip_markdown_suffix(name: &str) -> &str {
 }
 
 fn target_basename(target: &str) -> &str {
-    target
-        .rsplit(|character| matches!(character, '/' | '\\'))
-        .next()
-        .unwrap_or(target)
+    target.rsplit(['/', '\\']).next().unwrap_or(target)
 }
 
 /// Case-sensitive Levenshtein distance over Unicode scalar values, for

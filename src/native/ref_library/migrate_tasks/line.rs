@@ -78,14 +78,13 @@ pub(crate) fn migrate_v1_tracker_line(
 /// Split `- [m] ` (or `*`/`+`) from the rest; falls back to empty prefix.
 fn split_checkbox(line: &str) -> (String, String) {
     for marker in ["- ", "* ", "+ "] {
-        if let Some(after) = line.strip_prefix(marker) {
-            if after.starts_with('[') {
-                if let Some(close) = after.find(']') {
-                    let mark_part = &after[..close + 1];
-                    let rest = after[close + 1..].trim_start().to_string();
-                    return (format!("{marker}{mark_part} "), rest);
-                }
-            }
+        if let Some(after) = line.strip_prefix(marker)
+            && after.starts_with('[')
+            && let Some(close) = after.find(']')
+        {
+            let mark_part = &after[..close + 1];
+            let rest = after[close + 1..].trim_start().to_string();
+            return (format!("{marker}{mark_part} "), rest);
         }
     }
     (String::new(), line.to_string())
@@ -135,10 +134,10 @@ fn drop_hide_token(body: &str) -> String {
 fn remove_trailing_caret_ref(body: &str) -> String {
     let mut tokens: Vec<&str> = body.split_whitespace().collect();
     // V1 ends with exactly `^ref`; also drop a stray `^ref-*` preview.
-    if let Some(last) = tokens.last() {
-        if *last == "^ref" || last.starts_with("^ref-") {
-            tokens.pop();
-        }
+    if let Some(last) = tokens.last()
+        && (*last == "^ref" || last.starts_with("^ref-"))
+    {
+        tokens.pop();
     }
     tokens.join(" ")
 }

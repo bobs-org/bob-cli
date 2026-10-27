@@ -2713,10 +2713,8 @@ pub(super) fn label_page_number(label: &str) -> Option<u32> {
         rest
     } else if let Some(rest) = lower.strip_prefix("p. ") {
         rest
-    } else if let Some(rest) = lower.strip_prefix("p ") {
-        rest
     } else {
-        return None;
+        lower.strip_prefix("p ")?
     };
     let prefix_len = label.len() - rest.len();
     label[prefix_len..].trim().parse().ok()

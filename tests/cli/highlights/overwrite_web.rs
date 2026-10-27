@@ -178,7 +178,7 @@ fn write_bare_pdf(path: &Path, title: Option<&str>, author: Option<&str>) {
     if let Some(author) = author {
         info.set("Author", Object::string_literal(author));
     }
-    if info.len() > 0 {
+    if !info.is_empty() {
         let info_id = doc.add_object(info);
         doc.trailer.set("Info", info_id);
     }

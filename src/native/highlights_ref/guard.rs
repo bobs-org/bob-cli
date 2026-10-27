@@ -801,7 +801,7 @@ mod tests {
 
         let staged_entry = entries
             .iter()
-            .find(|entry| entry.path == PathBuf::from("ref/chat/staged \"é.md"))
+            .find(|entry| entry.path == Path::new("ref/chat/staged \"é.md"))
             .expect("staged path preserved");
         assert_eq!(
             (staged_entry.index_status, staged_entry.worktree_status),
@@ -810,7 +810,7 @@ mod tests {
         let untracked_entry = entries
             .iter()
             .find(|entry| {
-                entry.path == PathBuf::from("ref/chat/untracked \"é\n.md")
+                entry.path == Path::new("ref/chat/untracked \"é\n.md")
             })
             .expect("untracked path preserved");
         assert_eq!(
@@ -822,7 +822,7 @@ mod tests {
         );
         let rename_entry = entries
             .iter()
-            .find(|entry| entry.path == PathBuf::from("ref/chat/new \"é.md"))
+            .find(|entry| entry.path == Path::new("ref/chat/new \"é.md"))
             .expect("rename destination preserved");
         assert_eq!(rename_entry.index_status, 'R');
         assert_eq!(

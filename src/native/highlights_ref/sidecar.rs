@@ -493,9 +493,7 @@ fn standalone_section_declaration(lines: &[String]) -> Option<(usize, String)> {
             continue;
         }
         let candidate = strip_standalone_note_marker(line);
-        let Some(heading) = section_heading_text(&candidate) else {
-            return None;
-        };
+        let heading = section_heading_text(&candidate)?;
         return Some((index, heading));
     }
     None

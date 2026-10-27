@@ -303,7 +303,7 @@ fn consume_live_links_from_day(
     }
     let before = match planner.current_contents(day_absolute)? {
         Some(staged) => staged,
-        None => match fs::read_to_string(&day_absolute) {
+        None => match fs::read_to_string(day_absolute) {
             Ok(disk) => disk,
             Err(_) => return Ok(LiveLinkConsumption::default()),
         },
@@ -373,7 +373,7 @@ fn consume_live_links_from_day(
     }
 
     let item_pre = planner
-        .item_pre_day(&day_absolute)
+        .item_pre_day(day_absolute)
         .unwrap_or_else(|| before.clone());
     let item_pre_lines = task_status_hooks::logical_lines(&item_pre);
     let current_lines = task_status_hooks::logical_lines(&before);

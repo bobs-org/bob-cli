@@ -474,7 +474,7 @@ pub(super) fn move_started_pomodoro_to_current_slot_tracked(
         let anchor = completed.last().copied();
         let between = opens.iter().any(|index| {
             *index != entry_index
-                && anchor.map_or(true, |anchor| *index > anchor)
+                && anchor.is_none_or(|anchor| *index > anchor)
                 && *index < entry_index
         });
         if !between {

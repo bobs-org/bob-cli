@@ -819,11 +819,11 @@ fn unescape_markdown_punct(text: &str) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
     while let Some(character) = chars.next() {
-        if character == '\\' {
-            if chars.peek().is_some_and(|next| next.is_ascii_punctuation()) {
-                out.push(chars.next().expect("peeked punctuation"));
-                continue;
-            }
+        if character == '\\'
+            && chars.peek().is_some_and(|next| next.is_ascii_punctuation())
+        {
+            out.push(chars.next().expect("peeked punctuation"));
+            continue;
         }
         out.push(character);
     }
@@ -942,11 +942,7 @@ fn matching_backtick_run(
     length: usize,
 ) -> Option<usize> {
     while cursor < bytes.len() {
-        let Some(relative) =
-            bytes[cursor..].iter().position(|byte| *byte == b'`')
-        else {
-            return None;
-        };
+        let relative = bytes[cursor..].iter().position(|byte| *byte == b'`')?;
         cursor += relative;
         let run = bytes[cursor..]
             .iter()

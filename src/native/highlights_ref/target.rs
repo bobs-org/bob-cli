@@ -137,9 +137,7 @@ pub(super) fn fetch_and_route(
                     final_url: fetch.final_url.clone(),
                 })
             } else if normalized.is_empty() {
-                Err(CommandError::new(format!(
-                    "unsupported content type (missing): create accepts Markdown files, PDFs, PDF URLs, arXiv paper URLs, and web article URLs"
-                )))
+                Err(CommandError::new("unsupported content type (missing): create accepts Markdown files, PDFs, PDF URLs, arXiv paper URLs, and web article URLs".to_string()))
             } else {
                 Err(CommandError::new(format!(
                     "unsupported content type {content_type}: create accepts Markdown files, PDFs, PDF URLs, arXiv paper URLs, and web article URLs"

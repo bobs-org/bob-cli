@@ -37,10 +37,8 @@ fn list_save_show_and_delete_follow_the_template_protocol() {
     assert_eq!(listed_json["templates"].as_array().unwrap().len(), 0);
     assert!(!file.exists(), "list must not create the shelf file");
 
-    let saved = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
-        DEFINITION,
-    );
+    let saved =
+        run_with_stdin(command(&file).args(["save", "-f", "json"]), DEFINITION);
     assert_success(&saved);
     let saved_json = json(&saved);
     assert_eq!(saved_json["saved"]["status"], "new");
@@ -82,13 +80,7 @@ fn list_save_show_and_delete_follow_the_template_protocol() {
     let edited_definition =
         "@@template:\nApply for {0}! @job^apply-{1}\n\ninvalid row arity is ignored\n";
     let replaced = run_with_stdin(
-        &mut command(&file).args([
-            "save",
-            "--template-origin",
-            id,
-            "-f",
-            "json",
-        ]),
+        command(&file).args(["save", "--template-origin", id, "-f", "json"]),
         edited_definition,
     );
     assert_success(&replaced);
@@ -117,7 +109,7 @@ fn definition_errors_and_newer_schema_have_stable_recovery_paths() {
     let temp = TempDir::new("bob-cli-capture-templates-errors");
     let file = temp.path().join("templates.json");
     let invalid = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
+        command(&file).args(["save", "-f", "json"]),
         "@@template:\nA task\n\n",
     );
     assert_eq!(invalid.status.code(), Some(2));
@@ -157,7 +149,7 @@ fn definition_errors_and_newer_schema_have_stable_recovery_paths() {
     fs::write(&config, "capture:\n  max_saved_templates: 0\n")
         .expect("write disabled shelf config");
     let disabled = run_with_stdin(
-        &mut command(&disabled_file)
+        command(&disabled_file)
             .arg("save")
             .args(["-f", "json"])
             .env("BOB_CONFIG_FILE", config),
@@ -242,10 +234,8 @@ fn human_list_covers_empty_populated_and_saving_off() {
         format_output(&empty)
     );
 
-    let saved = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
-        DEFINITION,
-    );
+    let saved =
+        run_with_stdin(command(&file).args(["save", "-f", "json"]), DEFINITION);
     assert_success(&saved);
     let id = json(&saved)["saved"]["id"]
         .as_str()
@@ -292,10 +282,8 @@ fn human_list_covers_empty_populated_and_saving_off() {
 fn show_by_index_prints_the_insertable_draft() {
     let temp = TempDir::new("bob-cli-capture-templates-show-index");
     let file = temp.path().join("templates.json");
-    let saved = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
-        DEFINITION,
-    );
+    let saved =
+        run_with_stdin(command(&file).args(["save", "-f", "json"]), DEFINITION);
     assert_success(&saved);
     let shown = command(&file)
         .args(["show", "1"])
@@ -313,7 +301,7 @@ fn save_of_headerless_draft_is_not_a_template() {
     let temp = TempDir::new("bob-cli-capture-templates-headerless");
     let file = temp.path().join("templates.json");
     let output = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
+        command(&file).args(["save", "-f", "json"]),
         "just a task\n",
     );
     assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
@@ -324,10 +312,8 @@ fn save_of_headerless_draft_is_not_a_template() {
 fn clear_also_removes_the_corrupt_quarantine() {
     let temp = TempDir::new("bob-cli-capture-templates-clear-quarantine");
     let file = temp.path().join("templates.json");
-    let saved = run_with_stdin(
-        &mut command(&file).args(["save", "-f", "json"]),
-        DEFINITION,
-    );
+    let saved =
+        run_with_stdin(command(&file).args(["save", "-f", "json"]), DEFINITION);
     assert_success(&saved);
     let quarantine = temp.path().join("templates.corrupt.json");
     fs::write(&quarantine, b"old quarantine").expect("write quarantine");

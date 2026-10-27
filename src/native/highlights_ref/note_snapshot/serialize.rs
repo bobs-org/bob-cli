@@ -437,10 +437,10 @@ fn render_chip(view: &SnapshotView, chip: &Chip) -> String {
         ChipKind::Normal => ".chip",
         ChipKind::Accent => ".chip .chip-accent",
     };
-    if let Some(target) = &chip.target {
-        if let Some(destination) = render_target(view, target) {
-            return format!("[{content}]({destination}){{{classes}}}");
-        }
+    if let Some(target) = &chip.target
+        && let Some(destination) = render_target(view, target)
+    {
+        return format!("[{content}]({destination}){{{classes}}}");
     }
     format!("[{content}]{{{classes}}}")
 }
@@ -984,8 +984,7 @@ fn escape_attribute(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
 }
 
 fn plain_inlines(inlines: &[Inline]) -> String {

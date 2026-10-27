@@ -439,7 +439,7 @@ fn frozen_archive_is_inert_across_list_find_doctor_and_create() {
 
     let by_path = find_json(&fixture, &format!("ref/papers/{STEM}.md"));
     assert_eq!(by_path["results"][0]["verdict"], "in_library");
-    let archive_query = format!("ref_history/papers/report__2026-10-16.md");
+    let archive_query = "ref_history/papers/report__2026-10-16.md".to_string();
     let by_archive = find_json(&fixture, &archive_query);
     assert_eq!(
         by_archive["results"][0]["verdict"], "not_found",

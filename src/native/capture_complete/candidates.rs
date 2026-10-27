@@ -1246,10 +1246,10 @@ pub(super) fn relation_candidates(
     });
 
     let mut prerequisites = HashSet::new();
-    if let Some(identity) = &owner_identity {
-        if let Some(targets) = graph.get(identity) {
-            prerequisites.extend(targets.iter().cloned());
-        }
+    if let Some(identity) = &owner_identity
+        && let Some(targets) = graph.get(identity)
+    {
+        prerequisites.extend(targets.iter().cloned());
     }
     for entry in typed_dependencies {
         if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(

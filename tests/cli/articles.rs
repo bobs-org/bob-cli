@@ -159,8 +159,7 @@ fn stdin_json_returns_plan_without_writing() {
     write_file(&fixture.vault.join("draft.md"), ARTICLE);
 
     let output = run_with_stdin(
-        &mut article_command(&fixture)
-            .args(["format", "-s", "draft", "-f", "json"]),
+        article_command(&fixture).args(["format", "-s", "draft", "-f", "json"]),
         ARTICLE,
     );
 
@@ -456,8 +455,7 @@ fn adopt_stdin_json_returns_plan_without_writing() {
     write_file(&fixture.vault.join("plain.md"), source);
 
     let output = run_with_stdin(
-        &mut article_command(&fixture)
-            .args(["adopt", "-s", "plain", "-f", "json"]),
+        article_command(&fixture).args(["adopt", "-s", "plain", "-f", "json"]),
         source,
     );
 
@@ -679,8 +677,7 @@ fn stdin_json_fills_inbound_entries_without_writing() {
     );
 
     let output = run_with_stdin(
-        &mut article_command(&fixture)
-            .args(["format", "-s", "draft", "-f", "json"]),
+        article_command(&fixture).args(["format", "-s", "draft", "-f", "json"]),
         ARTICLE,
     );
     assert_success(&output);

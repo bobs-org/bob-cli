@@ -799,13 +799,11 @@ fn append_reference_ids_row(
         if mismatch {
             mismatches.push(row.path.as_str());
         }
-        if duplicate {
-            if let Some(id) = row.id.as_deref() {
-                duplicated
-                    .entry(id.to_ascii_lowercase())
-                    .or_default()
-                    .push(row.path.as_str());
-            }
+        if duplicate && let Some(id) = row.id.as_deref() {
+            duplicated
+                .entry(id.to_ascii_lowercase())
+                .or_default()
+                .push(row.path.as_str());
         }
     }
     let with_ids = rows.iter().filter(|row| row.id.is_some()).count();
@@ -1040,7 +1038,7 @@ fn format_count(count: usize) -> String {
     let digits = count.to_string();
     let mut out = String::new();
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);

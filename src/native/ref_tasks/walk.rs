@@ -647,13 +647,12 @@ fn contains_ref_marker(bytes: &[u8]) -> bool {
     let mut i = 0;
     while i + 4 <= bytes.len() {
         let b = bytes[i];
-        if b == b'#' || b == b'^' {
-            if bytes[i + 1].eq_ignore_ascii_case(&b'r')
-                && bytes[i + 2].eq_ignore_ascii_case(&b'e')
-                && bytes[i + 3].eq_ignore_ascii_case(&b'f')
-            {
-                return true;
-            }
+        if (b == b'#' || b == b'^')
+            && bytes[i + 1].eq_ignore_ascii_case(&b'r')
+            && bytes[i + 2].eq_ignore_ascii_case(&b'e')
+            && bytes[i + 3].eq_ignore_ascii_case(&b'f')
+        {
+            return true;
         }
         i += 1;
     }

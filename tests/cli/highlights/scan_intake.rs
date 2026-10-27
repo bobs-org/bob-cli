@@ -143,7 +143,9 @@ fn intake_only_drains_a_queued_pdf_into_one_pushed_commit() {
     );
     assert_eq!(
         fs::read(vault.join(&birth_pointer)).expect("read saved Markdown"),
-        format!("# queued_one\n\nQueued reference.\n").into_bytes(),
+        "# queued_one\n\nQueued reference.\n"
+            .to_string()
+            .into_bytes(),
         "the drain must commit the saved source bytes"
     );
     let subjects = subjects_since(&vault, &before);
@@ -837,7 +839,7 @@ fn intake_only_json_drain_writes_matching_receipt() {
         .expect("a writing drain must write the receipt");
     assert_eq!(
         bytes,
-        format!("{text}").into_bytes(),
+        text.to_string().into_bytes(),
         "the receipt must be the exact envelope line from stdout"
     );
     let document: serde_json::Value =
@@ -1205,7 +1207,7 @@ fn intake_only_preserves_version_in_long_stem_task_ids() {
         "the collision suffix follows the version: {id}"
     );
     assert!(
-        line.contains(&format!(" (v2)]] [created::")),
+        line.contains(&" (v2)]] [created::".to_string()),
         "the long-title alias keeps its suffix: {line}"
     );
     let alias = line

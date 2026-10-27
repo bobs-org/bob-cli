@@ -2078,7 +2078,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 vec![log_entry_from_inline(&entry, first, default_index)];
             Some(editor_close_outcome(
                 item,
-                &first.to_string(),
+                first,
                 EditorMode::PomodoroClose,
                 Some(spec),
                 base_spans,

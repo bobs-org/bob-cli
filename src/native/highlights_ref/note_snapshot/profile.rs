@@ -365,10 +365,11 @@ fn xelatex_command() -> Option<OsString> {
 /// current directory before the switch.
 fn resolve_for_cwd(command: &OsStr) -> PathBuf {
     let path = Path::new(command);
-    if path.components().count() > 1 && path.is_relative() {
-        if let Ok(cwd) = std::env::current_dir() {
-            return cwd.join(path);
-        }
+    if path.components().count() > 1
+        && path.is_relative()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        return cwd.join(path);
     }
     path.to_path_buf()
 }
@@ -376,10 +377,10 @@ fn resolve_for_cwd(command: &OsStr) -> PathBuf {
 /// Resolve a file path for cwd=scratch: relative paths become absolute via
 /// the current directory; absolute paths pass through.
 fn resolve_path_for_cwd(path: &Path) -> PathBuf {
-    if path.is_relative() {
-        if let Ok(cwd) = std::env::current_dir() {
-            return cwd.join(path);
-        }
+    if path.is_relative()
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        return cwd.join(path);
     }
     path.to_path_buf()
 }
@@ -396,16 +397,13 @@ fn collect_warnings(log: &str) -> Vec<NoteWarning> {
             if seen.insert(key) {
                 out.push(NoteWarning::MissingGlyph(line.trim().to_string()));
             }
-        } else if line.contains("Overfull") {
-            if let Some(width) = overfull_width_pt(line) {
-                if width > 20.0 {
-                    let key = format!("overfull:{line}");
-                    if seen.insert(key) {
-                        out.push(NoteWarning::Overfull(
-                            line.trim().to_string(),
-                        ));
-                    }
-                }
+        } else if line.contains("Overfull")
+            && let Some(width) = overfull_width_pt(line)
+            && width > 20.0
+        {
+            let key = format!("overfull:{line}");
+            if seen.insert(key) {
+                out.push(NoteWarning::Overfull(line.trim().to_string()));
             }
         }
     }
@@ -1441,7 +1439,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             for _ in 0..30 {
                 long_md.push_str("Filler paragraph pads the document so return pills span several pages and page labels vary across the eight-page navigation threshold. ");
             }
-            long_md.push_str("\n");
+            long_md.push('\n');
         }
         for (name, md, expect_pages) in
             [("short", short_md, false), ("long", long_md, true)]

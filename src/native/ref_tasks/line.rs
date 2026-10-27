@@ -39,7 +39,7 @@ pub(crate) fn strip_blockquote_prefix(mut line: &str) -> &str {
 /// is a list task line: indentation, then `-`/`*`/`+`, a space, `[m]`, then
 /// end-of-line or whitespace.
 pub(crate) fn task_mark(line: &str) -> Option<char> {
-    let trimmed_start = line.trim_start_matches(|c| c == ' ' || c == '\t');
+    let trimmed_start = line.trim_start_matches([' ', '\t']);
     // Indentation then marker.
     let after_marker = trimmed_start
         .strip_prefix("- ")
@@ -76,7 +76,7 @@ pub(crate) fn has_caret_ref(line: &str) -> bool {
 /// True when the line is an embed line (`- ![[...]]` or managed embed):
 /// after the checkbox, the body starts with `!`. Such lines are ignored.
 pub(crate) fn is_embed_task_line(stripped: &str) -> bool {
-    let trimmed_start = stripped.trim_start_matches(|c| c == ' ' || c == '\t');
+    let trimmed_start = stripped.trim_start_matches([' ', '\t']);
     let after = trimmed_start
         .strip_prefix("- ")
         .or_else(|| trimmed_start.strip_prefix("* "))

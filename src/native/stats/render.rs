@@ -904,24 +904,19 @@ fn parts_lines(
             styler.dim("grouped by today's note tree · from Task Links"),
         ));
     }
-    if metric.unit == "minutes" {
-        if let Some(project) = metric.parts_summary.get("project") {
-            let total: i64 = project.iter().map(|part| part.value).sum();
-            let split: i64 =
-                project.iter().filter_map(|part| part.apportioned).sum();
-            if split > 0 && total > 0 {
-                let percent = ((i128::from(split) * 100)
-                    + i128::from(total) / 2)
-                    / i128::from(total);
-                let line = format!(
+    if metric.unit == "minutes"
+        && let Some(project) = metric.parts_summary.get("project")
+    {
+        let total: i64 = project.iter().map(|part| part.value).sum();
+        let split: i64 =
+            project.iter().filter_map(|part| part.apportioned).sum();
+        if split > 0 && total > 0 {
+            let percent = ((i128::from(split) * 100) + i128::from(total) / 2)
+                / i128::from(total);
+            let line = format!(
                     "{percent}% of project minutes came from sessions with several homes"
                 );
-                out.push_str(&format!(
-                    " {:<8} {}\n",
-                    "split",
-                    styler.dim(&line),
-                ));
-            }
+            out.push_str(&format!(" {:<8} {}\n", "split", styler.dim(&line),));
         }
     }
     out

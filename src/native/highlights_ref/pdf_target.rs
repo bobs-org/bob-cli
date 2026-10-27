@@ -156,7 +156,7 @@ pub(super) fn plan_pdf_url(
                 } else {
                     format!(
                         "{}_{}",
-                        url.host.replace('.', "_").replace('-', "_"),
+                        url.host.replace(['.', '-'], "_"),
                         captured.replace('-', "")
                     )
                 }
@@ -312,7 +312,7 @@ pub(super) fn plan_arxiv(
 }
 
 fn arxiv_fallback_stem(full_id: &str) -> String {
-    format!("arxiv_{}", full_id.replace('.', "_").replace('/', "_"))
+    format!("arxiv_{}", full_id.replace(['.', '/'], "_"))
 }
 
 /// Validate a PDF file: size cap, loadable, at least one page, not
@@ -463,7 +463,7 @@ pub(super) fn check_local_pdf_identity(
                 ),
                 super::duplicate::Remedy::new(
                     "bob ref sync",
-                    &format!("re-sync {}", canonical.display()),
+                    format!("re-sync {}", canonical.display()),
                 ),
             ],
         );

@@ -255,7 +255,7 @@ pub(crate) fn sort_by_writer_order<T>(
         left_ts
             .cmp(&right_ts)
             .then_with(|| left_host.cmp(right_host))
-            .then_with(|| left_path.cmp(&right_path))
+            .then_with(|| left_path.cmp(right_path))
             .then_with(|| left_line.cmp(&right_line))
     });
 }

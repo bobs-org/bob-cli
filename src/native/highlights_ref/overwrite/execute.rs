@@ -553,10 +553,7 @@ fn overwrite_inside_accessor(
                 sha
             } else {
                 let rollback = recovery::rollback_transaction(
-                    config,
-                    child_env,
-                    &intent,
-                    pdf_move.as_deref_mut(),
+                    config, child_env, &intent, pdf_move,
                 );
                 return Err(CommandError::new(format!(
                     "Git commit failed: {error}{}",
@@ -1573,7 +1570,7 @@ fn move_annotated_bundle(
     if let Some(live_assets) = &annotated.live_assets_path {
         let live_manifest =
             recovery::asset_manifest(&config.bob_dir, live_assets)
-                .map_err(|error| CommandError::new(error))?;
+                .map_err(CommandError::new)?;
         if live_manifest != annotated.asset_manifest {
             return Err(CommandError::new(
                 "annotated assets changed before their archive move",
@@ -2178,7 +2175,7 @@ fn retain_note_local_frontmatter(
             None => !skipping_continuations,
         };
         match entry.key.as_deref() {
-            Some(key) => skipping_continuations = !keep && key != "",
+            Some(key) => skipping_continuations = !keep && !key.is_empty(),
             None if keep => skipping_continuations = false,
             None => {}
         }

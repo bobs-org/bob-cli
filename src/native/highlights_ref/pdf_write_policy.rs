@@ -194,12 +194,12 @@ fn probe_reading_activity() -> ReadingActivity {
                     ))
                 })
                 .ok_or_else(|| "could not determine HID idle time".to_string());
-        return match (front, idle) {
+        match (front, idle) {
             (Ok(front), Ok(idle)) => activity_for(front, idle),
             (Err(error), _) | (_, Err(error)) => {
                 ReadingActivity::Unknown(error)
             }
-        };
+        }
     }
 
     #[cfg(not(target_os = "macos"))]

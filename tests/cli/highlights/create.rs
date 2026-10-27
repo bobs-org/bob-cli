@@ -6210,7 +6210,9 @@ fn highlights_create_local_pdf_recapture_rereads_after_scan() {
     );
     // The earlier reading keeps its bytes.
     assert!(
-        std::fs::read(&library).expect("read library PDF").len() > 0,
+        !std::fs::read(&library)
+            .expect("read library PDF")
+            .is_empty(),
         "the earlier library PDF must survive"
     );
     assert!(

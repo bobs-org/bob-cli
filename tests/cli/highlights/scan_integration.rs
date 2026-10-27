@@ -671,7 +671,7 @@ fn v2_alias_parent_resolves_to_canonical_residence() {
         "{contents}"
     );
     assert!(
-        !fs::read_to_string(&vault.join("mac_inbox.md"))
+        !fs::read_to_string(vault.join("mac_inbox.md"))
             .unwrap_or_default()
             .contains("^ref-aliased"),
         "an alias match must not fall back to the inbox"

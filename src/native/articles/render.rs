@@ -134,7 +134,7 @@ pub(crate) fn format_human(
                         .unwrap_or(&plan.notice)
                         .trim_start_matches([' ', '·']);
                     let line = if detail.is_empty() {
-                        format!("{}", display_path(&plan.path))
+                        display_path(&plan.path).to_string()
                     } else {
                         format!("{} · {detail}", display_path(&plan.path))
                     };
@@ -206,13 +206,12 @@ pub(crate) fn list_human(
         .unwrap_or(5)
         .max(5);
     println!(
-        "{}  {}  {}  {}  {}  {}",
+        "{}  {}  {}  {}  {}  STATE",
         pad_right("ARTICLE", article_width),
         pad_right("SECTIONS", 8),
         pad_right("WORDS", 5),
         pad_right("TODO", 4),
-        pad_right("FINDINGS", 8),
-        "STATE"
+        pad_right("FINDINGS", 8)
     );
     for row in &rows {
         println!(
@@ -264,9 +263,8 @@ pub(crate) fn outline_human(plan: &ArticlePlan, styler: &Styler) {
         .unwrap_or(1)
         .max(3);
     println!(
-        "  {}  {}  {} w",
+        "  {}  Preamble  {} w",
         styler.dim("¶"),
-        "Preamble",
         pad_left(&plan.outline.preamble.words.to_string(), word_width)
     );
 

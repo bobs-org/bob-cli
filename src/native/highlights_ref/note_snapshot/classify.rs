@@ -502,18 +502,17 @@ pub(crate) fn classify_target<L: SourceLoader>(
             // only match excluded notes stay missing: only an exact
             // vault-relative reference detours here, so excluded copies can
             // never shadow (or answer for) real notes.
-            if let Some(canonical) = vault.existing_vault_file(&parsed) {
-                if vault_member_relative(store.vault_root(), &canonical)
+            if let Some(canonical) = vault.existing_vault_file(&parsed)
+                && vault_member_relative(store.vault_root(), &canonical)
                     .is_none()
-                    && markdown_extension(&canonical)
-                    && is_explicit_vault_path(
-                        store.vault_root(),
-                        &canonical,
-                        &parsed.note,
-                    )
-                {
-                    return Ok(SnapshotTarget::PlainMarkdown(canonical));
-                }
+                && markdown_extension(&canonical)
+                && is_explicit_vault_path(
+                    store.vault_root(),
+                    &canonical,
+                    &parsed.note,
+                )
+            {
+                return Ok(SnapshotTarget::PlainMarkdown(canonical));
             }
             Err(super::resolve::classify_error_from_resolve(trimmed, error))
         }

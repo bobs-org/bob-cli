@@ -343,7 +343,7 @@ fn capture_pomodoro_close_log_retired_tail() {
             .arg("-f")
             .arg("json")
             .arg("--")
-            .arg(&args[0])
+            .arg(args[0])
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00")
             .output()

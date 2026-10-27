@@ -924,7 +924,7 @@ mod tests {
         let loaded = read_all(dir.path()).expect("read");
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].1.entries[0].state, EntryState::Prepared);
-        assert!(has_verified(&loaded, "note-1", "0123456789ab") == false);
+        assert!(!has_verified(&loaded, "note-1", "0123456789ab"));
 
         let mut verified = loaded[0].1.clone();
         verified.entries[0].state = EntryState::Verified;

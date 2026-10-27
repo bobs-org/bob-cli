@@ -159,15 +159,11 @@ fn read_note_title_audio(note: &std::path::Path) -> (Option<String>, bool) {
             .as_ref()
             .and_then(|value| value.as_string().map(str::to_string));
         match key {
-            "title" => {
-                if title.is_none() {
-                    title = value;
-                }
+            "title" if title.is_none() => {
+                title = value;
             }
-            "audio" => {
-                if value.is_some_and(|value| !value.is_empty()) {
-                    has_audio = true;
-                }
+            "audio" if value.is_some_and(|value| !value.is_empty()) => {
+                has_audio = true;
             }
             _ => {}
         }
@@ -242,19 +238,17 @@ fn walk_notes_for_source_pdf(
         for raw in frontmatter {
             let entry = super::frontmatter::parse_frontmatter_entry(&raw);
             match entry.key.as_deref().unwrap_or_default() {
-                "source_pdf" => {
-                    if source_pdf.is_none() {
-                        source_pdf = entry.value.as_ref().and_then(|value| {
-                            value.as_string().map(str::to_string)
-                        });
-                    }
+                "source_pdf" if source_pdf.is_none() => {
+                    source_pdf = entry.value.as_ref().and_then(|value| {
+                        value.as_string().map(str::to_string)
+                    });
                 }
-                "audio" => {
+                "audio"
                     if entry.value.as_ref().is_some_and(|value| {
                         value.as_string().is_some_and(|value| !value.is_empty())
-                    }) {
-                        has_audio = true;
-                    }
+                    }) =>
+                {
+                    has_audio = true;
                 }
                 _ => {}
             }

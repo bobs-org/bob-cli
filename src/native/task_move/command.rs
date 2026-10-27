@@ -928,10 +928,10 @@ fn print_human(report: &Report) {
         println!("  Applied: {}", report.applied_paths.join(", "));
         println!("  Deferred: {}", report.deferred_paths.join(", "));
     }
-    if let Some(recovery) = &report.recovery_directory {
-        if !report.deferred_paths.is_empty() || report.error.is_some() {
-            println!("  Recovery: {recovery}");
-        }
+    if let Some(recovery) = &report.recovery_directory
+        && (!report.deferred_paths.is_empty() || report.error.is_some())
+    {
+        println!("  Recovery: {recovery}");
     }
     for warning in &report.warnings {
         eprintln!("{}: {warning}", styler.warning_prefix());

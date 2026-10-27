@@ -151,10 +151,10 @@ pub(crate) struct ParsedLinkTarget {
 /// left for the resolver, which applies it deterministically.
 pub(crate) fn parse_link_target(raw: &str) -> ParsedLinkTarget {
     let mut text = raw.trim();
-    if let Some(inner) = text.strip_prefix("[[") {
-        if let Some(stripped) = inner.strip_suffix("]]") {
-            text = stripped;
-        }
+    if let Some(inner) = text.strip_prefix("[[")
+        && let Some(stripped) = inner.strip_suffix("]]")
+    {
+        text = stripped;
     }
     let text = text.trim();
     let (before_alias, alias) = match text.split_once('|') {
@@ -961,10 +961,10 @@ pub(crate) struct ParsedAttachmentTarget {
 /// suffix stays part of the path.
 pub(crate) fn parse_attachment_target(raw: &str) -> ParsedAttachmentTarget {
     let mut text = raw.trim();
-    if let Some(inner) = text.strip_prefix("[[") {
-        if let Some(stripped) = inner.strip_suffix("]]") {
-            text = stripped;
-        }
+    if let Some(inner) = text.strip_prefix("[[")
+        && let Some(stripped) = inner.strip_suffix("]]")
+    {
+        text = stripped;
     }
     let text = text.trim();
     match text.rsplit_once('|') {
@@ -1105,11 +1105,10 @@ impl AttachmentIndex {
         if let Some(found) = self.exact_vault_hit(target_path) {
             return Ok(self.describe(found, parsed.width_px));
         }
-        if let Some(parent) = source_note_relative.parent() {
-            if let Some(found) = self.exact_vault_hit(&parent.join(target_path))
-            {
-                return Ok(self.describe(found, parsed.width_px));
-            }
+        if let Some(parent) = source_note_relative.parent()
+            && let Some(found) = self.exact_vault_hit(&parent.join(target_path))
+        {
+            return Ok(self.describe(found, parsed.width_px));
         }
         let Some(basename) = target_path.file_name().and_then(OsStr::to_str)
         else {
@@ -1171,7 +1170,7 @@ impl AttachmentIndex {
             relative_path: PathBuf::from(format!(
                 "assets/{sequence}.{extension}"
             )),
-            media_kind: attachment.media_kind.clone(),
+            media_kind: attachment.media_kind,
             missing_label: None,
             width_px_hint: attachment.width_px_hint,
             width_percent: attachment

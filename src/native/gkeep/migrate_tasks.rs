@@ -469,10 +469,8 @@ pub(crate) fn run(args: &MigrateTasksArgs) -> i32 {
         };
         let pending_migration_destinations: BTreeSet<String> = initial_receipts
             .iter()
-            .filter_map(|(_, receipt)| {
-                (receipt.state == EntryState::Prepared)
-                    .then(|| receipt.destination.clone())
-            })
+            .filter(|&(_, receipt)| receipt.state == EntryState::Prepared)
+            .map(|(_, receipt)| receipt.destination.clone())
             .collect();
         let mut recovery_destinations: BTreeSet<String> = preliminary
             .iter()
@@ -670,28 +668,33 @@ pub(crate) fn run(args: &MigrateTasksArgs) -> i32 {
             if installed {
                 changed_notes.push(PathBuf::from(&plan.rel));
                 if let Ok(receipts) = read_migration_receipts(&bob_dir) {
-                    receipt_paths.extend(receipts.iter().filter_map(
-                        |(path, receipt)| {
-                            (receipt.destination == plan.rel).then(|| {
+                    receipt_paths.extend(
+                        receipts
+                            .iter()
+                            .filter(|&(_path, receipt)| {
+                                receipt.destination == plan.rel
+                            })
+                            .map(|(path, _receipt)| {
                                 path.strip_prefix(&bob_dir)
                                     .unwrap_or(path)
                                     .to_path_buf()
-                            })
-                        },
-                    ));
+                            }),
+                    );
                 }
                 if let Ok(files) = imports::read_all(&bob_dir) {
-                    receipt_paths.extend(files.iter().filter_map(
-                        |(path, tx)| {
-                            (tx.destination == plan.rel
-                                && tx.transaction_id.starts_with("mt-"))
-                            .then(|| {
+                    receipt_paths.extend(
+                        files
+                            .iter()
+                            .filter(|&(_path, tx)| {
+                                tx.destination == plan.rel
+                                    && tx.transaction_id.starts_with("mt-")
+                            })
+                            .map(|(path, _tx)| {
                                 path.strip_prefix(&bob_dir)
                                     .unwrap_or(path)
                                     .to_path_buf()
-                            })
-                        },
-                    ));
+                            }),
+                    );
                 }
             }
             for task in &mut plan.tasks {
@@ -1247,13 +1250,12 @@ fn scan_file(
                 "source destination is malformed".into()
             });
         }
-        if let Some(url) = source_url.as_deref() {
-            if !supported_keep_url(url) {
-                skip.get_or_insert_with(|| {
-                    "source destination is not a supported HTTP(S) Keep URL"
-                        .into()
-                });
-            }
+        if let Some(url) = source_url.as_deref()
+            && !supported_keep_url(url)
+        {
+            skip.get_or_insert_with(|| {
+                "source destination is not a supported HTTP(S) Keep URL".into()
+            });
         }
         if bulb_urls.len() > 1 {
             skip.get_or_insert_with(|| {
@@ -1544,10 +1546,7 @@ fn parse_legacy_source(
     } else {
         return None;
     };
-    if labels
-        .as_deref()
-        .is_some_and(|labels| labels.trim().is_empty())
-    {
+    if labels.is_some_and(|labels| labels.trim().is_empty()) {
         return None;
     }
     let label_prefix = labels.as_ref().map(|_| {
@@ -2279,7 +2278,7 @@ fn report(
             files.push(json!({"path": plan.rel, "tasks": tasks, "closed_tasks_excluded": plan.closed_tasks}));
         }
     }
-    let failed = failures.len() > 0;
+    let failed = !failures.is_empty();
     let ok = !failed && unresolved == 0;
     if args.format.is_json() {
         if args.quiet && ok {

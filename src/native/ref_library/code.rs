@@ -143,9 +143,7 @@ fn fenced(text: &str, lang: Option<&str>) -> String {
 
 fn box_drawing_line(line: &str) -> bool {
     !line.is_empty()
-        && line
-            .chars()
-            .all(|ch| matches!(ch as u32, 0x2500..=0x257f | 0x2580..=0x259f))
+        && line.chars().all(|ch| matches!(ch as u32, 0x2500..=0x259f))
 }
 
 fn meaningful(line: &str) -> Option<String> {

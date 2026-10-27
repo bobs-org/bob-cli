@@ -47,7 +47,7 @@ fn bob_dir_saved_sources_are_ignored_by_note_walkers() {
     );
     write_file(&saved_source_path(&vault), SAVED_SOURCE);
     let saved_before =
-        fs::read(&saved_source_path(&vault)).expect("read saved source");
+        fs::read(saved_source_path(&vault)).expect("read saved source");
 
     let archive = bob_command()
         .args(["task", "archive", "--threshold", "1"])
@@ -57,7 +57,7 @@ fn bob_dir_saved_sources_are_ignored_by_note_walkers() {
         .expect("run bob task archive");
     assert_success(&archive);
     assert_eq!(
-        fs::read(&saved_source_path(&vault)).expect("read after archive"),
+        fs::read(saved_source_path(&vault)).expect("read after archive"),
         saved_before,
         "archive must leave the saved source byte-identical:\n{}",
         format_output(&archive)
@@ -77,7 +77,7 @@ fn bob_dir_saved_sources_are_ignored_by_note_walkers() {
         .expect("run bob task move");
     assert_success(&moved);
     assert_eq!(
-        fs::read(&saved_source_path(&vault)).expect("read after move"),
+        fs::read(saved_source_path(&vault)).expect("read after move"),
         saved_before,
         "link repair must leave the saved source byte-identical:\n{}",
         format_output(&moved)
@@ -135,7 +135,7 @@ fn bob_dir_saved_sources_are_ignored_by_note_walkers() {
         .expect("run bob task reconcile");
     assert_success(&reconcile);
     assert_eq!(
-        fs::read(&saved_source_path(&vault)).expect("read after reconcile"),
+        fs::read(saved_source_path(&vault)).expect("read after reconcile"),
         saved_before,
         "task-status hooks must leave the saved source byte-identical:\n{}",
         format_output(&reconcile)
@@ -184,7 +184,7 @@ fn bob_dir_saved_sources_are_ignored_by_note_walkers() {
         format_output(&gkeep)
     );
     assert_eq!(
-        fs::read(&saved_source_path(&vault)).expect("read after gkeep list"),
+        fs::read(saved_source_path(&vault)).expect("read after gkeep list"),
         saved_before,
         "gkeep list must not rewrite the saved source"
     );

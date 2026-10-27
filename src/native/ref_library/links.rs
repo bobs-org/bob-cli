@@ -573,11 +573,11 @@ pub(crate) fn run_links(matches: &ArgMatches) -> i32 {
         return 0;
     }
     if view.status != LinksStatus::Available {
-        if view.status == LinksStatus::NoLinks {
-            if let Some(number) = number {
-                eprintln!("bob ref: error: no link {number} (0 links)");
-                return 1;
-            }
+        if view.status == LinksStatus::NoLinks
+            && let Some(number) = number
+        {
+            eprintln!("bob ref: error: no link {number} (0 links)");
+            return 1;
         }
         print_unavailable(
             view.detail
@@ -611,11 +611,11 @@ pub(crate) fn run_links(matches: &ArgMatches) -> i32 {
         return 0;
     }
 
-    if links.is_empty() {
-        if let Some(page) = page {
-            println!("no links on page {page}");
-            return 0;
-        }
+    if links.is_empty()
+        && let Some(page) = page
+    {
+        println!("no links on page {page}");
+        return 0;
     }
     let hint_ref = shortest_ref(&index, resolved.row);
     print!(

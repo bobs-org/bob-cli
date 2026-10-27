@@ -190,10 +190,7 @@ fn existing_owner_reports_self_existing_edges_and_typed_blocked_rows() {
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     write_toggle_task_settings(&vault);
-    write_file(
-        &vault.join("owner.md"),
-        concat!("- [ ] #task Owner ^owner\n",),
-    );
+    write_file(&vault.join("owner.md"), "- [ ] #task Owner ^owner\n");
     write_file(
         &vault.join("target.md"),
         concat!(

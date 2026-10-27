@@ -1809,19 +1809,19 @@ pub(super) fn print_human_item_success(
         print_consumed_links(result, &styler);
         return;
     }
-    if result.kind == "pomodoro_start" {
-        if let Some(start) = result.pomodoro_start.as_ref() {
-            print_human_pomodoro_start_success(
-                result,
-                start,
-                &styler,
-                &prefix,
-                &ordinal,
-                &target_label,
-            );
-            print_consumed_links(result, &styler);
-            return;
-        }
+    if result.kind == "pomodoro_start"
+        && let Some(start) = result.pomodoro_start.as_ref()
+    {
+        print_human_pomodoro_start_success(
+            result,
+            start,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        print_consumed_links(result, &styler);
+        return;
     }
     if result.kind == "ref"
         && let Some(reference) = result.r#ref.as_ref()
@@ -2617,7 +2617,8 @@ fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
         update.target.path, update.target.block_id
     );
     let quoted = format!("\"{}\"", update.target.text);
-    let verb = match (update.direction, update.action, dry_run) {
+
+    match (update.direction, update.action, dry_run) {
         (RelationDirection::To, RelationAction::Added, false) => {
             format!("🪢 links to {quoted}{label}{locator}")
         }
@@ -2645,8 +2646,7 @@ fn human_relation_line(dry_run: bool, update: &RelationUpdateJson) -> String {
         (_, RelationAction::Unchanged, _) => {
             format!("🪢 unchanged {quoted}{locator}")
         }
-    };
-    verb
+    }
 }
 
 fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {

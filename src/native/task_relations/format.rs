@@ -85,14 +85,13 @@ pub(crate) fn relation_insert_slot(
         .map(|index| leading_whitespace(lines[*index]).to_string())
         .unwrap_or(fallback_indent);
 
-    if kind == RelationSlotKind::LinkedFrom {
-        if let Some(child) = links_children_of(lines, fenced, task_line).first()
-        {
-            return RelationInsertSlot {
-                line_index: subtree_end(lines, child.line_index),
-                indent: child_indent,
-            };
-        }
+    if kind == RelationSlotKind::LinkedFrom
+        && let Some(child) = links_children_of(lines, fenced, task_line).first()
+    {
+        return RelationInsertSlot {
+            line_index: subtree_end(lines, child.line_index),
+            indent: child_indent,
+        };
     }
 
     let mut last_anchor = None;

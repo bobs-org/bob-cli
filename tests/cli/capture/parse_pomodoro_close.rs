@@ -334,7 +334,8 @@ fn capture_parse_pomodoro_close_selection_protocol() {
 
     // Other extra text keeps an `invalid_pomodoro_close` diagnostic on the
     // first tail token.
-    for (text, range) in [("x - wired", [2, 3])] {
+    {
+        let (text, range) = ("x - wired", [2, 3]);
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -553,7 +554,8 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     }
 
     // Other `=` shapes and mid-body tokens stay ordinary prose.
-    for text in ["Plan x1"] {
+    {
+        let text = "Plan x1";
         let value = parse(text);
         assert_eq!(value["mode"], "task", "{text}");
         assert!(value.get("pomodoro_close").is_none(), "{text}: {value}");

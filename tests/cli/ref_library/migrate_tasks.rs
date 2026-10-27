@@ -94,7 +94,7 @@ fn run_write_json(vault: &Path, args: &[&str]) -> serde_json::Value {
 }
 
 fn commit_subjects(vault: &Path) -> Vec<String> {
-    let output = git_in(vault, &["log", "--format=%s"]);
+    let output = git_in(vault, ["log", "--format=%s"]);
     stdout(&output).lines().map(str::to_string).collect()
 }
 
@@ -235,8 +235,8 @@ fn depends_on_and_pomodoro_links_rewritten() {
     let dep_note =
         format!("# Dep\n\n- [ ] #task work [dependsOn:: {old_dep}]\n");
     fs::write(vault.join("dep.md"), &dep_note).expect("write dep");
-    git_in(&vault, &["add", "-A"]);
-    git_in(&vault, &["commit", "-q", "-m", "dep"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "dep"]);
     let document = run_write_json(&vault, &[]);
     assert_eq!(document["ok"], true);
     // Pomodoro link rewritten but absent from wrappers.
@@ -366,8 +366,8 @@ fn unmapped_refuses_write_and_map_wins() {
     // Remove the frontmatter parent so the ref is unmapped (no PDF marker).
     let unmapped_contents = "---\ncreated: 2026-10-01\n---\n\n# U Title\n\n- [ ] #task #ref [[lib/papers/u.pdf]] #hide ^ref\n";
     fs::write(vault.join("ref/papers/u.md"), unmapped_contents).expect("write");
-    git_in(&vault, &["add", "-A"]);
-    git_in(&vault, &["commit", "-q", "-m", "unmapped"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "unmapped"]);
     let before = worktree_snapshot(&vault);
     let dry = run_migrate(&vault, &[]);
     assert!(dry.status.success(), "dry run exits 0");
@@ -390,8 +390,8 @@ fn unmapped_refuses_write_and_map_wins() {
         "- [ ] #task #ref [[lib/papers/u.pdf]] #hide ^ref",
     );
     fs::write(vault.join("ref/papers/u.md"), &mapped_contents).expect("write");
-    git_in(&vault, &["add", "-A"]);
-    git_in(&vault, &["commit", "-q", "-m", "mapped"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "mapped"]);
     let map_path = vault.join("map.tsv");
     fs::write(&map_path, "ref/papers/u.md\tbob\n").expect("map");
     let output = run_write(&vault, &["-m", map_path.to_str().unwrap()]);
@@ -467,8 +467,8 @@ fn crash_adoption_writes_embed_without_second_task() {
     let v2 = "- [ ] #task #ref [[ref/papers/c|C Title]] [created::2026-10-01] ^ref-c\n";
     let sase = format!("{AREA}\n{v2}");
     fs::write(vault.join("sase.md"), &sase).expect("write");
-    git_in(&vault, &["add", "-A"]);
-    git_in(&vault, &["commit", "-q", "-m", "crash"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "crash"]);
     let document = run_write_json(&vault, &[]);
     assert_eq!(document["ok"], true);
     let after = fs::read_to_string(vault.join("sase.md")).expect("read");

@@ -264,14 +264,12 @@ pub(crate) fn write_store(
     let source_abs = dir_abs.join("source.md");
     let code_abs = dir_abs.join("code.json");
 
-    if let Err(error) = fs::create_dir_all(&dir_abs).map_err(|error| {
+    fs::create_dir_all(&dir_abs).map_err(|error| {
         CommandError::new(format!(
             "create source store {}: {error}",
             dir_abs.display()
         ))
-    }) {
-        return Err(error);
-    }
+    })?;
 
     // Write-once: an existing `source.md` with a different digest refuses
     // the write with a warning and never overwrites.

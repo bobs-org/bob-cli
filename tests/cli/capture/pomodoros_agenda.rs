@@ -645,7 +645,8 @@ fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
     assert_success(&plan);
     let plan: Value = serde_json::from_slice(&plan.stdout).expect("plan json");
 
-    for field in ["status"] {
+    {
+        let field = "status";
         assert_eq!(agenda["plan_budget"][field], plan[field]);
     }
     for meter in ["themes", "links"] {

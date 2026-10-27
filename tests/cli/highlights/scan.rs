@@ -2807,7 +2807,7 @@ fn ref_scan_json_receipt_matches_stdout() {
     let bytes = fs::read(&receipt).expect("scan must write the receipt");
     assert_eq!(
         bytes,
-        format!("{text}").into_bytes(),
+        text.to_string().into_bytes(),
         "the receipt must be the exact envelope line from stdout"
     );
     let document: serde_json::Value =
@@ -2999,7 +2999,7 @@ fn ref_scan_json_hard_failure_writes_error_receipt() {
         .expect("a hard failure after the lock must write the receipt");
     assert_eq!(
         bytes,
-        format!("{text}").into_bytes(),
+        text.to_string().into_bytes(),
         "the error receipt must be the exact envelope line from stdout"
     );
     let document: serde_json::Value =

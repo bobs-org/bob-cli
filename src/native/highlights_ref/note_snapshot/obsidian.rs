@@ -937,12 +937,12 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 index = next;
                 continue;
             }
-            if is_single_embed_line(&line.text) {
-                if let Some(block) = self.parse_line_embed(line) {
-                    blocks.push(block);
-                    index += 1;
-                    continue;
-                }
+            if is_single_embed_line(&line.text)
+                && let Some(block) = self.parse_line_embed(line)
+            {
+                blocks.push(block);
+                index += 1;
+                continue;
             }
             let (block, next) = self.parse_paragraph(lines, index, min_indent);
             if next <= index {
@@ -973,12 +973,11 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             }
             return Some(self.project_wikilink_embed(inner, line.line_no));
         }
-        if let Some(rest) = trimmed.strip_prefix('!') {
-            if let Some(image) =
+        if let Some(rest) = trimmed.strip_prefix('!')
+            && let Some(image) =
                 self.parse_markdown_image_line(rest, line.line_no)
-            {
-                return Some(image);
-            }
+        {
+            return Some(image);
         }
         None
     }
@@ -1207,13 +1206,10 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             }
             let (item_body, block_id) = strip_trailing_block_id(marker.content);
             let mut content = self.parse_inlines(item_body, Some(line.line_no));
-            match block_id {
-                Some(id) => {
-                    let tid = self.claim_anchor_id(&format!("t-{id}"));
-                    let anchor = self.push_anchor(AnchorKind::Block, id, tid);
-                    content.push(Inline::Anchor(anchor));
-                }
-                None => {}
+            if let Some(id) = block_id {
+                let tid = self.claim_anchor_id(&format!("t-{id}"));
+                let anchor = self.push_anchor(AnchorKind::Block, id, tid);
+                content.push(Inline::Anchor(anchor));
             }
             let width = line.indent_width();
             let (children, next) = self.parse_nested(lines, cursor + 1, width);
@@ -1269,14 +1265,13 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         }
         let mut kind = "note".to_string();
         let mut title = Vec::new();
-        if let Some(first) = inner.first() {
-            if let Some((parsed_kind, parsed_title)) =
+        if let Some(first) = inner.first()
+            && let Some((parsed_kind, parsed_title)) =
                 parse_callout_header(&first.text)
-            {
-                kind = parsed_kind;
-                title = self.parse_inlines(&parsed_title, Some(first.line_no));
-                inner.remove(0);
-            }
+        {
+            kind = parsed_kind;
+            title = self.parse_inlines(&parsed_title, Some(first.line_no));
+            inner.remove(0);
         }
         // Drop blank separators the prefix strip left behind at the edges.
         while inner.first().is_some_and(|line| line.is_blank()) {
@@ -1426,14 +1421,12 @@ fn is_single_embed_line(line: &str) -> bool {
     {
         return !inner.contains("[[") && !inner.contains("]]");
     }
-    if let Some(rest) = trimmed.strip_prefix('!') {
-        if let Some((_, after)) = split_balanced(rest, '[', ']') {
-            if after.starts_with('(') {
-                if let Some((_, tail)) = split_balanced(&after, '(', ')') {
-                    return tail.trim().is_empty();
-                }
-            }
-        }
+    if let Some(rest) = trimmed.strip_prefix('!')
+        && let Some((_, after)) = split_balanced(rest, '[', ']')
+        && after.starts_with('(')
+        && let Some((_, tail)) = split_balanced(&after, '(', ')')
+    {
+        return tail.trim().is_empty();
     }
     false
 }
@@ -1557,20 +1550,20 @@ fn split_balanced(
 /// Handles `"double"`, `'single'`, and `(paren)` titles.
 fn split_image_target(target: &str) -> (String, Option<String>) {
     let target = target.trim();
-    if let Some(path) = target.strip_suffix('"') {
-        if let Some(bare) = path.rsplit_once(" \"") {
-            return (bare.0.trim().to_string(), Some(bare.1.to_string()));
-        }
+    if let Some(path) = target.strip_suffix('"')
+        && let Some(bare) = path.rsplit_once(" \"")
+    {
+        return (bare.0.trim().to_string(), Some(bare.1.to_string()));
     }
-    if let Some(path) = target.strip_suffix('\'') {
-        if let Some(bare) = path.rsplit_once(" '") {
-            return (bare.0.trim().to_string(), Some(bare.1.to_string()));
-        }
+    if let Some(path) = target.strip_suffix('\'')
+        && let Some(bare) = path.rsplit_once(" '")
+    {
+        return (bare.0.trim().to_string(), Some(bare.1.to_string()));
     }
-    if let Some(path) = target.strip_suffix(')') {
-        if let Some(bare) = path.rsplit_once(" (") {
-            return (bare.0.trim().to_string(), Some(bare.1.to_string()));
-        }
+    if let Some(path) = target.strip_suffix(')')
+        && let Some(bare) = path.rsplit_once(" (")
+    {
+        return (bare.0.trim().to_string(), Some(bare.1.to_string()));
     }
     (target.to_string(), None)
 }
@@ -1755,48 +1748,49 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         let prev = text[..cursor].chars().next_back();
         // Fenced-code-style protection never reaches this line parser, but
         // inline code does: a backtick run wins over every other construct.
-        if rest.starts_with('`') && !is_escaped(text, cursor) {
-            if let Some((content, consumed)) = match_code_span(text, cursor) {
-                if is_inline_query(&content) {
-                    return Some((
-                        vec![Inline::Link {
-                            label: vec![Inline::Text(
-                                "Open live query".to_string(),
-                            )],
-                            target: LinkTarget::ObsidianUri(
-                                self.host_file_uri.clone(),
-                            ),
-                        }],
-                        consumed,
-                    ));
-                }
-                return Some((vec![Inline::Code(content)], consumed));
+        if rest.starts_with('`')
+            && !is_escaped(text, cursor)
+            && let Some((content, consumed)) = match_code_span(text, cursor)
+        {
+            if is_inline_query(&content) {
+                return Some((
+                    vec![Inline::Link {
+                        label: vec![Inline::Text(
+                            "Open live query".to_string(),
+                        )],
+                        target: LinkTarget::ObsidianUri(
+                            self.host_file_uri.clone(),
+                        ),
+                    }],
+                    consumed,
+                ));
+            }
+            return Some((vec![Inline::Code(content)], consumed));
+        }
+        if rest.starts_with("![[")
+            && let Some(end) = rest.find("]]")
+        {
+            let inner = rest[3..end].to_string();
+            if !inner.contains("[[") {
+                let inlines = self.project_inline_embed(&inner, line_no);
+                return Some((inlines, end + 2));
             }
         }
-        if rest.starts_with("![[") {
-            if let Some(end) = rest.find("]]") {
-                let inner = rest[3..end].to_string();
-                if !inner.contains("[[") {
-                    let inlines = self.project_inline_embed(&inner, line_no);
-                    return Some((inlines, end + 2));
-                }
-            }
+        if rest.starts_with("[[")
+            && let Some(end) = rest.find("]]")
+        {
+            let inner = rest[2..end].to_string();
+            let tail = rest[end + 2..].to_string();
+            let (inlines, extra) =
+                self.project_content_link(&inner, &tail, line_no);
+            return Some((inlines, end + 2 + extra));
         }
-        if rest.starts_with("[[") {
-            if let Some(end) = rest.find("]]") {
-                let inner = rest[2..end].to_string();
-                let tail = rest[end + 2..].to_string();
-                let (inlines, extra) =
-                    self.project_content_link(&inner, &tail, line_no);
-                return Some((inlines, end + 2 + extra));
-            }
-        }
-        if rest.starts_with("![") && !rest.starts_with("![[") {
-            if let Some(link) =
+        if rest.starts_with("![")
+            && !rest.starts_with("![[")
+            && let Some(link) =
                 self.match_markdown_link(text, cursor, line_no, true)
-            {
-                return Some(link);
-            }
+        {
+            return Some(link);
         }
         if rest.starts_with('[') {
             if let Some(link) =
@@ -1816,63 +1810,58 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 ));
             }
         }
-        if rest.starts_with('(') {
-            if let Some((key, value, len)) = match_bracket_field(rest) {
-                if BOOKKEEPING_FIELDS.contains(&key.as_str()) {
-                    return Some((Vec::new(), len));
-                }
-                return Some((
-                    vec![Inline::Muted(vec![Inline::Text(format!(
-                        "{key}: {value}"
-                    ))])],
-                    len,
-                ));
+        if rest.starts_with('(')
+            && let Some((key, value, len)) = match_bracket_field(rest)
+        {
+            if BOOKKEEPING_FIELDS.contains(&key.as_str()) {
+                return Some((Vec::new(), len));
             }
+            return Some((
+                vec![Inline::Muted(vec![Inline::Text(format!(
+                    "{key}: {value}"
+                ))])],
+                len,
+            ));
         }
-        if rest.starts_with("~~") {
-            if let Some((inner, consumed)) = match_delimited(rest, "~~") {
-                let content = self.parse_inlines(&inner, line_no);
-                return Some((vec![Inline::Strike(content)], consumed));
-            }
+        if rest.starts_with("~~")
+            && let Some((inner, consumed)) = match_delimited(rest, "~~")
+        {
+            let content = self.parse_inlines(&inner, line_no);
+            return Some((vec![Inline::Strike(content)], consumed));
         }
-        if rest.starts_with("**") {
-            if let Some((inner, consumed)) = match_delimited(rest, "**") {
-                let content = self.parse_inlines(&inner, line_no);
-                return Some((vec![Inline::Strong(content)], consumed));
-            }
+        if rest.starts_with("**")
+            && let Some((inner, consumed)) = match_delimited(rest, "**")
+        {
+            let content = self.parse_inlines(&inner, line_no);
+            return Some((vec![Inline::Strong(content)], consumed));
         }
-        if rest.starts_with("__") {
-            if let Some((inner, consumed)) =
+        if rest.starts_with("__")
+            && let Some((inner, consumed)) =
                 match_delimited_underscore(rest, 2, prev)
-            {
-                let content = self.parse_inlines(&inner, line_no);
-                return Some((vec![Inline::Strong(content)], consumed));
-            }
+        {
+            let content = self.parse_inlines(&inner, line_no);
+            return Some((vec![Inline::Strong(content)], consumed));
         }
-        if rest.starts_with('*') {
-            if let Some((inner, consumed)) = match_delimited(rest, "*") {
-                let content = self.parse_inlines(&inner, line_no);
-                return Some((vec![Inline::Emphasis(content)], consumed));
-            }
+        if rest.starts_with('*')
+            && let Some((inner, consumed)) = match_delimited(rest, "*")
+        {
+            let content = self.parse_inlines(&inner, line_no);
+            return Some((vec![Inline::Emphasis(content)], consumed));
         }
-        if rest.starts_with('_') {
-            if let Some((inner, consumed)) =
+        if rest.starts_with('_')
+            && let Some((inner, consumed)) =
                 match_delimited_underscore(rest, 1, prev)
-            {
-                let content = self.parse_inlines(&inner, line_no);
-                return Some((vec![Inline::Emphasis(content)], consumed));
-            }
+        {
+            let content = self.parse_inlines(&inner, line_no);
+            return Some((vec![Inline::Emphasis(content)], consumed));
         }
-        if rest.starts_with('#') {
-            if let Some((tag, len)) = match_tag(text, cursor) {
-                if STRUCTURAL_TAGS.contains(&tag.as_str()) {
-                    return Some((Vec::new(), len));
-                }
-                return Some((
-                    vec![Inline::Muted(vec![Inline::Text(tag)])],
-                    len,
-                ));
+        if rest.starts_with('#')
+            && let Some((tag, len)) = match_tag(text, cursor)
+        {
+            if STRUCTURAL_TAGS.contains(&tag.as_str()) {
+                return Some((Vec::new(), len));
             }
+            return Some((vec![Inline::Muted(vec![Inline::Text(tag)])], len));
         }
         if rest.starts_with("http://") || rest.starts_with("https://") {
             let (url, len) = scan_autolink(rest);
@@ -1884,23 +1873,24 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 len,
             ));
         }
-        if rest.starts_with('^') && is_word_boundary(prev) {
-            if let Some((label, len)) = match_caret_residue_label(rest) {
-                return Some((vec![Inline::Text(label)], len));
-            }
+        if rest.starts_with('^')
+            && is_word_boundary(prev)
+            && let Some((label, len)) = match_caret_residue_label(rest)
+        {
+            return Some((vec![Inline::Text(label)], len));
         }
-        if rest.starts_with("<http") {
-            if let Some(end) = rest.find('>') {
-                let url = rest[1..end].to_string();
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some((
-                        vec![Inline::Link {
-                            label: vec![Inline::Text(url.clone())],
-                            target: LinkTarget::Url(url),
-                        }],
-                        end + 1,
-                    ));
-                }
+        if rest.starts_with("<http")
+            && let Some(end) = rest.find('>')
+        {
+            let url = rest[1..end].to_string();
+            if url.starts_with("http://") || url.starts_with("https://") {
+                return Some((
+                    vec![Inline::Link {
+                        label: vec![Inline::Text(url.clone())],
+                        target: LinkTarget::Url(url),
+                    }],
+                    end + 1,
+                ));
             }
         }
         if rest.starts_with("~/") && is_word_boundary(prev) {
@@ -2148,9 +2138,8 @@ fn match_code_span(text: &str, cursor: usize) -> Option<(String, usize)> {
                 close_end += 1;
             }
             if close_end - search == run {
-                let mut content = text[open_end..search]
-                    .replace('\n', " ")
-                    .replace('\r', " ");
+                let mut content =
+                    text[open_end..search].replace(['\n', '\r'], " ");
                 if content.starts_with(' ')
                     && content.ends_with(' ')
                     && !content.trim().is_empty()
@@ -2513,18 +2502,15 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 ));
                 match fragment {
                     LinkFragment::Block(id) => {
-                        if is_self {
-                            if let Some(warning) =
+                        if is_self
+                            && let Some(warning) =
                                 self.check_host_fragment(fragment)
-                            {
-                                return (
-                                    vec![Inline::Text(format!(
-                                        "{stem} › {id}"
-                                    ))],
-                                    None,
-                                    Some(warning),
-                                );
-                            }
+                        {
+                            return (
+                                vec![Inline::Text(format!("{stem} › {id}"))],
+                                None,
+                                Some(warning),
+                            );
                         }
                         let excerpt = self.block_excerpt(
                             &resolved.canonical_path,
@@ -3115,12 +3101,11 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
 fn consume_paired_h_field(tail: &str) -> usize {
     let gap = tail.len() - tail.trim_start().len();
     let rest = tail.trim_start();
-    if rest.starts_with('[') {
-        if let Some((key, _, len)) = match_bracket_field(rest) {
-            if key == "h" {
-                return gap + len;
-            }
-        }
+    if rest.starts_with('[')
+        && let Some((key, _, len)) = match_bracket_field(rest)
+        && key == "h"
+    {
+        return gap + len;
     }
     0
 }
@@ -3148,12 +3133,12 @@ pub(crate) fn clean_readable_text(line: &str) -> String {
     }
     // The list strip above leaves `[c] body` for task rows, including
     // the space symbol as `[ ]`.
-    if text.starts_with('[') {
-        if let Some(close) = text.find(']') {
-            let symbol = text[1..close].trim();
-            if symbol.chars().count() <= 1 {
-                text = text[close + 1..].trim_start().to_string();
-            }
+    if text.starts_with('[')
+        && let Some(close) = text.find(']')
+    {
+        let symbol = text[1..close].trim();
+        if symbol.chars().count() <= 1 {
+            text = text[close + 1..].trim_start().to_string();
         }
     }
     let (without_id, _) = strip_trailing_block_id(&text);
@@ -3224,13 +3209,13 @@ fn replace_markdown_links_for_excerpt(text: &str) -> String {
             out.push_str(rest);
             break;
         };
-        if after.starts_with('(') {
-            if let Some((_, tail)) = split_balanced(&after, '(', ')') {
-                out.push_str(&rest[..open]);
-                out.push_str(&label);
-                cursor = text.len() - tail.len();
-                continue;
-            }
+        if after.starts_with('(')
+            && let Some((_, tail)) = split_balanced(&after, '(', ')')
+        {
+            out.push_str(&rest[..open]);
+            out.push_str(&label);
+            cursor = text.len() - tail.len();
+            continue;
         }
         out.push_str(&rest[..=open]);
         cursor += open + 1;
@@ -3312,15 +3297,15 @@ fn replace_bracket_fields_for_excerpt(text: &str) -> String {
     let mut cursor = 0;
     while cursor < text.len() {
         let rest = &text[cursor..];
-        if rest.starts_with('[') || rest.starts_with('(') {
-            if let Some((key, value, len)) = match_bracket_field(rest) {
-                if !hidden_excerpt_field(&key) && !value.is_empty() {
-                    out.push_str(&format!("{key}: {value}"));
-                }
-                out.push(' ');
-                cursor += len;
-                continue;
+        if (rest.starts_with('[') || rest.starts_with('('))
+            && let Some((key, value, len)) = match_bracket_field(rest)
+        {
+            if !hidden_excerpt_field(&key) && !value.is_empty() {
+                out.push_str(&format!("{key}: {value}"));
             }
+            out.push(' ');
+            cursor += len;
+            continue;
         }
         let next = rest
             .chars()
@@ -3337,14 +3322,14 @@ fn replace_tags_for_excerpt(text: &str) -> String {
     let mut out = String::new();
     let mut cursor = 0;
     while cursor < text.len() {
-        if text[cursor..].starts_with('#') {
-            if let Some((tag, len)) = match_tag(text, cursor) {
-                if !STRUCTURAL_TAGS.contains(&tag.as_str()) {
-                    out.push_str(&tag);
-                }
-                cursor += len;
-                continue;
+        if text[cursor..].starts_with('#')
+            && let Some((tag, len)) = match_tag(text, cursor)
+        {
+            if !STRUCTURAL_TAGS.contains(&tag.as_str()) {
+                out.push_str(&tag);
             }
+            cursor += len;
+            continue;
         }
         let next = text[cursor..]
             .chars()
@@ -3362,14 +3347,14 @@ fn replace_bare_fields_for_excerpt(text: &str) -> String {
     let mut cursor = 0;
     while cursor < text.len() {
         let prev = text[..cursor].chars().next_back();
-        if is_word_boundary(prev) {
-            if let Some((key, value, len)) = match_bare_field(&text[cursor..]) {
-                if !hidden_excerpt_field(&key) {
-                    out.push_str(&format!("{key}: {value} "));
-                }
-                cursor += len;
-                continue;
+        if is_word_boundary(prev)
+            && let Some((key, value, len)) = match_bare_field(&text[cursor..])
+        {
+            if !hidden_excerpt_field(&key) {
+                out.push_str(&format!("{key}: {value} "));
             }
+            cursor += len;
+            continue;
         }
         let next = text[cursor..]
             .chars()

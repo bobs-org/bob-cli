@@ -23,11 +23,11 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
                 libc::RENAME_NOREPLACE,
             )
         };
-        return if status == 0 {
+        if status == 0 {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
-        };
+        }
     }
 
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -43,11 +43,11 @@ pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
         let status = unsafe {
             libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL)
         };
-        return if status == 0 {
+        if status == 0 {
             Ok(())
         } else {
             Err(std::io::Error::last_os_error())
-        };
+        }
     }
 
     #[cfg(not(any(

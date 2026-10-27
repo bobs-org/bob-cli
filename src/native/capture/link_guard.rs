@@ -728,6 +728,36 @@ pub(super) fn promote_consume_plan(
         .collect())
 }
 
+/// Flip a new task's first line to Blocked plus the machine-owned tag
+/// (PDG5): open Ready/Next/In Progress lines become `[?]`, an existing
+/// `[?]` only gains the tag, and closed or custom-status lines come
+/// back untouched. Returns `None` when the line is not a task line.
+pub(super) fn apply_new_task_project_block(
+    line: &str,
+    status_types: &BTreeMap<char, task_status_hooks::TaskStatusType>,
+) -> Option<String> {
+    let indent_len = line
+        .bytes()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let rest = line.get(indent_len..)?;
+    let symbol = rest.strip_prefix("- [")?.chars().next()?;
+    if !rest[3 + symbol.len_utf8()..].starts_with(']') {
+        return None;
+    }
+    match symbol {
+        '?' => Some(normalize_prj_is_blocked_tag(line, true)),
+        _ if status_types
+            .get(&symbol)
+            .is_some_and(|status| status.is_open()) =>
+        {
+            let blocked = replace_status_char(line, '?')?;
+            Some(normalize_prj_is_blocked_tag(&blocked, true))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,35 +1091,5 @@ mod tests {
             apply_new_task_project_block("ordinary prose", &status_types),
             None
         );
-    }
-}
-
-/// Flip a new task's first line to Blocked plus the machine-owned tag
-/// (PDG5): open Ready/Next/In Progress lines become `[?]`, an existing
-/// `[?]` only gains the tag, and closed or custom-status lines come
-/// back untouched. Returns `None` when the line is not a task line.
-pub(super) fn apply_new_task_project_block(
-    line: &str,
-    status_types: &BTreeMap<char, task_status_hooks::TaskStatusType>,
-) -> Option<String> {
-    let indent_len = line
-        .bytes()
-        .take_while(|byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    let rest = line.get(indent_len..)?;
-    let symbol = rest.strip_prefix("- [")?.chars().next()?;
-    if !rest[3 + symbol.len_utf8()..].starts_with(']') {
-        return None;
-    }
-    match symbol {
-        '?' => Some(normalize_prj_is_blocked_tag(line, true)),
-        _ if status_types
-            .get(&symbol)
-            .is_some_and(|status| status.is_open()) =>
-        {
-            let blocked = replace_status_char(line, '?')?;
-            Some(normalize_prj_is_blocked_tag(&blocked, true))
-        }
-        _ => None,
     }
 }

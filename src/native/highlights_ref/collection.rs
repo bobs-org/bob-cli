@@ -191,15 +191,12 @@ fn run_preflight(
         .as_deref()
         .and_then(Path::file_stem)
         .and_then(std::ffi::OsStr::to_str);
-    let resolved_name = match collection_name::resolve_collection_name(
+    let resolved_name = collection_name::resolve_collection_name(
         options.name.as_deref(),
         output_stem,
         options.title.as_deref(),
         &urls,
-    ) {
-        Ok(name) => name,
-        Err(error) => return Err(error),
-    };
+    )?;
 
     let recorded = sources::collect_recorded_source_urls(config)
         .map_err(|error| CommandError::new(error.message))?;
@@ -347,15 +344,12 @@ fn attach_gate(
                 .as_deref()
                 .and_then(Path::file_stem)
                 .and_then(std::ffi::OsStr::to_str);
-            let resolved_name = match collection_name::resolve_collection_name(
+            let resolved_name = collection_name::resolve_collection_name(
                 options.name.as_deref(),
                 output_stem,
                 options.title.as_deref(),
                 urls,
-            ) {
-                Ok(name) => name,
-                Err(error) => return Err(error),
-            };
+            )?;
             if let Some(warning) = collection_name::part_order_warning(urls) {
                 eprintln!("{warning}");
             }
@@ -402,7 +396,7 @@ fn recapture_gate(
         name,
         output,
         force,
-        &reread_title_fallback(
+        reread_title_fallback(
             matches.get_one::<String>("name").map(String::as_str),
             urls,
         ),
@@ -749,7 +743,7 @@ fn recheck_collection_overlap(
             options.name.as_deref(),
             None,
             options.force,
-            &reread_title_fallback(options.name.as_deref(), urls),
+            reread_title_fallback(options.name.as_deref(), urls),
         )?;
         if fresh.is_some_and(|next| next.plan.stem != preflight.plan.stem) {
             return Err(CommandError::new(format!(
@@ -1523,7 +1517,7 @@ fn recheck_collection_overwrite(
         options.name.as_deref(),
         None,
         options.force,
-        &reread_title_fallback(options.name.as_deref(), urls),
+        reread_title_fallback(options.name.as_deref(), urls),
     )?;
     let same = matches!(
         fresh,

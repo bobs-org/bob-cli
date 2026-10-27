@@ -670,17 +670,16 @@ pub(crate) fn parse_capture_draft_with_clip_control_coded(
         if let Some(first_issue) = analysis.issues.first() {
             if let Some(row) =
                 super::template::row_number_for_issue(&analysis, first_issue)
-            {
-                if let Some(execution) = first_leading_execution_error(
+                && let Some(execution) = first_leading_execution_error(
                     raw_text,
                     &analysis,
                     row,
                     forced_route,
                     forced_section,
                     options,
-                ) {
-                    return Err(execution);
-                }
+                )
+            {
+                return Err(execution);
             }
             return Err(TemplateCodedError::coded(
                 first_issue.code(),
@@ -873,8 +872,7 @@ fn parse_template_expansion(
             forced_route,
             forced_section,
             &instance_options,
-        )
-        .map_err(|error| error)?;
+        )?;
         let (outcome_parsed, ref_source) = parsed;
         items.push(ParsedCaptureItem {
             index: instance.row - 1,

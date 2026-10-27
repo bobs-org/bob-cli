@@ -752,10 +752,9 @@ fn source_url_for_hit(plan: &FilePlan, hit: &MarkerHit) -> Option<String> {
     let description = lines.get(task_line).unwrap_or(&"").to_string();
     // The description from the raw line still carries the checkbox; the
     // shared parser looks for the 💡 shape anywhere in it.
-    parse_source_url(&description).and_then(|encoded| {
-        // Decode percent-encoding back to the raw Keep URL for storage.
-        Some(percent_decode(&encoded).unwrap_or(encoded))
-    })
+    // Decode percent-encoding back to the raw Keep URL for storage.
+    parse_source_url(&description)
+        .map(|encoded| percent_decode(&encoded).unwrap_or(encoded))
 }
 
 fn percent_decode(encoded: &str) -> Option<String> {

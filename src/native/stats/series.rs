@@ -1832,7 +1832,7 @@ mod tests {
             make_delta(&summary, &prior, MetricUnit::Signed, "4 weeks", true);
         assert_eq!(delta.display, "shrinking");
         assert_eq!(delta.sign, -1);
-        assert_eq!(summary.headline.value.is_some_and(|v| v < 0), true);
+        assert!(summary.headline.value.is_some_and(|v| v < 0));
         assert_eq!(delta.sign < 0, summary.headline.value.unwrap() < 0);
 
         // Mirror: negative median but positive total → growing.

@@ -429,13 +429,15 @@ fn add_resident_implicit_edges(
             let mut targets = BTreeSet::new();
             for id in &prj.depends_on {
                 if let Some(identities) = task_ids.get(id) {
-                    targets.extend(identities.iter().filter_map(
-                        |(path, block)| {
-                            (!project_tree
-                                .is_internal_target(owner_index, path))
-                            .then(|| (path.clone(), block.clone()))
-                        },
-                    ));
+                    targets.extend(
+                        identities
+                            .iter()
+                            .filter(|&(path, _block)| {
+                                !project_tree
+                                    .is_internal_target(owner_index, path)
+                            })
+                            .map(|(path, block)| (path.clone(), block.clone())),
+                    );
                 }
             }
             for source in &sources {

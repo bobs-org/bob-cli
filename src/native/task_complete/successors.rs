@@ -2089,7 +2089,7 @@ fn apply_verdicts(
             successor_positions: &successor_positions,
             completed: &input.completed,
             surfaces,
-            project_states: &project_states,
+            project_states,
             day: &day,
             closing_target: &closing_target,
             minted: &minted,

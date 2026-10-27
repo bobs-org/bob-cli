@@ -703,19 +703,19 @@ fn ref_title(contents: &str, ref_note: &str) -> String {
         crate::native::highlights_ref::split_frontmatter(contents)
     {
         for raw in front {
-            if let Some((key, value)) = raw.split_once(':') {
-                if key.trim().eq_ignore_ascii_case("title") {
-                    let mut v = value.trim().to_string();
-                    if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
-                        || (v.starts_with('\'')
-                            && v.ends_with('\'')
-                            && v.len() >= 2)
-                    {
-                        v = v[1..v.len() - 1].to_string();
-                    }
-                    if !v.trim().is_empty() {
-                        return v.trim().to_string();
-                    }
+            if let Some((key, value)) = raw.split_once(':')
+                && key.trim().eq_ignore_ascii_case("title")
+            {
+                let mut v = value.trim().to_string();
+                if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+                    || (v.starts_with('\'')
+                        && v.ends_with('\'')
+                        && v.len() >= 2)
+                {
+                    v = v[1..v.len() - 1].to_string();
+                }
+                if !v.trim().is_empty() {
+                    return v.trim().to_string();
                 }
             }
         }
@@ -728,27 +728,27 @@ fn ref_created(contents: &str) -> String {
         crate::native::highlights_ref::split_frontmatter(contents)
     {
         for raw in front {
-            if let Some((key, value)) = raw.split_once(':') {
-                if key.trim().eq_ignore_ascii_case("created") {
-                    let mut v = value.trim().to_string();
-                    if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
-                        || (v.starts_with('\'')
-                            && v.ends_with('\'')
-                            && v.len() >= 2)
-                    {
-                        v = v[1..v.len() - 1].to_string();
-                    }
-                    let v = v.trim().to_string();
-                    // Accept a date prefix YYYY-MM-DD.
-                    if v.len() >= 10
-                        && v[..4].chars().all(|c| c.is_ascii_digit())
-                        && &v[4..5] == "-"
-                        && v[5..7].chars().all(|c| c.is_ascii_digit())
-                        && &v[7..8] == "-"
-                        && v[8..10].chars().all(|c| c.is_ascii_digit())
-                    {
-                        return v[..10].to_string();
-                    }
+            if let Some((key, value)) = raw.split_once(':')
+                && key.trim().eq_ignore_ascii_case("created")
+            {
+                let mut v = value.trim().to_string();
+                if (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+                    || (v.starts_with('\'')
+                        && v.ends_with('\'')
+                        && v.len() >= 2)
+                {
+                    v = v[1..v.len() - 1].to_string();
+                }
+                let v = v.trim().to_string();
+                // Accept a date prefix YYYY-MM-DD.
+                if v.len() >= 10
+                    && v[..4].chars().all(|c| c.is_ascii_digit())
+                    && &v[4..5] == "-"
+                    && v[5..7].chars().all(|c| c.is_ascii_digit())
+                    && &v[7..8] == "-"
+                    && v[8..10].chars().all(|c| c.is_ascii_digit())
+                {
+                    return v[..10].to_string();
                 }
             }
         }
@@ -771,16 +771,12 @@ fn taken_ids(
         ));
         // Archive.
         if let Some(archive_rel) = archive_rel_for(bob_dir, dest_abs, &contents)
-        {
-            if let Ok(archive) =
+            && let Ok(archive) =
                 std::fs::read_to_string(bob_dir.join(&archive_rel))
-            {
-                taken.extend(
-                    crate::native::collect_done::block_ids_in_markdown(
-                        &archive,
-                    ),
-                );
-            }
+        {
+            taken.extend(crate::native::collect_done::block_ids_in_markdown(
+                &archive,
+            ));
         }
     }
     taken.extend(reserved.iter().cloned());
@@ -794,24 +790,23 @@ fn archive_rel_for(
 ) -> Option<String> {
     for line in dest_contents.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("done_tasks:") {
-            if let Some(start) = trimmed.find("[[") {
-                if let Some(end) = trimmed[start..].find("]]") {
-                    let target = &trimmed[start + 2..start + end];
-                    let mut rel = target.trim().to_string();
-                    if !rel.ends_with(".md") {
-                        rel.push_str(".md");
-                    }
-                    return Some(rel);
-                }
+        if trimmed.starts_with("done_tasks:")
+            && let Some(start) = trimmed.find("[[")
+            && let Some(end) = trimmed[start..].find("]]")
+        {
+            let target = &trimmed[start + 2..start + end];
+            let mut rel = target.trim().to_string();
+            if !rel.ends_with(".md") {
+                rel.push_str(".md");
             }
+            return Some(rel);
         }
     }
     let relative = dest_abs.strip_prefix(bob_dir).unwrap_or(dest_abs);
-    if relative.components().count() == 1 {
-        if let Some(stem) = dest_abs.file_stem().and_then(|s| s.to_str()) {
-            return Some(format!("done/{stem}_done.md"));
-        }
+    if relative.components().count() == 1
+        && let Some(stem) = dest_abs.file_stem().and_then(|s| s.to_str())
+    {
+        return Some(format!("done/{stem}_done.md"));
     }
     None
 }

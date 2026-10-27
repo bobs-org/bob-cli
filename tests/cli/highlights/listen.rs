@@ -1665,7 +1665,7 @@ fn listen_plugin_failure_has_no_fallback() {
         "plugin failure never falls back to the trap"
     );
     assert!(
-        vault.join("xlib").exists() == false
+        !vault.join("xlib").exists()
             || collect_files(&vault.join("xlib")).is_empty(),
         "a failed plugin writes nothing to the vault"
     );

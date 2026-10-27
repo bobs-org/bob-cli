@@ -537,7 +537,7 @@ fn parse_section_opening(
     while index < lines.len() && lines[index].trim().is_empty() {
         index += 1;
     }
-    let block_id = region_section_id(*lines.get(index)?)?;
+    let block_id = region_section_id(lines.get(index)?)?;
     let stripped = card_lines
         .iter()
         .copied()

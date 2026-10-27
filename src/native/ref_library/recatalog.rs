@@ -191,13 +191,13 @@ pub(crate) fn run_recatalog(matches: &ArgMatches) -> i32 {
         }
     }
 
-    if !dry_run && batch_count > 0 {
-        if let Err(error) =
+    if !dry_run
+        && batch_count > 0
+        && let Err(error) =
             commit_batch(&config.bob_dir, &batch_paths, batch_count)
-        {
-            eprintln!("{COMMAND_NAME}: error: {error}");
-            return 1;
-        }
+    {
+        eprintln!("{COMMAND_NAME}: error: {error}");
+        return 1;
     }
 
     println!(

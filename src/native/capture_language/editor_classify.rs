@@ -714,9 +714,7 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
                     )),
                 });
             }
-            let (after_x, x_len) = classify_link_close(raw)
-                .map(|(selection, x_len)| (selection, x_len))
-                .unwrap_or(("", 1));
+            let (after_x, x_len) = classify_link_close(raw).unwrap_or(("", 1));
             let after_x_base = token.start + eq_rel + 1 + x_len;
             match lex_close_selection(after_x, after_x_base, &display) {
                 Ok(CloseSelectionOutcome::Valid(lex)) => {
@@ -1114,18 +1112,17 @@ fn classify_pomodoro_link_start_suffix(
                     }
                     // Trailing `@<X>` timing stays visible.
                     if let Some((timing_offset, timing_text)) = timing.as_ref()
+                        && !timing_text.is_empty()
                     {
-                        if !timing_text.is_empty() {
-                            extra_spans.push(Span {
-                                start: token.start + equals_rel + timing_offset,
-                                end: token.start
-                                    + equals_rel
-                                    + timing_offset
-                                    + 1
-                                    + timing_text.len(),
-                                kind: SpanKind::PomodoroStart,
-                            });
-                        }
+                        extra_spans.push(Span {
+                            start: token.start + equals_rel + timing_offset,
+                            end: token.start
+                                + equals_rel
+                                + timing_offset
+                                + 1
+                                + timing_text.len(),
+                            kind: SpanKind::PomodoroStart,
+                        });
                     }
                     let effective = effective_start_timing(&suffix, &timing);
                     // An empty effective (`=#`) still yields the default

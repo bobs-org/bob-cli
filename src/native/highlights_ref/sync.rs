@@ -1576,24 +1576,23 @@ fn preview_archive_rel_for(
 ) -> Option<String> {
     for line in dest_contents.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("done_tasks:") {
-            if let Some(start) = trimmed.find("[[") {
-                if let Some(end) = trimmed[start..].find("]]") {
-                    let target = &trimmed[start + 2..start + end];
-                    let mut rel = target.trim().to_string();
-                    if !rel.ends_with(".md") {
-                        rel.push_str(".md");
-                    }
-                    return Some(rel);
-                }
+        if trimmed.starts_with("done_tasks:")
+            && let Some(start) = trimmed.find("[[")
+            && let Some(end) = trimmed[start..].find("]]")
+        {
+            let target = &trimmed[start + 2..start + end];
+            let mut rel = target.trim().to_string();
+            if !rel.ends_with(".md") {
+                rel.push_str(".md");
             }
+            return Some(rel);
         }
     }
     let relative = destination.strip_prefix(bob_dir).unwrap_or(destination);
-    if relative.components().count() == 1 {
-        if let Some(stem) = destination.file_stem().and_then(|s| s.to_str()) {
-            return Some(format!("done/{stem}_done.md"));
-        }
+    if relative.components().count() == 1
+        && let Some(stem) = destination.file_stem().and_then(|s| s.to_str())
+    {
+        return Some(format!("done/{stem}_done.md"));
     }
     None
 }

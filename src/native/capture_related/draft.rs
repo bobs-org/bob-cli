@@ -377,18 +377,11 @@ fn linked_for_item(
             ));
         }
     }
-    if let Some(global) = global.filter(|global| global.block_id.is_some()) {
-        if item.local_destination_markers.is_empty() {
-            if let (Some(route), Some(block_id)) =
-                (&global.route, &global.block_id)
-            {
-                targets.push((
-                    route.clone(),
-                    block_id.clone(),
-                    "parent".to_string(),
-                ));
-            }
-        }
+    if let Some(global) = global.filter(|global| global.block_id.is_some())
+        && item.local_destination_markers.is_empty()
+        && let (Some(route), Some(block_id)) = (&global.route, &global.block_id)
+    {
+        targets.push((route.clone(), block_id.clone(), "parent".to_string()));
     }
 
     let mut linked = BTreeSet::new();

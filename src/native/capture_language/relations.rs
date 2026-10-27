@@ -749,7 +749,7 @@ fn invalid_label_message(label: &str) -> String {
         ),
         Err(error) => match error {
             crate::native::task_relations::label::LabelError::Empty => {
-                format!("relation label is empty after trimming")
+                "relation label is empty after trimming".to_string()
             }
             crate::native::task_relations::label::LabelError::TooLong => {
                 format!(

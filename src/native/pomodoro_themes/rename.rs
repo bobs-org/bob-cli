@@ -1088,7 +1088,7 @@ fn verify_renamed(
         if let Some(planned) =
             prepared.files.iter().find(|file| &file.path == relative)
         {
-            if &contents != &planned.after_contents {
+            if contents != planned.after_contents {
                 return Err(format!("{} changed during the rename", relative));
             }
             // Only name tails may differ: every changed line shares the

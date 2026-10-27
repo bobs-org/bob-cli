@@ -40,7 +40,7 @@ pub(crate) fn fixture(prefix: &str) -> (TempDir, PathBuf, PathBuf) {
 }
 
 pub(crate) fn head(vault: &Path) -> String {
-    let output = git_in(&vault, &["rev-parse", "HEAD"]);
+    let output = git_in(vault, ["rev-parse", "HEAD"]);
     assert!(output.status.success(), "rev-parse HEAD failed");
     stdout(&output).trim().to_string()
 }
@@ -299,9 +299,9 @@ fn overwrite_recovery_keeps_committed_overwrite_on_scan() {
         "---\nid: half-written\n---\nreplaced\n",
     )
     .expect("new body");
-    let committed = git_in(&vault, &["add", "-A"]);
+    let committed = git_in(&vault, ["add", "-A"]);
     assert!(committed.status.success());
-    let committed = git_in(&vault, &["commit", "-q", "-m", SUBJECT]);
+    let committed = git_in(&vault, ["commit", "-q", "-m", SUBJECT]);
     assert!(committed.status.success());
     let committed_head = head(&vault);
     write_intent(

@@ -118,13 +118,13 @@ impl<'a> HomesEngine<'a> {
                         let home = resolver.resolve_note(path);
                         self.remember(&home);
                         let path_key = path_string(path);
-                        if home.area == path_key {
-                            if let Some(hue) = home.hue {
-                                top_areas
-                                    .entry(hue)
-                                    .or_default()
-                                    .push((home.label.clone(), path_key));
-                            }
+                        if home.area == path_key
+                            && let Some(hue) = home.hue
+                        {
+                            top_areas
+                                .entry(hue)
+                                .or_default()
+                                .push((home.label.clone(), path_key));
                         }
                     }
                     NoteKind::Other => {}

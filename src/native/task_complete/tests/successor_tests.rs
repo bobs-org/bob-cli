@@ -936,7 +936,7 @@ fn closing_placement_creates_placeholder() {
         "- [ ] () \u{2014} FIX\n",
     );
     let (text, placed) = insert_successor_links(
-        &day,
+        day,
         Path::new("20261005.md"),
         &vault_index,
         vec![SuccessorPlacement {
@@ -968,7 +968,7 @@ fn closing_placement_takes_lone_stub() {
         "- [ ] () \u{2014} FIX\n",
     );
     let (text, placed) = insert_successor_links(
-        &day,
+        day,
         Path::new("20261005.md"),
         &vault_index,
         vec![SuccessorPlacement {
@@ -1382,7 +1382,7 @@ fn ub_close_next_landing_skips_unblocked() {
                 "- [?] #task D [fresh:: 2026-10-01] [dependsOn:: p] [id:: d] ^d\n",
             ),
         )],
-        Some(&day),
+        Some(day),
         "20261005.md",
         true,
         &vault_index,

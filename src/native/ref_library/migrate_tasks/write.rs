@@ -553,7 +553,7 @@ fn apply_plan(
                 fix_inserted_dep_id(
                     bob_dir,
                     &dest_abs,
-                    &task,
+                    task,
                     &inserted.block_id,
                 )?;
             }
@@ -563,13 +563,13 @@ fn apply_plan(
             task.ref_note.clone(),
             (task.parent_route.clone(), final_id.clone()),
         );
-        if let Some(old) = task.old_dep_id.clone() {
-            if let Ok(new) = crate::native::task_dependencies::dependency_id(
+        if let Some(old) = task.old_dep_id.clone()
+            && let Ok(new) = crate::native::task_dependencies::dependency_id(
                 Path::new(&task.parent_path),
                 &final_id,
-            ) {
-                dep_final.insert(old, new);
-            }
+            )
+        {
+            dep_final.insert(old, new);
         }
         // Follow-ups as siblings via insert_task_line + write_staged_files.
         for fu in &task.follow_ups {
@@ -750,10 +750,9 @@ fn apply_graph_rewrites(
                 .extension()
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+                && let Ok(rel) = path.strip_prefix(bob_dir)
             {
-                if let Ok(rel) = path.strip_prefix(bob_dir) {
-                    ref_notes.push(rel.to_string_lossy().replace('\\', "/"));
-                }
+                ref_notes.push(rel.to_string_lossy().replace('\\', "/"));
             }
         }
     }
@@ -901,29 +900,27 @@ fn verify_written(
                     crate::native::task_dependencies::parse_block_link_inside(
                         inside,
                     )
+                    && block_id == "ref"
                 {
-                    if block_id == "ref" {
-                        // Any remaining #^ref link whose target is a migrated
-                        // ref is a missed rewrite.
-                        let target = inside
-                            .split('|')
-                            .next()
-                            .unwrap_or("")
-                            .split('#')
-                            .next()
-                            .unwrap_or("")
-                            .trim();
-                        for ref_note in final_map.keys() {
-                            let no_md = ref_note
-                                .strip_suffix(".md")
-                                .unwrap_or(ref_note);
-                            if target.eq_ignore_ascii_case(ref_note)
-                                || target.eq_ignore_ascii_case(no_md)
-                            {
-                                return Err(format!(
-                                    "verify: {file} still links {target}#^ref"
-                                ));
-                            }
+                    // Any remaining #^ref link whose target is a migrated
+                    // ref is a missed rewrite.
+                    let target = inside
+                        .split('|')
+                        .next()
+                        .unwrap_or("")
+                        .split('#')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    for ref_note in final_map.keys() {
+                        let no_md =
+                            ref_note.strip_suffix(".md").unwrap_or(ref_note);
+                        if target.eq_ignore_ascii_case(ref_note)
+                            || target.eq_ignore_ascii_case(no_md)
+                        {
+                            return Err(format!(
+                                "verify: {file} still links {target}#^ref"
+                            ));
                         }
                     }
                 }

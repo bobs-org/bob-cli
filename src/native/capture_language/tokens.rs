@@ -779,11 +779,9 @@ fn parse_link_start_suffix(
     let effective = effective_start_timing(&suffix, &timing);
     // Overflow and invalid timing win over duplicate/dangling checks,
     // mirroring `parse_pomodoro_equals_item`'s `named_token_error` order.
-    let spec = parse_pomodoro_start_suffix(&effective).map_err(|message| {
-        // A glued timing (`=3bugs`) already returned above via the length
-        // check; any remaining effective failure is overflow/invalid timing.
-        message
-    })?;
+    // A glued timing (`=3bugs`) already returned above via the length
+    // check; any remaining effective failure is overflow/invalid timing.
+    let spec = parse_pomodoro_start_suffix(&effective)?;
     // Both timings win over the dangling-`@` incomplete state, including a
     // dangling second timing (`=3#bugs@`). Reuse the standalone teaching
     // rule rather than drifting.
@@ -1718,9 +1716,7 @@ fn classify_caret_close_suffix(
             range: (suffix_offset, suffix_offset + display.len()),
         };
     }
-    let (after_x, x_len) = classify_link_close(raw_suffix)
-        .map(|(selection, x_len)| (selection, x_len))
-        .unwrap_or(("", 1));
+    let (after_x, x_len) = classify_link_close(raw_suffix).unwrap_or(("", 1));
     let after_x_offset = suffix_offset + 1 + x_len;
     let link_end = link_base + block_id.len();
     match lex_close_selection(after_x, after_x_offset, &display) {
@@ -2225,7 +2221,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                 );
             }
             let marker_text = first.to_string();
-            return Ok(Some(parsed_capture_item_outcome(
+            Ok(Some(parsed_capture_item_outcome(
                 item,
                 ParsedCaptureText {
                     body: String::new(),
@@ -2250,7 +2246,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                 },
                 Vec::new(),
                 Some(marker_text),
-            )));
+            )))
         }
         Err(message) => {
             if message == POMODORO_LINK_PROJECT_ERROR
@@ -2314,7 +2310,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
             if tail.ends_with('#') {
                 return Ok(None);
             }
-            return Err(POMODORO_LINK_SHAPE_ERROR.to_string());
+            Err(POMODORO_LINK_SHAPE_ERROR.to_string())
         }
     }
 }
