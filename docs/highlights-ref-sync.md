@@ -668,7 +668,9 @@ note is new by `find_birth_store(vault, ref_type, stem, pdf_sha256)` —
 the single store under `.bob/ref-sources/<ref_type>/<stem>--*/code.json`
 whose `pdf.sha256` equals the incoming PDF digest — and repeat syncs and
 `bob ref scan` preserve the authored line verbatim. It never enters the
-PDF marker, projection, or hash. For example:
+PDF marker, projection, or hash. Before attaching it to a new note, Bob
+also verifies that the saved source bytes match their content-addressed
+path and recorded digest. For example:
 
 ```yaml
 source_markdown: .bob/ref-sources/chat/ace--5d3be944e47e/source.md
@@ -2368,6 +2370,10 @@ MacBook validation checklist:
   `warn` for dangling pointers, digest mismatches, missing catalogs,
   orphans, and an ignored `code.json`). A missing `~/bob/xlib` is
   warning-only because `create` creates it on demand.
+  For an orphan, inspect whether the saved file belongs to that reference;
+  historical and pending stores can both appear as orphans. Preview any
+  repair with `bob ref attach-source REF -s FILE -d`. Doctor never attaches
+  or deletes source stores.
 - `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If

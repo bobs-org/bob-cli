@@ -561,6 +561,16 @@ bytes changed, keeping the old one as history. The note frontmatter
 ...)` or `links: none`), and `bob ref show` carries the
 pointer in JSON and in its `markdown` row.
 
+When create successfully saves a source, it carries the verified pointer
+through inline ingest and checks the planned and persisted note frontmatter
+before reporting a completed ingest. A missing or different pointer refuses
+or leaves ingest incomplete; create never reports that ingest as successful.
+With `-k`, disabled ingest, or a lock/offline queue, the source store can be
+saved before the note is born. A later `bob ref scan` derives the pointer from
+the birth PDF digest and keeps it on the new note. The pre-sync can commit the
+store before the note, so the store and note are not guaranteed to share one
+Git commit.
+
 ## arXiv
 
 URL recognition mirrors `sase-listen` (`abs`, `html`, `pdf`, new- and
@@ -910,7 +920,10 @@ prints a `ref sources` row for dangling pointers, digest mismatches,
 missing catalogs, orphans, and an ignored catalog. Clap's default `-s ready`
 is not an explicit reopen; pass `-s` to change the kept task. An explicit
 open status cannot reopen a task archived in `done/`; reopen it where it lives
-first. Any status overwrite cannot stamp is rejected before rendering. Exact-set
+first. An orphan can be historical or still pending; inspect the source and
+reference pairing, then preview an explicit repair with
+`bob ref attach-source REF -s FILE -d`. Doctor never attaches or deletes an
+orphan. Any status overwrite cannot stamp is rejected before rendering. Exact-set
 collection overwrite follows the same identity, audio, and task-preservation
 rules; partial overlaps refuse under every mode. Without a filed match
 overwrite exits 1. Annotated references — text highlights, image-only

@@ -70,6 +70,16 @@ pub(super) fn seed_synced_vault(
     (vault, peer)
 }
 
+fn reported_source_pointer(report: &str) -> String {
+    report
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("source_markdown:"))
+        .unwrap_or_else(|| panic!("no source pointer in report:\n{report}"))
+        .trim()
+        .trim_matches('"')
+        .to_string()
+}
+
 #[test]
 fn create_ingests_pdf_audio_note_and_parent_as_one_scoped_pushed_commit() {
     let temp = TempDir::new("bob-cli-create-ingest-happy");
@@ -275,6 +285,7 @@ fn create_queues_when_locks_or_pre_sync_prevent_inline_intake() {
         stdout(&scan_output)
     );
     assert!(vault.join("xlib/chat/scan_busy.pdf").is_file());
+    let scan_busy_pointer = reported_source_pointer(&stdout(&scan_output));
     drop(held_scan);
 
     let remote_unreachable = temp.path().join("unreachable.git");
@@ -319,6 +330,22 @@ fn create_queues_when_locks_or_pre_sync_prevent_inline_intake() {
     assert_success(&drain);
     assert!(vault.join("lib/chat/offline.pdf").is_file());
     assert!(vault.join("ref/chat/offline.md").is_file());
+    let scan_busy_note =
+        fs::read_to_string(vault.join("ref/chat/scan_busy.md"))
+            .expect("read note drained from queued Markdown");
+    assert!(
+        scan_busy_note.lines().any(|line| {
+            line.strip_prefix("source_markdown:").is_some_and(|value| {
+                value.trim().trim_matches('"') == scan_busy_pointer
+            })
+        }),
+        "scan must retain the saved birth pointer:\n{scan_busy_note}"
+    );
+    assert_eq!(
+        fs::read(vault.join(&scan_busy_pointer))
+            .expect("saved scan-busy Markdown"),
+        fs::read(&scan_source).expect("scan-busy source Markdown")
+    );
 }
 
 #[test]

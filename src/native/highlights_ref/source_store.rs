@@ -1185,7 +1185,16 @@ pub(super) fn write_for_create(
             if let Some(warning) = &outcome.warning {
                 eprintln!("{warning}");
             }
-            Some(outcome)
+            let verified = read_store(&config.bob_dir, &outcome.pointer);
+            if verified.bytes.as_deref() != Some(source_bytes) {
+                eprintln!(
+                    "warning: saved source {} did not verify against its content-addressed pointer; reference still filed",
+                    outcome.pointer
+                );
+                None
+            } else {
+                Some(outcome)
+            }
         }
         Err(error) => {
             eprintln!(

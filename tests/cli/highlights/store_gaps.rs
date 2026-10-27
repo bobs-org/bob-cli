@@ -56,10 +56,26 @@ fn note_pointer(vault: &Path, relative: &str) -> Option<String> {
     })
 }
 
+fn ingested_note_path(report: &str) -> String {
+    report
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ingested: ")
+                .and_then(|line| line.split_once(" → "))
+                .map(|(_, note)| {
+                    note.split_once(" · task → ")
+                        .map_or(note, |(note, _)| note)
+                        .trim()
+                        .to_string()
+                })
+        })
+        .unwrap_or_else(|| panic!("no ingested note path in report:\n{report}"))
+}
+
 #[test]
 fn store_markdown_create_records_route_and_pointer() {
     let temp = TempDir::new("bob-cli-store-markdown-route");
-    let (vault, _peer) = seed_synced_vault(&temp);
+    let (vault, peer) = seed_synced_vault(&temp);
     let (fixture, pandoc) = create_fixture(&temp);
     let source = temp.path().join("report.md");
     write_file(
@@ -81,7 +97,11 @@ fn store_markdown_create_records_route_and_pointer() {
 
     // The store directory holds the verified source plus a catalog record
     // carrying the create route.
-    assert!(vault.join(&pointer).is_file(), "{report}");
+    assert_eq!(
+        fs::read(vault.join(&pointer)).expect("read saved Markdown"),
+        fs::read(&source).expect("read source Markdown"),
+        "saved source bytes must match the bytes reported by create"
+    );
     let catalog = read_code_json(&vault, &pointer);
     assert_eq!(catalog["version"], serde_json::Value::from(1));
     assert_eq!(catalog["route"], serde_json::Value::from("markdown"));
@@ -93,13 +113,25 @@ fn store_markdown_create_records_route_and_pointer() {
         )
     );
 
-    // The fake copies a static PDF whose marker carries no source
-    // information, so the intake-filed note itself has no pointer; the
-    // report and the on-disk store above are the wiring this harness can
-    // observe. (Real renders embed the pointer in the PDF marker, and the
-    // hand-built rename test below covers the read surface.)
+    assert_eq!(
+        note_pointer(&vault, "ref/chat/store_route.md").as_deref(),
+        Some(pointer.as_str()),
+        "the filed note must persist exactly the pointer reported by create"
+    );
     let value = code_json_status(&vault, "store_route");
-    assert_eq!(value["status"], serde_json::Value::from("no_source"));
+    assert_eq!(value["status"], serde_json::Value::from("no_catalog"));
+
+    git_in(&peer, ["pull", "-q", "--ff-only"]);
+    assert_eq!(
+        note_pointer(&peer, "ref/chat/store_route.md").as_deref(),
+        Some(pointer.as_str()),
+        "the peer note must retain the same source pointer"
+    );
+    assert_eq!(
+        fs::read(peer.join(&pointer)).expect("peer saved Markdown"),
+        fs::read(&source).expect("source Markdown"),
+        "the peer must receive the same saved source bytes"
+    );
 }
 
 #[test]
@@ -146,6 +178,7 @@ fn store_plain_note_create_records_plain_route_with_source_note() {
     assert_success(&output);
     let report = stdout(&output);
     let pointer = report_pointer(&report);
+    let note = ingested_note_path(&report);
     let catalog = read_code_json(&vault, &pointer);
     assert_eq!(catalog["route"], serde_json::Value::from("plain_note"));
     assert_eq!(
@@ -153,6 +186,15 @@ fn store_plain_note_create_records_plain_route_with_source_note() {
         serde_json::Value::from("zk/plain_note")
     );
     assert!(catalog["source"]["source_note_sha256"].is_string());
+    assert_eq!(
+        note_pointer(&vault, &note).as_deref(),
+        Some(pointer.as_str()),
+        "plain-note intake must persist the reported source pointer"
+    );
+    assert_eq!(
+        fs::read(vault.join(&pointer)).expect("saved plain note bytes"),
+        fs::read(vault.join("zk/plain_note.md")).expect("plain note bytes")
+    );
 }
 
 #[test]
@@ -201,6 +243,7 @@ fn store_snapshot_create_records_note_snapshot_route() {
     assert_success(&output);
     let report = stdout(&output);
     let pointer = report_pointer(&report);
+    let note = ingested_note_path(&report);
     let catalog = read_code_json(&vault, &pointer);
     assert_eq!(catalog["route"], serde_json::Value::from("note_snapshot"));
     assert_eq!(
@@ -208,6 +251,19 @@ fn store_snapshot_create_records_note_snapshot_route() {
         serde_json::Value::from("zk/harbor_cranes")
     );
     assert!(catalog["source"]["source_note_sha256"].is_string());
+    assert_eq!(
+        note_pointer(&vault, &note).as_deref(),
+        Some(pointer.as_str()),
+        "snapshot intake must persist the reported source pointer"
+    );
+    assert_eq!(
+        fs::metadata(vault.join(&pointer))
+            .expect("saved snapshot Markdown")
+            .len(),
+        catalog["source"]["bytes"]
+            .as_u64()
+            .expect("saved byte count")
+    );
 }
 
 #[test]
@@ -310,7 +366,7 @@ fn store_rename_keeps_pointer_and_store_directory() {
     let before = fs::read_to_string(&note_path).expect("read synced note");
     let with_pointer = before.replacen(
         "---\n",
-        &format!("---\nsource_markdown: {pointer}\n"),
+        &format!("---\nsource_markdown: \"{pointer}\"\n"),
         1,
     );
     assert_ne!(before, with_pointer, "note has frontmatter to extend");
@@ -332,6 +388,15 @@ fn store_rename_keeps_pointer_and_store_directory() {
     let kept = note_pointer(&vault, "ref/papers/rename_me.md")
         .expect("repeat sync preserves the authored pointer");
     assert_eq!(kept, pointer);
+    let resynced =
+        fs::read_to_string(&note_path).expect("read resynced reference note");
+    let authored_line = format!("source_markdown: \"{pointer}\"");
+    assert!(resynced.contains(&authored_line), "{resynced}");
+    assert_eq!(
+        resynced.matches("source_markdown:").count(),
+        1,
+        "repeat sync must not duplicate the authored pointer"
+    );
     // Commit anything the re-sync wrote so the rename lands clean.
     git_in(&vault, ["add", "-A"]);
     let status = std::process::Command::new("git")

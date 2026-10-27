@@ -1903,6 +1903,7 @@ fn print_success(
         config,
         plan,
         options.keep_intake_reason.as_deref(),
+        None,
     )?;
     print_part_warnings(styler, parts);
     print_warnings(styler, &compose.warnings);

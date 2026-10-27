@@ -800,6 +800,7 @@ pub(super) fn capture_article(
         config,
         &plan,
         options.keep_intake_reason.as_deref(),
+        None,
     )
     .map_err(ClipError::from)?;
     print_warnings(&styler, &response.warnings);

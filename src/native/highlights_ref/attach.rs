@@ -411,6 +411,7 @@ pub(super) fn run_attach(
         super::intake::IntakeRequest {
             producer: "bob ref create",
             keep_reason,
+            expected_source_pointer: None,
             dry_run: false,
             progress: Some(&progress),
         },

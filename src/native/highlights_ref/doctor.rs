@@ -999,6 +999,16 @@ fn append_ref_sources_row(
     if !health.dangling.is_empty() || !health.digest_mismatch.is_empty() {
         hint.push_str(" — bob ref attach-source");
     }
+    if !health.orphans.is_empty() {
+        if hint.is_empty() {
+            hint.push_str(" — ");
+        } else {
+            hint.push_str("; ");
+        }
+        hint.push_str(
+            "inspect the orphan pairing; preview bob ref attach-source REF -s FILE -d",
+        );
+    }
     if health.ignored_catalogs > 0 {
         if hint.is_empty() {
             hint.push_str(" — ");

@@ -559,12 +559,19 @@ fn derive_birth_source_markdown(
     let meta = pdf_path_metadata(config, pdf).ok()?;
     let ref_type = meta.ref_type?;
     let stem = note_path.file_stem()?.to_str()?.to_string();
-    super::source_store::find_birth_store(
+    let pointer = super::source_store::find_birth_store(
         &config.bob_dir,
         &ref_type,
         &stem,
         pdf_sha256,
-    )
+    )?;
+    // The catalog identifies the birth PDF, while read_store verifies the
+    // content-addressed source bytes and their recorded digest. A pointer
+    // is only safe to attach when both checks succeed.
+    super::source_store::read_store(&config.bob_dir, &pointer)
+        .bytes
+        .as_ref()?;
+    Some(pointer)
 }
 
 pub(super) fn plan_pdf_sync(
@@ -1802,6 +1809,7 @@ fn execute_pdf_sync_v1(
         if is_new_note {
             metadata.created = Some(new_note_created_timestamp());
         }
+        metadata.source_markdown = plan.stable_metadata.source_markdown.clone();
         plan.note.render_with_projection(
             &plan.synced_projection,
             &plan.synced_hash,
@@ -2166,6 +2174,7 @@ fn execute_pdf_sync_v2(
         // re-render must carry the same `earlier:` the dry-run preview
         // showed, so repeat syncs preserve it byte-for-byte.
         metadata.birth_lineage = plan.stable_metadata.birth_lineage.clone();
+        metadata.source_markdown = plan.stable_metadata.source_markdown.clone();
         let body = execution_body.as_deref().unwrap_or(&plan.rendered_body);
         let rendered = plan.note.render_with_projection(
             &render_projection,

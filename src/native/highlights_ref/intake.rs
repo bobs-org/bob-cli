@@ -123,6 +123,7 @@ impl QueueFailure {
 pub(super) struct IntakeRequest<'a> {
     pub(super) producer: &'a str,
     pub(super) keep_reason: Option<&'a str>,
+    pub(super) expected_source_pointer: Option<&'a str>,
     pub(super) dry_run: bool,
     pub(super) progress: Option<&'a dyn Fn(&str)>,
 }
@@ -285,7 +286,12 @@ fn file_unit(
         }
     }
 
-    match session.ingest(config, &unit, request.producer) {
+    match session.ingest(
+        config,
+        &unit,
+        request.producer,
+        request.expected_source_pointer,
+    ) {
         Ok(mut ingested) => {
             ingested.sync_status = session.post_sync();
             for path in &ingested.ignored_paths {
@@ -396,6 +402,7 @@ impl IntakeSession {
         config: &Config,
         unit: &IntakeUnit,
         producer: &str,
+        expected_source_pointer: Option<&str>,
     ) -> std::result::Result<Ingested, IngestFailure> {
         // Locked reread recheck before any move/task/note mutation: when
         // another host filed the whole-bundle name after queue time,
@@ -448,6 +455,38 @@ impl IntakeSession {
                 );
             }
         };
+        if let Some(expected) = expected_source_pointer {
+            if let Some(error) = source_pointer_mismatch(
+                "planned reference note",
+                expected,
+                plan.stable_metadata.source_markdown.as_deref(),
+            ) {
+                return rollback_or_queue(
+                    &mut moves,
+                    QueueFailure::new(QueueReason::Refused, error),
+                );
+            }
+            let saved =
+                super::source_store::read_store(&config.bob_dir, expected);
+            let saved_for_pdf = saved.catalog.as_ref().is_some_and(|catalog| {
+                catalog.pdf.sha256 == plan.marker.source_pdf_sha256
+            });
+            if saved.bytes.is_none() || !saved_for_pdf {
+                let detail = saved.detail.unwrap_or_else(|| {
+                    "saved catalog does not match the installed PDF digest"
+                        .to_string()
+                });
+                return rollback_or_queue(
+                    &mut moves,
+                    QueueFailure::new(
+                        QueueReason::Refused,
+                        format!(
+                            "saved-source pointer {expected} failed verification before ingest: {detail}"
+                        ),
+                    ),
+                );
+            }
+        }
         if let Err(error) = ensure_safe_to_write(config, iter::once(&plan)) {
             return rollback_or_queue(
                 &mut moves,
@@ -503,6 +542,26 @@ impl IntakeSession {
         };
 
         let note = plan.note_path.clone();
+        if let Some(expected) = expected_source_pointer {
+            let persisted = match super::frontmatter::read_note(&note) {
+                Ok(note) => note
+                    .frontmatter_value(FIELD_SOURCE_MARKDOWN)
+                    .and_then(|value| value.as_string().map(str::to_string)),
+                Err(error) => {
+                    return Err(IngestFailure::Incomplete(format!(
+                        "saved-source pointer verification could not read the persisted reference note {}: {error}",
+                        note.display()
+                    )));
+                }
+            };
+            if let Some(error) = source_pointer_mismatch(
+                "persisted reference note",
+                expected,
+                persisted.as_deref(),
+            ) {
+                return Err(IngestFailure::Incomplete(error));
+            }
+        }
         for moved in &moves {
             path_set.insert(moved.to.clone());
         }
@@ -572,6 +631,20 @@ fn queue_reason_for_plan_error(error: &CommandError) -> QueueReason {
     } else {
         QueueReason::Refused
     }
+}
+
+fn source_pointer_mismatch(
+    stage: &str,
+    expected: &str,
+    actual: Option<&str>,
+) -> Option<String> {
+    if actual == Some(expected) {
+        return None;
+    }
+    Some(format!(
+        "saved-source pointer mismatch in {stage}: expected {expected}, found {}",
+        actual.unwrap_or("missing")
+    ))
 }
 
 fn ignored_path_warning(path: &Path) -> String {
@@ -1343,7 +1416,7 @@ fn drain_queue(
                     .to_string(),
             }
         } else {
-            match session.ingest(config, &unit, DRAIN_PRODUCER) {
+            match session.ingest(config, &unit, DRAIN_PRODUCER, None) {
                 Ok(ingested) => {
                     for path in &ingested.ignored_paths {
                         progress(&ignored_path_warning(path));
@@ -1815,6 +1888,32 @@ mod tests {
         assert_eq!(
             queue_reason_for_plan_error(&mismatched_text),
             QueueReason::Refused
+        );
+    }
+
+    #[test]
+    fn source_pointer_mismatch_names_missing_and_different_values() {
+        assert_eq!(
+            source_pointer_mismatch(
+                "planned reference note",
+                "expected.md",
+                Some("expected.md")
+            ),
+            None
+        );
+        assert_eq!(
+            source_pointer_mismatch("planned reference note", "expected.md", None)
+                .as_deref(),
+            Some("saved-source pointer mismatch in planned reference note: expected expected.md, found missing")
+        );
+        assert_eq!(
+            source_pointer_mismatch(
+                "persisted reference note",
+                "expected.md",
+                Some("other.md"),
+            )
+            .as_deref(),
+            Some("saved-source pointer mismatch in persisted reference note: expected expected.md, found other.md")
         );
     }
 }

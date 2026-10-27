@@ -353,6 +353,7 @@ pub(super) fn finish_create_intake(
     config: &Config,
     plan: &TargetPlan,
     keep_reason: Option<&str>,
+    expected_source_pointer: Option<&str>,
 ) -> Result<()> {
     let unit = match &plan.workflow {
         TargetWorkflow::Intake {
@@ -376,6 +377,7 @@ pub(super) fn finish_create_intake(
         super::intake::IntakeRequest {
             producer: "bob ref create",
             keep_reason,
+            expected_source_pointer,
             dry_run: false,
             progress: Some(&progress),
         },
@@ -3004,7 +3006,8 @@ fn create_snapshot_plan(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
-    persist_snapshot_store(config, &plan, &snapshot, &outcome.code_catalog);
+    let source_pointer =
+        persist_snapshot_store(config, &plan, &snapshot, &outcome.code_catalog);
     print_snapshot_shown_omitted(&snapshot.summary);
     emit_snapshot_warnings(
         &snapshot,
@@ -3017,6 +3020,7 @@ fn create_snapshot_plan(
         config,
         &plan.target_plan(),
         options.keep_intake_reason.as_deref(),
+        source_pointer.as_deref(),
     )?;
     print_earlier_snapshots(config, &snapshot, &plan.stem, false);
     Ok(())
@@ -3601,11 +3605,11 @@ fn persist_markdown_store(
     plan: &CreatePlan,
     frozen_source: &Path,
     catalog: &super::code_catalog::CatalogOutcome,
-) {
+) -> Option<String> {
     use super::stamp::TargetWorkflow;
     if matches!(plan.workflow, TargetWorkflow::External) {
         println!("source_markdown: none (output outside the library)");
-        return;
+        return None;
     }
     let source_bytes = match fs::read(frozen_source) {
         Ok(bytes) => bytes,
@@ -3614,7 +3618,7 @@ fn persist_markdown_store(
                 "warning: could not read frozen Markdown {}: {error}; skipping source store",
                 frozen_source.display()
             );
-            return;
+            return None;
         }
     };
     let route = if plan.source_kind == "vault note" {
@@ -3642,6 +3646,7 @@ fn persist_markdown_store(
             println!("source_markdown: {}", outcome.pointer);
             println!("code: {}", super::source_store::code_summary(catalog));
             println!("links: {}", super::source_store::link_summary(catalog));
+            Some(outcome.pointer)
         }
         None => {
             // Warning already printed; keep the pointer line honest.
@@ -3659,6 +3664,7 @@ fn persist_markdown_store(
                 );
                 println!("source_markdown: {pointer}");
             }
+            None
         }
     }
 }
@@ -3669,11 +3675,11 @@ fn persist_snapshot_store(
     plan: &CreatePlan,
     snapshot: &note_snapshot::SnapshotPlan,
     catalog: &super::code_catalog::CatalogOutcome,
-) {
+) -> Option<String> {
     use super::stamp::TargetWorkflow;
     if matches!(plan.workflow, TargetWorkflow::External) {
         println!("source_markdown: none (output outside the library)");
-        return;
+        return None;
     }
     let source_bytes = snapshot.projected_markdown.as_bytes();
     let origin = snapshot.note.canonical_path.display().to_string();
@@ -3694,6 +3700,7 @@ fn persist_snapshot_store(
             println!("source_markdown: {}", outcome.pointer);
             println!("code: {}", super::source_store::code_summary(catalog));
             println!("links: {}", super::source_store::link_summary(catalog));
+            Some(outcome.pointer)
         }
         None => {
             if let Some((ref_type, _, _)) =
@@ -3709,6 +3716,7 @@ fn persist_snapshot_store(
                 );
                 println!("source_markdown: {pointer}");
             }
+            None
         }
     }
 }
@@ -3974,7 +3982,7 @@ fn create_markdown_plan(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
-    persist_markdown_store(
+    let source_pointer = persist_markdown_store(
         config,
         &plan,
         &frozen_source,
@@ -3986,6 +3994,7 @@ fn create_markdown_plan(
         config,
         &plan.target_plan(),
         options.keep_intake_reason.as_deref(),
+        source_pointer.as_deref(),
     )?;
     Ok(())
 }
@@ -4219,6 +4228,7 @@ fn create_local_pdf_route(
         config,
         &target_plan,
         options.keep_intake_reason.as_deref(),
+        None,
     )?;
     Ok(())
 }
@@ -4559,6 +4569,7 @@ fn create_pdf_url_route(
         config,
         &target_plan,
         options.keep_intake_reason.as_deref(),
+        None,
     )?;
     Ok(())
 }
@@ -4992,6 +5003,7 @@ fn create_arxiv_route(
         config,
         &target_plan,
         options.keep_intake_reason.as_deref(),
+        None,
     )?;
     Ok(())
 }

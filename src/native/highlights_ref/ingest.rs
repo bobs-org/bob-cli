@@ -808,6 +808,7 @@ fn apply_intake(
         super::intake::IntakeRequest {
             producer: request.producer,
             keep_reason,
+            expected_source_pointer: None,
             dry_run: false,
             progress: request.progress,
         },

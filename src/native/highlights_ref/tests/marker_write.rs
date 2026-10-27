@@ -192,6 +192,39 @@ fn text_of(path: &Path) -> String {
     fs::read_to_string(path).expect("read text")
 }
 
+fn write_birth_source(config: &Config, pdf: &Path) -> String {
+    let source_bytes = b"# Saved source\n\nExact bytes.\n";
+    let metadata = pdf_path_metadata(config, pdf).expect("PDF metadata");
+    let ref_type = metadata.ref_type.expect("reference type");
+    let stem = pdf.file_stem().and_then(OsStr::to_str).expect("PDF stem");
+    let (_, pointer) =
+        source_store::planned_pointer(&ref_type, stem, source_bytes);
+    let pdf_rel = pdf
+        .strip_prefix(&config.bob_dir)
+        .expect("PDF is in the vault")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let catalog = code_catalog::CatalogOutcome::Missing;
+    source_store::write_store(
+        &config.bob_dir,
+        source_store::StoreWriteParams {
+            ref_type: &ref_type,
+            stem,
+            source_bytes,
+            route: "markdown",
+            origin: "fixture.md".to_string(),
+            source_note: None,
+            source_note_sha256: None,
+            pdf_rel,
+            pdf_sha256: sha256_file(pdf).expect("PDF digest"),
+            catalog: &catalog,
+            verified: None,
+        },
+    )
+    .expect("write birth source store");
+    pointer
+}
+
 fn assert_unchanged(
     pdf: &Path,
     note: &Path,
@@ -759,6 +792,131 @@ fn v2_hold_leaves_the_reading_task_untouched() {
     assert_eq!(bytes_of(&pdf), pdf_before);
     assert_eq!(text_of(&note), note_before);
     assert_eq!(text_of(&parent), parent_before);
+}
+
+#[test]
+fn v1_execution_refresh_carries_planned_source_pointer_through_marker_write() {
+    let bob = temp_bob_dir("marker-write-v1-source-pointer");
+    let (config, pdf, note, mut plan) =
+        plan_checkbox_write(&bob, "example", V1_TASK);
+    let pointer =
+        ".bob/ref-sources/chat/example--0123456789ab/source.md".to_string();
+    plan.stable_metadata.source_markdown = Some(pointer.clone());
+
+    let fake = FakeCoordinator::grant(Duration::ZERO);
+    let mut session = write_session(
+        MarkerWriteCoordinator::Fake(fake),
+        ReadingHoldMode::Exempt,
+    );
+    let outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    )
+    .expect("execute v1 marker write");
+    assert!(matches!(outcome, PdfSyncOutcome::Written(_)));
+
+    let persisted = frontmatter::read_note(&note).expect("read v1 note");
+    assert_eq!(
+        persisted
+            .frontmatter_value(FIELD_SOURCE_MARKDOWN)
+            .and_then(|value| value.as_string().map(str::to_string))
+            .as_deref(),
+        Some(pointer.as_str())
+    );
+    assert_eq!(
+        text_of(&note).matches("source_markdown:").count(),
+        1,
+        "v1 execution must not duplicate the pointer"
+    );
+    assert_eq!(
+        persisted
+            .frontmatter_value(FIELD_SOURCE_PDF_SHA256)
+            .and_then(|value| value.as_string().map(str::to_string))
+            .as_deref(),
+        Some(sha256_file(&pdf).expect("post-write PDF digest").as_str()),
+        "marker rewrite must retain the post-write PDF digest"
+    );
+}
+
+#[test]
+fn v2_birth_attaches_verified_source_through_normalizing_marker_write() {
+    let bob = temp_bob_dir("marker-write-v2-source-pointer");
+    seed_area(&bob);
+    let pdf = bob.join("lib/chat/grow.pdf");
+    let note = bob.join("ref/chat/grow.md");
+    write_pdf_with_marker(
+        &pdf,
+        "- status: unread\n- parent: obsidian\n",
+        false,
+    );
+    let config = vault_config(&bob);
+    let pointer = write_birth_source(&config, &pdf);
+    let plan = plan_single_pdf_sync(&config, &pdf, write_opts())
+        .expect("plan v2 birth with marker normalization");
+    assert!(plan.marker_write_needed, "deprecated marker needs rewrite");
+    assert_eq!(
+        plan.stable_metadata.source_markdown.as_deref(),
+        Some(pointer.as_str()),
+        "new-note planning must derive the verified birth pointer"
+    );
+    let planned_pdf_digest = plan.marker.source_pdf_sha256.clone();
+
+    let fake = FakeCoordinator::grant(Duration::ZERO);
+    let mut session = write_session(
+        MarkerWriteCoordinator::Fake(fake),
+        ReadingHoldMode::Exempt,
+    );
+    let outcome = execute_pdf_sync(
+        &config,
+        &plan,
+        &mut RunWriteState::default(),
+        &mut session,
+    )
+    .expect("execute v2 birth marker write");
+    assert!(matches!(outcome, PdfSyncOutcome::Written(_)));
+    assert_ne!(
+        sha256_file(&pdf).expect("post-write PDF digest"),
+        planned_pdf_digest,
+        "marker rewrite should change the PDF bytes"
+    );
+
+    let persisted = frontmatter::read_note(&note).expect("read v2 note");
+    assert_eq!(
+        persisted
+            .frontmatter_value(FIELD_SOURCE_MARKDOWN)
+            .and_then(|value| value.as_string().map(str::to_string))
+            .as_deref(),
+        Some(pointer.as_str()),
+        "execution must carry the pointer planned against the original PDF"
+    );
+    assert_eq!(
+        persisted
+            .frontmatter_value(FIELD_SOURCE_PDF_SHA256)
+            .and_then(|value| value.as_string().map(str::to_string))
+            .as_deref(),
+        Some(sha256_file(&pdf).expect("post-write PDF digest").as_str()),
+        "note must record the post-write PDF digest"
+    );
+}
+
+#[test]
+fn v2_birth_does_not_attach_a_source_that_fails_digest_verification() {
+    let bob = temp_bob_dir("marker-write-v2-corrupt-source");
+    seed_area(&bob);
+    let pdf = bob.join("lib/chat/corrupt.pdf");
+    write_pdf_with_marker(&pdf, READY_MARKER, false);
+    let config = vault_config(&bob);
+    let pointer = write_birth_source(&config, &pdf);
+    write_test_bytes(&bob.join(&pointer), b"corrupted saved source");
+
+    let plan = plan_single_pdf_sync(&config, &pdf, write_opts())
+        .expect("plan birth with corrupt source store");
+    assert_eq!(
+        plan.stable_metadata.source_markdown, None,
+        "a catalog match cannot attach source bytes that fail verification"
+    );
 }
 
 fn plan_v1_stale_restore(
