@@ -21,6 +21,8 @@ Library:
   list           List notes by reading state, status, type, origin, or date
   migrate-tasks  Move open ref tasks into parent notes; dry run unless --write
   migrate-zorg   Migrate zorg-era records to ref/zorg/; dry run unless --write
+  recatalog      Add link records to saved-source catalogs written before bob
+                 recorded links
   rename         Rename a reference's files and update every link to it
   show           Show notes with metadata, annotations, and your own notes
   today          Pull a reference's reading task into today's Pomodoro (sets it

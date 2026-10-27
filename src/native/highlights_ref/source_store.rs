@@ -765,6 +765,8 @@ pub(crate) enum SourceStoreIssue {
 pub(crate) struct SourceStoreHealth {
     pub(crate) saved: usize,
     pub(crate) code_blocks: usize,
+    pub(crate) links: usize,
+    pub(crate) without_links: usize,
     pub(crate) dangling: Vec<SourceStoreIssue>,
     pub(crate) digest_mismatch: Vec<SourceStoreIssue>,
     pub(crate) missing_catalog: Vec<SourceStoreIssue>,
@@ -884,6 +886,10 @@ fn consider_pointer(
                 health.saved += 1;
                 if let Some(catalog) = &read.catalog {
                     health.code_blocks += catalog.blocks.len();
+                    match &catalog.links {
+                        Some(links) => health.links += links.len(),
+                        None => health.without_links += 1,
+                    }
                 }
             }
         }

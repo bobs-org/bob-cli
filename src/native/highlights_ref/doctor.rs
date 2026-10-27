@@ -925,6 +925,14 @@ fn append_ref_sources_row(
 ) {
     let health =
         super::source_store::inspect_source_stores(&config.bob_dir, rows);
+    let links_hint = if health.without_links == 0 {
+        String::new()
+    } else {
+        format!(
+            " · {} without links — bob ref recatalog",
+            format_count(health.without_links),
+        )
+    };
     let mut parts: Vec<String> = Vec::new();
     push_issue_part(&mut parts, health.dangling.len(), "dangling", "dangling");
     push_issue_part(
@@ -949,9 +957,10 @@ fn append_ref_sources_row(
     }
     if parts.is_empty() {
         println!(
-            "ref sources: ok ({} saved · {} code blocks)",
+            "ref sources: ok ({} saved · {} code blocks · {} links{links_hint})",
             format_count(health.saved),
             format_count(health.code_blocks),
+            format_count(health.links),
         );
         return;
     }
@@ -1006,7 +1015,7 @@ fn append_ref_sources_row(
         format!(" · e.g. {}", examples.join(", "))
     };
     println!(
-        "ref sources: warn ({}{example_text}{hint})",
+        "ref sources: warn ({}{example_text}{hint}{links_hint})",
         parts.join(" · "),
     );
     warnings.push(format!("reference sources: {}{hint}", parts.join(" · "),));

@@ -67,6 +67,7 @@ mod note;
 #[allow(dead_code)]
 pub(crate) mod note_snapshot;
 mod pdf_dests;
+pub(crate) mod pdf_links;
 mod pdf_meta;
 mod pdf_target;
 pub(crate) mod pdf_write_policy;
@@ -353,6 +354,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("links", sub_matches)) => {
             crate::native::ref_library::cli::run_links(sub_matches)
+        }
+        Some(("recatalog", sub_matches)) => {
+            crate::native::ref_library::cli::run_recatalog(sub_matches)
         }
         Some(("show", sub_matches)) => {
             crate::native::ref_library::cli::run_show(sub_matches)

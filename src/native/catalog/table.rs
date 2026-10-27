@@ -942,6 +942,10 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
         reason: "Backfill that needs search paths; run it from a terminal",
     },
     Excluded {
+        path: &["ref", "recatalog"],
+        reason: "Saved-source catalog backfill; run it from a terminal",
+    },
+    Excluded {
         path: &["ref", "migrate-tasks"],
         reason: "One-time migration; run it from a terminal",
     },

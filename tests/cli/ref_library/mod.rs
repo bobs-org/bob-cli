@@ -8,6 +8,7 @@ mod links;
 mod list;
 mod migrate_tasks;
 mod migrate_zorg;
+mod recatalog;
 mod rename;
 mod show;
 mod tasks;

@@ -8,6 +8,8 @@ const REPORT: &str = r#"# Harbor Cranes
 Intro paragraph about harbor cranes and shipping logistics in the bay
 area harbor district, with observers watching every container move.
 
+See [harbor details](https://example.test/harbor).
+
 ## Retrieval
 
 ```yaml
@@ -175,6 +177,11 @@ fn attach_verifies_and_records_a_fixture_source() {
     .expect("code.json parses");
     assert_eq!(code["route"], "attached");
     assert_eq!(code["version"], 1);
+    let links = code["links"].as_array().expect("attached link records");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["url"], "https://example.test/harbor");
+    assert_eq!(links[0]["page"], 1);
+    assert_eq!(links[0]["page_source"], "annotation");
     assert!(
         code["verified"]["matched"].as_u64().unwrap_or(0) >= 1,
         "verified counts: {code}"

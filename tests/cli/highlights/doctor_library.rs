@@ -70,7 +70,7 @@ fn doctor_library_rows_report_ok_on_clean_vault() {
         "{report}"
     );
     assert!(
-        report.contains("ref sources: ok (0 saved · 0 code blocks)"),
+        report.contains("ref sources: ok (0 saved · 0 code blocks · 0 links)"),
         "{report}"
     );
     assert!(
@@ -677,10 +677,28 @@ fn doctor_ref_sources_ok_counts_saved_code_blocks() {
 
     let report = stdout(&run_doctor(&vault));
     assert!(
-        report.contains("ref sources: ok (1 saved · 2 code blocks)"),
+        report.contains("ref sources: ok (1 saved · 2 code blocks · 0 links · 1 without links — bob ref recatalog)"),
         "{report}"
     );
     assert!(report.contains("result: ok"), "{report}");
+
+    let catalog_path = vault.join(&pointer).with_file_name("code.json");
+    let mut catalog: serde_json::Value =
+        serde_json::from_slice(&fs::read(&catalog_path).expect("catalog"))
+            .expect("catalog JSON");
+    catalog["links"] = serde_json::json!([{
+        "n": 1, "url": "https://example.test/link", "text": "Link",
+        "title": null, "autolink": false, "context": null,
+        "section": null, "page": 1, "page_source": "annotation"
+    }]);
+    write_file(&catalog_path, &serde_json::to_string(&catalog).unwrap());
+    commit_vault(&vault);
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("ref sources: ok (1 saved · 2 code blocks · 1 links)"),
+        "{report}"
+    );
+    assert!(!report.contains("without links"), "{report}");
 }
 
 #[test]

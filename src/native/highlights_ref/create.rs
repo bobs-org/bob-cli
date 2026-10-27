@@ -73,7 +73,7 @@ pub(super) const PANDOC_HEADER_INCLUDES: &str = concat!(
 /// file's top section level (a lone H1 becomes an unnumbered, unlisted title
 /// heading and every other heading moves up) whenever pandoc numbers sections
 /// for LaTeX output.
-pub(super) const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
+pub(crate) const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
 local PLAY_URI = nil
 
 function Meta(meta)
@@ -175,7 +175,7 @@ function Div(div)
 end
 
 local function number_from_top_level(doc)
-  if not (FORMAT:match("latex") and PANDOC_WRITER_OPTIONS
+  if not ((FORMAT:match("latex") or FORMAT == "native") and PANDOC_WRITER_OPTIONS
       and PANDOC_WRITER_OPTIONS.number_sections) then
     return nil
   end

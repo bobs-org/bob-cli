@@ -25,7 +25,7 @@ use super::{
 };
 use crate::native::highlights_ref::{
     code_catalog::{self, CatalogLink, CodeBlock},
-    reference_mutation,
+    pdf_links, reference_mutation,
     source_store::{self, StoredVerified},
     split_frontmatter, COMMAND_NAME,
 };
@@ -374,11 +374,22 @@ fn is_matchable(block: &CodeBlock) -> bool {
         && normalize_text(&block.text).chars().count() >= MIN_MATCHABLE_CHARS
 }
 
-/// Run pandoc's record and report passes over a candidate (no XeLaTeX)
-/// and return the report catalog with pageless blocks.
-fn extract_candidate_blocks(
-    candidate: &Path,
+/// Run the render's record and report passes without XeLaTeX. Preserve
+/// the source route's reader and section numbering; pages are assigned later.
+pub(crate) fn record_source_catalog(
+    bytes: &[u8],
+    route: &str,
 ) -> Result<code_catalog::CodeCatalog, String> {
+    let snapshot = route == "note_snapshot";
+    let reader = match route {
+        "markdown" | "plain_note" | "attached" => {
+            code_catalog::MARKDOWN_PANDOC_READER
+        }
+        "note_snapshot" => {
+            crate::native::highlights_ref::note_snapshot::profile::SNAPSHOT_PANDOC_READER
+        }
+        _ => return Err(format!("unsupported saved-source route: {route}")),
+    };
     let pandoc = pandoc_command().ok_or_else(|| {
         "pandoc command not found; install pandoc or set BOB_PANDOC_COMMAND"
             .to_string()
@@ -395,6 +406,9 @@ fn extract_candidate_blocks(
         format!("create attach scratch {}: {error}", scratch.display())
     })?;
     let result = (|| {
+        let candidate = scratch.join("source.md");
+        fs::write(&candidate, bytes)
+            .map_err(|error| format!("write record source: {error}"))?;
         let record = scratch.join("code-catalog.lua");
         fs::write(
             &record,
@@ -418,13 +432,25 @@ fn extract_candidate_blocks(
         )?;
         let report_path = scratch.join("code-catalog.json");
         let rendered = scratch.join("native.txt");
-        let status = Command::new(&pandoc)
-            .arg(candidate)
+        let section_filter = scratch.join("code-break.lua");
+        fs::write(
+            &section_filter,
+            crate::native::highlights_ref::create::PANDOC_CODE_BREAK_FILTER,
+        )
+        .map_err(|error| format!("write section filter: {error}"))?;
+        let mut command = Command::new(&pandoc);
+        if !snapshot {
+            command.arg("--number-sections");
+        }
+        let status = command
+            .arg(&candidate)
             .arg("-f")
-            .arg(code_catalog::MARKDOWN_PANDOC_READER)
+            .arg(reader)
             .arg("--preserve-tabs")
             .arg("--lua-filter")
             .arg(&record)
+            .arg("--lua-filter")
+            .arg(&section_filter)
             .arg("--lua-filter")
             .arg(&report_filter)
             .arg("--metadata")
@@ -1049,7 +1075,7 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
             skipped.push((&row.path, reason));
             continue;
         }
-        let catalog = match extract_candidate_blocks(&candidate) {
+        let mut catalog = match record_source_catalog(&bytes, "attached") {
             Ok(catalog) => catalog,
             Err(error) => {
                 println!("{}: skipped ({error})", row.path);
@@ -1061,6 +1087,17 @@ pub(crate) fn run_attach_source(matches: &ArgMatches) -> i32 {
         let pdf_path = config
             .bob_dir
             .join(row.source_pdf.as_deref().unwrap_or_default());
+        if let Some(links) = catalog.links.as_mut() {
+            if let Err(error) =
+                pdf_links::annotate_catalog_links(links, &pdf_path)
+            {
+                let reason = format!("unreadable PDF annotations: {error}");
+                println!("{}: skipped ({reason})", row.path);
+                skipped.push((&row.path, reason));
+                failed = true;
+                continue;
+            }
+        }
         let pages = match pdf_page_texts(&pdf_path, &mut pdftotext_checked) {
             Ok(pages) => pages,
             Err(error) => {
@@ -1193,6 +1230,30 @@ fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_record_pass_preserves_route_section_numbering() {
+        if pandoc_command().is_none() {
+            eprintln!("skipping record pass: pandoc is required");
+            return;
+        }
+        let source = b"# Report\n\n## Details\n\nSee [link](https://example.test).\n\n```rust\nlet saved = 1;\n```\n";
+        for route in ["markdown", "plain_note", "attached", "note_snapshot"] {
+            let catalog =
+                record_source_catalog(source, route).expect("record pass");
+            let expected_number = (route != "note_snapshot").then_some("1");
+            let link = &catalog.links.as_ref().unwrap()[0];
+            let section = link.section.as_ref().unwrap();
+            assert_eq!(section.title, "Details");
+            assert_eq!(section.number.as_deref(), expected_number, "{route}");
+            assert_eq!(catalog.blocks[0].section.as_ref().unwrap(), section);
+            assert_eq!(catalog.blocks[0].text, "let saved = 1;");
+            assert_eq!(link.page, None);
+        }
+        assert!(record_source_catalog(source, "unsupported")
+            .unwrap_err()
+            .contains("unsupported saved-source route"));
+    }
 
     #[test]
     fn titles_compare_case_and_whitespace_insensitively() {

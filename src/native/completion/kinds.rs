@@ -237,6 +237,12 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref recatalog` takes optional reference handles.
+    Entry {
+        path: &["ref", "recatalog"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
     // `bob ref attach-source` takes optional REFs plus search paths.
     Entry {
         path: &["ref", "attach-source"],

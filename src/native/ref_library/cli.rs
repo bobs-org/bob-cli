@@ -25,6 +25,7 @@ use super::{
 pub(crate) use super::attach::run_attach_source;
 pub(crate) use super::code::run_code;
 pub(crate) use super::links::run_links;
+pub(crate) use super::recatalog::run_recatalog;
 pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
@@ -285,6 +286,30 @@ pub(crate) fn attach_source_command() -> ClapCommand {
         )
         .after_help(
             "Eligible references are PDF-backed, with no saved source and no live source note. Each candidate is verified against its library PDF text: the title must match, and at least 80% of matchable code blocks (12 or more normalized characters, never Mermaid) must match in order at 85% or better similarity, or else the five longest paragraphs must. Verified sources are written to .bob/ref-sources/<type>/<stem>--<hash>/ with route \"attached\" plus the match counts, the note gains a source_markdown pointer, and every 100 references commit as one revertable batch. A dry run verifies and reports but ends with `writes: none`.\n\nExamples:\n  bob ref attach-source -s ~/projects/bob-cli--research -d\n  bob ref attach-source ace_refresh_loop -s ./sidecar/report.md -d\n  bob ref attach-source -s ./sidecar-a -s ./sidecar-b",
+        )
+}
+
+/// The `bob ref recatalog` additive link-backfill command.
+pub(crate) fn recatalog_command() -> ClapCommand {
+    ClapCommand::new("recatalog")
+        .about("Add link records to saved-source catalogs written before bob recorded links")
+        .arg(
+            Arg::new("ref")
+                .value_name("REF")
+                .num_args(0..)
+                .help("Vault path, note stem or id, URL, arXiv ID, DOI, or exact title; the default is every eligible reference"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("dry-run")
+                .long("dry-run")
+                .short('d')
+                .action(ArgAction::SetTrue)
+                .help("Report link records and page matches without writing catalogs or commits"),
+        )
+        .arg(ref_dir_arg())
+        .after_help(
+            "Never changes saved Markdown or recorded code blocks. Eligible stores have a verified source and a catalog without link records. Pandoc records links using the source route's reader; pages come from the current library PDF's URI annotations. Already-recorded stores are skipped. Writes run under the reference-mutation locks in revertable batches of up to 100 references. A dry run ends with `writes: none`.\n\nExamples:\n  bob ref recatalog -d\n  bob ref recatalog\n  bob ref recatalog agent_image_generation_toolset -d",
         )
 }
 

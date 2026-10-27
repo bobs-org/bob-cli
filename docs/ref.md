@@ -29,6 +29,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Copy or inspect a saved code block | `bob ref code <REF> [N]` | Read exact block bytes, a block catalog, or the saved Markdown source |
 | Copy or inspect a recorded link | `bob ref links <REF> [N]` | Read exact URL bytes, a link catalog, or Markdown forms |
 | Backfill saved sources for filed references | `bob ref attach-source -s <PATH> [-d] [REF]...` | Verify same-stem Markdown against library PDFs and record only verified sources |
+| Add links to older saved-source catalogs | `bob ref recatalog [REF]... [-d]` | Record links and map pages from existing PDF annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
@@ -83,13 +84,15 @@ doctor` counts any that remain), and annotations are the snapshot
 written by the last Highlights scan, not live PDF state.
 
 `bob ref doctor` also prints a `ref sources` row for the write-once
-store under `.bob/ref-sources/`. `ok (N saved · M code blocks)` means
+store under `.bob/ref-sources/`. `ok (N saved · M code blocks · K links)` means
 every `source_markdown` pointer verified; `warn` lists dangling
 pointers, digest mismatches, missing catalogs, orphans, and ignored
 `code.json` files, with `bob ref attach-source` and
 [Reference sources](vault-git-sync.md#reference-sources) as hints.
 Frozen notes under `ref_history/` keep their pointer, so a store the
 archive still names is not an orphan. Doctor never writes.
+Catalogs that predate link recording append
+`· N without links — bob ref recatalog` without changing the row's level.
 
 ## Reading state
 
@@ -670,6 +673,39 @@ The `id` on each link is generation-scoped as `<source-hash12>/link-<N>`.
 A missing `links` array means the catalog predates link recording
 (`not_recorded`); an empty array is `no_links`.
 
+## `bob ref recatalog`
+
+```bash
+bob ref recatalog -d
+bob ref recatalog
+bob ref recatalog agent_image_generation_toolset -d
+```
+
+Add link records to saved-source catalogs written before bob recorded links.
+Saved Markdown, recorded code blocks, PDF bytes, and existing catalog fields
+stay unchanged. Without `REF`, every eligible reference is considered;
+named references resolve like `bob ref show`. Options are `-b/--bob-dir`,
+`-d/--dry-run`, and `-r/--ref-dir`.
+
+Eligible stores have a verified source and a readable catalog without a
+`links` array. Pandoc runs the shared record and report filters with the
+source route's reader and section numbering. Snapshot sources keep their
+unnumbered headings. Pages come from the current PDF's URI annotations,
+matched in document order, with `page_source: annotation`. Wrapped link
+pieces count as one occurrence. Unmatched links remain pageless, including
+bare URLs that were plain text in older PDFs.
+
+Each reference prints `added N links (M on pages)` or `skipped (<reason>)`.
+Skip reasons are `already recorded`, `no catalog`, `source missing`,
+`source invalid`, `no PDF`, and `pandoc failed: …`. Missing pandoc exits 1
+with an install hint. A summary ends the run; dry runs use `would add`
+and end with `writes: none`.
+
+Writes hold `bob_sync.lock` then `scan.lock`, replace each `code.json`
+atomically, and commit batches of up to 100 references with the subject
+`bob ref recatalog: N references`. Each batch can be reverted with
+`git revert`. Ignored catalogs print the existing source-store allowlist hint.
+
 ## `bob ref attach-source`
 
 ```bash
@@ -708,6 +744,8 @@ pages from the match position (`page_source: text_match`). The note
 gains a `source_markdown` pointer. Every 100 references commit as one
 scoped, revertable `bob ref attach-source: N references` batch, under
 the reference-mutation session (`bob_sync.lock` then `scan.lock`).
+The catalog also records URI links, with pages from the existing PDF's
+annotations (`page_source: annotation`); unmatched links remain pageless.
 
 One line prints per reference, `attached` or `skipped (<reason>)`, where
 the reason is `no candidate`, `ambiguous`, `title mismatch`,

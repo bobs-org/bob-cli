@@ -24,6 +24,7 @@ pub(crate) mod lineage;
 pub(crate) mod links;
 pub(crate) mod list;
 pub(crate) mod output;
+pub(crate) mod recatalog;
 mod resolve;
 mod row;
 pub(crate) mod show;
