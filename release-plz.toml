@@ -18,6 +18,8 @@ git_tag_name = "v{{ version }}"
 [[package]]
 name = "bob-obsidian-assets"
 git_tag_name = "bob-obsidian-assets-v{{ version }}"
+# Tag and process the crate; do not create a GitHub Release that the
+# rehearsal daily guard would count as the day's root release.
 git_release_enable = false
 
 [changelog]

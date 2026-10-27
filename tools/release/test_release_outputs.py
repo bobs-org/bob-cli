@@ -13,6 +13,7 @@ from release_outputs import (
     ReleaseOutputsError,
     format_summary,
     last_json_object,
+    list_releases,
     main,
     parse_file,
     select_release,
@@ -26,6 +27,18 @@ EMPTY_RELEASES = '{"releases":[]}'
 OTHER_PACKAGE = (
     '{"releases":[{"package_name":"other-crate","prs":[],'
     '"tag":"v1.0.0","version":"1.0.0"}]}'
+)
+ASSETS_ONLY = (
+    '{"releases":[{"package_name":"bob-obsidian-assets","prs":[],'
+    '"tag":"bob-obsidian-assets-v0.1.1","version":"0.1.1"}]}'
+)
+MIXED_ASSETS_FIRST = (
+    '{"releases":['
+    '{"package_name":"bob-obsidian-assets","prs":[],'
+    '"tag":"bob-obsidian-assets-v0.1.1","version":"0.1.1"},'
+    '{"package_name":"bob-obsidian","prs":[],'
+    '"tag":"v0.2.0","version":"0.2.0"}'
+    "]}"
 )
 
 
@@ -81,6 +94,16 @@ class SelectReleaseTests(unittest.TestCase):
         self.assertEqual(tag, "")
         self.assertEqual(version, "")
 
+    def test_mixed_assets_first_still_selects_root(self) -> None:
+        tag, version = select_release(json_obj(MIXED_ASSETS_FIRST), "bob-obsidian")
+        self.assertEqual(tag, "v0.2.0")
+        self.assertEqual(version, "0.2.0")
+
+    def test_assets_only_is_not_a_binary_release(self) -> None:
+        tag, version = select_release(json_obj(ASSETS_ONLY), "bob-obsidian")
+        self.assertEqual(tag, "")
+        self.assertEqual(version, "")
+
     def test_missing_releases_key(self) -> None:
         with self.assertRaises(ReleaseOutputsError):
             select_release({"ok": True}, "bob-obsidian")
@@ -99,12 +122,35 @@ def json_obj(text: str) -> object:
     return last_json_object(text)
 
 
+class ListReleasesTests(unittest.TestCase):
+    def test_mixed_preserves_assets_first_order(self) -> None:
+        self.assertEqual(
+            list_releases(json_obj(MIXED_ASSETS_FIRST)),
+            [
+                ("bob-obsidian-assets", "bob-obsidian-assets-v0.1.1", "0.1.1"),
+                ("bob-obsidian", "v0.2.0", "0.2.0"),
+            ],
+        )
+
+    def test_empty_releases(self) -> None:
+        self.assertEqual(list_releases(json_obj(EMPTY_RELEASES)), [])
+
+    def test_assets_missing_tag_is_error(self) -> None:
+        payload = {
+            "releases": [
+                {"package_name": "bob-obsidian-assets", "version": "0.1.1"},
+            ]
+        }
+        with self.assertRaises(ReleaseOutputsError):
+            list_releases(payload)
+
+
 class FormatSummaryTests(unittest.TestCase):
     def test_released(self) -> None:
         text = format_summary(tag="v0.2.0", version="0.2.0", mode="rehearsal")
         self.assertIn("### Release: v0.2.0", text)
-        self.assertIn("- version: `0.2.0`", text)
-        self.assertIn("- tag: `v0.2.0`", text)
+        self.assertIn("- bob-obsidian: `0.2.0` (tag `v0.2.0`)", text)
+        self.assertIn("- binaries: `v0.2.0`", text)
         self.assertIn("- mode: `rehearsal`", text)
 
     def test_no_release(self) -> None:
@@ -112,6 +158,36 @@ class FormatSummaryTests(unittest.TestCase):
         self.assertEqual(
             text, "No release: release-plz found nothing new to release\n"
         )
+
+    def test_mixed_assets_first_keeps_root_headline_and_binaries(self) -> None:
+        text = format_summary(
+            tag="v0.2.0",
+            version="0.2.0",
+            mode="rehearsal",
+            releases=list_releases(json_obj(MIXED_ASSETS_FIRST)),
+        )
+        self.assertIn("### Release: v0.2.0", text)
+        self.assertIn(
+            "- bob-obsidian-assets: `0.1.1` (tag `bob-obsidian-assets-v0.1.1`)",
+            text,
+        )
+        self.assertIn("- bob-obsidian: `0.2.0` (tag `v0.2.0`)", text)
+        self.assertIn("- binaries: `v0.2.0`", text)
+
+    def test_assets_only_reports_package_without_binaries(self) -> None:
+        text = format_summary(
+            tag="",
+            version="",
+            mode="rehearsal",
+            releases=list_releases(json_obj(ASSETS_ONLY)),
+        )
+        self.assertIn("### Release: bob-obsidian-assets-v0.1.1", text)
+        self.assertIn(
+            "- bob-obsidian-assets: `0.1.1` (tag `bob-obsidian-assets-v0.1.1`)",
+            text,
+        )
+        self.assertIn("- binaries: none", text)
+        self.assertNotIn("No release:", text)
 
 
 class ParseFileTests(unittest.TestCase):
@@ -148,6 +224,8 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(output.read_text(), "tag=v0.2.0\nversion=0.2.0\n")
             self.assertIn("### Release: v0.2.0", summary.read_text())
+            self.assertIn("- bob-obsidian: `0.2.0` (tag `v0.2.0`)", summary.read_text())
+            self.assertIn("- binaries: `v0.2.0`", summary.read_text())
             self.assertIn("- mode: `rehearsal`", summary.read_text())
 
     def test_empty_releases_clears_outputs(self) -> None:
@@ -182,7 +260,7 @@ class MainTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(output.read_text(), "tag=v0.2.0\nversion=0.2.0\n")
 
-    def test_other_package_is_no_release(self) -> None:
+    def test_other_package_clears_binary_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
             json_path = write_temp(directory, OTHER_PACKAGE)
@@ -196,7 +274,51 @@ class MainTests(unittest.TestCase):
                 code = main([str(json_path)])
             self.assertEqual(code, 0)
             self.assertEqual(output.read_text(), "tag=\nversion=\n")
-            self.assertIn("No release:", summary.read_text())
+            self.assertIn("- other-crate: `1.0.0` (tag `v1.0.0`)", summary.read_text())
+            self.assertIn("- binaries: none", summary.read_text())
+
+    def test_mixed_assets_first_writes_root_binary_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            json_path = write_temp(directory, MIXED_ASSETS_FIRST)
+            output = directory / "github_output"
+            summary = directory / "github_summary"
+            env = {
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_STEP_SUMMARY": str(summary),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                code = main(
+                    [str(json_path), "--package", "bob-obsidian", "--mode", "rehearsal"]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(output.read_text(), "tag=v0.2.0\nversion=0.2.0\n")
+            body = summary.read_text()
+            self.assertIn("### Release: v0.2.0", body)
+            self.assertIn(
+                "- bob-obsidian-assets: `0.1.1` (tag `bob-obsidian-assets-v0.1.1`)",
+                body,
+            )
+            self.assertIn("- binaries: `v0.2.0`", body)
+
+    def test_assets_only_clears_binary_outputs_and_summarizes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            json_path = write_temp(directory, ASSETS_ONLY)
+            output = directory / "github_output"
+            summary = directory / "github_summary"
+            env = {
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_STEP_SUMMARY": str(summary),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                code = main([str(json_path)])
+            self.assertEqual(code, 0)
+            self.assertEqual(output.read_text(), "tag=\nversion=\n")
+            body = summary.read_text()
+            self.assertIn("### Release: bob-obsidian-assets-v0.1.1", body)
+            self.assertIn("- binaries: none", body)
+            self.assertNotIn("No release:", body)
 
     def test_malformed_output_exits_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

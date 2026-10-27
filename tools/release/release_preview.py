@@ -2,11 +2,10 @@
 """Preview what tomorrow's release train would do, with no side effects.
 
 Clones `origin/master` into a temp dir, requires release-plz at the pinned
-version, runs `release-plz update` there, and prints the next version (or
-"no release: nothing user-visible since vX"), the new changelog section and
-`git diff --stat`. Then runs the guard in explain-only mode against live
-data to show what the next scheduled run would decide, degrading gracefully
-without `gh` auth.
+version, runs `release-plz update` there, and prints both package versions
+(or "no release"), each changelog that changed, and `git diff --stat`. Then
+runs the guard in explain-only mode against live data to show what the next
+scheduled run would decide, degrading gracefully without `gh` auth.
 
 Nothing outside the temp dir is touched: no pushes, tags, publishes, or
 working-tree changes.
@@ -20,6 +19,14 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from workspace_versions import (
+    CHANGELOG_PATHS,
+    format_next_versions,
+    format_no_release,
+    load_release_plz_config,
+    read_versions,
+)
 
 RELEASE_PLZ_VERSION = "0.3.173"
 
@@ -87,35 +94,34 @@ def main(argv: list[str] | None = None) -> int:
         # release-plz needs full history to decide the bump.
         _run(["git", "fetch", "--unshallow"], cwd=clone)
 
+        before = read_versions(clone)
+        config = load_release_plz_config(clone)
         update = _run(["release-plz", "update"], cwd=clone)
         sys.stdout.write(update.stdout or "")
         sys.stderr.write(update.stderr or "")
         if update.returncode != 0:
             return update.returncode
 
+        after = read_versions(clone)
+        for changelog_path in CHANGELOG_PATHS:
+            if (clone / changelog_path).exists():
+                _run(["git", "add", "-N", "--", str(changelog_path)], cwd=clone)
         status = _run(["git", "status", "--porcelain"], cwd=clone)
         if not status.stdout.strip():
-            version_probe = _run(
-                ["python3", "-c",
-                 "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])"],
-                cwd=clone,
-            )
-            current = version_probe.stdout.strip() or "?"
-            sys.stdout.write(f"no release: nothing user-visible since v{current}\n")
+            sys.stdout.write(format_no_release(after, config))
         else:
-            version_probe = _run(
-                ["python3", "-c",
-                 "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])"],
-                cwd=clone,
-            )
-            nxt = version_probe.stdout.strip() or "?"
-            sys.stdout.write(f"\nnext version: v{nxt}\n\n")
+            sys.stdout.write("\n")
+            sys.stdout.write(format_next_versions(before, after, config))
+            sys.stdout.write("\n")
             diff_stat = _run(["git", "diff", "--stat"], cwd=clone)
             sys.stdout.write(diff_stat.stdout or "")
-            changelog = _run(["git", "diff", "--", "CHANGELOG.md"], cwd=clone)
-            if changelog.stdout.strip():
-                sys.stdout.write("\n--- CHANGELOG.md (new section) ---\n")
-                sys.stdout.write(changelog.stdout)
+            for changelog_path in CHANGELOG_PATHS:
+                changelog = _run(
+                    ["git", "diff", "--", str(changelog_path)], cwd=clone
+                )
+                if changelog.stdout.strip():
+                    sys.stdout.write(f"\n--- {changelog_path} (new section) ---\n")
+                    sys.stdout.write(changelog.stdout)
 
         sys.stdout.write("\n--- guard explain (live data) ---\n")
         guard = _run(

@@ -38,6 +38,10 @@ class BinariesContractTests(unittest.TestCase):
         self.assertNotIn("{ bin }", self.pkg_url)
         self.assertNotIn("{bin}", self.pkg_url)
 
+    def test_pkg_url_selects_root_v_tags(self) -> None:
+        self.assertIn("/releases/download/v{ version }/", self.pkg_url)
+        self.assertNotIn("bob-obsidian-assets-v", self.pkg_url)
+
     def test_archive_does_not_use_dollar_bin(self) -> None:
         self.assertGreater(
             len(self.action_bins),

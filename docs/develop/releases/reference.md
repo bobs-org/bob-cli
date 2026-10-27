@@ -6,7 +6,8 @@ description: Exact schedule, triggers, guard rules, release metadata, and packag
 # Release train reference
 
 This page records the current release.yml, ci.yml, release-plz.toml, and tools/release
-configuration. The release train is in rehearsal mode until git_only is changed.
+configuration. The release train is in rehearsal mode until git_only is changed. It
+manages bob-obsidian and bob-obsidian-assets together; they version independently.
 
 ## Schedule
 
@@ -36,7 +37,7 @@ Release, or publish a crate. A non-dry-run release is allowed only from master.
 | Name | Kind | Required value or behavior |
 | --- | --- | --- |
 | RELEASES_PAUSED | Repository Actions variable | Exactly false arms the train. Missing or any other value keeps it paused. |
-| release | GitHub environment | Used by the release job; configure the matching Trusted Publisher before live publishing. |
+| release | GitHub environment | Used by the release job. Future live mode needs a Trusted Publisher for both bob-obsidian and bob-obsidian-assets (owner bobs-org, repository bob-cli, workflow release.yml, environment release). This configuration does not arm or switch the publisher. |
 
 An absent variable is reported as unarmed; a present but non-false value is reported as
 paused. Neither state proceeds to release.
@@ -95,7 +96,10 @@ publication advances the guard even if its later GitHub tag or Release step fail
 | workspace.semver_check | false | src/lib.rs is an internal seam, not the product contract |
 | workspace.dependencies_update | false | Do not update dependency versions during release |
 | workspace.publish_timeout | 30m | Publishing timeout |
-| workspace.git_tag_name | v{{ version }} | Version tags use vX.Y.Z |
+| workspace.git_tag_name | v{{ version }} | Default tag pattern, kept by bob-obsidian |
+| package.bob-obsidian.git_tag_name | v{{ version }} | Root tag and GitHub Release name |
+| package.bob-obsidian-assets.git_tag_name | bob-obsidian-assets-v{{ version }} | Unique assets tag; cannot collide with vX.Y.Z |
+| package.bob-obsidian-assets.git_release_enable | false | Tag and process assets without a GitHub Release |
 | changelog.protect_breaking_commits | true | Preserve breaking commits even for otherwise skipped types |
 
 The release-plz version pinned in CI, release.yml, and release-preview is 0.3.173.
@@ -119,12 +123,18 @@ phase verified these 0.x results:
 ## Version-bump commit and release names
 
 When release-plz update changes files, the workflow commits them as
-chore(release): vX.Y.Z with the GitHub Actions bot identity and
+chore(release): vX.Y.Z, bob-obsidian-assets-vA.B.C with only the packages whose
+versions changed, using the GitHub Actions bot identity and
 41898282+github-actions[bot]@users.noreply.github.com. The push is fast-forward only.
 If master moved, the push fails and nothing ships in that run.
 
-Tags and GitHub Releases use vX.Y.Z. The release-plz release step runs even when update
-makes no changes, so it can finish a bump left pending by an earlier failed run.
+bob-obsidian tags and GitHub Releases use vX.Y.Z. bob-obsidian-assets tags use
+bob-obsidian-assets-vA.B.C and do not create a GitHub Release, so an assets-only
+run does not advance the rehearsal daily guard. release-plz owns the assets
+changelog at crates/bob-obsidian-assets/CHANGELOG.md; do not hand-author either
+version or changelog. The release-plz release step runs even when update makes no
+changes, so it can finish a bump left pending by an earlier failed run. Dry-run
+previews report both package versions and each changelog that changed.
 
 ## Actions and tool versions
 
@@ -143,14 +153,18 @@ Workflow actions are pinned to commit SHAs in .github/workflows/ci.yml,
 
 ## Package contents and size
 
-The package is named bob-obsidian and contains Cargo metadata, README, license files,
-src, assets, and the scripts embedded or run by the binaries. Documentation, tests,
-tools, vault, sase, and .github are excluded. Cargo's compressed archive cap is
-10 MiB; just package-check warns above 8 MiB and fails above 9 MiB. The last rehearsal
-check measured 7.79 MiB.
+Both workspace members are checked independently. Cargo's compressed archive cap is
+10 MiB per crate; just package-check warns each archive above 8 MiB and fails above
+9 MiB.
 
-Required notices include the project MIT license, OFL and DejaVu font notices,
-Defuddle and Mermaid notices, and the Moment license.
+| Package | Contents | Required notices | Latest size |
+| --- | --- | --- | --- |
+| bob-obsidian 0.4.0 | Cargo metadata, README, CHANGELOG, src, runtime scripts, small native assets | Project MIT license; Moment license | 3,217,425 bytes (3.07 MiB); 4.93 MiB headroom before the warning |
+| bob-obsidian-assets 0.1.0 | Print fonts, web-clip fonts, Defuddle and Mermaid vendor bundles | Project MIT license; OFL, DejaVu, Defuddle, and Mermaid notices | 5,004,764 bytes (4.77 MiB); 3.23 MiB headroom before the warning |
+
+Documentation, tests, tools, vault, sase, and .github are excluded from every archive.
+The root archive must not contain the moved payload tree. Full package verification
+must succeed before the assets crate exists on crates.io.
 
 ## Binaries
 

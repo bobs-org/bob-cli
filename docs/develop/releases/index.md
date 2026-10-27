@@ -10,7 +10,7 @@ These pages explain how bob-cli previews, schedules, and recovers releases.
 ## Learn
 
 - [Tutorial: Preview the next release](preview-the-next-release.md) — inspect the
-  next version, changelog, package size, and guard verdict.
+  next package versions, changelogs, archive sizes, and guard verdict.
 
 ## Do
 

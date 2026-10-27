@@ -1,4 +1,4 @@
-# Release train for bob-cli (package `bob-obsidian`).
+# Release train for bob-cli (packages `bob-obsidian` and `bob-obsidian-assets`).
 #
 # One serialized workflow makes every release decision in order:
 # guard, CI on the exact SHA, `release-plz update`, fast-forward push,
@@ -142,13 +142,14 @@ jobs:
       - name: Bump version and changelog
         id: bump
         run: |
+          python3 tools/release/workspace_versions.py --write-json /tmp/versions-before.json
           release-plz update
           if [ -n "$(git status --porcelain)" ]; then
-            VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')"
+            SUBJECT="$(python3 tools/release/workspace_versions.py --commit-subject --before /tmp/versions-before.json)"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add -A
-            git commit -m "chore(release): v${VERSION}"
+            git commit -m "${SUBJECT}"
             # Fast-forward only, never force: when master moved the push is
             # rejected, the job fails and nothing ships; the retry slot
             # tests the new HEAD.
@@ -200,15 +201,25 @@ jobs:
       - name: Preview the next release
         run: |
           # Dry runs only: never pushes, tags or publishes.
+          python3 tools/release/workspace_versions.py --write-json /tmp/versions-before.json
           release-plz update
-          VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')"
+          for changelog in CHANGELOG.md crates/bob-obsidian-assets/CHANGELOG.md; do
+            if [ -e "$changelog" ]; then
+              git add -N -- "$changelog" || true
+            fi
+          done
           {
             echo "### Release preview (dry run)"
             echo ""
             echo "- planned sha: \`${{ needs.plan.outputs.sha }}\`"
             echo "- mode: \`${{ needs.plan.outputs.mode }}\`"
             echo "- guard: ${{ needs.plan.outputs.go == 'true' && 'GO' || 'SKIP' }}"
-            echo "- version after update: \`${VERSION}\`"
+            echo ""
+            if [ -n "$(git status --porcelain)" ]; then
+              python3 tools/release/workspace_versions.py --preview --before /tmp/versions-before.json
+            else
+              python3 tools/release/workspace_versions.py --no-release
+            fi
             echo ""
             echo "#### git diff --stat"
             echo ""
@@ -216,11 +227,17 @@ jobs:
             git diff --stat || true
             echo '```'
             echo ""
-            echo "#### CHANGELOG diff"
-            echo ""
-            echo '```diff'
-            git diff -- CHANGELOG.md | head -n 120 || true
-            echo '```'
+            for changelog in CHANGELOG.md crates/bob-obsidian-assets/CHANGELOG.md; do
+              if git diff --quiet -- "$changelog"; then
+                continue
+              fi
+              echo "#### ${changelog} diff"
+              echo ""
+              echo '```diff'
+              git diff -- "$changelog" | head -n 120 || true
+              echo '```'
+              echo ""
+            done
           } >> "$GITHUB_STEP_SUMMARY"
           # `release-plz release --dry-run` is not used: it needs write
           # credentials in git_only mode. `update` plus the diff above is
