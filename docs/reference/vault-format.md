@@ -168,9 +168,8 @@ These three readings share a task line and mean different things.
 | Freshness | Whether a human has confirmed the task as written, and whether that confirmation is still due | `[fresh::]`, `[refresh::]`, `[keeps::]`, `[unblocked::]`. Never a lane change. |
 | Today | Open tasks with a dedicated Task Link under today's **open** Pomodoros | Computed at read time. Not a tag, field, or path filter. |
 
-The morning walk visits PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER →
-REFERENCES → ROTTEN → POST (plus RECURRING when those tasks are due). Tiers
-are a review queue, not extra checkboxes.
+The morning walk visits PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING →
+TICKLER → ROTTEN → POST. Tiers are a review queue, not extra checkboxes.
 
 A dedicated Task Link is a direct child bullet of an open Pomodoro whose
 body, after stripping 🍅 markers, is exactly one `[[target#^id]]` or
