@@ -271,6 +271,57 @@ fn theme_mutations_and_relation_hide_use_their_catalogs() {
 }
 
 #[test]
+fn split_old_offers_themes_and_map_offers_files() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("2026/20260531.md"),
+        "## Pomodoros\n- [ ] () — FOCUS\n",
+    );
+    write_file(
+        &fixture.vault.join(".bob/themes/apollo.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"host\":\"apollo\",\"kind\":\"theme.hide\",\"key\":\"hidden theme\",\"name\":\"HIDDEN THEME\",\"via\":\"test\"}\n",
+    );
+    write_file(
+        &fixture.vault.join("2026/20260530.md"),
+        "## Pomodoros\n- [ ] () — HIDDEN THEME\n",
+    );
+
+    let output = complete(&fixture, &["bob", "themes", "split", ""]);
+    assert_success(&output);
+    let offered = values(&output);
+    assert!(
+        offered.contains(&"FOCUS".to_string()),
+        "split OLD should offer themes: {}",
+        stdout(&output)
+    );
+    assert!(
+        offered.contains(&"DEEP WORK".to_string()),
+        "split OLD should offer daily themes: {}",
+        stdout(&output)
+    );
+    assert!(
+        offered.contains(&"HIDDEN THEME".to_string()),
+        "split OLD should offer hidden themes: {}",
+        stdout(&output)
+    );
+
+    for words in [
+        vec!["bob", "themes", "split", "FOCUS", "--map", ""],
+        vec!["bob", "themes", "split", "FOCUS", "-m", ""],
+    ] {
+        let output = complete(&fixture, &words);
+        assert_success(&output);
+        assert_eq!(
+            directives(&output),
+            vec!["!files".to_string()],
+            "words: {words:?}: {}",
+            stdout(&output)
+        );
+        assert!(rows(&output).is_empty(), "words: {words:?}");
+    }
+}
+
+#[test]
 fn sections_follow_long_short_and_attached_route_forms() {
     let fixture = fixture();
     let expected = concat!(

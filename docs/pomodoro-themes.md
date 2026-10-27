@@ -232,7 +232,7 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
   offline host, muscle memory), `bob themes list` reports it in
   `renamed_reappeared`. It only reports; it never rewrites on its own. The
   latest rename *from* each key is the candidate, using the fold's
-  `(ts, host, line)` writer order. A later event in that order that
+  `(ts, host, path, line)` writer order. A later event in that order that
   re-adopts the key clears the report: a `theme.rename` whose `to` is the
   key, or a `theme.color` (pin or unpin) or `theme.unhide` naming the key.
   A later `theme.hide` does not re-adopt a name.

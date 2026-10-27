@@ -395,6 +395,49 @@ fn themes_split_refusals_are_json_on_nonzero_exit() {
 }
 
 #[test]
+fn themes_split_preserves_crlf_bytes_in_offline_write() {
+    let temp = TempDir::new("bob-cli-themes-split-crlf");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n",
+    );
+    let before: &[u8] =
+        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB\r\n\t- keep this child\r\n- [ ] () \xe2\x80\x94 KEEP\r\n";
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    fs::write(vault.join("2026/20261020.md"), before).unwrap();
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let value = template_json(&vault, &cache, "JOB");
+    let entries = value["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let date = entries[0]["date"].as_str().unwrap().to_string();
+    let pomodoro_ref = entries[0]["ref"].as_str().unwrap().to_string();
+    let map = write_map(&vault, &format!("{date}\t{pomodoro_ref}\tWRITE\n"));
+
+    let output = split_command(&vault, &cache)
+        .args(["themes", "split", "JOB", "-m", path_str(&map), "-o"])
+        .output()
+        .expect("crlf split");
+    assert_success(&output);
+
+    let after = fs::read(vault.join("2026/20261020.md")).unwrap();
+    let expected: &[u8] =
+        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE\r\n\t- keep this child\r\n- [ ] () \xe2\x80\x94 KEEP\r\n";
+    assert_eq!(after, expected);
+
+    let log = git_in(&vault, ["log", "--oneline"]);
+    assert_eq!(stdout(&log).lines().count(), 2);
+    assert!(!vault.join(".bob/themes/apollo.jsonl").exists());
+}
+
+#[test]
 fn themes_split_stdin_map_works() {
     let temp = TempDir::new("bob-cli-themes-split-stdin");
     let (vault, cache) = split_vault(temp.path());

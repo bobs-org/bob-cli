@@ -917,22 +917,59 @@ fn stale_entry(date: NaiveDate, pomodoro_ref: &PomodoroRef) -> SplitFailure {
     )
 }
 
+fn raw_lines_preserving(contents: &str) -> Vec<String> {
+    if contents.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let bytes = contents.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\n' {
+            lines.push(contents[start..=index].to_string());
+            start = index + 1;
+        }
+        index += 1;
+    }
+    if start < contents.len() {
+        lines.push(contents[start..].to_string());
+    } else if contents.ends_with('\n') && start == contents.len() {
+        // Trailing newline already closed the last line; nothing more.
+    }
+    lines
+}
+
+fn split_body_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
+}
+
 fn apply_changes(
     contents: &str,
     changes: &[PlannedChange],
 ) -> Result<String, SplitFailure> {
-    let mut owned: Vec<String> = contents.lines().map(str::to_string).collect();
+    let mut owned = raw_lines_preserving(contents);
+    // An empty file has no lines; any planned change there is stale.
+    // A file that ends with a newline has exactly lines().count()
+    // raw lines, so 1-based entry lines index directly.
     for change in changes {
         let index = change.line.saturating_sub(1);
-        let Some(line) = owned.get(index).cloned() else {
+        let Some(raw) = owned.get(index).cloned() else {
             return Err(SplitFailure::new(
                 "stale_entry",
                 format!("stale entry line {}", change.line),
                 Some("regenerate with -t"),
             ));
         };
+        let (body, ending) = split_body_ending(&raw);
         let Some(rewritten) =
-            replace_name_tail(&line, &change.before, &change.after)
+            replace_name_tail(body, &change.before, &change.after)
         else {
             return Err(SplitFailure::new(
                 "stale_entry",
@@ -940,13 +977,9 @@ fn apply_changes(
                 Some("regenerate with -t"),
             ));
         };
-        owned[index] = rewritten;
+        owned[index] = format!("{rewritten}{ending}");
     }
-    let mut joined = owned.join("\n");
-    if contents.ends_with('\n') {
-        joined.push('\n');
-    }
-    Ok(joined)
+    Ok(owned.concat())
 }
 
 fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
@@ -1042,6 +1075,56 @@ fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
         if contents != file.after_contents {
             return Err(format!("{} changed during the split", file.path));
         }
+        // Raw byte check: unchanged lines must keep exact bytes and
+        // changed lines must keep their original terminators. This
+        // catches a planned after-image that normalizes CRLF or
+        // touches unrelated bytes even when the reread equals it.
+        let before_raw = raw_lines_preserving(&file.before_contents);
+        let planned_raw = raw_lines_preserving(&file.after_contents);
+        let reread_raw = raw_lines_preserving(&contents);
+        if before_raw.len() != planned_raw.len()
+            || reread_raw.len() != planned_raw.len()
+        {
+            return Err(format!("{} line count changed", file.path));
+        }
+        let planned: BTreeSet<usize> =
+            file.changes.iter().map(|change| change.line).collect();
+        for (index, (before, planned_after, reread)) in before_raw
+            .iter()
+            .zip(planned_raw.iter())
+            .zip(reread_raw.iter())
+            .map(|((a, b), c)| (a, b, c))
+            .enumerate()
+        {
+            let line_number = index + 1;
+            if !planned.contains(&line_number) {
+                if before != planned_after {
+                    return Err(format!(
+                        "{} changed outside a Pomodoro name tail",
+                        file.path
+                    ));
+                }
+                if reread != planned_after {
+                    return Err(format!(
+                        "{} changed during the split",
+                        file.path
+                    ));
+                }
+                continue;
+            }
+            let (_, before_ending) = split_body_ending(before);
+            let (_, planned_ending) = split_body_ending(planned_after);
+            let (_, reread_ending) = split_body_ending(reread);
+            if before_ending != planned_ending {
+                return Err(format!(
+                    "{} changed outside a Pomodoro name tail",
+                    file.path
+                ));
+            }
+            if reread_ending != planned_ending {
+                return Err(format!("{} changed during the split", file.path));
+            }
+        }
         let before_lines: Vec<&str> = file.before_contents.lines().collect();
         let after_lines: Vec<&str> = contents.lines().collect();
         if before_lines.len() != after_lines.len() {
@@ -1064,8 +1147,6 @@ fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
                 ));
             }
         }
-        let planned: BTreeSet<usize> =
-            file.changes.iter().map(|change| change.line).collect();
         if actual_changed != planned {
             return Err(format!(
                 "{} changed a different set of lines",
@@ -1216,5 +1297,88 @@ mod split_tests {
         let plus =
             parse_map_rows("2026-10-13\t36:abcd1234\tA+B\n").unwrap_err();
         assert_eq!(plus.code, "invalid_name");
+    }
+
+    fn test_change(line: usize, before: &str, after: &str) -> PlannedChange {
+        PlannedChange {
+            line,
+            pomodoro_ref: PomodoroRef::parse("2:abcd1234").expect("test ref"),
+            before: before.to_string(),
+            after: after.to_string(),
+            to_name: after.to_string(),
+            time_range: None,
+        }
+    }
+
+    #[test]
+    fn apply_changes_preserves_crlf_terminators() {
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
+        let changes = vec![test_change(2, "JOB", "WRITE")];
+        let after = apply_changes(before, &changes).expect("apply");
+        assert_eq!(
+            after,
+            "## Pomodoros\r\n- [ ] () — WRITE\r\n\t- keep this child\r\n"
+        );
+    }
+
+    #[test]
+    fn apply_changes_preserves_mixed_endings_blank_and_trailing_space() {
+        let before = "## Pomodoros\n\n- [ ] () — JOB \r\n- [ ] () — KEEP\ntrailing  \nlast without newline";
+        let changes = vec![test_change(3, "JOB", "WRITE")];
+        let after = apply_changes(before, &changes).expect("apply");
+        assert_eq!(
+            after,
+            "## Pomodoros\n\n- [ ] () — WRITE \r\n- [ ] () — KEEP\ntrailing  \nlast without newline"
+        );
+        // No final newline stays absent; blank line and trailing
+        // spaces survive untouched.
+        assert!(!after.ends_with('\n'));
+        assert!(after.contains("\n\n"));
+        assert!(after.contains("trailing  \n"));
+    }
+
+    #[test]
+    fn apply_changes_preserves_no_final_newline_on_changed_line() {
+        let before = "## Pomodoros\n- [ ] () — JOB";
+        let changes = vec![test_change(2, "JOB", "WRITE")];
+        let after = apply_changes(before, &changes).expect("apply");
+        assert_eq!(after, "## Pomodoros\n- [ ] () — WRITE");
+    }
+
+    #[test]
+    fn verify_split_rejects_collateral_terminator_rewrite() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let relative = "2026/20261020.md".to_string();
+        let absolute = vault.join(&relative);
+        std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
+        // Malformed planned image normalizes every CRLF to LF.
+        let malformed = "## Pomodoros\n- [ ] () — WRITE\n\t- keep this child\n";
+        std::fs::write(&absolute, malformed).unwrap();
+        let prepared = PreparedSplit {
+            old_key: "job".to_string(),
+            old_name: "JOB".to_string(),
+            files: vec![FilePlan {
+                path: relative.clone(),
+                changes: vec![test_change(2, "JOB", "WRITE")],
+                before_contents: before.to_string(),
+                after_contents: malformed.to_string(),
+            }],
+            targets: Vec::new(),
+            kept: 0,
+            unmapped: 0,
+            remaining: 0,
+            warnings: Vec::new(),
+            sync_pre: "skipped",
+        };
+        let error = verify_split(vault, &prepared).expect_err("must reject");
+        assert!(
+            error.contains("outside a Pomodoro name tail")
+                || error.contains("different set"),
+            "{error}"
+        );
     }
 }

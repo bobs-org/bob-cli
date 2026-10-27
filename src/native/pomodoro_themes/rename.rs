@@ -1223,8 +1223,13 @@ pub(super) fn print_failure(
 
 fn writer_order(
     event: &journal::JournalEvent,
-) -> (DateTime<FixedOffset>, &str, u32) {
-    (event.ts, event.host.as_str(), event.line)
+) -> (DateTime<FixedOffset>, &str, &str, u32) {
+    (
+        event.ts,
+        event.host.as_str(),
+        event.path.as_str(),
+        event.line,
+    )
 }
 
 /// A later rename *to* this key, or a later color/unhide naming it,
@@ -1328,5 +1333,226 @@ mod rename_tests {
         let rewritten =
             replace_name_tail(line, "FIX + FIXES", "FIX").expect("rewrite");
         assert_eq!(rewritten, "- [ ] () — FIX");
+    }
+
+    fn test_event(
+        ts: &str,
+        host: &str,
+        path: &str,
+        line: u32,
+        payload: EventPayload,
+    ) -> journal::JournalEvent {
+        journal::JournalEvent {
+            ts: DateTime::parse_from_rfc3339(ts).expect("ts"),
+            host: host.to_string(),
+            path: path.to_string(),
+            line,
+            payload,
+        }
+    }
+
+    fn rename_event(
+        ts: &str,
+        host: &str,
+        path: &str,
+        line: u32,
+        from: &str,
+        to: &str,
+    ) -> journal::JournalEvent {
+        test_event(
+            ts,
+            host,
+            path,
+            line,
+            EventPayload::Rename {
+                from: from.to_string(),
+                to: to.to_string(),
+                from_name: from.to_string(),
+                to_name: to.to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn writer_order_uses_path_before_line() {
+        let ts = "2026-10-27T12:00:00Z";
+        // Same ts/host, different paths: later path wins even with
+        // a smaller line number.
+        let earlier = test_event(
+            ts,
+            "apollo",
+            "a.jsonl",
+            5,
+            EventPayload::Hide {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+            },
+        );
+        let later = test_event(
+            ts,
+            "apollo",
+            "b.jsonl",
+            3,
+            EventPayload::Hide {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+            },
+        );
+        assert!(writer_order(&later) > writer_order(&earlier));
+
+        // Equal line numbers across paths: path still orders.
+        let earlier_equal = test_event(
+            ts,
+            "apollo",
+            "a.jsonl",
+            3,
+            EventPayload::Hide {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+            },
+        );
+        let later_equal = test_event(
+            ts,
+            "apollo",
+            "b.jsonl",
+            3,
+            EventPayload::Hide {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+            },
+        );
+        assert!(writer_order(&later_equal) > writer_order(&earlier_equal));
+    }
+
+    #[test]
+    fn re_adopted_later_respects_journal_path_tiebreak() {
+        let ts = "2026-10-27T12:00:00Z";
+        let rename = rename_event(ts, "apollo", "a.jsonl", 5, "fixes", "fix");
+        // Same ts/host, later path but inverted (smaller) line number:
+        // path orders before line, so this still re-adopts.
+        let color_in_later_path = test_event(
+            ts,
+            "apollo",
+            "b.jsonl",
+            3,
+            EventPayload::Color {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+                hue: Some(Hue::Red),
+            },
+        );
+        assert!(re_adopted_later(
+            &[rename.clone(), color_in_later_path.clone()],
+            &rename,
+            "fixes"
+        ));
+
+        // Equal line numbers across paths also re-adopt.
+        let rename_equal =
+            rename_event(ts, "apollo", "a.jsonl", 3, "fixes", "fix");
+        let color_equal = test_event(
+            ts,
+            "apollo",
+            "b.jsonl",
+            3,
+            EventPayload::Color {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+                hue: None,
+            },
+        );
+        assert!(re_adopted_later(
+            &[rename_equal.clone(), color_equal],
+            &rename_equal,
+            "fixes"
+        ));
+    }
+
+    #[test]
+    fn re_adopted_later_covers_color_unpin_unhide_and_rename_to() {
+        let ts = "2026-10-27T12:00:00Z";
+        let rename =
+            rename_event(ts, "apollo", "apollo.jsonl", 1, "fixes", "fix");
+        let events = [
+            test_event(
+                ts,
+                "apollo",
+                "apollo.jsonl",
+                2,
+                EventPayload::Color {
+                    key: "fixes".to_string(),
+                    name: "FIXES".to_string(),
+                    hue: None,
+                },
+            ),
+            test_event(
+                ts,
+                "apollo",
+                "apollo.jsonl",
+                2,
+                EventPayload::Unhide {
+                    key: "fixes".to_string(),
+                    name: "FIXES".to_string(),
+                },
+            ),
+            test_event(
+                ts,
+                "apollo",
+                "apollo.jsonl",
+                2,
+                EventPayload::Rename {
+                    from: "fix".to_string(),
+                    to: "fixes".to_string(),
+                    from_name: "FIX".to_string(),
+                    to_name: "FIXES".to_string(),
+                },
+            ),
+        ];
+        for event in &events {
+            assert!(
+                re_adopted_later(
+                    &[rename.clone(), event.clone()],
+                    &rename,
+                    "fixes"
+                ),
+                "{event:?}"
+            );
+        }
+        let hide = test_event(
+            ts,
+            "apollo",
+            "apollo.jsonl",
+            2,
+            EventPayload::Hide {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+            },
+        );
+        assert!(!re_adopted_later(&[rename.clone(), hide], &rename, "fixes"));
+    }
+
+    #[test]
+    fn later_rename_away_restores_the_warning() {
+        let ts = "2026-10-27T12:00:00Z";
+        let first =
+            rename_event(ts, "apollo", "apollo.jsonl", 1, "fixes", "fix");
+        let readopt = test_event(
+            ts,
+            "apollo",
+            "apollo.jsonl",
+            2,
+            EventPayload::Color {
+                key: "fixes".to_string(),
+                name: "FIXES".to_string(),
+                hue: Some(Hue::Red),
+            },
+        );
+        let second =
+            rename_event(ts, "apollo", "apollo.jsonl", 3, "fixes", "other");
+        let events = vec![first.clone(), readopt, second.clone()];
+        // The first rename was re-adopted, but the latest rename has
+        // no later re-adoption, so the warning returns.
+        assert!(re_adopted_later(&events, &first, "fixes"));
+        assert!(!re_adopted_later(&events, &second, "fixes"));
     }
 }

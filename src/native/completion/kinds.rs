@@ -557,6 +557,16 @@ const TABLE: &[Entry] = &[
         kind: Kind::FreeText,
     },
     Entry {
+        path: &["themes", "split"],
+        arg: "old",
+        kind: Kind::ThemeName,
+    },
+    Entry {
+        path: &["themes", "split"],
+        arg: "map",
+        kind: Kind::Files(None),
+    },
+    Entry {
         path: &["relations", "hide"],
         arg: "label",
         kind: Kind::RelationLabel,

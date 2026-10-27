@@ -412,6 +412,19 @@ pub(crate) const ENTRIES: &[Row] = &[
             180,
         )
     },
+    Row {
+        slots: &[("OLD", "theme"), ("old", "theme")],
+        invalidates: &["themes"],
+        ..syncs(
+            "themes-split",
+            &["themes", "split"],
+            "Split a theme",
+            &["themes", "split", "rewrite"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
     // Tasks and projects
     reads(
         "projects-list",
