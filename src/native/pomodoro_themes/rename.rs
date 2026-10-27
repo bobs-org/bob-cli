@@ -723,8 +723,47 @@ fn scope_files(vault: &Path) -> Vec<(String, PathBuf)> {
     scoped
 }
 
+fn raw_lines_preserving(contents: &str) -> Vec<String> {
+    if contents.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let bytes = contents.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'\n' {
+            lines.push(contents[start..=index].to_string());
+            start = index + 1;
+        }
+        index += 1;
+    }
+    if start < contents.len() {
+        lines.push(contents[start..].to_string());
+    } else if contents.ends_with('\n') && start == contents.len() {
+        // Trailing newline already closed the last line; nothing more.
+    }
+    lines
+}
+
+fn rename_body_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else {
+        (line, "")
+    }
+}
+
 /// Rewrite the theme component in every Pomodoro ` — NAME` tail.
 /// Returns the new contents plus one tail change per rewritten entry.
+///
+/// Every byte outside the precise renamed spans is preserved: each raw
+/// line keeps its original terminator (`\n`, `\r\n`, or none) and all
+/// untouched lines keep their exact bytes. Only the NAME tail body is
+/// spliced; the file is concatenated from raw lines, never rebuilt
+/// from `lines()` with `join("\n")`.
 fn rewrite_file_contents(
     contents: &str,
     old_key: &str,
@@ -734,7 +773,6 @@ fn rewrite_file_contents(
     if scan.entries.is_empty() {
         return None;
     }
-    let lines: Vec<&str> = contents.lines().collect();
     // Map line number (1-based) to the entry name for lines we may rewrite.
     let mut by_line: BTreeMap<usize, &str> = BTreeMap::new();
     for entry in &scan.entries {
@@ -751,24 +789,27 @@ fn rewrite_file_contents(
     if by_line.is_empty() {
         return None;
     }
-    let mut owned: Vec<String> =
-        lines.iter().map(|line| line.to_string()).collect();
+    // Raw lines keep their terminators so splicing one tail never
+    // normalizes CRLF, mixed endings, trailing spaces, or a missing
+    // final newline elsewhere in the file.
+    let mut owned = raw_lines_preserving(contents);
     let mut tails = Vec::new();
     for (line_number, old_name) in by_line {
         let index = line_number.saturating_sub(1);
-        let Some(line) = owned.get(index).cloned() else {
+        let Some(raw) = owned.get(index).cloned() else {
             continue;
         };
+        let (body, ending) = rename_body_ending(&raw);
         let Some(new_name) =
             rewrite_name(old_name, old_key, new_display_trimmed)
         else {
             continue;
         };
-        let Some(rewritten) = replace_name_tail(&line, old_name, &new_name)
+        let Some(rewritten) = replace_name_tail(body, old_name, &new_name)
         else {
             continue;
         };
-        owned[index] = rewritten;
+        owned[index] = format!("{rewritten}{ending}");
         tails.push(TailChange {
             line: line_number,
             before: old_name.to_string(),
@@ -778,11 +819,7 @@ fn rewrite_file_contents(
     if tails.is_empty() {
         return None;
     }
-    let mut joined = owned.join("\n");
-    if contents.ends_with('\n') {
-        joined.push('\n');
-    }
-    Some((joined, tails))
+    Some((owned.concat(), tails))
 }
 
 /// Replace matching `+` components with the new display spelling,
@@ -1079,6 +1116,59 @@ fn verify_renamed(
         {
             if contents != planned.after_contents {
                 return Err(format!("{} changed during the rename", relative));
+            }
+            // Raw byte check: unchanged lines must keep exact bytes and
+            // changed lines must keep their original terminators. This
+            // catches a planned after-image that normalizes CRLF or
+            // touches unrelated bytes even when the reread equals it.
+            let before_raw = raw_lines_preserving(&planned.before_contents);
+            let planned_raw = raw_lines_preserving(&planned.after_contents);
+            let reread_raw = raw_lines_preserving(&contents);
+            if before_raw.len() != planned_raw.len()
+                || reread_raw.len() != planned_raw.len()
+            {
+                return Err(format!("{} line count changed", relative));
+            }
+            let planned_lines: BTreeSet<usize> =
+                planned.tails.iter().map(|tail| tail.line).collect();
+            for (index, (before, planned_after, reread)) in before_raw
+                .iter()
+                .zip(planned_raw.iter())
+                .zip(reread_raw.iter())
+                .map(|((a, b), c)| (a, b, c))
+                .enumerate()
+            {
+                let line_number = index + 1;
+                if !planned_lines.contains(&line_number) {
+                    if before != planned_after {
+                        return Err(format!(
+                            "{} changed outside a Pomodoro name tail",
+                            relative
+                        ));
+                    }
+                    if reread != planned_after {
+                        return Err(format!(
+                            "{} changed during the rename",
+                            relative
+                        ));
+                    }
+                    continue;
+                }
+                let (_, before_ending) = rename_body_ending(before);
+                let (_, planned_ending) = rename_body_ending(planned_after);
+                let (_, reread_ending) = rename_body_ending(reread);
+                if before_ending != planned_ending {
+                    return Err(format!(
+                        "{} changed outside a Pomodoro name tail",
+                        relative
+                    ));
+                }
+                if reread_ending != planned_ending {
+                    return Err(format!(
+                        "{} changed during the rename",
+                        relative
+                    ));
+                }
             }
             // Only name tails may differ: every changed line shares the
             // same ledger prefix before the tail.
@@ -1554,5 +1644,105 @@ mod rename_tests {
         // no later re-adoption, so the warning returns.
         assert!(re_adopted_later(&events, &first, "fixes"));
         assert!(!re_adopted_later(&events, &second, "fixes"));
+    }
+
+    #[test]
+    fn rewrite_preserves_crlf_terminators() {
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
+        let (after, tails) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        assert_eq!(
+            after,
+            "## Pomodoros\r\n- [ ] () — WRITE\r\n\t- keep this child\r\n"
+        );
+        assert_eq!(tails.len(), 1);
+        assert_eq!(tails[0].line, 2);
+    }
+
+    #[test]
+    fn rewrite_preserves_mixed_endings_blank_and_trailing_space() {
+        let before = "## Pomodoros\n\n- [ ] () — JOB \r\n- [ ] () — KEEP\ntrailing  \nlast without newline";
+        let (after, tails) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        assert_eq!(
+            after,
+            "## Pomodoros\n\n- [ ] () — WRITE \r\n- [ ] () — KEEP\ntrailing  \nlast without newline"
+        );
+        assert_eq!(tails.len(), 1);
+        // No final newline stays absent; blank line and trailing
+        // spaces survive untouched.
+        assert!(!after.ends_with('\n'));
+        assert!(after.contains("\n\n"));
+        assert!(after.contains("trailing  \n"));
+    }
+
+    #[test]
+    fn rewrite_preserves_no_final_newline_on_changed_line() {
+        let before = "## Pomodoros\n- [ ] () — JOB";
+        let (after, _) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        assert_eq!(after, "## Pomodoros\n- [ ] () — WRITE");
+    }
+
+    #[test]
+    fn rewrite_preserves_untouched_heading_and_child_rows() {
+        let before = "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n- [ ] () — JOB + KEEP\r\n- [ ] () — KEEP\r\n";
+        let (after, tails) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        assert_eq!(
+            after,
+            "## Pomodoros\r\n- [ ] () — WRITE\r\n\t- keep this child\r\n- [ ] () — WRITE + KEEP\r\n- [ ] () — KEEP\r\n"
+        );
+        // Two selected entries rewritten; heading, child, and the
+        // KEEP-only row keep their exact bytes.
+        assert_eq!(tails.len(), 2);
+        assert!(after.contains("## Pomodoros\r\n"));
+        assert!(after.contains("\t- keep this child\r\n"));
+        assert!(after.contains("- [ ] () — KEEP\r\n"));
+    }
+
+    #[test]
+    fn verify_rejects_collateral_terminator_rewrite() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let relative = "2026/20261020.md".to_string();
+        let absolute = vault.join(&relative);
+        std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
+        // Malformed planned image normalizes every CRLF to LF.
+        let malformed = "## Pomodoros\n- [ ] () — WRITE\n\t- keep this child\n";
+        std::fs::write(&absolute, malformed).unwrap();
+        let prepared = PreparedRename {
+            vault: vault.to_path_buf(),
+            old_key: "job".to_string(),
+            old_name: "JOB".to_string(),
+            new_key: "write".to_string(),
+            new_name: "WRITE".to_string(),
+            merge: false,
+            via: "test".to_string(),
+            files: vec![FilePlan {
+                path: relative.clone(),
+                entries: 1,
+                tails: vec![TailChange {
+                    line: 2,
+                    before: "JOB".to_string(),
+                    after: "WRITE".to_string(),
+                }],
+                before_contents: before.to_string(),
+                after_contents: malformed.to_string(),
+            }],
+            total_before_entries: 1,
+            warnings: Vec::new(),
+            sync_pre: "skipped",
+            hidden_before: false,
+        };
+        let error = verify_renamed(vault, &prepared).expect_err("must reject");
+        assert!(
+            error.contains("outside a Pomodoro name tail")
+                || error.contains("line count"),
+            "{error}"
+        );
     }
 }

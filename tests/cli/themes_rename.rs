@@ -473,3 +473,48 @@ fn hold_vault_lock(path: &std::path::Path) -> fs::File {
     fs2::FileExt::try_lock_exclusive(&file).expect("take lock");
     file
 }
+
+#[test]
+fn themes_rename_preserves_crlf_bytes_in_offline_write() {
+    let temp = TempDir::new("bob-cli-themes-rename-crlf");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n",
+    );
+    // Isolated Git fixture with CRLF terminators, one JOB placeholder,
+    // and an untouched indented child; autocrlf off keeps bytes exact.
+    let before: &[u8] =
+        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB\r\n\t- keep this child\r\n";
+    fs::create_dir_all(vault.join("2026")).unwrap();
+    fs::write(vault.join("2026/20261020.md"), before).unwrap();
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["config", "core.autocrlf", "false"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let (output, value) = rename_json(&vault, &cache, &["JOB", "WRITE", "-o"]);
+    assert_success(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["mode"], "write");
+
+    // Committed file keeps every untouched byte: heading and child
+    // stay CRLF, only the NAME tail changes.
+    let after = fs::read(vault.join("2026/20261020.md")).unwrap();
+    let expected: &[u8] =
+        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE\r\n\t- keep this child\r\n";
+    assert_eq!(after, expected);
+
+    // Transaction semantics hold: one commit plus the journal event.
+    let log = git_in(&vault, ["log", "--oneline"]);
+    assert_eq!(stdout(&log).lines().count(), 2);
+    let journal =
+        fs::read_to_string(vault.join(".bob/themes/apollo.jsonl")).unwrap();
+    assert!(journal.contains("\"kind\":\"theme.rename\""), "{journal}");
+    assert!(journal.contains("\"from\":\"job\""), "{journal}");
+    assert!(journal.contains("\"to\":\"write\""), "{journal}");
+}
