@@ -6,7 +6,7 @@ plus bundled ``fonts/``), and prints it with a separate headless browser
 supplied by the adapter's ``launcher``.
 
 ``render(article_json_path, out_pdf, launcher)`` returns
-``{"pdf_bytes", "images", "warnings"}``.
+``{"pdf_bytes", "images", "warnings", "source_html", "code_anchors"}``.
 
 ``render_collection(parts, collection, workdir, out_pdf, launcher)``
 typesets ordered article.json parts into one PDF: an opening page with
@@ -19,6 +19,7 @@ import atexit
 import datetime
 import hashlib
 import html
+import json
 import os
 import re
 import shutil
@@ -352,14 +353,14 @@ def css_escape_string(text: str) -> str:
     return cleaned.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def shift_headings(markup: str) -> str:
-    """Shift headings so the article's highest heading renders as ``h2``."""
+def shift_headings(markup: str, target_level: int = 2) -> str:
+    """Shift headings so the highest heading renders at ``target_level``."""
 
     levels = [int(match.group(2)) for match in _HEADING_RE.finditer(markup)
               if not match.group(1)]
     if not levels:
         return markup
-    shift = 2 - min(levels)
+    shift = target_level - min(levels)
     if shift <= 0:
         return markup
 
@@ -574,8 +575,8 @@ def prefix_part_assets(markup: str, assets_dir: str, prefix: str,
     return _IMG_TAG_RE.sub(_replace, markup)
 
 
-def assemble_masthead(article: dict, body: str | None = None) -> str:
-    """Build the ``<header class="masthead">`` for one article."""
+def _masthead_fields(article: dict, body: str | None = None) -> dict:
+    """Return the shared title, dek, byline, and provenance fields."""
     title = article.get("title") or "Untitled"
     author = article.get("author")
     published = format_long_date(article.get("published"))
@@ -595,25 +596,119 @@ def assemble_masthead(article: dict, body: str | None = None) -> str:
     if word_count:
         provenance.append(f"{word_count} words")
     dek = show_dek(description, body)
+    return {
+        "title": title,
+        "site": site,
+        "dek": dek,
+        "byline": byline,
+        "provenance": provenance,
+    }
+
+
+def assemble_masthead(article: dict, body: str | None = None) -> str:
+    """Build the ``<header class="masthead">`` for one article."""
+    fields = _masthead_fields(article, body)
 
     masthead = ['<header class="masthead">']
-    if site:
+    if fields["site"]:
         masthead.append(
-            f'<p class="masthead-site">{html.escape(site)}</p>')
+            f'<p class="masthead-site">{html.escape(fields["site"])}</p>')
     masthead.append(
-        f'<h1 class="masthead-title">{html.escape(title)}</h1>')
-    if dek:
+        f'<h1 class="masthead-title">{html.escape(fields["title"])}</h1>')
+    if fields["dek"]:
         masthead.append(
-            f'<p class="masthead-dek">{html.escape(dek)}</p>')
-    if byline:
+            f'<p class="masthead-dek">{html.escape(fields["dek"])}</p>')
+    if fields["byline"]:
         masthead.append(
-            f'<p class="masthead-byline">{html.escape(byline)}</p>')
+            f'<p class="masthead-byline">{html.escape(fields["byline"])}</p>')
     masthead.append(
         '<p class="masthead-provenance">'
-        + " · ".join(f"<span>{part}</span>" for part in provenance)
+        + " · ".join(f"<span>{part}</span>"
+                     for part in fields["provenance"])
         + "</p>")
     masthead.append("</header>")
     return "".join(masthead)
+
+
+_IMG_ATTR_RE = re.compile(
+    r'''\s([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''')
+
+
+def _img_attr(tag: str, name: str) -> str | None:
+    """Read one serialized image attribute, case-insensitively."""
+    for match in _IMG_ATTR_RE.finditer(tag):
+        if match.group(1).lower() == name:
+            return html.unescape(next(
+                value for value in match.groups()[1:] if value is not None))
+    return None
+
+
+def source_images(markup: str) -> str:
+    """Keep only original remote image URL, alt, and title in source HTML."""
+    def _replace(match: re.Match) -> str:
+        tag = match.group(0)
+        origin = _img_attr(tag, "data-bob-origin")
+        if not origin or not origin.startswith(("http://", "https://")):
+            return ""
+        attrs = [f'src="{html.escape(origin, quote=True)}"']
+        for name in ("alt", "title"):
+            value = _img_attr(tag, name)
+            if value is not None:
+                attrs.append(f'{name}="{html.escape(value, quote=True)}"')
+        return "<img " + " ".join(attrs) + ">"
+
+    return _IMG_TAG_RE.sub(_replace, markup)
+
+
+def _source_document(title: str, body: str) -> str:
+    """Wrap semantic source content without print CSS or Bob-only markup."""
+    return ("<!doctype html>\n<html lang=\"en\">\n<head>"
+            "<meta charset=\"utf-8\">"
+            f"<title>{html.escape(title)}</title></head>\n<body>\n"
+            f"{body}\n</body>\n</html>\n")
+
+
+def assemble_source(article: dict) -> str:
+    """Build the semantic HTML source view for a single printed article."""
+    source_url = article.get("source_url") or ""
+    body = resolve_relative_hrefs(article.get("html") or "", source_url)
+    body = source_images(shift_headings(body))
+    fields = _masthead_fields(article, body)
+    masthead = [f'<h1>{html.escape(fields["title"])}</h1>']
+    if fields["dek"]:
+        masthead.append(f'<p>{html.escape(fields["dek"])}</p>')
+    if fields["byline"]:
+        masthead.append(f'<p>{html.escape(fields["byline"])}</p>')
+    masthead.append('<p>' + " · ".join(fields["provenance"]) + "</p>")
+    return _source_document(fields["title"], "\n".join(masthead + [body]))
+
+
+def assemble_collection_source(parts: list[dict], collection: dict) -> str:
+    """Build collection source HTML with one semantic heading per part."""
+    title = collection.get("title") or "Untitled"
+    total_words = sum(int(part.get("word_count") or 0) for part in parts)
+    captured = format_long_date(collection.get("captured"))
+    collection_byline = collection.get("author")
+    opening = [f"<h1>{html.escape(title)}</h1>"]
+    if collection_byline:
+        opening.append(f"<p>{html.escape(str(collection_byline))}</p>")
+    meta = [f"{len(parts)} articles", f"{total_words:,} words"]
+    if captured:
+        meta.append(f"Captured {html.escape(captured)}")
+    opening.append("<p>" + " · ".join(meta) + "</p>")
+
+    sections: list[str] = []
+    for part in parts:
+        source_url = part.get("source_url") or ""
+        body = resolve_relative_hrefs(part.get("html") or "", source_url)
+        body = source_images(shift_headings(body, target_level=3))
+        fields = _masthead_fields(part, body)
+        sections.append(f'<h2>{html.escape(fields["title"])}</h2>')
+        if fields["byline"]:
+            sections.append(f'<p>{html.escape(fields["byline"])}</p>')
+        sections.append("<p>" + " · ".join(fields["provenance"]) + "</p>")
+        sections.append(body)
+    return _source_document(title, "\n".join(opening + sections))
 
 
 def assemble(article: dict) -> str:
@@ -799,6 +894,9 @@ def build_collection_html(part_json_paths: list[str], collection: dict,
     page_path = os.path.join(render_dir, "article.html")
     with open(page_path, "w", encoding="utf-8") as handle:
         handle.write(page)
+    source_path = os.path.join(render_dir, "source.html")
+    with open(source_path, "w", encoding="utf-8") as handle:
+        handle.write(assemble_collection_source(loaded, collection))
     return page, images, warnings
 
 
@@ -860,8 +958,8 @@ def _route_handler(render_dir: str):
     return _handle
 
 
-def print_pdf(render_dir: str, out_pdf: str, launcher) -> None:
-    """Print ``render/article.html`` offline to ``out_pdf``."""
+def print_pdf(render_dir: str, out_pdf: str, launcher) -> list[dict]:
+    """Print ``render/article.html`` and record code blocks at render time."""
     try:
         with open(READER_CSS_PATH, encoding="utf-8") as handle:
             handle.read()
@@ -888,6 +986,50 @@ def print_pdf(render_dir: str, out_pdf: str, launcher) -> None:
                     "Promise.race([document.fonts.ready.then(() => 1), "
                     "new Promise((r) => setTimeout(() => r(0), 10000))])"
                 )
+                code_blocks = page.evaluate("""() => {
+                    const blocks = Array.from(
+                        document.querySelectorAll('.article-body pre'));
+                    const recorded = blocks.map((pre, index) => {
+                        const k = index + 1;
+                        const text = pre.textContent || '';
+                        const start = document.createElement('span');
+                        start.id = `bob-code-${k}`;
+                        start.className = 'bob-code-anchor';
+                        start.setAttribute('aria-hidden', 'true');
+                        pre.insertBefore(start, pre.firstChild);
+                        const end = document.createElement('span');
+                        end.id = `bob-code-${k}-end`;
+                        end.className = 'bob-code-anchor';
+                        end.setAttribute('aria-hidden', 'true');
+                        pre.appendChild(end);
+                        return {k, text};
+                    });
+                    const style = document.createElement('style');
+                    style.textContent = '.bob-code-anchor {' +
+                        'display:inline-block;width:1px;height:1px;' +
+                        'overflow:hidden;font-size:0;line-height:0;}';
+                    document.head.appendChild(style);
+                    const nav = document.createElement('nav');
+                    nav.hidden = true;
+                    nav.setAttribute('aria-hidden', 'true');
+                    for (const block of recorded) {
+                        for (const suffix of ['', '-end']) {
+                            const link = document.createElement('a');
+                            link.href = `#bob-code-${block.k}${suffix}`;
+                            link.textContent = 'anchor';
+                            nav.appendChild(link);
+                        }
+                    }
+                    document.body.appendChild(nav);
+                    return recorded;
+                }""")
+                if not isinstance(code_blocks, list):
+                    raise RenderError("browser returned invalid code anchors")
+                anchors_path = os.path.abspath(os.path.join(
+                    render_dir, "code-anchors.json"))
+                with open(anchors_path, "w", encoding="utf-8") as handle:
+                    json.dump({"version": 1, "blocks": code_blocks}, handle,
+                              ensure_ascii=False)
                 page.pdf(path=out_pdf, format="Letter",
                          print_background=True, outline=True, tagged=True,
                          prefer_css_page_size=True,
@@ -905,6 +1047,7 @@ def print_pdf(render_dir: str, out_pdf: str, launcher) -> None:
             browser.close()
         except Exception:  # noqa: BLE001 - best effort
             pass
+    return code_blocks
 
 
 # ---------------------------------------------------------------------------
@@ -930,15 +1073,26 @@ def render(article_json_path: str, out_pdf: str, launcher) -> dict:
     page_path = os.path.join(render_dir, "article.html")
     with open(page_path, "w", encoding="utf-8") as handle:
         handle.write(assemble(article))
+    source_path = os.path.abspath(os.path.join(render_dir, "source.html"))
+    with open(source_path, "w", encoding="utf-8") as handle:
+        handle.write(assemble_source(article))
 
-    print_pdf(render_dir, out_pdf, launcher)
+    code_blocks = print_pdf(render_dir, out_pdf, launcher)
 
     pdf_bytes = os.path.getsize(out_pdf)
     if pdf_bytes > PDF_WARN_BYTES:
         warnings.append(
             f"printed PDF is {pdf_bytes / 1048576:.1f} MiB "
             "(vault sync refuses 95 MiB or more)")
-    return {"pdf_bytes": pdf_bytes, "images": images, "warnings": warnings}
+    return {
+        "pdf_bytes": pdf_bytes,
+        "images": images,
+        "warnings": warnings,
+        "source_html": source_path,
+        "code_anchors": os.path.abspath(os.path.join(
+            render_dir, "code-anchors.json")),
+        "code_blocks": code_blocks,
+    }
 
 
 def render_collection(parts: list[str], collection: dict, workdir: str,
@@ -947,11 +1101,19 @@ def render_collection(parts: list[str], collection: dict, workdir: str,
     _page, images, warnings = build_collection_html(
         parts, collection, workdir)
     render_dir = os.path.join(workdir, "render")
-    print_pdf(render_dir, out_pdf, launcher)
+    code_blocks = print_pdf(render_dir, out_pdf, launcher)
 
     pdf_bytes = os.path.getsize(out_pdf)
     if pdf_bytes > PDF_WARN_BYTES:
         warnings.append(
             f"printed PDF is {pdf_bytes / 1048576:.1f} MiB "
             "(vault sync refuses 95 MiB or more)")
-    return {"pdf_bytes": pdf_bytes, "images": images, "warnings": warnings}
+    return {
+        "pdf_bytes": pdf_bytes,
+        "images": images,
+        "warnings": warnings,
+        "source_html": os.path.abspath(os.path.join(render_dir, "source.html")),
+        "code_anchors": os.path.abspath(os.path.join(
+            render_dir, "code-anchors.json")),
+        "code_blocks": code_blocks,
+    }

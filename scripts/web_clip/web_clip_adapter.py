@@ -427,7 +427,9 @@ def sanitize_html(dirty: str) -> str:
     tags = _TEXT_TAGS | _MATHML_TAGS | _SVG_TAGS
     attributes: dict[str, set[str]] = {
         "a": {"href", "title"},
-        "img": {"src", "alt", "width", "height"},
+        "img": {"src", "alt", "title", "width", "height"},
+        "pre": {"class"},
+        "code": {"class"},
         "th": {"colspan", "rowspan", "scope"},
         "td": {"colspan", "rowspan"},
         "time": {"datetime"},
@@ -1202,7 +1204,13 @@ def _localize_images(api, markup: str, assets_dir: str, page_url: str,
             handle.write(data)
         total_bytes += len(data)
         manifest["kept"] += 1
-        return _SRC_ATTR_RE.sub(f'src="assets/{name}"', tag, count=1)
+        localized = _SRC_ATTR_RE.sub(f'src="assets/{name}"', tag, count=1)
+        if raw_src.startswith(("http://", "https://")):
+            origin = html_module.escape(raw_src, quote=True)
+            localized = re.sub(
+                r"<img\b", f'<img data-bob-origin="{origin}"',
+                localized, count=1, flags=re.IGNORECASE)
+        return localized
 
     markup = _IMG_TAG_RE.sub(_replace_img, markup)
 
@@ -1668,6 +1676,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             warnings.extend(fidelity_warnings)
 
             article_json_path: str | None = None
+            rendered_output: dict | None = None
             if not dry_run:
                 article = {
                     "title": title,
@@ -1700,6 +1709,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                         raise AdapterFail(
                             "render", str(exc),
                             "retry with --html from a browser-saved page") from exc
+                    rendered_output = rendered
                     pdf_bytes = rendered["pdf_bytes"]
                     images = rendered.get("images") or images
                     warnings.extend(rendered.get("warnings") or [])
@@ -1756,6 +1766,10 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                           "snapshot_html": snapshot["html"],
                           "sanitized_html": sanitized,
                           "facts": facts})
+            if rendered_output is not None:
+                response["source_html"] = rendered_output["source_html"]
+                response["code_anchors"] = rendered_output["code_anchors"]
+                debug["dom_code_blocks"] = rendered_output["code_blocks"]
             return response, debug
         finally:
             for old in contexts:
@@ -1946,6 +1960,8 @@ def op_compose(request: dict) -> dict:
         "ok": True,
         "op": "compose",
         "pdf_bytes": pdf_bytes,
+        "source_html": rendered["source_html"],
+        "code_anchors": rendered["code_anchors"],
         "images": rendered.get("images") or {},
         "warnings": rendered.get("warnings") or [],
     }
@@ -2231,6 +2247,34 @@ def _inspect_collection_pdf(
     if "no qpdf or mutool" in notes[0]:
         return True, True, True, "; ".join(notes)
     return outline_ok, blank_ok, counters_ok, "; ".join(notes)
+
+
+def _pdf_has_named_destinations(pdf_path: str, names: list[str]) -> bool:
+    """Check Chrome's catalog-level /Dests names in the raw PDF bytes."""
+    try:
+        with open(pdf_path, "rb") as handle:
+            data = handle.read()
+    except OSError:
+        return False
+    direct = re.search(rb"/Dests\s*<<(.*?)>>", data, flags=re.DOTALL)
+    if direct:
+        destinations = direct.group(1)
+    else:
+        reference = re.search(rb"/Dests\s+(\d+)\s+(\d+)\s+R", data)
+        if reference is None:
+            return False
+        object_marker = (reference.group(1) + b" " + reference.group(2)
+                         + b" obj")
+        object_start = data.find(object_marker)
+        if object_start < 0:
+            return False
+        object_end = data.find(b"endobj", object_start)
+        if object_end < 0:
+            return False
+        destinations = data[object_start:object_end]
+    return all(re.search(rb"/" + re.escape(name.encode("ascii"))
+                         + rb"(?:\s|/|\[)", destinations) is not None
+               for name in names)
 
 
 def _compose_error_kind_checks(
@@ -2876,6 +2920,74 @@ def self_test() -> int:
     check("normalize cleans svg",
           "<script" not in cleaned_svg and "onload" not in cleaned_svg)
 
+    class _ImageResponse:
+        status = 200
+        headers = {"content-type": "image/png"}
+
+        @staticmethod
+        def body() -> bytes:
+            return b"test image bytes"
+
+    class _ImageApi:
+        @staticmethod
+        def get(_url: str, **_kwargs):
+            return _ImageResponse()
+
+    localized_dir = os.path.join(offline_dir, "localized-assets")
+    os.makedirs(localized_dir, exist_ok=True)
+    localized_markup, _localized_images = _localize_images(
+        _ImageApi(),
+        '<img src="https://example.com/pic.png?a=1&amp;b=2" '
+        'alt="remote" title="original title">'
+        '<img src="data:image/png;base64,bm90LWltYWdl" alt="inline">'
+        '<svg data-bob-svg="1"><circle r="3"/></svg>',
+        localized_dir, "https://example.com/article", time.monotonic() + 30,
+        [])
+    check("image localization keeps remote origin",
+          'data-bob-origin="https://example.com/pic.png?a=1&amp;b=2"'
+          in localized_markup)
+    check("localized data and inline SVG images have no remote origin",
+          localized_markup.count("data-bob-origin=") == 1)
+    source_image_markup = _render.source_images(localized_markup)
+    check("source images restore only original remote attributes",
+          source_image_markup ==
+          '<img src="https://example.com/pic.png?a=1&amp;b=2" '
+          'alt="remote" title="original title">'
+          and "assets/" not in source_image_markup
+          and "data-bob-origin" not in source_image_markup)
+
+    source_view = _render.assemble_source({
+        "title": "Source title",
+        "author": "Ada Example",
+        "published": "2026-04-27",
+        "captured": "2026-10-01",
+        "description": "A source dek.",
+        "source_url": "https://example.com/path/article",
+        "word_count": 22,
+        "html": ('<h1>Duplicate title</h1><p>Body.</p>'
+                 '<pre><code class="language-python">print(1)</code></pre>'
+                 '<pre><code class="language-mermaid">graph TD</code></pre>'
+                 '<p><a href="../next">Next</a></p>'
+                 '<img src="assets/a.jpg" data-bob-origin="https://example.com/a.png" '
+                 'alt="figure" title="caption" width="200">'
+                 '<img src="assets/b.jpg" alt="local">'),
+    })
+    check("source view has semantic masthead and body headings",
+          "<h1>Source title</h1>" in source_view
+          and "<h2>Duplicate title</h2>" in source_view
+          and 'class="language-python"' in source_view
+          and 'class="language-mermaid"' in source_view
+          and "<p>A source dek.</p>" in source_view
+          and "Ada Example · April 27, 2026" in source_view
+          and "https://example.com/path/article" in source_view)
+    check("source view resolves links and restores clean image origin",
+          'href="https://example.com/next"' in source_view
+          and '<img src="https://example.com/a.png" alt="figure" '
+          'title="caption">' in source_view
+          and "assets/" not in source_view
+          and "data-bob-origin" not in source_view
+          and "width=\"200\"" not in source_view)
+
     check("reading minutes ceil",
           _render.reading_minutes(230) == 1
           and _render.reading_minutes(231) == 2
@@ -2953,12 +3065,21 @@ def self_test() -> int:
         if _CollImage is not None:
             _CollImage.new("RGB", (80, 80), (20 * index, 80, 160)).save(
                 os.path.join(assets, "img-001.png"))
+        code_html = (
+            f'<pre><code class="language-rust">fn part_{index}() {{}}\n'
+            f'</code></pre>' if index == 1 else
+            '<pre><code class="language-mermaid">graph TD\n'
+            '  A --> B\n</code></pre>'
+        )
         html_body = (
             f'<h2 id="introduction">Introduction {index}</h2>'
             f'<p>See the <a href="#fn1">note</a> and the '
             f'<a href="#introduction">start</a> of part {index}. '
             f'<a href="/other-{index}">relative</a>.</p>'
-            f'<p><img src="assets/img-001.png" alt="fig-{index}"></p>'
+            f'{code_html}'
+            f'<p><img src="assets/img-001.png" '
+            f'data-bob-origin="https://example.com/img-{index}.png" '
+            f'alt="fig-{index}" title="figure {index}"></p>'
             f'<p id="fn1">Footnote {index}.</p>'
         )
         article = {
@@ -3012,6 +3133,25 @@ def self_test() -> int:
     check("collection resolves relative links per part",
           'href="https://example.com/other-1"' in collection_html
           and 'href="https://example.com/other-2"' in collection_html)
+    with open(os.path.join(compose_dir, "render", "source.html"),
+              encoding="utf-8") as handle:
+        collection_source = handle.read()
+    check("collection source uses title and omits contents list",
+          collection_source.count("<h1>Tokio Internals</h1>") == 1
+          and "<h2>Tokio Internals, Part 1: The Piece</h2>"
+          in collection_source
+          and "<ol" not in collection_source
+          and "Contents" not in collection_source)
+    check("collection source shifts body headings and restores image origins",
+          '<h3 id="p1-introduction">Introduction 1</h3>'
+          in collection_source
+          and '<img src="https://example.com/img-1.png" '
+          'alt="fig-1" title="figure 1">' in collection_source
+          and "assets/" not in collection_source
+          and "data-bob-origin" not in collection_source)
+    check("collection source retains code languages and Mermaid blocks",
+          'class="language-rust"' in collection_source
+          and 'class="language-mermaid"' in collection_source)
     check("collection css has part page break",
           "break-before: page" in css)
     invalid_request_ok, browser_kind_ok = _compose_error_kind_checks(
@@ -3077,12 +3217,62 @@ def self_test() -> int:
               response.get("word_count", 0) >= 300)
         check("article fidelity",
               response.get("fidelity", {}).get("status") in ("ok", "warn"))
+        source_html_path = response.get("source_html")
+        code_anchors_path = response.get("code_anchors")
+        check("capture reports absolute source and anchor paths",
+              isinstance(source_html_path, str)
+              and os.path.isabs(source_html_path)
+              and os.path.isfile(source_html_path)
+              and isinstance(code_anchors_path, str)
+              and os.path.isabs(code_anchors_path)
+              and os.path.isfile(code_anchors_path))
+        code_anchor_payload: dict = {}
+        try:
+            with open(code_anchors_path, encoding="utf-8") as handle:
+                code_anchor_payload = json.load(handle)
+            if not isinstance(code_anchor_payload, dict):
+                code_anchor_payload = {}
+            anchor_blocks = code_anchor_payload.get("blocks", [])
+        except (OSError, ValueError, TypeError):
+            code_anchor_payload = {}
+            anchor_blocks = []
+        check("render-time code anchors equal printed DOM text",
+              code_anchor_payload.get("version") == 1
+              and anchor_blocks == debug.get("dom_code_blocks")
+              and [block.get("text") for block in anchor_blocks] == [
+                  'symphony run --fleet small --task "migrate the parser"\n'
+                  '    symphony status --watch  \n'
+                  'symphony land --task parser-migration',
+                  "graph TD\n  A --> B",
+              ])
+        try:
+            with open(source_html_path, encoding="utf-8") as handle:
+                rendered_source = handle.read()
+        except (OSError, TypeError):
+            rendered_source = ""
+        check("source view keeps code language classes",
+              'class="language-shell"' in rendered_source)
+        check("source view drops data URI images",
+              "inline image" not in rendered_source
+              and "data:image/" not in rendered_source)
+        check("printed PDF has named code destinations",
+              _pdf_has_named_destinations(
+                  os.path.join(workdir, "render.pdf"),
+                  ["bob-code-1", "bob-code-1-end", "bob-code-2",
+                   "bob-code-2-end"]))
         snapshot_html = debug.get("snapshot_html", "")
         check("picture resolves to the light variant",
               "Desktop-Light" in snapshot_html
               and "Desktop-Dark" not in snapshot_html)
         sanitized_out = debug.get("sanitized_html", "")
         check("soft hyphens stripped", "\u00ad" not in sanitized_out)
+        check("sanitizer keeps language and Mermaid classes",
+              'class="language-shell"' in sanitized_out
+              and 'class="language-mermaid"' in sanitize_html(
+                  '<pre><code class="language-mermaid">graph TD</code>'
+                  '</pre>'))
+        check("sanitizer removes data URI image sources",
+              "data:image/" not in sanitized_out)
         check("word joiners stripped", "\u2060" not in sanitized_out)
         check("zero-width spaces stripped", "\u200b" not in sanitized_out)
         check("extraction dropped nav junk",
@@ -3189,6 +3379,31 @@ def self_test() -> int:
             check("compose pdf written",
                   (compose_resp.get("pdf_bytes") or 0) > 1000
                   and os.path.isfile(compose_pdf))
+            compose_source_path = compose_resp.get("source_html")
+            compose_anchors_path = compose_resp.get("code_anchors")
+            check("compose reports absolute source and anchor paths",
+                  isinstance(compose_source_path, str)
+                  and os.path.isabs(compose_source_path)
+                  and os.path.isfile(compose_source_path)
+                  and isinstance(compose_anchors_path, str)
+                  and os.path.isabs(compose_anchors_path)
+                  and os.path.isfile(compose_anchors_path))
+            try:
+                with open(compose_anchors_path, encoding="utf-8") as handle:
+                    compose_anchor_payload = json.load(handle)
+                compose_blocks = compose_anchor_payload.get("blocks", [])
+            except (OSError, ValueError, TypeError):
+                compose_blocks = []
+            check("compose anchors cover each printed part code block",
+                  len(compose_blocks) == 2
+                  and [block.get("k") for block in compose_blocks] == [1, 2]
+                  and [block.get("text") for block in compose_blocks] == [
+                      "fn part_1() {}\n", "graph TD\n  A --> B\n"])
+            check("compose PDF has named code destinations",
+                  _pdf_has_named_destinations(
+                      compose_pdf,
+                      ["bob-code-1", "bob-code-1-end", "bob-code-2",
+                       "bob-code-2-end"]))
             outline_ok, blank_ok, counters_ok, compose_note = (
                 _inspect_collection_pdf(compose_pdf, "Tokio Internals"))
             check(f"compose outline two top-level ({compose_note})",

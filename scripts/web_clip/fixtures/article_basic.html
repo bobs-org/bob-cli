@@ -29,10 +29,14 @@ into the main line of development history.</p>
 with clear acceptance criteria so that each agent knows exactly when its own
 piece of the larger puzzle is finished and ready for review by a human being
 who understands the broader goals of the project.</p>
-<pre><code>symphony run --fleet small --task "migrate the parser"
-symphony status --watch
+<pre><code class="language-shell">symphony run --fleet small --task "migrate the parser"
+	symphony status --watch&#32;&#32;
 symphony land --task parser-migration
 </code></pre>
+<pre><code class="language-mermaid">graph TD
+  A --> B
+</code></pre>
+<p><img src="data:image/png;base64,iVBORw0KGgo=" alt="inline image"></p>
 <p>State is exchanged through plain files on disk rather than through a hidden
 database, which means that a developer can inspect everything with ordinary
 tools and can reconstruct the reasoning behind every automated decision weeks

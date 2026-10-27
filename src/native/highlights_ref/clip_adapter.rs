@@ -512,6 +512,10 @@ pub(super) struct CaptureSuccess {
     #[serde(default)]
     pub(super) pdf_bytes: Option<u64>,
     #[serde(default)]
+    pub(super) source_html: Option<String>,
+    #[serde(default)]
+    pub(super) code_anchors: Option<String>,
+    #[serde(default)]
     pub(super) article_json: Option<String>,
     #[serde(default)]
     pub(super) warnings: Vec<String>,
@@ -593,6 +597,10 @@ pub(super) struct ComposeSuccess {
     pub(super) op: Option<String>,
     #[serde(default)]
     pub(super) pdf_bytes: Option<u64>,
+    #[serde(default)]
+    pub(super) source_html: Option<String>,
+    #[serde(default)]
+    pub(super) code_anchors: Option<String>,
     #[serde(default)]
     pub(super) images: ImageReport,
     #[serde(default)]
@@ -927,12 +935,30 @@ mod tests {
     #[test]
     fn compose_success_deserializes() {
         let value: ComposeSuccess = serde_json::from_str(
-            r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":1234,"images":{"total":2,"kept":2,"skipped_small":0,"failed":0},"warnings":[]}"#,
+            r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":1234,"source_html":"/tmp/render/source.html","code_anchors":"/tmp/render/code-anchors.json","images":{"total":2,"kept":2,"skipped_small":0,"failed":0},"warnings":[]}"#,
         )
         .expect("deserialize compose success");
         assert_eq!(value.pdf_bytes, Some(1234));
+        assert_eq!(
+            value.source_html.as_deref(),
+            Some("/tmp/render/source.html")
+        );
+        assert_eq!(
+            value.code_anchors.as_deref(),
+            Some("/tmp/render/code-anchors.json")
+        );
         assert_eq!(value.images.kept, 2);
         assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn compose_success_defaults_new_render_paths() {
+        let value: ComposeSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":1234}"#,
+        )
+        .expect("deserialize older compose response");
+        assert!(value.source_html.is_none());
+        assert!(value.code_anchors.is_none());
     }
 
     #[test]
@@ -999,11 +1025,29 @@ mod tests {
     #[test]
     fn capture_success_reads_article_json() {
         let value: CaptureSuccess = serde_json::from_str(
-            r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","pdf_bytes":null,"article_json":"/tmp/w/article.json","warnings":[],"images":{},"fidelity":{},"capture":{},"metadata_sources":{},"word_count":0}"#,
+            r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","pdf_bytes":null,"article_json":"/tmp/w/article.json","source_html":"/tmp/w/render/source.html","code_anchors":"/tmp/w/render/code-anchors.json","warnings":[],"images":{},"fidelity":{},"capture":{},"metadata_sources":{},"word_count":0}"#,
         )
         .expect("deserialize capture success");
         assert_eq!(value.article_json.as_deref(), Some("/tmp/w/article.json"));
+        assert_eq!(
+            value.source_html.as_deref(),
+            Some("/tmp/w/render/source.html")
+        );
+        assert_eq!(
+            value.code_anchors.as_deref(),
+            Some("/tmp/w/render/code-anchors.json")
+        );
         assert_eq!(value.pdf_bytes, None);
+    }
+
+    #[test]
+    fn capture_success_defaults_new_render_paths() {
+        let value: CaptureSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"capture","kind":"article"}"#,
+        )
+        .expect("deserialize older capture response");
+        assert!(value.source_html.is_none());
+        assert!(value.code_anchors.is_none());
     }
 
     #[test]
