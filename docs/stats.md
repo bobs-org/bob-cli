@@ -1149,9 +1149,10 @@ listing every segment, and the group `aria-label` sentence uses the same
 phrase.
 
 Each legend item paints a `legendLabel`: for `root_parent`, the bare catalog
-`label` (so the synthetic daily root paints `<daily>` and `gtd · area tasks`
-reads `gtd`); in other dimensions it uses a non-empty `short_label` when Bob
-supplies one (review buckets carry their theme name), else the row label. When
+`label` (so the synthetic daily root paints `GTD`; on a day when the `gtd` area
+also has time, the collision rule paints `GTD` and `gtd · area tasks`); in other
+dimensions it uses a non-empty `short_label` when Bob supplies one (review
+buckets carry their theme name), else the row label. When
 two or more of the day's segments share a `legendLabel` ignoring case, each
 of them paints its full `label` instead. Tooltips and accessible sentences
 keep full labels: each legend item's `title` reads `<label> <display>`, and

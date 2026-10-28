@@ -1025,16 +1025,16 @@
         {
           "state": "attributed",
           "kind": "work",
-          "label": "<daily> \u00b7 bob",
-          "chip": "<daily> \u00b7 bob",
+          "label": "GTD \u00b7 bob",
+          "chip": "GTD \u00b7 bob",
           "hue": null,
           "parts": [
             {
               "key": "@daily",
-              "label": "<daily>",
+              "label": "GTD",
               "kind": "bucket",
               "area": "@daily",
-              "area_label": "<daily>",
+              "area_label": "GTD",
               "hue": null,
               "tasks": 1,
               "share": 50,

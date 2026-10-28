@@ -11,7 +11,7 @@ use crate::native::vault_links::{
 
 const MAX_PROJECT_DEPTH: usize = 16;
 pub(crate) const DAILY_KEY: &str = "@daily";
-pub(crate) const DAILY_LABEL: &str = "<daily>";
+pub(crate) const DAILY_LABEL: &str = "GTD";
 
 pub(crate) trait HomeSource {
     fn resolve(&self, current: &Path, target: &str) -> LinkResolution;

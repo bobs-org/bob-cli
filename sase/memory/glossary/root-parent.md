@@ -6,7 +6,7 @@ The [[area-note]] a task lives in, else the nearest project marked
 `root: true` on the walk up to that area, else the [[top-level-project]]
 above its project note. Archive and reference wrappers are walked through, and
 an area-less walk falls back to the outermost project. Review buckets and tasks
-defined in canonical daily notes group under the `<daily>` bucket; `unlinked`
+defined in canonical daily notes group under the `GTD` bucket (key `@daily`); `unlinked`
 and `unfiled` stay buckets. Derived at read time
 from today's note tree and never written; `rollup:` no longer exists. The
 [[day-strip]]'s root-parent bar and the default [[stats-dash]] view group by it; Stats

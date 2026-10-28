@@ -964,7 +964,7 @@ mod tests {
         assert_eq!(review_root.apportioned, None);
         // Root labels are bare catalog labels.
         assert_eq!(sase_root.label.as_deref(), Some("sase"));
-        assert_eq!(review_root.label.as_deref(), Some("<daily>"));
+        assert_eq!(review_root.label.as_deref(), Some("GTD"));
 
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
@@ -1375,7 +1375,7 @@ mod tests {
             .homes
             .get("@daily")
             .expect("daily root catalog entry");
-        assert_eq!(daily.label, "<daily>");
+        assert_eq!(daily.label, "GTD");
         assert_eq!(daily.kind, HomeKind::Bucket);
         assert_eq!(daily.hue, None);
         assert_eq!(daily.short_label, None);
@@ -1391,7 +1391,7 @@ mod tests {
         let value = serde_json::to_value(&report).expect("report serializes");
         let catalog = value["homes"].as_object().unwrap();
         assert_eq!(catalog["@review:PLAN"]["short_label"], "PLAN");
-        assert_eq!(catalog["@daily"]["label"], "<daily>");
+        assert_eq!(catalog["@daily"]["label"], "GTD");
         assert_eq!(catalog["@daily"]["kind"], "bucket");
         assert!(catalog["@daily"]["hue"].is_null());
         assert!(catalog["@daily"].get("short_label").is_none());

@@ -64,7 +64,7 @@ hint. A link's close suffix still uses the separator `=`, as in
 | Surface | Current behavior | Consumer impact |
 | --- | --- | --- |
 | `plan.exempt` default | `[PLAN]` | Explicit configured lists still apply. GTD is an ordinary theme unless included in that list. |
-| Pomodoro root parent | Review buckets and tasks defined in canonical daily notes group under `@daily`, labeled `<daily>` | Keep that key distinct from `@unfiled`; project and area attribution still use the shared home resolver. |
+| Pomodoro root parent | Review buckets and tasks defined in canonical daily notes group under `@daily`, labeled `GTD` | Keep that key distinct from `@unfiled`; project and area attribution still use the shared home resolver. |
 | Project reporting | `root: true` selects a project's own root parent; `rollup:` is ignored | Update frontmatter used for Stats grouping. |
 | Task dependencies | Only the managed Depends-On line supplies dependency links | Ordinary child links remain content and are not adopted automatically. |
 | `bob task reconcile -f json` | `legacy_dependency_children` is absent | Consumers must not require the zero-valued compatibility field shipped in v0.4.0. |

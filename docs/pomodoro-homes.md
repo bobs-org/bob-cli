@@ -90,7 +90,7 @@ review tiers, capture routing, plan budget, or `bob projects` output.
 Roots are derived from today's note tree at read time, never written. A
 leftover `rollup:` frontmatter key is silently ignored: project rollup is
 retired and never regroups homes. Labels use the bare root stem (`sase`,
-`gtd`); buckets keep `PLAN review`, `<daily>`, `unlinked`, and `unfiled`.
+`gtd`); buckets keep `PLAN review`, `GTD` (key `@daily`), `unlinked`, and `unfiled`.
 Hues follow R8:
 bob reports each root's area hue (R8); bars give every root they show a distinct
 colour (see stats.md). Stats splits each session per task first, then sums shares by root,
@@ -173,7 +173,7 @@ unfiled-link health or warning.
 ## R7 — Labels, chips, and dots
 
 Use a lowercase note stem for project and area labels. Use `<NAME> review`,
-`<daily>`, `unlinked`, and `unfiled` for reserved buckets. Review buckets also carry
+`GTD`, `unlinked`, and `unfiled` for reserved buckets. Review buckets also carry
 `short_label` `<NAME>` for compact views. Sort labels by share, descending;
 show up to two joined by ` · `, then append ` +N` for additional homes. A
 session with no homes has an empty label.
