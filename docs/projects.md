@@ -1162,9 +1162,13 @@ the reason `🍂 decayed past <level> after <n> roll(s)` — just
 Side effects apply immediately, for feedback. Every live link to a cancelled
 task with a block ID is removed from today's open Pomodoros with the same
 dedicated-bullet/token semantics as the deferral prune above (a dedicated
-link bullet goes with its subtree; otherwise only the link token goes), and
-[`bob task reconcile`](task-status-hooks.md) stays authoritative for the
-same rule. After the writes land, the picker reuses the Task Status Cycler
+link bullet goes with its subtree; otherwise only the link token goes).
+Struck links, closed Pomodoros, and other days' notes stay.
+[`bob task reconcile`](task-status-hooks.md#canceled-task-references) does
+not re-derive that same cleanup: its canceled-reference pass also removes
+struck links and mixed-prose items that this immediate prune keeps.
+Reconcile stays authoritative for later healing. After the writes land, the
+picker reuses the Task Status Cycler
 `api.recoverBlockedDependents` recovery: a Blocked dependent with no
 remaining open dependency and no future `scheduled` date becomes Ready. The
 notice card summarizes the result with `removed N Pomodoro links`,
