@@ -56,6 +56,7 @@ pub(crate) fn bob_command() -> Command {
     // Online writers must explicitly select the same fixture in BOB_DIR.
     command.env("BOB_DIR", isolation.join("unused-vault"));
     command.env("BOB_VAULT_SYNC_LOCK_FILE", isolation.join("bob_sync.lock"));
+    command.env("BOB_VAULT_SYNC_NOTIFY", "0");
     command.env("XDG_STATE_HOME", isolation.join("state"));
     command.env("XDG_CACHE_HOME", isolation.join("cache"));
     command
@@ -326,6 +327,7 @@ pub(crate) fn vault_sync_command(vault: &Path, temp: &TempDir) -> Command {
         .env("BOB_DIR", vault)
         .env("BOB_VAULT_SYNC_LOCK_FILE", vault_sync_lock_file(temp))
         .env("BOB_VAULT_SYNC_STATE_FILE", vault_sync_state_file(temp))
+        .env("BOB_VAULT_SYNC_NOTIFY", "0")
         .env("HOME", home)
         .env("NO_COLOR", "1")
         .env("XDG_CACHE_HOME", temp.path().join("cache"));

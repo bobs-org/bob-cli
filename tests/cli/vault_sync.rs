@@ -1129,6 +1129,267 @@ fn executable_stubs_stay_executable_while_other_threads_fork() {
     }
 }
 
+const CLOBBER_SASE_CREATED: &str = "2026-06-01T03:30:02-04:00";
+const CLOBBER_RECOVERY_CREATED: &str = "2026-10-19T19:32:43-0400";
+
+fn clobber_recovery_note() -> String {
+    format!(
+        "---\ncreated: {CLOBBER_RECOVERY_CREATED}\nparent: \"[[sase]]\"\n---\n\
+- [ ] #task Failed, killed, or interrupted agents can be recovered in one action without losing work! #prj ^prj\n\
+- [ ] #task Recover the session pane ^time-all-of-turn\n\
+- [ ] #task Preserve the transcript ^restart-survival\n\
+- [ ] #task Keep the worktree ^worktree-keep\n\
+- [ ] #task Unique recovery line one ^recovery-one\n\
+- [ ] #task Unique recovery line two ^recovery-two\n\
+- [ ] #task Unique recovery line three ^recovery-three\n\
+- [ ] #task Unique recovery line four ^recovery-four\n"
+    )
+}
+
+fn clobber_sase_note() -> String {
+    format!(
+        "---\ncreated: {CLOBBER_SASE_CREATED}\n---\n\
+- [ ] #task Get ≥1000 stars #prj ^prj\n\
+- [ ] #task Task alpha ^alpha\n\
+- [ ] #task Task beta ^beta\n\
+- [ ] #task Task gamma ^gamma\n\
+- [ ] #task Task delta ^delta\n\
+- [ ] #task Task epsilon ^epsilon\n"
+    )
+}
+
+fn clobber_worktree(sase: &str) -> String {
+    sase.replace(
+        "- [ ] #task Task alpha ^alpha\n",
+        "- [?] #task Task alpha [scheduled:: 2026-11-19] ^alpha\n\
+- 🎲 P2 roll · in 22\n",
+    )
+}
+
+fn seed_clobber_vault(vault: &Path) -> (String, String) {
+    let recovery = clobber_recovery_note();
+    let sase = clobber_sase_note();
+    write_file(&vault.join("sase.md"), &sase);
+    write_file(&vault.join("sase_agent_recovery.md"), &recovery);
+    git_in(vault, ["add", "."]);
+    git_in(vault, ["commit", "-q", "-m", "seed clobber notes"]);
+    git_in(vault, ["push", "-q", "origin", "master"]);
+    (recovery, sase)
+}
+
+#[test]
+fn vault_sync_quarantines_incident_shaped_clobber() {
+    let temp = TempDir::new("bob-cli-vault-sync-clobber");
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
+    let (recovery, sase) = seed_clobber_vault(&vault);
+    write_file(
+        &vault.join("sase_agent_recovery.md"),
+        &clobber_worktree(&sase),
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run clobber vault-sync");
+
+    assert_success(&output);
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("quarantined clobber of sase_agent_recovery.md")
+            && stderr.contains("matches sase.md"),
+        "expected red clobber warning:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase_agent_recovery.md"))
+            .expect("read restored note"),
+        recovery,
+        "HEAD bytes should be restored"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("read sase"),
+        sase
+    );
+
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        clobber_worktree(&sase)
+    );
+    let log = fs::read_to_string(vault.join("_conflicts/sync_conflicts.md"))
+        .expect("read conflict log");
+    assert!(
+        log.contains("sase_agent_recovery.md")
+            && log.contains("clobber")
+            && log.contains("sase.md"),
+        "conflict log should name the clobber:\n{log}"
+    );
+
+    let committed_recovery = stdout(&git([
+        "--git-dir",
+        path_str(&remote),
+        "show",
+        "master:sase_agent_recovery.md",
+    ]));
+    assert_eq!(
+        committed_recovery, recovery,
+        "clobbered bytes must not reach the remote"
+    );
+    let remote_log = stdout(&git([
+        "--git-dir",
+        path_str(&remote),
+        "show",
+        "master:_conflicts/sync_conflicts.md",
+    ]));
+    assert!(
+        remote_log.contains("clobber"),
+        "conflict log should be pushed:\n{remote_log}"
+    );
+
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["clobbers"].as_array().map(Vec::len), Some(1));
+    assert_eq!(status["clobbers"][0]["path"], "sase_agent_recovery.md");
+    assert_eq!(status["clobbers"][0]["matched_note"], "sase.md");
+    assert_eq!(status["clobbers"][0]["action"], "quarantined");
+    assert!(
+        status["clobbers"][0]["conflict_copy"]
+            .as_str()
+            .is_some_and(|path| path.contains("_conflicts/")),
+        "status should record the conflict copy:\n{status}"
+    );
+    assert_eq!(status["recent_clobbers"].as_array().map(Vec::len), Some(1));
+
+    let panel = vault_sync_command(&vault, &temp)
+        .args(["status"])
+        .output()
+        .expect("run vault-sync status");
+    assert_success(&panel);
+    let panel_out = stdout(&panel);
+    assert!(
+        panel_out.contains("sase_agent_recovery.md")
+            && panel_out.contains("sase.md"),
+        "human status should show the clobber:\n{panel_out}"
+    );
+
+    let follow_up = vault_sync_command(&vault, &temp)
+        .output()
+        .expect("run follow-up vault-sync");
+    assert_success(&follow_up);
+    let later = read_vault_sync_status(&temp);
+    assert_eq!(later["clobbers"].as_array().map(Vec::len), Some(0));
+    assert_eq!(later["recent_clobbers"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        later["recent_clobbers"][0]["path"],
+        "sase_agent_recovery.md"
+    );
+}
+
+#[test]
+fn vault_sync_dry_run_reports_clobber_without_writing() {
+    let temp = TempDir::new("bob-cli-vault-sync-clobber-dry");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let (recovery, sase) = seed_clobber_vault(&vault);
+    let work = clobber_worktree(&sase);
+    write_file(&vault.join("sase_agent_recovery.md"), &work);
+
+    let output = vault_sync_command(&vault, &temp)
+        .arg("--dry-run")
+        .output()
+        .expect("run clobber dry-run");
+
+    assert_success(&output);
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains(
+            "would quarantine sase_agent_recovery.md (matches sase.md:"
+        ),
+        "dry-run should name the would-quarantine action:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase_agent_recovery.md"))
+            .expect("read untouched note"),
+        work
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("read sase"),
+        sase
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "dry-run must not write a conflict copy"
+    );
+    assert!(
+        !vault.join("_conflicts/sync_conflicts.md").exists(),
+        "dry-run must not write the conflict log"
+    );
+    assert!(
+        !vault_sync_state_file(&temp).exists(),
+        "dry-run must not write the status file"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["show", "HEAD:sase_agent_recovery.md"])),
+        recovery
+    );
+}
+
+#[test]
+fn vault_sync_ignores_legitimate_rewrites() {
+    let temp = TempDir::new("bob-cli-vault-sync-clobber-negatives");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let recovery = clobber_recovery_note();
+    write_file(&vault.join("sase_agent_recovery.md"), &recovery);
+    write_file(&vault.join("sase.md"), &clobber_sase_note());
+    write_file(&vault.join("done/archive.md"), &recovery);
+    write_file(&vault.join("2026/20261028.md"), &recovery);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed negatives"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    write_file(
+        &vault.join("sase_agent_recovery.md"),
+        "---\ncreated: 2026-10-19T19:32:43-0400\n---\nleft\n",
+    );
+    write_file(
+        &vault.join("done/archive.md"),
+        &clobber_worktree(&clobber_sase_note()),
+    );
+    write_file(
+        &vault.join("2026/20261028.md"),
+        &clobber_worktree(&clobber_sase_note()),
+    );
+    write_file(
+        &vault.join("brand_new.md"),
+        &clobber_worktree(&clobber_sase_note()),
+    );
+    write_file(
+        &vault.join("sase.md"),
+        &format!(
+            "{}- [ ] #task Extra copy ^docs-like-zen\n",
+            clobber_sase_note()
+        ),
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run negative clobber vault-sync");
+
+    assert_success(&output);
+    assert!(
+        !stderr(&output).contains("quarantine"),
+        "legitimate rewrites should not quarantine:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "no conflict copies for negatives"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["clobbers"].as_array().map(Vec::len), Some(0));
+}
+
 fn done_tasks_source(count: usize) -> String {
     let mut text = String::new();
     for index in 1..=count {

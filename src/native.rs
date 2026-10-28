@@ -96,6 +96,7 @@ mod task_theme;
 #[cfg(test)]
 pub(crate) mod test_stub;
 pub(crate) mod url_routing;
+mod vault_clobber;
 pub(crate) mod vault_git;
 mod vault_links;
 mod vault_rewrite;

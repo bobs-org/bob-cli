@@ -12,14 +12,17 @@ default):
    complete a fast-forward whose index and worktree were updated before a Git lock
    prevented `HEAD` from moving.
 2. Read `git status --porcelain`; only stage when there are local changes.
-3. Refuse any file at or above 95 MiB before staging, and warn at or above 50 MiB.
-4. Commit staged local changes with a generated `vault(<host>): ...` message, unless
+3. Detect displaced-plus-foreign-identity rewrites of tracked notes and quarantine
+   them (see [Clobbered notes](#clobbered-notes)) before staging. Dry runs report
+   `would quarantine` and write nothing.
+4. Refuse any file at or above 95 MiB before staging, and warn at or above 50 MiB.
+5. Commit staged local changes with a generated `vault(<host>): ...` message, unless
    `--message` supplies one.
-5. Check `origin/master`, fetch only when needed, fast-forward or merge, retry a
+6. Check `origin/master`, fetch only when needed, fast-forward or merge, retry a
    fast-forward blocked by a Git lock, and auto-resolve supported conflicts into
    `_conflicts/`.
-6. Push, retrying bounded non-fast-forward races.
-7. Write the status record used by `bob vault-sync status`.
+7. Push, retrying bounded non-fast-forward races.
+8. Write the status record used by `bob vault-sync status`.
 
 The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
 `bob task reconcile` runs, `bob task reroll`, `bob task move`, writing `bob ref scan`, and
@@ -54,8 +57,10 @@ git -C ~/bob config gc.autoDetach false
 
 Remote content wins in-place during supported conflicts. The local version is kept as a
 conflict copy under `_conflicts/`, and `_conflicts/sync_conflicts.md` records the event.
-Conflict copies are force-added, including paths ignored by `.gitignore`, so every
-logged copy is committed and reaches the other hosts.
+A whole-note clobber uses the same conflict copy and log: the working-tree bytes are
+quarantined, `HEAD` is restored in place, and the cycle continues so the restore, copy,
+and log commit together. Conflict copies are force-added, including paths ignored by
+`.gitignore`, so every logged copy is committed and reaches the other hosts.
 The conflict directory is excluded from Bob's vault walkers, the Tasks global query, and
 Dataview's excluded folders, so quarantined copies do not appear in task dashboards.
 
@@ -94,6 +99,49 @@ git -C ~/bob merge --abort
 
 Never use `reset --hard` or force-push. A successful later vault-sync clears the breaker
 fields.
+
+## Clobbered notes
+
+Vault-sync flags a tracked `.md` note when the working tree looks like another live note
+was saved over it. Added, deleted, renamed, and untracked paths are skipped, as are
+`_conflicts/`, `done/`, `_templates/`, dot-directories (`.bob/`, `.obsidian/`, `.trash/`),
+and canonical daily notes (`YYYY/YYYYMMDD*.md`).
+
+A note A is flagged only when both hold:
+
+1. **Displaced.** `HEAD` has at least 5 distinct non-blank lines, and at least 50% of
+   them are absent from the working tree.
+2. **Foreign identity.** Some other live note B matches at least one of:
+   - A's working-tree frontmatter `created:` differs from `HEAD` and equals B's
+     `created:`.
+   - A's working-tree `^prj` task line differs from `HEAD` and is identical (trimmed) to
+     B's.
+   - At least 3 task block IDs (excluding `prj`) on A's working-tree task lines are
+     absent from `HEAD` and present on task lines in B.
+
+Legitimate rewrites do not match: a task move leaves the IDs, deleting half a note has
+no foreign identity, a new-note copy is added rather than modified, and a single
+duplicated task is one ID.
+
+On a match, vault-sync writes the working-tree bytes to a conflict copy under
+`_conflicts/`, restores the `HEAD` blob into A, appends `_conflicts/sync_conflicts.md`
+with the matched note and evidence, prints a red warning on stderr even under `-q`,
+records `clobbers` for this cycle plus a capped `recent_clobbers` (last 10) on the
+status record, and fires a best-effort desktop notification (`osascript` on macOS,
+`notify-send` on Linux). Set `BOB_VAULT_SYNC_NOTIFY=0` to suppress the notification.
+Dry runs print `would quarantine A (matches B: evidence)` and change nothing.
+
+Look at `_conflicts/sync_conflicts.md` and `bob vault-sync status` (human panel in red,
+and `--json`). To undo a false positive, copy the conflict copy back onto the live note.
+
+If a clobber was already committed:
+
+1. Find the commit with `git -C ~/bob log -p -- <note>`.
+2. `git show <commit>^:<note> > <note>`; never `git revert` a mixed vault commit.
+3. `bob task reconcile --dry-run`, then live, to drop stale LINKED FROM / BLOCKS
+   mirrors.
+4. `bob ref scan --dry-run`.
+5. `bob vault-sync`.
 
 ## Credentials
 
@@ -516,8 +564,11 @@ ssh mac 'bob vault-sync status --json'
 
 The record includes attempt and success timestamps, local and remote SHAs, files
 committed, push retries, duration, conflict-copy paths, interrupted-merge recovery,
-`aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, and the
-last error. The halted SHA is shown in red in the human status panel.
+`aborted_merge_head`, `halted_merge_head`, `interrupted_fast_forward_recovered`, this
+cycle's `clobbers` and the persistent `recent_clobbers` (last 10), and the last error.
+The halted SHA and clobber rows are shown in red in the human status panel. `clobbers`
+resets each cycle; `recent_clobbers` keeps the latest detections so a 15-second follow-up
+cycle does not hide them.
 
 ## Rollback
 

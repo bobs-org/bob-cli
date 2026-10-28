@@ -21,6 +21,7 @@ use super::{
     env as bob_env,
     ob::{self, ChildEnv},
     style::Styler,
+    vault_clobber,
 };
 
 const COMMAND_NAME: &str = "bob vault-sync";
@@ -29,6 +30,7 @@ const BRANCH: &str = "master";
 const LARGE_FILE_WARNING_BYTES: u64 = 50 * 1024 * 1024;
 pub(crate) const LARGE_FILE_LIMIT_BYTES: u64 = 95 * 1024 * 1024;
 const MAX_PUSH_RETRIES: usize = 3;
+const RECENT_CLOBBER_CAP: usize = 10;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let args = default_run_args(args);
@@ -95,6 +97,7 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Examples:\n  bob vault-sync\n  bob vault-sync run --dry-run\n  bob vault-sync status --json\n\n\
 Environment:\n  BOB_DIR                    Bob vault root; defaults to ~/bob\n  \
 BOB_VAULT_SYNC_LOCK_FILE   lock file; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n  \
+BOB_VAULT_SYNC_NOTIFY      set to 0 to suppress desktop clobber notifications\n  \
 BOB_VAULT_SYNC_STATE_FILE  status JSON path; defaults to ${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/vault-sync.json\n  \
 NO_COLOR                   disable color even when stdout is a TTY\n\n\
 Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer recognized; use BOB_VAULT_SYNC_*.",
@@ -200,6 +203,21 @@ struct StatusRecord {
     #[serde(default)]
     interrupted_fast_forward_recovered: bool,
     last_error: Option<String>,
+    #[serde(default)]
+    clobbers: Vec<ClobberRecord>,
+    #[serde(default)]
+    recent_clobbers: Vec<ClobberRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ClobberRecord {
+    path: String,
+    matched_note: String,
+    evidence: String,
+    action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conflict_copy: Option<String>,
+    detected_at: String,
 }
 
 fn run_cycle(options: RunOptions) -> i32 {
@@ -299,6 +317,7 @@ fn run_cycle_with_env_report(
     status.push_retries = 0;
     status.duration_ms = 0;
     status.conflicts.clear();
+    status.clobbers.clear();
     status.interrupted_merge_recovered = false;
     status.halted_merge_head = None;
     status.interrupted_fast_forward_recovered = false;
@@ -394,7 +413,18 @@ fn run_cycle_inner(
     status.interrupted_fast_forward_recovered =
         complete_interrupted_fast_forward(vault, child_env, options, styler)?;
 
-    let changed_paths = working_tree_status(vault, child_env)?;
+    let mut changed_paths = working_tree_status(vault, child_env)?;
+    let clobber_force_add = handle_clobbers(
+        vault,
+        child_env,
+        options,
+        styler,
+        status,
+        &changed_paths,
+    )?;
+    if !clobber_force_add.is_empty() {
+        changed_paths = working_tree_status(vault, child_env)?;
+    }
     if changed_paths.is_empty() {
         print_log(options, "working tree clean; skipping git add -A");
     } else {
@@ -410,6 +440,9 @@ fn run_cycle_inner(
                 &format!("staging {} changed path(s)", changed_paths.len()),
             );
             git_success(vault, child_env, ["add", "-A", "."])?;
+            for path in &clobber_force_add {
+                git_add_path(vault, child_env, path)?;
+            }
         }
     }
 
@@ -463,6 +496,221 @@ fn run_cycle_inner(
     }
 
     Err(CycleError::fatal("push retry limit exceeded"))
+}
+
+fn handle_clobbers(
+    vault: &Path,
+    child_env: &ChildEnv,
+    options: &RunOptions,
+    styler: &Styler,
+    status: &mut StatusRecord,
+    changed_paths: &[StatusEntry],
+) -> Result<Vec<PathBuf>, CycleError> {
+    let candidates = changed_paths
+        .iter()
+        .filter(|entry| {
+            vault_clobber::is_clobber_candidate(&entry.code, &entry.path)
+        })
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let hits = vault_clobber::detect_clobbers(vault, child_env, &candidates)
+        .map_err(CycleError::fatal)?;
+    if hits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let host = hostname_slug();
+    let timestamp = Local::now().format("%Y-%m-%dT%H%M%S%z").to_string();
+    let detected_at = now_rfc3339();
+    let mut force_add = BTreeSet::new();
+    let mut note_lines = Vec::new();
+    let mut records = Vec::new();
+
+    for hit in &hits {
+        let path_display = display_path(&hit.path);
+        let matched = display_path(&hit.matched_note);
+        if options.dry_run {
+            clobber_warn(
+                styler,
+                &format!(
+                    "would quarantine {path_display} (matches {matched}: {})",
+                    hit.evidence
+                ),
+            );
+            continue;
+        }
+
+        let conflict_copy = write_conflict_copy_bytes(
+            vault,
+            &hit.path,
+            &host,
+            &timestamp,
+            &hit.work_bytes,
+        )?;
+        restore_head_bytes(vault, &hit.path, &hit.head_bytes)?;
+        let conflict_display = display_path(&conflict_copy);
+        clobber_warn(
+            styler,
+            &format!(
+                "quarantined clobber of {path_display} (matches {matched}: {}); conflict copy at {conflict_display}",
+                hit.evidence
+            ),
+        );
+        note_lines.push(format!(
+            "- {timestamp} {path_display} -> {conflict_display} (clobber; matches {matched}: {})",
+            hit.evidence
+        ));
+        force_add.insert(hit.path.clone());
+        force_add.insert(conflict_copy.clone());
+        records.push(ClobberRecord {
+            path: path_display,
+            matched_note: matched,
+            evidence: hit.evidence.clone(),
+            action: "quarantined".to_string(),
+            conflict_copy: Some(conflict_display),
+            detected_at: detected_at.clone(),
+        });
+    }
+
+    if options.dry_run {
+        return Ok(Vec::new());
+    }
+
+    let conflict_log = PathBuf::from("_conflicts").join("sync_conflicts.md");
+    append_conflict_log(vault, &conflict_log, &note_lines)?;
+    force_add.insert(conflict_log);
+    record_clobbers(status, records);
+    notify_clobbers(&hits);
+    Ok(force_add.into_iter().collect())
+}
+
+fn record_clobbers(status: &mut StatusRecord, records: Vec<ClobberRecord>) {
+    let mut recent = records.clone();
+    recent.append(&mut status.recent_clobbers);
+    recent.truncate(RECENT_CLOBBER_CAP);
+    status.recent_clobbers = recent;
+    status.clobbers = records;
+}
+
+fn restore_head_bytes(
+    vault: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), CycleError> {
+    let dest = vault.join(path);
+    let tmp_name = format!(
+        ".{}.bob-clobber-restore",
+        path.file_name().and_then(OsStr::to_str).unwrap_or("note")
+    );
+    let tmp = dest.with_file_name(tmp_name);
+    fs::write(&tmp, bytes).map_err(|error| {
+        CycleError::fatal(format!(
+            "failed to write restore temp {}: {error}",
+            tmp.display()
+        ))
+    })?;
+    fs::rename(&tmp, &dest).map_err(|error| {
+        CycleError::fatal(format!(
+            "failed to restore {}: {error}",
+            dest.display()
+        ))
+    })
+}
+
+fn clobber_warn(styler: &Styler, message: &str) {
+    eprintln!("[{}] {}: {message}", log_timestamp(), styler.red("warning"));
+}
+
+fn notify_clobbers(hits: &[vault_clobber::ClobberHit]) {
+    if !clobber_notifications_enabled() || hits.is_empty() {
+        return;
+    }
+    let body = if hits.len() == 1 {
+        format!(
+            "Quarantined clobber of {} (matches {})",
+            display_path(&hits[0].path),
+            display_path(&hits[0].matched_note)
+        )
+    } else {
+        format!("Quarantined {} clobbered notes", hits.len())
+    };
+    send_clobber_notification(&body);
+}
+
+fn clobber_notifications_enabled() -> bool {
+    match bob_env::var("BOB_VAULT_SYNC_NOTIFY") {
+        Ok(value)
+            if matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no"
+            ) =>
+        {
+            false
+        }
+        Ok(value)
+            if matches!(value.to_ascii_lowercase().as_str(), "1" | "true") =>
+        {
+            true
+        }
+        _ => {
+            #[cfg(test)]
+            {
+                false
+            }
+            #[cfg(not(test))]
+            {
+                true
+            }
+        }
+    }
+}
+
+fn send_clobber_notification(body: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{}\" with title \"bob vault-sync\"",
+            osascript_escape(body)
+        );
+        let _ = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !command_on_path("notify-send") {
+            return;
+        }
+        let _ = Command::new("notify-send")
+            .arg("bob vault-sync")
+            .arg(body)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn osascript_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn command_on_path(command: &str) -> bool {
+    let Some(path) = bob_env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(command).is_file())
 }
 
 fn gate_pending_overwrite_intent(
@@ -1056,6 +1304,16 @@ fn write_conflict_copy(
     timestamp: &str,
 ) -> Result<PathBuf, CycleError> {
     let contents = git_cat_file(vault, child_env, object_id)?;
+    write_conflict_copy_bytes(vault, original, host, timestamp, &contents)
+}
+
+fn write_conflict_copy_bytes(
+    vault: &Path,
+    original: &Path,
+    host: &str,
+    timestamp: &str,
+    contents: &[u8],
+) -> Result<PathBuf, CycleError> {
     let relative = conflict_copy_path(original, host, timestamp);
     let full_path = vault.join(&relative);
     if let Some(parent) = full_path.parent() {
@@ -1609,9 +1867,44 @@ fn print_status_panel(state_file: &Path, status: &StatusRecord) {
             println!("  - {conflict}");
         }
     }
+    print_clobber_status_lines(styler, "clobbers", &status.clobbers);
+    print_clobber_status_lines(
+        styler,
+        "recent_clobbers",
+        &status.recent_clobbers,
+    );
     match &status.last_error {
         Some(error) => println!("last_error: {}", styler.red(error)),
         None => println!("last_error: {}", styler.green("none")),
+    }
+}
+
+fn print_clobber_status_lines(
+    styler: Styler,
+    label: &str,
+    records: &[ClobberRecord],
+) {
+    if records.is_empty() {
+        println!("{label}: none");
+        return;
+    }
+    println!("{label}:");
+    for record in records {
+        let copy = record
+            .conflict_copy
+            .as_deref()
+            .map(|path| format!("; copy {path}"))
+            .unwrap_or_default();
+        println!(
+            "{}",
+            styler.red(&format!(
+                "  - {} (matches {}; {}): {}{copy}",
+                record.path,
+                record.matched_note,
+                record.action,
+                record.evidence
+            ))
+        );
     }
 }
 
@@ -1877,5 +2170,24 @@ mod tests {
         assert_eq!(status.aborted_merge_head, None);
         assert_eq!(status.halted_merge_head, None);
         assert!(!status.interrupted_fast_forward_recovered);
+        assert!(status.clobbers.is_empty());
+        assert!(status.recent_clobbers.is_empty());
+    }
+
+    #[test]
+    fn clobber_notifications_follow_env_override() {
+        let suppress = bob_env::TestEnvGuard::set(&[(
+            "BOB_VAULT_SYNC_NOTIFY",
+            Some(OsStr::new("0")),
+        )]);
+        assert!(!clobber_notifications_enabled());
+        drop(suppress);
+        let enable = bob_env::TestEnvGuard::set(&[(
+            "BOB_VAULT_SYNC_NOTIFY",
+            Some(OsStr::new("1")),
+        )]);
+        assert!(clobber_notifications_enabled());
+        drop(enable);
+        assert!(!clobber_notifications_enabled());
     }
 }
