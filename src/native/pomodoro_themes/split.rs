@@ -21,6 +21,7 @@ use serde_json::json;
 use crate::native::{
     capture_pomodoros::{self, PomodoroRef, PomodoroRefLookup, PomodoroState},
     env as bob_env,
+    markdown::split_line_ending,
     ob::{self},
     plan_budget::{normalize_component, split_components},
 };
@@ -29,8 +30,8 @@ use super::{
     cache,
     rename::{
         bob_dir_arg, format_arg, help_arg, offline_arg, print_clap_error,
-        print_failure, replace_name_tail, rewrite_name, OutputFormat,
-        RenameFailure,
+        print_failure, raw_lines_preserving, replace_name_tail, rewrite_name,
+        verify_raw_tail_splice, OutputFormat, RenameFailure,
     },
     scan, Catalog,
 };
@@ -917,39 +918,6 @@ fn stale_entry(date: NaiveDate, pomodoro_ref: &PomodoroRef) -> SplitFailure {
     )
 }
 
-fn raw_lines_preserving(contents: &str) -> Vec<String> {
-    if contents.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    let bytes = contents.as_bytes();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] == b'\n' {
-            lines.push(contents[start..=index].to_string());
-            start = index + 1;
-        }
-        index += 1;
-    }
-    if start < contents.len() {
-        lines.push(contents[start..].to_string());
-    } else if contents.ends_with('\n') && start == contents.len() {
-        // Trailing newline already closed the last line; nothing more.
-    }
-    lines
-}
-
-fn split_body_ending(line: &str) -> (&str, &str) {
-    if let Some(body) = line.strip_suffix("\r\n") {
-        (body, "\r\n")
-    } else if let Some(body) = line.strip_suffix('\n') {
-        (body, "\n")
-    } else {
-        (line, "")
-    }
-}
-
 fn apply_changes(
     contents: &str,
     changes: &[PlannedChange],
@@ -967,7 +935,7 @@ fn apply_changes(
                 Some("regenerate with -t"),
             ));
         };
-        let (body, ending) = split_body_ending(&raw);
+        let (body, ending) = split_line_ending(&raw);
         let Some(rewritten) =
             replace_name_tail(body, &change.before, &change.after)
         else {
@@ -1075,56 +1043,16 @@ fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
         if contents != file.after_contents {
             return Err(format!("{} changed during the split", file.path));
         }
-        // Raw byte check: unchanged lines must keep exact bytes and
-        // changed lines must keep their original terminators. This
-        // catches a planned after-image that normalizes CRLF or
-        // touches unrelated bytes even when the reread equals it.
-        let before_raw = raw_lines_preserving(&file.before_contents);
-        let planned_raw = raw_lines_preserving(&file.after_contents);
-        let reread_raw = raw_lines_preserving(&contents);
-        if before_raw.len() != planned_raw.len()
-            || reread_raw.len() != planned_raw.len()
-        {
-            return Err(format!("{} line count changed", file.path));
-        }
         let planned: BTreeSet<usize> =
             file.changes.iter().map(|change| change.line).collect();
-        for (index, (before, planned_after, reread)) in before_raw
-            .iter()
-            .zip(planned_raw.iter())
-            .zip(reread_raw.iter())
-            .map(|((a, b), c)| (a, b, c))
-            .enumerate()
-        {
-            let line_number = index + 1;
-            if !planned.contains(&line_number) {
-                if before != planned_after {
-                    return Err(format!(
-                        "{} changed outside a Pomodoro name tail",
-                        file.path
-                    ));
-                }
-                if reread != planned_after {
-                    return Err(format!(
-                        "{} changed during the split",
-                        file.path
-                    ));
-                }
-                continue;
-            }
-            let (_, before_ending) = split_body_ending(before);
-            let (_, planned_ending) = split_body_ending(planned_after);
-            let (_, reread_ending) = split_body_ending(reread);
-            if before_ending != planned_ending {
-                return Err(format!(
-                    "{} changed outside a Pomodoro name tail",
-                    file.path
-                ));
-            }
-            if reread_ending != planned_ending {
-                return Err(format!("{} changed during the split", file.path));
-            }
-        }
+        verify_raw_tail_splice(
+            &file.path,
+            &file.before_contents,
+            &file.after_contents,
+            &contents,
+            &planned,
+            "split",
+        )?;
         let before_lines: Vec<&str> = file.before_contents.lines().collect();
         let after_lines: Vec<&str> = contents.lines().collect();
         if before_lines.len() != after_lines.len() {

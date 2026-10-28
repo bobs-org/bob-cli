@@ -22,6 +22,7 @@ use serde_json::json;
 
 use crate::native::{
     capture_pomodoros, config, env as bob_env,
+    markdown::split_line_ending,
     ob::{self},
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
@@ -723,37 +724,62 @@ fn scope_files(vault: &Path) -> Vec<(String, PathBuf)> {
     scoped
 }
 
-fn raw_lines_preserving(contents: &str) -> Vec<String> {
-    if contents.is_empty() {
-        return Vec::new();
-    }
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    let bytes = contents.as_bytes();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] == b'\n' {
-            lines.push(contents[start..=index].to_string());
-            start = index + 1;
-        }
-        index += 1;
-    }
-    if start < contents.len() {
-        lines.push(contents[start..].to_string());
-    } else if contents.ends_with('\n') && start == contents.len() {
-        // Trailing newline already closed the last line; nothing more.
-    }
-    lines
+/// Physical lines with their terminators, so concatenating them
+/// reproduces `contents` byte for byte. Line `n` (1-based) is index
+/// `n - 1`, matching `capture_pomodoros::scan` entry lines.
+pub(super) fn raw_lines_preserving(contents: &str) -> Vec<String> {
+    contents.split_inclusive('\n').map(str::to_string).collect()
 }
 
-fn rename_body_ending(line: &str) -> (&str, &str) {
-    if let Some(body) = line.strip_suffix("\r\n") {
-        (body, "\r\n")
-    } else if let Some(body) = line.strip_suffix('\n') {
-        (body, "\n")
-    } else {
-        (line, "")
+/// Raw byte check shared by rename and split: lines outside
+/// `planned_lines` must keep exact bytes and planned lines must keep
+/// their original terminators. This catches a planned after-image
+/// that normalizes CRLF or touches unrelated bytes even when the
+/// reread equals it. `action` names the write in race errors.
+pub(super) fn verify_raw_tail_splice(
+    path: &str,
+    before_contents: &str,
+    planned_contents: &str,
+    reread_contents: &str,
+    planned_lines: &BTreeSet<usize>,
+    action: &str,
+) -> Result<(), String> {
+    let before_raw = raw_lines_preserving(before_contents);
+    let planned_raw = raw_lines_preserving(planned_contents);
+    let reread_raw = raw_lines_preserving(reread_contents);
+    if before_raw.len() != planned_raw.len()
+        || reread_raw.len() != planned_raw.len()
+    {
+        return Err(format!("{path} line count changed"));
     }
+    let outside = || format!("{path} changed outside a Pomodoro name tail");
+    let raced = || format!("{path} changed during the {action}");
+    for (index, ((before, planned_after), reread)) in before_raw
+        .iter()
+        .zip(planned_raw.iter())
+        .zip(reread_raw.iter())
+        .enumerate()
+    {
+        if !planned_lines.contains(&(index + 1)) {
+            if before != planned_after {
+                return Err(outside());
+            }
+            if reread != planned_after {
+                return Err(raced());
+            }
+            continue;
+        }
+        let (_, before_ending) = split_line_ending(before);
+        let (_, planned_ending) = split_line_ending(planned_after);
+        let (_, reread_ending) = split_line_ending(reread);
+        if before_ending != planned_ending {
+            return Err(outside());
+        }
+        if reread_ending != planned_ending {
+            return Err(raced());
+        }
+    }
+    Ok(())
 }
 
 /// Rewrite the theme component in every Pomodoro ` — NAME` tail.
@@ -799,7 +825,7 @@ fn rewrite_file_contents(
         let Some(raw) = owned.get(index).cloned() else {
             continue;
         };
-        let (body, ending) = rename_body_ending(&raw);
+        let (body, ending) = split_line_ending(&raw);
         let Some(new_name) =
             rewrite_name(old_name, old_key, new_display_trimmed)
         else {
@@ -1117,59 +1143,16 @@ fn verify_renamed(
             if contents != planned.after_contents {
                 return Err(format!("{} changed during the rename", relative));
             }
-            // Raw byte check: unchanged lines must keep exact bytes and
-            // changed lines must keep their original terminators. This
-            // catches a planned after-image that normalizes CRLF or
-            // touches unrelated bytes even when the reread equals it.
-            let before_raw = raw_lines_preserving(&planned.before_contents);
-            let planned_raw = raw_lines_preserving(&planned.after_contents);
-            let reread_raw = raw_lines_preserving(&contents);
-            if before_raw.len() != planned_raw.len()
-                || reread_raw.len() != planned_raw.len()
-            {
-                return Err(format!("{} line count changed", relative));
-            }
             let planned_lines: BTreeSet<usize> =
                 planned.tails.iter().map(|tail| tail.line).collect();
-            for (index, (before, planned_after, reread)) in before_raw
-                .iter()
-                .zip(planned_raw.iter())
-                .zip(reread_raw.iter())
-                .map(|((a, b), c)| (a, b, c))
-                .enumerate()
-            {
-                let line_number = index + 1;
-                if !planned_lines.contains(&line_number) {
-                    if before != planned_after {
-                        return Err(format!(
-                            "{} changed outside a Pomodoro name tail",
-                            relative
-                        ));
-                    }
-                    if reread != planned_after {
-                        return Err(format!(
-                            "{} changed during the rename",
-                            relative
-                        ));
-                    }
-                    continue;
-                }
-                let (_, before_ending) = rename_body_ending(before);
-                let (_, planned_ending) = rename_body_ending(planned_after);
-                let (_, reread_ending) = rename_body_ending(reread);
-                if before_ending != planned_ending {
-                    return Err(format!(
-                        "{} changed outside a Pomodoro name tail",
-                        relative
-                    ));
-                }
-                if reread_ending != planned_ending {
-                    return Err(format!(
-                        "{} changed during the rename",
-                        relative
-                    ));
-                }
-            }
+            verify_raw_tail_splice(
+                relative,
+                &planned.before_contents,
+                &planned.after_contents,
+                &contents,
+                &planned_lines,
+                "rename",
+            )?;
             // Only name tails may differ: every changed line shares the
             // same ledger prefix before the tail.
             let before_lines: Vec<&str> =
@@ -1700,6 +1683,41 @@ mod rename_tests {
         assert!(after.contains("## Pomodoros\r\n"));
         assert!(after.contains("\t- keep this child\r\n"));
         assert!(after.contains("- [ ] () — KEEP\r\n"));
+    }
+
+    #[test]
+    fn raw_lines_round_trip_every_terminator() {
+        for contents in ["", "\n", "a\r\nb\n\nc", "a\n", "x\r\n\r\n"] {
+            assert_eq!(raw_lines_preserving(contents).concat(), contents);
+        }
+        assert_eq!(raw_lines_preserving("a\r\nb"), ["a\r\n", "b"]);
+    }
+
+    #[test]
+    fn raw_tail_splice_names_the_racing_action() {
+        let before = "## Pomodoros\r\n- [ ] () — JOB\r\n";
+        let planned = "## Pomodoros\r\n- [ ] () — WRITE\r\n";
+        let lines = BTreeSet::from([2]);
+        assert_eq!(
+            verify_raw_tail_splice(
+                "n.md", before, planned, planned, &lines, "split"
+            ),
+            Ok(())
+        );
+        // A concurrent edit to an untouched line is a race, not a splice bug.
+        let raced = "## Pomodoros!\r\n- [ ] () — WRITE\r\n";
+        assert_eq!(
+            verify_raw_tail_splice(
+                "n.md", before, planned, raced, &lines, "split"
+            ),
+            Err("n.md changed during the split".to_string())
+        );
+        // Dropping the CR on the spliced line is collateral damage.
+        let lf = "## Pomodoros\r\n- [ ] () — WRITE\n";
+        assert_eq!(
+            verify_raw_tail_splice("n.md", before, lf, lf, &lines, "rename"),
+            Err("n.md changed outside a Pomodoro name tail".to_string())
+        );
     }
 
     #[test]
