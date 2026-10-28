@@ -564,10 +564,14 @@ pub(super) struct CaptureItemResult {
     )]
     pub(super) relation_cancels: Vec<RelationCancelJson>,
     /// Per-item complete-label outcomes (`docs/task-relations.md` §18
-    /// CP7): one JSON row per source this item completed. Additive:
-    /// omitted when nothing completed, so older output stays
-    /// byte-identical.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// CP7): one JSON row per source this item completed.
+    /// Already-closed sources stay in the vec for the muted human line
+    /// and serialize away. Additive: omitted when nothing completed, so
+    /// older output stays byte-identical.
+    #[serde(
+        skip_serializing_if = "relation_completes_is_empty",
+        serialize_with = "serialize_relation_completes"
+    )]
     pub(super) relation_completes: Vec<RelationCompleteJson>,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
@@ -1066,7 +1070,6 @@ pub(super) enum RelationCancelEffect {
 /// (`docs/task-relations.md` §18 CP7): the link was written and the
 /// source completed, or the link was written and the already-closed
 /// source was left alone.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum RelationCompleteEffect {
@@ -1119,6 +1122,26 @@ where
         .serialize(serializer)
 }
 
+fn relation_completes_is_empty(completes: &[RelationCompleteJson]) -> bool {
+    completes
+        .iter()
+        .all(|complete| complete.effect != RelationCompleteEffect::Completed)
+}
+
+fn serialize_relation_completes<S>(
+    completes: &[RelationCompleteJson],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    completes
+        .iter()
+        .filter(|complete| complete.effect == RelationCompleteEffect::Completed)
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
 /// The cancelled source of one `relation_cancels[]` row: where S sits
 /// after this item, with its pre-cancel description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1149,11 +1172,13 @@ pub(super) struct RelationCancelRecoveredJson {
 
 /// One complete-label source this item completed
 /// (`docs/task-relations.md` §18 CP7): the staged source completion, one
-/// row per source no matter how many complete edges named it. Only
-/// actually completed sources are recorded; already-closed sources keep
-/// only the link and an optional `complete_effect`.
+/// row per source no matter how many complete edges named it.
+/// Already-closed sources keep `effect: AlreadyClosed` for the human
+/// line and are omitted from JSON.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RelationCompleteJson {
+    #[serde(skip)]
+    pub(super) effect: RelationCompleteEffect,
     pub(super) source: RelationCompleteSourceJson,
     pub(super) target: RelationCompleteTargetJson,
     pub(super) labels: Vec<String>,
@@ -1291,7 +1316,8 @@ pub(super) fn print_capture_warnings(result: &CaptureResult) {
         // The cancel-label ⊘ row already names the cancel in stdout; the
         // matching structured warning stays JSON-only (§17 CL7).
         if let CaptureWarning::Structured(warning) = warning
-            && warning.code == "relation_cancelled_source"
+            && (warning.code == "relation_cancelled_source"
+                || warning.code == "relation_completed_source")
         {
             continue;
         }
@@ -2199,7 +2225,7 @@ pub(super) fn print_human_item_success(
         println!("  {}", styler.dim(line));
     }
     print_human_dependency_updates(result, &styler);
-    print_human_relation_updates(result);
+    print_human_relation_updates(result, &styler);
     if let Some(clip) = &result.clip {
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
@@ -2799,7 +2825,7 @@ pub(super) fn print_human_task_dependency_success(
     println!("{prefix} {verb}  {ordinal}{target_label}");
     print_human_owner_status_row(result, styler);
     print_human_dependency_updates(result, styler);
-    print_human_relation_updates(result);
+    print_human_relation_updates(result, styler);
 }
 
 fn print_human_owner_status_row(result: &CaptureItemResult, styler: &Styler) {
@@ -2892,7 +2918,7 @@ fn parent_previous_status(
     })
 }
 
-fn print_human_relation_updates(result: &CaptureItemResult) {
+fn print_human_relation_updates(result: &CaptureItemResult, styler: &Styler) {
     for update in &result.relation_updates {
         println!("  {}", human_relation_line(result.dry_run, update));
     }
@@ -2901,6 +2927,20 @@ fn print_human_relation_updates(result: &CaptureItemResult) {
     // the human output never repeats it.
     for cancel in &result.relation_cancels {
         println!("  {}", cancel.message);
+    }
+    // One bob-authored ✓ row per complete-label source (§18 CP6); the
+    // matching `relation_completed_source` warning stays JSON-only so
+    // the human output never repeats it. Completed sources then print
+    // the shared `!` detail rows.
+    for complete in &result.relation_completes {
+        println!("  {}", complete.message);
+        if complete.effect == RelationCompleteEffect::Completed {
+            print_task_complete_details(
+                &complete.task_complete,
+                result.dry_run,
+                styler,
+            );
+        }
     }
     for hide in &result.relation_label_hides {
         if hide.action != RelationLabelHideAction::Hide {
@@ -4412,6 +4452,7 @@ mod tests {
         let mut result = minimal_result();
         result.task_complete = Some(whole);
         result.relation_completes.push(RelationCompleteJson {
+            effect: RelationCompleteEffect::Completed,
             source: RelationCompleteSourceJson {
                 path: "a.md".to_string(),
                 line: 1,
@@ -4463,6 +4504,7 @@ mod tests {
         let mut result = minimal_result();
         result.task_complete = Some(whole);
         result.relation_completes.push(RelationCompleteJson {
+            effect: RelationCompleteEffect::Completed,
             source: RelationCompleteSourceJson {
                 path: "a.md".to_string(),
                 line: 1,
@@ -4525,5 +4567,33 @@ mod tests {
         };
         let value = to_value(&completed).expect("serialize");
         assert_eq!(value["complete_effect"], json!("completed"), "{value}");
+    }
+
+    #[test]
+    fn relation_completes_omits_already_closed_rows() {
+        let mut result = minimal_result();
+        result.relation_completes.push(RelationCompleteJson {
+            effect: RelationCompleteEffect::AlreadyClosed,
+            source: RelationCompleteSourceJson {
+                path: "a.md".to_string(),
+                line: 1,
+                block_id: "1".to_string(),
+                text: "source".to_string(),
+            },
+            target: RelationCompleteTargetJson {
+                path: "b.md".to_string(),
+                block_id: "2".to_string(),
+                text: "target".to_string(),
+            },
+            labels: vec!["implemented by".to_string()],
+            action: RelationAction::Added,
+            previous_status: 'x',
+            previous_status_name: "Done".to_string(),
+            project_open_tasks: None,
+            task_complete: minimal_summary("already"),
+            message: "Already Done · link only".to_string(),
+        });
+        let value = to_value(&result).expect("serialize");
+        assert!(value.get("relation_completes").is_none(), "{value}");
     }
 }

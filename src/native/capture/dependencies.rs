@@ -54,8 +54,12 @@ pub(super) struct DependencyContext {
     link_unblocked: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
     linked_from_lines: OnceLock<(bool, Option<String>)>,
-    cancel_labels:
-        OnceLock<(Vec<config::relations::CancelLabel>, Option<String>)>,
+    close_policy: OnceLock<(
+        Vec<config::relations::CancelLabel>,
+        Vec<config::relations::CompleteLabel>,
+        Option<String>,
+    )>,
+    closing_intents: HashMap<(String, String), config::relations::CloseEffect>,
     block_reservations: BTreeMap<PathBuf, BTreeSet<String>>,
     #[cfg(test)]
     graph_builds: AtomicUsize,
@@ -81,7 +85,8 @@ impl DependencyContext {
             blocks_lines: OnceLock::new(),
             linked_from_lines: OnceLock::new(),
             block_reservations: BTreeMap::new(),
-            cancel_labels: OnceLock::new(),
+            close_policy: OnceLock::new(),
+            closing_intents: HashMap::new(),
             #[cfg(test)]
             graph_builds: AtomicUsize::new(0),
         }
@@ -177,24 +182,63 @@ impl DependencyContext {
             .and_then(|(_, warning)| warning.clone())
     }
 
-    /// Cancel-label policy (`docs/task-relations.md` §17 CL2), read once
-    /// per batch: `relations.cancel_labels`, defaulting to `[]`. Entries
-    /// that fail validation are skipped with a warning; a non-list value
-    /// cancels nothing. The warning surfaces once per batch through
-    /// [`Self::cancel_labels_warning`].
-    pub(super) fn cancel_labels(&self) -> &[config::relations::CancelLabel] {
-        self.cancel_labels
-            .get_or_init(load_cancel_labels)
-            .0
-            .as_slice()
+    fn close_policy(
+        &self,
+    ) -> &(
+        Vec<config::relations::CancelLabel>,
+        Vec<config::relations::CompleteLabel>,
+        Option<String>,
+    ) {
+        self.close_policy.get_or_init(load_close_policy)
     }
 
-    /// The invalid-config warning for [`Self::cancel_labels`], when the
-    /// batch planned relations and the value was invalid.
+    /// Cancel-label policy (`docs/task-relations.md` §17 CL2), read once
+    /// per batch as part of the shared close policy: `relations.cancel_labels`,
+    /// defaulting to `[]`. Entries that fail validation are skipped with a
+    /// warning; a non-list value cancels nothing. The warning surfaces once
+    /// per batch through [`Self::cancel_labels_warning`].
+    pub(super) fn cancel_labels(&self) -> &[config::relations::CancelLabel] {
+        self.close_policy().0.as_slice()
+    }
+
+    /// Complete-label policy (`docs/task-relations.md` §18 CP2), read once
+    /// per batch as part of the shared close policy.
+    pub(super) fn complete_labels(
+        &self,
+    ) -> &[config::relations::CompleteLabel] {
+        self.close_policy().1.as_slice()
+    }
+
+    /// The invalid-config warning for the close policy (cancel labels,
+    /// complete labels, and both-lists overlap), when the batch planned
+    /// relations and the value was invalid.
     pub(super) fn cancel_labels_warning(&self) -> Option<String> {
-        self.cancel_labels
+        self.close_policy
             .get()
-            .and_then(|(_, warning)| warning.clone())
+            .and_then(|(_, _, warning)| warning.clone())
+    }
+
+    /// The close-effect already recorded for this source in the current
+    /// planning pass, keyed by resolved note path and block id.
+    pub(super) fn close_intent(
+        &self,
+        path: &str,
+        block: &str,
+    ) -> Option<config::relations::CloseEffect> {
+        self.closing_intents
+            .get(&(path.to_string(), block.to_string()))
+            .copied()
+    }
+
+    /// Record a cancel or complete intent so a later item in this draft
+    /// cannot apply the opposite effect to the same source.
+    pub(super) fn record_close_intent(
+        &mut self,
+        path: String,
+        block: String,
+        effect: config::relations::CloseEffect,
+    ) {
+        self.closing_intents.insert((path, block), effect);
     }
 
     /// Remember a minted dependent `^block-id` so later mints in the
@@ -3042,6 +3086,8 @@ pub(super) fn plan_dependency_only_item(
         Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
+    let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut close_day_file: Option<String> = None;
     if !parsed.relations.is_empty() {
         let relation_owner = RelationOwner::from_dependent(
             ctx,
@@ -3063,16 +3109,20 @@ pub(super) fn plan_dependency_only_item(
         minted_relation_block_ids = reports.minted;
         mirror_skipped = reports.skipped;
         task_block_refs.extend(reports.source_refs);
-        relation_cancels = plan_relation_cancels(
+        let close = plan_relation_close_effects(
             ctx,
             planner,
-            &request.bob_dir,
+            request,
             parsed,
             &mut relation_updates,
             true,
-            request.dry_run,
             warnings,
         )?;
+        relation_cancels = close.cancels;
+        relation_completes = close.completes;
+        pomodoro_refs.extend(close.pomodoro_refs);
+        task_block_refs.extend(close.task_block_refs);
+        close_day_file = close.day_file;
     }
     let relocated = locate_task_by_block_id(
         ctx,
@@ -3118,7 +3168,7 @@ pub(super) fn plan_dependency_only_item(
             clip: None,
             schedule_log: None,
             block_id: Some(block_id.clone()),
-            day_file: None,
+            day_file: close_day_file,
             block_link: Some(format!("[[{route}#^{block_id}]]")),
             pomodoro_link_placement: None,
             parent_line: None,
@@ -3164,7 +3214,7 @@ pub(super) fn plan_dependency_only_item(
             minted_blocker_block_id: None,
             relation_updates,
             relation_cancels,
-            relation_completes: Vec::new(),
+            relation_completes,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

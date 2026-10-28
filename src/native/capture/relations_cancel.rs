@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 use crate::native::{
-    relation_labels::relation_label_key,
+    config::relations::CloseEffect,
     task_cancel::{
         plan_task_cancel, verdicts::CancelSourceVerdict, CancelLogOutcome,
         DailyReadState, TaskCancelError, TaskCancelInput,
@@ -14,14 +14,6 @@ use crate::native::{
     task_relations::parse as relation_parse,
     task_status_hooks,
 };
-
-/// One cancel-label edge that names a configured label on an Added or
-/// Relabeled relation, in typed order.
-struct CancelEdge {
-    update_index: usize,
-    typed_index: usize,
-    label: String,
-}
 
 /// Plan the cancel-label commits for one item's already-staged relation
 /// writes. Collects Added/Relabeled edges whose label is configured,
@@ -50,44 +42,13 @@ pub(super) fn plan_relation_cancels(
     if configured.is_empty() {
         return Ok(Vec::new());
     }
-    let mut edges = Vec::new();
-    for (update_index, update) in updates.iter().enumerate() {
-        if !matches!(
-            update.action,
-            RelationAction::Added | RelationAction::Relabeled
-        ) {
-            continue;
-        }
-        let Some(label) = update.label.clone() else {
-            continue;
-        };
-        if !configured
-            .iter()
-            .any(|key| *key == relation_label_key(&label))
-        {
-            continue;
-        }
-        edges.push(CancelEdge {
-            update_index,
-            typed_index: update_index,
-            label,
-        });
-    }
+    let edges =
+        collect_closing_edges(updates, &configured, CloseEffect::Cancel);
     if edges.is_empty() {
         return Ok(Vec::new());
     }
     refuse_cancel_conflicts(ctx, planner, bob_dir, parsed, updates, &edges)?;
-    let mut groups: Vec<Vec<CancelEdge>> = Vec::new();
-    for edge in edges {
-        let key = source_identity(&updates[edge.update_index]);
-        match groups.iter_mut().find(|group| {
-            let first = &updates[group[0].update_index];
-            source_identity(first) == key
-        }) {
-            Some(group) => group.push(edge),
-            None => groups.push(vec![edge]),
-        }
-    }
+    let groups = group_closing_edges(updates, edges);
     let mut cancels = Vec::new();
     for group in groups {
         if let Some(cancel) = plan_source_cancel(
@@ -147,16 +108,6 @@ fn cancel_target_for_label<'a>(
         .map(|update| update.target.text.as_str())
 }
 
-/// One cancel-label source, by staged identity: same note, same block
-/// (or same line when the source never gained one), in typed order.
-fn source_identity(update: &RelationUpdateJson) -> (String, String, usize) {
-    (
-        update.source.path.clone(),
-        update.source.block_id.clone(),
-        update.source.line,
-    )
-}
-
 /// Refuse an item that also changes the cancel source through another
 /// marker (`docs/task-relations.md` §17 CL5): `&` / `*` on an owner
 /// source (`~`), or a `*` naming a picked source (`~~`). Capture is
@@ -167,40 +118,13 @@ fn refuse_cancel_conflicts(
     bob_dir: &Path,
     parsed: &ParsedCaptureText,
     updates: &[RelationUpdateJson],
-    edges: &[CancelEdge],
+    edges: &[ClosingEdge],
 ) -> Result<(), CaptureError> {
     for edge in edges {
         let update = &updates[edge.update_index];
         let typed = &parsed.relations[edge.typed_index];
-        let markers = match update.direction {
-            RelationDirection::To => {
-                let mut markers = Vec::new();
-                if !parsed.dependencies.is_empty() {
-                    markers.push("&");
-                }
-                if !parsed.blocked_tasks.is_empty() {
-                    markers.push("*");
-                }
-                markers
-            }
-            RelationDirection::From => {
-                let names_source = parsed.blocked_tasks.iter().any(|star| {
-                    star.block_id == update.source.block_id
-                        && !update.source.block_id.is_empty()
-                        && resolve_prerequisite_note(
-                            ctx, planner, bob_dir, &star.note,
-                        )
-                        .is_ok_and(|relative| {
-                            display_relative(&relative) == update.source.path
-                        })
-                });
-                if names_source {
-                    vec!["*"]
-                } else {
-                    Vec::new()
-                }
-            }
-        };
+        let markers =
+            item_action_markers(ctx, planner, bob_dir, parsed, update);
         if markers.is_empty() {
             continue;
         }
@@ -228,7 +152,7 @@ fn plan_source_cancel(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     updates: &mut [RelationUpdateJson],
-    group: &[CancelEdge],
+    group: &[ClosingEdge],
     existing_owner: bool,
     dry_run: bool,
 ) -> Result<Option<RelationCancelJson>, CaptureError> {
@@ -333,7 +257,15 @@ fn plan_source_cancel(
         CancelSourceVerdict::Cancels {
             previous_status,
             project,
-        } => (RelationCancelEffect::Cancelled, previous_status, project),
+        } => {
+            let registry = source_registry_key(&updates[group[0].update_index]);
+            ctx.record_close_intent(
+                registry.0,
+                registry.1,
+                CloseEffect::Cancel,
+            );
+            (RelationCancelEffect::Cancelled, previous_status, project)
+        }
         CancelSourceVerdict::AlreadyClosed { status } => {
             (RelationCancelEffect::AlreadyClosed, status, false)
         }
@@ -457,7 +389,7 @@ fn cancel_reasons(
     source_relative: &Path,
     line_index: usize,
     updates: &[RelationUpdateJson],
-    group: &[CancelEdge],
+    group: &[ClosingEdge],
 ) -> Result<Vec<String>, CaptureError> {
     let source_absolute = absolute_note(bob_dir, source_relative);
     let staged = current_note_text(planner, &source_absolute)?;
@@ -507,42 +439,6 @@ fn daily_read_state(
             day_absolute.display()
         )),
     }
-}
-
-/// The 1-based source line after staging, located by block id so a
-/// composed write still reports where S sits.
-fn locate_final_line(
-    staged: &str,
-    ctx: &DependencyContext,
-    display: &str,
-    block_id: Option<&str>,
-    fallback: usize,
-) -> usize {
-    let scan = note_tasks::scan(staged, ctx.settings());
-    if let Some(block_id) = block_id
-        && !block_id.is_empty()
-        && let Ok(task) = lookup_staged_task(&scan, display, block_id)
-    {
-        return task.line_index + 1;
-    }
-    fallback
-}
-
-/// Open tasks left behind by a cancelled `^prj`: every open-status task
-/// in the project note except the cancelled source line itself.
-fn count_open_tasks(
-    staged: &str,
-    ctx: &DependencyContext,
-    source_line: usize,
-) -> usize {
-    note_tasks::scan(staged, ctx.settings())
-        .tasks()
-        .iter()
-        .filter(|task| {
-            task.line_index + 1 != source_line
-                && matches!(task.status_symbol, ' ' | '*' | '/' | '?')
-        })
-        .count()
 }
 
 /// Clean display text for a recovered dependent line.

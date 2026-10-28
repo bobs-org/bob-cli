@@ -59,6 +59,7 @@ mod relate_existing;
 mod related;
 mod relations;
 mod relations_cancel;
+mod relations_complete;
 mod rewrite;
 mod routing;
 mod sections;

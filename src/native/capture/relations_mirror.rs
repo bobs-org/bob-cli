@@ -44,22 +44,35 @@ impl MirrorSkipReason {
     }
 }
 
-/// Load `relations.cancel_labels`, failing toward fewer cancels and
+/// Load the shared close policy (`relations.cancel_labels` and
+/// `relations.complete_labels`), failing toward fewer closes and
 /// warning through the capture warning string on invalid values. A
-/// missing key, `null`, or `[]` is a valid empty policy; anything else
-/// invalid yields the valid entries (possibly none) plus one warning.
-pub(super) fn load_cancel_labels(
-) -> (Vec<config::relations::CancelLabel>, Option<String>) {
+/// missing key, `null`, or `[]` is a valid empty policy; overlap and
+/// anything else invalid yields the valid entries (possibly none) plus
+/// one warning. The cancel-only substring filter is not used, so a
+/// both-lists overlap still surfaces.
+pub(super) fn load_close_policy() -> (
+    Vec<config::relations::CancelLabel>,
+    Vec<config::relations::CompleteLabel>,
+    Option<String>,
+) {
     match config::load_relations_config(&config::config_path()) {
-        Ok(loaded) => (
-            loaded.cancel_labels,
-            loaded
+        Ok(loaded) => {
+            let warning = loaded
                 .warnings
                 .iter()
-                .find(|warning| warning.contains("relations.cancel_labels"))
-                .map(|warning| format!("invalid relations config: {warning}")),
-        ),
+                .find(|warning| {
+                    warning.contains("relations.cancel_labels")
+                        || warning.contains("relations.complete_labels")
+                        || warning.contains(
+                            "is in both cancel_labels and complete_labels",
+                        )
+                })
+                .map(|warning| format!("invalid relations config: {warning}"));
+            (loaded.cancel_labels, loaded.complete_labels, warning)
+        }
         Err(error) => (
+            Vec::new(),
             Vec::new(),
             Some(format!(
                 "invalid relations config: {error}; cancelling nothing"

@@ -168,7 +168,13 @@ fn completion_summary_count(
     if result.task_complete.is_some() {
         count += 1;
     }
-    count += result.relation_completes.len();
+    count += result
+        .relation_completes
+        .iter()
+        .filter(|complete| {
+            complete.effect == super::output::RelationCompleteEffect::Completed
+        })
+        .count();
     if result.pomodoro_close.is_some() {
         count += 1;
     }

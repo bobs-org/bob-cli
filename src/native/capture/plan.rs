@@ -231,9 +231,9 @@ pub(super) fn plan_capture_batch_with_config_path(
     {
         warnings.push(warning.into());
     }
-    // The cancel-label policy warning (§17 CL2) surfaces once per batch,
-    // and only when a relation gesture consulted the policy. Plain
-    // captures never touch the config and never warn.
+    // The close-label policy warning (§17 CL2 / §18 CP2) surfaces once
+    // per batch, and only when a relation gesture consulted the policy.
+    // Plain captures never touch the config and never warn.
     if let Some(warning) = dependency_ctx.cancel_labels_warning()
         && !warnings
             .iter()
@@ -1541,6 +1541,9 @@ pub(super) fn plan_capture_item(
     }
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
     let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
+    let mut relation_completes: Vec<RelationCompleteJson> = Vec::new();
+    let mut close_day_file: Option<String> = None;
+    let mut close_task_block_refs: Vec<TaskBlockRef> = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     if !parsed.relations.is_empty() {
@@ -1573,16 +1576,20 @@ pub(super) fn plan_capture_item(
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
-        relation_cancels = plan_relation_cancels(
+        let close = plan_relation_close_effects(
             dependency_ctx,
             planner,
-            &request.bob_dir,
+            request,
             &parsed,
             &mut relation_updates,
             existing_owner,
-            request.dry_run,
             warnings,
         )?;
+        relation_cancels = close.cancels;
+        relation_completes = close.completes;
+        pomodoro_refs.extend(close.pomodoro_refs);
+        close_task_block_refs = close.task_block_refs;
+        close_day_file = close.day_file;
         if let Some(block_id) = reports.owner_block_id.as_deref() {
             let relocated = locate_task_by_block_id(
                 dependency_ctx,
@@ -1728,7 +1735,8 @@ pub(super) fn plan_capture_item(
             day_file: special
                 .as_ref()
                 .map(|edit| edit.details.day_file.clone())
-                .or_else(|| pomodoro_note.map(|note| note.day_file.clone())),
+                .or_else(|| pomodoro_note.map(|note| note.day_file.clone()))
+                .or(close_day_file),
             block_link: special
                 .as_ref()
                 .map(|edit| edit.details.block_link.clone()),
@@ -1793,7 +1801,7 @@ pub(super) fn plan_capture_item(
             minted_blocker_block_id,
             relation_updates,
             relation_cancels,
-            relation_completes: Vec::new(),
+            relation_completes,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,
@@ -1804,6 +1812,7 @@ pub(super) fn plan_capture_item(
         task_block_refs: {
             let mut refs = task_block_refs;
             refs.extend(dependency_block_refs);
+            refs.extend(close_task_block_refs);
             refs
         },
     })
