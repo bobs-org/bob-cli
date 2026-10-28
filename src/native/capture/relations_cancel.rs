@@ -106,11 +106,7 @@ pub(super) fn plan_relation_cancels(
     // machines can match the human ⊘ row. The human renderer prints the
     // ⊘ row once and never repeats these warning messages.
     for cancel in &cancels {
-        if cancel.cancel_log == "none"
-            && cancel.pomodoro_links_removed == 0
-            && cancel.recovered.is_empty()
-            && is_link_only_message(&cancel.message)
-        {
+        if cancel.effect == RelationCancelEffect::AlreadyClosed {
             continue;
         }
         let source_text = &cancel.source.text;
@@ -125,11 +121,11 @@ pub(super) fn plan_relation_cancels(
                     count: None,
                     message: if dry_run {
                         format!(
-                            "⊘ would cancel “{source_text}” (“{label}” “{target_text}”)"
+                            "⊘ would cancel “{source_text}” ({label} “{target_text}”)"
                         )
                     } else {
                         format!(
-                            "⊘ cancelled “{source_text}” (“{label}” “{target_text}”)"
+                            "⊘ cancelled “{source_text}” ({label} “{target_text}”)"
                         )
                     },
                 },
@@ -137,12 +133,6 @@ pub(super) fn plan_relation_cancels(
         }
     }
     Ok(cancels)
-}
-
-/// Link-only rows carry the muted already-closed message rather than a
-/// cancel message; they warn nothing.
-fn is_link_only_message(message: &str) -> bool {
-    message.starts_with("⊘ Stays") || message.starts_with("⊘ Already")
 }
 
 /// The target text behind one triggering label of a grouped cancel: the
@@ -401,6 +391,7 @@ fn plan_source_cancel(
             CancelLogOutcome::None | CancelLogOutcome::NotPresent => "none",
         };
         let cancel = RelationCancelJson {
+            effect: RelationCancelEffect::Cancelled,
             source: RelationCancelSourceJson {
                 path: display.clone(),
                 line: final_line,
@@ -425,13 +416,14 @@ fn plan_source_cancel(
                 &description,
                 &previous_status_name,
                 plan.removed_pomodoro_links,
-                recovered.len(),
+                &recovered,
                 project_open_tasks,
             ),
         };
         return Ok(Some(cancel));
     }
     Ok(Some(RelationCancelJson {
+        effect: RelationCancelEffect::AlreadyClosed,
         source: RelationCancelSourceJson {
             path: display,
             line: final_line,
@@ -451,7 +443,7 @@ fn plan_source_cancel(
         cancel_log: "none",
         pomodoro_links_removed: 0,
         recovered: Vec::new(),
-        message: already_closed_message(previous_status, &previous_status_name),
+        message: already_closed_message(previous_status),
     }))
 }
 
@@ -568,13 +560,14 @@ fn clean_task_text(
 
 /// The bob-authored capture row for a staged cancel
 /// (`docs/task-relations.md` §17 CL6): names S, the status transition,
-/// the prune count, and the recovery count. Dry runs use would-forms.
+/// the prune count, and the recovered dependent. Dry runs use
+/// would-forms.
 fn cancel_message(
     dry_run: bool,
     source_text: &str,
     previous_status_name: &str,
     pomodoro_links_removed: usize,
-    recovered_count: usize,
+    recovered: &[RelationCancelRecoveredJson],
     project_open_tasks: Option<usize>,
 ) -> String {
     let mut message = if dry_run {
@@ -602,29 +595,45 @@ fn cancel_message(
             ));
         }
     }
-    if recovered_count > 0 {
-        if dry_run {
-            message.push_str(&format!(" · would unblock {recovered_count}"));
-        } else {
-            message.push_str(&format!(" · unblocked {recovered_count}"));
+    match recovered {
+        [] => {}
+        [one] => {
+            if dry_run {
+                message.push_str(&format!(" · would unblock “{}”", one.text));
+            } else {
+                message.push_str(&format!(" · unblocked “{}”", one.text));
+            }
+        }
+        many => {
+            let count = many.len();
+            if dry_run {
+                message.push_str(&format!(" · would unblock {count} tasks"));
+            } else {
+                message.push_str(&format!(" · unblocked {count} tasks"));
+            }
         }
     }
     if let Some(open_tasks) = project_open_tasks
         && open_tasks > 0
     {
-        message.push_str(&format!(" · its {open_tasks} open tasks stay open"));
+        if open_tasks == 1 {
+            message.push_str(" · its 1 open task stays open");
+        } else {
+            message
+                .push_str(&format!(" · its {open_tasks} open tasks stay open"));
+        }
     }
     message
 }
 
 /// The muted link-only row for an already-closed source
-/// (`docs/task-relations.md` §17 CL6).
-fn already_closed_message(status: char, status_name: &str) -> String {
+/// (`docs/task-relations.md` §17 CL6). Capture prints this as a human
+/// line only: `-` is Already Cancelled, every other closed symbol
+/// stays Done.
+fn already_closed_message(status: char) -> String {
     if status == '-' {
-        "⊘ Already Cancelled · link only".to_string()
-    } else if status == 'x' || status == 'X' {
-        "⊘ Stays Done · link only".to_string()
+        "Already Cancelled · link only".to_string()
     } else {
-        format!("⊘ Stays {status_name} · link only")
+        "Stays Done · link only".to_string()
     }
 }

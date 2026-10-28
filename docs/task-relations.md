@@ -1128,15 +1128,15 @@ note stem, shown only when S is not in the active note (nav), or for
 | Live sentence (nav, Mac) | `⊘ {S} — {label} → {T}`, source dimmed; remote: `⊘ {S} ({note}) — …` |
 | Verdict `cancels` (bob `relation_cancel.message`) | `⊘ Cancels “{S}” · {Status} → Cancelled` |
 | Consequence strip (nav) | `⊘ Cancels “{S}” · removes its links from today's open Pomodoros · unblocks dependents` (no Pomodoro clause when S has no block id, as Task Card does) |
-| `^prj` suffix | `· its {N} open tasks stay open` |
-| Verdict `already_closed` (muted) | `Already Cancelled · link only` / `Stays Done · link only` |
+| `^prj` suffix | `· its 1 open task stays open` / `· its {N} open tasks stay open` |
+| Verdict `already_closed` (muted) | `Already Cancelled · link only` / `Stays Done · link only`; capture prints this as a muted human line only |
 | Verdict `recurring` (disabled row) | `“{S}” repeats — cancel it with Obsidian Tasks first` |
 | Verdict `new_task` (disabled row, refusal) | `“{S}” is new — it would be born cancelled · to retire “{T}”, use ~~` |
 | Inverse hint (muted) | `“supersedes” never cancels · to retire “{T}”, use ~~ with “superseded by”` (nav says `⇧L` instead of `~~`) |
 | Return hint (nav) | `↵ link & cancel` |
 | Batch banner (nav) | `⊘ Cancels {N} tasks — ↵ again to confirm` |
 | Notice (nav) | `🪢 {S} — {label} → {T} · ⊘ cancelled · removed {n} Pomodoro link · unblocked {k}` |
-| Capture row / preview (bob-authored) | `⊘ cancelled “{S}” · {Status} → Cancelled · removed {n} Pomodoro link · unblocked “{D}”`; dry run uses `would cancel`, `would remove`, `would unblock` |
+| Capture row / preview (bob-authored) | `⊘ cancelled “{S}” · {Status} → Cancelled · removed {n} Pomodoro link · unblocked “{D}”`; two or more recovered dependents use `unblocked {k} tasks`; dry run uses `would cancel`, `would remove`, `would unblock` |
 | Structured warning `relation_cancelled_source` | `⊘ cancelled “{S}” ({label} “{T}”)`; dry run `⊘ would cancel …` |
 | Hand-edit hint (nav, once per burst) | `⊘ “{label}” cancels only from the Links stage or capture · this task stays open` |
 | Rename warning | `“{label}” is a cancel label in config.yml — update relations.cancel_labels` |
@@ -1162,7 +1162,7 @@ byte-identical. Names below are final.
     `~~` token's task for `~~`. It never scans the vault.
 - **`capture-parse`:** relation-label spans gain `cancels_source: true`.
 - **`capture` (dry run and commit), per item:**
-  - `relation_cancels[]: {source: {path, line, block_id, text}, target: {path, block_id, text}, labels[], action: "added"|"relabeled", previous_status, previous_status_name, project_open_tasks?, cancel_log: "none"|"prepended", pomodoro_links_removed, recovered[]: {path, line, block_id, text}, message}`.
+  - `relation_cancels[]: {source: {path, line, block_id, text}, target: {path, block_id, text}, labels[], action: "added"|"relabeled", previous_status, previous_status_name, project_open_tasks?, cancel_log: "none"|"prepended", pomodoro_links_removed, recovered[]: {path, line, block_id, text}, message}`. One row per source the item cancels; already-closed sources appear only as `relation_updates[].cancel_effect`.
   - `relation_updates[]` rows gain `cancel_effect: "cancelled"|"already_closed"`.
   - `warnings[]` gains `{code: "relation_cancelled_source", label, message}`.
     The human renderer prints the ⊘ row once and does not repeat the

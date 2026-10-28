@@ -554,9 +554,14 @@ pub(super) struct CaptureItemResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) relation_updates: Vec<RelationUpdateJson>,
     /// Per-item cancel-label outcomes (`docs/task-relations.md` §17
-    /// CL7): one row per source this item retired or left closed.
-    /// Additive: omitted when empty, so older output stays byte-identical.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// CL7): one JSON row per source this item cancelled. Already-closed
+    /// sources stay in the vec for the muted human line and serialize
+    /// away. Additive: omitted when nothing cancelled, so older output
+    /// stays byte-identical.
+    #[serde(
+        skip_serializing_if = "relation_cancels_is_empty",
+        serialize_with = "serialize_relation_cancels"
+    )]
     pub(super) relation_cancels: Vec<RelationCancelJson>,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
@@ -1046,12 +1051,15 @@ pub(super) enum RelationCancelEffect {
     AlreadyClosed,
 }
 
-/// One cancel-label source this item retired or left closed
-/// (`docs/task-relations.md` §17 CL7): the staged source cancel (or the
-/// link-only outcome), one row per source no matter how many cancel
-/// edges named it.
+/// One cancel-label source this item cancelled
+/// (`docs/task-relations.md` §17 CL7): the staged source cancel, one
+/// row per source no matter how many cancel edges named it.
+/// Already-closed sources keep `effect: AlreadyClosed` for the human
+/// line and are omitted from JSON.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RelationCancelJson {
+    #[serde(skip)]
+    pub(super) effect: RelationCancelEffect,
     pub(super) source: RelationCancelSourceJson,
     pub(super) target: RelationCancelTargetJson,
     pub(super) labels: Vec<String>,
@@ -1068,8 +1076,28 @@ pub(super) struct RelationCancelJson {
     pub(super) message: String,
 }
 
-/// The cancelled (or already-closed) source of one `relation_cancels[]`
-/// row: where S sits after this item, with its pre-cancel description.
+fn relation_cancels_is_empty(cancels: &[RelationCancelJson]) -> bool {
+    cancels
+        .iter()
+        .all(|cancel| cancel.effect != RelationCancelEffect::Cancelled)
+}
+
+fn serialize_relation_cancels<S>(
+    cancels: &[RelationCancelJson],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    cancels
+        .iter()
+        .filter(|cancel| cancel.effect == RelationCancelEffect::Cancelled)
+        .collect::<Vec<_>>()
+        .serialize(serializer)
+}
+
+/// The cancelled source of one `relation_cancels[]` row: where S sits
+/// after this item, with its pre-cancel description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RelationCancelSourceJson {
     pub(super) path: String,

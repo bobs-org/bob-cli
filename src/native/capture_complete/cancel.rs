@@ -77,10 +77,13 @@ pub(super) fn plan_relation_cancel(
             );
             if project {
                 let open = source.project_open_tasks.unwrap_or(0);
-                message.push_str(&format!(
-                    " · its {open} open {} stay open",
-                    if open == 1 { "task" } else { "tasks" }
-                ));
+                if open == 1 {
+                    message.push_str(" · its 1 open task stays open");
+                } else {
+                    message.push_str(&format!(
+                        " · its {open} open tasks stay open"
+                    ));
+                }
             }
             ("cancels", message)
         }

@@ -251,14 +251,14 @@ fn cancel_forward_cancels_prunes_and_recovers() {
     assert_eq!(cancel["recovered"][0]["text"], "Needs stocks");
     assert_eq!(
         cancel["message"],
-        "⊘ cancelled “Sell stocks” · Todo → Cancelled · removed 1 Pomodoro link · unblocked 1",
+        "⊘ cancelled “Sell stocks” · Todo → Cancelled · removed 1 Pomodoro link · unblocked “Needs stocks”",
         "{cancel}"
     );
     assert_eq!(json["warnings"][0]["code"], "relation_cancelled_source");
     assert_eq!(json["warnings"][0]["label"], "duplicate of");
     assert_eq!(
         json["warnings"][0]["message"],
-        "⊘ cancelled “Sell stocks” (“duplicate of” “Sell stocks now”)",
+        "⊘ cancelled “Sell stocks” (duplicate of “Sell stocks now”)",
         "{json}"
     );
 
@@ -486,25 +486,50 @@ fn cancel_already_closed_links_only() {
     );
     write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
 
+    let dry_done = capture_human(
+        &vault,
+        &day,
+        &config,
+        "@a+done ~b:beta|\"duplicate of\"",
+        true,
+    );
+    assert_success(&dry_done);
+    let done_text = stdout(&dry_done);
+    assert!(
+        done_text.contains("Stays Done · link only")
+            && !done_text.contains('⊘'),
+        "muted already-closed line has no ⊘:\n{done_text}"
+    );
+
     let json =
         capture_json(&vault, &day, &config, "@a+done ~b:beta|\"duplicate of\"");
     assert_eq!(
         json["relation_updates"][0]["cancel_effect"], "already_closed",
         "{json}"
     );
-    let cancel = &json["relation_cancels"][0];
-    assert_eq!(cancel["previous_status"], "x");
-    assert_eq!(cancel["previous_status_name"], "Done");
-    assert_eq!(cancel["message"], "⊘ Stays Done · link only");
-    assert_eq!(cancel["pomodoro_links_removed"], 0);
-    assert!(cancel["recovered"].as_array().unwrap().is_empty());
+    assert!(json.get("relation_cancels").is_none(), "{json}");
     assert!(json.get("warnings").is_none(), "{json}");
+
+    let dry_old = capture_human(
+        &vault,
+        &day,
+        &config,
+        "@a+old ~b:beta|\"superseded by\"",
+        true,
+    );
+    assert_success(&dry_old);
+    let old_text = stdout(&dry_old);
+    assert!(
+        old_text.contains("Already Cancelled · link only")
+            && !old_text.contains('⊘'),
+        "muted already-cancelled line has no ⊘:\n{old_text}"
+    );
 
     let second =
         capture_json(&vault, &day, &config, "@a+old ~b:beta|\"superseded by\"");
+    assert!(second.get("relation_cancels").is_none(), "{second}");
     assert_eq!(
-        second["relation_cancels"][0]["message"],
-        "⊘ Already Cancelled · link only",
+        second["relation_updates"][0]["cancel_effect"], "already_closed",
         "{second}"
     );
 
@@ -814,7 +839,7 @@ fn cancel_prj_source_cancels_project_only() {
     assert_eq!(cancel["project_open_tasks"], 2);
     assert_eq!(
         cancel["message"],
-        "⊘ cancelled “Ship it” · Todo → Cancelled · unblocked 1 · its 2 open tasks stay open",
+        "⊘ cancelled “Ship it” · Todo → Cancelled · unblocked “Resident blocked” · its 2 open tasks stay open",
         "{cancel}"
     );
 
@@ -832,6 +857,112 @@ fn cancel_prj_source_cancels_project_only() {
     assert!(
         note.contains("- [ ] #task Resident blocked [fresh:: 2026-10-14] [unblocked:: 2026-10-14] [dependsOn:: s__prj] ^res-blocked\n"),
         "residents blocked only by the project recover:\n{note}"
+    );
+}
+
+// Two recovered dependents use the plural unblocked form.
+#[test]
+fn cancel_two_recovered_dependents_uses_plural() {
+    let (_temp, vault, day, config) = setup("bob-cli-cancel-two-recovered");
+    write_file(
+        &vault.join("a.md"),
+        "- [ ] #task Alpha [id:: a__alpha] ^alpha\n",
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    write_file(
+        &vault.join("c.md"),
+        concat!(
+            "- [?] #task First [fresh:: 2026-10-14] [dependsOn:: a__alpha] ^first\n",
+            "\t- ⛓️ **DEPENDS ON:** [[a#^alpha]]\n",
+            "- [?] #task Second [fresh:: 2026-10-14] [dependsOn:: a__alpha] ^second\n",
+            "\t- ⛓️ **DEPENDS ON:** [[a#^alpha]]\n",
+        ),
+    );
+
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"duplicate of\"",
+    );
+    assert_eq!(
+        json["relation_cancels"][0]["recovered"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "{json}"
+    );
+    assert_eq!(
+        json["relation_cancels"][0]["message"],
+        "⊘ cancelled “Alpha” · Todo → Cancelled · unblocked 2 tasks",
+        "{json}"
+    );
+}
+
+// A dry run names the one recovered dependent with the would-form.
+#[test]
+fn cancel_dry_run_names_one_dependent() {
+    let (_temp, vault, day, config) = setup("bob-cli-cancel-dry-unblock");
+    write_file(
+        &vault.join("a.md"),
+        "- [ ] #task Alpha [id:: a__alpha] ^alpha\n",
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    write_file(
+        &vault.join("c.md"),
+        concat!(
+            "- [?] #task Needs alpha [fresh:: 2026-10-14] [dependsOn:: a__alpha] ^needs-alpha\n",
+            "\t- ⛓️ **DEPENDS ON:** [[a#^alpha]]\n",
+        ),
+    );
+
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("--")
+        .arg("@a+alpha ~b:beta|\"duplicate of\"");
+    command
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", &config);
+    let output = command.output().expect("run dry-run capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["dry_run"], true);
+    assert_eq!(
+        json["relation_cancels"][0]["message"],
+        "⊘ would cancel “Alpha” · Todo → Cancelled · would unblock “Needs alpha”",
+        "{json}"
+    );
+}
+
+// A `^prj` with exactly one open resident uses the singular suffix.
+#[test]
+fn cancel_prj_source_singular_open_task() {
+    let (_temp, vault, day, config) = setup("bob-cli-cancel-prj-one");
+    write_file(
+        &vault.join("s.md"),
+        concat!(
+            "- [ ] #task Ship it [id:: s__prj] ^prj\n",
+            "- [ ] #task Only resident ^res-one\n",
+        ),
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+
+    let json =
+        capture_json(&vault, &day, &config, "@s+prj ~b:beta|\"duplicate of\"");
+    assert_eq!(json["relation_cancels"][0]["project_open_tasks"], 1);
+    assert_eq!(
+        json["relation_cancels"][0]["message"],
+        "⊘ cancelled “Ship it” · Todo → Cancelled · its 1 open task stays open",
+        "{json}"
     );
 }
 

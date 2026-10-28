@@ -512,6 +512,10 @@ fn cancel_fixture() -> TempDir {
         &temp.path().join("proj.md"),
         "- [ ] #task Big project ^prj\n- [ ] #task Resident one ^r1\n- [ ] #task Resident two ^r2\n",
     );
+    write_file(
+        &temp.path().join("solo.md"),
+        "- [ ] #task Solo project ^prj\n- [ ] #task Only resident ^r1\n",
+    );
     temp
 }
 
@@ -629,6 +633,17 @@ fn cancel_project_source_keeps_residents_open() {
         "⊘ Cancels “Big project” · Todo → Cancelled · its 2 open tasks stay open"
     );
     assert_eq!(json["relation_cancel"]["source"]["project_open_tasks"], 2);
+
+    let raw = "Use this @solo+prj ~invest:now|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+    assert_eq!(json["relation_cancel"]["source"]["text"], "Solo project");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "⊘ Cancels “Solo project” · Todo → Cancelled · its 1 open task stays open"
+    );
+    assert_eq!(json["relation_cancel"]["source"]["project_open_tasks"], 1);
 }
 
 #[test]

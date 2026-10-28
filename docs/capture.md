@@ -2397,9 +2397,11 @@ new label reports `🪢 relabeled`. A one-off hide prints
 `🪢 hides "see" from suggestions (2 links)`. Dry runs say
 `would link to` / `would now link here` / `would relabel`. A staged
 cancel adds one bob-authored `⊘` row per source, for example
-`⊘ cancelled “Sell stocks” · Ready → Cancelled · removed 1 Pomodoro link · unblocked 1`
+`⊘ cancelled “Sell stocks” · Ready → Cancelled · removed 1 Pomodoro link · unblocked “Needs stocks”`
 (`would cancel` / `would remove` / `would unblock` on dry runs);
-an already-closed source prints the muted link-only line instead.
+an already-closed source prints the muted human line
+(`Already Cancelled · link only` / `Stays Done · link only`) instead,
+with no ⊘ and no `relation_cancels[]` row.
 
 **JSON.** Every `schema_version` stays 1 and every field is
 additive. `capture-parse` adds `relations[]` (top-level and per
