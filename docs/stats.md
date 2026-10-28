@@ -379,9 +379,9 @@ total (`stat: "total"`, suffix `total`), bool is met days over days with data
 linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
 `summary.p25`/`p75` stay daily even when the chart is grouped. Parts
-summaries rank dimensions by total; only `note` and `theme` collapse to top
-five plus `other`. `area`, `root_parent`, and `project` keep every key (the
-note tree already bounds them). Rolling medians span 7 day points, 4 week
+summaries rank dimensions by total; only `note` collapses to top five plus
+`other`. `theme`, `area`, `root_parent`, and `project` keep every key (the
+note tree already bounds the homes dimensions). Rolling medians span 7 day points, 4 week
 buckets, or 3
 month buckets, with a 7-day / 3-week / 2-month lead-in so the first displayed
 point can fill, need half the window in real observations, and stay `null`
@@ -598,7 +598,8 @@ dimension in a stable order: pomodoro `area`, `root parent`, `project`,
 root-parent, and project cells use catalog labels; under color they prefix a
 `●` in the area's xterm hue, and buckets render dim. The project line shows
 the top five homes plus
-`other`, with buckets always shown outside those five. When apportioned
+`other`, with buckets always shown outside those five. The theme line shows
+the top five plus `other`. When apportioned
 minutes are non-zero, a dim `split` line reports the share of project
 minutes that came from sessions with several homes. Review bucket dots use
 their area's hue; `@daily`, `@unlinked`, and `@unfiled` stay dim. Reports with area or
@@ -1016,9 +1017,13 @@ The context panel follows the focused metric family:
   with an `Update bob to group by root parent.` hint; a stale
   `homesView === "areas"` maps to `roots`.
 - **Themes** remains one click away and shows the supplied theme breakdown. Theme
-  bars and names come from the report's `theme_hues`. Reports
-  without `root_parent` parts default to Themes and show an update-bob hint. Reports
-  without the additive `sessions` list omit session drill-down controls.
+  bars and names come from the report's `theme_hues`. The list shows the top 8
+  rows by value plus a quiet `N more` / `Show fewer` toggle (focus key
+  `panel-theme-more`, state `themeRowsExpanded`). Reports that still carry an
+  `other` bucket (older bob) render the supplied list as before, without the
+  cap. Reports without `root_parent` parts default to Themes and show an
+  update-bob hint. Reports without the additive `sessions` list omit session
+  drill-down controls.
 - Root rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
   expand contributing sessions (newest first, 20 initially) with date, time range,
   duration, authored name, and home shares; selecting a session opens its daily note at
@@ -1052,6 +1057,105 @@ closes the definition panel. Inputs and native controls keep their normal key be
 
 **Definition** discloses the metric's report-provided definition, unit, source, tracking
 start, and limits. No definition or metric value is reconstructed by the renderer.
+
+### Window bars
+
+Two Day-strip-style working-time bars sit in a `.bob-stats-lanes` group between
+`.bob-stats-header` (whose last line is the window label) and `.bob-stats-tiles`.
+They have no card, border, or background. The roots lane comes first and the
+themes lane second; both always show when their data exists, with no lane
+switch. Each lane is one legend row over one **6 px** fully rounded bar.
+A 2 px gap of page background separates segments, never track colour.
+Neighbouring **gray** segments, and neighbouring **unattributed** segments,
+join with no gap. Every positive segment keeps `min-width: 2px`. Spacing is
+the legend row, the bar `0.4em` below it, the next lane `0.7em` below that
+bar, and group margin about `0.7rem 0 0.2rem`. Legend type matches the Day
+strip: `0.85em`, muted labels, `--text-normal` tabular values.
+
+The source is the `worked` metric's `parts_summary` from the report already
+loaded for the page. That data covers the **complete days** of the selected
+window: `summarize_parts` skips the provisional today, and so do the tiles.
+A pinned day or bucket never changes the bars; the "Where the time went"
+panel keeps following the pin. Roots use `parts_summary.root_parent`. A
+report without it but with `parts_summary.area` (older bob) falls back to
+areas, and the copy then says `Time by area`. Themes use
+`parts_summary.theme`. Bob owns every value: labels, `display`, `share`, the
+total, and hues all come from the report. The plugin only orders, colours,
+and lays out. It never sums daily parts and never formats minutes itself.
+
+**Roots** come from `statsPanelHomeRows(worked, report, dimension, null)`
+(positive values only), ordered by `statsPanelHomeAreaRows` (area hue-slot
+order, then label, with buckets last) and coloured by `statsPanelDistinctHues`,
+so the top bar and the panel's root bar always agree. **Themes** follow the
+Day strip theme-lane rule. Identity comes from `statsThemeRef` (report
+`theme_hues`, else the plugin's `pomodoroThemeHueFor`). Coloured themes are
+ordered by minutes descending, then label. Gray themes (exempt,
+unconfigured) follow, by minutes. Then comes `other` (older bob only), and
+`(unnamed)` is last. Among coloured themes that share a hue, the largest
+keeps the exact hue, the second gets 65% and later ones 42%. The exact keys
+`other` and `(unnamed)` are always gray, even when `theme_hues` carries an
+entry for them.
+
+Every segment has `tone` = `hue` | `gray` | `none`. `none` is time bob
+cannot attribute in that dimension (`@unlinked`, `@unfiled`, and
+`(unnamed)`): a fine diagonal hatch in `--text-faint` over a faint base,
+and a hollow legend mark. `gray` is the existing muted fill: `@daily`
+(GTD), exempt PLAN, unconfigured themes, and `other`.
+
+The legend uses `bob-day-strip-legend` markup and the Day strip fitter.
+Items appear in bar order, the lowest-ranked items drop first, one `+N`
+counter replaces them, and the legend switches to names-only mode when that
+names more items. Legend items never shrink or ellipsize. Roots legend
+labels use the Day strip `legendLabel` rule: the bare catalog label
+(`@daily` → `GTD`), `short_label` for review buckets, and the full label
+for case-insensitive collisions. Tooltips and accessible text use full
+labels. Item and segment titles read `<label> · <display> · <share>`.
+Unconfigured themes append ` · not in your themes`. Each legend item shows
+bob's `display` (window time). The right end of the first shown lane row
+holds `<summary.total.display> worked` in faint tabular text that never
+wraps. Its title is `Worked <range.label>`. When `range.includes_today`,
+the title adds `· complete days; today is not included`.
+
+Each lane's legend is a keyboard stop: `span role="button" tabindex="0"`,
+`data-stats-focus-key="lanes-roots"` / `"lanes-themes"`, activated by Enter
+or Space (`preventDefault`). The bar is a mouse-only second target with
+`aria-hidden` and no tabindex. Activation sets `state.focus = "worked"`,
+`state.homesView` to `"roots"` (or `"areas"` on an older bob) or
+`"themes"`, clears `state.pinnedDay` and `state.pinnedBucket`, sets
+`state.revealPanel = "homes"`, and calls `statsRenderLocally` with the
+matching panel view toggle, making no fetch. Pointer over a segment or
+legend item marks that key hot on its lane: other segments fade to about
+0.28 opacity, other legend items to about 0.45. Hovering `+N` lights every
+segment whose legend item is currently hidden. Leaving the lane clears the
+highlight. Delegated `pointerover`/`pointerleave` on the lane with a 120 ms
+opacity transition; nothing repaints and nothing is fetched.
+
+On a range change (`windowKey` = `range.start..range.end`), when the
+document is laid out and `(prefers-reduced-motion: reduce)` does not match,
+each segment's `flexGrow` starts at its old value (or 0 for new keys),
+`.bob-stats-lanes-morph` carries `flex-grow 280ms cubic-bezier(.2,.8,.2,1)`,
+and the next animation frame sets the final values. Keys that left the
+window are simply not rendered. Without layout or `requestAnimationFrame`,
+final values are set at once. First paint, same-window revalidation,
+`statsRenderLocally` re-renders, and the skeleton never morph.
+
+No `worked` metric, or not minutes, or `summary.total` is null: render no
+lanes and no element. Total 0: show the roots lane as an empty track
+(`--background-modifier-border`) with `no Pomodoros`, omit the themes lane,
+and read `0m worked`. No positive root or area parts: omit the roots lane.
+No positive theme parts: omit the themes lane. Neither: render no lanes.
+Skeleton (first paint only): two invisible legend lines plus two empty 6 px
+tracks, so the tiles do not jump when the report lands. An error card means
+no lanes.
+
+The group has `role="group"` and
+`aria-label="Where the time went, <range.label>"`. Each legend
+`aria-label` reads
+`Time by root parent, <range.label>: bob 28h 36m (23%), … Show details below.`
+It lists every segment; the themes lane says `Time by theme` and the area
+fallback says `Time by area`. `:focus-visible` gets a 2 px
+`--interactive-accent` outline. Under `forced-colors`, segments are
+`CanvasText`, gray and hatch are `GrayText`, and gaps stay.
 
 ### Day strip
 

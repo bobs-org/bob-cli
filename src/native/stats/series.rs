@@ -1127,7 +1127,7 @@ fn summarize_parts(
                         .then_with(|| left_key.cmp(right_key))
                 },
             );
-            if dimension == "note" || dimension == "theme" {
+            if dimension == "note" {
                 let overflow = ranked.split_off(ranked.len().min(5));
                 if !overflow.is_empty() {
                     let other =
@@ -1778,6 +1778,34 @@ mod tests {
         assert_eq!(areas.len(), 6);
         assert!(areas.iter().all(|part| part.key != "other"));
         assert_eq!(areas[0].display, "6m");
+    }
+
+    #[test]
+    fn parts_summary_keeps_every_theme_key() {
+        let mut value = daily(date(2026, 1, 1), Some(36));
+        value.parts.insert(
+            "theme".to_string(),
+            [
+                ("ALPHA", 8),
+                ("BRAVO", 7),
+                ("CHARLIE", 6),
+                ("DELTA", 5),
+                ("ECHO", 4),
+                ("FOXTROT", 3),
+                ("GOLF", 2),
+                ("HOTEL", 1),
+            ]
+            .into_iter()
+            .map(|(key, count)| (key.to_string(), count))
+            .collect(),
+        );
+        let summary = summarize_parts(&[value], MetricUnit::Minutes);
+        let themes = &summary["theme"];
+        assert_eq!(themes.len(), 8);
+        assert!(themes.iter().all(|part| part.key != "other"));
+        assert_eq!(themes[0].key, "ALPHA");
+        assert_eq!(themes[7].key, "HOTEL");
+        assert_eq!(themes[0].display, "8m");
     }
 
     #[test]

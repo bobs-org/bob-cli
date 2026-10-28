@@ -138,8 +138,9 @@ Names wear a tint; places wear a dot.
   cursor leaves it.
 - **Swatch:** in dense rows, an 8 pt rounded square (radius 2) before the
   name. The Day strip theme legend uses the same rounded square at the
-  legend-dot footprint. Area homes keep their ● circle. The Day strip
-  shades smaller same-hue themes; every other surface uses the exact hue.
+  legend-dot footprint. Area homes keep their ● circle. The Day strip and
+  the Stats window bars shade smaller same-hue themes; every other surface
+  uses the exact hue.
 - **Composites:** each component gets its own pill; the `+` stays neutral.
 - **CLI:** an xterm-256 `■` before a default-color name when color is
   enabled (TTY and no `NO_COLOR`). An exempt theme gets `□`; an

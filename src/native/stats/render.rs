@@ -854,10 +854,10 @@ fn parts_lines(
         let Some(parts) = metric.parts_summary.get(*name) else {
             continue;
         };
-        let displayed = if *name == "project" {
-            collapse_project_cli(parts)
-        } else {
-            parts.clone()
+        let displayed = match *name {
+            "project" => collapse_parts_cli(parts, true),
+            "theme" => collapse_parts_cli(parts, false),
+            _ => parts.clone(),
         };
         if displayed.is_empty() {
             continue;
@@ -942,11 +942,14 @@ fn legacy_parts_lines(metric: &MetricReport, styler: &Styler) -> String {
     out
 }
 
-fn collapse_project_cli(parts: &[PartSummary]) -> Vec<PartSummary> {
+fn collapse_parts_cli(
+    parts: &[PartSummary],
+    keep_buckets: bool,
+) -> Vec<PartSummary> {
     let mut homes = Vec::new();
     let mut buckets = Vec::new();
     for part in parts {
-        if is_bucket_key(&part.key) {
+        if keep_buckets && is_bucket_key(&part.key) {
             buckets.push(part.clone());
         } else {
             homes.push(part.clone());
@@ -1378,6 +1381,50 @@ mod tests {
         assert!(!text.contains("●"));
         let colored = detail(&report, &Styler::colored());
         assert!(colored.contains("\u{1b}[38;5;208m●"), "{colored:?}");
+    }
+
+    fn part(key: &str, value: i64, share: &str) -> PartSummary {
+        PartSummary {
+            key: key.to_string(),
+            value,
+            display: format!("{value}m"),
+            share: share.to_string(),
+            label: None,
+            apportioned: None,
+            apportioned_display: None,
+        }
+    }
+
+    #[test]
+    fn detail_theme_line_still_collapses_to_five_plus_other() {
+        let mut report = report(vec![point(9, Some(36), "36m")]);
+        report.metrics[0].parts_summary.insert(
+            "theme".to_string(),
+            vec![
+                part("ALPHA", 8, "22%"),
+                part("BRAVO", 7, "19%"),
+                part("CHARLIE", 6, "17%"),
+                part("DELTA", 5, "14%"),
+                part("ECHO", 4, "11%"),
+                part("FOXTROT", 3, "8%"),
+                part("GOLF", 2, "6%"),
+                part("HOTEL", 1, "3%"),
+            ],
+        );
+        let text = detail(&report, &Styler::plain());
+        let theme_line = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("theme"))
+            .expect("theme line");
+        assert!(theme_line.contains("ALPHA 8m 22%"), "{theme_line:?}");
+        assert!(theme_line.contains("ECHO 4m 11%"), "{theme_line:?}");
+        assert!(theme_line.contains("other 6m 17%"), "{theme_line:?}");
+        assert!(
+            !theme_line.contains("FOXTROT")
+                && !theme_line.contains("GOLF")
+                && !theme_line.contains("HOTEL"),
+            "{theme_line:?}"
+        );
     }
 
     #[test]
