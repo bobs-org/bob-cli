@@ -25,6 +25,7 @@ pub(crate) mod rename;
 mod scan;
 mod similar;
 pub(crate) mod split;
+pub(crate) mod suggest;
 #[cfg(test)]
 mod tests;
 pub(crate) mod write;
@@ -36,6 +37,10 @@ pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
 pub(crate) use rename::{build_cli_rename, renamed_reappeared, run_rename};
 pub(crate) use split::{build_cli_split, run_split};
+#[allow(unused_imports)]
+pub(crate) use suggest::{
+    suggest_for_new_task, suggest_for_task, SuggestResult, ThemeSuggestion,
+};
 pub(crate) use write::{run_color, run_hide, run_unhide};
 
 pub(crate) const THEME_NOT_CONFIGURED: &str = "theme_not_configured";
@@ -329,6 +334,92 @@ impl Catalog {
             Some(themes) => {
                 !themes.contains(key) && !self.inventory.contains(key)
             }
+        }
+    }
+
+    pub(crate) fn display_name(&self, key: &str, canonical: &str) -> String {
+        if let Some(record) = self.records.get(key) {
+            return record.name.clone();
+        }
+        if let Some(themes) = &self.themes
+            && let Some(entry) =
+                themes.entries.iter().find(|entry| entry.key == key)
+        {
+            return entry.name.clone();
+        }
+        canonical.to_string()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_suggest(
+        known: &[(String, String)],
+        configured: &[(String, String)],
+        live: &[String],
+        areas: BTreeMap<String, Hue>,
+        hidden: &[String],
+        exempt: &[String],
+    ) -> Self {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 28).expect("valid date");
+        let mut records = BTreeMap::new();
+        for (key, name) in known {
+            records.insert(
+                key.clone(),
+                ThemeRecord {
+                    key: key.clone(),
+                    name: name.clone(),
+                    first_used: today,
+                    last_used: today,
+                    days_used: 1,
+                    entries: 1,
+                    today: None,
+                },
+            );
+        }
+        for key in live {
+            records.entry(key.clone()).or_insert_with(|| ThemeRecord {
+                key: key.clone(),
+                name: key.to_ascii_uppercase(),
+                first_used: today,
+                last_used: today,
+                days_used: 1,
+                entries: 1,
+                today: Some(TodayPresence::Open),
+            });
+        }
+        let mut prefs = Prefs::default();
+        for key in hidden {
+            prefs.by_key.insert(
+                key.clone(),
+                journal::KeyPref {
+                    hidden: true,
+                    pin: None,
+                },
+            );
+        }
+        let themes = if configured.is_empty() {
+            None
+        } else {
+            Some(config::ThemesConfig {
+                entries: configured
+                    .iter()
+                    .map(|(key, name)| config::ConfiguredTheme {
+                        key: key.clone(),
+                        name: name.clone(),
+                        color: None,
+                    })
+                    .collect(),
+            })
+        };
+        Self {
+            today,
+            records,
+            days: BTreeMap::new(),
+            prefs,
+            areas,
+            exempt: exempt.iter().cloned().collect(),
+            inventory: BTreeSet::new(),
+            themes,
+            warnings: Vec::new(),
         }
     }
 

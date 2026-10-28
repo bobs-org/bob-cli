@@ -106,6 +106,48 @@ pub(crate) fn format_calendar_date(date: NaiveDate) -> String {
     format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
 }
 
+/// Canonical single-component theme name: trimmed, nonempty, no `+`,
+/// and accepted by the Pomodoro-name character class after uppercasing.
+pub(crate) fn canonical_theme_name(raw: &str) -> Option<String> {
+    if raw.contains('+') {
+        return None;
+    }
+    let name = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_uppercase();
+    is_theme_component(&name).then_some(name)
+}
+
+fn is_theme_component(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_uppercase() && !first.is_ascii_digit() {
+        return false;
+    }
+    let mut has_letter = first.is_ascii_uppercase();
+    for character in chars {
+        let allowed = first_or_rest_theme_char(character);
+        if !allowed {
+            return false;
+        }
+        has_letter |= character.is_ascii_uppercase();
+    }
+    has_letter
+}
+
+fn first_or_rest_theme_char(character: char) -> bool {
+    character.is_ascii_uppercase()
+        || character.is_ascii_digit()
+        || matches!(
+            character,
+            ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +267,18 @@ mod tests {
     fn format_round_trips_through_strict_parse() {
         let date = parse_strict_calendar_date("2026-03-05").expect("valid");
         assert_eq!(format_calendar_date(date), "2026-03-05");
+    }
+
+    #[test]
+    fn canonical_theme_name_accepts_a_single_component() {
+        assert_eq!(canonical_theme_name(" write "), Some("WRITE".into()));
+        assert_eq!(
+            canonical_theme_name("Deep  Work"),
+            Some("DEEP WORK".into())
+        );
+        assert_eq!(canonical_theme_name("BUILD + FIX"), None);
+        assert_eq!(canonical_theme_name(""), None);
+        assert_eq!(canonical_theme_name("+++"), None);
+        assert_eq!(canonical_theme_name("??"), None);
     }
 }

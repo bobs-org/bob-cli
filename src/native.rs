@@ -91,6 +91,7 @@ pub(crate) mod task_relations;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;
+mod task_theme;
 #[cfg(test)]
 pub(crate) mod test_stub;
 pub(crate) mod url_routing;

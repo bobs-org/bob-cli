@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fs,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 
@@ -9,15 +10,22 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 
 use crate::native::{
+    config::PlanConfig,
     env::TestEnvGuard,
     plan_budget::{normalize_component, split_components},
-    pomodoro_homes::{fallback_hue, Hue},
+    pomodoro_homes::{fallback_hue, HomeResolver, Hue, IndexedHomeSource},
+    task_theme::{
+        clear_task_theme, parse_task_theme, plan_theme_change, set_task_theme,
+        TaskThemeState, ThemeChange,
+    },
+    vault_links::NoteIndex,
 };
 
 use super::{
     journal, rank_history, resolve_hue, scan,
     similar::{similar_to, SimilarTheme},
-    Catalog, HueSource, RankTheme, ThemeLookup,
+    suggest_for_new_task, suggest_for_task, Catalog, HueSource, RankTheme,
+    SuggestResult, ThemeLookup, ThemeSuggestion,
 };
 
 fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {
@@ -391,6 +399,347 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
             .collect();
         let got = similar_to(&case.query, &themes);
         assert_eq!(got, case.expected, "similar: {}", case.name);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ThemeCoreVectors {
+    suggest: SuggestVectors,
+    task_field: Vec<TaskFieldCase>,
+    write_rule: Vec<WriteRuleCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SuggestVectors {
+    notes: BTreeMap<PathBuf, String>,
+    cases: Vec<SuggestCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SuggestCase {
+    id: String,
+    residence: String,
+    #[serde(default)]
+    line: Option<String>,
+    #[serde(default)]
+    new_task: bool,
+    #[serde(default)]
+    config: Option<SuggestConfig>,
+    #[serde(default)]
+    live: Vec<String>,
+    expected: Option<SuggestExpected>,
+    #[serde(default)]
+    warnings: Vec<SuggestWarningExpected>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SuggestConfig {
+    reading_theme: String,
+    exempt: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SuggestExpected {
+    source: String,
+    label: String,
+    theme_key: String,
+    theme_name: String,
+    known: bool,
+    #[serde(default)]
+    repair: Option<String>,
+    #[serde(default)]
+    from: Option<FromExpected>,
+    #[serde(default)]
+    inherited: Option<Box<SuggestExpected>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FromExpected {
+    path: String,
+    stem: String,
+    kind: String,
+    chain: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SuggestWarningExpected {
+    code: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskFieldCase {
+    id: String,
+    op: String,
+    #[serde(default)]
+    line: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    repair: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WriteRuleCase {
+    id: String,
+    field: String,
+    #[serde(default)]
+    field_key: Option<String>,
+    suggestion: Option<String>,
+    inherited: Option<String>,
+    destination: String,
+    exempt: Vec<String>,
+    deliberate: bool,
+    expected: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[test]
+fn shared_vectors_cover_suggest_task_field_and_write_rule() {
+    let vectors: ThemeCoreVectors = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/pomodoro_themes/vectors.json"
+    ))
+    .expect("theme core vectors parse");
+    assert!(!vectors.suggest.cases.is_empty());
+    assert!(!vectors.task_field.is_empty());
+    assert!(!vectors.write_rule.is_empty());
+
+    let note_index =
+        NoteIndex::from_paths(vectors.suggest.notes.keys().cloned());
+    let known = [
+        ("write".to_string(), "WRITE".to_string()),
+        ("build".to_string(), "BUILD".to_string()),
+        ("read".to_string(), "READ".to_string()),
+        ("fix".to_string(), "FIX".to_string()),
+        ("plan".to_string(), "PLAN".to_string()),
+    ];
+    let configured = [("chore".to_string(), "CHORE".to_string())];
+    let areas = BTreeMap::from([
+        ("dev".to_string(), Hue::Blue),
+        ("job".to_string(), Hue::Aqua),
+    ]);
+    let hidden = ["chore".to_string()];
+    let exempt = ["plan".to_string()];
+
+    for case in &vectors.suggest.cases {
+        let catalog = super::Catalog::for_suggest(
+            &known,
+            &configured,
+            &case.live,
+            areas.clone(),
+            &hidden,
+            &exempt,
+        );
+        let mut cfg = PlanConfig::default();
+        if let Some(config) = &case.config {
+            if config.reading_theme.eq_ignore_ascii_case("off") {
+                cfg.reading_theme = None;
+            } else {
+                cfg.reading_theme =
+                    Some(config.reading_theme.to_ascii_uppercase());
+            }
+            cfg.exempt = config.exempt.clone();
+        }
+        let mut resolver = HomeResolver::new(IndexedHomeSource::new(
+            &note_index,
+            &vectors.suggest.notes,
+        ));
+        let result: SuggestResult = if case.new_task {
+            suggest_for_new_task(
+                &mut resolver,
+                &catalog,
+                &cfg,
+                Path::new(&case.residence),
+            )
+        } else {
+            suggest_for_task(
+                &mut resolver,
+                &catalog,
+                &cfg,
+                Path::new(&case.residence),
+                case.line.as_deref().expect(case.id.as_str()),
+            )
+        };
+        assert_suggestion(
+            &case.id,
+            case.expected.as_ref(),
+            result.suggestion.as_ref(),
+        );
+        let got_warnings: Vec<(String, Option<String>)> = result
+            .warnings
+            .iter()
+            .map(|warning| (warning.code.clone(), warning.path.clone()))
+            .collect();
+        let expected_warnings: Vec<(String, Option<String>)> = case
+            .warnings
+            .iter()
+            .map(|warning| (warning.code.clone(), warning.path.clone()))
+            .collect();
+        assert_eq!(got_warnings, expected_warnings, "warnings: {}", case.id);
+        if let Some(suggestion) = result.suggestion.as_ref() {
+            let value =
+                serde_json::to_value(suggestion).expect(case.id.as_str());
+            assert_eq!(value["source"], case.expected.as_ref().unwrap().source);
+            if suggestion.source == super::suggest::SuggestionSource::Task {
+                assert!(value.get("inherited").is_some(), "{}", case.id);
+            } else {
+                assert!(value.get("inherited").is_none(), "{}", case.id);
+            }
+        }
+    }
+
+    for case in &vectors.task_field {
+        match case.op.as_str() {
+            "parse" => {
+                let state =
+                    parse_task_theme(case.line.as_deref().expect(&case.id));
+                match case.state.as_deref() {
+                    Some("none") => assert!(
+                        matches!(state, TaskThemeState::None),
+                        "{}",
+                        case.id
+                    ),
+                    Some("set") => match state {
+                        TaskThemeState::Set { value, .. } => {
+                            assert_eq!(
+                                value,
+                                case.value.as_deref().unwrap(),
+                                "{}",
+                                case.id
+                            );
+                        }
+                        other => panic!("{}: {other:?}", case.id),
+                    },
+                    Some("repair") => match state {
+                        TaskThemeState::Repair { kind } => {
+                            let got = match kind {
+                                crate::native::task_theme::RepairKind::Duplicate => {
+                                    "duplicate"
+                                }
+                                crate::native::task_theme::RepairKind::Invalid => {
+                                    "invalid"
+                                }
+                            };
+                            assert_eq!(
+                                got,
+                                case.repair.as_deref().unwrap(),
+                                "{}",
+                                case.id
+                            );
+                        }
+                        other => panic!("{}: {other:?}", case.id),
+                    },
+                    other => panic!("unknown parse state {other:?}"),
+                }
+            }
+            "set" => {
+                let got = set_task_theme(
+                    case.before.as_deref().expect(&case.id),
+                    case.name.as_deref().expect(&case.id),
+                );
+                assert_eq!(got, case.after.as_deref().unwrap(), "{}", case.id);
+            }
+            "clear" => {
+                let got =
+                    clear_task_theme(case.before.as_deref().expect(&case.id));
+                assert_eq!(got, case.after.as_deref().unwrap(), "{}", case.id);
+            }
+            other => panic!("unknown task_field op {other}"),
+        }
+    }
+
+    for case in &vectors.write_rule {
+        let field = match case.field.as_str() {
+            "none" => TaskThemeState::None,
+            "set" => TaskThemeState::Set {
+                value: case
+                    .field_key
+                    .clone()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase(),
+                key: case.field_key.clone().unwrap_or_default(),
+            },
+            "repair" => TaskThemeState::Repair {
+                kind: crate::native::task_theme::RepairKind::Invalid,
+            },
+            other => panic!("unknown field {other}"),
+        };
+        let exempt: BTreeSet<String> = case.exempt.iter().cloned().collect();
+        let change = plan_theme_change(
+            &field,
+            case.suggestion.as_deref(),
+            case.inherited.as_deref(),
+            &case.destination,
+            &exempt,
+            case.deliberate,
+        );
+        match (case.expected.as_str(), change) {
+            ("none", ThemeChange::None) => {}
+            ("clear", ThemeChange::Clear) => {}
+            ("set", ThemeChange::Set { name, .. }) => {
+                assert_eq!(name, case.name.as_deref().unwrap(), "{}", case.id);
+            }
+            (expected, got) => {
+                panic!("{}: expected {expected}, got {got:?}", case.id)
+            }
+        }
+    }
+}
+
+fn assert_suggestion(
+    id: &str,
+    expected: Option<&SuggestExpected>,
+    got: Option<&ThemeSuggestion>,
+) {
+    match (expected, got) {
+        (None, None) => {}
+        (Some(expected), Some(got)) => {
+            let source = match got.source {
+                super::suggest::SuggestionSource::Task => "task",
+                super::suggest::SuggestionSource::Reading => "reading",
+                super::suggest::SuggestionSource::Review => "review",
+                super::suggest::SuggestionSource::Note => "note",
+            };
+            assert_eq!(source, expected.source, "{id}");
+            assert_eq!(got.label, expected.label, "{id}");
+            assert_eq!(got.theme.key, expected.theme_key, "{id}");
+            assert_eq!(got.theme.name, expected.theme_name, "{id}");
+            assert_eq!(got.theme.known, expected.known, "{id}");
+            let repair = got.repair.map(|kind| match kind {
+                crate::native::task_theme::RepairKind::Duplicate => "duplicate",
+                crate::native::task_theme::RepairKind::Invalid => "invalid",
+            });
+            assert_eq!(repair, expected.repair.as_deref(), "{id}");
+            match (&expected.from, &got.from) {
+                (None, None) => {}
+                (Some(expected), Some(got)) => {
+                    assert_eq!(got.path, expected.path, "{id}");
+                    assert_eq!(got.stem, expected.stem, "{id}");
+                    assert_eq!(got.kind, expected.kind, "{id}");
+                    assert_eq!(got.chain, expected.chain, "{id}");
+                }
+                other => panic!("{id}: from mismatch {other:?}"),
+            }
+            match (&expected.inherited, &got.inherited) {
+                (None, None) | (None, Some(None)) => {}
+                (Some(expected), Some(Some(got))) => {
+                    assert_suggestion(id, Some(expected), Some(got));
+                }
+                (Some(_), Some(None)) => panic!("{id}: inherited null"),
+                other => panic!("{id}: inherited mismatch {other:?}"),
+            }
+        }
+        other => panic!("{id}: suggestion mismatch {other:?}"),
     }
 }
 

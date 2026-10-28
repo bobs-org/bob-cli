@@ -1067,5 +1067,730 @@
       "draft": "=#sase",
       "replacement": "\"SASE\""
     }
+  ],
+  "suggest": {
+    "notes": {
+      "dev.md": "---\ntype: [[area]]\ncolor: blue\ntheme: BUILD\n---\n",
+      "sase.md": "---\ntype: [[project]]\nparent: [[dev]]\n---\n",
+      "sase_blog.md": "---\ntype: [[project]]\nparent: [[sase]]\ntheme: WRITE\n---\n",
+      "done/sase_blog.md": "---\ntype: [[done]]\nparent: [[sase_blog]]\n---\n",
+      "ref/paper.md": "---\ntype: [[ref]]\nparent: [[sase_blog]]\n---\n",
+      "job.md": "---\ntype: [[area]]\ncolor: aqua\ntheme: WRITE\n---\n",
+      "off_child.md": "---\ntype: [[project]]\nparent: [[dev]]\ntheme: off\n---\n",
+      "invalid_list.md": "---\ntype: [[project]]\nparent: [[invalid_scalar]]\ntheme: [BUILD, WRITE]\n---\n",
+      "invalid_scalar.md": "---\ntype: [[project]]\nparent: [[sase]]\ntheme: BUILD + FIX\n---\n",
+      "invalid_block.md": "---\ntype: [[project]]\nparent: [[dev]]\ntheme:\n  - BUILD\n---\n",
+      "quoted.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: \"CHORE\"\n---\n",
+      "blank.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme:\n---\n",
+      "ignored.md": "---\ntype: [[note]]\nparent: [[sase_blog]]\ntheme: BUILD\n---\n",
+      "secret.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: SECRET\n---\n",
+      "chore_unused.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: CHORE\n---\n",
+      "cycle_a.md": "---\ntype: [[project]]\nparent: [[cycle_b]]\ntheme: ???\n---\n",
+      "cycle_b.md": "---\ntype: [[project]]\nparent: [[cycle_a]]\n---\n",
+      "2026/20261028.md": "# daily\n",
+      "daily.md": "---\ntype: [[note]]\nparent: [[dev]]\n---\n",
+      "cap0.md": "---\ntype: [[note]]\nparent: [[cap1]]\n---\n",
+      "cap1.md": "---\ntype: [[note]]\nparent: [[cap2]]\n---\n",
+      "cap2.md": "---\ntype: [[note]]\nparent: [[cap3]]\n---\n",
+      "cap3.md": "---\ntype: [[note]]\nparent: [[cap4]]\n---\n",
+      "cap4.md": "---\ntype: [[note]]\nparent: [[cap5]]\n---\n",
+      "cap5.md": "---\ntype: [[note]]\nparent: [[cap6]]\n---\n",
+      "cap6.md": "---\ntype: [[note]]\nparent: [[cap7]]\n---\n",
+      "cap7.md": "---\ntype: [[note]]\nparent: [[cap8]]\n---\n",
+      "cap8.md": "---\ntype: [[note]]\nparent: [[cap9]]\n---\n",
+      "cap9.md": "---\ntype: [[note]]\nparent: [[cap10]]\n---\n",
+      "cap10.md": "---\ntype: [[note]]\nparent: [[cap11]]\n---\n",
+      "cap11.md": "---\ntype: [[note]]\nparent: [[cap12]]\n---\n",
+      "cap12.md": "---\ntype: [[note]]\nparent: [[cap13]]\n---\n",
+      "cap13.md": "---\ntype: [[note]]\nparent: [[cap14]]\n---\n",
+      "cap14.md": "---\ntype: [[note]]\nparent: [[cap15]]\n---\n",
+      "cap15.md": "---\ntype: [[note]]\nparent: [[cap16]]\n---\n",
+      "cap16.md": "---\ntype: [[area]]\ncolor: blue\ntheme: BUILD\n---\n"
+    },
+    "cases": [
+      {
+        "id": "task-beats-read",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Read it #ref [theme:: FIX] ^ref-paper",
+        "expected": {
+          "source": "task",
+          "label": "this task",
+          "theme_key": "fix",
+          "theme_name": "FIX",
+          "known": true,
+          "inherited": {
+            "source": "reading",
+            "label": "reading task",
+            "theme_key": "read",
+            "theme_name": "READ",
+            "known": true
+          }
+        }
+      },
+      {
+        "id": "reading-hash-ref",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Read it #ref ^follow-up",
+        "expected": {
+          "source": "reading",
+          "label": "reading task",
+          "theme_key": "read",
+          "theme_name": "READ",
+          "known": true
+        }
+      },
+      {
+        "id": "reading-ref-reread-id",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Reread it ^ref-paper-v2",
+        "expected": {
+          "source": "reading",
+          "label": "reading task",
+          "theme_key": "read",
+          "theme_name": "READ",
+          "known": true
+        }
+      },
+      {
+        "id": "reading-legacy-ref-id",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Legacy ref ^ref",
+        "expected": {
+          "source": "reading",
+          "label": "reading task",
+          "theme_key": "read",
+          "theme_name": "READ",
+          "known": true
+        }
+      },
+      {
+        "id": "non-reading-follow-up",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Follow up on the paper ^follow-up",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "reading-off",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Read it #ref ^ref-paper",
+        "config": { "reading_theme": "off", "exempt": ["PLAN"] },
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "daily-review",
+        "residence": "2026/20261028.md",
+        "line": "- [ ] Morning review ^gtd",
+        "expected": {
+          "source": "review",
+          "label": "daily review",
+          "theme_key": "plan",
+          "theme_name": "PLAN",
+          "known": true
+        }
+      },
+      {
+        "id": "daily-review-empty-exempt",
+        "residence": "2026/20261028.md",
+        "line": "- [ ] Morning review ^gtd",
+        "config": { "reading_theme": "READ", "exempt": [] },
+        "expected": null
+      },
+      {
+        "id": "nearest-default",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Write the post ^post",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "parent-default",
+        "residence": "sase.md",
+        "line": "- [ ] Work in sase ^sase-task",
+        "expected": {
+          "source": "note",
+          "label": "from dev",
+          "theme_key": "build",
+          "theme_name": "BUILD",
+          "known": true,
+          "from": {
+            "path": "dev.md",
+            "stem": "dev",
+            "kind": "area",
+            "chain": ["sase.md", "dev.md"]
+          }
+        }
+      },
+      {
+        "id": "off-stops-walk",
+        "residence": "off_child.md",
+        "line": "- [ ] No default here ^none",
+        "expected": null
+      },
+      {
+        "id": "archive-wrapper",
+        "residence": "done/sase_blog.md",
+        "line": "- [ ] Archived write ^old",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["done/sase_blog.md", "sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "reference-wrapper",
+        "residence": "ref/paper.md",
+        "line": "- [ ] Annotation follow-up ^note",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["ref/paper.md", "sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "invalid-scalar-and-list-skipped",
+        "residence": "invalid_list.md",
+        "line": "- [ ] Survive bad defaults ^ok",
+        "expected": {
+          "source": "note",
+          "label": "from dev",
+          "theme_key": "build",
+          "theme_name": "BUILD",
+          "known": true,
+          "from": {
+            "path": "dev.md",
+            "stem": "dev",
+            "kind": "area",
+            "chain": ["invalid_list.md", "invalid_scalar.md", "sase.md", "dev.md"]
+          }
+        },
+        "warnings": [
+          { "code": "theme_default_invalid", "path": "invalid_list.md" },
+          { "code": "theme_default_invalid", "path": "invalid_scalar.md" }
+        ]
+      },
+      {
+        "id": "invalid-multiline-list",
+        "residence": "invalid_block.md",
+        "line": "- [ ] Multiline list is invalid ^ok",
+        "expected": {
+          "source": "note",
+          "label": "from dev",
+          "theme_key": "build",
+          "theme_name": "BUILD",
+          "known": true,
+          "from": {
+            "path": "dev.md",
+            "stem": "dev",
+            "kind": "area",
+            "chain": ["invalid_block.md", "dev.md"]
+          }
+        },
+        "warnings": [
+          { "code": "theme_default_invalid", "path": "invalid_block.md" }
+        ]
+      },
+      {
+        "id": "cycle-invalid",
+        "residence": "cycle_a.md",
+        "line": "- [ ] Cycle walk ^c",
+        "expected": null,
+        "warnings": [
+          { "code": "theme_default_invalid", "path": "cycle_a.md" }
+        ]
+      },
+      {
+        "id": "sixteen-note-boundary",
+        "residence": "cap0.md",
+        "line": "- [ ] Too deep ^deep",
+        "expected": null
+      },
+      {
+        "id": "noncanonical-daily-name",
+        "residence": "daily.md",
+        "line": "- [ ] Not a real daily ^gtd",
+        "expected": {
+          "source": "note",
+          "label": "from dev",
+          "theme_key": "build",
+          "theme_name": "BUILD",
+          "known": true,
+          "from": {
+            "path": "dev.md",
+            "stem": "dev",
+            "kind": "area",
+            "chain": ["daily.md", "dev.md"]
+          }
+        }
+      },
+      {
+        "id": "unknown-name",
+        "residence": "secret.md",
+        "line": "- [ ] Mystery ^x",
+        "expected": {
+          "source": "note",
+          "label": "from secret",
+          "theme_key": "secret",
+          "theme_name": "SECRET",
+          "known": false,
+          "from": {
+            "path": "secret.md",
+            "stem": "secret",
+            "kind": "project",
+            "chain": ["secret.md"]
+          }
+        }
+      },
+      {
+        "id": "configured-but-unused",
+        "residence": "chore_unused.md",
+        "line": "- [ ] Configured unused ^x",
+        "expected": {
+          "source": "note",
+          "label": "from chore_unused",
+          "theme_key": "chore",
+          "theme_name": "CHORE",
+          "known": true,
+          "from": {
+            "path": "chore_unused.md",
+            "stem": "chore_unused",
+            "kind": "project",
+            "chain": ["chore_unused.md"]
+          }
+        }
+      },
+      {
+        "id": "hidden-name",
+        "residence": "quoted.md",
+        "line": "- [ ] Hidden is eligible ^x",
+        "expected": {
+          "source": "note",
+          "label": "from quoted",
+          "theme_key": "chore",
+          "theme_name": "CHORE",
+          "known": true,
+          "from": {
+            "path": "quoted.md",
+            "stem": "quoted",
+            "kind": "project",
+            "chain": ["quoted.md"]
+          }
+        }
+      },
+      {
+        "id": "quoted-value",
+        "residence": "quoted.md",
+        "line": "- [ ] Quoted default ^x",
+        "expected": {
+          "source": "note",
+          "label": "from quoted",
+          "theme_key": "chore",
+          "theme_name": "CHORE",
+          "known": true,
+          "from": {
+            "path": "quoted.md",
+            "stem": "quoted",
+            "kind": "project",
+            "chain": ["quoted.md"]
+          }
+        }
+      },
+      {
+        "id": "blank-inherits",
+        "residence": "blank.md",
+        "line": "- [ ] Blank inherits ^x",
+        "expected": {
+          "source": "note",
+          "label": "from job",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "job.md",
+            "stem": "job",
+            "kind": "area",
+            "chain": ["blank.md", "job.md"]
+          }
+        }
+      },
+      {
+        "id": "ignored-non-home-theme",
+        "residence": "ignored.md",
+        "line": "- [ ] Note type theme ignored ^x",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["ignored.md", "sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "paren-field",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Paren field (theme:: WRITE) ^x",
+        "expected": {
+          "source": "task",
+          "label": "this task",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "inherited": {
+            "source": "note",
+            "label": "from sase_blog",
+            "theme_key": "write",
+            "theme_name": "WRITE",
+            "known": true,
+            "from": {
+              "path": "sase_blog.md",
+              "stem": "sase_blog",
+              "kind": "project",
+              "chain": ["sase_blog.md"]
+            }
+          }
+        }
+      },
+      {
+        "id": "duplicate-field-repair",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Dup [theme:: FIX] [theme:: WRITE] ^x",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "repair": "duplicate",
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "invalid-field-repair",
+        "residence": "sase_blog.md",
+        "line": "- [ ] Bad [theme:: BUILD + FIX] ^x",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "repair": "invalid",
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "closed-task",
+        "residence": "sase_blog.md",
+        "line": "- [x] Done [theme:: FIX] ^x",
+        "expected": null,
+        "warnings": [{ "code": "closed_task" }]
+      },
+      {
+        "id": "new-task-note-default",
+        "residence": "sase_blog.md",
+        "new_task": true,
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
+        "id": "live-day-known",
+        "residence": "secret.md",
+        "line": "- [ ] Live known ^x",
+        "live": ["secret"],
+        "expected": {
+          "source": "note",
+          "label": "from secret",
+          "theme_key": "secret",
+          "theme_name": "SECRET",
+          "known": true,
+          "from": {
+            "path": "secret.md",
+            "stem": "secret",
+            "kind": "project",
+            "chain": ["secret.md"]
+          }
+        }
+      }
+    ]
+  },
+  "task_field": [
+    {
+      "id": "parse-none",
+      "op": "parse",
+      "line": "- [ ] Plain title ^id",
+      "state": "none"
+    },
+    {
+      "id": "parse-set",
+      "op": "parse",
+      "line": "- [ ] Title [theme:: FIX] ^id",
+      "state": "set",
+      "value": "FIX"
+    },
+    {
+      "id": "parse-paren",
+      "op": "parse",
+      "line": "- [ ] Title (theme:: WRITE)",
+      "state": "set",
+      "value": "WRITE"
+    },
+    {
+      "id": "parse-duplicate",
+      "op": "parse",
+      "line": "- [ ] Title [theme:: FIX] (theme:: WRITE)",
+      "state": "repair",
+      "repair": "duplicate"
+    },
+    {
+      "id": "parse-invalid",
+      "op": "parse",
+      "line": "- [ ] Title [theme:: BUILD + FIX]",
+      "state": "repair",
+      "repair": "invalid"
+    },
+    {
+      "id": "set-before-fresh",
+      "op": "set",
+      "name": "FIX",
+      "before": "- [*] #task Make gates more reliable [fresh:: 2026-10-27] [created::2026-10-20] ^gates-more-reliable",
+      "after": "- [*] #task Make gates more reliable [theme:: FIX] [fresh:: 2026-10-27] [created::2026-10-20] ^gates-more-reliable"
+    },
+    {
+      "id": "set-with-tags-no-id",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Draft the post #task #write",
+      "after": "- [ ] Draft the post [theme:: WRITE] #task #write"
+    },
+    {
+      "id": "set-blockquote",
+      "op": "set",
+      "name": "BUILD",
+      "before": "> - [ ] Quoted task ^qid",
+      "after": "> - [ ] Quoted task [theme:: BUILD] ^qid"
+    },
+    {
+      "id": "set-crlf",
+      "op": "set",
+      "name": "CHORE",
+      "before": "- [ ] Windows line\r",
+      "after": "- [ ] Windows line [theme:: CHORE]\r"
+    },
+    {
+      "id": "set-unicode-title",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Café résumé 日本語 ^id",
+      "after": "- [ ] Café résumé 日本語 [theme:: WRITE] ^id"
+    },
+    {
+      "id": "set-unknown-trailing-key",
+      "op": "set",
+      "name": "FIX",
+      "before": "- [ ] Keep custom [mood:: grumpy] ^id",
+      "after": "- [ ] Keep custom [theme:: FIX] [mood:: grumpy] ^id"
+    },
+    {
+      "id": "clear-theme",
+      "op": "clear",
+      "before": "- [ ] Title [theme:: FIX] [fresh:: 2026-10-27] ^id",
+      "after": "- [ ] Title [fresh:: 2026-10-27] ^id"
+    },
+    {
+      "id": "clear-paren",
+      "op": "clear",
+      "before": "- [ ] Title (theme:: WRITE) #task",
+      "after": "- [ ] Title #task"
+    },
+    {
+      "id": "set-replaces-duplicate",
+      "op": "set",
+      "name": "BUILD",
+      "before": "- [ ] Title [theme:: FIX] (theme:: WRITE) [fresh:: 2026-10-01]",
+      "after": "- [ ] Title [theme:: BUILD] [fresh:: 2026-10-01]"
+    }
+  ],
+  "write_rule": [
+    {
+      "id": "deliberate-false",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "FIX",
+      "exempt": ["plan"],
+      "deliberate": false,
+      "expected": "none"
+    },
+    {
+      "id": "no-suggestion",
+      "field": "none",
+      "suggestion": null,
+      "inherited": null,
+      "destination": "FIX",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    },
+    {
+      "id": "clear-to-inherited",
+      "field": "set",
+      "field_key": "fix",
+      "suggestion": "fix",
+      "inherited": "write",
+      "destination": "WRITE",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "clear"
+    },
+    {
+      "id": "clear-noop-when-absent",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "WRITE",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    },
+    {
+      "id": "set-single",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "FIX",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "set",
+      "name": "FIX"
+    },
+    {
+      "id": "set-noop-same-key",
+      "field": "set",
+      "field_key": "fix",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "FIX",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    },
+    {
+      "id": "plan-plus-build-selects-build",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "PLAN + BUILD",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "set",
+      "name": "BUILD"
+    },
+    {
+      "id": "composite-no-change",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "BUILD + FIX",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    },
+    {
+      "id": "exempt-only-no-change",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "PLAN",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    },
+    {
+      "id": "unnamed-no-change",
+      "field": "none",
+      "suggestion": "write",
+      "inherited": "write",
+      "destination": "(unnamed)",
+      "exempt": ["plan"],
+      "deliberate": true,
+      "expected": "none"
+    }
   ]
 }

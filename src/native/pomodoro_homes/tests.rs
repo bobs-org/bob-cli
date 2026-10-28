@@ -13,6 +13,7 @@ use crate::native::{
     vault_links::NoteIndex,
 };
 
+use super::facts::{NoteFacts, NoteTheme};
 use super::{
     attribute_session, daily_home, fallback_hue, session_links, split_minutes,
     DiskHomeSource, HomeResolver, HomeSource, Hue, IndexedHomeSource,
@@ -125,6 +126,33 @@ fn split_minutes_uses_ledger_order_for_remainder() {
 fn fallback_palette_fnv_vector_is_pinned() {
     assert_eq!(fallback_hue("job"), Hue::Magenta);
     assert_eq!(super::palette::fnv1a32(b"job"), 3_721_670_620);
+}
+
+#[test]
+fn note_facts_parse_theme_scalars_lists_and_off() {
+    let named = NoteFacts::parse("---\ntype: [[project]]\ntheme: WRITE\n---\n");
+    assert_eq!(named.theme, Some(NoteTheme::Name("WRITE".into())));
+    let quoted =
+        NoteFacts::parse("---\ntype: [[area]]\ntheme: \"BUILD\"\n---\n");
+    assert_eq!(quoted.theme, Some(NoteTheme::Name("BUILD".into())));
+    let off = NoteFacts::parse("---\ntype: [[project]]\ntheme: Off\n---\n");
+    assert_eq!(off.theme, Some(NoteTheme::Off));
+    let blank = NoteFacts::parse("---\ntype: [[project]]\ntheme:\n---\n");
+    assert_eq!(blank.theme, None);
+    let flow = NoteFacts::parse(
+        "---\ntype: [[project]]\ntheme: [BUILD, WRITE]\n---\n",
+    );
+    assert!(matches!(flow.theme, Some(NoteTheme::Invalid(_))));
+    let block =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme:\n  - BUILD\n---\n");
+    assert!(matches!(block.theme, Some(NoteTheme::Invalid(_))));
+    let composite =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme: BUILD + FIX\n---\n");
+    assert!(matches!(composite.theme, Some(NoteTheme::Invalid(_))));
+    let ignored = NoteFacts::parse(
+        "---\ntype: [[note]]\ntheme: BUILD\nparent: [[dev]]\n---\n",
+    );
+    assert_eq!(ignored.theme, Some(NoteTheme::Name("BUILD".into())));
 }
 
 #[test]

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::ConfigError;
+use crate::native::task_fields::canonical_theme_name;
 
 /// Today's plan budget configuration (`plan:` block).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,8 @@ pub(crate) struct PlanConfig {
     pub(crate) link_unblocked: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
+    /// Canonical reading-task theme, or `None` when the rule is `off`.
+    pub(crate) reading_theme: Option<String>,
 }
 
 impl Default for PlanConfig {
@@ -35,6 +38,7 @@ impl Default for PlanConfig {
                 "NEW FEATURES".to_string(),
                 "SASE".to_string(),
             ],
+            reading_theme: Some("READ".to_string()),
         }
     }
 }
@@ -78,6 +82,10 @@ impl PlanConfig {
 
     pub(crate) fn inventory_labels(&self) -> &[String] {
         &self.inventory_labels
+    }
+
+    pub(crate) fn reading_theme(&self) -> Option<&str> {
+        self.reading_theme.as_deref()
     }
 }
 
@@ -275,6 +283,8 @@ pub(crate) fn parse_plan_config(
             .collect::<Result<Vec<_>, _>>()
     };
 
+    let reading_theme = parse_reading_theme(get("reading_theme"), path)?;
+
     // A stale `max_now` stays ignored like any other unknown key.
     Ok(PlanConfig {
         max_themes: cap("max_themes", get("max_themes"), defaults.max_themes)?,
@@ -295,7 +305,35 @@ pub(crate) fn parse_plan_config(
         link_unblocked: link_unblocked_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
+        reading_theme,
     })
+}
+
+fn parse_reading_theme(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<String>, ConfigError> {
+    let path_display = path.display();
+    match value {
+        None | Some(serde_yaml::Value::Null) => {
+            Ok(PlanConfig::default().reading_theme)
+        }
+        Some(serde_yaml::Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("off") {
+                return Ok(None);
+            }
+            canonical_theme_name(trimmed).map(Some).ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "plan.reading_theme in {path_display} must be a single Pomodoro theme name or off; got {text:?}"
+                ))
+            })
+        }
+        Some(other) => Err(ConfigError::Invalid(format!(
+            "plan.reading_theme in {path_display} must be a single Pomodoro theme name or off; got {}",
+            render_scalar(&other)
+        ))),
+    }
 }
 
 fn render_scalar(value: &serde_yaml::Value) -> String {
@@ -334,6 +372,7 @@ mod tests {
             config.inventory_labels(),
             ["LATER", "MISC", "NEW FEATURES", "SASE"]
         );
+        assert_eq!(config.reading_theme(), Some("READ"));
     }
 
     #[test]
@@ -411,6 +450,10 @@ mod tests {
             "plan:\n  exempt: [GTD, 7]\n",
             "plan:\n  inventory_labels: ['  ']\n",
             "plan:\n  inventory_labels: MISC\n",
+            "plan:\n  reading_theme: BUILD + FIX\n",
+            "plan:\n  reading_theme: 7\n",
+            "plan:\n  reading_theme: []\n",
+            "plan:\n  reading_theme: \"\"\n",
             "plan: [1, 2]\n",
         ] {
             let error = parse_plan_config(text, Path::new("/config.yml"))
@@ -483,11 +526,40 @@ mod tests {
     }
 
     #[test]
+    fn reading_theme_defaults_off_and_parses_names() {
+        let defaulted = parse_plan_config(
+            "plan:\n  max_links: 12\n",
+            Path::new("/config.yml"),
+        )
+        .expect("absent reading_theme");
+        assert_eq!(defaulted.reading_theme(), Some("READ"));
+        let nulled = parse_plan_config(
+            "plan:\n  reading_theme: null\n",
+            Path::new("/config.yml"),
+        )
+        .expect("null reading_theme");
+        assert_eq!(nulled.reading_theme(), Some("READ"));
+        let off = parse_plan_config(
+            "plan:\n  reading_theme: off\n",
+            Path::new("/config.yml"),
+        )
+        .expect("off reading_theme");
+        assert_eq!(off.reading_theme(), None);
+        let named = parse_plan_config(
+            "plan:\n  reading_theme: study\n",
+            Path::new("/config.yml"),
+        )
+        .expect("named reading_theme");
+        assert_eq!(named.reading_theme(), Some("STUDY"));
+    }
+
+    #[test]
     fn mistyped_plan_block_leaves_other_loaders_working() {
         for text in [
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  max_themes: many\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  strict: \"yes\"\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  exempt: GTD\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  reading_theme: BUILD + FIX\n",
         ] {
             let path = Path::new("/config.yml");
             super::super::parse_priority_property(text, path)

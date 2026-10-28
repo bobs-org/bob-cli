@@ -444,6 +444,53 @@ pub(crate) fn frontmatter_value<'a>(
     None
 }
 
+/// A frontmatter key's scalar-or-not shape. Distinguishes a blank
+/// `key:` (inherit) from a following block list or mapping, which
+/// [`frontmatter_value`] would otherwise treat as absence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FrontmatterScalar {
+    Absent,
+    Blank,
+    Value(String),
+    NonScalar(String),
+}
+
+pub(crate) fn frontmatter_scalar(
+    frontmatter: &Frontmatter<'_>,
+    key: &str,
+) -> FrontmatterScalar {
+    let key_index = frontmatter.lines.iter().position(|line| {
+        line.strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .is_some()
+    });
+    let Some(key_index) = key_index else {
+        return FrontmatterScalar::Absent;
+    };
+    let raw = frontmatter.lines[key_index]
+        .strip_prefix(key)
+        .and_then(|rest| rest.strip_prefix(':'))
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        let next = frontmatter.lines.get(key_index + 1).copied().unwrap_or("");
+        let trimmed = next.trim_start();
+        if !trimmed.is_empty() && trimmed.len() < next.len() {
+            return FrontmatterScalar::NonScalar(trimmed.to_string());
+        }
+        return FrontmatterScalar::Blank;
+    }
+    if raw.starts_with(['[', '{', '|', '>']) {
+        return FrontmatterScalar::NonScalar(raw.to_string());
+    }
+    let value = trim_yaml_scalar(raw);
+    if value.is_empty() {
+        FrontmatterScalar::Blank
+    } else {
+        FrontmatterScalar::Value(value.to_string())
+    }
+}
+
 pub(crate) fn trim_yaml_scalar(value: &str) -> &str {
     let value = value.trim();
     if value.len() >= 2 {
