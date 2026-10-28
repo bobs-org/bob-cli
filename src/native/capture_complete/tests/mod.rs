@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
@@ -6,6 +7,7 @@ use std::{
 };
 
 use super::{engine::build_result, model::CaptureCompleteResult};
+use crate::native::env::TestEnvGuard;
 
 mod active_tasks;
 mod blocked_tasks;
@@ -20,9 +22,19 @@ static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // Overrides below are thread-local (see `crate::native::env`), so no
 // serializing lock is needed: a test's `BOB_DAY_FILE` override is
-// invisible to every other test thread.
+// invisible to every other test thread. Isolate `BOB_CONFIG_FILE` so a
+// host `themes:` vocabulary cannot leak Recent rows into temp-vault
+// menus (PT12).
+
+fn isolate_missing_config() -> TestEnvGuard {
+    TestEnvGuard::set(&[(
+        "BOB_CONFIG_FILE",
+        Some(OsStr::new("/nonexistent/bob-cli-test-config.yml")),
+    )])
+}
 
 fn result(bob_dir: &Path, raw: &str, cursor: usize) -> CaptureCompleteResult {
+    let _guard = isolate_missing_config();
     build_result(bob_dir, raw, cursor, false).expect("build result")
 }
 
@@ -31,6 +43,7 @@ fn result_all(
     raw: &str,
     cursor: usize,
 ) -> CaptureCompleteResult {
+    let _guard = isolate_missing_config();
     build_result(bob_dir, raw, cursor, true).expect("build result")
 }
 

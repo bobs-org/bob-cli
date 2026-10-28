@@ -604,3 +604,66 @@ fn plan_help_lists_options_alphabetically() {
     );
     assert_stdout_has_no_ansi(&output);
 }
+
+#[test]
+fn plan_lints_unconfigured_theme_and_invalid_themes_block() {
+    let temp = plan_vault("bob-cli-plan-theme-lints");
+    let vault = vault_dir(&temp);
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  PLAN: blue\n",
+    );
+
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob plan with vocabulary");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(&stdout(&output)).expect("plan JSON parses");
+    let warnings = value["warnings"].as_array().expect("warnings");
+    let unconfigured: Vec<&Value> = warnings
+        .iter()
+        .filter(|warning| warning["code"] == "theme_not_configured")
+        .collect();
+    assert!(
+        unconfigured.iter().any(|warning| {
+            warning["message"]
+                .as_str()
+                .unwrap()
+                .contains("GOALS isn't one of your configured themes")
+                && warning["line"] == 5
+        }),
+        "{warnings:?}"
+    );
+
+    write_file(&config, "plan:\n  max_themes: 30\nthemes: [BUILD]\n");
+    let invalid = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob plan with invalid themes");
+    assert_success(&invalid);
+    let invalid_value: Value =
+        serde_json::from_str(&stdout(&invalid)).expect("plan JSON parses");
+    assert!(
+        invalid_value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["code"] == "themes_config_invalid"),
+        "{invalid_value}"
+    );
+}

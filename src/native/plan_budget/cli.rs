@@ -25,8 +25,8 @@ use super::{
     },
     assemble_report, compute_for_daily, count_lanes,
     today::{today_tasks, TodayResult},
-    with_entry_homes, with_theme_refs, Lanes, LedgerBudget, PlanReport,
-    PlanStatus, UNNAMED_THEME,
+    with_configured_theme_lints, with_entry_homes, with_theme_refs, Lanes,
+    LedgerBudget, PlanReport, PlanStatus, UNNAMED_THEME,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -241,7 +241,10 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         report
     };
     let report = match ThemeCatalog::load(&request.bob_dir, today, false) {
-        Ok(catalog) => with_theme_refs(report, &catalog),
+        Ok(catalog) => with_configured_theme_lints(
+            with_theme_refs(report, &catalog),
+            &catalog,
+        ),
         Err(_) => report,
     };
     Ok(PlanSuccess {

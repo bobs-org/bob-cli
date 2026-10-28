@@ -544,3 +544,49 @@ fn themes_list_emits_collision_hints() {
         "{text}"
     );
 }
+
+#[test]
+fn themes_list_emits_not_configured_hints() {
+    let temp = TempDir::new("bob-cli-themes-not-configured-hints");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — SNACK\n- [ ] () — BUILD\n",
+    );
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  CHORE: magenta\n",
+    );
+
+    let output = themes_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["themes", "-f", "json"])
+        .output()
+        .expect("not-configured hints json");
+    assert_success(&output);
+    let value: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
+    let hints = value["hints"].as_array().expect("hints");
+    let hint = hints
+        .iter()
+        .find(|hint| hint["code"] == "theme_not_configured")
+        .expect("theme_not_configured hint");
+    assert_eq!(hint["theme"]["name"], "SNACK");
+    assert_eq!(hint["theme"]["key"], "snack");
+    assert_eq!(hint["last_used"], "2026-10-24");
+
+    let human = themes_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["themes"])
+        .output()
+        .expect("not-configured hints human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("SNACK isn't one of your configured themes")
+            && text.contains("themes:"),
+        "{text}"
+    );
+}

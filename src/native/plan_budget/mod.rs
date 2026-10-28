@@ -33,6 +33,10 @@ pub(crate) const LINT_INVENTORY_LABEL: &str = "inventory_label_open";
 pub(crate) const LINT_SUBHEADING: &str = "subheading_in_pomodoros";
 pub(crate) const LINT_NEXT_CAP: &str = "next_cap_exceeded";
 pub(crate) const LINT_PENDING_CAP: &str = "pending_cap_exceeded";
+pub(crate) const LINT_THEME_NOT_CONFIGURED: &str =
+    super::pomodoro_themes::THEME_NOT_CONFIGURED;
+pub(crate) const LINT_THEMES_CONFIG_INVALID: &str =
+    super::pomodoro_themes::THEMES_CONFIG_INVALID;
 
 /// Display name used when an unnamed open entry holds counted links.
 pub(crate) const UNNAMED_THEME: &str = "(unnamed)";
@@ -222,6 +226,47 @@ pub(crate) fn with_theme_refs(
     for entry in &mut report.entries {
         entry.themes = catalog.theme_refs_for_names(&entry.components);
     }
+    report
+}
+
+/// CLI-layer lints that need the theme catalog: a broken `themes:`
+/// block, and each unconfigured open component at its first line.
+pub(crate) fn with_configured_theme_lints(
+    mut report: PlanReport,
+    catalog: &ThemeCatalog,
+) -> PlanReport {
+    if let Some(warning) = catalog.config_warning() {
+        report.warnings.push(PlanLint {
+            code: LINT_THEMES_CONFIG_INVALID.to_string(),
+            message: warning.to_string(),
+            line: None,
+        });
+    }
+    if !catalog.has_configured() {
+        return report;
+    }
+    let mut seen = BTreeSet::new();
+    let mut lints = Vec::new();
+    for entry in &report.entries {
+        for component in &entry.components {
+            let key = normalize_component(component);
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if !catalog.unconfigured(&key) {
+                continue;
+            }
+            let similar = catalog.similar_to(component);
+            lints.push(PlanLint {
+                code: LINT_THEME_NOT_CONFIGURED.to_string(),
+                message: super::pomodoro_themes::theme_not_configured_message(
+                    component, &similar,
+                ),
+                line: Some(entry.line),
+            });
+        }
+    }
+    report.warnings.extend(lints);
     report
 }
 

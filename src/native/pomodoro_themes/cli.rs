@@ -14,9 +14,7 @@ use crate::native::{
     style::{pad_right, Styler},
 };
 
-use super::{
-    hints, Catalog, CollisionHint, HueSource, ThemeRecord, TodayPresence,
-};
+use super::{hints, Catalog, HueSource, ThemeRecord, TodayPresence};
 
 const COMMAND_NAME: &str = "bob themes list";
 const SCHEMA_VERSION: u32 = 1;
@@ -253,7 +251,7 @@ struct ListReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     configured_themes: Option<Vec<ConfiguredThemeJson>>,
     themes: Vec<ListTheme>,
-    hints: Vec<CollisionHint>,
+    hints: Vec<hints::ThemeHint>,
     renamed_reappeared: Vec<serde_json::Value>,
     warnings: Vec<String>,
 }
@@ -355,7 +353,20 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
         },
         configured_themes,
         themes,
-        hints: catalog.collision_hints(),
+        hints: {
+            let mut hints: Vec<hints::ThemeHint> = catalog
+                .collision_hints()
+                .into_iter()
+                .map(hints::ThemeHint::Collision)
+                .collect();
+            hints.extend(
+                catalog
+                    .not_configured_hints()
+                    .into_iter()
+                    .map(hints::ThemeHint::NotConfigured),
+            );
+            hints
+        },
         renamed_reappeared: super::renamed_reappeared(
             &request.bob_dir,
             catalog,
@@ -521,8 +532,28 @@ fn print_human(report: &ListReport) {
             );
         }
     }
+    let mut not_configured = 0usize;
+    let mut extra_not_configured = 0usize;
     for hint in &report.hints {
-        println!("  hint  {}", hints::human_hint(hint));
+        match hint {
+            hints::ThemeHint::Collision(hint) => {
+                println!("  hint  {}", hints::human_hint(hint));
+            }
+            hints::ThemeHint::NotConfigured(hint) => {
+                if not_configured < hints::NOT_CONFIGURED_HINT_HUMAN_CAP {
+                    println!(
+                        "  hint  {}",
+                        hints::human_not_configured_hint(hint)
+                    );
+                    not_configured += 1;
+                } else {
+                    extra_not_configured += 1;
+                }
+            }
+        }
+    }
+    if extra_not_configured > 0 {
+        println!("  hint  … and {extra_not_configured} more · bob themes -a");
     }
     for warning in &report.warnings {
         eprintln!("{}: {}", COMMAND_NAME, styler.yellow(warning));

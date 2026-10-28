@@ -76,12 +76,11 @@ pub(super) fn compose(
         .filter_map(|row| row.name.as_deref())
         .flat_map(split_components)
         .map(|name| normalize_component(&name))
-        .chain(catalog.into_iter().flat_map(|catalog| {
+        .chain(
             catalog
-                .records()
-                .filter(|record| catalog.is_hidden(&record.key))
-                .map(|record| record.key.clone())
-        }))
+                .into_iter()
+                .flat_map(|catalog| catalog.hidden_keys().map(str::to_string)),
+        )
         .collect();
     let exact_today = today.iter().any(|row| {
         !row.requires_name
@@ -113,16 +112,17 @@ pub(super) fn compose(
     let mut prefix = Vec::new();
     let mut substring = Vec::new();
     if let Some(catalog) = catalog {
+        let empty_cap = if catalog.has_configured() { 12 } else { 5 };
         for record in catalog
-            .rank_for_query(query, &exclusions)
+            .rank_for_menu(query, &exclusions)
             .into_iter()
             .filter(|record| match_rank(&record.name, query, literal).is_some())
-            .take(if query.is_empty() { 5 } else { 12 })
+            .take(if query.is_empty() { empty_cap } else { 12 })
         {
             let mut row = creation_candidate(scan, record.name.clone(), hint);
             row.origin = Some("history");
-            row.last_used = Some(record.last_used.to_string());
-            row.days_used = Some(record.days_used);
+            row.last_used = record.last_used.map(|date| date.to_string());
+            row.days_used = record.days_used;
             if match_rank(&record.name, query, literal) == Some(2) {
                 substring.push(row);
             } else {

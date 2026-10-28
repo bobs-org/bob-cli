@@ -103,6 +103,8 @@ one applies:
 | `note_ready_cap_invalid` | a note's `ready_cap` is not `1–999` or `off`; emitted once per note, then the default cap applies |
 | `note_ready_in_terminal_project` | a done/canceled project still holds counted Ready tasks; not capped, listed under "not capped" |
 | `today_link_unresolved` | a ledger link resolves to no countable task (missing or ambiguous note, unreadable file, or no open task behind the block ID) |
+| `theme_not_configured` | an open entry uses a theme outside the `themes:` vocabulary; once per key, at the first open-entry line |
+| `themes_config_invalid` | the `themes:` block is present but invalid; the catalog degrades to no configured themes |
 
 ## Today
 

@@ -30,13 +30,56 @@ mod tests;
 pub(crate) mod write;
 
 pub(crate) use cli::run_list;
-pub(crate) use hints::CollisionHint;
+pub(crate) use hints::{CollisionHint, NotConfiguredHint};
 pub(crate) use hue::resolve_hue;
 pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
 pub(crate) use rename::{build_cli_rename, renamed_reappeared, run_rename};
 pub(crate) use split::{build_cli_split, run_split};
 pub(crate) use write::{run_color, run_hide, run_unhide};
+
+pub(crate) const THEME_NOT_CONFIGURED: &str = "theme_not_configured";
+pub(crate) const THEMES_CONFIG_INVALID: &str = "themes_config_invalid";
+
+/// `SNACK isn't one of your configured themes`, plus `; did you mean
+/// CHORE?` when PT7 similarity matches a configured theme.
+pub(crate) fn theme_not_configured_message(
+    name: &str,
+    similar: &[String],
+) -> String {
+    match similar.first() {
+        Some(suggestion) => format!(
+            "{name} isn't one of your configured themes; did you mean {suggestion}?"
+        ),
+        None => format!("{name} isn't one of your configured themes"),
+    }
+}
+
+/// List-hint rendering: add it under `themes:` or fold it into a
+/// similar configured name.
+pub(crate) fn theme_not_configured_list_hint(
+    name: &str,
+    similar: Option<&str>,
+) -> String {
+    let path = config::display_config_path();
+    match similar {
+        Some(suggestion) => format!(
+            "{name} isn't one of your configured themes → add it under themes: in {path}, or fold it in: bob themes rename {name} {suggestion}"
+        ),
+        None => format!(
+            "{name} isn't one of your configured themes → add it under themes: in {path}"
+        ),
+    }
+}
+
+/// One Recent-row theme for PT7 menus: used history carries dates,
+/// never-used configured themes omit them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MenuTheme {
+    pub(crate) name: String,
+    pub(crate) last_used: Option<NaiveDate>,
+    pub(crate) days_used: Option<u32>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,6 +175,7 @@ pub(crate) struct Catalog {
     exempt: BTreeSet<String>,
     inventory: BTreeSet<String>,
     themes: Option<config::ThemesConfig>,
+    config_warning: Option<String>,
     warnings: Vec<String>,
 }
 
@@ -193,6 +237,7 @@ impl Catalog {
             exempt: sources.exempt,
             inventory: sources.inventory,
             themes: sources.themes,
+            config_warning: sources.warning,
             warnings,
         })
     }
@@ -240,6 +285,21 @@ impl Catalog {
         &self.warnings
     }
 
+    /// Warning from a present-but-invalid `themes:` block, if any.
+    pub(crate) fn config_warning(&self) -> Option<&str> {
+        self.config_warning.as_deref()
+    }
+
+    /// Hidden theme keys, including configured names that have never
+    /// been used and so have no history record.
+    pub(crate) fn hidden_keys(&self) -> impl Iterator<Item = &str> {
+        self.prefs
+            .by_key
+            .iter()
+            .filter(|(_, pref)| pref.hidden)
+            .map(|(key, _)| key.as_str())
+    }
+
     /// `None` when no `themes:` vocabulary is configured, else whether the
     /// key belongs to it. Inventory labels always report `Some(true)`.
     pub(crate) fn configured(&self, key: &str) -> Option<bool> {
@@ -259,7 +319,11 @@ impl Catalog {
         self.themes.as_ref().map(|themes| themes.entries.as_slice())
     }
 
-    fn unconfigured(&self, key: &str) -> bool {
+    pub(crate) fn has_configured(&self) -> bool {
+        self.themes.is_some()
+    }
+
+    pub(crate) fn unconfigured(&self, key: &str) -> bool {
         match &self.themes {
             None => false,
             Some(themes) => {
@@ -326,6 +390,29 @@ impl Catalog {
     }
 
     pub(crate) fn similar_to(&self, query: &str) -> Vec<String> {
+        if let Some(themes) = &self.themes {
+            let never_used = NaiveDate::MIN;
+            let candidates: Vec<similar::SimilarTheme<'_>> = themes
+                .entries
+                .iter()
+                .filter(|entry| !self.is_hidden(&entry.key))
+                .map(|entry| match self.records.get(&entry.key) {
+                    Some(record) => similar::SimilarTheme {
+                        key: record.key.as_str(),
+                        name: record.name.as_str(),
+                        last_used: record.last_used,
+                        hidden: false,
+                    },
+                    None => similar::SimilarTheme {
+                        key: entry.key.as_str(),
+                        name: entry.name.as_str(),
+                        last_used: never_used,
+                        hidden: false,
+                    },
+                })
+                .collect();
+            return similar::similar_to(query, &candidates);
+        }
         similar::similar_to(
             query,
             &self
@@ -363,6 +450,75 @@ impl Catalog {
                     .expect("ranked key is in catalog")
             })
             .collect()
+    }
+
+    /// Recent-row ranking for theme-name menus. With a `themes:` block,
+    /// only configured keys participate: used ones in PT7 recency order,
+    /// then never-used configured names in config order.
+    pub(crate) fn rank_for_menu(
+        &self,
+        query: &str,
+        exclusions: &BTreeSet<String>,
+    ) -> Vec<MenuTheme> {
+        let Some(themes) = &self.themes else {
+            return self
+                .rank_for_query(query, exclusions)
+                .into_iter()
+                .map(|record| MenuTheme {
+                    name: record.name.clone(),
+                    last_used: Some(record.last_used),
+                    days_used: Some(record.days_used),
+                })
+                .collect();
+        };
+        let configured_keys: BTreeSet<&str> = themes
+            .entries
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect();
+        let ranked: Vec<RankTheme<'_>> = self
+            .records
+            .values()
+            .filter(|record| configured_keys.contains(record.key.as_str()))
+            .map(|record| RankTheme {
+                key: &record.key,
+                name: &record.name,
+                last_used: record.last_used,
+                days_used: record.days_used,
+            })
+            .collect();
+        let mut rows: Vec<MenuTheme> = rank_history(&ranked, query, exclusions)
+            .into_iter()
+            .map(|index| {
+                let theme = &ranked[index];
+                MenuTheme {
+                    name: theme.name.to_string(),
+                    last_used: Some(theme.last_used),
+                    days_used: Some(theme.days_used),
+                }
+            })
+            .collect();
+        let used: BTreeSet<&str> =
+            ranked.iter().map(|theme| theme.key).collect();
+        for entry in &themes.entries {
+            if exclusions.contains(&entry.key)
+                || self.is_hidden(&entry.key)
+                || used.contains(entry.key.as_str())
+            {
+                continue;
+            }
+            rows.push(MenuTheme {
+                name: entry.name.clone(),
+                last_used: None,
+                days_used: None,
+            });
+        }
+        rows
+    }
+
+    /// Visible unconfigured themes used today or in the last 7 days.
+    pub(crate) fn not_configured_hints(&self) -> Vec<NotConfiguredHint> {
+        hints::not_configured_hints(self)
     }
 }
 

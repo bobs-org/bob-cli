@@ -288,6 +288,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     }
     append_plan_budget(&request, &mut batch)?;
     let theme_refs = append_theme_refs(&request, &mut batch);
+    append_unconfigured_theme_warnings(&request, &mut batch);
     let open_notes = build_open_notes(&request.bob_dir, &batch);
     if !request.dry_run {
         commit_capture_batch(&mut batch, &request.bob_dir)?;

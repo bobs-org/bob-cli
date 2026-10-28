@@ -17,7 +17,27 @@ fn command(root: &Path) -> Command {
 fn fixture(root: &Path, case: &Value) {
     let vault = root.join("vault");
     write_capture_task_settings(&vault);
-    write_file(&root.join("config.yml"), "plan:\n  max_themes: 30\n");
+    let mut config = String::from("plan:\n  max_themes: 30\n");
+    if let Some(configured) = case.get("configured") {
+        config.push_str("themes:\n");
+        match configured {
+            Value::Object(map) => {
+                for (name, color) in map {
+                    let slot = color.as_str().unwrap_or("auto");
+                    config.push_str(&format!("  {name}: {slot}\n"));
+                }
+            }
+            Value::Array(entries) => {
+                for entry in entries {
+                    let name = entry["name"].as_str().unwrap();
+                    let slot = entry["color"].as_str().unwrap_or("auto");
+                    config.push_str(&format!("  {name}: {slot}\n"));
+                }
+            }
+            _ => {}
+        }
+    }
+    write_file(&root.join("config.yml"), &config);
     write_file(&vault.join("inbox_t.md"), "- [ ] #task Test task ^foo1\n");
     let today = case["today"]
         .as_array()
@@ -101,10 +121,28 @@ fn theme_menu_vectors() {
             if row["origin"] == "history" {
                 assert_eq!(row["creates_pomodoro"], true);
                 assert!(row.get("ref").is_none() && row.get("line").is_none());
-                assert!(row["last_used"].is_string());
-                assert!(row["days_used"].as_u64().unwrap() > 0);
+                if row.get("last_used").is_some() {
+                    assert!(row["last_used"].is_string());
+                    assert!(row["days_used"].as_u64().unwrap() > 0);
+                } else {
+                    assert!(row.get("days_used").is_none());
+                }
                 assert!(row["plan_themes_after"].is_number());
                 assert_eq!(row["plan_themes_cap"], 30);
+            }
+            if case.get("configured").is_some()
+                && row.get("origin").is_none()
+                && row["creates_pomodoro"] == true
+            {
+                assert!(
+                    row["themes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|theme| theme["configured"] == false),
+                    "{} create row should be unconfigured: {row}",
+                    case["name"]
+                );
             }
         }
         assert_eq!(fs::read(&journal).unwrap(), before);
@@ -183,6 +221,66 @@ fn theme_recent_shell_description_and_quoted_replacement() {
     let text = stdout(&output);
     assert!(text.contains("recent · Oct 23 · 1 day"), "{text}");
     assert!(text.contains("DEEP WORK"), "{text}");
+}
+
+#[test]
+fn configured_shell_describes_never_used_and_unconfigured_create() {
+    let temp = TempDir::new("bob-theme-shell-configured");
+    fixture(
+        temp.path(),
+        &json!({
+            "today": [],
+            "history": {"2026-10-23": ["BUILD"]},
+            "hidden": [],
+            "configured": [
+                {"name": "BUILD", "color": "yellow"},
+                {"name": "WRITE", "color": "violet"}
+            ]
+        }),
+    );
+    let never_used = command(temp.path())
+        .args([
+            "__complete",
+            "zsh",
+            "--protocol",
+            "1",
+            "--",
+            "bob",
+            "capture",
+            "=#",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&never_used);
+    let never_text = stdout(&never_used);
+    assert!(
+        never_text.contains("your theme · never used"),
+        "{never_text}"
+    );
+    assert!(
+        never_text.to_ascii_lowercase().contains("write"),
+        "{never_text}"
+    );
+
+    let create = command(temp.path())
+        .args([
+            "__complete",
+            "zsh",
+            "--protocol",
+            "1",
+            "--",
+            "bob",
+            "capture",
+            "=#snack",
+        ])
+        .output()
+        .unwrap();
+    assert_success(&create);
+    let create_text = stdout(&create);
+    assert!(
+        create_text.contains("new · not in your themes"),
+        "{create_text}"
+    );
 }
 
 #[test]

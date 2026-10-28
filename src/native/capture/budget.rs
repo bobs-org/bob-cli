@@ -7,7 +7,10 @@
 //! cap. With `plan.strict: true` the whole batch is refused, atomically,
 //! when a non-start item creates a new named Pomodoro past the theme cap.
 use super::*;
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 fn pomodoros_section_text(contents: &str) -> Option<String> {
     let lines: Vec<&str> = contents.lines().collect();
@@ -98,6 +101,148 @@ pub(super) fn append_theme_refs(
             .collect();
     }
     refs_by_name
+}
+
+/// Structured `theme_not_configured` warnings for names whose entry
+/// count grew on a staged canonical daily note (or today's day file).
+/// An invalid `themes:` block is a plain-string warning. Never blocks.
+pub(super) fn append_unconfigured_theme_warnings(
+    request: &CaptureRequest,
+    batch: &mut PlannedCaptureBatch,
+) {
+    let day_file = pomodoro::day_file_for(&request.bob_dir);
+    let today = super::super::capture_pomodoros_agenda::agenda_date(&day_file);
+    let Ok(catalog) = super::super::pomodoro_themes::Catalog::load(
+        &request.bob_dir,
+        today,
+        false,
+    ) else {
+        return;
+    };
+    if let Some(warning) = catalog.config_warning() {
+        let already = batch
+            .warnings
+            .iter()
+            .any(|existing| existing.message() == warning);
+        if !already {
+            batch.warnings.push(warning.to_string().into());
+        }
+    }
+    if !catalog.has_configured() {
+        return;
+    }
+
+    let close_created = close_created_component_counts(batch);
+    let mut seen = BTreeSet::new();
+    for file in &batch.text_files {
+        if !is_daily_note(&request.bob_dir, &file.target, &day_file) {
+            continue;
+        }
+        let before = component_entry_counts(&file.original_target);
+        let after = component_entry_counts(&file.updated_target);
+        for (key, name) in authored_components_in_order(&file.updated_target) {
+            // Closing (and its inherited next-Pomodoro row) does not
+            // count as using the name; only a real entry-count increase
+            // beyond those rows does.
+            let grew = after.get(&key).copied().unwrap_or(0)
+                > before.get(&key).copied().unwrap_or(0)
+                    + close_created.get(&key).copied().unwrap_or(0);
+            if !grew || !catalog.unconfigured(&key) || !seen.insert(key.clone())
+            {
+                continue;
+            }
+            let similar = catalog.similar_to(&name);
+            batch
+                .warnings
+                .push(CaptureWarning::Structured(StructuredCaptureWarning {
+                code: super::super::pomodoro_themes::THEME_NOT_CONFIGURED,
+                label: Some(name.clone()),
+                count: None,
+                message:
+                    super::super::pomodoro_themes::theme_not_configured_message(
+                        &name, &similar,
+                    ),
+            }));
+        }
+    }
+}
+
+/// Next-Pomodoro rows a close creates inherit the closed name; those
+/// extra entries are not a use of the theme.
+fn close_created_component_counts(
+    batch: &PlannedCaptureBatch,
+) -> BTreeMap<String, u32> {
+    let mut counts = BTreeMap::new();
+    for item in &batch.items {
+        let Some(close) = item.result.pomodoro_close.as_ref() else {
+            continue;
+        };
+        let Some(next) = close.next_pomodoro.as_ref() else {
+            continue;
+        };
+        if !next.created {
+            continue;
+        }
+        let Some(name) = next.name.as_deref() else {
+            continue;
+        };
+        for component in plan_budget::split_components(name) {
+            let key = plan_budget::normalize_component(&component);
+            if key.is_empty() {
+                continue;
+            }
+            *counts.entry(key).or_default() += 1;
+        }
+    }
+    counts
+}
+
+fn is_daily_note(bob_dir: &Path, path: &Path, day_file: &Path) -> bool {
+    if path == day_file {
+        return true;
+    }
+    let Ok(relative) = path.strip_prefix(bob_dir) else {
+        return false;
+    };
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    crate::native::stats::index::canonical_daily_date(&relative).is_some()
+}
+
+fn component_entry_counts(contents: &str) -> BTreeMap<String, u32> {
+    let mut counts = BTreeMap::new();
+    let scan = capture_pomodoros::scan(contents);
+    for entry in &scan.entries {
+        let Some(name) = entry.name.as_deref() else {
+            continue;
+        };
+        for component in plan_budget::split_components(name) {
+            let key = plan_budget::normalize_component(&component);
+            if key.is_empty() {
+                continue;
+            }
+            *counts.entry(key).or_default() += 1;
+        }
+    }
+    counts
+}
+
+fn authored_components_in_order(contents: &str) -> Vec<(String, String)> {
+    let scan = capture_pomodoros::scan(contents);
+    let mut names = Vec::new();
+    let mut seen = BTreeSet::new();
+    for entry in &scan.entries {
+        let Some(name) = entry.name.as_deref() else {
+            continue;
+        };
+        for component in plan_budget::split_components(name) {
+            let key = plan_budget::normalize_component(&component);
+            if key.is_empty() || !seen.insert(key.clone()) {
+                continue;
+            }
+            names.push((key, component));
+        }
+    }
+    names
 }
 
 /// Compare today's daily note before and after planning, attach

@@ -10,8 +10,7 @@ summary:
 metadata:
   status: superseded
   decided: 2026-10-24
-superseded_by:
-  - "[[decisions:theme-hue-is-config-pin-exempt-area-hash]]"
+  superseded_by: decisions:theme-hue-is-config-pin-exempt-area-hash
 ---
 
 **Applies to.** bob-cli catalog and JSON, Obsidian theme pills, Bob Mac Capture

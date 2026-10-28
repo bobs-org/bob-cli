@@ -907,6 +907,79 @@
           "replacement": "\"SASE-V18\""
         }
       ]
+    },
+    {
+      "name": "configured-scopes-recent-and-never-used",
+      "draft": "=#",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "BUILD",
+          "SNACK"
+        ]
+      },
+      "hidden": [],
+      "configured": [
+        {"name": "BUILD", "color": "yellow"},
+        {"name": "WRITE", "color": "violet"}
+      ],
+      "expected": [
+        {
+          "name": "BUILD",
+          "replacement": "build",
+          "origin": "history"
+        },
+        {
+          "name": "WRITE",
+          "replacement": "write",
+          "origin": "history"
+        }
+      ]
+    },
+    {
+      "name": "configured-hides-configured-theme",
+      "draft": "=#",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "BUILD"
+        ]
+      },
+      "hidden": [
+        "hide me"
+      ],
+      "configured": [
+        {"name": "BUILD", "color": "yellow"},
+        {"name": "HIDE ME", "color": "auto"}
+      ],
+      "expected": [
+        {
+          "name": "BUILD",
+          "replacement": "build",
+          "origin": "history"
+        }
+      ]
+    },
+    {
+      "name": "configured-unconfigured-create-row",
+      "draft": "=#snack",
+      "today": [],
+      "history": {
+        "2026-10-23": [
+          "BUILD"
+        ]
+      },
+      "hidden": [],
+      "configured": [
+        {"name": "BUILD", "color": "yellow"}
+      ],
+      "expected": [
+        {
+          "name": "SNACK",
+          "replacement": "snack",
+          "creates_pomodoro": true
+        }
+      ]
     }
   ],
   "literal": [

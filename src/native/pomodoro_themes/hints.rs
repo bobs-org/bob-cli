@@ -9,6 +9,8 @@ use super::{hue::resolve_hue, journal::Prefs, ThemeRecord};
 
 pub(crate) const HINT_WINDOW_DAYS: i64 = 30;
 pub(crate) const MIN_DAYS_TOGETHER: u32 = 2;
+pub(crate) const NOT_CONFIGURED_HINT_DAYS: i64 = 7;
+pub(crate) const NOT_CONFIGURED_HINT_HUMAN_CAP: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CollisionHint {
@@ -23,6 +25,80 @@ pub(crate) struct CollisionHint {
 pub(crate) struct HintSuggest {
     pub(crate) name: String,
     pub(crate) hue: Hue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HintTheme {
+    pub(crate) key: String,
+    pub(crate) name: String,
+}
+
+/// Visible unconfigured themes used today or in the last 7 days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct NotConfiguredHint {
+    pub(crate) code: &'static str,
+    pub(crate) theme: HintTheme,
+    pub(crate) last_used: String,
+    pub(crate) days_used: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) similar_to: Option<String>,
+}
+
+/// Collision and not-configured list hints share one JSON array.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub(crate) enum ThemeHint {
+    Collision(CollisionHint),
+    NotConfigured(NotConfiguredHint),
+}
+
+pub(crate) fn not_configured_hints(
+    catalog: &super::Catalog,
+) -> Vec<NotConfiguredHint> {
+    if !catalog.has_configured() {
+        return Vec::new();
+    }
+    let window_start = catalog
+        .today
+        .checked_sub_signed(Duration::days(NOT_CONFIGURED_HINT_DAYS - 1))
+        .unwrap_or(NaiveDate::MIN);
+    let mut hints: Vec<NotConfiguredHint> = catalog
+        .records()
+        .filter(|record| {
+            !catalog.is_hidden(&record.key)
+                && catalog.unconfigured(&record.key)
+                && record.last_used >= window_start
+                && record.last_used <= catalog.today
+        })
+        .map(|record| {
+            let similar = catalog.similar_to(&record.name);
+            NotConfiguredHint {
+                code: super::THEME_NOT_CONFIGURED,
+                theme: HintTheme {
+                    key: record.key.clone(),
+                    name: record.name.clone(),
+                },
+                last_used: record.last_used.to_string(),
+                days_used: record.days_used,
+                similar_to: similar.into_iter().next(),
+            }
+        })
+        .collect();
+    hints.sort_by(|left, right| {
+        right
+            .last_used
+            .cmp(&left.last_used)
+            .then_with(|| left.theme.name.cmp(&right.theme.name))
+            .then_with(|| left.theme.key.cmp(&right.theme.key))
+    });
+    hints
+}
+
+pub(crate) fn human_not_configured_hint(hint: &NotConfiguredHint) -> String {
+    super::theme_not_configured_list_hint(
+        &hint.theme.name,
+        hint.similar_to.as_deref(),
+    )
 }
 
 /// Unpinned, non-exempt pairs that share a hue and met on at least two of

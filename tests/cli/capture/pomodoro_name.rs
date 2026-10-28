@@ -1193,3 +1193,61 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["kind"], "pomodoro_task");
 }
+
+#[test]
+fn capture_pomodoro_name_warns_when_name_is_unconfigured() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-name-unconfigured");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261024.md");
+    let config = temp.path().join("config.yml");
+    write_file(&day_file, concat!("## Pomodoros\n", "- [ ] ()\n"));
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n",
+    );
+    let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 2);
+
+    let output = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("SNACK")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("dry-run capture-pomodoro-name");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["warnings"][0]["code"], "theme_not_configured");
+    assert_eq!(json["warnings"][0]["label"], "SNACK");
+
+    let build = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("BUILD")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("configured name");
+    assert_success(&build);
+    let build_json: serde_json::Value =
+        serde_json::from_str(stdout(&build).trim()).expect("json");
+    assert!(build_json.get("warnings").is_none(), "{build_json}");
+}

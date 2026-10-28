@@ -31,7 +31,7 @@ use crate::native::{
 use super::{
     cache,
     journal::{self, EventPayload},
-    scan, Catalog,
+    scan, theme_not_configured_message, Catalog,
 };
 
 const COMMAND_NAME: &str = "bob themes rename";
@@ -658,8 +658,6 @@ fn plan_rename(
     {
         return Err(reference);
     }
-
-    let warnings = Vec::new();
     let touched_relative = files
         .iter()
         .map(|file| PathBuf::from(&file.path))
@@ -700,6 +698,20 @@ fn plan_rename(
         .map(|record| record.name.clone())
         .unwrap_or_else(|| old_raw.trim().to_string());
     let hidden_before = catalog.is_hidden(&old_key);
+    let new_name = new_raw.trim().to_string();
+    let mut warnings = Vec::new();
+    if catalog.unconfigured(&new_key) {
+        let similar = catalog.similar_to(&new_name);
+        warnings.push(theme_not_configured_message(&new_name, &similar));
+    }
+    if merge
+        && catalog.configured(&old_key) == Some(true)
+        && catalog.configured(&new_key) == Some(true)
+    {
+        warnings.push(format!(
+            "{old_display} stays in themes: until you remove it"
+        ));
+    }
 
     Ok(PreparedRenameLive {
         inner: PreparedRename {
@@ -707,7 +719,7 @@ fn plan_rename(
             old_key,
             old_name: old_display,
             new_key,
-            new_name: new_raw.trim().to_string(),
+            new_name,
             merge,
             via: via.to_string(),
             files,
@@ -934,6 +946,20 @@ fn config_reference(
     new_raw: &str,
 ) -> Option<RenameFailure> {
     let config_path = config::config_path();
+    let sources = config::load_theme_sources();
+    if let Some(themes) = &sources.themes {
+        let old_configured = themes.contains(old_key);
+        let new_configured = themes.contains(new_key);
+        if old_configured && !new_configured {
+            return Some(RenameFailure::new(
+                "config_reference",
+                format!(
+                    "{old_raw} is a configured theme; add {new_raw} under themes: first"
+                ),
+                Some("edit the chezmoi config to add NEW first"),
+            ));
+        }
+    }
     // plan.exempt and plan.inventory_labels.
     if let Ok(plan) = config::load_plan_config(&config_path) {
         let exempt = plan
@@ -1254,6 +1280,9 @@ fn print_human(report: &RenameReport) {
     }
     println!("  sync: pre {}, post {}", report.sync.pre, report.sync.post);
     for warning in &report.warnings {
+        if warning.contains("isn't one of your configured themes") {
+            println!("  ◌ {} not configured", report.to.name);
+        }
         eprintln!("{}: {warning}", styler.warning_prefix());
     }
 }

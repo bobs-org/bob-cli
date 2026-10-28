@@ -75,3 +75,4 @@ mod task_marker;
 mod task_toggle;
 mod template;
 mod template_expand;
+mod theme_warnings;

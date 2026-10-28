@@ -281,9 +281,10 @@ edited in place.
     color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
     top-level area stem, then name hash; clients render the hue Bob reports.
 36. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
-    (`theme-hue-is-pin-exempt-area-hash`) - A theme's hue is journal pin, then
-    plan.exempt mute, then top-level area stem, then name hash; clients render the hue
-    Bob reports.
+    (`theme-hue-is-pin-exempt-area-hash`) - _[superseded by
+    `decisions:theme-hue-is-config-pin-exempt-area-hash`]_ A theme's hue is journal pin,
+    then plan.exempt mute, then top-level area stem, then name hash; clients render the
+    hue Bob reports.
 37. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is

@@ -172,8 +172,12 @@ Recent rows exclude hidden themes and any theme that is a component of a
 named Today row in the same menu. Only rows the menu actually shows count. A
 theme used today only by a done or cancelled Pomodoro is not a Today row in a
 link or move picker, so it stays in Recent. In the start context it shows as
-an "again" row. An empty query shows at most 5 Recent
-rows; a non-empty query shows at most 12. Matching is ASCII
+an "again" row. When a `themes:` vocabulary is configured, Recent rows come
+only from that set: never-used configured themes rank after used ones, in
+config order, with no `last_used`/`days_used`, and `similar_to` draws only
+from visible configured themes. An empty query shows at most 5 Recent
+rows, or 12 when themes are configured so the whole vocabulary can show; a
+non-empty query shows at most 12. Matching is ASCII
 case-insensitive on slugs. A partial quoted literal matches on the
 normalized key prefix.
 
@@ -188,7 +192,11 @@ A create row carries `hidden: true` when its exact key is hidden, and
 needs at least three characters. Similarity means equality ignoring spaces
 and punctuation, a singular/plural pair (`s` or `es`), or edit distance one
 when both keys have at least five characters. This badge never changes
-ranking or Return. Zsh descriptions show `recent · Oct 21 · 3 days`.
+ranking or Return. When themes are configured, an unconfigured create row's
+`themes` refs carry `configured: false`. Zsh descriptions show
+`recent · Oct 21 · 3 days` for used Recent rows, `your theme · never used`
+for never-used configured Recent rows, and `new · not in your themes` on
+unconfigured create rows.
 
 Fetching, filtering, and accepting suggestions never touch the journal.
 
@@ -244,12 +252,18 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
 - **Refusals:** `unknown_theme` (OLD never used), `invalid_name` (NEW
   contains `+` or is blank), `unchanged` (OLD and NEW share a key),
   `theme_exists` (NEW already used without `--merge`), `config_reference`
-  (OLD is in `plan.exempt`, `plan.inventory_labels`, or a Stats metric filter
-  and NEW is not — edit the chezmoi config to add NEW first), plus
+  (OLD is in `plan.exempt`, `plan.inventory_labels`, a Stats metric filter,
+  or the `themes:` vocabulary, and NEW is not — edit the chezmoi config to
+  add NEW first; a configured OLD reads "OLD is a configured theme; add NEW
+  under themes: first"), plus
   `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
   `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
 - **Color and state:** the color follows the new name, and the preview says
   so. Hidden state and pins move with the rename per PT4.
+- **Unconfigured NEW:** a NEW outside the vocabulary adds a `warnings`
+  entry (`theme_not_configured` message) to the preview and result; human
+  output marks it `◌ NEW not configured`. A `--merge` of two configured
+  themes notes that OLD stays in `themes:` until you remove it.
 - **Reappearance:** if OLD's spelling reappears after a rename event (an
   offline host, muscle memory), `bob themes list` reports it in
   `renamed_reappeared`. It only reports; it never rewrites on its own. The
@@ -299,7 +313,8 @@ map from stdin. OLD must be a known theme.
   their `+` spelling and a resulting duplicate collapses. OLD entries with
   no row are left alone and counted as `unmapped`. If every row is a keep,
   refuse with `unchanged`. THEME may not exist yet (`new` in the preview).
-  Targets in normalized `plan.exempt` are `exempt`.
+  Targets in normalized `plan.exempt` are `exempt`. An unconfigured THEME
+  adds a `warnings` entry and human output marks it `◌ not configured`.
 - **Writing:** `-d` prints the plan and changes nothing. A write runs
   through the shared vault-rewrite transaction (`command_name` `bob themes
   split`, worktree subject "theme splits"). Split writes **no journal
@@ -388,6 +403,11 @@ themes:
   color}]`, color a slot or null, in config order), per-row `configured`,
   and `hue_source` values `config` and `unconfigured`.
   `theme_hue_collision` skips config-colored and muted themes.
+  `theme_not_configured` hints cover visible unconfigured, non-inventory
+  themes used today or in the last 7 days, one JSON object per theme
+  (`{code, theme: {key, name}, last_used, days_used, similar_to?}`). Human
+  output prints at most 3 of those hint lines, then
+  `… and N more · bob themes -a`.
 - **`bob themes color`.** Pinning a theme whose config sets a color refuses
   with `config_color` (exit 1, no journal write):
   `BUILD's color comes from themes: in ~/.config/bob/config.yml (yellow)`,
@@ -446,6 +466,13 @@ while typing, clients keep them neutral.
       "hue": "orange",
       "days_together": 6,
       "suggest": { "name": "BLOG", "hue": "red" }
+    },
+    {
+      "code": "theme_not_configured",
+      "theme": { "key": "snack", "name": "SNACK" },
+      "last_used": "2026-10-27",
+      "days_used": 1,
+      "similar_to": "CHORE"
     }
   ],
   "renamed_reappeared": [],

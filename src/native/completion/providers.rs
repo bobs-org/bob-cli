@@ -62,7 +62,7 @@ fn theme_names(context: &Context) -> Vec<String> {
     else {
         return Vec::new();
     };
-    catalog
+    let mut names: Vec<String> = catalog
         .records()
         .filter_map(|record| {
             protocol::candidate_line(
@@ -72,7 +72,27 @@ fn theme_names(context: &Context) -> Vec<String> {
                 false,
             )
         })
-        .collect()
+        .collect();
+    if let Some(entries) = catalog.configured_themes() {
+        let known: std::collections::BTreeSet<&str> = catalog
+            .records()
+            .map(|record| record.key.as_str())
+            .collect();
+        for entry in entries {
+            if known.contains(entry.key.as_str()) {
+                continue;
+            }
+            if let Some(line) = protocol::candidate_line(
+                OsStr::new(&entry.name),
+                "configured theme",
+                "themes",
+                false,
+            ) {
+                names.push(line);
+            }
+        }
+    }
+    names
 }
 
 /// Relation labels, including hidden labels so rename can recover a label

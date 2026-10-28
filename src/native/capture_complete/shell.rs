@@ -267,22 +267,36 @@ pub(crate) fn shell_completion(
                     continue;
                 }
                 let description = if item.origin == Some("history") {
-                    let date = item
-                        .last_used
-                        .as_deref()
-                        .and_then(|date| {
-                            chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                    if item.last_used.is_none() {
+                        "your theme · never used".to_string()
+                    } else {
+                        let date = item
+                            .last_used
+                            .as_deref()
+                            .and_then(|date| {
+                                chrono::NaiveDate::parse_from_str(
+                                    date, "%Y-%m-%d",
+                                )
                                 .ok()
-                        })
-                        .map(|date| date.format("%b %-d").to_string())
-                        .unwrap_or_default();
-                    let days = item.days_used.unwrap_or_default();
-                    format!(
-                        "recent · {date} · {days} {}",
-                        if days == 1 { "day" } else { "days" }
-                    )
+                            })
+                            .map(|date| date.format("%b %-d").to_string())
+                            .unwrap_or_default();
+                        let days = item.days_used.unwrap_or_default();
+                        format!(
+                            "recent · {date} · {days} {}",
+                            if days == 1 { "day" } else { "days" }
+                        )
+                    }
                 } else if item.creates_pomodoro {
-                    "new Pomodoro".to_string()
+                    if item
+                        .themes
+                        .iter()
+                        .any(|theme| theme.configured == Some(false))
+                    {
+                        "new · not in your themes".to_string()
+                    } else {
+                        "new Pomodoro".to_string()
+                    }
                 } else {
                     pomodoro_description(&item.time_range, &item.name)
                 };

@@ -127,7 +127,9 @@ that happen to share a selector slug. Both contexts compose their menu as \
 Today matches, Recent exact/prefix matches, an optional create row, Recent \
 substring matches, then utility rows. Recent comes from canonical daily \
 notes, excludes hidden themes and components already represented by Today, \
-and is capped at five rows for an empty query or twelve otherwise. Hidden \
+and is capped at five rows for an empty query or twelve otherwise \
+(twelve for an empty query too when a `themes:` vocabulary is configured, \
+so the whole vocabulary can show). Hidden \
 themes still work when typed and still appear in Today. An exact Today or \
 Recent match suppresses a separate create row; a prefix match does not. \
 A create row sets creates_pomodoro and replaces the query with the canonical selector; \

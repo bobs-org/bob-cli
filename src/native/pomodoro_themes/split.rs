@@ -33,7 +33,7 @@ use super::{
         print_failure, raw_lines_preserving, replace_name_tail, rewrite_name,
         verify_raw_tail_splice, OutputFormat, RenameFailure,
     },
-    scan, Catalog,
+    scan, theme_not_configured_message, Catalog,
 };
 
 const COMMAND_NAME: &str = "bob themes split";
@@ -492,6 +492,12 @@ struct TargetSummary {
     entries: usize,
     new: bool,
     exempt: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    not_configured: bool,
+}
+
+fn is_false(flag: &bool) -> bool {
+    !*flag
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -869,12 +875,22 @@ fn plan_split(
         .map(|(key, (name, entries))| TargetSummary {
             new: catalog.get(&key).is_none(),
             exempt: catalog.is_exempt(&key),
+            not_configured: catalog.unconfigured(&key),
             key,
             name,
             entries,
         })
         .collect();
     targets.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut warnings = Vec::new();
+    let mut warned = BTreeSet::new();
+    for target in &targets {
+        if !target.not_configured || !warned.insert(target.key.clone()) {
+            continue;
+        }
+        let similar = catalog.similar_to(&target.name);
+        warnings.push(theme_not_configured_message(&target.name, &similar));
+    }
 
     if !dry_run {
         let touched: BTreeSet<PathBuf> =
@@ -905,7 +921,7 @@ fn plan_split(
         kept,
         unmapped,
         remaining,
-        warnings: Vec::new(),
+        warnings,
         sync_pre: "skipped",
     })
 }
@@ -1137,6 +1153,9 @@ fn print_human(report: &SplitReport) {
         }
         if target.exempt {
             flags.push("exempt");
+        }
+        if target.not_configured {
+            flags.push("◌ not configured");
         }
         if flags.is_empty() {
             println!("  {}: {}", target.name, target.entries);

@@ -518,3 +518,78 @@ fn themes_rename_preserves_crlf_bytes_in_offline_write() {
     assert!(journal.contains("\"from\":\"job\""), "{journal}");
     assert!(journal.contains("\"to\":\"write\""), "{journal}");
 }
+
+#[test]
+fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
+    let temp = TempDir::new("bob-cli-themes-rename-configured");
+    let (vault, cache) = rename_vault(temp.path());
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n  FIXES: red\n",
+    );
+
+    let (output, value) = {
+        let mut command = rename_command(&vault, &cache);
+        command
+            .env("BOB_CONFIG_FILE", &config)
+            .args(["themes", "rename", "FIXES", "SNACK", "-d", "-f", "json"]);
+        let output = command.output().expect("rename configured");
+        let value: Value =
+            serde_json::from_str(stdout(&output).trim()).expect("json");
+        (output, value)
+    };
+    assert_ne!(output.status.code(), Some(0), "{value}");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "config_reference");
+    assert!(
+        value["message"]
+            .as_str()
+            .unwrap()
+            .contains("configured theme"),
+        "{value}"
+    );
+
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: yellow\n",
+    );
+    let mut command = rename_command(&vault, &cache);
+    command
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["themes", "rename", "FIXES", "SNACK", "-d", "-f", "json"]);
+    let warned = command.output().expect("rename unconfigured");
+    assert_success(&warned);
+    let warned_value: Value =
+        serde_json::from_str(stdout(&warned).trim()).expect("json");
+    assert_eq!(warned_value["ok"], true);
+    let warnings = warned_value["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("SNACK isn't one of your configured themes")),
+        "{warnings:?}"
+    );
+
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\nthemes:\n  FIXES: red\n  FIX: yellow\n",
+    );
+    let mut merge = rename_command(&vault, &cache);
+    merge.env("BOB_CONFIG_FILE", &config).args([
+        "themes", "rename", "FIXES", "FIX", "-d", "--merge", "-f", "json",
+    ]);
+    let merged = merge.output().expect("merge configured");
+    assert_success(&merged);
+    let merged_value: Value =
+        serde_json::from_str(stdout(&merged).trim()).expect("json");
+    let merge_warnings = merged_value["warnings"].as_array().expect("warnings");
+    assert!(
+        merge_warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("stays in themes:")),
+        "{merge_warnings:?}"
+    );
+}

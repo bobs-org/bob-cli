@@ -18,7 +18,9 @@ use super::{
     capture_pomodoros::{
         self, PomodoroEntry, PomodoroRef, PomodoroRefLookup, PomodoroState,
     },
-    collect_done, env as bob_env, pomodoro,
+    collect_done, env as bob_env,
+    plan_budget::{normalize_component, split_components},
+    pomodoro, pomodoro_themes,
     style::Styler,
 };
 
@@ -87,9 +89,10 @@ trimming that line's trailing spaces, preserves that line's ending and every \
 unrelated byte, and replaces the note with one same-directory temporary file \
 rename. The written contents are re-scanned and must parse with the expected \
 name and slug before success is reported. Dry-run plans the same mutation \
-and returns the same success shape without writing. Stale, ambiguous, \
-completed, already-named, missing, or unreadable Pomodoros fail without \
-touching the note.",
+and returns the same success shape without writing, including any \
+theme_not_configured warnings when the name is outside the configured \
+vocabulary. Stale, ambiguous, completed, already-named, missing, or \
+unreadable Pomodoros fail without touching the note.",
         )
         .after_help(
             "Examples:\n  bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'\n  bob capture-pomodoro-name --pomodoro-ref 12:abcd1234 --name 'AFTER TUI FIX' -f json\n  bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work' --dry-run\n  bob capture-pomodoro-name -b ~/bob -p 8:deadbeef -n MEMORY\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
@@ -237,6 +240,16 @@ struct CapturePomodoroNameResult {
     #[serde(rename = "ref")]
     pomodoro_ref: String,
     pomodoro: PomodoroEntry,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<NameWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct NameWarning {
+    code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,8 +385,41 @@ fn plan_assignment(
             line: updated_entry.line,
             pomodoro_ref: updated_entry.pomodoro_ref.to_string(),
             pomodoro: updated_entry.clone(),
+            warnings: name_warnings(&request.bob_dir, day_file, &request.name),
         },
     })
+}
+
+fn name_warnings(
+    bob_dir: &Path,
+    day_file: &Path,
+    name: &str,
+) -> Vec<NameWarning> {
+    let today = super::capture_pomodoros_agenda::agenda_date(day_file);
+    let Ok(catalog) = pomodoro_themes::Catalog::load(bob_dir, today, false)
+    else {
+        return Vec::new();
+    };
+    if !catalog.has_configured() {
+        return Vec::new();
+    }
+    let mut warnings = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for component in split_components(name) {
+        let key = normalize_component(&component);
+        if !seen.insert(key.clone()) || !catalog.unconfigured(&key) {
+            continue;
+        }
+        let similar = catalog.similar_to(&component);
+        warnings.push(NameWarning {
+            code: pomodoro_themes::THEME_NOT_CONFIGURED,
+            label: Some(component.clone()),
+            message: pomodoro_themes::theme_not_configured_message(
+                &component, &similar,
+            ),
+        });
+    }
+    warnings
 }
 
 fn assign_name_to_line(
@@ -451,6 +497,13 @@ fn human_success(
         result.line,
         styler.dim(&result.pomodoro_ref)
     ));
+    for warning in &result.warnings {
+        output.push_str(&format!(
+            "  {} {}\n",
+            styler.warning_prefix(),
+            warning.message
+        ));
+    }
     output
 }
 
@@ -903,6 +956,7 @@ mod tests {
                 is_current: false,
                 child_count: 0,
             },
+            warnings: Vec::new(),
         };
 
         let value: serde_json::Value =

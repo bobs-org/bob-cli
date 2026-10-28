@@ -6902,8 +6902,12 @@ writing.
 
 JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `day_file`, `relative_day_file`, the canonical `name`, the `slug` to
-type, the updated one-based `line`, the updated `ref`, and a `pomodoro` object
-with the same picker metadata as `capture-pomodoros` after the assignment.
+type, the updated one-based `line`, the updated `ref`, a `pomodoro` object
+with the same picker metadata as `capture-pomodoros` after the assignment,
+and `warnings` when a `themes:` vocabulary is configured and the name is
+outside it (`theme_not_configured`, omitted when empty). Human output
+prints those warnings after the success lines. `--dry-run` returns the same
+success shape without writing.
 JSON failure is `{"ok": false, "error": "..."}` and is write-free, as are
 stale, ambiguous, completed, already-named, missing-note, missing-section, and
 unreadable-note errors.
