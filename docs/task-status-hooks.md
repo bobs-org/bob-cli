@@ -181,12 +181,17 @@ only; canceled-reference cleanup uses the full list-item subtree. When a
 completed parent bullet is relocated, any independently canceled descendant
 subtree is omitted from the moved content.
 
-The `Ctrl+Shift+P` Cancel row in Bob Navigation Hotkeys applies this same
-removal at once, using the deferral prune's dedicated-bullet/token semantics
-(a dedicated link bullet is removed with its subtree; otherwise only the link
-token is removed). Struck links, closed Pomodoros, and other days' notes are
-untouched either way. This command stays authoritative: it re-derives the
-same cleanup on its next run.
+The `Ctrl+Shift+P` Cancel row in Bob Navigation Hotkeys, and a
+[cancel-label commit](task-relations.md#17-cancel-labels), apply an
+immediate prune of today's open-Pomodoro links using dedicated-bullet
+/ token semantics: a dedicated link bullet is removed with its
+subtree; otherwise only the link token is removed. Struck links,
+closed Pomodoros, top-level entry lines, fenced examples, text
+outside `## Pomodoros`, and other days' notes stay. Reconcile does
+**not** re-derive that same cleanup: its canceled-reference pass also
+removes struck links and mixed-prose items that the immediate prune
+keeps. Reconcile stays authoritative for later healing; the immediate
+prune is the gesture's feedback.
 
 ### Empty Pomodoros
 

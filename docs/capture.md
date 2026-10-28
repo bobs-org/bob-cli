@@ -2045,7 +2045,8 @@ The aliases stay narrow: `@route:id` and `^route:id` name an owner only when
 used bare with relationship modifiers. Without `&` or `*`, their existing
 Pomodoro-link behavior remains unchanged. `&`, `*`, `~`, and `~~` are all
 **relationship modifiers**: the first two change status and lanes, while
-`~` / `~~` only write inert relation lines
+`~` / `~~` write inert relation lines, except a
+[cancel-label](task-relations.md#17-cancel-labels) commit
 ([Linking tasks with '~' and '~~'](#linking-tasks)). The
 familiar two-item form still
 keeps a blocked task in a session while it takes over the blocker’s slot:
@@ -2319,6 +2320,10 @@ task. `~~note:block-id` means that task relates to this item's task.
 A label after `|` is phrased from the source's side
 (`S — ‹label› → T`); write `|"follow-up of"` for multi-word labels.
 Labels obey the [relation label rules](task-relations.md#32-labels).
+A label listed in `relations.cancel_labels` is a
+[cancel label](task-relations.md#17-cancel-labels): committing an
+add or relabel into one cancels the relation's source in the same
+batch. *planned (phase capture-cancel).*
 A label after `||` is a one-off: the stored Markdown is identical to
 the `|` form, but the label hides from suggestions once the capture
 succeeds. Hiding a visible existing label warns with its link count;
@@ -2359,7 +2364,10 @@ glob; single-quote the draft.
 
 **Inertness.** Relations never block, consume, schedule, stamp, or
 route anything. `Fix it ~work:foo` leaves every status, lane, and
-Pomodoro link exactly as it was, apart from a minted `^id`.
+Pomodoro link exactly as it was, apart from a minted `^id`. The one
+exception is a [cancel-label](task-relations.md#17-cancel-labels)
+commit, which cancels the source as Task Card Cancel would.
+*planned (phase capture-cancel).*
 
 **Human output.** Successful captures print `🪢` rows in the
 dependency style, for example:
@@ -2392,6 +2400,11 @@ action: hide|already_hidden}`, pre-capture counts, omitted when
 empty), plus a `hides_existing_relation_label` warning object
 (`{code, label, count, message}`) when a one-off hides a visible
 existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
+Cancel-label fields (`relation_cancels[]`, `cancel_effect`,
+`relation_cancelled_source`, `cancels_source`) are specified in
+[§17 CL7](task-relations.md#cl7-contracts) and stubbed in
+[JSON outputs](reference/json-outputs.md). *planned (phase capture-cancel),
+planned (phase cancel-surfaces).*
 
 ### Completing tasks with '!'
 

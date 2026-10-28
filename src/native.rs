@@ -80,6 +80,9 @@ pub(crate) mod ref_tasks;
 mod relation_labels;
 mod stats;
 pub(crate) mod style;
+// Shared cancel-label vectors; the engine lands in phase cancel-engine.
+#[allow(dead_code)]
+mod task_cancel;
 mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;

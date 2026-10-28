@@ -1,0 +1,1507 @@
+{
+  "cancel": [
+    {
+      "name": "open-ready-minimal",
+      "content": "- [ ] #task Sell stocks! ^sell-stocks",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [cancelled:: 2026-10-22] ^sell-stocks",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "open-next",
+      "content": "- [*] #task Write introduction! ^write-intro",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Write introduction! [cancelled:: 2026-10-22] ^write-intro",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "open-in-progress",
+      "content": "- [/] #task Flesh out tasks ^flesh-out",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Flesh out tasks [cancelled:: 2026-10-22] ^flesh-out",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "open-blocked",
+      "content": "- [?] #task Finish full v1 draft ^v1-draft",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Finish full v1 draft [cancelled:: 2026-10-22] ^v1-draft",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "fields-present",
+      "content": "- [ ] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [id:: sell-stocks] [dependsOn:: other] ^sell-stocks",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [id:: sell-stocks] [dependsOn:: other] [cancelled:: 2026-10-22] ^sell-stocks",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "fields-absent",
+      "content": "- [ ] #task Sell stocks!",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [cancelled:: 2026-10-22]",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "id-field-without-block-id",
+      "content": "- [ ] #task Sell stocks! [id:: sell-stocks]",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [id:: sell-stocks] [cancelled:: 2026-10-22]",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "existing-cancel-log-prepends-fallback",
+      "content": "- [*] #task Sell stocks! [priority:: high] [created:: 2026-08-14] ^sell-stocks\n  - ❌ **CANCEL LOG**\n    - *2026-10-01* — earlier reason\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "🪢 duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [priority:: high] [created:: 2026-08-14] [cancelled:: 2026-10-22] ^sell-stocks\n  - ❌ **CANCEL LOG**\n    - *2026-10-22* — 🪢 duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]\n    - *2026-10-01* — earlier reason\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 1,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 1
+      }
+    },
+    {
+      "name": "no-log-empty-reason-writes-none",
+      "content": "- [ ] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] ^sell-stocks\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "🪢 duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [cancelled:: 2026-10-22] ^sell-stocks\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "already-done-unchanged",
+      "content": "- [x] #task Sell stocks! [cancelled:: 2026-10-01] ^sell-stocks",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [x] #task Sell stocks! [cancelled:: 2026-10-01] ^sell-stocks",
+        "cancelledCount": 0,
+        "skippedClosedCount": 1,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "already-cancelled-unchanged",
+      "content": "- [-] #task Sell stocks! [cancelled:: 2026-10-01] ^sell-stocks",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [cancelled:: 2026-10-01] ^sell-stocks",
+        "cancelledCount": 0,
+        "skippedClosedCount": 1,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "recurring-repeat-field-refused",
+      "content": "- [ ] #task Weekly review [repeat:: weekly] ^weekly",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": false,
+        "recurring": true,
+        "error": "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        "content": "- [ ] #task Weekly review [repeat:: weekly] ^weekly",
+        "cancelledCount": 0,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "recurring-emoji-refused",
+      "content": "- [ ] #task Weekly review 🔁 ^weekly",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": false,
+        "recurring": true,
+        "error": "Recurring tasks are cancelled with Obsidian Tasks so the next occurrence is handled; no tasks were updated",
+        "content": "- [ ] #task Weekly review 🔁 ^weekly",
+        "cancelledCount": 0,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "prj-line",
+      "content": "- [ ] #task #prj Ship the project outcome! #hide ^prj",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task #prj Ship the project outcome! #hide [cancelled:: 2026-10-22] ^prj",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    },
+    {
+      "name": "cash-md-cl4",
+      "content": "- [ ] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] ^sell-stocks\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+      "line": 0,
+      "date": "2026-10-22",
+      "reason": "",
+      "fallbackReason": "",
+      "expected": {
+        "valid": true,
+        "recurring": false,
+        "error": null,
+        "content": "- [-] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [cancelled:: 2026-10-22] ^sell-stocks\n  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]",
+        "cancelledCount": 1,
+        "skippedClosedCount": 0,
+        "loggedCount": 0,
+        "createdLogCount": 0,
+        "fallbackLoggedCount": 0
+      }
+    }
+  ],
+  "prune": [
+    {
+      "name": "dedicated-bullet-with-children",
+      "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - [[cash#^sell-stocks]]\n    - nested detail\n    - [[cash#^other]]\n  - keep me\n- [x] Done (0930-1000)",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": true,
+        "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - keep me\n- [x] Done (0930-1000)",
+        "removedLinkCount": 1,
+        "removedBulletCount": 1,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "mixed-prose-token",
+      "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - Review [[cash#^sell-stocks]] before lunch",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": true,
+        "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - Review before lunch",
+        "removedLinkCount": 1,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "struck-link-kept",
+      "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - ~~[[cash#^sell-stocks]]~~\n  - keep me",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - ~~[[cash#^sell-stocks]]~~\n  - keep me",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "closed-pomodoro-kept",
+      "content": "## Pomodoros\n\n- [x] Done (0900-0930)\n  - [[cash#^sell-stocks]]\n- [-] Cancelled (0930-1000)\n  - [[cash#^sell-stocks]]\n- [ ] Open (1000-1030)\n  - keep me",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "## Pomodoros\n\n- [x] Done (0900-0930)\n  - [[cash#^sell-stocks]]\n- [-] Cancelled (0930-1000)\n  - [[cash#^sell-stocks]]\n- [ ] Open (1000-1030)\n  - keep me",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "top-level-entry-line-kept",
+      "content": "## Pomodoros\n\n- [ ] Current [[cash#^sell-stocks]] (0900-0930)\n  - keep me",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "## Pomodoros\n\n- [ ] Current [[cash#^sell-stocks]] (0900-0930)\n  - keep me",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "fenced-example-kept",
+      "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - See also:\n  ```md\n  - [[cash#^sell-stocks]]\n  ```\n  - keep me",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - See also:\n  ```md\n  - [[cash#^sell-stocks]]\n  ```\n  - keep me",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "outside-pomodoros-kept",
+      "content": "- [[cash#^sell-stocks]]\n\n## Pomodoros\n\n- [ ] Current (0900-0930)\n  - keep me\n\n## Tasks\n- [[cash#^sell-stocks]]",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "- [[cash#^sell-stocks]]\n\n## Pomodoros\n\n- [ ] Current (0900-0930)\n  - keep me\n\n## Tasks\n- [[cash#^sell-stocks]]",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "several-links",
+      "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - [[cash#^sell-stocks]]\n  - Review [[cash#^sell-stocks]] and notes\n- [/] Working (0930-1000)\n  - [[cash#^sell-stocks]]\n  - [[Tasks#^other]]",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md",
+        "Tasks.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": true,
+        "content": "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - Review and notes\n- [/] Working (0930-1000)\n  - [[Tasks#^other]]",
+        "removedLinkCount": 3,
+        "removedBulletCount": 2,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    },
+    {
+      "name": "empty-daily-note",
+      "content": "",
+      "dailyPath": "2026/20261022.md",
+      "notePaths": [
+        "2026/20261022.md",
+        "cash.md"
+      ],
+      "targets": [
+        {
+          "path": "cash.md",
+          "blockId": "sell-stocks"
+        }
+      ],
+      "expected": {
+        "changed": false,
+        "content": "",
+        "removedLinkCount": 0,
+        "removedBulletCount": 0,
+        "removedEntryCount": 0,
+        "unresolvedCount": 0
+      }
+    }
+  ],
+  "rule": [
+    {
+      "name": "cl5-open-ready-added",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-open-next-added",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "superseded by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "*",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-open-in-progress-relabeled",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": "see",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "/",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-open-blocked-added",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "?",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-open-prj-added",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": true,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-already-done",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "x",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-already-cancelled",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "superseded by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "-",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-recurring",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": true,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "recurring",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-new-task-tilde",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": true,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "new_task",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-conflict-complete",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "!"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-conflict-start",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "="
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-conflict-pomodoro-link",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        ":"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-conflict-depends",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "&"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-conflict-blocks",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "*"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-unchanged-same-edge",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": "duplicate of",
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-relabel-away",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "see",
+      "previous_label": "duplicate of",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "-",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "relabel_away",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-unlink",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": "-",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "unlink",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-reconcile",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "reconcile",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-rename",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": "see",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "rename",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-hand-edit",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "hand_edit",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-agent-edit",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "agent_edit",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-mirror",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "mirror",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-sync",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "sync",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl1-config-change",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "config_change",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl3-nav-links-cancels-cursor",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl3-nav-linked-from-cancels-picked",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_linked_from",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl3-capture-tilde-cancels-owner",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl3-capture-tilde-tilde-cancels-picked",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "superseded by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": "*",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl3-counted-batch-each-source",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "counted_batch",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    },
+    {
+      "name": "cl5-relabel-cancel-to-cancel-already-closed",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "superseded by",
+      "previous_label": "duplicate of",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "-",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-inverse-supersedes-never-cancels",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "supersedes",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl5-inverse-duplicated-by-never-cancels",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicated by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl2-unconfigured-label-never-cancels",
+      "configured": [],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "cancels": false
+      }
+    },
+    {
+      "name": "cl2-hidden-cancel-label-still-cancels",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": true,
+      "expected": {
+        "verdict": "cancels",
+        "cancels": true
+      }
+    }
+  ],
+  "key": [
+    {
+      "name": "plain-canonical",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "duplicate of",
+      "expected": {
+        "key": "duplicate of",
+        "matches": true
+      }
+    },
+    {
+      "name": "case-spacing-trailing-colon",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "Duplicate  Of:",
+      "expected": {
+        "key": "duplicate of",
+        "matches": true
+      }
+    },
+    {
+      "name": "uppercase",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "SUPERSEDED BY",
+      "expected": {
+        "key": "superseded by",
+        "matches": true
+      }
+    },
+    {
+      "name": "inner-spacing-collapsed",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "superseded   by",
+      "expected": {
+        "key": "superseded by",
+        "matches": true
+      }
+    },
+    {
+      "name": "inverse-duplicated-by",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "duplicated by",
+      "expected": {
+        "key": "duplicated by",
+        "matches": false
+      }
+    },
+    {
+      "name": "inverse-supersedes",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "supersedes",
+      "expected": {
+        "key": "supersedes",
+        "matches": false
+      }
+    },
+    {
+      "name": "substring-dup-of",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "dup of",
+      "expected": {
+        "key": "dup of",
+        "matches": false
+      }
+    },
+    {
+      "name": "substring-duplicate",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "duplicate",
+      "expected": {
+        "key": "duplicate",
+        "matches": false
+      }
+    },
+    {
+      "name": "prefix-plus-extra",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "duplicate of extra",
+      "expected": {
+        "key": "duplicate of extra",
+        "matches": false
+      }
+    },
+    {
+      "name": "merged-into-not-configured",
+      "configured": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "input": "merged into",
+      "expected": {
+        "key": "merged into",
+        "matches": false
+      }
+    }
+  ],
+  "config": [
+    {
+      "name": "missing-key",
+      "yaml": "timezone: America/New_York\n",
+      "expected": {
+        "keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "null",
+      "yaml": "relations:\n  cancel_labels: null\n",
+      "expected": {
+        "keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "empty-list",
+      "yaml": "relations:\n  cancel_labels: []\n",
+      "expected": {
+        "keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "scalar",
+      "yaml": "relations:\n  cancel_labels: duplicate of\n",
+      "expected": {
+        "keys": [],
+        "warning_count": 1
+      }
+    },
+    {
+      "name": "mapping",
+      "yaml": "relations:\n  cancel_labels:\n    duplicate of: true\n",
+      "expected": {
+        "keys": [],
+        "warning_count": 1
+      }
+    },
+    {
+      "name": "non-string-entry",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - 1\n    - true\n",
+      "expected": {
+        "keys": [
+          "duplicate of"
+        ],
+        "warning_count": 2
+      }
+    },
+    {
+      "name": "illegal-label",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - see (old)\n    - \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n    - \"\"\n    - ·leading\n",
+      "expected": {
+        "keys": [
+          "duplicate of"
+        ],
+        "warning_count": 4
+      }
+    },
+    {
+      "name": "duplicate-keys-collapse",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - Duplicate  Of:\n    - superseded by\n",
+      "expected": {
+        "keys": [
+          "duplicate of",
+          "superseded by"
+        ],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "invalid-linked-from-lines-beside-valid-cancel-labels",
+      "yaml": "relations:\n  linked_from_lines: maybe\n  cancel_labels:\n    - duplicate of\n",
+      "expected": {
+        "keys": [
+          "duplicate of"
+        ],
+        "warning_count": 1,
+        "linked_from_lines": true
+      }
+    },
+    {
+      "name": "canonical-list",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n    # - merged into\n",
+      "expected": {
+        "keys": [
+          "duplicate of",
+          "superseded by"
+        ],
+        "warning_count": 0
+      }
+    }
+  ]
+}

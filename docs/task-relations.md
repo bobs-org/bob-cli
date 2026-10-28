@@ -6,7 +6,8 @@ Mac Capture (`~` / `~~`) and from the Obsidian Task Card (`l` /
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
 the target always converges to it. Live chips render both ends
 correctly, and relations never block, promote, consume, schedule,
-stamp, or route anything.
+stamp, or route anything. The one exception is the commit-time
+cancel of [§17](#17-cancel-labels).
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_relations/` (LINKS and LINKED FROM parsers, label
@@ -40,6 +41,10 @@ vector, fix this doc first in the same change.
   (`picker.relationship`, `dependency_target`,
   `relationship_needs_text`, mode `task_dependency`) keep their
   spelling and now cover all four.
+- **Cancel label**: a relation label listed in
+  `relations.cancel_labels`. Committing one through an explicit
+  relation gesture cancels the relation's source exactly as Task
+  Card Cancel would ([§17](#17-cancel-labels)).
 - **Task Link** keeps its glossary meaning: a block link to an
   Obsidian task. Entries on a LINKS line are block links to tasks,
   but they are **never** Pomodoro Task Links.
@@ -63,7 +68,10 @@ A relation write, a relation line, or a relation gesture never:
 - counts as a review answer, advances the `]s` walk, becomes a walk
   tier, or triggers inbox routing;
 - disappears because either end closes, is cancelled, reopens, or is
-  archived. Relations are history.
+  archived. Relations are history;
+- except the commit-time cancel of [§17](#17-cancel-labels), which
+  may cancel the source, prune its links from today's open
+  Pomodoros, and recover blocked dependents.
 
 A link that needs to block is a dependency (`&`, `b`).
 
@@ -291,7 +299,8 @@ failed follow-ups are repaired by reconcile.
 | nav hand-edit mirror (cursor leaves an edited LINKS line; undo re-arms) | Diff the burst baseline's (target, label) set against the final set, then mirror the difference as follow-ups. |
 | Hand edit of LINKED FROM | Never an edge change. A notice appears once per burst, and reconcile restores the line. |
 | Ctrl+Shift+M, `bob task move`, `bob task archive`, Obsidian rename | The LINKS line moves with its task, and generic link rebasing applies. Reconcile re-sorts and repairs the mirrors. |
-| Closes, cancels, reopens | None. |
+| Closes, cancels, reopens | None. Lifecycle events never write or remove a relation. |
+| Cancel-label commit | [§17](#17-cancel-labels). An explicit add or relabel into a cancel label cancels the source as Task Card Cancel would. |
 
 All writers share one planner, implemented in Rust with a JS twin and
 pinned by the same LW vectors. Writers compare canonical output
@@ -453,7 +462,8 @@ group in the dependency style, and `--dry-run` previews all of it.
 2. **Inertness (LR18, LX13, LG13).** Adding, removing, or relabelling
    any relation leaves every status, lane, field, schedule, Pomodoro
    section, and Depends-On / BLOCKS line byte-identical, apart from a
-   minted `^id`.
+   minted `^id`. The one carve-out is the commit-time cancel of
+   [§17](#17-cancel-labels).
 3. **Engine agreement (LW14, LK\*).** Rust and JS agree on every LK,
    LW, and LM vector, malformed cases included.
 4. **Live view (LC8).** Chips render from the live index, never from
@@ -468,6 +478,9 @@ group in the dependency style, and `--dry-run` previews all of it.
 
 - **Close, cancel, reopen S or T.** None. Relations are history;
   nothing changes.
+- **Relabel away from a cancel label, or unlink.** S stays
+  Cancelled. Nothing ever reopens because of a label
+  ([§17](#17-cancel-labels)).
 - **Archive S.** Link repair rewrites T's mirror entry to the
   `[[done/…#^s]]` form; reconcile keeps it unchanged (LR22).
 - **Archive T.** No mirror is written in `done/`; chips show the live
@@ -555,7 +568,8 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LR15 | two LINKED FROM lines | first rewritten, the rest deleted (`deduplicated`) |
 | LR16 | `relations.linked_from_lines: false`, then `true` | every LINKED FROM on writable tasks removed, no mints; then rebuilt |
 | LR17 | invalid `relations.linked_from_lines` | behaves as `true`; stderr warning |
-| LR18 | relation added / removed / relabelled between runs | only LINKED FROM lines and minted ids differ |
+| LR18 | relation added / removed / relabelled between runs | only LINKED FROM lines and minted ids differ; an open source whose LINKS already carries a cancel label stays open (LR25) |
+| LR25 | reconcile an open source whose LINKS carries a configured cancel label | status, checkbox, and `[cancelled::]` byte-identical; reconcile never cancels |
 | LR19 | A → B and B → A | each lists the other |
 | LR20 | `--dry-run -f json` | identical rows; nothing written; no mints persisted |
 | LR21 | owner's note modified less than 2 s ago | edits deferred |
@@ -579,7 +593,7 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LX10 | T's LINKED FROM malformed | capture succeeds; `mirror_skipped` `malformed_line` and a warning |
 | LX11 | `x ~job:cleanup` | `operator_relation_error` |
 | LX12 | any LX vector, dry run vs live | identical JSON apart from `dry_run` |
-| LX13 | any relation capture | no `[fresh::]`, lane, status, or Pomodoro change on S or T |
+| LX13 | any relation capture | no `[fresh::]`, lane, status, or Pomodoro change on S or T, except a [§17](#17-cancel-labels) cancel-label commit |
 | LX14 | `N ~T1 ~T2 ~T1` / `N ~T1\|a ~T1\|b` | T1 then T2, duplicate no-op / refused |
 | LX15 | `N ~T ~~T` | two independent edges |
 | LX16 | a same-note S and T | both edits composed against staged text; one write of the note |
@@ -644,7 +658,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG10 | hand edit adds / removes / relabels a LINKS entry, cursor leaves | mirrors follow; Ctrl+Z re-fires the mirror |
 | LG11 | hand edit confined to LINKED FROM | notice once; no edge change |
 | LG12 | `3 Ctrl+Shift+L`, choose T with a label | four sources each gain one labelled entry |
-| LG13 | any relation gesture on an inbox task or a `]s` landing | no stamp, lane change, inbox routing, or walk advance |
+| LG13 | any relation gesture on an inbox task or a `]s` landing | no stamp, lane change, inbox routing, or walk advance, except a [§17](#17-cancel-labels) cancel of the landed source |
 | LG14 | kill switch off | no mirror writes and no source mints |
 | LG15 | Tab marks two targets, then ↵ | both linked in one gesture and one notice |
 
@@ -836,6 +850,11 @@ Every `schema_version` stays 1; JSON grows additively.
   journal append adds `{code: "relation_label_hide_failed", message}` with
   the exact retry command; the capture still succeeds. A dry run previews
   all of this and writes nothing.
+- **Cancel labels** ([§17](#17-cancel-labels)): additive
+  `cancels_source` / `configured` row flags, `relation_cancel`,
+  `relation_cancels[]`, `cancel_effect`, and the
+  `relation_cancelled_source` warning. *planned (phase capture-cancel)*,
+  *planned (phase cancel-surfaces)*.
 
 ### RV8 The rename transaction
 
@@ -889,3 +908,302 @@ stage with the card's keys and copy.
 Its `key`, `catalog`, `fold`, `rank`, and `grammar` (LD vectors)
 sections are consumed by Rust tests; rename fold cases live in
 `fold`. bob-plugins copies the file byte-for-byte.
+
+Cancel-label bytes live in
+`tests/fixtures/task_cancel/vectors.json` ([§17](#17-cancel-labels)).
+
+## 17. Cancel labels
+
+A **cancel label** is a relation label listed in
+`relations.cancel_labels`. Committing one through an explicit
+relation gesture cancels the relation's **source** exactly as Task
+Card Cancel would. Until a rule's implementing phase lands, it
+carries `planned (phase <id>)`.
+
+### CL1 The rule
+
+*Status: planned (phase capture-cancel), planned (phase nav-cancel-writer).*
+
+When an explicit relation gesture **adds** a cancel label to an open
+task, or **relabels** one of its links **into** a cancel label, the
+same gesture cancels that task (the relation's **source**) exactly as
+Task Card Cancel would. Nothing else cancels because of a label, and
+nothing ever reopens because of one.
+
+**Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
+Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+marked batches in those stages.
+
+It **never** fires on: reconcile, `bob relations rename`, hand edits
+of LINKS, agent edits, unlink, relabel *away* from a cancel label,
+mirrors, vault sync, config changes, or an `Unchanged` re-add.
+
+It **fires once, at commit.** It is never a state that reconcile
+enforces. A reopened source stays open. Only a *new* explicit add or
+relabel can cancel it again.
+
+### CL2 Config
+
+*Status: planned (phase cancel-engine). Chezmoi lands in planned
+(phase rollout).*
+
+The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
+built-in default is `[]`.
+
+```yaml
+# Task relations (docs/task-relations.md in bob-cli).
+relations:
+  # linked_from_lines: true   # write 🪢 LINKED FROM mirrors (default)
+  # Committing a link with one of these labels also cancels the task the label
+  # is phrased from ("S duplicate of T" cancels S). Matched like relation
+  # labels (case, spacing, trailing colon ignored). Empty cancels nothing.
+  cancel_labels:
+    - duplicate of
+    - superseded by
+    # - merged into
+```
+
+- **Matching** uses `relation_label_key`. `Duplicate  Of:` matches;
+  `duplicated by`, `supersedes`, and `dup of` do not. There is no
+  substring or fuzzy matching.
+- **Parsing fails toward fewer cancels.**
+  - A missing key, `null`, or `[]` is a valid empty policy.
+  - A non-sequence value warns
+    `invalid relations.cancel_labels in <path>: expected a list of relation labels; cancelling nothing`
+    and yields an empty set.
+  - An entry that is not a string, or not a legal relation label
+    (the writer's length and character rules in §3.2), warns and is
+    skipped.
+  - Entries that share a key collapse.
+  - A `cancel_labels` problem never becomes a `ConfigError`, and
+    never changes `linked_from_lines`.
+- **Hide is not disable.** A hidden or `||` one-off cancel label
+  still cancels when typed
+  (`relation-label-hide-is-suggestions-only`). To turn the effect
+  off, change the config.
+- **Catalog overlay.** A configured cancel label appears in
+  suggestions and in `bob relations list -a` even with zero uses. It
+  is marked `configured`, ranks as a zero-use row, and is never
+  boosted. Hidden still wins. *planned (phase cancel-surfaces).*
+- **Host-wide YAML**, like `linked_from_lines`. It never goes in the
+  per-host label journal, and bob never edits `config.yml`.
+
+### CL3 Which task is cancelled
+
+*Status: planned (phase capture-cancel), planned (phase nav-cancel-writer).*
+
+The source is always the task the label is phrased from: "S duplicate
+of T" cancels S.
+
+| Gesture | Source S (cancelled) | Target T (survives) |
+| --- | --- | --- |
+| Task Card `l` → `⇧↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Capture `@note+id ~t:id\|"duplicate of"` | routed existing task | picked task |
+| Capture `New task ~~old:id\|"superseded by"` | **picked existing task** | the new task |
+| Capture `New task ~old:id\|"duplicate of"` | — refused `relation_cancels_new_task` | — |
+| Counted `N Ctrl+Shift+L` / marked rows | each source | one target (second Return if ≥2 cancels) |
+
+### CL4 What one commit writes
+
+*Status: planned (phase cancel-engine).* Capture composes these
+writes in *planned (phase capture-cancel)*; nav folds them into the
+source write in *planned (phase nav-cancel-writer)*.
+
+Every step below is existing cancel behavior. The only new part is
+composing them.
+
+1. **S's note, one write.** The LINKS add or relabel, then `[-]` and
+   an upserted `[cancelled:: today]` on S's task line. "Today" is
+   bob's configured day timezone in Rust, and nav's existing Task
+   Card Cancel date in JS.
+   - There is no new Cancel Log.
+   - If S already keeps a `❌ CANCEL LOG`, prepend
+     `*date* — 🪢 duplicate of [[T]]`, using the same link text the
+     LINKS entry uses. This is nav's `fallbackReason`. Two cancel
+     edges on one source in one commit join in authored order,
+     separated by `·`.
+2. **T's LINKED FROM mirror.** The usual best-effort follow-up;
+   reconcile stays the authority. `linked_from_lines: false` skips
+   only this step.
+3. **Today's daily note.** Prune S's links under **open** Pomodoros
+   with Task Card Cancel's immediate semantics:
+   - a dedicated link bullet goes with its subtree;
+   - in mixed prose, only the token goes;
+   - struck links, closed Pomodoros, top-level entry lines, fenced
+     examples, text outside `## Pomodoros`, and other days stay.
+
+   Never create the note: an absent note means 0 links, and an
+   unreadable note is an error.
+
+4. **Recovery.** S's Blocked dependents recover through the existing
+   engines, stamping `[unblocked:: today]`
+   (`unblocked-tasks-resurface-as-ticklers`). For a `^prj`, this
+   includes residents blocked only by the project. There are **no
+   successor offers** and no dependency transfer.
+5. **Feedback.** One composed result names the cancel, the prune
+   count, and how many tasks were unblocked.
+
+For the `cash.md` case, the result is byte-identical to the
+hand-made cancel:
+
+```markdown
+- [-] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [cancelled:: 2026-10-22] ^sell-stocks
+  - 🪢 **LINKS:** duplicate of [[dev_plex_hack_patch#^sell-stocks-now]]
+```
+
+### CL5 Verdicts and edge cases
+
+*Status: planned (phase cancel-engine).* The cue and the writer use
+one verdict function per engine: Rust in `task_cancel`, JS
+`planRelationCancelEffects`. The shared `rule` vectors pin both, so
+the cue can never disagree with the write.
+
+| Source state | Verdict | Effect |
+| --- | --- | --- |
+| Open: `[ ]` Ready, `[*]` Next, `[/]` In Progress, `[?]` Blocked (the Task Card Cancel open set) | `cancels` | link and cancel |
+| `^prj` task, open | `cancels` (project) | as Task Card `x`; copy adds "its N open tasks stay open" |
+| Done, Cancelled, or any status outside the open set | `already_closed` | link or relabel only; keep the original date; never Done → Cancelled |
+| Recurring (`is_recurring_task_line`) | `recurring` | refused before writing; cancel-label rows disabled |
+| `~` source is the task this capture item creates | `new_task` | refused before writing, with a `~~` hint |
+| Item also completes, starts, Pomodoro-links, or adds `&` / `*` to S | `conflict` | refused `relation_cancel_conflicts_with_item_action` |
+
+More edge cases:
+
+- **Same edge, same label key (`Unchanged`):** no cancel and no log.
+  Retries are safe.
+- **Relabel from one cancel label to another** on an already-cancelled
+  S: relabel only.
+- **Relabel away, or unlink:** S stays Cancelled. The nav notice says
+  `stays Cancelled · reopen with Alt+]`.
+- **T is Cancelled or archived:** allowed. Amber caveat `“T” is
+  Cancelled too`. T is never changed.
+- **Inverse label typed** (`supersedes`, `duplicated by`): no cancel,
+  plus a muted flip hint (CL6).
+- **`bob relations rename` into or out of a cancel label:** never
+  cancels. The preview warns that the config needs updating.
+- **Midnight rollover or a config change between cue and commit:**
+  re-plan at commit. If the consequence changed, nav writes nothing
+  and re-renders for a fresh Return. Capture always plans at commit,
+  so its result reports what happened.
+
+### CL6 The indication
+
+*Status: planned (phase nav-cancel-cue), planned (phase capture-cancel),
+planned (phase cancel-surfaces), planned (phase mac-cancel-cue).*
+
+Name the task, change the verb, use ⊘, stay calm.
+
+- **⊘ plus words**, in the existing Cancelled-status tint, marks the
+  intended consequence. Meaning never depends on color alone.
+- **Amber** stays reserved for caveats (T already cancelled, the `||`
+  hide warning).
+- **Red** stays reserved for errors and refusals.
+- **No strikethrough** on a task that has not been cancelled yet. Bob
+  already uses strikethrough for closed ledger children.
+
+Canonical strings. `{S}` and `{T}` are task texts. `{note}` is the
+note stem, shown only when S is not in the active note (nav), or for
+`~~` (capture). Plurals follow the count.
+
+| Where | Text |
+| --- | --- |
+| Row meta (nav) / capsule (Mac) / `relations list` / zsh | `⊘ cancels` / `circle.slash cancels` / `⊘ cancels source` / `N links · cancels source` |
+| Live sentence (nav, Mac) | `⊘ {S} — {label} → {T}`, source dimmed; remote: `⊘ {S} ({note}) — …` |
+| Verdict `cancels` (bob `relation_cancel.message`) | `⊘ Cancels “{S}” · {Status} → Cancelled` |
+| Consequence strip (nav) | `⊘ Cancels “{S}” · removes its links from today's open Pomodoros · unblocks dependents` (no Pomodoro clause when S has no block id, as Task Card does) |
+| `^prj` suffix | `· its {N} open tasks stay open` |
+| Verdict `already_closed` (muted) | `Already Cancelled · link only` / `Stays Done · link only` |
+| Verdict `recurring` (disabled row) | `“{S}” repeats — cancel it with Obsidian Tasks first` |
+| Verdict `new_task` (disabled row, refusal) | `“{S}” is new — it would be born cancelled · to retire “{T}”, use ~~` |
+| Inverse hint (muted) | `“supersedes” never cancels · to retire “{T}”, use ~~ with “superseded by”` (nav says `⇧L` instead of `~~`) |
+| Return hint (nav) | `↵ link & cancel` |
+| Batch banner (nav) | `⊘ Cancels {N} tasks — ↵ again to confirm` |
+| Notice (nav) | `🪢 {S} — {label} → {T} · ⊘ cancelled · removed {n} Pomodoro link · unblocked {k}` |
+| Capture row / preview (bob-authored) | `⊘ cancelled “{S}” · {Status} → Cancelled · removed {n} Pomodoro link · unblocked “{D}”`; dry run uses `would cancel`, `would remove`, `would unblock` |
+| Structured warning `relation_cancelled_source` | `⊘ cancelled “{S}” ({label} “{T}”)`; dry run `⊘ would cancel …` |
+| Hand-edit hint (nav, once per burst) | `⊘ “{label}” cancels only from the Links stage or capture · this task stays open` |
+| Rename warning | `“{label}” is a cancel label in config.yml — update relations.cancel_labels` |
+
+### CL7 Contracts
+
+*Status: planned (phase capture-cancel), planned (phase cancel-surfaces).*
+
+All additions are additive, every `schema_version` stays 1, and every
+new field is omitted when it does not apply, so older output stays
+byte-identical. Names below are final.
+
+- **`capture-complete`, `relation_label` context:**
+  - Rows gain `cancels_source: true` when the row's key is
+    configured, and `configured: true` on overlay rows.
+  - A cancel-label row gets the existing `disabled_reason` when the
+    verdict is `recurring` or `new_task`.
+  - The response gains
+    `relation_cancel: {source: {path, block_id?, text, status_symbol, status_name, project_open_tasks?}, verdict: "cancels"|"already_closed"|"recurring"|"new_task", message, hint?}`.
+    It is present only when at least one cancel label is configured.
+    It resolves only the token's source: the item owner for `~`, the
+    `~~` token's task for `~~`. It never scans the vault.
+- **`capture-parse`:** relation-label spans gain `cancels_source: true`.
+- **`capture` (dry run and commit), per item:**
+  - `relation_cancels[]: {source: {path, line, block_id, text}, target: {path, block_id, text}, labels[], action: "added"|"relabeled", previous_status, previous_status_name, project_open_tasks?, cancel_log: "none"|"prepended", pomodoro_links_removed, recovered[]: {path, line, block_id, text}, message}`.
+  - `relation_updates[]` rows gain `cancel_effect: "cancelled"|"already_closed"`.
+  - `warnings[]` gains `{code: "relation_cancelled_source", label, message}`.
+    The human renderer prints the ⊘ row once and does not repeat the
+    warning.
+  - Refusal codes: `relation_cancels_new_task`,
+    `relation_cancels_recurring_task`,
+    `relation_cancel_conflicts_with_item_action`.
+- **`bob relations list`:** JSON rows gain `cancels_source` and
+  `configured`. The human header gains `· N cancel`.
+
+### CL8 Architecture
+
+*Status: planned (phase cancel-engine), planned (phase capture-cancel),
+planned (phase nav-cancel-writer), planned (phase mac-cancel-cue).*
+
+Three layers, with one authority per surface:
+
+1. **Policy:** label key → cancels or not, plus config validity.
+2. **Pure effect plan:** edge delta plus snapshots → source
+   transition, optional log line, daily prune, recovery, refusals,
+   and summary.
+3. **Existing writers:** apply the planned contents through today's
+   guarded paths.
+
+- bob owns capture (CLI and Mac). Swift renders bob's flags and
+  strings and decides nothing (`mac-capture-is-a-thin-client`).
+- nav keeps its JS planner and editor transaction: unsaved buffers,
+  same-note transactions, and undo stay local. Obsidian never goes
+  through `bob capture`.
+- Never call the relation writer and then the cancel UI handler.
+  Compose the plans before the write.
+- **Shared vectors** `tests/fixtures/task_cancel/vectors.json`
+  (bob-cli is the source of truth; bob-plugins copies it
+  byte-for-byte) keep the two engines writing identical bytes:
+  - `cancel` and `prune` bytes are **generated from nav's current
+    Task Card Cancel planners**, so "just like other cancels" is
+    checked, not assumed;
+  - `rule`, `key`, and `config` are hand-authored from this section.
+- **Atomicity, stated honestly:**
+  - Capture: S's LINKS, status, and log, T's mirror, today's prune,
+    and recovery share one staged, preimage-checked batch.
+  - Obsidian, when S's note is the daily note: one transaction and
+    one undo.
+  - Obsidian, otherwise: S's note commits as one undo step. The
+    prune, mirror, and recovery are follow-ups that show a chip on
+    failure, and reconcile heals them. This is the contract Task
+    Card Cancel already ships with.
+
+### CL vector index
+
+`tests/fixtures/task_cancel/vectors.json` is the single source.
+bob-plugins copies it byte-for-byte. A behavior change edits bob-cli
+first.
+
+| Section | Pins | Representative cases |
+| --- | --- | --- |
+| `cancel` | Task Card Cancel source-note bytes (`planTaskCancelBatch`, `reason: ""`) | each open status; fields present or absent; existing `❌ CANCEL LOG` prepend vs none; already Done or Cancelled; recurring refused; `^prj`; `cash-md-cl4` |
+| `prune` | immediate Pomodoro prune (`planDeferredPomodoroLinkCleanup`) | dedicated bullet with children; mixed-prose token; struck link kept; closed Pomodoro kept; top-level entry kept; fenced example kept; outside `## Pomodoros` kept; several links; empty daily note |
+| `rule` | verdict and `cancels` for an edge | every CL5 row; every CL1 never path; the CL3 table |
+| `key` | cancel-label matching (`relation_label_key`) | case/spacing/colon; inverses; substrings |
+| `config` | YAML → effective keys and warning count | missing, `null`, `[]`, scalar, mapping, non-string, illegal label, duplicate keys, invalid `linked_from_lines` beside valid `cancel_labels` |
