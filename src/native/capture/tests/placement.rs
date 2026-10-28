@@ -360,6 +360,7 @@ fn json_success_shape_is_stable() {
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
             relation_updates: Vec::new(),
+            relation_cancels: Vec::new(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),

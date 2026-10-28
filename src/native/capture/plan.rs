@@ -231,6 +231,16 @@ pub(super) fn plan_capture_batch_with_config_path(
     {
         warnings.push(warning.into());
     }
+    // The cancel-label policy warning (§17 CL2) surfaces once per batch,
+    // and only when a relation gesture consulted the policy. Plain
+    // captures never touch the config and never warn.
+    if let Some(warning) = dependency_ctx.cancel_labels_warning()
+        && !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
+    {
+        warnings.push(warning.into());
+    }
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
@@ -535,6 +545,7 @@ fn plan_ref_item(
             dependency_updates: Vec::new(),
             minted_blocker_block_id: None,
             relation_updates: Vec::new(),
+            relation_cancels: Vec::new(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),
@@ -811,6 +822,7 @@ pub(super) fn plan_capture_item(
                 dependency_updates: Vec::new(),
                 minted_blocker_block_id: None,
                 relation_updates: Vec::new(),
+                relation_cancels: Vec::new(),
                 linked_from_line_updates: Vec::new(),
                 minted_relation_block_ids: Vec::new(),
                 mirror_skipped: Vec::new(),
@@ -1526,6 +1538,7 @@ pub(super) fn plan_capture_item(
         }
     }
     let mut relation_updates: Vec<RelationUpdateJson> = Vec::new();
+    let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
     let mut linked_from_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
     if !parsed.relations.is_empty() {
@@ -1558,6 +1571,16 @@ pub(super) fn plan_capture_item(
         minted_relation_block_ids.extend(reports.minted);
         mirror_skipped = reports.skipped;
         dependency_block_refs.extend(reports.source_refs);
+        relation_cancels = plan_relation_cancels(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &parsed,
+            &mut relation_updates,
+            existing_owner,
+            request.dry_run,
+            warnings,
+        )?;
         if let Some(block_id) = reports.owner_block_id.as_deref() {
             let relocated = locate_task_by_block_id(
                 dependency_ctx,
@@ -1767,6 +1790,7 @@ pub(super) fn plan_capture_item(
             dependency_updates,
             minted_blocker_block_id,
             relation_updates,
+            relation_cancels,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

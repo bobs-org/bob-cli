@@ -44,6 +44,30 @@ impl MirrorSkipReason {
     }
 }
 
+/// Load `relations.cancel_labels`, failing toward fewer cancels and
+/// warning through the capture warning string on invalid values. A
+/// missing key, `null`, or `[]` is a valid empty policy; anything else
+/// invalid yields the valid entries (possibly none) plus one warning.
+pub(super) fn load_cancel_labels(
+) -> (Vec<config::relations::CancelLabel>, Option<String>) {
+    match config::load_relations_config(&config::config_path()) {
+        Ok(loaded) => (
+            loaded.cancel_labels,
+            loaded
+                .warnings
+                .iter()
+                .find(|warning| warning.contains("relations.cancel_labels"))
+                .map(|warning| format!("invalid relations config: {warning}")),
+        ),
+        Err(error) => (
+            Vec::new(),
+            Some(format!(
+                "invalid relations config: {error}; cancelling nothing"
+            )),
+        ),
+    }
+}
+
 /// Load `relations.linked_from_lines`, falling back to `true` and
 /// warning through the capture warning string on invalid values.
 pub(super) fn load_linked_from_lines_enabled() -> (bool, Option<String>) {

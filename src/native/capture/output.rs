@@ -553,6 +553,11 @@ pub(super) struct CaptureItemResult {
     /// omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) relation_updates: Vec<RelationUpdateJson>,
+    /// Per-item cancel-label outcomes (`docs/task-relations.md` §17
+    /// CL7): one row per source this item retired or left closed.
+    /// Additive: omitted when empty, so older output stays byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_cancels: Vec<RelationCancelJson>,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
     /// order. Present on dry runs too; the journal append happens only
@@ -1023,6 +1028,72 @@ pub(super) struct RelationUpdateJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) previous_label: Option<String>,
     pub(super) action: RelationAction,
+    /// Cancel-label outcome for an Added/Relabeled edge whose label is
+    /// configured (`docs/task-relations.md` §17 CL7). Omitted for
+    /// unchanged edges and labels that cancel nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) cancel_effect: Option<RelationCancelEffect>,
+}
+
+/// What a cancel-label edge did to its source
+/// (`docs/task-relations.md` §17 CL5): the link was written and the
+/// source cancelled, or the link was written and the already-closed
+/// source was left alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationCancelEffect {
+    Cancelled,
+    AlreadyClosed,
+}
+
+/// One cancel-label source this item retired or left closed
+/// (`docs/task-relations.md` §17 CL7): the staged source cancel (or the
+/// link-only outcome), one row per source no matter how many cancel
+/// edges named it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancelJson {
+    pub(super) source: RelationCancelSourceJson,
+    pub(super) target: RelationCancelTargetJson,
+    pub(super) labels: Vec<String>,
+    pub(super) action: RelationAction,
+    pub(super) previous_status: char,
+    pub(super) previous_status_name: String,
+    /// Open tasks that stay open when the cancelled source is a `^prj`.
+    /// Omitted for non-project sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_open_tasks: Option<usize>,
+    pub(super) cancel_log: &'static str,
+    pub(super) pomodoro_links_removed: usize,
+    pub(super) recovered: Vec<RelationCancelRecoveredJson>,
+    pub(super) message: String,
+}
+
+/// The cancelled (or already-closed) source of one `relation_cancels[]`
+/// row: where S sits after this item, with its pre-cancel description.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancelSourceJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// The surviving target of one `relation_cancels[]` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancelTargetJson {
+    pub(super) path: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// One dependent this cancel recovered: the post-recovery location and
+/// clean text, in vault order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancelRecoveredJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1127,6 +1198,13 @@ pub(super) fn print_capture_warnings(result: &CaptureResult) {
             .any(|item| !item.consumed_links.is_empty())
     };
     for warning in &result.warnings {
+        // The cancel-label ⊘ row already names the cancel in stdout; the
+        // matching structured warning stays JSON-only (§17 CL7).
+        if let CaptureWarning::Structured(warning) = warning
+            && warning.code == "relation_cancelled_source"
+        {
+            continue;
+        }
         if has_structured_consumption
             && warning
                 .as_text()
@@ -2584,6 +2662,12 @@ fn parent_previous_status(
 fn print_human_relation_updates(result: &CaptureItemResult) {
     for update in &result.relation_updates {
         println!("  {}", human_relation_line(result.dry_run, update));
+    }
+    // One bob-authored ⊘ row per cancel-label source (§17 CL6); the
+    // matching `relation_cancelled_source` warning stays JSON-only so
+    // the human output never repeats it.
+    for cancel in &result.relation_cancels {
+        println!("  {}", cancel.message);
     }
     for hide in &result.relation_label_hides {
         if hide.action != RelationLabelHideAction::Hide {

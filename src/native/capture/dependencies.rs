@@ -54,6 +54,8 @@ pub(super) struct DependencyContext {
     link_unblocked: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
     linked_from_lines: OnceLock<(bool, Option<String>)>,
+    cancel_labels:
+        OnceLock<(Vec<config::relations::CancelLabel>, Option<String>)>,
     block_reservations: BTreeMap<PathBuf, BTreeSet<String>>,
     #[cfg(test)]
     graph_builds: AtomicUsize,
@@ -79,6 +81,7 @@ impl DependencyContext {
             blocks_lines: OnceLock::new(),
             linked_from_lines: OnceLock::new(),
             block_reservations: BTreeMap::new(),
+            cancel_labels: OnceLock::new(),
             #[cfg(test)]
             graph_builds: AtomicUsize::new(0),
         }
@@ -170,6 +173,26 @@ impl DependencyContext {
     /// when the batch consulted the switch and the value was invalid.
     pub(super) fn linked_from_lines_warning(&self) -> Option<String> {
         self.linked_from_lines
+            .get()
+            .and_then(|(_, warning)| warning.clone())
+    }
+
+    /// Cancel-label policy (`docs/task-relations.md` §17 CL2), read once
+    /// per batch: `relations.cancel_labels`, defaulting to `[]`. Entries
+    /// that fail validation are skipped with a warning; a non-list value
+    /// cancels nothing. The warning surfaces once per batch through
+    /// [`Self::cancel_labels_warning`].
+    pub(super) fn cancel_labels(&self) -> &[config::relations::CancelLabel] {
+        self.cancel_labels
+            .get_or_init(load_cancel_labels)
+            .0
+            .as_slice()
+    }
+
+    /// The invalid-config warning for [`Self::cancel_labels`], when the
+    /// batch planned relations and the value was invalid.
+    pub(super) fn cancel_labels_warning(&self) -> Option<String> {
+        self.cancel_labels
             .get()
             .and_then(|(_, warning)| warning.clone())
     }
@@ -3018,6 +3041,7 @@ pub(super) fn plan_dependency_only_item(
     let mut minted_relation_block_ids: Vec<MintedRelationBlockIdJson> =
         Vec::new();
     let mut mirror_skipped: Vec<MirrorSkippedJson> = Vec::new();
+    let mut relation_cancels: Vec<RelationCancelJson> = Vec::new();
     if !parsed.relations.is_empty() {
         let relation_owner = RelationOwner::from_dependent(
             ctx,
@@ -3039,6 +3063,16 @@ pub(super) fn plan_dependency_only_item(
         minted_relation_block_ids = reports.minted;
         mirror_skipped = reports.skipped;
         task_block_refs.extend(reports.source_refs);
+        relation_cancels = plan_relation_cancels(
+            ctx,
+            planner,
+            &request.bob_dir,
+            parsed,
+            &mut relation_updates,
+            true,
+            request.dry_run,
+            warnings,
+        )?;
     }
     let relocated = locate_task_by_block_id(
         ctx,
@@ -3129,6 +3163,7 @@ pub(super) fn plan_dependency_only_item(
             dependency_updates,
             minted_blocker_block_id: None,
             relation_updates,
+            relation_cancels,
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

@@ -2323,7 +2323,7 @@ Labels obey the [relation label rules](task-relations.md#32-labels).
 A label listed in `relations.cancel_labels` is a
 [cancel label](task-relations.md#17-cancel-labels): committing an
 add or relabel into one cancels the relation's source in the same
-batch. *planned (phase capture-cancel).*
+batch.
 A label after `||` is a one-off: the stored Markdown is identical to
 the `|` form, but the label hides from suggestions once the capture
 succeeds. Hiding a visible existing label warns with its link count;
@@ -2367,7 +2367,21 @@ route anything. `Fix it ~work:foo` leaves every status, lane, and
 Pomodoro link exactly as it was, apart from a minted `^id`. The one
 exception is a [cancel-label](task-relations.md#17-cancel-labels)
 commit, which cancels the source as Task Card Cancel would.
-*planned (phase capture-cancel).*
+
+**Cancel-label commits.** Adding a cancel label — or relabeling into
+one — cancels the relation's source in the same staged batch: the
+LINKS edit, `[-]` plus `[cancelled:: today]` (with a Cancel Log
+prepend only when a log already exists), today's Pomodoro-link prune,
+and dependent recovery share one all-or-nothing batch, so a refusal
+writes nothing. `~~` retires the picked task; `~` on the task the
+item creates is refused (`relation_cancels_new_task`, with a `~~`
+hint), as are recurring sources
+(`relation_cancels_recurring_task`) and an item that also changes the
+source through `&` / `*`
+(`relation_cancel_conflicts_with_item_action`). Already-closed
+sources link only. A later item sees an earlier cancel through the
+staged batch, so linking, starting, or completing a just-cancelled
+task is refused by the existing closed-task checks.
 
 **Human output.** Successful captures print `🪢` rows in the
 dependency style, for example:
@@ -2381,7 +2395,11 @@ dependency style, for example:
 An existing-owner rerun of the same edge reports `🪢 unchanged`; a
 new label reports `🪢 relabeled`. A one-off hide prints
 `🪢 hides "see" from suggestions (2 links)`. Dry runs say
-`would link to` / `would now link here` / `would relabel`.
+`would link to` / `would now link here` / `would relabel`. A staged
+cancel adds one bob-authored `⊘` row per source, for example
+`⊘ cancelled “Sell stocks” · Ready → Cancelled · removed 1 Pomodoro link · unblocked 1`
+(`would cancel` / `would remove` / `would unblock` on dry runs);
+an already-closed source prints the muted link-only line instead.
 
 **JSON.** Every `schema_version` stays 1 and every field is
 additive. `capture-parse` adds `relations[]` (top-level and per
@@ -2401,10 +2419,10 @@ empty), plus a `hides_existing_relation_label` warning object
 (`{code, label, count, message}`) when a one-off hides a visible
 existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
 Cancel-label fields (`relation_cancels[]`, `cancel_effect`,
-`relation_cancelled_source`, `cancels_source`) are specified in
-[§17 CL7](task-relations.md#cl7-contracts) and stubbed in
-[JSON outputs](reference/json-outputs.md). *planned (phase capture-cancel),
-planned (phase cancel-surfaces).*
+`relation_cancelled_source`) are specified in
+[§17 CL7](task-relations.md#cl7-contracts) and
+[JSON outputs](reference/json-outputs.md); the remaining
+`cancels_source` spans stay *planned (phase cancel-surfaces).*
 
 ### Completing tasks with '!'
 

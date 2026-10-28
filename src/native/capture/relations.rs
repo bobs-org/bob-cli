@@ -629,6 +629,7 @@ fn apply_linked_from(
         label: target.typed.label.clone(),
         previous_label,
         action,
+        cancel_effect: None,
     });
     if action == RelationAction::Unchanged {
         return Ok(());
@@ -875,7 +876,7 @@ fn stage_links_add(
     }
 }
 
-fn existing_links_entry(
+pub(super) fn existing_links_entry(
     children: &[relation_parse::LinksChild],
     index: &crate::native::vault_links::NoteIndex,
     source_relative: &Path,
@@ -925,6 +926,7 @@ fn relation_update_json(
         label: target.typed.label.clone(),
         previous_label,
         action,
+        cancel_effect: None,
     }
 }
 

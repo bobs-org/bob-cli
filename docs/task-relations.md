@@ -857,8 +857,8 @@ Every `schema_version` stays 1; JSON grows additively.
 - **Cancel labels** ([§17](#17-cancel-labels)): additive
   `cancels_source` / `configured` row flags, `relation_cancel`,
   `relation_cancels[]`, `cancel_effect`, and the
-  `relation_cancelled_source` warning. *planned (phase capture-cancel)*,
-  *planned (phase cancel-surfaces)*.
+  `relation_cancelled_source` warning. The `capture` fields are
+  implemented; *planned (phase cancel-surfaces)* covers the rest.
 
 ### RV8 The rename transaction
 
@@ -926,7 +926,7 @@ carries `planned (phase <id>)`.
 
 ### CL1 The rule
 
-*Status: planned (phase capture-cancel), planned (phase nav-cancel-writer).*
+*Status: capture implements this; planned (phase nav-cancel-writer).*
 
 When an explicit relation gesture **adds** a cancel label to an open
 task, or **relabels** one of its links **into** a cancel label, the
@@ -994,7 +994,7 @@ relations:
 
 ### CL3 Which task is cancelled
 
-*Status: planned (phase capture-cancel), planned (phase nav-cancel-writer).*
+*Status: capture implements this; planned (phase nav-cancel-writer).*
 
 The source is always the task the label is phrased from: "S duplicate
 of T" cancels S.
@@ -1010,9 +1010,9 @@ of T" cancels S.
 
 ### CL4 What one commit writes
 
-*Status: The pure Rust cancel engine is implemented.* Capture composes
-these writes in *planned (phase capture-cancel)*; nav folds them into
-the source write in *planned (phase nav-cancel-writer)*.
+*Status: the pure Rust cancel engine and the capture composition are
+implemented.* Nav folds these writes into the source write in
+*planned (phase nav-cancel-writer)*.
 
 Every step below is existing cancel behavior. The only new part is
 composing them.
@@ -1092,7 +1092,7 @@ More edge cases:
 
 ### CL6 The indication
 
-*Status: planned (phase nav-cancel-cue), planned (phase capture-cancel),
+*Status: capture implements the capture rows; planned (phase nav-cancel-cue),
 planned (phase cancel-surfaces), planned (phase mac-cancel-cue).*
 
 Name the task, change the verb, use ⊘, stay calm.
@@ -1130,7 +1130,7 @@ note stem, shown only when S is not in the active note (nav), or for
 
 ### CL7 Contracts
 
-*Status: planned (phase capture-cancel), planned (phase cancel-surfaces).*
+*Status: the `capture` fields are implemented; planned (phase cancel-surfaces).*
 
 All additions are additive, every `schema_version` stays 1, and every
 new field is omitted when it does not apply, so older output stays
@@ -1161,8 +1161,8 @@ byte-identical. Names below are final.
 
 ### CL8 Architecture
 
-*Status: The pure Rust engine is implemented; planned (phase capture-cancel),
-planned (phase nav-cancel-writer), planned (phase mac-cancel-cue).*
+*Status: the pure Rust engine and the capture composition are
+implemented; planned (phase nav-cancel-writer), planned (phase mac-cancel-cue).*
 
 Three layers, with one authority per surface:
 
