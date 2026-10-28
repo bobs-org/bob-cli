@@ -48,7 +48,14 @@ impl MirrorSkipReason {
 /// warning through the capture warning string on invalid values.
 pub(super) fn load_linked_from_lines_enabled() -> (bool, Option<String>) {
     match config::load_relations_config(&config::config_path()) {
-        Ok(loaded) => (loaded.linked_from_lines, None),
+        Ok(loaded) => (
+            loaded.linked_from_lines,
+            loaded
+                .warnings
+                .iter()
+                .find(|warning| warning.starts_with("relations.linked_from_lines"))
+                .map(|warning| format!("invalid relations config: {warning}")),
+        ),
         Err(error) => (
             true,
             Some(format!(

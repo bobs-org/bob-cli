@@ -27,7 +27,9 @@ use super::super::{
     note_tasks::NoteTaskSettings,
     note_tasks::{clean_description, stable_task_key},
     pomodoro::pomodoros_section_range,
-    project_dependencies::{blocking_open_dependency_ids, is_project_task_id},
+    project_dependencies::{
+        blocking_open_dependency_ids, is_project_task_id, ProjectBlockReasons,
+    },
     projects::edits::normalize_prj_is_blocked_tag,
     task_dependencies::format::canonical_link,
     task_status_hooks::{
@@ -649,6 +651,121 @@ pub(crate) enum VerdictKind {
 
 /// Run the shared successor rule (§12.2) over one gesture.
 pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
+    plan_successors_inner(input, SuccessorMode::Completion)
+}
+
+/// Run only the existing dependency/project recovery rules for a
+/// cancellation. This mode never detects project-finished pull-ins, builds
+/// offers, assigns keys, selects rows, mints IDs, or writes successor links.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn plan_recovery_only(
+    mut input: SuccessorInput,
+    cancelled_project_paths: &BTreeSet<PathBuf>,
+) -> SuccessorPlan {
+    input.link_unblocked = false;
+    input.selection = SuccessorSelection::None;
+    plan_successors_inner(
+        input,
+        SuccessorMode::CancelRecovery {
+            cancelled_project_paths: cancelled_project_paths.clone(),
+        },
+    )
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum SuccessorMode {
+    Completion,
+    CancelRecovery {
+        cancelled_project_paths: BTreeSet<PathBuf>,
+    },
+}
+
+impl SuccessorMode {
+    fn is_cancel_recovery(&self) -> bool {
+        matches!(self, Self::CancelRecovery { .. })
+    }
+
+    fn cancelled_project_paths(&self) -> &BTreeSet<PathBuf> {
+        match self {
+            Self::Completion => empty_paths(),
+            Self::CancelRecovery {
+                cancelled_project_paths,
+            } => cancelled_project_paths,
+        }
+    }
+}
+
+fn empty_paths() -> &'static BTreeSet<PathBuf> {
+    static EMPTY: std::sync::OnceLock<BTreeSet<PathBuf>> =
+        std::sync::OnceLock::new();
+    EMPTY.get_or_init(BTreeSet::new)
+}
+
+/// Build a read-only project-context view for a just-cancelled `^prj`.
+/// Project membership normally requires its anchor task to be open, so
+/// reopen only that parsed row in the planning snapshot; its terminal
+/// postimage is still used for all returned writes.
+fn prepare_cancelled_project_contexts(
+    files: &mut [FileScan],
+    cancelled_project_paths: &BTreeSet<PathBuf>,
+) {
+    for file in files {
+        if !cancelled_project_paths.contains(&file.relative_path) {
+            continue;
+        }
+        let Some(task_index) = file.tasks.iter().position(|task| {
+            task.block_id
+                .as_deref()
+                .is_some_and(|id| is_project_task_id(Some(id)))
+        }) else {
+            continue;
+        };
+        let line_index = file.tasks[task_index].line_index;
+        let Some(raw) = file.contents.lines().nth(line_index) else {
+            continue;
+        };
+        let Some(reopened) = set_task_line_status(raw, ' ') else {
+            continue;
+        };
+        file.contents =
+            replace_logical_line(&file.contents, line_index, &reopened);
+        let task = &mut file.tasks[task_index];
+        task.status = ' ';
+        task.status_type =
+            super::super::task_status_hooks::TaskStatusType::Todo;
+        task.status_recognized = true;
+    }
+}
+
+fn replace_logical_line(
+    content: &str,
+    index: usize,
+    replacement: &str,
+) -> String {
+    let mut output = String::with_capacity(content.len() + replacement.len());
+    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+        if line_index != index {
+            output.push_str(segment);
+            continue;
+        }
+        let ending = if segment.ends_with("\r\n") {
+            "\r\n"
+        } else if segment.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        output.push_str(replacement);
+        output.push_str(ending);
+    }
+    output
+}
+
+fn plan_successors_inner(
+    input: SuccessorInput,
+    mode: SuccessorMode,
+) -> SuccessorPlan {
     // Merge the staged texts of C's notes (§12.10 Gate) over the snapshot:
     // a project note without `dependsOn`/`id::` markers is never in the
     // dependents snapshot, even when staged.
@@ -686,25 +803,54 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         .iter()
         .map(|(path, _)| path.clone())
         .collect();
-    let pull_ins = detect_pull_ins(
-        &input.completed,
-        &files,
-        &surfaces,
-        &staged_notes,
-        Some(input.index),
-        input.today,
-    );
+    let pull_ins = if mode.is_cancel_recovery() {
+        Vec::new()
+    } else {
+        detect_pull_ins(
+            &input.completed,
+            &files,
+            &surfaces,
+            &staged_notes,
+            Some(input.index),
+            input.today,
+        )
+    };
     // GATE: without an `[id::]` on any completed task no dependent can
     // name this close, so skip the lookup with no extra reads — unless a
     // pull-in candidate was detected from the staged texts.
     if !input.completed.iter().any(|task| !task.task_id.is_empty())
         && pull_ins.is_empty()
+        && mode.cancelled_project_paths().is_empty()
     {
         return SuccessorPlan::default();
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
-    let project_states =
-        project_states_for_files(&files, &states, input.today, input.index);
+    let mut project_context_files = files.clone();
+    if mode.is_cancel_recovery() {
+        prepare_cancelled_project_contexts(
+            &mut project_context_files,
+            mode.cancelled_project_paths(),
+        );
+    }
+    let mut project_states = project_states_for_files(
+        &project_context_files,
+        &states,
+        input.today,
+        input.index,
+    );
+    if mode.is_cancel_recovery() {
+        for (index, file) in files.iter().enumerate() {
+            if mode.cancelled_project_paths().contains(&file.relative_path)
+                && let Some(state) = project_states.get_mut(index)
+            {
+                // The project task itself is now terminal, so its former
+                // prerequisite/date reasons no longer block its residents.
+                // Keep the inherited parent marker: cancellation never
+                // crosses a subproject boundary.
+                state.reasons = ProjectBlockReasons::default();
+            }
+        }
+    }
     let day = match input.pre_day.as_deref() {
         Some(text) => DayView::parse(text, &input.day_relative, input.index),
         None => DayView::empty(),
@@ -884,6 +1030,34 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         }
     }
 
+    // A cancelled ^prj has no direct predecessor transition from which the
+    // completion planner could infer a project recovery. Seed its existing
+    // resident classifier explicitly, even if the ^prj has no [id::] field.
+    if mode.is_cancel_recovery() {
+        for (file_index, file) in files.iter().enumerate() {
+            if !mode.cancelled_project_paths().contains(&file.relative_path) {
+                continue;
+            }
+            if let Some(task_index) = file.tasks.iter().position(|task| {
+                task.block_id
+                    .as_deref()
+                    .is_some_and(|id| is_project_task_id(Some(id)))
+            }) {
+                verdicts.push(DependentVerdict {
+                    file: file_index,
+                    task: task_index,
+                    preds: Vec::new(),
+                    anchor: None,
+                    kind: VerdictKind::Recover("cancelled_project"),
+                    open_count: 0,
+                    pull_in: false,
+                    offer: None,
+                    muted_project: None,
+                });
+            }
+        }
+    }
+
     let insertion_base = input
         .post_day
         .as_deref()
@@ -895,15 +1069,17 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         input.index,
     );
 
-    attach_hand_off_and_pull_in_offers(
-        &mut verdicts,
-        &files,
-        &day,
-        &input.day_relative,
-        input.closing.is_some(),
-        implicit.as_ref(),
-        input.note_settings,
-    );
+    if !mode.is_cancel_recovery() {
+        attach_hand_off_and_pull_in_offers(
+            &mut verdicts,
+            &files,
+            &day,
+            &input.day_relative,
+            input.closing.is_some(),
+            implicit.as_ref(),
+            input.note_settings,
+        );
+    }
 
     let members = classify_project_members(
         &verdicts,
@@ -929,9 +1105,11 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         input.note_settings,
     );
 
-    assign_offer_keys(&mut verdicts, &files, input.note_settings);
-    apply_selection(&mut verdicts, &input.selection);
-    number_offers(&mut verdicts, &files);
+    if !mode.is_cancel_recovery() {
+        assign_offer_keys(&mut verdicts, &files, input.note_settings);
+        apply_selection(&mut verdicts, &input.selection);
+        number_offers(&mut verdicts, &files);
+    }
 
     let mut successor_positions = verdicts
         .iter()

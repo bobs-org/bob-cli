@@ -159,7 +159,7 @@ cancels nothing; an illegal or non-string entry warns and is skipped;
 duplicate keys collapse. A `cancel_labels` problem never becomes a
 config error and never changes `linked_from_lines`. Hide is not
 disable: a hidden or one-off cancel label still cancels when typed.
-*planned (phase cancel-engine); chezmoi planned (phase rollout).*
+*Chezmoi planned (phase rollout).*
 
 ### `freshness`
 

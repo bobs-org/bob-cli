@@ -229,7 +229,16 @@ fn load_blocks_lines_enabled() -> bool {
 /// on stderr when the value is invalid (LR17).
 fn load_relations_linked_from_enabled() -> bool {
     match bob_config::load_relations_config(&bob_config::config_path()) {
-        Ok(config) => config.linked_from_lines,
+        Ok(config) => {
+            if let Some(warning) = config.warnings.iter().find(|warning| {
+                warning.starts_with("relations.linked_from_lines")
+            }) {
+                eprintln!(
+                    "{COMMAND_NAME}: warning: invalid relations config: {warning}"
+                );
+            }
+            config.linked_from_lines
+        }
         Err(error) => {
             eprintln!(
                 "{COMMAND_NAME}: warning: invalid relations config: {error}; using relations.linked_from_lines=true"

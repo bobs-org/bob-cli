@@ -948,7 +948,7 @@ relabel can cancel it again.
 
 ### CL2 Config
 
-*Status: planned (phase cancel-engine). Chezmoi lands in planned
+*Status: The bob config parser is implemented. Chezmoi lands in planned
 (phase rollout).*
 
 The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
@@ -1010,9 +1010,9 @@ of T" cancels S.
 
 ### CL4 What one commit writes
 
-*Status: planned (phase cancel-engine).* Capture composes these
-writes in *planned (phase capture-cancel)*; nav folds them into the
-source write in *planned (phase nav-cancel-writer)*.
+*Status: The pure Rust cancel engine is implemented.* Capture composes
+these writes in *planned (phase capture-cancel)*; nav folds them into
+the source write in *planned (phase nav-cancel-writer)*.
 
 Every step below is existing cancel behavior. The only new part is
 composing them.
@@ -1058,10 +1058,9 @@ hand-made cancel:
 
 ### CL5 Verdicts and edge cases
 
-*Status: planned (phase cancel-engine).* The cue and the writer use
-one verdict function per engine: Rust in `task_cancel`, JS
-`planRelationCancelEffects`. The shared `rule` vectors pin both, so
-the cue can never disagree with the write.
+The Rust engine and the JavaScript client use one verdict function each:
+Rust in `task_cancel`, JS `planRelationCancelEffects`. The shared `rule`
+vectors pin both, so the cue can never disagree with the write.
 
 | Source state | Verdict | Effect |
 | --- | --- | --- |
@@ -1162,7 +1161,7 @@ byte-identical. Names below are final.
 
 ### CL8 Architecture
 
-*Status: planned (phase cancel-engine), planned (phase capture-cancel),
+*Status: The pure Rust engine is implemented; planned (phase capture-cancel),
 planned (phase nav-cancel-writer), planned (phase mac-cancel-cue).*
 
 Three layers, with one authority per surface:

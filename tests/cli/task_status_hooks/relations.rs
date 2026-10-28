@@ -669,7 +669,38 @@ fn lr17_invalid_kill_switch_behaves_as_true() {
             && err.contains("using relations.linked_from_lines=true"),
         "{err}"
     );
+    assert_eq!(err.matches("invalid relations config").count(), 1, "{err}");
     assert_eq!(linked_from_updates(&json)[0]["kind"], "inserted");
+}
+
+#[test]
+fn configured_cancel_label_stays_inert_during_reconcile() {
+    let temp = TempDir::new("bob-cli-relations-cancel-inert");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    let tasks = vault.join("tasks.md");
+    let expected = concat!(
+        "- [ ] #task Source ^source\n",
+        "  - 🪢 **LINKS:** duplicate of [[#^target]]\n",
+        "- [ ] #task Target ^target\n",
+    );
+    write_file(
+        &config,
+        "relations:\n  linked_from_lines: false\n  cancel_labels:\n    - duplicate of\n",
+    );
+    write_file(&tasks, expected);
+    write_blocked_tasks_settings(&vault);
+
+    apply_with_config(&vault, &daily, &config);
+    let first = fs::read_to_string(&tasks).expect("read after first reconcile");
+    assert_eq!(first, expected);
+    assert!(first.starts_with("- [ ] #task Source"), "{first}");
+
+    apply_with_config(&vault, &daily, &config);
+    let second =
+        fs::read_to_string(&tasks).expect("read after second reconcile");
+    assert_eq!(second, first);
 }
 
 #[test]

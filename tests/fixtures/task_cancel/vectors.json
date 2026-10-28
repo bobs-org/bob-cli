@@ -1472,7 +1472,7 @@
     },
     {
       "name": "duplicate-keys-collapse",
-      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - Duplicate  Of:\n    - superseded by\n",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - \"Duplicate  Of:\"\n    - superseded by\n",
       "expected": {
         "keys": [
           "duplicate of",
