@@ -84,6 +84,7 @@ mod start_output;
 mod sub_bullet;
 mod task_blocks;
 mod task_complete;
+mod task_theme;
 mod task_toggle;
 #[cfg(test)]
 mod tests;
@@ -122,6 +123,7 @@ use start_output::*;
 use sub_bullet::*;
 use task_blocks::*;
 use task_complete::*;
+use task_theme::*;
 use task_toggle::*;
 
 pub(crate) use batch::StagedTextFile;

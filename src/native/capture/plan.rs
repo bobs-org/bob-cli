@@ -113,6 +113,8 @@ pub(super) fn plan_capture_batch_with_config_path(
     let task_settings = note_tasks::read_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings.clone());
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
+    let mut task_theme_context =
+        CaptureTaskThemeContext::new(&request.bob_dir, today, config_path);
     let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
     let mut staged_jobs = Vec::new();
 
@@ -158,6 +160,7 @@ pub(super) fn plan_capture_batch_with_config_path(
             &mut warnings,
             &mut dependency_ctx,
             config_path,
+            &mut task_theme_context,
         )
         .map_err(|mut error| {
             error.message = format!("{error_context}: {}", error.message);
@@ -461,6 +464,7 @@ fn plan_ref_item(
         .then(|| listen_hint_for_unchanged(&intent.cleaned, &parent_route));
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -570,6 +574,7 @@ pub(super) fn plan_capture_item(
     warnings: &mut Vec<CaptureWarning>,
     dependency_ctx: &mut DependencyContext,
     config_path: Option<&Path>,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
@@ -746,6 +751,37 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
+        let task_theme = if link_guard.is_none()
+            && *intent == TaskToggleIntent::EnsureNext
+            && pomodoro_name.is_some()
+        {
+            let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
+                CaptureError::io(
+                    "task toggle capture invariant failed: missing toggle details",
+                )
+            })?;
+            task_theme_context
+                .apply_existing_task(
+                    planner,
+                    &target,
+                    route,
+                    block_id,
+                    &toggle.previous_task_line,
+                    toggle.pomodoro_name.as_deref(),
+                    warnings,
+                )?
+                .map(|applied| {
+                    let task_line = applied.task_line.clone();
+                    note_plan
+                        .toggle
+                        .as_mut()
+                        .expect("toggle details were checked above")
+                        .task_line = task_line;
+                    applied.summary
+                })
+        } else {
+            None
+        };
         let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
             CaptureError::io(
                 "task toggle capture invariant failed: missing toggle details",
@@ -763,6 +799,7 @@ pub(super) fn plan_capture_item(
                 target: target.display().to_string(),
                 text: String::new(),
                 task_line: toggle.task_line.clone(),
+                task_theme,
                 kind: capture_kind_label(&parsed.kind),
                 created,
                 scheduled: None,
@@ -875,7 +912,7 @@ pub(super) fn plan_capture_item(
             Some(name) => capture_task_toggle::PomodoroLinkTarget::Named(name),
             None => capture_task_toggle::PomodoroLinkTarget::Implicit,
         };
-        return plan_existing_task_pomodoro_link_item(
+        let mut planned = plan_existing_task_pomodoro_link_item(
             planner,
             &request.bob_dir,
             request.dry_run,
@@ -888,7 +925,38 @@ pub(super) fn plan_capture_item(
             today,
             warnings,
             dependency_ctx,
-        );
+        )?;
+        // This capture-only boundary keeps `bob ref today` on the shared
+        // link planner's explicit never-deliberate path.
+        if pomodoro_name.is_some() && planned.result.link_guard.is_none() {
+            let previous_task_line = planned
+                .result
+                .previous_task_line
+                .as_deref()
+                .ok_or_else(|| {
+                    CaptureError::io(
+                        "pomodoro link capture invariant failed: missing previous task line",
+                    )
+                })?;
+            let resolved_name = planned
+                .result
+                .pomodoro_link_destination
+                .as_ref()
+                .and_then(|destination| destination.name.as_deref());
+            if let Some(applied) = task_theme_context.apply_existing_task(
+                planner,
+                &target,
+                route,
+                block_id,
+                previous_task_line,
+                resolved_name,
+                warnings,
+            )? {
+                planned.result.task_line = applied.task_line;
+                planned.result.task_theme = Some(applied.summary);
+            }
+        }
+        return Ok(planned);
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
         return plan_project_note_item(
@@ -1649,6 +1717,38 @@ pub(super) fn plan_capture_item(
             details.parent_line = task.line_index + 1;
         }
     }
+    let task_theme = match &parsed.kind {
+        CaptureKind::Pomodoro {
+            block_id,
+            pomodoro_name: Some(_),
+            close: None,
+            ..
+        } if new_task_link_guard.is_none() && note_plan.pomodoro.is_some() => {
+            let route = parsed.route.as_deref().ok_or_else(|| {
+                CaptureError::io(
+                    "Pomodoro capture invariant failed: route is missing",
+                )
+            })?;
+            let destination_name = note_plan
+                .pomodoro
+                .as_ref()
+                .and_then(|edit| edit.details.pomodoro_name.as_deref());
+            task_theme_context
+                .apply_new_task(
+                    planner,
+                    &target,
+                    route,
+                    block_id,
+                    destination_name,
+                    warnings,
+                )?
+                .map(|applied| {
+                    block_first_line = applied.task_line;
+                    applied.summary
+                })
+        }
+        _ => None,
+    };
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);
     dependency_block_refs = relocate_task_block_refs(
@@ -1716,6 +1816,7 @@ pub(super) fn plan_capture_item(
             target: target.display().to_string(),
             text: parsed.body,
             task_line: block_first_line,
+            task_theme,
             kind: kind_label,
             created,
             scheduled,

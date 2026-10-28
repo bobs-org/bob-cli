@@ -204,7 +204,7 @@ fn strip_dry_run(value: &Value) -> Value {
 }
 
 #[test]
-fn today_matches_capture_on_identical_vaults() {
+fn today_matches_unnamed_capture_and_named_capture_remembers_theme() {
     let left = TodayVault::new(
         "bob-cli-ref-today-parity-left",
         ready_task(),
@@ -261,10 +261,12 @@ fn today_matches_capture_on_identical_vaults() {
         .output()
         .expect("run named capture parity");
     assert_success(&named_capture);
-    assert_eq!(
-        fs::read_to_string(named_left.vault.join("sase.md")).expect("left"),
-        fs::read_to_string(named_right.vault.join("sase.md")).expect("right")
-    );
+    let left_task =
+        fs::read_to_string(named_left.vault.join("sase.md")).expect("left");
+    let right_task =
+        fs::read_to_string(named_right.vault.join("sase.md")).expect("right");
+    assert!(!left_task.contains("[theme::"), "{left_task}");
+    assert!(right_task.contains("[theme:: BUGS]"), "{right_task}");
     assert_eq!(
         fs::read_to_string(&named_left.day_file).expect("left day"),
         fs::read_to_string(&named_right.day_file).expect("right day")

@@ -260,12 +260,17 @@ fn capture_plan_budget_invalid_config_skips_with_warning() {
     let json = parse_json(&output);
     assert!(json.get("plan_budget").is_none(), "{json}");
     let warnings = json["warnings"].as_array().expect("warnings");
-    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings.len(), 2, "{json}");
     assert!(
-        warnings[0]
+        warnings.iter().any(|warning| warning
             .as_str()
-            .expect("warning")
-            .contains("plan budget"),
+            .is_some_and(|message| message.contains("plan budget"))),
+        "{json}"
+    );
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .is_some_and(|message| message.contains("read plan config"))),
         "{json}"
     );
 }

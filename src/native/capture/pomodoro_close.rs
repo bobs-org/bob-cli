@@ -1044,6 +1044,7 @@ fn plan_reset_link_item(
     let _ = today;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -1188,6 +1189,7 @@ fn plan_reset_task_item(
     );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -1306,6 +1308,7 @@ fn plan_reset_whole_item(
     let _ = parsed;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -1529,6 +1532,7 @@ pub(super) fn plan_pomodoro_close_item(
         .unwrap_or_else(|_| day_file.clone());
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: false,
@@ -2279,6 +2283,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         Some(format!("{}-{}", summary.closed.start, summary.closed.end));
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,
@@ -2594,6 +2599,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

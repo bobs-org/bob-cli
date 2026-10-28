@@ -27,8 +27,6 @@ pub(crate) enum TaskThemeState {
     Repair { kind: RepairKind },
 }
 
-// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ThemeChange {
     None,
@@ -55,8 +53,6 @@ pub(crate) fn parse_task_theme(line: &str) -> TaskThemeState {
     }
 }
 
-// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_task_theme(line: &str, name: &str) -> String {
     let (body, ending) = split_line_ending(line);
     let cleared = remove_theme_fields(body);
@@ -79,8 +75,6 @@ pub(crate) fn set_task_theme(line: &str, name: &str) -> String {
     output
 }
 
-// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn clear_task_theme(line: &str) -> String {
     let (body, ending) = split_line_ending(line);
     let mut output = remove_theme_fields(body);
@@ -88,8 +82,6 @@ pub(crate) fn clear_task_theme(line: &str) -> String {
     output
 }
 
-// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_theme_change(
     field: &TaskThemeState,
     shown_suggestion_key: Option<&str>,

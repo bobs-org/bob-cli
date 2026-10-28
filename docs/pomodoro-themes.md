@@ -568,9 +568,29 @@ Shift+Enter. Alt+Enter is always link once; untouched preselection is
 not deliberate. Guards refuse before any field edit. Theme edits never
 affect freshness eligibility.
 
-No existing gesture becomes a writer in this phase. In the full
-contract, close, roll, typed `^^`, move, rollover, reconcile, ordinary
-successor placement, and ref-today are never writers.
+Capture writes task themes only for an explicit Pomodoro name: a new
+Pomodoro-linked task (`<text> @route:id#NAME`), a whole-item existing-task
+link (`@route:id#NAME` or `^route:id#NAME`), or Ensure Next
+(`@route+id#NAME`). The equivalent `=name` link-and-start shorthand is also
+deliberate. New tasks use the destination note's suggestion; existing tasks
+use the staged task line and the suggestion it inherits from that note. The
+writer runs after the destination name resolves, so a slug or prefix writes
+the chosen Pomodoro's canonical name. Link guards, unnamed links, ordinary
+toggles, close gestures, and `bob ref today` never write this field. A batch
+re-evaluates suggestions against its staged note snapshot, and the task field
+is committed with that capture's task and ledger edits.
+
+Capture JSON omits `task_theme` unless the field changes. When present it is
+`{action, theme, previous, inherited}`: `action` is `set` or `cleared`,
+`theme` is the selected `ThemeRef` (null on clear), `previous` is the prior
+valid task field (null when absent or needing repair), and `inherited` is the
+suggestion without the task's own field (or null). Human output adds a theme
+row that names the choice and its inherited reason; dry-run reports the same
+post-image without writing.
+
+The explicitly named capture choice is the writer boundary in this phase.
+Close, roll, typed `^^`, move, rollover, reconcile, ordinary successor
+placement, and ref-today remain never-writers.
 
 ### Preservation
 

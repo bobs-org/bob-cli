@@ -152,6 +152,20 @@ impl<S: HomeSource> HomeResolver<S> {
         &self.health
     }
 
+    /// Clear derived note facts and homes after the source's snapshot has
+    /// changed. Keep the source's lazy link index so a multi-item batch does
+    /// not rescan the vault for every capture.
+    pub(crate) fn refresh(&mut self) {
+        self.homes.clear();
+        self.facts.clear();
+        self.color_linted.clear();
+        self.health = ResolverHealth::default();
+    }
+
+    pub(crate) fn source_mut(&mut self) -> &mut S {
+        &mut self.source
+    }
+
     pub(crate) fn facts(&mut self, path: &Path) -> Option<NoteFacts> {
         self.facts_for(path)
     }

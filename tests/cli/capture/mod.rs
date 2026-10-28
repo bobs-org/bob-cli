@@ -74,6 +74,7 @@ mod task_goto;
 mod task_id;
 mod task_link;
 mod task_marker;
+mod task_theme_writes;
 mod task_toggle;
 mod template;
 mod template_expand;

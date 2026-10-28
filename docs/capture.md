@@ -1092,6 +1092,16 @@ Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
 entries remain an invariant error when a new named entry would need the
 current-Pomodoro anchor.
 
+An explicit `#NAME` choice also records the selected theme on the task when
+the destination note or task provides a usable suggestion. For a new task,
+the suggestion comes from its destination note. For an existing task, its
+current task field is compared with the suggestion it inherits from its
+destination note. Bob writes `[theme:: NAME]` only when the resolved Pomodoro
+name is deliberate and the task has exactly one non-exempt theme field, or
+no field; choosing the inherited theme clears the task override. An absent
+suggestion, an ambiguous or repair field, a guarded link, or a no-op leaves
+the line alone. The field edit joins the routed note and daily-note transaction.
+
 The routed note and daily note are both parsed and validated before either is
 replaced. A missing daily note or Pomodoros section, no eligible unnamed target,
 timed ambiguity for implicit or named-creation captures, invalid Pomodoro name,
@@ -1170,6 +1180,13 @@ are rejected with messages naming the `@route^block-id+` project-note and
 `@route+block-id!` toggle spellings. A `@@` declaration never applies to a
 `^` item. Body-bearing `<text> @route:block-id[#name][=<X>]` keeps its exact
 current new-task meaning.
+
+An explicit Pomodoro name on a whole-item existing-task link also applies the
+task-theme write rule described above. This includes the `^route:block-id`
+active-task spelling and the `@route+block-id#pomodoro` Ensure Next spelling.
+The suggestion is evaluated from the task's staged pre-edit line and its
+destination note; the selected, resolved Pomodoro name is the deliberate
+choice. The field edit is staged with the task and ledger changes.
 
 The existing task resolves with the task-toggle lookup, so missing notes,
 missing IDs (with a close-match suggestion plus a hint to add text for a new
@@ -5161,6 +5178,36 @@ Dry-run JSON equals real-run JSON except
 for `dry_run`. Human output names a deleted session on the structured
 `−` consumption lines
 ([Blocking existing tasks with '*'](#blocking-existing-tasks-with)).
+
+#### Task-theme changes
+
+When an explicitly named Pomodoro capture changes a task's `[theme::]`
+field, that item gains this additive `task_theme` object. It is omitted when
+there is no suggestion, a guard consumes the gesture, or the field already
+has the desired value. The field edit is included in the same staged capture
+transaction as the task and Pomodoro changes.
+
+```json
+"task_theme": {
+  "action": "set",
+  "theme": {"key": "fix", "name": "FIX", "hue": "blue", "hue_source": "config"},
+  "previous": null,
+  "inherited": {
+    "theme": {"key": "write", "name": "WRITE", "hue": "magenta", "hue_source": "config"},
+    "source": "note",
+    "label": "from sase"
+  }
+}
+```
+
+`action` is `"set"` or `"cleared"`. `theme` is the selected
+`ThemeRef`, or null when cleared. `previous` is the valid task theme before
+the edit, or null when the field was absent or needed repair. `inherited` is
+the suggestion that the task inherits apart from its own field, or null when
+there was no suggestion. A clear removes every task theme field; a set writes
+the catalog spelling before trailing task metadata. The human output includes
+a `theme` row naming the selected or cleared theme and its inherited reason.
+Dry-run JSON reports the same post-image and summary without writing files.
 
 #### Task blocks
 

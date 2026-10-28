@@ -1,5 +1,6 @@
 //! Capture result/error types and human/JSON output.
 use super::*;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -256,6 +257,7 @@ fn is_zero(value: &usize) -> bool {
 pub(super) enum CaptureWarning {
     Text(String),
     Structured(StructuredCaptureWarning),
+    Suggestion(super::super::pomodoro_themes::suggest::SuggestWarning),
 }
 
 impl From<String> for CaptureWarning {
@@ -266,10 +268,17 @@ impl From<String> for CaptureWarning {
 
 impl CaptureWarning {
     /// The human rendering of this warning, for stderr and dedup.
-    pub(super) fn message(&self) -> &str {
+    pub(super) fn message(&self) -> Cow<'_, str> {
         match self {
-            Self::Text(message) => message,
-            Self::Structured(warning) => &warning.message,
+            Self::Text(message) => Cow::Borrowed(message),
+            Self::Structured(warning) => Cow::Borrowed(&warning.message),
+            Self::Suggestion(warning) => Cow::Owned(
+                warning
+                    .path
+                    .as_deref()
+                    .map(|path| format!("{} · {path}", warning.code))
+                    .unwrap_or_else(|| warning.code.clone()),
+            ),
         }
     }
 
@@ -277,7 +286,7 @@ impl CaptureWarning {
     pub(super) fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(message) => Some(message),
-            Self::Structured(_) => None,
+            Self::Structured(_) | Self::Suggestion(_) => None,
         }
     }
 }
@@ -293,6 +302,18 @@ pub(super) struct StructuredCaptureWarning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) count: Option<u64>,
     pub(super) message: String,
+}
+
+/// The task-theme field change made by one explicit named capture choice.
+/// `theme`, `previous`, and `inherited` intentionally serialize as null when
+/// the corresponding state has no single valid theme.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CaptureTaskThemeChange {
+    pub(super) action: &'static str,
+    pub(super) theme: Option<super::super::pomodoro_themes::ThemeRef>,
+    pub(super) previous: Option<super::super::pomodoro_themes::ThemeRef>,
+    pub(super) inherited:
+        Option<super::super::pomodoro_themes::suggest::ThemeSuggestion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -431,6 +452,8 @@ pub(super) struct CaptureItemResult {
     pub(super) target: String,
     pub(super) text: String,
     pub(super) task_line: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_theme: Option<CaptureTaskThemeChange>,
     pub(super) kind: &'static str,
     pub(super) created: String,
     pub(super) scheduled: Option<String>,
@@ -2206,6 +2229,9 @@ pub(super) fn print_human_item_success(
             ))
         );
     }
+    if let Some(row) = format_task_theme_row(result, &styler) {
+        print!("{row}");
+    }
     if let Some(note) = result.project_note.as_ref() {
         let sections = if note.sections.is_empty() {
             "—".to_string()
@@ -3307,6 +3333,9 @@ pub(super) fn print_human_ensure_next_ledger(
             println!("  {}", styler.dim(&already));
         }
     }
+    if let Some(row) = format_task_theme_row(result, styler) {
+        print!("{row}");
+    }
 }
 
 pub(super) fn format_pomodoro_endpoint(
@@ -3515,6 +3544,9 @@ pub(crate) fn format_human_pomodoro_link_details(
         }
     }
 
+    if let Some(row) = format_task_theme_row(result, styler) {
+        out.push_str(&row);
+    }
     if let Some(start) = result.pomodoro_start.as_ref() {
         let name = start.pomodoro_name.as_deref().unwrap_or("next session");
         let created = if start.created_pomodoro {
@@ -3539,6 +3571,60 @@ pub(crate) fn format_human_pomodoro_link_details(
         ));
     }
     out
+}
+
+fn format_task_theme_row(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) -> Option<String> {
+    let change = result.task_theme.as_ref()?;
+    let inherited = change
+        .inherited
+        .as_ref()
+        .map(|suggestion| match suggestion.source {
+            super::super::pomodoro_themes::suggest::SuggestionSource::Task => {
+                format!("this task suggests {}", suggestion.theme.name)
+            }
+            super::super::pomodoro_themes::suggest::SuggestionSource::Reading => {
+                format!("reading tasks suggest {}", suggestion.theme.name)
+            }
+            super::super::pomodoro_themes::suggest::SuggestionSource::Review => {
+                format!("daily review suggests {}", suggestion.theme.name)
+            }
+            super::super::pomodoro_themes::suggest::SuggestionSource::Note => {
+                let stem = suggestion
+                    .label
+                    .strip_prefix("from ")
+                    .unwrap_or(&suggestion.label);
+                format!("{stem} suggests {}", suggestion.theme.name)
+            }
+        })
+        .unwrap_or_else(|| "no default here".to_string());
+    let row = match change.action {
+        "set" => {
+            let theme = change.theme.as_ref()?;
+            let name = super::super::pomodoro_themes::swatch_name(
+                std::slice::from_ref(theme),
+                "",
+                styler,
+            )
+            .unwrap_or_else(|| theme.name.clone());
+            if result.dry_run {
+                format!("would set task theme → {name} · {inherited}")
+            } else {
+                format!("task theme → {name} · {inherited}")
+            }
+        }
+        "cleared" => {
+            if result.dry_run {
+                format!("would clear task theme · {inherited}")
+            } else {
+                format!("task theme cleared · {inherited}")
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("  theme  {row}\n"))
 }
 
 pub(super) fn print_removed_pomodoro_links(
@@ -4361,6 +4447,7 @@ mod tests {
 
     fn minimal_result() -> CaptureItemResult {
         CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run: false,
             routed: true,

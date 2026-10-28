@@ -621,6 +621,7 @@ fn planned_item_from_pomodoro_link_plan(
     let relative_target = relative_target(Some(route));
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
+            task_theme: None,
             ok: true,
             dry_run,
             routed: true,
