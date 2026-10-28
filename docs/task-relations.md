@@ -335,6 +335,8 @@ Writes stamp nothing.
 | Hand edit | Mirrored when the cursor leaves the line | `🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L` once per burst |
 | Ctrl+D on the Task Card row | Links to: removes every outgoing link and its mirror entries | Linked from: refused with the generated-line notice |
 
+On a dedicated Task Link bullet, Ctrl+Shift+L / Ctrl+Shift+Alt+L act on the linked task, opening its note first (LG18).
+
 ## 10. Chips
 
 Chips render a live relation index (§11), never the stored mirror.
@@ -689,6 +691,11 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG15 | Tab marks two targets, then ↵ | both linked in one gesture and one notice |
 | LG16 | `~` typed anywhere in a Links / Linked-from filter | the stage flips direction in place; filter text and caret kept, the `~` never typed, marks cleared; a counted session refuses the flip to Linked from with "Linked from needs a single task" |
 | LG17 | Links / Linked-from stage query that a Blocked task matches best | the Blocked row ranks by score inside RESULTS; the stage never shows a BLOCKED section; equal scores order In Progress, Next, then Ready and Blocked together |
+| LG18 | Ctrl+Shift+L / Ctrl+Shift+Alt+L on a dedicated Task Link bullet | opens the linked task's Links / Linked-from stage in its own note, for open or closed targets |
+| LG19 | the same gesture on a read-only linked task (`done/` or the previous daily note) | refused before the linked note is focused |
+| LG20 | `N Ctrl+Shift+L` on Task Links | opens the first resolved linked task's Links stage and reports that it opened the first of N linked tasks |
+| LG21 | Ctrl+Shift+L / Ctrl+Shift+Alt+L on a Depends-On or BLOCKS line | opens the owner's Links / Linked-from stage |
+| LG22 | Ctrl+Shift+B / Ctrl+Shift+Alt+B on a LINKS / LINKED FROM line | opens the owner's Depends on / Blocks stage |
 
 ### LC — chips
 
