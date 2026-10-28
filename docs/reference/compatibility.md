@@ -89,6 +89,15 @@ The documented workflows use these external-tool integrations:
   LaTeX packages `bob ref doctor` checks; override pandoc with
   `BOB_PANDOC_COMMAND`. Doctor prints the `tlmgr install` line for any
   missing packages
+- `pandoc` also saves web articles and collections as Markdown with code/link
+  catalogs. Without it, web PDF capture can still succeed, but reports
+  `source_markdown: none (pandoc unavailable)`; XeLaTeX is not needed for
+  this conversion. Reading an existing catalog with `bob ref code` or
+  `bob ref links` needs neither renderer
+- `pdftotext` from Poppler for `bob ref attach-source` to verify saved or
+  candidate Markdown against a library PDF. Search candidates also use
+  `pandoc` to record their code/link catalog; `bob ref recatalog` uses
+  Pandoc to add links to an existing catalog. Neither command needs XeLaTeX
 - `uv` and a discovered browser are optional for Mermaid fences in
   Markdown imports; without them, Mermaid prints as source with a visible
   note

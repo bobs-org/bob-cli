@@ -105,8 +105,8 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
 - **Paths.** Directory options (`--bob-dir`, `--repo`, `--backup-dir`,
   `--lib-dir`, `--ref-dir`, `--xlib-dir`, `query --vault`) answer
   `!dirs`. File options (`--query-file`, `--tasks-file`, ref
-  markdown inputs, PDF arguments, clip `--html`) answer `!files` with
-  a glob where one applies. A slot the builder annotates with a clap
+  markdown inputs, PDF arguments, clip `--html`, themes split `--map`)
+  answer `!files` with a glob where one applies. A slot the builder annotates with a clap
   `ValueHint` (for example `completion install -t`, `completion zsh -o`)
   answers the same way with no table entry; a path-specific table entry
   (the ref PDF `--output`) beats the hint.
@@ -146,10 +146,14 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
     git.
   - `task reroll --level`: configured priority labels in config order;
     the description is the roll window (for example `2–7 days`).
-  - `relations rename OLD NEW`: catalog labels, including hidden ones,
+  - `themes hide NAME…`, `themes unhide NAME…`, `themes color NAME`,
+    `themes rename OLD`, and `themes split OLD`: remembered theme names,
+    including hidden ones, grouped `themes`. The rename destination `NEW`
+    and color `HUE` remain free text.
+  - `relations hide LABEL…`, `relations unhide LABEL…`, and
+    `relations rename OLD NEW`: catalog labels, including hidden ones,
     grouped `relation labels`, with link counts and hidden-state descriptions.
-    Relation `hide`/`unhide` arguments, theme names, and `--inbox-route`
-    answers remain free text.
+    `--inbox-route` remains free text.
   - `query --tasks-note`, `query --origin`, `ready NOTE`,
     `capture-task-id --note-path`: vault notes
     as `!files-in <bob-dir>\t*.md`.

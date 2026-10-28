@@ -275,6 +275,10 @@ full reference-import toolchain.
 | Markdown with Mermaid | `uv` and a discovered browser are optional; without them Mermaid blocks print as source with a visible note |
 | Any target with `--listen` | A configured `highlights.listen_command` (`sase listen render ...`) that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen` |
 
+Saving a web article or collection's Markdown source and code/link catalog
+also uses `pandoc` (`BOB_PANDOC_COMMAND` can override it), without XeLaTeX.
+Missing Pandoc skips that source store with a warning; the PDF can still file.
+
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
 `latex_packages` rows diagnose Markdown rendering. A missing renderer or
 package is a warning rather than a fatal doctor error because other target
@@ -548,8 +552,8 @@ older parser could treat it as two.
 
 ## Saved Markdown
 
-Every new Markdown-born, single-URL web-article, or multi-URL
-web-collection reference keeps the exact cataloged bytes under
+Markdown-born, single-URL web-article, and multi-URL web-collection
+captures save source bytes under
 `.bob/ref-sources/<ref_type>/<stem>--<hash12>/source.md` plus its
 render-time catalog `code.json` (version 1). `hash12` is the first 12 hex
 digits of SHA-256(`source.md`); `<stem>` is the final target stem and
@@ -557,7 +561,9 @@ digits of SHA-256(`source.md`); `<stem>` is the final target stem and
 digest mismatch refuses with a warning and never overwrites. `code.json`
 is derived data that a later render of the same bytes may replace
 atomically. Writes hold `bob_sync.lock`, and readers treat a missing
-`code.json` as `no_catalog`.
+`code.json` as `no_catalog`. External `-o` outputs do not create a library
+source store. Web source conversion, catalog, or store failures warn and
+leave the PDF capture usable without a saved source.
 
 | Route | `code.json` route | `source.md` bytes | `source_note` |
 | --- | --- | --- | --- |
@@ -572,8 +578,10 @@ atomically. Writes hold `bob_sync.lock`, and readers treat a missing
 `page_source`). A missing `links` array means the catalog predates link
 recording; an empty array means no links. Older bobs ignore the new field.
 
-Hidden content such as HTML comments and frontmatter is preserved verbatim
-and synced through vault git (`source.md` via `!*.md`, `code.json` via
+For plain Markdown and `-M`, hidden content such as HTML comments and
+frontmatter is preserved verbatim. Snapshot sources contain the projected
+Markdown; web sources contain the converted article HTML. Sources sync
+through vault git (`source.md` via `!*.md`, `code.json` via
 `!/.bob/ref-sources/**/*.json`). `rename` never moves a store; a reread
 makes a new store and an in-place overwrite makes a new store when the
 bytes changed, keeping the old one as history. The note frontmatter

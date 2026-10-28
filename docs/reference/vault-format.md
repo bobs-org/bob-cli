@@ -358,6 +358,14 @@ and creating its note in `ref/`. The note appears in
 `bob ref list` after successful intake. `bob ref scan --intake-only` retries
 deferred intake; a full `bob ref scan` also synchronizes annotations.
 
+When a capture saves Markdown, `source_markdown` is a vault-relative plain
+path to `.bob/ref-sources/<ref_type>/<stem>--<hash12>/source.md`, alongside
+its `code.json` catalog. It is not a wikilink. The source bytes are
+write-once; renaming the reference leaves that path unchanged. An absent
+pointer means no saved source is attached. `bob ref code` and `bob ref links`
+read this store; [Saved Markdown](../highlights-create.md#saved-markdown)
+defines the capture routes and failure behavior.
+
 The `<!-- highlights:begin -->` / `<!-- highlights:end -->` region is
 generated; keep authored notes outside it. Highlight quotes store underline
 emphasis as `**…**` and use `^h-…` block IDs. Reordering distinct exported

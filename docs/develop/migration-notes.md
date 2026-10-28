@@ -53,6 +53,25 @@ The `@<route>::<block-id>` capture spelling is not accepted. Use
 `#<pomodoro>` to select or create a named Pomodoro. Sub-bullet capture uses
 `@<route>+<block-id>`.
 
+Whole-item Pomodoro starts use `=` or `=<X>` (five-minute units); closes
+use `x`, with optional task-selection operators. Doubled starts such as
+`==3` and whole-item closes such as `=x1!2` are refused with a rewrite
+hint. A link's close suffix still uses the separator `=`, as in
+`@work:task=x1`. See [Capture](../capture.md) for the complete grammar.
+
+## Review and reporting contracts
+
+| Surface | Current behavior | Consumer impact |
+| --- | --- | --- |
+| `plan.exempt` default | `[PLAN]` | Explicit configured lists still apply. GTD is an ordinary theme unless included in that list. |
+| Pomodoro root parent | Review buckets and tasks defined in canonical daily notes group under `@daily`, labeled `<daily>` | Keep that key distinct from `@unfiled`; project and area attribution still use the shared home resolver. |
+| Project reporting | `root: true` selects a project's own root parent; `rollup:` is ignored | Update frontmatter used for Stats grouping. |
+| Task dependencies | Only the managed Depends-On line supplies dependency links | Ordinary child links remain content and are not adopted automatically. |
+| `bob task reconcile -f json` | `legacy_dependency_children` is absent | Consumers must not require the zero-valued compatibility field shipped in v0.4.0. |
+
+Exact rules: [Pomodoro homes](../pomodoro-homes.md),
+[Plan](../plan.md), and [Task dependencies](../task-dependencies.md).
+
 ## Related
 
 - [CLI reference](../reference/cli/index.md)

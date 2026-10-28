@@ -14,21 +14,28 @@ with [Install a specific Bob release](../guides/install-a-tagged-release.md).
 | Surface | What it shows |
 | --- | --- |
 | [GitHub Releases](https://github.com/bobs-org/bob-cli/releases) | Version notes and, when the train ships them, prebuilt archives |
-| Git tags | `vX.Y.Z` on [bobs-org/bob-cli](https://github.com/bobs-org/bob-cli) |
-| `CHANGELOG.md` | Keep a Changelog sections in the bob-cli repository |
-| crates.io | The `bob-obsidian` package is not yet published. Install from Git or a GitHub Release |
+| Git tags | CLI: `vX.Y.Z`; embedded assets: `bob-obsidian-assets-vA.B.C`, on [bobs-org/bob-cli](https://github.com/bobs-org/bob-cli) |
+| Changelogs | CLI: root `CHANGELOG.md`; assets: `crates/bob-obsidian-assets/CHANGELOG.md`, maintained by the release train |
+| crates.io | The train is configured for Git-only releases. Install from Git or a GitHub Release |
 
 The Cargo package name is `bob-obsidian`. The installed binaries keep their
 names: `bob`, `bob_pomodoro`, `bob_notify`, and `tmux_bob_pomodoro`.
 `cargo install bob-cli` installs an unrelated project.
 
+`bob-obsidian-assets` supplies the fonts and vendor bundles embedded in
+those binaries. It versions independently, installs no command, and needs
+no separate installation. Assets tags do not create a GitHub Release or
+trigger prebuilt CLI archives.
+
 ## Cadence
 
-The release train ships at most one version per America/New_York calendar
+The release train ships at most one CLI version per America/New_York calendar
 day, and only when a user-visible change landed since the last tag.
 `feat`, `fix`, `perf`, and `revert` commits count. `docs`, `chore`,
 `refactor`, `test`, `ci`, `style`, and `build` commits do not ship a
-version on their own. A day with no qualifying commit produces no release.
+version on their own unless marked breaking with `!`. A day with no
+qualifying commit produces no release. The train can update either package
+or both; an assets-only tag does not consume the day's CLI release slot.
 
 The train is in rehearsal: it creates tags and GitHub Releases. It does
 not publish to crates.io yet.
@@ -41,7 +48,7 @@ Bob is on 0.x. On that series:
 | --- | --- |
 | `feat`, `fix`, `perf`, or `revert` | Patch, for example 0.2.0 → 0.2.1 |
 | A Conventional Commit with `!` | Minor, for example 0.2.1 → 0.3.0 |
-| `docs`, `chore`, `refactor`, `test`, `ci`, `style`, or `build` only | No release |
+| `docs`, `chore`, `refactor`, `test`, `ci`, `style`, or `build` only, without `!` | No release |
 
 A `!` marker is the product contract break for CLI flags, CLI output, and
 JSON consumers. The Rust library in this repository is an internal seam,

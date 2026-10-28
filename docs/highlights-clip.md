@@ -83,8 +83,11 @@ plus the episode instead.
    `.bob/ref-sources/<ref-type>/<stem>--<hash12>/source.md`, the catalog
    records each code block and link, Chrome's print destinations supply code
    pages and the printed PDF's link annotations supply link pages, and the
-   note files with a `source_markdown` pointer. Without a source view (or
-   with `-o`) the reference files with `source_markdown: none`.
+   note files with a `source_markdown` pointer. Missing Pandoc, a missing
+   source view, or a conversion/catalog/store failure warns and skips the
+   saved source without failing PDF capture. The command reports
+   `source_markdown: none (<reason>)`; an external `-o` output also skips
+   the library source store.
 7. Unless intake is kept or cannot safely run, `create` moves the PDF into `lib/`,
    writes the `ref/` note and reading task, and commits those paths together. A
    queued PDF is drained locally by `bob ref scan -i` or the host's intake timer.
