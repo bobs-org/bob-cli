@@ -64,6 +64,8 @@ pub(crate) struct CommandError {
     /// Vault paths the failure site knows (colliding destinations,
     /// colliding targets, dirty files); human rendering ignores them.
     pub(super) paths: Vec<PathBuf>,
+    /// Internal evidence for a multiple_open_ref_tasks refusal. Not serialized.
+    pub(super) ref_task_claimants: Vec<String>,
 }
 
 impl CommandError {
@@ -73,6 +75,7 @@ impl CommandError {
             exit_code: None,
             code: None,
             paths: Vec::new(),
+            ref_task_claimants: Vec::new(),
         }
     }
 
@@ -743,6 +746,22 @@ pub(super) struct ReadingTaskOutcome {
 pub(super) struct ScanFailure {
     pub(super) pdf: PathBuf,
     pub(super) error: CommandError,
+    /// Sorted, distinct claimant notes for multiple_open_ref_tasks only.
+    pub(super) ref_task_claimants: Vec<String>,
+}
+
+impl ScanFailure {
+    pub(super) fn new(pdf: PathBuf, mut error: CommandError) -> Self {
+        let mut ref_task_claimants =
+            std::mem::take(&mut error.ref_task_claimants);
+        ref_task_claimants.sort();
+        ref_task_claimants.dedup();
+        Self {
+            pdf,
+            error,
+            ref_task_claimants,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

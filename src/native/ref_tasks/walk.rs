@@ -509,8 +509,9 @@ impl RefTaskIndex {
         &self,
         ref_path: &str,
         v1_hits: &[TrackerHit],
+        parent: Option<&str>,
     ) -> RefTaskSelection {
-        select_for_ref(self.candidates(ref_path), v1_hits)
+        select_for_ref(self.candidates(ref_path), v1_hits, parent)
     }
 
     /// The empty selection for a path with no candidates and no hits

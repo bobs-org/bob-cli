@@ -1227,14 +1227,23 @@ same `priority`/`scheduled` fields from the tracker line. One
 additive under `schema_version` 1.
 
 Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
-detail lists `path:line`), `open_ref_task_in_done` (open task under
-`done/`, report-only), `open_ref_without_task` (v2 note with a
+detail lists `path:line` and, when every claimant has the same block ID,
+identifies them as copies of one task and advises keeping the copy in the
+reference's parent note, naming that parent when known),
+`open_ref_task_in_done` (open task under `done/`, report-only), `open_ref_without_task` (v2 note with a
 ready/next/wip status but no task), `orphan_ref_task` (a `#ref` line
 resolving to no note), `ref_task_outside_area` (live task outside an
 area/project/inbox), `parent_mismatch` (frontmatter parent differs from
 residence), `earlier_dangling` (an `earlier:` entry whose target
 resolves nowhere), and `open_v1_tracker` (open in-note `^ref`; run `bob ref
 migrate-tasks`).
+
+When two or more PDFs fail `bob ref scan` with `multiple_open_ref_tasks`
+from the same set of claimant notes, the human report and error summary
+show one shared-cause hint per set. If a note was accidentally copied over
+another, follow [Clobbered notes](vault-git-sync.md#clobbered-notes) to
+restore it. Scan JSON keeps its existing fields and order; each failure's
+message includes the richer diagnostic text.
 
 ## Errors and exit codes
 

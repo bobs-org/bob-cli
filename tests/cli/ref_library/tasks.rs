@@ -121,6 +121,30 @@ fn list_rows_carry_task_parent_status_and_diagnostics() {
 }
 
 #[test]
+fn copied_reading_tasks_name_the_frontmatter_parent_in_diagnostics() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-tasks-copies");
+    let note = vault.join("bob.md");
+    let contents = fs::read_to_string(&note).expect("read task note");
+    write_file(&note, &contents.replace("^ref-amb-b", "^ref-amb-a"));
+    write_file(
+        &vault.join("ref/papers/ambiguous.md"),
+        "---\nstatus: ready\nparent: \"[[sase]]\"\n---\n# Ambiguous\n",
+    );
+    let doc = run_json(&vault, &["list", "-R", "all", "-A"]);
+    let row = row_by_path(&doc, "ref/papers/ambiguous.md");
+    assert!(row["task"].is_null());
+    let diagnostic = row["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "multiple_open_ref_tasks")
+        .expect("ambiguity diagnostic");
+    assert!(diagnostic["detail"].as_str().expect("detail").ends_with(
+        "; all are copies of one task ^ref-amb-a — keep the copy in the ref's parent note (sase) and delete the others"
+    ));
+}
+
+#[test]
 fn list_parent_resolution_matches_routes_aliases_and_literals() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-tasks-parent");
     // Alias bob-cli matches the bob.md row (canonical bob).

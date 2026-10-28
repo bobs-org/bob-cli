@@ -340,10 +340,9 @@ fn scan_library_write(
                 write_outcomes.push(ScanWriteOutcome::Held(hold))
             }
             Err(error) => {
-                write_outcomes.push(ScanWriteOutcome::Failed(ScanFailure {
-                    pdf: plan.pdf.clone(),
-                    error,
-                }));
+                write_outcomes.push(ScanWriteOutcome::Failed(
+                    ScanFailure::new(plan.pdf.clone(), error),
+                ));
             }
         }
     }
@@ -487,15 +486,14 @@ fn plan_pdf_sync_for_scan(
         Ok(Some(hold)) => ScanPlanOutcome::Held(hold),
         Ok(None) => match plan_pdf_sync(config, pdf, options, ctx) {
             Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
-            Err(error) => ScanPlanOutcome::Failed(ScanFailure {
-                pdf: pdf.to_path_buf(),
+            Err(error) => ScanPlanOutcome::Failed(ScanFailure::new(
+                pdf.to_path_buf(),
                 error,
-            }),
+            )),
         },
-        Err(error) => ScanPlanOutcome::Failed(ScanFailure {
-            pdf: pdf.to_path_buf(),
-            error,
-        }),
+        Err(error) => {
+            ScanPlanOutcome::Failed(ScanFailure::new(pdf.to_path_buf(), error))
+        }
     }
 }
 
@@ -895,12 +893,17 @@ fn plan_pdf_sync_v2(
     candidates: Vec<ref_tasks_mod::LocatedRefTask>,
 ) -> Result<PdfSyncPlan> {
     let v1_hits = ref_tasks_mod::find_trackers(&note.body);
-    let parent_hint = marker_projection
+    let frontmatter_input = note.synced_projection_with_normalization()?;
+    let parent_projection = if note.exists() {
+        &frontmatter_input.projection
+    } else {
+        &marker_projection
+    };
+    let parent_hint = parent_projection
         .get(FIELD_PARENT)
         .and_then(MarkerValue::as_string)
         .unwrap_or("")
         .to_string();
-    let frontmatter_input = note.synced_projection_with_normalization()?;
     let marker_pf = without_parent(&marker_projection);
     let frontmatter_pf = without_parent(&frontmatter_input.projection);
     let marker_hash = projection_hash(&marker_pf)?;
@@ -961,7 +964,8 @@ fn plan_pdf_sync_v2(
     // task is archived-terminal, its source residence decides the reopen
     // parent. The planner re-selects internally; this only feeds
     // `archive_source_open`.
-    let preliminary = ref_tasks_mod::select_for_ref(&candidates, &v1_hits);
+    let preliminary =
+        ref_tasks_mod::select_for_ref(&candidates, &v1_hits, None);
     let archive_source_open = match &preliminary.task {
         Some(ref_tasks_mod::Selected::V2(located)) if located.archived => {
             located.residence.as_deref().is_some_and(|route| {
@@ -1067,10 +1071,24 @@ fn plan_pdf_sync_v2(
             detail = "ambiguous reading tasks; refusing status/parent writes"
                 .to_string();
         }
-        return Err(CommandError::new(format!(
+        let mut error = CommandError::new(format!(
             "refusing to sync {}: {detail}",
             pdf.display()
-        )));
+        ));
+        if reading_plan
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "multiple_open_ref_tasks")
+        {
+            error.ref_task_claimants = candidates
+                .iter()
+                .filter(|task| {
+                    !task.archived && ref_tasks_mod::is_open_mark(task.mark)
+                })
+                .map(|task| task.path.clone())
+                .collect();
+        }
+        return Err(error);
     }
     let decision = resolution.decision;
     let synced_pf = resolution.projection;
@@ -1407,13 +1425,13 @@ fn select_v2_located_task(
     v1_hits: &[ref_tasks_mod::TrackerHit],
 ) -> Option<ref_tasks_mod::LocatedRefTask> {
     if !note_exists {
-        let (task, _) = select_birth_task(candidates);
+        let (task, _) = select_birth_task(candidates, None);
         return match task {
             BirthTask::Adopt(located) => Some(located),
             BirthTask::Insert | BirthTask::Refused => None,
         };
     }
-    match ref_tasks_mod::select_for_ref(candidates, v1_hits).task {
+    match ref_tasks_mod::select_for_ref(candidates, v1_hits, None).task {
         Some(ref_tasks_mod::Selected::V2(located)) => Some(located),
         _ => None,
     }

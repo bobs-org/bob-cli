@@ -503,6 +503,7 @@ pub(super) fn print_verbose_scan_plan_report(
             }
         }
     }
+    print_scan_ref_task_causes(plan_outcomes);
 }
 
 pub(super) fn print_scan_header(
@@ -617,6 +618,7 @@ pub(super) fn print_concise_scan_plan_report(
         })
         .collect::<Vec<_>>();
     print_scan_lines(&lines, true, styler);
+    print_scan_ref_task_causes(plan_outcomes);
     let mut counts = ScanCounts::from_plans(plans);
     counts.held = plan_hold_count(plan_outcomes);
     println!(
@@ -676,6 +678,7 @@ pub(super) fn print_concise_scan_write_report(
     }
 
     print_scan_lines(&lines, false, styler);
+    print_scan_ref_task_causes(plan_outcomes);
     let mut counts = ScanCounts::from_write_outcomes(write_outcomes, reports);
     counts.held += plan_hold_count(plan_outcomes);
     println!(
@@ -1612,6 +1615,10 @@ pub(super) fn scan_partial_failure_error(
 ) -> CommandError {
     let total = plan_failures.len() + write_failures.len();
     let mut message = format!("scan completed with {total} per-PDF failure(s)");
+    for hint in scan_ref_task_cause_lines(plan_failures) {
+        message.push('\n');
+        message.push_str(&hint);
+    }
     if !plan_failures.is_empty() {
         message.push_str("\nplanning failures:");
         for failure in plan_failures {
@@ -1631,4 +1638,96 @@ pub(super) fn scan_partial_failure_error(
         }
     }
     CommandError::new(message)
+}
+
+/// Group refusals using selection evidence, never rendered diagnostic text.
+fn scan_ref_task_cause_lines(plan_failures: &[&ScanFailure]) -> Vec<String> {
+    let mut groups: BTreeMap<&[String], usize> = BTreeMap::new();
+    for failure in plan_failures {
+        if !failure.ref_task_claimants.is_empty() {
+            *groups.entry(&failure.ref_task_claimants).or_default() += 1;
+        }
+    }
+    groups.into_iter().filter_map(|(notes, count)| {
+        if count < 2 {
+            return None;
+        }
+        let (last, rest) = notes.split_last()?;
+        let (notes, verb) = if rest.is_empty() {
+            (last.clone(), "carries")
+        } else {
+            (format!("{} and {last}", rest.join(", ")), "carry")
+        };
+        Some(format!(
+            "hint: {count} refusals share one cause: {notes} {verb} the same open reading tasks. If one note is an accidental copy, restore it (docs/vault-git-sync.md#clobbered-notes)."
+        ))
+    }).collect()
+}
+
+fn print_scan_ref_task_causes(plan_outcomes: &[ScanPlanOutcome]) {
+    let failures = plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Failed(failure) => Some(failure),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for line in scan_ref_task_cause_lines(&failures) {
+        println!("{line}");
+    }
+}
+
+#[cfg(test)]
+mod copy_hint_tests {
+    use super::*;
+
+    fn failure(pdf: &str, notes: &[&str]) -> ScanFailure {
+        // The rendered message deliberately contains no diagnostic or paths.
+        let mut error = CommandError::new("refused");
+        error.ref_task_claimants =
+            notes.iter().map(|note| note.to_string()).collect();
+        ScanFailure::new(PathBuf::from(pdf), error)
+    }
+
+    #[test]
+    fn repeated_refusals_group_by_sorted_distinct_note_set() {
+        let failures = [
+            failure("1.pdf", &["sase.md", "recovery.md"]),
+            failure("2.pdf", &["recovery.md", "sase.md"]),
+            failure("3.pdf", &["sase.md", "recovery.md", "sase.md"]),
+        ];
+        let refs = failures.iter().collect::<Vec<_>>();
+        let lines = scan_ref_task_cause_lines(&refs);
+        assert_eq!(lines, ["hint: 3 refusals share one cause: recovery.md and sase.md carry the same open reading tasks. If one note is an accidental copy, restore it (docs/vault-git-sync.md#clobbered-notes)."]);
+        let error = scan_partial_failure_error(&refs, &[]).to_string();
+        assert_eq!(error.matches("hint:").count(), 1);
+        assert!(error.contains(&lines[0]));
+        for pdf in ["1.pdf", "2.pdf", "3.pdf"] {
+            assert!(error.contains(&format!("{pdf}: refused")));
+        }
+    }
+
+    #[test]
+    fn separate_pairs_get_separate_hints_and_single_refusals_get_none() {
+        let failures = [
+            failure("1.pdf", &["a.md", "b.md"]),
+            failure("2.pdf", &["b.md", "a.md"]),
+            failure("3.pdf", &["a.md", "c.md"]),
+            failure("4.pdf", &["c.md", "a.md"]),
+            failure("5.pdf", &["a.md", "d.md"]),
+            failure("6.pdf", &[]),
+        ];
+        let lines =
+            scan_ref_task_cause_lines(&failures.iter().collect::<Vec<_>>());
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("2 refusals share one cause: a.md and b.md"));
+        assert!(lines[1].contains("2 refusals share one cause: a.md and c.md"));
+        assert!(scan_ref_task_cause_lines(&[&failures[0]]).is_empty());
+        assert!(!scan_partial_failure_error(
+            &[],
+            &[&failures[0], &failures[1]]
+        )
+        .to_string()
+        .contains("hint:"));
+    }
 }

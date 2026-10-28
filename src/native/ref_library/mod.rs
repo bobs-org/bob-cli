@@ -155,11 +155,16 @@ pub(crate) fn build_index(
             strip_forward(path, &config.ref_dir).expect("member under ref dir");
         match std::fs::read_to_string(path) {
             Ok(contents) => {
-                let body = split_frontmatter(&contents)
-                    .map(|(_, rest)| rest)
-                    .unwrap_or(contents.clone());
+                let (raw_lines, body) = split_frontmatter(&contents)
+                    .unwrap_or_else(|| (Vec::new(), contents.clone()));
+                let front = ParsedFrontmatter::parse(&raw_lines);
+                let parent = front
+                    .get_all("parent")
+                    .iter()
+                    .find_map(|value| bare_parent_name(value));
                 let v1_hits = crate::native::ref_tasks::find_trackers(&body);
-                let mut selection = ref_tasks.select(&display, &v1_hits);
+                let mut selection =
+                    ref_tasks.select(&display, &v1_hits, parent.as_deref());
                 // The note is v2 when any candidate exists or the body
                 // holds the managed embed.
                 if crate::native::ref_tasks::find_managed_embed(&body).is_some()

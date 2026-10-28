@@ -64,7 +64,7 @@ fn birth_insert_then_rerun_adopts_without_duplication() {
     assert_eq!(candidates.len(), 1, "{candidates:?}");
     assert_eq!(candidates[0].block_id, Some(execution.block_id.clone()));
     let (birth, _) =
-        crate::native::highlights_ref::select_birth_task(candidates);
+        crate::native::highlights_ref::select_birth_task(candidates, None);
     match birth {
         BirthTask::Adopt(located) => {
             assert_eq!(located.block_id, Some(execution.block_id.clone()));

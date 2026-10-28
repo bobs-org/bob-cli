@@ -201,7 +201,7 @@ fn fallback_child_text_is_exact() {
 
 #[test]
 fn birth_with_no_candidates_inserts() {
-    let (task, diagnostics) = super::select_birth_task(&[]);
+    let (task, diagnostics) = super::select_birth_task(&[], None);
     assert_eq!(task, super::BirthTask::Insert);
     assert!(diagnostics.is_empty());
 }
@@ -209,7 +209,8 @@ fn birth_with_no_candidates_inserts() {
 #[test]
 fn birth_adopts_unique_orphan() {
     let orphan = located("sase.md", '*', Some("ref-stem"), false, Some("sase"));
-    let (task, _) = super::select_birth_task(std::slice::from_ref(&orphan));
+    let (task, _) =
+        super::select_birth_task(std::slice::from_ref(&orphan), None);
     assert_eq!(task, super::BirthTask::Adopt(orphan));
 }
 
@@ -223,7 +224,7 @@ fn birth_adopts_newest_closed() {
         closed_on: Some("2026-10-08".to_string()),
         ..closed_located("sase.md", '-', Some("2026-10-08"))
     };
-    let (task, _) = super::select_birth_task(&[older, newer.clone()]);
+    let (task, _) = super::select_birth_task(&[older, newer.clone()], None);
     assert_eq!(task, super::BirthTask::Adopt(newer));
 }
 
@@ -231,7 +232,7 @@ fn birth_adopts_newest_closed() {
 fn birth_refuses_multiple_open() {
     let first = located("sase.md", '*', Some("ref-stem"), false, Some("sase"));
     let second = located("bob.md", '/', Some("ref-stem"), false, Some("bob"));
-    let (task, diagnostics) = super::select_birth_task(&[first, second]);
+    let (task, diagnostics) = super::select_birth_task(&[first, second], None);
     assert_eq!(task, super::BirthTask::Refused);
     assert!(
         diagnostics
@@ -250,7 +251,7 @@ fn birth_refuses_open_archive_task() {
         true,
         Some("sase"),
     );
-    let (task, diagnostics) = super::select_birth_task(&[archived]);
+    let (task, diagnostics) = super::select_birth_task(&[archived], None);
     assert_eq!(task, super::BirthTask::Refused);
     assert!(
         diagnostics

@@ -119,8 +119,9 @@ pub(super) enum BirthTask {
 /// refused. Returns the locator diagnostics alongside for the plan report.
 pub(super) fn select_birth_task(
     candidates: &[LocatedRefTask],
+    parent: Option<&str>,
 ) -> (BirthTask, Vec<RefTaskDiagnostic>) {
-    let selection = select_for_ref(candidates, &[]);
+    let selection = select_for_ref(candidates, &[], parent);
     let task = match selection.task {
         Some(Selected::V2(located)) => BirthTask::Adopt(located),
         None if candidates.is_empty() => BirthTask::Insert,
@@ -542,6 +543,7 @@ pub(super) struct ReadingTaskPlanInputs<'a> {
     pub note_body: &'a str,
     pub candidates: &'a [LocatedRefTask],
     pub v1_hits: &'a [TrackerHit],
+    /// Marker parent for births; existing note's frontmatter parent for diagnostics.
     pub parent_hint: &'a str,
     pub resolved_status: Option<&'a str>,
     pub base_status: Option<&'a str>,
@@ -612,7 +614,8 @@ pub(super) fn plan_reading_task(
 
 fn plan_birth_task(inputs: &ReadingTaskPlanInputs<'_>) -> ReadingTaskPlan {
     let parent = resolve_birth_parent(inputs.parent_hint, inputs.resolver);
-    let (task, diagnostics) = select_birth_task(inputs.candidates);
+    let (task, diagnostics) =
+        select_birth_task(inputs.candidates, Some(inputs.parent_hint));
     match task {
         BirthTask::Adopt(located) => ReadingTaskPlan {
             branch: NoteBranch::V2,
@@ -662,7 +665,11 @@ fn plan_birth_task(inputs: &ReadingTaskPlanInputs<'_>) -> ReadingTaskPlan {
 fn plan_existing_task(
     inputs: &ReadingTaskPlanInputs<'_>,
 ) -> Result<ReadingTaskPlan> {
-    let selection = select_for_ref(inputs.candidates, inputs.v1_hits);
+    let selection = select_for_ref(
+        inputs.candidates,
+        inputs.v1_hits,
+        Some(inputs.parent_hint),
+    );
     let Some(selected) = selection.task else {
         return Ok(unselected_task_plan(inputs, &selection.diagnostics));
     };

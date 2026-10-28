@@ -560,6 +560,95 @@ fn v2_multiple_open_tasks_refuse_replacement() {
 }
 
 #[test]
+fn v2_scan_groups_copied_tasks_without_changing_json_shape_or_files() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-copies");
+    let parent = vault.join("obsidian.md");
+    write_area_note(&parent, "Obsidian");
+    for stem in ["alpha", "beta", "gamma"] {
+        let pdf = vault.join(format!("lib/{stem}.pdf"));
+        write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+        assert_success(&sync_pdf(&vault, &pdf, &[]));
+    }
+    let parent_bytes = fs::read(&parent).expect("read parent");
+    let copy = vault.join("recovery.md");
+    fs::write(&copy, &parent_bytes).expect("copy parent");
+    let paths = ["alpha", "beta", "gamma"]
+        .into_iter()
+        .flat_map(|stem| {
+            [
+                vault.join(format!("lib/{stem}.pdf")),
+                vault.join(format!("ref/{stem}.md")),
+            ]
+        })
+        .chain([parent, copy])
+        .collect::<Vec<_>>();
+    let before = paths
+        .iter()
+        .map(|path| fs::read(path).expect("read fixture"))
+        .collect::<Vec<_>>();
+
+    for args in [
+        vec!["--dry-run"],
+        vec!["--dry-run", "--verbose"],
+        vec!["--no-hooks"],
+        vec!["--no-hooks", "--verbose"],
+        vec!["--dry-run", "--format", "json"],
+    ] {
+        let output = bob_command()
+            .args(["ref", "scan"])
+            .args(&args)
+            .env("BOB_DIR", &vault)
+            .env("BOB_NOW", PINNED_NOW)
+            .output()
+            .expect("scan duplicate tasks");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if args.contains(&"json") {
+            let json: serde_json::Value =
+                serde_json::from_slice(&output.stdout)
+                    .expect("one JSON envelope");
+            let failures = json["failures"].as_array().expect("failures");
+            assert_eq!(failures.len(), 3);
+            for failure in failures {
+                assert_eq!(
+                    failure
+                        .as_object()
+                        .expect("failure object")
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    ["message", "pdf", "stage"]
+                );
+                assert!(failure["message"]
+                    .as_str()
+                    .expect("message")
+                    .contains("all are copies of one task ^ref-"));
+            }
+            assert!(!stdout.contains("hint:"));
+            assert!(!stderr.contains("hint:"));
+        } else {
+            let hint = "hint: 3 refusals share one cause: obsidian.md and recovery.md carry the same open reading tasks.";
+            assert_eq!(stdout.matches(hint).count(), 1, "{stdout}");
+            assert_eq!(stderr.matches(hint).count(), 1, "{stderr}");
+            assert!(stdout.contains("docs/vault-git-sync.md#clobbered-notes"));
+            assert!(
+                stdout.contains("the ref's parent note ([[obsidian]])"),
+                "{stdout}"
+            );
+        }
+        for (path, bytes) in paths.iter().zip(&before) {
+            assert_eq!(
+                &fs::read(path).expect("read after refusal"),
+                bytes,
+                "{}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn v2_birth_without_tasks_heading_creates_section() {
     let (_temp, vault) = scan_vault("bob-cli-scan-integration-heading");
     let pdf = vault.join("lib/heading.pdf");

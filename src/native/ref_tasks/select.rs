@@ -71,6 +71,7 @@ pub(crate) fn is_open_mark(mark: char) -> bool {
 pub(crate) fn select_for_ref(
     candidates: &[LocatedRefTask],
     v1_hits: &[TrackerHit],
+    parent: Option<&str>,
 ) -> RefTaskSelection {
     let v2 = !candidates.is_empty();
     let mut diagnostics = Vec::new();
@@ -127,18 +128,30 @@ pub(crate) fn select_for_ref(
         listed.sort_by(|a, b| {
             a.path.cmp(&b.path).then(a.line_index.cmp(&b.line_index))
         });
-        let detail = listed
+        let locations = listed
             .iter()
             .map(|c| format!("{}:{}", c.path, c.line_index + 1))
             .collect::<Vec<_>>()
             .join(", ");
-        diagnostics.push(RefTaskDiagnostic::new(
-            "multiple_open_ref_tasks",
-            format!(
-                "{} open reading tasks claim this ref: {detail}",
-                listed.len()
-            ),
-        ));
+        let mut detail = format!(
+            "{} open reading tasks claim this ref: {locations}",
+            listed.len()
+        );
+        if let Some(id) = listed[0].block_id.as_deref()
+            && listed
+                .iter()
+                .all(|task| task.block_id.as_deref() == Some(id))
+        {
+            let parent = parent
+                .filter(|parent| !parent.is_empty())
+                .map(|parent| format!("the ref's parent note ({parent})"))
+                .unwrap_or_else(|| "the ref's parent note".to_string());
+            detail.push_str(&format!(
+                "; all are copies of one task ^{id} — keep the copy in {parent} and delete the others"
+            ));
+        }
+        diagnostics
+            .push(RefTaskDiagnostic::new("multiple_open_ref_tasks", detail));
         selection.status_hits = Vec::new();
         selection.task = None;
     } else {
@@ -198,4 +211,63 @@ pub(crate) fn select_for_ref(
 
     selection.diagnostics = diagnostics;
     selection
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claimant(path: &str, block_id: Option<&str>) -> LocatedRefTask {
+        LocatedRefTask {
+            path: path.to_string(),
+            line_index: 5,
+            line: "- [ ] #task #ref [[ref/papers/x]]".to_string(),
+            mark: ' ',
+            block_id: block_id.map(str::to_string),
+            archived: false,
+            residence: None,
+            closed_on: None,
+            in_capture_target: true,
+        }
+    }
+
+    #[test]
+    fn copies_name_the_id_and_parent_without_selecting_a_winner() {
+        for (parent, expected_parent) in [
+            (None, "the ref's parent note"),
+            (Some("sase"), "the ref's parent note (sase)"),
+        ] {
+            let tasks = [
+                claimant("sase_agent_recovery.md", Some("ref-x")),
+                claimant("sase.md", Some("ref-x")),
+            ];
+            let selection = select_for_ref(&tasks, &[], parent);
+            assert!(selection.task.is_none());
+            assert!(selection.status_hits.is_empty());
+            assert_eq!(selection.diagnostics.len(), 1);
+            assert_eq!(
+                selection.diagnostics[0].code,
+                "multiple_open_ref_tasks"
+            );
+            assert_eq!(selection.diagnostics[0].detail, format!(
+                "2 open reading tasks claim this ref: sase.md:6, sase_agent_recovery.md:6; all are copies of one task ^ref-x — keep the copy in {expected_parent} and delete the others"
+            ));
+        }
+    }
+
+    #[test]
+    fn distinct_or_missing_ids_do_not_get_a_copy_hint() {
+        for ids in [
+            [Some("ref-x"), Some("ref-y")],
+            [Some("ref-x"), None],
+            [None, None],
+        ] {
+            let tasks = [claimant("a.md", ids[0]), claimant("b.md", ids[1])];
+            let selection = select_for_ref(&tasks, &[], Some("a"));
+            assert_eq!(
+                selection.diagnostics[0].detail,
+                "2 open reading tasks claim this ref: a.md:6, b.md:6"
+            );
+        }
+    }
 }

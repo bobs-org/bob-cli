@@ -213,7 +213,7 @@ fn selection_rules_cover_open_ambiguity_closed_v1_and_empty() {
         closed_on: None,
         in_capture_target: true,
     };
-    let sel = select::select_for_ref(std::slice::from_ref(&live), &[]);
+    let sel = select::select_for_ref(std::slice::from_ref(&live), &[], None);
     assert!(matches!(sel.task, Some(select::Selected::V2(_))));
     assert_eq!(sel.status_hits.len(), 1);
     assert!(sel.v2);
@@ -223,7 +223,7 @@ fn selection_rules_cover_open_ambiguity_closed_v1_and_empty() {
         path: "bob.md".to_string(),
         ..live.clone()
     };
-    let sel = select::select_for_ref(&[live.clone(), second], &[]);
+    let sel = select::select_for_ref(&[live.clone(), second], &[], None);
     assert!(sel.task.is_none());
     assert!(sel.status_hits.is_empty());
     assert!(sel
@@ -243,7 +243,7 @@ fn selection_rules_cover_open_ambiguity_closed_v1_and_empty() {
         closed_on: Some("2026-10-12".to_string()),
         ..live.clone()
     };
-    let sel = select::select_for_ref(&[old, new.clone()], &[]);
+    let sel = select::select_for_ref(&[old, new.clone()], &[], None);
     assert!(matches!(sel.task, Some(select::Selected::V2(_))));
     assert_eq!(sel.status_hits[0].mark, 'x');
 
@@ -252,11 +252,11 @@ fn selection_rules_cover_open_ambiguity_closed_v1_and_empty() {
         mark: ' ',
         line: "- [ ] #task #ref ^ref".to_string(),
     };
-    let sel = select::select_for_ref(&[], std::slice::from_ref(&hit));
+    let sel = select::select_for_ref(&[], std::slice::from_ref(&hit), None);
     assert_eq!(sel.status_hits.len(), 1);
 
     // Rule 5: nothing.
-    let sel = select::select_for_ref(&[], &[]);
+    let sel = select::select_for_ref(&[], &[], None);
     assert!(sel.task.is_none());
     assert!(sel.status_hits.is_empty());
     assert!(!sel.v2);
@@ -282,6 +282,7 @@ fn open_in_done_is_report_only_and_open_v1_always_fires() {
     let sel = select::select_for_ref(
         std::slice::from_ref(&archived_open),
         std::slice::from_ref(&hit),
+        None,
     );
     assert!(sel
         .diagnostics
@@ -438,7 +439,7 @@ fn outside_area_fires_for_daily_and_hub_notes() {
         closed_on: None,
         in_capture_target: false,
     };
-    let sel = select::select_for_ref(std::slice::from_ref(&daily), &[]);
+    let sel = select::select_for_ref(std::slice::from_ref(&daily), &[], None);
     assert!(sel
         .diagnostics
         .iter()
@@ -455,7 +456,7 @@ fn outside_area_fires_for_daily_and_hub_notes() {
         closed_on: None,
         in_capture_target: false,
     };
-    let sel = select::select_for_ref(std::slice::from_ref(&hub), &[]);
+    let sel = select::select_for_ref(std::slice::from_ref(&hub), &[], None);
     assert!(sel
         .diagnostics
         .iter()

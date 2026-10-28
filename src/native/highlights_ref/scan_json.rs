@@ -665,10 +665,9 @@ pub(super) fn scan_library_json(
                 write_outcomes.push(ScanWriteOutcome::Held(hold))
             }
             Err(error) => {
-                write_outcomes.push(ScanWriteOutcome::Failed(ScanFailure {
-                    pdf: plan.pdf.clone(),
-                    error,
-                }));
+                write_outcomes.push(ScanWriteOutcome::Failed(
+                    ScanFailure::new(plan.pdf.clone(), error),
+                ));
             }
         }
     }
