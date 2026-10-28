@@ -30,9 +30,11 @@ Closing the panel with Escape retains a nonempty draft and reopens
 it as left. **Discard** permanently clears it without stashing.
 Control-C always clears the draft: it stashes a semantically nonempty
 draft first, except a Task Go-To (`/`) draft is deliberately discarded
-and nothing is retained when stashing is off (capacity 0). Only a
-stashed draft can be recovered; restore it from the footer **Stash**
-action (Control-S) onto an empty editor. See
+and nothing is retained when stashing is off (capacity 0). Quit,
+Restart, and the restart that `just install` / `just install-all`
+performs stash a nonempty unsent draft, so it is waiting in the footer
+**Stash** (Control-S). Only a stashed draft can be recovered; restore
+it from the footer **Stash** action (Control-S) onto an empty editor. See
 [Settings › Canceled Draft Stash](../reference/mac-capture/settings.md#canceled-draft-stash).
 **Shift-D Delete All** in the stash picker permanently clears every
 retained draft, including the on-disk file; lowercase `d` does nothing.
