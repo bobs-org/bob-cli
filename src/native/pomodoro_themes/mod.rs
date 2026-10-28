@@ -419,6 +419,7 @@ impl Catalog {
             exempt: exempt.iter().cloned().collect(),
             inventory: BTreeSet::new(),
             themes,
+            config_warning: None,
             warnings: Vec::new(),
         }
     }
