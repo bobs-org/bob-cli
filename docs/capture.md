@@ -2419,10 +2419,9 @@ empty), plus a `hides_existing_relation_label` warning object
 (`{code, label, count, message}`) when a one-off hides a visible
 existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
 Cancel-label fields (`relation_cancels[]`, `cancel_effect`,
-`relation_cancelled_source`) are specified in
+`relation_cancelled_source`, and `cancels_source` spans) are specified in
 [§17 CL7](task-relations.md#cl7-contracts) and
-[JSON outputs](reference/json-outputs.md); the remaining
-`cancels_source` spans stay *planned (phase cancel-surfaces).*
+[JSON outputs](reference/json-outputs.md).
 
 ### Completing tasks with '!'
 

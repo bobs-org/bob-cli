@@ -1128,8 +1128,7 @@ cancels that lifecycle task the same way Task Card `x` does: `[-]` and
 `[cancelled:: today]`, then `bob projects sync` maps it to frontmatter
 `status: canceled`. Open residents stay open; recovery unblocks
 residents that were blocked only by the project, with no successor
-offers. *planned (phase cancel-engine),
-planned (phase nav-cancel-writer).*
+offers.
 
 ```markdown
 - [-] #task Add new `Agents` sub-tab to `Artifacts` tab! [priority:: high] [created::

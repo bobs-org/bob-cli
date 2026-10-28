@@ -938,12 +938,11 @@ Cancel-label bytes live in
 A **cancel label** is a relation label listed in
 `relations.cancel_labels`. Committing one through an explicit
 relation gesture cancels the relation's **source** exactly as Task
-Card Cancel would. Until a rule's implementing phase lands, it
-carries `planned (phase <id>)`.
+Card Cancel would.
 
 ### CL1 The rule
 
-*Status: capture implements this; planned (phase nav-cancel-writer).*
+*Status: implemented in capture and the nav relation writer.*
 
 When an explicit relation gesture **adds** a cancel label to an open
 task, or **relabels** one of its links **into** a cancel label, the
@@ -965,8 +964,7 @@ relabel can cancel it again.
 
 ### CL2 Config
 
-*Status: The bob config parser is implemented. Chezmoi lands in planned
-(phase rollout).*
+*Status: implemented; chezmoi enables `duplicate of` and `superseded by`.*
 
 The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
 built-in default is `[]`.
@@ -1011,7 +1009,7 @@ relations:
 
 ### CL3 Which task is cancelled
 
-*Status: capture implements this; planned (phase nav-cancel-writer).*
+*Status: implemented in capture and the nav relation writer.*
 
 The source is always the task the label is phrased from: "S duplicate
 of T" cancels S.
@@ -1028,8 +1026,7 @@ of T" cancels S.
 ### CL4 What one commit writes
 
 *Status: the pure Rust cancel engine and the capture composition are
-implemented.* Nav folds these writes into the source write in
-*planned (phase nav-cancel-writer)*.
+implemented.* Nav folds these writes into the source write.
 
 Every step below is existing cancel behavior. The only new part is
 composing them.
@@ -1109,8 +1106,7 @@ More edge cases:
 
 ### CL6 The indication
 
-*Status: capture and cancel-surfaces implement their rows; planned
-(phase nav-cancel-cue), planned (phase mac-cancel-cue).*
+*Status: implemented in capture, cancel-surfaces, nav, and Mac.*
 
 Name the task, change the verb, use ⊘, stay calm.
 
@@ -1179,8 +1175,7 @@ byte-identical. Names below are final.
 
 ### CL8 Architecture
 
-*Status: the pure Rust engine and the capture composition are
-implemented; planned (phase nav-cancel-writer), planned (phase mac-cancel-cue).*
+*Status: implemented in the Rust engine, capture, nav, and Mac.*
 
 Three layers, with one authority per surface:
 
