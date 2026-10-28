@@ -276,24 +276,28 @@ edited in place.
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-35. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
+35. **Theme Hue Is Config Then Pin Then Exempt Then Unconfigured Then Area Then Hash**
+    (`theme-hue-is-config-pin-exempt-area-hash`) - A theme's hue is configured themes
+    color, then journal pin, then plan.exempt mute, then the unconfigured mute, then
+    top-level area stem, then name hash; clients render the hue Bob reports.
+36. **Theme Hue Is Pin Then Exempt Then Area Then Hash**
     (`theme-hue-is-pin-exempt-area-hash`) - A theme's hue is journal pin, then
     plan.exempt mute, then top-level area stem, then name hash; clients render the hue
     Bob reports.
-36. **Theme Preferences Live In A Per-Host Journal**
+37. **Theme Preferences Live In A Per-Host Journal**
     (`theme-prefs-live-in-per-host-journal`) - Hide, unhide, color, and rename events
     live in vault-synced `.bob/themes/<host>.jsonl`; fold is last-writer-wins and bob is
     the only writer.
-37. **Today Is Read From The Ledger, Never Written To Tasks**
+38. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-38. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
+39. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`) -
     Every would-be successor link from a managed Done gesture is offered for explicit
     selection; recovery remains automatic.
-39. **Unblocked Tasks Resurface As Ticklers**
+40. **Unblocked Tasks Resurface As Ticklers**
     (`unblocked-tasks-resurface-as-ticklers`) - _[partly superseded by
     `decisions:unblocked-tasks-are-offered`]_ Every automatic Blocked-to-Ready recovery
     records [unblocked:: today] unless a WRITE skip applies, so the task is TICKLER in

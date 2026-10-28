@@ -48,9 +48,9 @@ Run 'bob themes <command> --help' for more information on a command.
 Pin or unpin a theme's hue
 
 ```text title="bob themes color --help"
-Pin a Pomodoro theme to a palette slot, or pass auto to drop the pin so the hue rule (exempt, area, then name hash) applies again.
+Pin a Pomodoro theme to a palette slot, or pass auto to drop the pin so the hue rule (config, pin, exempt, unconfigured, area, then name hash) applies again.
 
-The write appends one theme.color event to .bob/themes/<host>.jsonl under bob_sync.lock (wait at most 3s). A pin that already matches is a no-op.
+The write appends one theme.color event to .bob/themes/<host>.jsonl under bob_sync.lock (wait at most 3s). A pin that already matches is a no-op. A theme whose color comes from the `themes:` block refuses with `config_color`: edit the config file instead.
 
 Usage: bob themes color [OPTIONS] <NAME> <HUE>
 
@@ -90,8 +90,10 @@ Environment:
 
 Exit codes:
   0  wrote the color event
-  1  unknown theme, invalid hue, unchanged, lock busy, or I/O failure
+  1  unknown theme, invalid hue, unchanged, config color, lock busy, or I/O failure
   2  usage error
+
+Refusal codes: `unknown_theme`, `invalid_hue`, `unchanged`, `config_color`, `lock_busy`, `io`.
 
 See docs/pomodoro-themes.md for the hue rule and the journal contract.
 ```
@@ -153,7 +155,7 @@ List Pomodoro themes derived from canonical daily notes.
 
 A theme is one + component of a Pomodoro name. The catalog is read-only: it never writes the vault. Bare `bob themes` runs this command.
 
-By default the list shows visible themes used in the last 90 days or today, newest first. Hidden themes stay out of the default list; they still exist in history, Stats, and colors. Use --all to include every known theme, --hidden to show only hidden themes, --query to rank exact/prefix matches before substring matches, and --fresh to ignore the machine-local cache.
+By default the list shows visible themes used in the last 90 days or today, newest first. Hidden themes stay out of the default list; they still exist in history, Stats, and colors. Use --all to include every known theme, --hidden to show only hidden themes, --query to rank exact/prefix matches before substring matches, and --fresh to ignore the machine-local cache. When a `themes:` vocabulary is configured in the config file, the default list also shows every visible configured theme, even ones never used.
 
 Usage: bob themes list [OPTIONS]
 

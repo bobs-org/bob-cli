@@ -411,8 +411,10 @@ fn hue_for_key(vault: &Path, key: &str) -> (Option<Hue>, &'static str) {
         .unwrap_or_else(|| key.to_string());
     let theme_ref = catalog.theme_ref(key, &name);
     let source = match theme_ref.hue_source {
+        super::HueSource::Config => "config",
         super::HueSource::Pin => "pin",
         super::HueSource::Exempt => "exempt",
+        super::HueSource::Unconfigured => "unconfigured",
         super::HueSource::Area => "area",
         super::HueSource::Hash => "hash",
     };
@@ -437,22 +439,31 @@ fn hue_for_key_after_rename(
     } else {
         old_pin.or_else(|| catalog.pin(new_key))
     };
-    let exempt: BTreeSet<String> =
-        config::load_plan_config(&config::config_path())
-            .map(|plan| {
-                plan.exempt()
-                    .iter()
-                    .map(|value| normalize_component(value))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let sources = config::load_theme_sources();
+    let exempt: BTreeSet<String> = sources.exempt;
     let areas = scan::scan_root_areas(vault);
+    let unconfigured = sources
+        .themes
+        .as_ref()
+        .is_some_and(|themes| !themes.contains(new_key));
+    let config_color = sources
+        .themes
+        .as_ref()
+        .and_then(|themes| themes.color(new_key));
     // Reuse the catalog's hue rule with the effective pin.
-    let (hue, source) =
-        super::resolve_hue(new_key, effective_pin, &exempt, &areas);
+    let (hue, source) = super::resolve_hue(
+        new_key,
+        effective_pin,
+        &exempt,
+        &areas,
+        config_color,
+        unconfigured,
+    );
     let source = match source {
+        super::HueSource::Config => "config",
         super::HueSource::Pin => "pin",
         super::HueSource::Exempt => "exempt",
+        super::HueSource::Unconfigured => "unconfigured",
         super::HueSource::Area => "area",
         super::HueSource::Hash => "hash",
     };

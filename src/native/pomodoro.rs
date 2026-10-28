@@ -870,6 +870,7 @@ mod tests {
             hue: Some(super::super::pomodoro_homes::Hue::Aqua),
             hue_source: super::super::pomodoro_themes::HueSource::Area,
             known: true,
+            configured: None,
             start: None,
             end: None,
         };

@@ -8,8 +8,10 @@ summary:
   A theme's hue is journal pin, then plan.exempt mute, then top-level area
   stem, then name hash; clients render the hue Bob reports.
 metadata:
-  status: accepted
+  status: superseded
   decided: 2026-10-24
+superseded_by:
+  - "[[decisions:theme-hue-is-config-pin-exempt-area-hash]]"
 ---
 
 **Applies to.** bob-cli catalog and JSON, Obsidian theme pills, Bob Mac Capture
@@ -40,3 +42,8 @@ Bob's `hue` field.
 
 **Reopens when.** The palette grows, area notes stop being the hue source for
 matching stems, or a client needs a hue before Bob can answer.
+
+Superseded by [[decisions:theme-hue-is-config-pin-exempt-area-hash]], which
+retires the pin-first order: a configured `themes:` color now wins over the
+journal pin, and themes outside the configured vocabulary mute as
+`unconfigured`.

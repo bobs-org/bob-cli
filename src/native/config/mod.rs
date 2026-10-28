@@ -14,15 +14,19 @@ pub(crate) mod freshness;
 pub(crate) mod plan;
 pub(crate) mod relations;
 pub(crate) mod stats;
+pub(crate) mod themes;
 
 pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
 pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
-pub(crate) use plan::{load_plan_config, PlanConfig};
+pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 pub(crate) use relations::load_relations_config;
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
+pub(crate) use themes::{
+    display_config_path, load_theme_sources, ConfiguredTheme, ThemesConfig,
+};
 
 const CONFIG_RELATIVE_PATH: &str = "bob/config.yml";
 
@@ -382,6 +386,8 @@ pub(crate) struct RawConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) stats: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) themes: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]

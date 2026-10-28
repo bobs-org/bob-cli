@@ -108,7 +108,7 @@ fn plan_value(
     Ok(config.plan)
 }
 
-fn parse_plan_config(
+pub(crate) fn parse_plan_config(
     text: &str,
     path: &Path,
 ) -> Result<PlanConfig, ConfigError> {

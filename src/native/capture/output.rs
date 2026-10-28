@@ -3867,6 +3867,7 @@ mod tests {
                 hue: Some(crate::native::pomodoro_homes::Hue::Magenta),
                 hue_source: crate::native::pomodoro_themes::HueSource::Hash,
                 known: true,
+                configured: None,
                 start: None,
                 end: None,
             }],

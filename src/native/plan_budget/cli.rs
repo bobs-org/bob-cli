@@ -553,6 +553,7 @@ mod tests {
             hue: Some(hue),
             hue_source: HueSource::Hash,
             known: true,
+            configured: None,
             start: None,
             end: None,
         }

@@ -39,6 +39,10 @@ plan:
   max_themes: 3
   max_links: 10
   link_unblocked: true
+
+themes:
+  PLAN: blue
+  BUILD: yellow
 ```
 
 Missing configuration files use defaults for optional sections. Priority
@@ -111,6 +115,25 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 
 See the [plan configuration contract](../plan.md#config) and
 [dependency successor offers](../task-dependencies.md#12-successor-offers).
+
+### `themes`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `themes` | Mapping from theme name to palette slot, `auto`, or empty | Unset (no configured themes) | Declares the Pomodoro theme vocabulary and each theme's color. |
+
+Each key must be a valid single theme name (YAML strings only; quote names
+YAML reads as numbers or booleans). Each value is a palette slot (`blue`,
+`orange`, `aqua`, `yellow`, `magenta`, `green`, `violet`, `red`,
+case-insensitive), `auto`, or empty/null. `auto` and null mean configured
+with no fixed color: the hue falls through to pin, exempt, area, then hash.
+A value of anything else, a duplicate normalized name, or a non-mapping
+`themes` block is invalid, and the whole block is ignored as if no themes
+were configured (`bob themes list` carries the warning; `bob plan` and
+`bob capture` surface it on their own). Colors win over `bob themes color`
+pins: coloring a configured theme refuses with `config_color`.
+
+See [configured themes](../pomodoro-themes.md#pt12-configured-themes).
 
 ### `dependencies`
 

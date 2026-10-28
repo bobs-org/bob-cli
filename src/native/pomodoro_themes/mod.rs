@@ -41,8 +41,10 @@ pub(crate) use write::{run_color, run_hide, run_unhide};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum HueSource {
+    Config,
     Pin,
     Exempt,
+    Unconfigured,
     Area,
     Hash,
 }
@@ -63,6 +65,8 @@ pub(crate) struct ThemeRef {
     #[serde(skip_serializing_if = "is_true")]
     pub(crate) known: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) configured: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) start: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) end: Option<usize>,
@@ -82,6 +86,9 @@ pub(crate) fn swatch_name(
         themes
             .iter()
             .map(|theme| {
+                if theme.configured == Some(false) {
+                    return format!("{}{}", styler.dim("◌"), theme.name);
+                }
                 if !theme.known {
                     return theme.name.clone();
                 }
@@ -123,6 +130,8 @@ pub(crate) struct Catalog {
     prefs: Prefs,
     areas: BTreeMap<String, Hue>,
     exempt: BTreeSet<String>,
+    inventory: BTreeSet<String>,
+    themes: Option<config::ThemesConfig>,
     warnings: Vec<String>,
 }
 
@@ -153,8 +162,11 @@ impl Catalog {
         area_keys: Option<BTreeSet<String>>,
         live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
     ) -> std::io::Result<Self> {
-        let exempt = load_exempt();
+        let sources = config::load_theme_sources();
         let (prefs, mut warnings) = journal::load_prefs(vault)?;
+        if let Some(warning) = sources.warning.clone() {
+            warnings.push(warning);
+        }
         let mut scan_warnings = Vec::new();
         let (records, days) = load_records(
             vault,
@@ -178,7 +190,9 @@ impl Catalog {
             days,
             prefs,
             areas,
-            exempt,
+            exempt: sources.exempt,
+            inventory: sources.inventory,
+            themes: sources.themes,
             warnings,
         })
     }
@@ -226,15 +240,51 @@ impl Catalog {
         &self.warnings
     }
 
+    /// `None` when no `themes:` vocabulary is configured, else whether the
+    /// key belongs to it. Inventory labels always report `Some(true)`.
+    pub(crate) fn configured(&self, key: &str) -> Option<bool> {
+        if self.inventory.contains(key) {
+            return self.themes.as_ref().map(|_| true);
+        }
+        self.themes.as_ref().map(|themes| themes.contains(key))
+    }
+
+    pub(crate) fn config_color(&self, key: &str) -> Option<Hue> {
+        self.themes.as_ref().and_then(|themes| themes.color(key))
+    }
+
+    pub(crate) fn configured_themes(
+        &self,
+    ) -> Option<&[config::ConfiguredTheme]> {
+        self.themes.as_ref().map(|themes| themes.entries.as_slice())
+    }
+
+    fn unconfigured(&self, key: &str) -> bool {
+        match &self.themes {
+            None => false,
+            Some(themes) => {
+                !themes.contains(key) && !self.inventory.contains(key)
+            }
+        }
+    }
+
     pub(crate) fn theme_ref(&self, key: &str, name: &str) -> ThemeRef {
-        let (hue, hue_source) =
-            resolve_hue(key, self.prefs.pin(key), &self.exempt, &self.areas);
+        let configured = self.configured(key);
+        let (hue, hue_source) = resolve_hue(
+            key,
+            self.prefs.pin(key),
+            &self.exempt,
+            &self.areas,
+            self.config_color(key),
+            self.unconfigured(key),
+        );
         ThemeRef {
             key: key.to_string(),
             name: name.to_string(),
             hue,
             hue_source,
-            known: self.records.contains_key(key),
+            known: self.records.contains_key(key) || configured == Some(true),
+            configured,
             start: None,
             end: None,
         }
@@ -271,6 +321,7 @@ impl Catalog {
             &self.prefs,
             &self.exempt,
             &self.areas,
+            self.themes.as_ref(),
         )
     }
 
@@ -322,6 +373,8 @@ pub(crate) struct ThemeLookup {
     prefs: Prefs,
     areas: BTreeMap<String, Hue>,
     exempt: BTreeSet<String>,
+    inventory: BTreeSet<String>,
+    themes: Option<config::ThemesConfig>,
 }
 
 impl ThemeLookup {
@@ -333,11 +386,14 @@ impl ThemeLookup {
         let years = scan::year_dir_fingerprints(vault);
         if let Some(known_keys) = cache::load_known_keys(vault, today, &years) {
             let (prefs, _) = journal::load_prefs(vault)?;
+            let sources = config::load_theme_sources();
             return Ok(Self {
                 known_keys,
                 prefs,
                 areas: scan::scan_root_areas_for_keys(vault, keys),
-                exempt: load_exempt(),
+                exempt: sources.exempt,
+                inventory: sources.inventory,
+                themes: sources.themes,
             });
         }
 
@@ -347,31 +403,52 @@ impl ThemeLookup {
             prefs: catalog.prefs,
             areas: catalog.areas,
             exempt: catalog.exempt,
+            inventory: catalog.inventory,
+            themes: catalog.themes,
         })
     }
 
+    fn unconfigured(&self, key: &str) -> bool {
+        match &self.themes {
+            None => false,
+            Some(themes) => {
+                !themes.contains(key) && !self.inventory.contains(key)
+            }
+        }
+    }
+
+    fn config_color(&self, key: &str) -> Option<Hue> {
+        self.themes.as_ref().and_then(|themes| themes.color(key))
+    }
+
+    fn configured(&self, key: &str) -> Option<bool> {
+        if self.inventory.contains(key) {
+            return self.themes.as_ref().map(|_| true);
+        }
+        self.themes.as_ref().map(|themes| themes.contains(key))
+    }
+
     pub(crate) fn theme_ref(&self, key: &str, name: &str) -> ThemeRef {
-        let (hue, hue_source) =
-            resolve_hue(key, self.prefs.pin(key), &self.exempt, &self.areas);
+        let configured = self.configured(key);
+        let (hue, hue_source) = resolve_hue(
+            key,
+            self.prefs.pin(key),
+            &self.exempt,
+            &self.areas,
+            self.config_color(key),
+            self.unconfigured(key),
+        );
         ThemeRef {
             key: key.to_string(),
             name: name.to_string(),
             hue,
             hue_source,
-            known: self.known_keys.contains(key),
+            known: self.known_keys.contains(key) || configured == Some(true),
+            configured,
             start: None,
             end: None,
         }
     }
-}
-
-fn load_exempt() -> BTreeSet<String> {
-    config::load_plan_config(&config::config_path())
-        .unwrap_or_else(|_| config::PlanConfig::default())
-        .exempt()
-        .iter()
-        .map(|value| normalize_component(value))
-        .collect()
 }
 
 fn load_records(

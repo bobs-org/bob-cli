@@ -109,6 +109,78 @@
       "exempt": ["gtd"],
       "areas": {},
       "expected": { "hue": "orange", "hue_source": "hash" }
+    },
+    {
+      "name": "config-beats-pin",
+      "key": "build",
+      "pin": "red",
+      "exempt": ["gtd"],
+      "areas": {},
+      "configured": { "build": "yellow" },
+      "expected": { "hue": "yellow", "hue_source": "config" }
+    },
+    {
+      "name": "config-beats-exempt",
+      "key": "plan",
+      "pin": null,
+      "exempt": ["plan"],
+      "areas": {},
+      "configured": { "plan": "blue" },
+      "expected": { "hue": "blue", "hue_source": "config" }
+    },
+    {
+      "name": "configured-auto-falls-through-to-pin",
+      "key": "blog",
+      "pin": "red",
+      "exempt": ["gtd"],
+      "areas": {},
+      "configured": { "blog": null },
+      "expected": { "hue": "red", "hue_source": "pin" }
+    },
+    {
+      "name": "configured-auto-falls-through-to-area",
+      "key": "job",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "job": "aqua" },
+      "configured": { "job": null },
+      "expected": { "hue": "aqua", "hue_source": "area" }
+    },
+    {
+      "name": "configured-auto-falls-through-to-hash",
+      "key": "bob",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": {},
+      "configured": { "bob": null },
+      "expected": { "hue": "magenta", "hue_source": "hash" }
+    },
+    {
+      "name": "unconfigured-is-muted",
+      "key": "snack",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": {},
+      "configured": { "build": "yellow" },
+      "expected": { "hue": null, "hue_source": "unconfigured" }
+    },
+    {
+      "name": "unconfigured-pin-still-applies",
+      "key": "snack",
+      "pin": "red",
+      "exempt": ["gtd"],
+      "areas": {},
+      "configured": { "build": "yellow" },
+      "expected": { "hue": "red", "hue_source": "pin" }
+    },
+    {
+      "name": "unconfigured-area-still-muted",
+      "key": "snack",
+      "pin": null,
+      "exempt": ["gtd"],
+      "areas": { "snack": "aqua" },
+      "configured": { "build": "yellow" },
+      "expected": { "hue": null, "hue_source": "unconfigured" }
     }
   ],
   "fold": [

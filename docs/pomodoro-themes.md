@@ -8,7 +8,7 @@ compute a hue of their own.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, Bob Mac
 Capture, and the CLI. Rust owns the meaning. JSON grows additively at
-`schema_version` 1. PT1–PT11 describe shipped behavior across the catalog,
+`schema_version` 1. PT1–PT12 describe shipped behavior across the catalog,
 capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 ## PT1 — Vocabulary and identity
@@ -95,13 +95,24 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 In order:
 
-1. A journal pin wins (`hue_source: "pin"`).
-2. Else a key in normalized `plan.exempt` is muted: `hue: null`,
+1. A configured color from the `themes:` block wins
+   (`hue_source: "config"`).
+2. Else a journal pin wins (`hue_source: "pin"`).
+3. Else a key in normalized `plan.exempt` is muted: `hue: null`,
    `hue_source: "exempt"` (PLAN by default).
-3. Else a key equal to a **top-level area note's stem** (an area whose
+4. Else, when a `themes:` vocabulary is configured and the key is not in
+   it (and is not an inventory label), the theme is muted: `hue: null`,
+   `hue_source: "unconfigured"`.
+5. Else a key equal to a **top-level area note's stem** (an area whose
    `parent` is `[[area]]`) wears that area's resolved hue
    (`hue_source: "area"`): a frontmatter `color:` slot, else the stem hash.
-4. Else `Hue::ALL[fnv1a32(key) % 8]` (`hue_source: "hash"`).
+6. Else `Hue::ALL[fnv1a32(key) % 8]` (`hue_source: "hash"`).
+
+Explicit choices (config, pin) beat mutes, and mutes beat implicit
+sources (area, hash). Config beats pin because the user-owned file is the
+source of truth: editing it must always take effect. A config color also
+beats the exempt mute. Pins shadowed by a config color stay in the journal
+untouched and apply again if that config color is removed.
 
 Results: JOB → aqua, DEV → blue, LOVE → yellow, PLAN → muted. Palette: the
 eight existing slots (blue, orange, aqua, yellow, magenta, green, violet,
@@ -119,16 +130,24 @@ Names wear a tint; places wear a dot.
   horizontal padding about 0.3 em, no border, `box-decoration-break: clone`.
   The hue is never the text color.
 - **Muted pill:** exempt themes such as PLAN. Hover background, muted text.
+- **Unconfigured pill:** a theme outside the configured vocabulary wears a
+  1 px dashed outline in the platform warning color (Obsidian
+  `--text-warning`, macOS `systemOrange`) at about 70 % opacity, over the
+  muted pill, with a "not in your themes" tooltip/AX suffix. Like the
+  typing rule, the mark appears only once the name is committed or the
+  cursor leaves it.
 - **Swatch:** in dense rows, an 8 pt rounded square (radius 2) before the
   name. The Day strip theme legend uses the same rounded square at the
   legend-dot footprint. Area homes keep their ● circle. The Day strip
   shades smaller same-hue themes; every other surface uses the exact hue.
 - **Composites:** each component gets its own pill; the `+` stays neutral.
 - **CLI:** an xterm-256 `■` before a default-color name when color is
-  enabled (TTY and no `NO_COLOR`). An exempt theme gets `□`. `bob themes
-  list` already draws these swatches; `bob plan`, capture destinations, and
-  the Stats theme dimension use the same squares, and tmux uses its native
-  format color before each named component.
+  enabled (TTY and no `NO_COLOR`). An exempt theme gets `□`; an
+  unconfigured theme gets `◌` (dim). `bob themes list` already draws these
+  swatches; `bob plan`, capture destinations, and the Stats theme dimension
+  use the same squares, and tmux uses its native format color before each
+  named component. Under `NO_COLOR` the glyph and the
+  `not configured` text still carry the meaning.
 - **Typing:** a name the catalog does not know stays neutral while you type
   it; it takes its hue once it is committed or the cursor leaves the line.
 - Color is never the only signal. The name text, Today/Recent labels, and
@@ -299,18 +318,97 @@ Runbook: `bob themes split JOB -t > job.tsv`, edit THEME, preview with
 `bob themes split JOB -m job.tsv -d`, apply with `bob themes split JOB -m
 job.tsv`. Undo with `git revert <sha>` and `bob vault-sync`.
 
+## PT12 — Configured themes
+
+A `themes:` block in the config file declares the Pomodoro theme vocabulary
+and each theme's palette color. Bob reads the file and never writes it.
+
+```yaml
+themes:
+  PLAN: blue
+  BUILD: yellow
+  READ: green
+  CHORE: magenta
+  WRITE: violet
+  FIX: red
+```
+
+- **Shape.** A mapping from theme name to palette slot (`blue`, `orange`,
+  `aqua`, `yellow`, `magenta`, `green`, `violet`, `red`; case-insensitive,
+  trimmed), `auto`, or empty/null. `auto` and null both mean "configured,
+  but bob picks the color" (pin, then exempt, then area, then hash). No hex
+  values: every surface already has a light/dark pair and an xterm-256
+  code for each slot.
+- **"Configured" means** the block is present, valid, and has at least one
+  entry. Missing, `null`, or `{}` means no configured themes, which is
+  exactly today's behavior.
+- **Validation** is strict, and a failure drops the whole block, so behavior
+  is as if no themes were configured: `themes` must be a mapping; each key
+  must be a YAML string (a number or boolean key fails with "quote theme
+  names YAML reads as numbers or booleans"); each name must be a valid
+  single theme (not blank, no `+`); two names with the same normalized key
+  fail, naming both spellings; a value that is not a slot, `auto`, or null
+  fails, listing the valid colors. Every message names the config path and
+  the offending `themes.NAME`.
+- **Where an invalid block is reported.** Never fatal: `bob themes list`
+  carries it as a `warnings` entry (yellow in human output), `bob plan`
+  reports the `themes_config_invalid` lint, and `bob capture` prints a
+  plain warning string. `bob themes list` never exits 2 over it.
+- **Identity and display.** A configured theme's key is its normalized
+  name. The history catalog itself does not change: it is still derived
+  only from daily notes plus the journal. Reports combine the catalog with
+  the configured set. A configured theme with no history displays its
+  config spelling; otherwise the most recently authored spelling wins.
+- **Configured flag and `known`.** When themes are configured, every
+  `ThemeRef` and every `themes list` row carries
+  `configured: true|false`. When none are configured, the field is absent.
+  `known` is also true for configured themes with no history. Inventory
+  labels are storage, not themes: they never warn, are never muted as
+  unconfigured, and report `configured: true`. `(unnamed)` is not a theme.
+- **Warning code.** One code everywhere: `theme_not_configured`
+  (`SNACK isn't one of your configured themes`, plus `; did you mean
+  CHORE?` when the similarity rule matches a configured theme). Warnings
+  never block anything; there is no strict mode. Surfaces: theme-name
+  menus scope Recent rows to configured themes (never-used configured
+  themes rank after used ones in config order, the empty-query cap rises
+  from 5 to 12, `similar_to` draws only from visible configured themes,
+  create rows warn), `bob capture` (structured top-level warnings),
+  `capture-pomodoro-name` (Name-it), Obsidian pickers that write names,
+  `bob themes rename`/`split`, `bob plan` (`theme_not_configured` lint),
+  pills and swatches everywhere, and `bob themes list` hints.
+- **`bob themes list`.** The default view always includes visible configured
+  themes, even never-used ones (`first_used: null`, `last_used: null`,
+  `days_used: 0`, `entries: 0`, no `today`; human output shows `never`
+  and `0 days`, sorted last). The header reads
+  `6 configured · 76 known · …`. Human meta labels read `blue · config`
+  for config colors, today's labels (`aqua`, `red · pinned`,
+  `muted · exempt`, `aqua · area`) for configured `auto` themes, and
+  `muted · not configured` with the `◌` swatch for the rest. JSON adds
+  `counts.configured`, top-level `configured_themes` (`[{key, name,
+  color}]`, color a slot or null, in config order), per-row `configured`,
+  and `hue_source` values `config` and `unconfigured`.
+  `theme_hue_collision` skips config-colored and muted themes.
+- **`bob themes color`.** Pinning a theme whose config sets a color refuses
+  with `config_color` (exit 1, no journal write):
+  `BUILD's color comes from themes: in ~/.config/bob/config.yml (yellow)`,
+  hint `edit themes.BUILD there, or set it to auto to pin colors with bob
+  themes color`. Configured `auto` themes pin normally.
+
 ## JSON contract
 
 Additive; `schema_version` stays 1.
 
 **`ThemeRef`:** `{key, name, hue, hue_source}`, plus `known: false` only for
-names the catalog does not know. Where offsets matter, it also carries
-`start` / `end` byte offsets into the draft. `capture-parse` attaches `themes`
-to each Pomodoro-name span; offsets identify component text and exclude quotes
-and `+`. `capture-pomodoros` attaches `themes` to every entry. `bob plan`
-returns `theme_refs` beside `theme_names` and `themes` on each entry; `bob
-capture` returns `added_theme_refs` beside `added_themes`; task reconcile uses
-the same plan-budget fields. These arrays preserve source order.
+names the catalog does not know, plus `configured: true|false` when a
+`themes:` vocabulary is configured (absent otherwise). Where offsets matter,
+it also carries `start` / `end` byte offsets into the draft.
+`capture-parse` attaches `themes` to each Pomodoro-name span; offsets
+identify component text and exclude quotes and `+`. `capture-pomodoros`
+attaches `themes` to every entry. `bob plan` returns `theme_refs` beside
+`theme_names` and `themes` on each entry; `bob capture` returns
+`added_theme_refs` beside `added_themes`; task reconcile uses the same
+plan-budget fields. These arrays preserve source order. `hue_source` is
+one of `config`, `pin`, `exempt`, `unconfigured`, `area`, `hash`.
 
 Stats reports include `theme_hues` beside `homes`, keyed by normalized theme
 key, for theme-dimension values present in the report. Exempt themes have
@@ -370,9 +468,10 @@ on refusal, even on a nonzero exit. Refusal codes: `unknown_theme`,
 `invalid_hue`, `invalid_name`, `unchanged` (no journal write), `theme_exists`,
 `config_reference`, `invalid_map`, `stale_entry`, `lock_busy`, `dirty_paths`,
 `not_a_worktree`, `vault_mismatch`, `sync_failed`, `verify_failed`,
-`stale_note`. The Obsidian manager previews with `rename -d -f json` (files,
-entries, before/after tails, state and color change) and confirms with
-`--merge` when needed.
+`stale_note`, plus `config_color` for `color` on a theme whose color comes
+from the `themes:` block. The Obsidian manager previews with `rename -d -f
+json` (files, entries, before/after tails, state and color change) and
+confirms with `--merge` when needed.
 
 ## `bob themes` CLI
 
@@ -387,8 +486,10 @@ The group is `bob themes`, a top-level catalog noun in Daily workflow after
 - `unhide NAME…`
 
 List defaults: visible themes used in the last 90 days or today, newest
-first. `-a` shows every theme and flags hidden ones. `-H` shows only hidden
-themes. `-q` ranks per PT7 groups B then D.
+first, plus every visible configured theme even when never used (sorted
+last, showing `never` and `0 days`). `-a` shows every theme and flags
+hidden ones. `-H` shows only hidden themes. `-q` ranks per PT7 groups B
+then D.
 
 Human list:
 
@@ -401,13 +502,21 @@ THEMES  81 known · 4 today · 2 hidden · last 90 days
   hint  SASE and BLOG share orange and met on 6 days → bob themes color BLOG red
 ```
 
+With a vocabulary configured, the header reads
+`6 configured · 81 known · …`, configured rows show `blue · config`, and
+unconfigured rows show `◌ SNACK … muted · not configured`.
+
+`color` on a theme whose config sets a color refuses with `config_color`
+and writes nothing to the journal.
+
 ## Shared vectors
 
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
-`components`, `hue` (including the `areas` input), `fold`, `rank`, and
-`similar`, `menu`, and `literal`. CLI tests consume the menu and literal
-sections, including capture dry-run round trips. bob-plugins copies the file
-byte-for-byte and runs the same hue, fold, and ranking vectors in JavaScript.
+`components`, `hue` (including the `areas` and `configured` inputs), `fold`,
+`rank`, and `similar`, `menu`, and `literal`. CLI tests consume the menu and
+literal sections, including capture dry-run round trips. bob-plugins copies
+the file byte-for-byte and runs the same hue, fold, and ranking vectors in
+JavaScript.
 
 ## Related
 

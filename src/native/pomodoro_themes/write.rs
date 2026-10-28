@@ -15,7 +15,7 @@ use crate::native::{
 
 use super::{
     journal::{self, EventPayload},
-    Catalog, ThemeRecord,
+    Catalog,
 };
 
 const SCHEMA_VERSION: u32 = 1;
@@ -158,9 +158,12 @@ no-op."
         }
         WriteKind::Color => {
             "Pin a Pomodoro theme to a palette slot, or pass auto to drop \
-the pin so the hue rule (exempt, area, then name hash) applies again.\n\n\
+the pin so the hue rule (config, pin, exempt, unconfigured, area, then \
+name hash) applies again.\n\n\
 The write appends one theme.color event to .bob/themes/<host>.jsonl under \
-bob_sync.lock (wait at most 3s). A pin that already matches is a no-op."
+bob_sync.lock (wait at most 3s). A pin that already matches is a no-op. \
+A theme whose color comes from the `themes:` block refuses with \
+`config_color`: edit the config file instead."
         }
     }
 }
@@ -214,8 +217,9 @@ HOSTNAME                  Host label for the journal file; same slug vault-sync 
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  wrote the color event\n  \
-1  unknown theme, invalid hue, unchanged, lock busy, or I/O failure\n  \
+1  unknown theme, invalid hue, unchanged, config color, lock busy, or I/O failure\n  \
 2  usage error\n\n\
+Refusal codes: `unknown_theme`, `invalid_hue`, `unchanged`, `config_color`, `lock_busy`, `io`.\n\n\
 See docs/pomodoro-themes.md for the hue rule and the journal contract."
         }
     }
@@ -335,6 +339,7 @@ enum WriteError {
     UnknownTheme(String),
     InvalidHue(String),
     Unchanged(String),
+    ConfigColor { message: String, hint: String },
     LockBusy(String),
     Io(String),
 }
@@ -346,6 +351,7 @@ impl WriteError {
             Self::UnknownTheme(_) => "unknown_theme",
             Self::InvalidHue(_) => "invalid_hue",
             Self::Unchanged(_) => "unchanged",
+            Self::ConfigColor { .. } => "config_color",
             Self::LockBusy(_) => "lock_busy",
             Self::Io(_) => "io",
         }
@@ -358,9 +364,17 @@ impl WriteError {
             | Self::Unchanged(message)
             | Self::LockBusy(message)
             | Self::Io(message) => message.clone(),
+            Self::ConfigColor { message, .. } => message.clone(),
             Self::InvalidHue(value) => format!(
                 "invalid hue: {value} (use blue, orange, aqua, yellow, magenta, green, violet, red, or auto)"
             ),
+        }
+    }
+
+    fn hint(&self) -> Option<&str> {
+        match self {
+            Self::ConfigColor { hint, .. } => Some(hint.as_str()),
+            _ => None,
         }
     }
 
@@ -392,6 +406,25 @@ fn execute(
             ))
         })?;
     let records = resolve_names(&catalog, &request.names)?;
+    if kind == WriteKind::Color {
+        for record in &records {
+            if let Some(hue) = catalog.config_color(&record.key) {
+                let path = crate::native::config::display_config_path();
+                return Err(WriteError::ConfigColor {
+                    message: format!(
+                        "{}'s color comes from themes: in {} ({})",
+                        record.name,
+                        path,
+                        hue.name(),
+                    ),
+                    hint: format!(
+                        "edit themes.{} there, or set it to auto to pin colors with bob themes color",
+                        record.name,
+                    ),
+                });
+            }
+        }
+    }
     let payloads = planned_events(kind, &catalog, &records, request.hue)?;
     if payloads.is_empty() {
         return Err(unchanged_error(kind, &records, request.hue));
@@ -412,22 +445,46 @@ fn execute(
     })
 }
 
-fn resolve_names<'a>(
-    catalog: &'a Catalog,
+struct ResolvedTheme {
+    key: String,
+    name: String,
+}
+
+fn resolve_names(
+    catalog: &Catalog,
     names: &[String],
-) -> Result<Vec<&'a ThemeRecord>, WriteError> {
+) -> Result<Vec<ResolvedTheme>, WriteError> {
     let mut records = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for name in names {
         let key = normalize_component(name);
-        let Some(record) = catalog.get(&key) else {
-            return Err(WriteError::UnknownTheme(format!(
-                "unknown theme: {name}"
-            )));
-        };
-        if seen.insert(record.key.clone()) {
-            records.push(record);
+        if let Some(record) = catalog.get(&key) {
+            if seen.insert(record.key.clone()) {
+                records.push(ResolvedTheme {
+                    key: record.key.clone(),
+                    name: record.name.clone(),
+                });
+            }
+            continue;
         }
+        // A configured theme with no history is still a known vocabulary
+        // word, so pins apply to it.
+        if catalog.configured(&key) == Some(true) {
+            let display = catalog
+                .configured_themes()
+                .and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.key == key)
+                        .map(|entry| entry.name.clone())
+                })
+                .unwrap_or_else(|| name.trim().to_string());
+            if seen.insert(key.clone()) {
+                records.push(ResolvedTheme { key, name: display });
+            }
+            continue;
+        }
+        return Err(WriteError::UnknownTheme(format!("unknown theme: {name}")));
     }
     Ok(records)
 }
@@ -435,7 +492,7 @@ fn resolve_names<'a>(
 fn planned_events(
     kind: WriteKind,
     catalog: &Catalog,
-    records: &[&ThemeRecord],
+    records: &[ResolvedTheme],
     hue: Option<Option<Hue>>,
 ) -> Result<Vec<EventPayload>, WriteError> {
     let mut payloads = Vec::new();
@@ -474,7 +531,7 @@ fn planned_events(
 
 fn unchanged_error(
     kind: WriteKind,
-    records: &[&ThemeRecord],
+    records: &[ResolvedTheme],
     hue: Option<Option<Hue>>,
 ) -> WriteError {
     let names = records
@@ -576,20 +633,25 @@ fn print_error(
 ) -> i32 {
     let code = error.code();
     let message = error.message();
+    let hint = error.hint().map(str::to_string);
     let exit = error.exit_code();
     match format {
         OutputFormat::Json => {
-            println!(
-                "{}",
-                json!({
-                    "ok": false,
-                    "code": code,
-                    "message": message,
-                })
-            );
+            let mut value = json!({
+                "ok": false,
+                "code": code,
+                "message": message,
+            });
+            if let Some(hint) = hint {
+                value["hint"] = json!(hint);
+            }
+            println!("{value}");
         }
         OutputFormat::Human => {
             eprintln!("{}: {message}", command_name(kind));
+            if let Some(hint) = hint {
+                eprintln!("hint: {hint}");
+            }
         }
     }
     exit

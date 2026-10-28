@@ -13,7 +13,9 @@ dimension splits a named session into the same components. The catalog is derive
 from canonical daily notes plus `.bob/themes/<host>.jsonl`; `bob themes` lists,
 hides/unhides from Recent suggestions, pins/unpins colors, and renames components
 through one previewed Bob transaction. Hiding removes a theme from history
-suggestions only. Hue priority is pin, exempt mute, matching top-level area, then
-stable hash. Each theme wears a tint or rounded swatch, never an area's ● dot. Not a
+suggestions only. Hue priority is configured `themes:` color, then journal pin,
+then exempt mute, then the unconfigured mute, then matching top-level area, then
+stable hash. Configured themes live under `themes:` in config.yml and scope Recent
+suggestions. Each theme wears a tint or rounded swatch, never an area's ● dot. Not a
 Pomodoro home, an Obsidian appearance theme, or `(unnamed)`. See
 `docs/pomodoro-themes.md`.

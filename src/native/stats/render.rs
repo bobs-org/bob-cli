@@ -1190,6 +1190,7 @@ mod tests {
                 hue: None,
                 hue_source: crate::native::pomodoro_themes::HueSource::Exempt,
                 known: true,
+                configured: None,
                 start: None,
                 end: None,
             },

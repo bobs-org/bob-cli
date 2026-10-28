@@ -69,7 +69,9 @@ today, newest first. Hidden themes stay out of the default list; they \
 still exist in history, Stats, and colors. Use --all to include every \
 known theme, --hidden to show only hidden themes, --query to rank \
 exact/prefix matches before substring matches, and --fresh to ignore \
-the machine-local cache.",
+the machine-local cache. When a `themes:` vocabulary is configured in \
+the config file, the default list also shows every visible configured \
+theme, even ones never used.",
         )
         .after_help(
             "Examples:\n  \
@@ -225,12 +227,21 @@ struct ListTheme {
     pinned: bool,
     hidden: bool,
     exempt: bool,
-    first_used: String,
-    last_used: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configured: Option<bool>,
+    first_used: Option<String>,
+    last_used: Option<String>,
     days_used: u32,
     entries: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     today: Option<TodayPresence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConfiguredThemeJson {
+    key: String,
+    name: String,
+    color: Option<Hue>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +250,8 @@ struct ListReport {
     today: String,
     window_days: u32,
     counts: ListCounts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configured_themes: Option<Vec<ConfiguredThemeJson>>,
     themes: Vec<ListTheme>,
     hints: Vec<CollisionHint>,
     renamed_reappeared: Vec<serde_json::Value>,
@@ -247,6 +260,8 @@ struct ListReport {
 
 #[derive(Debug, Clone, Serialize)]
 struct ListCounts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    configured: Option<usize>,
     known: usize,
     listed: usize,
     today: usize,
@@ -310,20 +325,35 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
         selected.truncate(limit);
     }
 
-    let themes = selected
+    let mut themes = selected
         .iter()
         .map(|record| list_theme(catalog, record))
         .collect::<Vec<_>>();
+    themes.extend(never_used_configured(catalog, request, &selected, query));
+    let configured_themes = catalog.configured_themes().map(|entries| {
+        entries
+            .iter()
+            .map(|entry| ConfiguredThemeJson {
+                key: entry.key.clone(),
+                name: entry.name.clone(),
+                color: entry.color,
+            })
+            .collect::<Vec<_>>()
+    });
     ListReport {
         schema_version: SCHEMA_VERSION,
         today: today.to_string(),
         window_days: u32::try_from(DEFAULT_WINDOW_DAYS).unwrap_or(90),
         counts: ListCounts {
+            configured: catalog
+                .configured_themes()
+                .map(|entries| entries.len()),
             known: catalog.known_count(),
             listed: themes.len(),
             today: catalog.today_count(),
             hidden: catalog.hidden_count(),
         },
+        configured_themes,
         themes,
         hints: catalog.collision_hints(),
         renamed_reappeared: super::renamed_reappeared(
@@ -332,6 +362,62 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
         ),
         warnings: catalog.warnings().to_vec(),
     }
+}
+
+/// Never-used configured themes, in config order, sorted last. They show
+/// `never` and `0 days` so the whole vocabulary is visible.
+fn never_used_configured(
+    catalog: &Catalog,
+    request: &ListRequest,
+    selected: &[&ThemeRecord],
+    query: Option<&str>,
+) -> Vec<ListTheme> {
+    let Some(entries) = catalog.configured_themes() else {
+        return Vec::new();
+    };
+    let selected_keys: BTreeSet<&str> =
+        selected.iter().map(|record| record.key.as_str()).collect();
+    let query_key = query.map(crate::native::plan_budget::normalize_component);
+    entries
+        .iter()
+        .filter(|entry| !selected_keys.contains(entry.key.as_str()))
+        .filter(|entry| {
+            let hidden = catalog.is_hidden(&entry.key);
+            if request.hidden_only {
+                return hidden;
+            }
+            if !request.all && hidden {
+                return false;
+            }
+            true
+        })
+        .filter(|entry| {
+            let Some(query_key) = query_key.as_deref() else {
+                return true;
+            };
+            let name_key =
+                crate::native::plan_budget::normalize_component(&entry.name);
+            name_key.contains(query_key) || query_key.contains(&entry.key)
+        })
+        .map(|entry| {
+            let theme_ref = catalog.theme_ref(&entry.key, &entry.name);
+            ListTheme {
+                key: entry.key.clone(),
+                name: entry.name.clone(),
+                hue: theme_ref.hue,
+                hue_source: theme_ref.hue_source,
+                pinned: catalog.pin(&entry.key).is_some(),
+                hidden: catalog.is_hidden(&entry.key),
+                exempt: catalog.is_exempt(&entry.key),
+                configured: theme_ref.configured,
+                first_used: None,
+                last_used: None,
+                days_used: 0,
+                entries: 0,
+                today: None,
+            }
+        })
+        .collect()
 }
 
 fn include_record(
@@ -366,8 +452,9 @@ fn list_theme(catalog: &Catalog, record: &ThemeRecord) -> ListTheme {
         pinned: catalog.pin(&record.key).is_some(),
         hidden: catalog.is_hidden(&record.key),
         exempt: catalog.is_exempt(&record.key),
-        first_used: record.first_used.to_string(),
-        last_used: record.last_used.to_string(),
+        configured: theme_ref.configured,
+        first_used: Some(record.first_used.to_string()),
+        last_used: Some(record.last_used.to_string()),
         days_used: record.days_used,
         entries: record.entries,
         today: record.today,
@@ -389,15 +476,28 @@ fn print_success(report: &ListReport, format: OutputFormat) {
 fn print_human(report: &ListReport) {
     let styler = Styler::detect();
     let window = format!("last {} days", report.window_days);
-    println!(
-        "THEMES  {} known {} {} today {} {} hidden {} {window}",
-        report.counts.known,
-        styler.separator(),
-        report.counts.today,
-        styler.separator(),
-        report.counts.hidden,
-        styler.separator(),
-    );
+    if let Some(configured) = report.counts.configured {
+        println!(
+            "THEMES  {configured} configured {} {} known {} {} today {} {} hidden {} {window}",
+            styler.separator(),
+            report.counts.known,
+            styler.separator(),
+            report.counts.today,
+            styler.separator(),
+            report.counts.hidden,
+            styler.separator(),
+        );
+    } else {
+        println!(
+            "THEMES  {} known {} {} today {} {} hidden {} {window}",
+            report.counts.known,
+            styler.separator(),
+            report.counts.today,
+            styler.separator(),
+            report.counts.hidden,
+            styler.separator(),
+        );
+    }
     if report.themes.is_empty() {
         println!("  (no themes)");
     } else {
@@ -410,7 +510,7 @@ fn print_human(report: &ListReport) {
             .clamp(8, 20);
         for theme in &report.themes {
             let swatch = swatch(&styler, theme);
-            let when = human_when(&theme.last_used, &report.today);
+            let when = human_when(theme.last_used.as_deref(), &report.today);
             let days = format!("{} days", theme.days_used);
             let meta = human_meta(theme);
             println!(
@@ -425,11 +525,18 @@ fn print_human(report: &ListReport) {
         println!("  hint  {}", hints::human_hint(hint));
     }
     for warning in &report.warnings {
-        eprintln!("{COMMAND_NAME}: {warning}");
+        eprintln!("{}: {}", COMMAND_NAME, styler.yellow(warning));
     }
 }
 
 fn swatch(styler: &Styler, theme: &ListTheme) -> String {
+    if theme.hue_source == HueSource::Unconfigured {
+        return if styler.is_color() {
+            styler.dim("◌")
+        } else {
+            "◌".to_string()
+        };
+    }
     if theme.hue_source == HueSource::Exempt || theme.hue.is_none() {
         return if styler.is_color() {
             styler.dim("□")
@@ -445,7 +552,10 @@ fn swatch(styler: &Styler, theme: &ListTheme) -> String {
     }
 }
 
-fn human_when(last_used: &str, today: &str) -> String {
+fn human_when(last_used: Option<&str>, today: &str) -> String {
+    let Some(last_used) = last_used else {
+        return "never".to_string();
+    };
     if last_used == today {
         return "today".to_string();
     }
@@ -458,7 +568,9 @@ fn human_when(last_used: &str, today: &str) -> String {
 fn human_meta(theme: &ListTheme) -> String {
     let mut parts = Vec::new();
     match theme.hue_source {
-        HueSource::Exempt => parts.push("muted".to_string()),
+        HueSource::Exempt | HueSource::Unconfigured => {
+            parts.push("muted".to_string());
+        }
         _ => {
             if let Some(hue) = theme.hue {
                 parts.push(hue.name().to_string());
@@ -466,13 +578,20 @@ fn human_meta(theme: &ListTheme) -> String {
         }
     }
     match theme.hue_source {
+        HueSource::Config => parts.push("config".to_string()),
         HueSource::Pin => parts.push("pinned".to_string()),
         HueSource::Area => parts.push("area".to_string()),
         HueSource::Exempt => parts.push("exempt".to_string()),
+        HueSource::Unconfigured => parts.push("not configured".to_string()),
         HueSource::Hash => {}
     }
     if theme.hidden {
         parts.push("hidden".to_string());
+    }
+    if theme.configured == Some(false)
+        && theme.hue_source != HueSource::Unconfigured
+    {
+        parts.push("not configured".to_string());
     }
     parts.join(" · ")
 }

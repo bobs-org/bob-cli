@@ -27,6 +27,7 @@ pub(crate) struct HintSuggest {
 
 /// Unpinned, non-exempt pairs that share a hue and met on at least two of
 /// the last 30 days. The theme with fewer `days_used` is the one to move.
+/// Config-colored and muted (exempt or unconfigured) themes never collide.
 pub(crate) fn collision_hints(
     today: NaiveDate,
     records: &BTreeMap<String, ThemeRecord>,
@@ -34,6 +35,7 @@ pub(crate) fn collision_hints(
     prefs: &Prefs,
     exempt: &BTreeSet<String>,
     areas: &BTreeMap<String, Hue>,
+    themes: Option<&crate::native::config::ThemesConfig>,
 ) -> Vec<CollisionHint> {
     let window_start = today
         .checked_sub_signed(Duration::days(HINT_WINDOW_DAYS - 1))
@@ -48,15 +50,24 @@ pub(crate) fn collision_hints(
         window_keys.extend(keys.iter().cloned());
     }
 
+    let config_color = |key: &str| themes.and_then(|themes| themes.color(key));
+    let unconfigured =
+        |key: &str| themes.is_some_and(|themes| !themes.contains(key));
     let mut candidates: Vec<(&ThemeRecord, Hue)> = Vec::new();
     for key in &window_keys {
         let Some(record) = records.get(key) else {
             continue;
         };
-        if prefs.pin(key).is_some() || exempt.contains(key) {
+        if prefs.pin(key).is_some()
+            || exempt.contains(key)
+            || config_color(key).is_some()
+            || unconfigured(key)
+        {
             continue;
         }
-        let (Some(hue), _) = resolve_hue(key, None, exempt, areas) else {
+        let (Some(hue), _) =
+            resolve_hue(key, None, exempt, areas, None, unconfigured(key))
+        else {
             continue;
         };
         candidates.push((record, hue));
@@ -65,7 +76,14 @@ pub(crate) fn collision_hints(
     let mut usage = BTreeMap::<Hue, u32>::new();
     for key in &window_keys {
         let pin = prefs.pin(key);
-        let (Some(hue), _) = resolve_hue(key, pin, exempt, areas) else {
+        let (Some(hue), _) = resolve_hue(
+            key,
+            pin,
+            exempt,
+            areas,
+            config_color(key),
+            unconfigured(key),
+        ) else {
             continue;
         };
         *usage.entry(hue).or_default() += 1;
@@ -107,6 +125,7 @@ pub(crate) fn collision_hints(
                 exempt,
                 areas,
                 &usage,
+                themes,
             ) else {
                 continue;
             };
@@ -141,6 +160,7 @@ fn suggested_hue(
     exempt: &BTreeSet<String>,
     areas: &BTreeMap<String, Hue>,
     usage: &BTreeMap<Hue, u32>,
+    themes: Option<&crate::native::config::ThemesConfig>,
 ) -> Option<Hue> {
     let mut excluded = BTreeSet::new();
     excluded.insert(current);
@@ -153,7 +173,14 @@ fn suggested_hue(
                 continue;
             }
             let pin = prefs.pin(other);
-            let (Some(hue), _) = resolve_hue(other, pin, exempt, areas) else {
+            let (Some(hue), _) = resolve_hue(
+                other,
+                pin,
+                exempt,
+                areas,
+                themes.and_then(|themes| themes.color(other)),
+                themes.is_some_and(|themes| !themes.contains(other)),
+            ) else {
                 continue;
             };
             excluded.insert(hue);

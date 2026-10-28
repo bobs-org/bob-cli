@@ -171,6 +171,8 @@ struct HueCase {
     pin: Option<String>,
     exempt: Vec<String>,
     areas: BTreeMap<String, String>,
+    #[serde(default)]
+    configured: Option<BTreeMap<String, Option<String>>>,
     expected: HueExpected,
 }
 
@@ -254,7 +256,7 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
             .iter()
             .map(|value| normalize_component(value))
             .collect();
-        let areas = case
+        let areas: BTreeMap<String, Hue> = case
             .areas
             .iter()
             .map(|(key, hue)| {
@@ -264,7 +266,30 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
                 )
             })
             .collect();
-        let (hue, source) = resolve_hue(&case.key, pin, &exempt, &areas);
+        let configured: BTreeMap<String, Option<Hue>> = case
+            .configured
+            .as_ref()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(key, hue)| {
+                        (key.clone(), hue.as_deref().and_then(Hue::parse))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_configured = case.configured.is_some();
+        let config_color = configured.get(&case.key).copied().flatten();
+        let unconfigured =
+            has_configured && !configured.contains_key(&case.key);
+        let (hue, source) = resolve_hue(
+            &case.key,
+            pin,
+            &exempt,
+            &areas,
+            config_color,
+            unconfigured,
+        );
         assert_eq!(
             hue.map(Hue::name),
             case.expected.hue.as_deref(),
@@ -272,8 +297,10 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
             case.name
         );
         let source = match source {
+            HueSource::Config => "config",
             HueSource::Pin => "pin",
             HueSource::Exempt => "exempt",
+            HueSource::Unconfigured => "unconfigured",
             HueSource::Area => "area",
             HueSource::Hash => "hash",
         };
