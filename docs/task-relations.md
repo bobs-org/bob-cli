@@ -2,7 +2,9 @@
 
 A task can relate to any other task with an optional label, from Bob
 Mac Capture (`~` / `~~`) and from the Obsidian Task Card (`l` /
-`⇧L`). The relation is authored once on the source's
+`⇧L`). In either client's relation picker, typing `~` anywhere in the
+task filter flips Links to ↔ Linked from in place and keeps the filter
+text. The relation is authored once on the source's
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
 the target always converges to it. Live chips render both ends
 correctly, and relations never block, promote, consume, schedule,
@@ -661,6 +663,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG13 | any relation gesture on an inbox task or a `]s` landing | no stamp, lane change, inbox routing, or walk advance, except a [§17](#17-cancel-labels) cancel of the landed source |
 | LG14 | kill switch off | no mirror writes and no source mints |
 | LG15 | Tab marks two targets, then ↵ | both linked in one gesture and one notice |
+| LG16 | `~` typed anywhere in a Links / Linked-from filter | the stage flips direction in place; filter text and caret kept, the `~` never typed, marks cleared; a counted session refuses the flip to Linked from with "Linked from needs a single task" |
 
 ### LC — chips
 
