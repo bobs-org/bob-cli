@@ -837,6 +837,16 @@ minutes); named rows do no resolution and omit it. A guarded gesture is
 `ok: true` with `capture.kind == "link_guard"`: it is a real write that
 promotes prerequisites, as in capture.
 
+The envelope also includes `theme_suggestion` for the reading task. One
+`pomodoros` row can carry `suggested: true` and its
+`suggestion_label`. If no open bucket matches, a known theme that can be
+created gets `theme_suggestion.create: true`; the client can offer a new
+Pomodoro. Otherwise `theme_suggestion.fallback` reports
+`unknown_theme`, `creation_blocked`, or `strict_cap`. If the task already
+has a live link under an open entry, `already_queued` wins and no row is
+marked suggested. This is read-only suggestion metadata: `ref today`
+never writes `[theme::]`.
+
 ```json
 {"ok":true,"schema_version":1,"command":"ref today","mode":"dry_run","changed":true,"ref":{"path":"ref/papers/attention.md","link":"[[ref/papers/attention]]","title":"Attention Is All You Need","marker_id":"attention"},"task":{"path":"sase.md","block_id":"ref-attention","link":"[[sase#^ref-attention]]","status_symbol":" ","status_name":"Ready"},"pomodoros":[{"ref":"41:0b1c2d3e","line":41,"name":"BUGS","running":true,"default":true,"linked":false}],"capture":{"kind":"pomodoro_link"}}
 ```

@@ -1911,5 +1911,122 @@
       "deliberate": true,
       "expected": "none"
     }
+  ],
+  "preselect": [
+    {
+      "id": "running-exact-before-ledger-exact",
+      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "entries": [
+        {"name": "PLAN + BUILD", "open": true, "running": false},
+        {"name": "BUILD", "open": true, "running": true},
+        {"name": "BUILD + FIX", "open": true, "running": false}
+      ],
+      "exempt": ["PLAN"],
+      "ledger_keys": ["plan", "build"],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 2,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "entry", "index": 1}
+    },
+    {
+      "id": "first-exact-in-ledger-order",
+      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "entries": [
+        {"name": "PLAN + BUILD", "open": true, "running": false},
+        {"name": "BUILD", "open": true, "running": false}
+      ],
+      "exempt": ["PLAN"],
+      "ledger_keys": ["plan", "build"],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 2,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "entry", "index": 0}
+    },
+    {
+      "id": "first-containing-entry",
+      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "entries": [
+        {"name": "FIX + BUILD", "open": true, "running": false},
+        {"name": "FIX + BUILD + PLAN", "open": true, "running": false}
+      ],
+      "exempt": ["PLAN"],
+      "ledger_keys": ["fix", "build"],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 2,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "entry", "index": 0}
+    },
+    {
+      "id": "known-theme-creates",
+      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "entries": [],
+      "exempt": ["plan"],
+      "ledger_keys": [],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 1,
+      "cap": 3,
+      "already_queued": false,
+      "query": "",
+      "expected": {"kind": "create"}
+    },
+    {
+      "id": "unknown-theme-does-not-preselect-existing-match",
+      "suggestion": {"key": "secret", "name": "SECRET", "known": false},
+      "entries": [{"name": "SECRET", "open": true, "running": false}],
+      "exempt": [],
+      "ledger_keys": ["secret"],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 1,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "fallback", "code": "unknown_theme"}
+    },
+    {
+      "id": "creation-blocked-by-timed-entry",
+      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "entries": [],
+      "exempt": [],
+      "ledger_keys": [],
+      "creation_allowed": false,
+      "strict": false,
+      "themes_before": 0,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "fallback", "code": "creation_blocked"}
+    },
+    {
+      "id": "strict-cap-blocks-new-theme",
+      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "entries": [],
+      "exempt": [],
+      "ledger_keys": ["build"],
+      "creation_allowed": true,
+      "strict": true,
+      "themes_before": 3,
+      "cap": 3,
+      "already_queued": false,
+      "expected": {"kind": "fallback", "code": "strict_cap"}
+    },
+    {
+      "id": "queued-link-wins",
+      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "entries": [{"name": "BUILD", "open": true, "running": false}],
+      "exempt": [],
+      "ledger_keys": ["build"],
+      "creation_allowed": true,
+      "strict": false,
+      "themes_before": 1,
+      "cap": 3,
+      "already_queued": true,
+      "expected": {"kind": "fallback", "code": "already_queued"}
+    }
   ]
 }

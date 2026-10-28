@@ -119,6 +119,7 @@ fn build_result_inner(
             },
             context: Some(field.context),
             candidates,
+            theme_suggestion: None,
             r#override: None,
             block_id: None,
             warnings: index.warnings(),
@@ -193,6 +194,7 @@ fn build_result_inner(
             },
             context: Some(field.context),
             candidates,
+            theme_suggestion: None,
             r#override: None,
             block_id: Some(block_field),
             warnings,
@@ -218,6 +220,7 @@ fn build_result_inner(
             field.replacement.0,
         )
         .is_some_and(|(_, _, hidden)| hidden);
+    let mut theme_suggestion = None;
     let (mut candidates, warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
@@ -256,12 +259,21 @@ fn build_result_inner(
                 &field.query,
             )?
         }
-        CompletionContext::PomodoroName => pomodoro_candidates(
-            bob_dir,
-            &field.query,
-            false,
-            raw_text[field.replacement.0..].starts_with(['"', '“']),
-        )?,
+        CompletionContext::PomodoroName => {
+            let (candidates, warnings, suggestion) =
+                super::pomodoros::pomodoro_name_candidates_for_task(
+                    bob_dir,
+                    &field.query,
+                    raw_text[field.replacement.0..].starts_with(['"', '“']),
+                    field.route.as_deref().expect("route resolved"),
+                    field.block_id.as_deref(),
+                    editor_item
+                        .as_ref()
+                        .is_some_and(|item| !item.body.trim().is_empty()),
+                )?;
+            theme_suggestion = Some(suggestion);
+            (candidates, warnings)
+        }
         CompletionContext::PomodoroStartName => pomodoro_candidates(
             bob_dir,
             &field.query,
@@ -512,6 +524,7 @@ fn build_result_inner(
         },
         context: Some(field.context),
         candidates,
+        theme_suggestion,
         r#override: override_info,
         block_id: None,
         warnings,

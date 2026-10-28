@@ -16,7 +16,9 @@ use crate::native::{
         PomodoroState,
     },
     plan_budget::{normalize_component, split_components},
-    pomodoro_themes::Catalog,
+    pomodoro_themes::{
+        preselect::MenuChoice, suggest::ThemeSuggestion, Catalog,
+    },
 };
 
 pub(super) fn lossless_replacement(scan: &PomodoroScan, name: &str) -> String {
@@ -175,5 +177,104 @@ pub(super) fn compose(
             }
         }
     }
+    rows
+}
+
+/// Apply the task-aware PT12 selection to the normal PT7-ranked menu.
+/// Existing rows stay where PT7 put them. Only an empty-query create choice
+/// is promoted to the top, and its Recent duplicate is removed.
+pub(super) fn compose_task_aware(
+    scan: &PomodoroScan,
+    query: &str,
+    hint: Option<&PlanCreationHint>,
+    catalog: Option<&Catalog>,
+    start: bool,
+    literal: bool,
+    suggestion: &ThemeSuggestion,
+    choice: MenuChoice,
+) -> Vec<PomodoroNameCandidate> {
+    let mut rows = compose(scan, query, hint, catalog, start, literal);
+    let selected_line = match choice {
+        MenuChoice::Entry(index) => {
+            scan.entries.get(index).map(|entry| entry.line)
+        }
+        MenuChoice::Create => None,
+        MenuChoice::Fallback(_) => None,
+    };
+    if let Some(line) = selected_line {
+        let selected_entry =
+            scan.entries.iter().find(|entry| entry.line == line);
+        let selected_key = selected_entry
+            .and_then(|entry| entry.name.as_deref())
+            .map(normalize_component);
+        let selected_row = rows
+            .iter()
+            .position(|row| row.line == Some(line))
+            .or_else(|| {
+                rows.iter().position(|row| {
+                    row.name.as_deref().is_some_and(|name| {
+                        Some(normalize_component(name)) == selected_key
+                    })
+                })
+            });
+        if let Some(index) = selected_row {
+            let row = &mut rows[index];
+            if row.line != Some(line)
+                && let Some(entry) = selected_entry
+            {
+                // Duplicate named entries collapse to one Today row. Keep
+                // that row in place while directing acceptance to the
+                // running (or first exact) occurrence selected by PT12.
+                row.pomodoro_ref = Some(entry.pomodoro_ref.clone());
+                row.line = Some(entry.line);
+                row.state = entry.state;
+                row.status_symbol = entry.status_symbol;
+                row.time_range = entry.time_range.clone();
+                row.placeholder = entry.placeholder;
+                row.is_current = entry.is_current;
+            }
+            row.suggested = true;
+            row.suggestion_label = Some(suggestion.label.clone());
+        }
+        return rows;
+    }
+
+    if !matches!(choice, MenuChoice::Create) {
+        return rows;
+    }
+
+    let key = suggestion.theme.key.as_str();
+    if !query.is_empty() {
+        if let Some(row) = rows.iter_mut().find(|row| {
+            row.name
+                .as_deref()
+                .is_some_and(|name| normalize_component(name) == key)
+        }) {
+            row.suggested = true;
+            row.suggestion_label = Some(suggestion.label.clone());
+        }
+        return rows;
+    }
+
+    rows.retain(|row| {
+        row.origin != Some("history")
+            || !row
+                .name
+                .as_deref()
+                .is_some_and(|name| normalize_component(name) == key)
+    });
+    let mut create =
+        creation_candidate(scan, suggestion.theme.name.clone(), hint);
+    create.origin = Some("history");
+    if let Some(record) = catalog.and_then(|catalog| catalog.get(key)) {
+        create.last_used = Some(record.last_used.to_string());
+        create.days_used = Some(record.days_used);
+    }
+    create.themes = catalog
+        .map(|catalog| catalog.theme_refs_for_name(&suggestion.theme.name))
+        .unwrap_or_default();
+    create.suggested = true;
+    create.suggestion_label = Some(suggestion.label.clone());
+    rows.insert(0, create);
     rows
 }

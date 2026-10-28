@@ -349,7 +349,7 @@ Runbook: `bob themes split JOB -t > job.tsv`, edit THEME, preview with
 `bob themes split JOB -m job.tsv -d`, apply with `bob themes split JOB -m
 job.tsv`. Undo with `git revert <sha>` and `bob vault-sync`.
 
-## PT12 — Configured themes
+## PT12 — Task theme suggestions
 
 A `themes:` block in the config file declares the Pomodoro theme vocabulary
 and each theme's palette color. Bob reads the file and never writes it.
@@ -630,11 +630,29 @@ from sase_blog`. Explicit task fields alone get PT6 pills; inherited
 values never become ghost pills. Unknown and repair styling follows the
 established pill rules.
 
-The later capture addition is
-`task_theme: {action: "set" | "cleared", theme, previous, inherited}`,
-omitted on no change. Later listing rows add `suggested` and
-`suggestion_label`; suggestions may gain `fallback`, and ref-today
-`create`, without a schema bump.
+Capture completion emits a top-level `theme_suggestion` in
+`pomodoro_name` context (null when there is no suggestion). At most one
+candidate adds `suggested: true` and `suggestion_label`. With an empty
+query, a known suggestion with no matching open entry becomes a suggested
+create row at the top when the daily note and theme cap allow it; the row
+uses the normal Recent/create shape and is removed from Recent to avoid a
+duplicate. A hidden theme can appear in this row. With a nonempty query,
+PT7 order and first-row behavior stay fixed and a matching row only gets the
+suggested marker. `theme_suggestion.fallback` is
+`unknown_theme`, `creation_blocked`, or `strict_cap` when no row can be
+preselected. Zsh descriptions use `suggested · <label>`.
+
+`bob ref today` adds the same row marker and label to its `pomodoros`
+listing, plus a top-level `theme_suggestion`. Its `fallback` also includes
+`already_queued` when the task already has a live link; that queue takes
+priority. When a known suggestion has no matching open bucket and a new
+entry is allowed, `theme_suggestion.create: true` tells clients to offer a
+new suggested Pomodoro. This command never writes a theme field.
+
+The capture command and `bob ref today` consume the shared `preselect`
+vectors. `task_theme: {action: "set" | "cleared", theme, previous,
+inherited}` remains the additive capture-write result, omitted on no
+change.
 
 ### Dataview caveat
 

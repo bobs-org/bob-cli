@@ -22,6 +22,14 @@ use crate::native::highlights_ref::{bob_dir_arg, ref_dir_arg, COMMAND_NAME};
 use crate::native::note_tasks::{self, BlockIdLookup};
 use crate::native::pomodoro;
 use crate::native::style::Styler;
+use crate::native::{
+    config,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
+    pomodoro_themes::{
+        preselect::{self, MenuSuggestion},
+        suggest, Catalog,
+    },
+};
 
 const TODAY_COMMAND: &str = "ref today";
 
@@ -85,6 +93,7 @@ pub(crate) fn today_command() -> ClapCommand {
 -p NAME -e          Whole-slug among open entries only, else create\n  \
 -P LINE:DIGEST      Exactly that entry; stale or ambiguous is stale_pomodoro\n\n\
 The vault mutation matches `bob capture '^route:block-id[#name]'`. This command never starts a Pomodoro and never commits or syncs; vault-sync picks the change up, as with capture.\n\n\
+The response also suggests a Pomodoro theme for the reading task. JSON marks the suggested open row, or sets theme_suggestion.create when a new bucket can be offered; it reports a fallback when no row can be preselected. This metadata never writes a [theme::] field.\n\n\
 Environment:\n  \
 BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -123,6 +132,8 @@ struct TodaySuccessEnvelope<'a> {
     r#ref: TodayRefJson<'a>,
     task: TodayTaskJson<'a>,
     pomodoros: &'a [TodayPomodoroRow],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme_suggestion: Option<Option<MenuSuggestion>>,
     capture: &'a serde_json::Value,
 }
 
@@ -141,6 +152,15 @@ struct TodayErrorEnvelope<'a> {
     task: Option<TodayTaskJson<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pomodoros: Option<&'a [TodayPomodoroRow]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme_suggestion: Option<Option<MenuSuggestion>>,
+}
+
+struct TodayListing {
+    pomodoros: Vec<TodayPomodoroRow>,
+    /// Outer None means no task listing; Some(None) is a task with no
+    /// applicable suggestion.
+    theme_suggestion: Option<Option<MenuSuggestion>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -213,7 +233,7 @@ pub(crate) fn run_today(matches: &ArgMatches) -> i32 {
     let ledger_target = match parse_ledger_target(matches) {
         Ok(target) => target,
         Err((code, message, hint)) => {
-            let pomodoros = list_pomodoros(&config.bob_dir, None);
+            let listing = list_pomodoros(&config.bob_dir, None);
             return fail(
                 format,
                 dry_run,
@@ -222,7 +242,7 @@ pub(crate) fn run_today(matches: &ArgMatches) -> i32 {
                 hint,
                 Some(row),
                 None,
-                &pomodoros,
+                &listing,
             );
         }
     };
@@ -237,7 +257,7 @@ pub(crate) fn run_today(matches: &ArgMatches) -> i32 {
             ledger_target.as_ref(),
         ),
         Err(refusal) => {
-            let pomodoros =
+            let listing =
                 list_pomodoros(&config.bob_dir, refusal.task.as_ref());
             fail(
                 format,
@@ -247,7 +267,7 @@ pub(crate) fn run_today(matches: &ArgMatches) -> i32 {
                 refusal.hint,
                 Some(row),
                 refusal.task.as_ref(),
-                &pomodoros,
+                &listing,
             )
         }
     }
@@ -468,7 +488,7 @@ fn lookup_task_status(
 fn list_pomodoros(
     bob_dir: &Path,
     task: Option<&ResolvedReadingTask>,
-) -> Vec<TodayPomodoroRow> {
+) -> TodayListing {
     let day_file = pomodoro::day_file_for(bob_dir);
     let today = bob_env::current_datetime().date();
     let block_link = task
@@ -479,18 +499,116 @@ fn list_pomodoros(
         .strip_prefix(bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
-    std::fs::read_to_string(&day_file)
-        .ok()
-        .map(|contents| {
-            list_today_link_pomodoros(
-                bob_dir,
-                &daily_path,
-                &contents,
-                &block_link,
-                today,
-            )
+    let contents = std::fs::read_to_string(&day_file).unwrap_or_default();
+    let mut pomodoros = list_today_link_pomodoros(
+        bob_dir,
+        &daily_path,
+        &contents,
+        &block_link,
+        today,
+    );
+    let theme_suggestion = task.map(|task| {
+        theme_menu_for_task(
+            bob_dir,
+            &daily_path,
+            &contents,
+            task,
+            &mut pomodoros,
+            today,
+        )
+    });
+    TodayListing {
+        pomodoros,
+        theme_suggestion,
+    }
+}
+
+fn theme_menu_for_task(
+    bob_dir: &Path,
+    daily_path: &Path,
+    day_contents: &str,
+    task: &ResolvedReadingTask,
+    rows: &mut [TodayPomodoroRow],
+    today: chrono::NaiveDate,
+) -> Option<MenuSuggestion> {
+    let config = config::load_plan_config(&config::config_path()).ok()?;
+    let scan = crate::native::capture_pomodoros::scan(day_contents);
+    let live_keys = scan
+        .entries
+        .iter()
+        .filter_map(|entry| entry.name.as_deref())
+        .flat_map(crate::native::plan_budget::split_components)
+        .map(|name| crate::native::plan_budget::normalize_component(&name))
+        .collect::<std::collections::BTreeSet<_>>();
+    let catalog =
+        Catalog::load_for_completion(bob_dir, today, live_keys, Some(&scan))
+            .ok()?;
+    let task_contents =
+        std::fs::read_to_string(bob_dir.join(&task.path)).ok()?;
+    let settings = note_tasks::read_settings(bob_dir);
+    let tasks = note_tasks::scan(&task_contents, &settings);
+    let note_task = tasks
+        .lookup_capture_task(&task.route, &task.block_id)
+        .ok()?;
+    let line = task_contents.lines().nth(note_task.line_index)?;
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(bob_dir));
+    let resolved = suggest::suggest_for_task(
+        &mut resolver,
+        &catalog,
+        &config,
+        Path::new(&task.path),
+        line,
+    );
+    let suggestion = resolved.suggestion?;
+
+    let daily_key = crate::native::plan_budget::daily_key_from_path(daily_path);
+    let ledger = crate::native::plan_budget::compute_for_daily(
+        day_contents,
+        &config,
+        daily_key.as_deref(),
+    );
+    let entries = rows
+        .iter()
+        .map(|row| preselect::MenuEntry {
+            name: row.name.as_deref(),
+            open: true,
+            running: row.running,
         })
-        .unwrap_or_default()
+        .collect::<Vec<_>>();
+    let creation_allowed = scan.has_section
+        && scan
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.state
+                    == crate::native::capture_pomodoros::PomodoroState::Open
+                    && entry.time_range.is_some()
+            })
+            .count()
+            <= 1;
+    let block_link = format!("[[{}#^{}]]", task.route, task.block_id);
+    let already_queued =
+        crate::native::capture_task_toggle::list_open_entry_links(day_contents)
+            .iter()
+            .any(|entry| entry.links.iter().any(|link| link == &block_link));
+    let choice = preselect::choose(
+        &suggestion.theme,
+        &entries,
+        config.exempt(),
+        &ledger.theme_names,
+        creation_allowed,
+        config.strict(),
+        ledger.themes.count,
+        config.max_themes(),
+        already_queued,
+    );
+    if let preselect::MenuChoice::Entry(index) = choice
+        && let Some(row) = rows.get_mut(index)
+    {
+        row.suggested = true;
+        row.suggestion_label = Some(suggestion.label.clone());
+    }
+    Some(MenuSuggestion::new(suggestion, choice, true))
 }
 
 fn run_link(
@@ -508,22 +626,7 @@ fn run_link(
         .strip_prefix(bob_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|_| day_file.clone());
-    let pre_pomodoros = if day_file.is_file() {
-        std::fs::read_to_string(&day_file)
-            .ok()
-            .map(|contents| {
-                list_today_link_pomodoros(
-                    bob_dir,
-                    &daily_path,
-                    &contents,
-                    &block_link,
-                    today,
-                )
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let pre_listing = list_pomodoros(bob_dir, Some(task));
     let styler = Styler::detect();
     match link_existing_task(
         bob_dir,
@@ -534,21 +637,33 @@ fn run_link(
         &styler,
     ) {
         Ok(outcome) => {
-            let pomodoros = if dry_run {
-                pre_pomodoros
+            let listing = if dry_run {
+                pre_listing
             } else if let Ok(contents) = std::fs::read_to_string(&day_file) {
-                list_today_link_pomodoros(
+                let mut pomodoros = list_today_link_pomodoros(
                     bob_dir,
                     &daily_path,
                     &contents,
                     &block_link,
                     today,
-                )
+                );
+                let theme_suggestion = Some(theme_menu_for_task(
+                    bob_dir,
+                    &daily_path,
+                    &contents,
+                    task,
+                    &mut pomodoros,
+                    today,
+                ));
+                TodayListing {
+                    pomodoros,
+                    theme_suggestion,
+                }
             } else {
-                pre_pomodoros
+                pre_listing
             };
             print_success(
-                format, dry_run, row, task, &pomodoros, &outcome, &styler,
+                format, dry_run, row, task, &listing, &outcome, &styler,
             );
             0
         }
@@ -563,7 +678,7 @@ fn run_link(
                 hint,
                 Some(row),
                 Some(task),
-                &pre_pomodoros,
+                &pre_listing,
             )
         }
     }
@@ -591,7 +706,7 @@ fn print_success(
     dry_run: bool,
     row: &RefRow,
     task: &ResolvedReadingTask,
-    pomodoros: &[TodayPomodoroRow],
+    listing: &TodayListing,
     outcome: &crate::native::capture::ExistingTaskLinkOutcome,
     styler: &Styler,
 ) {
@@ -607,7 +722,8 @@ fn print_success(
                 changed: outcome.changed,
                 r#ref: today_ref_json(row),
                 task: today_task_json(task),
-                pomodoros,
+                pomodoros: &listing.pomodoros,
+                theme_suggestion: listing.theme_suggestion.clone(),
                 capture: &outcome.capture,
             };
             println!(
@@ -636,7 +752,20 @@ fn print_success(
             println!("{mark} {verb} 📖 {}", row.title);
             print!("{}", outcome.human_details);
             if dry_run {
-                print_open_pomodoros(pomodoros, styler);
+                print_open_pomodoros(&listing.pomodoros, styler);
+                if let Some(Some(suggestion)) =
+                    listing.theme_suggestion.as_ref()
+                    && suggestion.create
+                {
+                    println!(
+                        "{}",
+                        styler.cyan(&format!(
+                            "Suggested new Pomodoro: {} · suggested · {}",
+                            suggestion.suggestion.theme.name,
+                            suggestion.suggestion.label
+                        ))
+                    );
+                }
             }
         }
     }
@@ -669,7 +798,15 @@ fn print_open_pomodoros(pomodoros: &[TodayPomodoroRow], styler: &Styler) {
             })
             .unwrap_or_else(|| "(untitled)".to_string());
         let when = row.time_range.as_deref().unwrap_or("planned");
-        println!("  {glyph} {name}  {when}  -P {}", row.pomodoro_ref);
+        let suggested = row
+            .suggestion_label
+            .as_deref()
+            .map(|label| format!("  suggested · {label}"))
+            .unwrap_or_default();
+        println!(
+            "  {glyph} {name}  {when}{suggested}  -P {}",
+            row.pomodoro_ref
+        );
     }
 }
 
@@ -681,7 +818,7 @@ fn fail(
     hint: Option<&str>,
     row: Option<&RefRow>,
     task: Option<&ResolvedReadingTask>,
-    pomodoros: &[TodayPomodoroRow],
+    listing: &TodayListing,
 ) -> i32 {
     let _ = dry_run;
     match format {
@@ -699,7 +836,9 @@ fn fail(
                 candidates: None,
                 r#ref: row.map(today_ref_json),
                 task: task.map(today_task_json),
-                pomodoros: (!pomodoros.is_empty()).then_some(pomodoros),
+                pomodoros: (!listing.pomodoros.is_empty())
+                    .then_some(listing.pomodoros.as_slice()),
+                theme_suggestion: listing.theme_suggestion.clone(),
             };
             println!(
                 "{}",

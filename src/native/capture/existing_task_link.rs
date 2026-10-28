@@ -28,6 +28,10 @@ pub(crate) struct TodayPomodoroRow {
     pub running: bool,
     pub default: bool,
     pub linked: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub suggested: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_label: Option<String>,
     pub task_link_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homes: Option<crate::native::pomodoro_homes::Homes>,
@@ -184,11 +188,17 @@ pub(crate) fn list_today_link_pomodoros(
                 running: entry.is_current,
                 default: default_line == Some(entry.line),
                 linked: queue_line == Some(entry.line),
+                suggested: false,
+                suggestion_label: None,
                 task_link_count,
                 homes,
             }
         })
         .collect()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub(crate) fn today_error_code(error: &CaptureError) -> &'static str {

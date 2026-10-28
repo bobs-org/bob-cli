@@ -566,6 +566,11 @@ pub(super) fn pomodoro_name_badges(
     if item.creates_pomodoro {
         badges.push("create".to_string());
     }
+    if item.suggested
+        && let Some(label) = item.suggestion_label.as_deref()
+    {
+        badges.push(format!("suggested · {label}"));
+    }
     badges
 }
 

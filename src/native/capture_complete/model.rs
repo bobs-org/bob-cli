@@ -553,6 +553,11 @@ pub(super) struct PomodoroNameCandidate {
     /// byte-identical.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) next_up: bool,
+    /// Task-aware menu row selected by the shared PT12 preselection rule.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) suggested: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) suggestion_label: Option<String>,
     /// Resulting theme count and cap when this create row is accepted.
     /// Only on `creates_pomodoro` rows (new and again rows in
     /// `pomodoro_start_name`); omitted when the daily note or the plan
@@ -656,6 +661,12 @@ pub(super) struct CaptureCompleteResult {
     pub(super) replacement: Replacement,
     pub(super) context: Option<CompletionContext>,
     pub(super) candidates: Candidates,
+    /// `None` outside `pomodoro_name`; `Some(None)` means that context
+    /// ran without a task theme suggestion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) theme_suggestion: Option<
+        Option<crate::native::pomodoro_themes::preselect::MenuSuggestion>,
+    >,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) r#override: Option<OverrideCompletion>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -710,6 +721,7 @@ impl CaptureCompleteResult {
             },
             context: None,
             candidates: Candidates::Route(Vec::new()),
+            theme_suggestion: None,
             r#override: None,
             block_id: None,
             warnings: Vec::new(),

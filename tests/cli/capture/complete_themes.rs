@@ -150,6 +150,57 @@ fn theme_menu_vectors() {
 }
 
 #[test]
+fn pomodoro_name_completion_preselects_the_existing_task_theme() {
+    let temp = TempDir::new("bob-task-theme-completion");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &temp.path().join("config.yml"),
+        "plan:\n  max_themes: 30\nthemes:\n  READ: auto\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\ncolor: blue\n---\n# Sase\n\n## Tasks\n- [ ] #task #ref Read this ^ref-x\n",
+    );
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — READ\n- [ ] () — BUILD\n",
+    );
+    let result = complete(temp.path(), "@sase:ref-x#");
+    assert_eq!(result["theme_suggestion"]["source"], "reading");
+    assert_eq!(result["theme_suggestion"]["label"], "reading task");
+    let rows = result["candidates"].as_array().unwrap();
+    let selected = rows.iter().find(|row| row["suggested"] == true).unwrap();
+    assert_eq!(selected["name"], "READ");
+    assert_eq!(selected["suggestion_label"], "reading task");
+}
+
+#[test]
+fn pomodoro_name_completion_adds_suggested_create_row_for_note_default() {
+    let temp = TempDir::new("bob-note-theme-completion");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(
+        &temp.path().join("config.yml"),
+        "plan:\n  max_themes: 30\nthemes:\n  BUILD: auto\n  READ: auto\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[project]]\ntheme: BUILD\n---\n# Sase\n- [ ] #task #ref [theme:: READ] ^ref-x\n",
+    );
+    write_file(&vault.join("2026/20261024.md"), "## Pomodoros\n");
+    let result = complete(temp.path(), "Draft work @sase:ref-x#");
+    assert_eq!(result["theme_suggestion"]["source"], "note");
+    assert_eq!(result["theme_suggestion"]["label"], "from sase");
+    let selected = &result["candidates"][0];
+    assert_eq!(selected["name"], "BUILD");
+    assert_eq!(selected["origin"], "history");
+    assert_eq!(selected["creates_pomodoro"], true);
+    assert_eq!(selected["suggested"], true);
+    assert_eq!(selected["suggestion_label"], "from sase");
+}
+
+#[test]
 fn theme_literal_vectors_round_trip_through_capture() {
     let vectors: Value = serde_json::from_str(include_str!(
         "../../fixtures/pomodoro_themes/vectors.json"

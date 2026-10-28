@@ -322,6 +322,39 @@ pub(crate) fn scan(
     NoteTaskScan { tasks, block_ids }
 }
 
+/// Find the source line for a uniquely identified capture task without
+/// building the full note-task index. Capture completion only needs to know
+/// whether the supplied block ID names one task and, if so, its line.
+pub(crate) fn unique_capture_task_line<'a>(
+    contents: &'a str,
+    settings: &NoteTaskSettings,
+    block_id: &str,
+) -> Option<&'a str> {
+    let lines = contents.lines().collect::<Vec<_>>();
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced = markdown::fenced_lines(&lines, scan_start..lines.len());
+    let mut occurrences = 0;
+    let mut task_line = None;
+
+    for (line_index, line) in lines.iter().enumerate() {
+        if frontmatter_end.is_some_and(|end| line_index <= end)
+            || fenced.contains(&line_index)
+            || collect_done::trailing_block_id_in_line(line).as_deref()
+                != Some(block_id)
+        {
+            continue;
+        }
+
+        occurrences += 1;
+        if parse_task_line(line, settings).is_some() {
+            task_line = Some(*line);
+        }
+    }
+
+    (occurrences == 1).then_some(task_line?)
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ParsedTask<'a> {
     indentation: &'a str,
@@ -641,6 +674,40 @@ mod tests {
         ));
         assert_eq!(scan.by_block_id("dupe"), BlockIdLookup::Duplicate(2));
         assert_eq!(scan.by_block_id("absent"), BlockIdLookup::Missing);
+    }
+
+    #[test]
+    fn lightweight_capture_lookup_matches_full_index_task_rules() {
+        let (_root, settings) = missing_settings();
+        let contents = concat!(
+            "---\nmetadata: ^hidden\n---\n",
+            "```md\n- [ ] #task ^fenced\n```\n",
+            "- [ ] #task Found ^found\n",
+            "Plain text ^not-a-task\n",
+            "- [ ] #task First ^duplicate\n",
+            "- [x] #task Second ^duplicate\n",
+        );
+
+        assert_eq!(
+            unique_capture_task_line(contents, &settings, "found"),
+            Some("- [ ] #task Found ^found")
+        );
+        assert_eq!(
+            unique_capture_task_line(contents, &settings, "not-a-task"),
+            None
+        );
+        assert_eq!(
+            unique_capture_task_line(contents, &settings, "duplicate"),
+            None
+        );
+        assert_eq!(
+            unique_capture_task_line(contents, &settings, "hidden"),
+            None
+        );
+        assert_eq!(
+            unique_capture_task_line(contents, &settings, "fenced"),
+            None
+        );
     }
 
     #[test]

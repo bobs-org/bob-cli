@@ -134,7 +134,7 @@ were configured (`bob themes list` carries the warning; `bob plan` and
 `bob capture` surface it on their own). Colors win over `bob themes color`
 pins: coloring a configured theme refuses with `config_color`.
 
-See [configured themes](../pomodoro-themes.md#pt12-configured-themes).
+See [task theme suggestions](../pomodoro-themes.md#pt12-task-theme-suggestions).
 
 ### `dependencies`
 

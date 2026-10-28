@@ -10,11 +10,17 @@ use super::{
     support::{bounded_warning, rank},
 };
 use crate::native::{
-    capture_language,
+    capture, capture_language,
     capture_pomodoros::{self, PomodoroEntry, PomodoroState},
     config::{self},
     plan_budget::{self},
     pomodoro,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
+    pomodoro_themes::{
+        self,
+        preselect::{self, MenuChoice, MenuEntry, MenuSuggestion},
+        suggest::ThemeSuggestion,
+    },
 };
 
 pub(super) fn pomodoro_candidates(
@@ -23,6 +29,35 @@ pub(super) fn pomodoro_candidates(
     start: bool,
     literal: bool,
 ) -> Result<(Candidates, Vec<String>), CompleteError> {
+    let (candidates, warnings, _) =
+        pomodoro_candidates_inner(bob_dir, query, start, literal, None)?;
+    Ok((candidates, warnings))
+}
+
+pub(super) fn pomodoro_name_candidates_for_task(
+    bob_dir: &Path,
+    query: &str,
+    literal: bool,
+    route: &str,
+    block_id: Option<&str>,
+    new_task: bool,
+) -> Result<(Candidates, Vec<String>, Option<MenuSuggestion>), CompleteError> {
+    pomodoro_candidates_inner(
+        bob_dir,
+        query,
+        false,
+        literal,
+        Some((route, if new_task { None } else { block_id })),
+    )
+}
+
+fn pomodoro_candidates_inner(
+    bob_dir: &Path,
+    query: &str,
+    start: bool,
+    literal: bool,
+    task_target: Option<(&str, Option<&str>)>,
+) -> Result<(Candidates, Vec<String>, Option<MenuSuggestion>), CompleteError> {
     // Resolve Bob's date once: DATE may be a subprocess and timezone
     // configuration is read on each call.
     let today = crate::native::env::current_datetime().date();
@@ -65,15 +100,186 @@ pub(super) fn pomodoro_candidates(
             None
         }
     };
-    let candidates = theme_menu::compose(
-        &scan,
-        query,
-        hint.as_ref(),
-        catalog.as_ref(),
-        start,
-        literal,
+    let suggestion = if !start {
+        task_target.and_then(|(route, block_id)| {
+            resolve_task_suggestion(
+                bob_dir,
+                route,
+                block_id,
+                catalog.as_ref()?,
+                &mut warnings,
+            )
+        })
+    } else {
+        None
+    };
+    let (candidates, menu_suggestion) = if let Some(suggestion) = suggestion {
+        let choice = menu_choice(&suggestion, &scan, hint.as_ref());
+        let candidates = theme_menu::compose_task_aware(
+            &scan,
+            query,
+            hint.as_ref(),
+            catalog.as_ref(),
+            start,
+            literal,
+            &suggestion,
+            choice,
+        );
+        let output_choice = if matches!(choice, MenuChoice::Create)
+            && !query.is_empty()
+            && !candidates.iter().any(|row| row.suggested)
+        {
+            MenuChoice::Fallback(preselect::MenuFallback::CreationBlocked)
+        } else {
+            choice
+        };
+        (
+            candidates,
+            Some(MenuSuggestion::new(suggestion, output_choice, false)),
+        )
+    } else {
+        (
+            theme_menu::compose(
+                &scan,
+                query,
+                hint.as_ref(),
+                catalog.as_ref(),
+                start,
+                literal,
+            ),
+            None,
+        )
+    };
+    Ok((
+        Candidates::PomodoroName(candidates),
+        warnings,
+        menu_suggestion,
+    ))
+}
+
+fn resolve_task_suggestion(
+    bob_dir: &Path,
+    route: &str,
+    block_id: Option<&str>,
+    catalog: &pomodoro_themes::Catalog,
+    warnings: &mut Vec<String>,
+) -> Option<ThemeSuggestion> {
+    let cfg = match config::load_plan_config(&config::config_path()) {
+        Ok(config) => config,
+        Err(error) => {
+            warnings
+                .push(bounded_warning(format!("read plan config: {error}")));
+            return None;
+        }
+    };
+    let relative = capture::route_label(route);
+    let result = if let Some(block_id) = block_id {
+        let path = bob_dir.join(&relative);
+        let contents = match fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                String::new()
+            }
+            Err(error) => {
+                warnings.push(bounded_warning(format!(
+                    "read task note {}: {error}",
+                    path.display()
+                )));
+                String::new()
+            }
+        };
+        let settings = crate::native::note_tasks::read_settings(bob_dir);
+        match crate::native::note_tasks::unique_capture_task_line(
+            &contents, &settings, block_id,
+        ) {
+            Some(line) => {
+                let mut source =
+                    HomeResolver::new(DiskHomeSource::new(bob_dir));
+                pomodoro_themes::suggest::suggest_for_task(
+                    &mut source,
+                    catalog,
+                    &cfg,
+                    Path::new(&relative),
+                    line,
+                )
+            }
+            None => {
+                let mut source =
+                    HomeResolver::new(DiskHomeSource::new(bob_dir));
+                pomodoro_themes::suggest::suggest_for_new_task(
+                    &mut source,
+                    catalog,
+                    &cfg,
+                    Path::new(&relative),
+                )
+            }
+        }
+    } else {
+        let mut source = HomeResolver::new(DiskHomeSource::new(bob_dir));
+        pomodoro_themes::suggest::suggest_for_new_task(
+            &mut source,
+            catalog,
+            &cfg,
+            Path::new(&relative),
+        )
+    };
+    warnings.extend(result.warnings.iter().map(|warning| {
+        let suffix = warning.path.as_deref().map(|path| format!(" · {path}"));
+        bounded_warning(format!(
+            "{}{}",
+            warning.code,
+            suffix.unwrap_or_default()
+        ))
+    }));
+    result.suggestion
+}
+
+fn menu_choice(
+    suggestion: &ThemeSuggestion,
+    scan: &capture_pomodoros::PomodoroScan,
+    hint: Option<&PlanCreationHint>,
+) -> MenuChoice {
+    let (exempt, ledger_keys, before, cap, strict) = hint.map_or_else(
+        || (Vec::new(), Vec::new(), 0, 0, false),
+        |hint| {
+            (
+                hint.exempt.clone(),
+                hint.keys.clone(),
+                hint.before,
+                hint.cap,
+                hint.strict,
+            )
+        },
     );
-    Ok((Candidates::PomodoroName(candidates), warnings))
+    let entries = scan
+        .entries
+        .iter()
+        .map(|entry| MenuEntry {
+            name: entry.name.as_deref(),
+            open: entry.state == PomodoroState::Open,
+            running: entry.is_current,
+        })
+        .collect::<Vec<_>>();
+    let creation_allowed = scan.has_section
+        && scan
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.state == PomodoroState::Open && entry.time_range.is_some()
+            })
+            .count()
+            <= 1;
+    preselect::choose(
+        &suggestion.theme,
+        &entries,
+        &exempt,
+        &ledger_keys,
+        creation_allowed,
+        strict,
+        before,
+        cap,
+        false,
+    )
 }
 
 fn read_daily(
@@ -380,6 +586,7 @@ pub(super) struct PlanCreationHint {
     pub(super) keys: Vec<String>,
     pub(super) exempt: Vec<String>,
     pub(super) cap: u32,
+    pub(super) strict: bool,
 }
 
 pub(super) fn plan_creation_hint(
@@ -405,6 +612,7 @@ pub(super) fn plan_creation_hint(
             .map(|name| plan_budget::normalize_component(name))
             .collect(),
         cap: config.max_themes(),
+        strict: config.strict(),
     })
 }
 
@@ -465,6 +673,8 @@ pub(super) fn creation_candidate(
         requires_name: false,
         creates_pomodoro: true,
         next_up: false,
+        suggested: false,
+        suggestion_label: None,
         plan_themes_after,
         plan_themes_cap,
         line: None,
@@ -568,6 +778,8 @@ pub(super) fn pomodoro_name_candidate_with_next_up(
         requires_name,
         creates_pomodoro: false,
         next_up,
+        suggested: false,
+        suggestion_label: None,
         plan_themes_after: None,
         plan_themes_cap: None,
         line: Some(entry.line),

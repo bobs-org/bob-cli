@@ -245,13 +245,31 @@ pub(crate) fn shell_completion(
         }
         CompletionContext::PomodoroName
         | CompletionContext::PomodoroStartName => {
-            let (mut candidates, _) = pomodoro_candidates(
-                bob_dir,
-                &field.query,
-                field.context == CompletionContext::PomodoroStartName,
-                raw_text[field.replacement.0..].starts_with(['"', '“']),
-            )
-            .map_err(|error| error.message.clone())?;
+            let (mut candidates, _) = if field.context
+                == CompletionContext::PomodoroName
+            {
+                let route = field.route.as_deref().expect("route resolved");
+                let (candidates, warnings, _) =
+                    super::pomodoros::pomodoro_name_candidates_for_task(
+                        bob_dir,
+                        &field.query,
+                        raw_text[field.replacement.0..].starts_with(['"', '“']),
+                        route,
+                        field.block_id.as_deref(),
+                        capture_language::editor_item_at(raw_text, cursor)
+                            .is_some_and(|item| !item.body.trim().is_empty()),
+                    )
+                    .map_err(|error| error.message.clone())?;
+                (candidates, warnings)
+            } else {
+                pomodoro_candidates(
+                    bob_dir,
+                    &field.query,
+                    true,
+                    raw_text[field.replacement.0..].starts_with(['"', '“']),
+                )
+                .map_err(|error| error.message.clone())?
+            };
             if field.bare_name {
                 apply_bare_start_name_replacements(&mut candidates);
             }
@@ -266,7 +284,14 @@ pub(crate) fn shell_completion(
                 if full.is_empty() {
                     continue;
                 }
-                let description = if item.origin == Some("history") {
+                let description = if item.suggested {
+                    format!(
+                        "suggested · {}",
+                        item.suggestion_label
+                            .as_deref()
+                            .unwrap_or("task theme")
+                    )
+                } else if item.origin == Some("history") {
                     if item.last_used.is_none() {
                         "your theme · never used".to_string()
                     } else {
@@ -304,7 +329,9 @@ pub(crate) fn shell_completion(
                     nospace: ends_in_continuation(&full),
                     full,
                     description,
-                    group: if item.origin == Some("history") {
+                    group: if item.suggested {
+                        "Suggested"
+                    } else if item.origin == Some("history") {
                         "Recent"
                     } else {
                         "open Pomodoros"

@@ -57,6 +57,10 @@ impl TodayVault {
         let temp = TempDir::new(prefix);
         let vault = temp.path().join("vault");
         write_toggle_task_settings(&vault);
+        write_file(
+            &temp.path().join("config.yml"),
+            "plan:\n  max_themes: 30\n",
+        );
         write_file(&vault.join("ref/papers/attention.md"), ATTENTION);
         write_file(&vault.join("sase.md"), &area(task));
         let day_file = vault.join("day.md");
@@ -76,6 +80,10 @@ impl TodayVault {
         let temp = TempDir::new(prefix);
         let vault = temp.path().join("vault");
         write_toggle_task_settings(&vault);
+        write_file(
+            &temp.path().join("config.yml"),
+            "plan:\n  max_themes: 30\n",
+        );
         for (relative, contents) in notes {
             write_file(&vault.join(relative), contents);
         }
@@ -99,8 +107,38 @@ fn run_today(vault: &TodayVault, args: &[&str]) -> Output {
         .env("BOB_DIR", &vault.vault)
         .env("BOB_DAY_FILE", &vault.day_file)
         .env("BOB_NOW", NOW)
+        .env(
+            "BOB_CONFIG_FILE",
+            vault.vault.parent().unwrap().join("config.yml"),
+        )
         .output()
         .expect("run bob ref today")
+}
+
+#[test]
+fn today_listing_marks_the_task_theme_suggestion() {
+    let vault = TodayVault::new(
+        "bob-cli-ref-today-theme-suggestion",
+        ready_task(),
+        "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n- [ ] () — READ\n",
+    );
+    write_file(
+        &vault._temp.path().join("config.yml"),
+        "plan:\n  max_themes: 30\nthemes:\n  READ: auto\n",
+    );
+    let (output, json) = run_today_json(&vault, &["attention", "-d"]);
+    assert_success(&output);
+    assert_envelope(&json, true);
+    assert_eq!(json["theme_suggestion"]["source"], "reading");
+    assert_eq!(json["theme_suggestion"]["label"], "reading task");
+    let suggested = json["pomodoros"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["suggested"] == true)
+        .expect("suggested open Pomodoro");
+    assert_eq!(suggested["name"], "READ");
+    assert_eq!(suggested["suggestion_label"], "reading task");
 }
 
 fn run_today_json(vault: &TodayVault, args: &[&str]) -> (Output, Value) {

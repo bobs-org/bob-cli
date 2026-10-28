@@ -6296,6 +6296,21 @@ Nameable rows use an empty `replacement`; clients prompt for a name rather
 than inserting it. A theme completed today is Recent in this link context
 and an “again” row in the start context.
 
+In `pomodoro_name` only, capture completion is task-aware: body-bearing
+items use the destination note default, while a resolved
+`@route:block-id#`, `^route:block-id#`, or `@route+id#` uses that task's
+suggestion. The response adds top-level `theme_suggestion` (null when there
+is none), and one candidate at most adds `suggested: true` plus
+`suggestion_label`. A known suggestion with no matching open entry adds a
+suggested create row at the top for an empty query when creation is allowed;
+its Recent duplicate is removed. Hidden themes remain eligible for this
+suggested row. With a nonempty query, PT7 ordering stays unchanged and a
+matching row is marked in place. The top-level suggestion adds
+`fallback: "unknown_theme" | "creation_blocked" | "strict_cap"` when no
+row can be preselected. Zsh descriptions for a marked row read
+`suggested · <label>`. `pomodoro_start_name` and all other contexts keep
+their existing response shape.
+
 Accepting a creation or Recent row edits the draft only; the later
 `bob capture` transaction performs the write with its normal placement,
 missing-section, multiple-running, and strict-budget checks. A new create row

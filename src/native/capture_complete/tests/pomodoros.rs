@@ -421,6 +421,7 @@ fn pomodoro_start_name_again_rows_preview_plan_budget() {
         ],
         exempt: vec!["gtd".to_string()],
         cap: 3,
+        strict: false,
     };
     let candidates = pomodoro_start_name_candidates_from_scan_with_hint(
         &scan,
@@ -459,6 +460,7 @@ fn pomodoro_start_name_again_rows_preview_plan_budget() {
         ],
         exempt: vec!["gtd".to_string()],
         cap: 3,
+        strict: false,
     };
     let novel = pomodoro_start_name_candidates_from_scan_with_hint(
         &scan,
@@ -492,6 +494,7 @@ fn pomodoro_start_name_again_rows_preview_plan_budget() {
         ],
         exempt: vec!["gtd".to_string()],
         cap: 3,
+        strict: false,
     };
     let running = pomodoro_start_name_candidates_from_scan_with_hint(
         &running_scan,
@@ -715,6 +718,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
         candidates: Candidates::PomodoroName(vec![creation]),
+        theme_suggestion: None,
         r#override: None,
         block_id: None,
         warnings: Vec::new(),
@@ -745,6 +749,7 @@ fn plan_themes_after_counts_only_fresh_non_exempt_components() {
         keys: vec!["a".to_string(), "goals".to_string()],
         exempt: vec!["gtd".to_string()],
         cap: 3,
+        strict: false,
     };
     assert_eq!(
         plan_themes_after_for(Some(&hint), "GTD"),
@@ -770,6 +775,7 @@ fn plan_themes_after_counts_only_fresh_non_exempt_components() {
                 keys: vec!["a".to_string(), "goals".to_string()],
                 exempt: vec!["gtd".to_string()],
                 cap: 3,
+                strict: false,
             }),
         ),
         pomodoro_start_name_candidates_from_scan_with_hint(
@@ -780,6 +786,7 @@ fn plan_themes_after_counts_only_fresh_non_exempt_components() {
                 keys: vec!["a".to_string(), "goals".to_string()],
                 exempt: vec!["gtd".to_string()],
                 cap: 3,
+                strict: false,
             }),
         ),
     ] {
@@ -833,6 +840,7 @@ fn pomodoro_start_name_orders_repeated_completed_names_newest_first() {
         replacement: Replacement { start: 0, end: 2 },
         context: Some(CompletionContext::PomodoroStartName),
         candidates: Candidates::PomodoroName(candidates.clone()),
+        theme_suggestion: None,
         r#override: None,
         block_id: None,
         warnings: Vec::new(),

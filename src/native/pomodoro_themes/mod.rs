@@ -22,6 +22,7 @@ mod defaults;
 mod hints;
 mod hue;
 mod journal;
+pub(crate) mod preselect;
 mod rank;
 pub(crate) mod rename;
 mod scan;
