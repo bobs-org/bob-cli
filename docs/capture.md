@@ -2406,7 +2406,7 @@ only. Offers join the batch's single offer set: numbered, picked with
 `-p/--pull-in`, and gated by `--require-pull-in-choice`. A later item
 sees an earlier completion through the staged batch, so linking,
 starting, or completing it again is refused, or no-ops, exactly as
-after a `!`. Planned (phase `complete-capture`).
+after a `!`.
 
 **Human output.** Successful captures print `🪢` rows in the
 dependency style, for example:
@@ -2426,7 +2426,13 @@ cancel adds one bob-authored `⊘` row per source, for example
 (`would cancel` / `would remove` / `would unblock` on dry runs);
 an already-closed source prints the muted human line
 (`Already Cancelled · link only` / `Stays Done · link only`) instead,
-with no ⊘ and no `relation_cancels[]` row.
+with no ⊘ and no `relation_cancels[]` row. A staged complete adds one
+bob-authored `✓` row per source, for example
+`✓ completed “Sell stocks” · Todo → Done · struck 1 Pomodoro link · unblocked “Needs stocks”`
+(`would complete` / `would strike` / `would unblock` on dry runs);
+an already-closed source prints the muted human line
+(`Already Done · link only` / `Stays Cancelled · link only`) instead,
+with no ✓ and no `relation_completes[]` row.
 
 **JSON.** Every `schema_version` stays 1 and every field is
 additive. `capture-parse` adds `relations[]` (top-level and per

@@ -1113,7 +1113,7 @@ relations:
   boosted. Hidden still wins.
 - **Host-wide YAML**, like `linked_from_lines`. It never goes in the
   per-host label journal, and bob never edits `config.yml`.
-- **One effect per label** (planned, phase `complete-capture`). A key
+- **One effect per label.** A key
   listed in both `cancel_labels` and `complete_labels` closes nothing.
   bob drops it from **both** lists and warns once:
   `relations: “{label}” is in both cancel_labels and complete_labels in <path>; it closes nothing`.
@@ -1347,7 +1347,7 @@ surface's managed Done gesture would.
 
 ### CP1 The rule
 
-*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+*Status: implemented in capture; planned (phase `nav-complete-writer`).*
 
 When an explicit relation gesture **adds** a complete label to an open
 task, or **relabels** one of its links **into** a complete label, the
@@ -1374,7 +1374,7 @@ and "S verified by T" complete S.
 
 ### CP2 Config
 
-*Status: planned (phase `complete-capture`).*
+*Status: implemented in capture; live config rollout stays with the outer phases.*
 
 The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
 built-in default is `[]`.
@@ -1429,7 +1429,7 @@ relations:
 
 ### CP3 Which task completes
 
-*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+*Status: implemented in capture; planned (phase `nav-complete-writer`).*
 
 The source is always the task the label is phrased from: "S
 implemented by T" completes S.
@@ -1445,7 +1445,7 @@ implemented by T" completes S.
 
 ### CP4 What one commit writes
 
-*Status: planned (phase `complete-capture`, `cycler-done-api`,
+*Status: implemented in capture; planned (phase `cycler-done-api`,
 `nav-complete-writer`).*
 
 There is nothing new about Done. Each surface composes its **existing**
@@ -1485,7 +1485,7 @@ them, so neither does this.
 
 ### CP5 Verdicts and edge cases
 
-*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+*Status: implemented in capture; planned (phase `nav-complete-writer`).*
 
 There is one verdict function per engine: Rust
 `task_complete::verdicts` and JS `planRelationCompleteEffects`. Shared
@@ -1529,7 +1529,7 @@ More edge cases:
 
 ### CP6 The indication
 
-*Status: planned (phase `complete-surfaces`, `nav-complete-cue`,
+*Status: implemented in capture; planned (phase `complete-surfaces`, `nav-complete-cue`,
 `mac-complete-cue`).*
 
 Name the task, change the verb, use ✓, stay calm.
@@ -1568,7 +1568,7 @@ note stem, shown only when S is not in the active note (nav), or for
 
 ### CP7 Contracts
 
-*Status: planned (phase `complete-capture`, `complete-surfaces`).*
+*Status: capture fields implemented; planned (phase `complete-surfaces`).*
 
 All additions are additive, every `schema_version` stays 1, and every
 new field is omitted when it does not apply, so output with no
@@ -1607,7 +1607,7 @@ new field is omitted when it does not apply, so output with no
 
 ### CP8 Architecture
 
-*Status: planned (phase `complete-capture`, `cycler-done-api`).*
+*Status: implemented in Rust capture; planned (phase `cycler-done-api`).*
 
 - **One Done per engine, never a new one.**
   - Rust: complete-label commits call the same function `!` calls.

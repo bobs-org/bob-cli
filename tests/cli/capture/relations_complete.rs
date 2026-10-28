@@ -837,6 +837,133 @@ fn complete_distinct_sources_mixed_cancel_and_complete() {
     );
 }
 
+// Every open status completes; a custom status links only with its date kept.
+#[test]
+fn complete_open_statuses_complete_and_custom_links_only() {
+    let (_temp, vault, day, config) = setup("bob-cli-complete-statuses");
+    write_file(
+        &vault.join("a.md"),
+        concat!(
+            "- [ ] #task Ready [id:: a__ready] ^ready\n",
+            "- [*] #task Next [id:: a__next] ^next\n",
+            "- [/] #task Prog [id:: a__prog] ^prog\n",
+            "- [?] #task Blocked [id:: a__blocked] ^blocked\n",
+            "- [>] #task Custom ^custom\n",
+        ),
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+
+    for (block, symbol) in [
+        ("ready", " "),
+        ("next", "*"),
+        ("prog", "/"),
+        ("blocked", "?"),
+    ] {
+        let json = capture_json(
+            &vault,
+            &day,
+            &config,
+            &format!("@a+{block} ~b:beta|\"implemented by\""),
+        );
+        assert_eq!(
+            json["relation_updates"][0]["complete_effect"], "completed",
+            "{block}: {json}"
+        );
+        let complete = &json["relation_completes"][0];
+        assert_eq!(complete["previous_status"], symbol, "{block}: {complete}");
+        assert_eq!(
+            complete["task_complete"]["action"], "completed",
+            "{block}: {complete}"
+        );
+    }
+    let note = read(&vault, "a.md");
+    for block in ["ready", "next", "prog", "blocked"] {
+        assert!(
+            note.contains(&format!("- [x] #task")),
+            "open source {block} is Done:\n{note}"
+        );
+    }
+
+    let custom = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+custom ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(
+        custom["relation_updates"][0]["complete_effect"], "already_closed",
+        "{custom}"
+    );
+    assert!(custom.get("relation_completes").is_none(), "{custom}");
+    let note = read(&vault, "a.md");
+    assert!(
+        note.contains("- [>] #task Custom ^custom\n"),
+        "custom status keeps its bytes:\n{note}"
+    );
+}
+
+// Relabel into a complete label completes; relabel away leaves Done;
+// an unchanged retry (even after a manual reopen) never completes;
+// inverse labels never complete.
+#[test]
+fn complete_relabel_unchanged_inverse() {
+    let (_temp, vault, day, config) = setup("bob-cli-complete-relabel");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+
+    let plain = capture_json(&vault, &day, &config, "@a+alpha ~b:beta|see");
+    assert!(plain.get("relation_completes").is_none(), "{plain}");
+    assert!(read(&vault, "a.md").starts_with("- [ ] #task Alpha ^alpha\n"));
+
+    let relabel = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(relabel["relation_updates"][0]["action"], "relabeled");
+    assert_eq!(
+        relabel["relation_updates"][0]["complete_effect"], "completed",
+        "{relabel}"
+    );
+    assert!(read(&vault, "a.md").starts_with("- [x] #task Alpha"));
+
+    capture_json(&vault, &day, &config, "@a+alpha ~b:beta|see");
+    assert!(
+        read(&vault, "a.md").starts_with("- [x] #task Alpha"),
+        "relabel away leaves the source Done:\n{}",
+        read(&vault, "a.md")
+    );
+
+    // Manually reopen with the same edge still present: an unchanged
+    // retry must not complete again.
+    let reopened = read(&vault, "a.md").replacen(
+        "- [x] #task Alpha",
+        "- [ ] #task Alpha",
+        1,
+    );
+    write_file(&vault.join("a.md"), &reopened);
+    let retry = capture_json(&vault, &day, &config, "@a+alpha ~b:beta|see");
+    assert_eq!(retry["relation_updates"][0]["action"], "unchanged");
+    assert!(retry.get("relation_completes").is_none(), "{retry}");
+    assert!(
+        read(&vault, "a.md").starts_with("- [ ] #task Alpha"),
+        "unchanged retry leaves the reopened source open:\n{}",
+        read(&vault, "a.md")
+    );
+
+    // Inverse labels never complete.
+    write_file(&vault.join("c.md"), "- [ ] #task Gamma ^gamma\n");
+    let inverse =
+        capture_json(&vault, &day, &config, "@a+alpha ~c:gamma|implements");
+    assert!(inverse.get("relation_completes").is_none(), "{inverse}");
+    assert!(
+        read(&vault, "a.md").starts_with("- [ ] #task Alpha"),
+        "inverse label leaves the source open:\n{}",
+        read(&vault, "a.md")
+    );
+}
+
 // A label listed in both lists closes nothing and warns once.
 #[test]
 fn complete_overlap_label_closes_nothing() {
@@ -884,4 +1011,448 @@ fn complete_overlap_label_closes_nothing() {
         "the source stays open:\n{}",
         read(&vault, "a.md")
     );
+}
+
+// A `^prj` source completes like `!`: residents stay open and the copy
+// names how many.
+#[test]
+fn complete_prj_source_keeps_residents() {
+    let (_temp, vault, day, config) = setup("bob-cli-complete-prj");
+    write_file(
+        &vault.join("s.md"),
+        concat!(
+            "- [ ] #task Ship it [id:: s__prj] ^prj\n",
+            "- [ ] #task Resident one ^res-one\n",
+            "- [?] #task Resident blocked [fresh:: 2026-10-14] [dependsOn:: s__prj] ^res-blocked\n",
+            "\t- ⛓️ **DEPENDS ON:** [[s#^prj]]\n",
+        ),
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@s+prj ~b:beta|\"implemented by\"",
+    );
+    let complete = &json["relation_completes"][0];
+    assert_eq!(complete["project_open_tasks"], 2, "{complete}");
+    assert!(
+        complete["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("its 2 open tasks stay open"),
+        "{complete}"
+    );
+
+    let note = read(&vault, "s.md");
+    assert!(
+        note.contains("- [x] #task Ship it [id:: s__prj]"),
+        "the project completes:\n{note}"
+    );
+    assert!(
+        note.contains("- [ ] #task Resident one ^res-one\n"),
+        "residents stay open:\n{note}"
+    );
+}
+
+// Embedded subtasks follow `!` rules through the shared Done path.
+#[test]
+fn complete_embedded_subtasks_follow_bang() {
+    let (_temp, vault, day, config) = setup("bob-cli-complete-subtasks");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Root [id:: sase__root] ^root\n\t- ![[sase#^sub1]]\n\t- ![[sase#^sub2]]\n- [/] #task Sub one ^sub1\n- [?] #task Sub two ^sub2\n\t- ![[sase#^sub3]]\n- [ ] #task Sub three ^sub3\n",
+    );
+    write_file(&vault.join("t.md"), "- [ ] #task Target ^tgt\n");
+
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@sase+root ~t:tgt|\"implemented by\"",
+    );
+    let complete = &json["relation_completes"][0];
+    let subtasks = complete["task_complete"]["subtasks"]
+        .as_array()
+        .expect("subtasks");
+    assert_eq!(subtasks.len(), 1, "{complete}");
+    assert_eq!(subtasks[0]["block_id"], "sub1");
+    assert!(
+        read(&vault, "sase.md").contains("- [ ] #task Sub three ^sub3\n"),
+        "the task below a Blocked subtask stays open:\n{}",
+        read(&vault, "sase.md")
+    );
+}
+
+// Daily-note source, missing daily note, mirror kill switch, hidden
+// labels, midnight dates, and CRLF preservation.
+#[test]
+fn complete_locations_mirror_hidden_midnight_crlf() {
+    // Source in today's daily note: one staged file holds every write.
+    let (_temp, vault, _, config) = setup("bob-cli-complete-daily-source");
+    let day = vault.join("day.md");
+    write_file(
+        &day,
+        concat!(
+            "- [ ] #task Day task ^daytask\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] Morning 0900-1000\n",
+            "  - [[day#^daytask]]\n",
+        ),
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@day+daytask ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(
+        json["relation_updates"][0]["complete_effect"], "completed",
+        "{json}"
+    );
+    assert_eq!(
+        json["relation_completes"][0]["task_complete"]["ledger"]["struck"],
+        1
+    );
+    assert!(
+        read(&vault, "day.md").contains("- [x] #task Day task"),
+        "daily source completes in place:\n{}",
+        read(&vault, "day.md")
+    );
+
+    // No daily note on disk: the complete still stages, no note created.
+    let (_temp, vault, _, config) = setup("bob-cli-complete-no-day");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let missing = vault.join("2026/20261014.md");
+    let json = capture_json(
+        &vault,
+        &missing,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(
+        json["relation_updates"][0]["complete_effect"], "completed",
+        "{json}"
+    );
+    assert!(!missing.exists(), "capture never creates the daily note");
+
+    // Mirror kill switch skips only the mirror.
+    let (_temp, vault, day, _) = setup("bob-cli-complete-no-mirror");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let config = vault.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  linked_from_lines: false\n  complete_labels:\n    - implemented by\n",
+    );
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(json["mirror_skipped"][0]["reason"], "disabled", "{json}");
+    assert_eq!(
+        read(&vault, "b.md"),
+        "- [ ] #task Beta ^beta\n",
+        "the mirror stays untouched"
+    );
+
+    // Hidden labels still complete.
+    let (_temp, vault, day, config) = setup("bob-cli-complete-hidden");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let mut hide = bob_command();
+    hide.arg("relations")
+        .arg("hide")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--allow-unused")
+        .arg("--")
+        .arg("implemented by");
+    hide.env("BOB_CONFIG_FILE", &config);
+    let hide = hide.output().expect("hide the complete label");
+    assert_success(&hide);
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(
+        json["relation_completes"][0]["message"],
+        "✓ completed “Alpha” · Todo → Done",
+        "a hidden complete label still completes: {json}"
+    );
+
+    // Midnight dates follow BOB_NOW.
+    for (name, now, expected) in [
+        (
+            "bob-cli-complete-midnight-before",
+            "2026-10-14 23:59:00",
+            "2026-10-14",
+        ),
+        (
+            "bob-cli-complete-midnight-after",
+            "2026-10-15 00:05:00",
+            "2026-10-15",
+        ),
+    ] {
+        let (_temp, vault, day, config) = setup(name);
+        write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+        write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg("@a+alpha ~b:beta|\"implemented by\"");
+        command
+            .env("BOB_DAY_FILE", &day)
+            .env("BOB_NOW", now)
+            .env("BOB_CONFIG_FILE", &config);
+        let output = command.output().expect("run capture");
+        assert_success(&output);
+        assert!(
+            read(&vault, "a.md")
+                .contains(&format!("[completion:: {expected}]")),
+            "BOB_NOW {now} completes with {expected}:\n{}",
+            read(&vault, "a.md")
+        );
+    }
+
+    // CRLF preservation.
+    let (_temp, vault, day, config) = setup("bob-cli-complete-crlf");
+    fs::write(
+        vault.join("a.md"),
+        "- [ ] #task Alpha ^alpha\r\n- [ ] #task Beta ^beta\r\n",
+    )
+    .expect("write CRLF note");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"",
+    );
+    assert_eq!(
+        json["relation_updates"][0]["complete_effect"], "completed",
+        "{json}"
+    );
+    let raw = fs::read(vault.join("a.md")).expect("read raw note");
+    assert!(
+        raw.windows(2).any(|w| w == b"\r\n"),
+        "CRLF line endings survive the complete"
+    );
+}
+
+// The same fixture via `!` and via relation yields matching Done bytes,
+// allowing only the extra relation edits and documented token differences.
+#[test]
+fn complete_matches_bang_bytes() {
+    let build = |name: &str| {
+        let temp = TempDir::new(name);
+        let vault = temp.path().join("vault");
+        fs::create_dir_all(&vault).expect("create vault");
+        write_blocked_tasks_settings(&vault);
+        let day = vault.join("day.md");
+        write_file(&day, DAY);
+        let config = vault.join("config.yml");
+        write_file(&config, CONFIG);
+        write_file(
+            &vault.join("cash.md"),
+            concat!(
+                "- [ ] #task Sell stocks [id:: cash__sell-stocks] ^sell-stocks\n",
+                "- [?] #task Needs stocks [dependsOn:: cash__sell-stocks] [id:: cash__needs] ^needs-stocks\n",
+            ),
+        );
+        write_file(
+            &vault.join("today.md"),
+            concat!(
+                "## Pomodoros\n",
+                "- [ ] Morning 0900-1000\n",
+                "  - [[cash#^sell-stocks]]\n",
+            ),
+        );
+        (temp, vault, day, config)
+    };
+
+    let (_t1, v1, d1, c1) = build("bob-cli-complete-parity-bang");
+    let bang =
+        capture_json(&v1, &v1.join("today.md"), &c1, "!cash:sell-stocks");
+    let bang_line = read(&v1, "cash.md")
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+
+    let (_t2, v2, d2, c2) = build("bob-cli-complete-parity-rel");
+    write_file(
+        &v2.join("dev.md"),
+        "- [ ] #task Sell stocks now ^sell-stocks-now\n",
+    );
+    let rel = capture_json(
+        &v2,
+        &v2.join("today.md"),
+        &c2,
+        "@cash+sell-stocks ~dev:sell-stocks-now|\"implemented by\"",
+    );
+    let rel_line = read(&v2, "cash.md")
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let strip_links = |line: &str| {
+        line.replace("  [completion:: 2026-10-14]", "")
+            .replace("[completion:: 2026-10-14]", "")
+    };
+    // Both close the same task on the same date; the relation run adds
+    // only the LINKS child (checked on later lines).
+    assert!(
+        bang_line.contains("- [x] #task Sell stocks")
+            && bang_line.contains("[completion:: 2026-10-14]"),
+        "bang closes the source:\n{bang_line}\n{bang}"
+    );
+    assert!(
+        rel_line.contains("- [x] #task Sell stocks")
+            && rel_line.contains("[completion:: 2026-10-14]"),
+        "relation closes the same bytes:\n{rel_line}\n{rel}"
+    );
+    assert_eq!(
+        strip_links(&bang_line)
+            .replace("  ", " ")
+            .trim()
+            .to_string(),
+        strip_links(&rel_line).replace("  ", " ").trim().to_string(),
+        "Done bytes match apart from spacing"
+    );
+    let _ = (d1, d2);
+}
+
+// No config means a plain link; cancel-only config proves the shipped
+// cancel path still works and new fields stay absent.
+#[test]
+fn complete_no_config_and_cancel_only_compat() {
+    // No complete labels configured: same draft is a plain link.
+    let temp = TempDir::new("bob-cli-complete-inert");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    let day = vault.join("day.md");
+    write_file(&day, DAY);
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command.arg("--").arg("@a+alpha ~b:beta|\"implemented by\"");
+        command.env("BOB_DAY_FILE", &day).env("BOB_NOW", NOW);
+        let output = command.output().expect("run capture");
+        assert_success(&output);
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+    };
+    let dry: serde_json::Value = run(true);
+    let real: serde_json::Value = run(false);
+    assert!(dry.get("relation_completes").is_none(), "{dry}");
+    assert!(dry.get("warnings").is_none(), "{dry}");
+    assert!(
+        dry["relation_updates"][0].get("complete_effect").is_none(),
+        "{dry}"
+    );
+    assert!(real.get("relation_completes").is_none(), "{real}");
+    assert!(
+        read(&vault, "a.md").starts_with("- [ ] #task Alpha ^alpha\n"),
+        "the source stays open:\n{}",
+        read(&vault, "a.md")
+    );
+
+    // Cancel-only config: the shipped cancel path is unchanged and no
+    // complete fields appear.
+    let (_temp, vault, day, _) = setup("bob-cli-complete-cancel-only");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let config = vault.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n",
+    );
+    let json = capture_json(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"duplicate of\"",
+    );
+    assert_eq!(
+        json["relation_updates"][0]["cancel_effect"], "cancelled",
+        "{json}"
+    );
+    assert!(json.get("relation_completes").is_none(), "{json}");
+    assert!(
+        json["relation_updates"].as_array().unwrap()[0]
+            .get("complete_effect")
+            .is_none(),
+        "{json}"
+    );
+}
+
+// Reconcile never infers Done, and a late invalid item rolls the whole
+// batch back.
+#[test]
+fn complete_reconcile_never_infers_and_batch_atomic() {
+    // A LINKS line already carrying a complete label stays open until an
+    // explicit gesture: reconcile must not complete it.
+    let (_temp, vault, day, config) = setup("bob-cli-complete-reconcile");
+    write_file(
+        &vault.join("a.md"),
+        "- [ ] #task Alpha ^alpha\n\t- 🪢 **LINKS:** implemented by [[b#^beta]]\n",
+    );
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let mut reconcile = bob_command();
+    reconcile
+        .arg("task")
+        .arg("reconcile")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json");
+    reconcile
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", NOW)
+        .env("BOB_CONFIG_FILE", &config);
+    let output = reconcile.output().expect("run reconcile");
+    assert_success(&output);
+    assert!(
+        read(&vault, "a.md").starts_with("- [ ] #task Alpha ^alpha\n"),
+        "reconcile never completes:\n{}",
+        read(&vault, "a.md")
+    );
+
+    // A late invalid item refuses the whole batch atomically.
+    let (_temp, vault, day, config) = setup("bob-cli-complete-atomic");
+    write_file(&vault.join("a.md"), "- [ ] #task Alpha ^alpha\n");
+    write_file(&vault.join("b.md"), "- [ ] #task Beta ^beta\n");
+    let before = snapshot(&vault, &["a.md", "b.md", "day.md"]);
+    let (code, _) = capture_fail_code(
+        &vault,
+        &day,
+        &config,
+        "@a+alpha ~b:beta|\"implemented by\"\n\nNew thing ~a:alpha|\"implemented by\"",
+    );
+    assert_eq!(code, "relation_completes_new_task");
+    assert_unchanged(&vault, &before);
 }
