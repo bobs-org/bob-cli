@@ -905,6 +905,35 @@ fn themes_default_hints_track_edits_additions_deletions_types_and_knownness() {
 }
 
 #[test]
+fn themes_list_does_not_invent_off_or_whitespace_unknown_hints() {
+    let temp = TempDir::new("bob-cli-theme-default-off-blank");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    write_file(
+        &vault.join("padded-off.md"),
+        "---\ntype: [[area]]\ntheme: \" off \"\n---\n",
+    );
+    write_file(
+        &vault.join("quoted-blank.md"),
+        "---\ntype: [[project]]\ntheme: \"   \"\n---\n",
+    );
+    write_file(
+        &vault.join("unindented.md"),
+        "---\ntype: [[project]]\ntheme:\n- WRITE\n---\n",
+    );
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(
+        &vault.join("padded-off.md"),
+        "---\ntype: [[area]]\ntheme: MYSTERY\n---\n",
+    );
+    let after_edit = unknown_default_hints(&vault, &cache, &[]);
+    assert_eq!(after_edit.len(), 1);
+    assert_eq!(after_edit[0]["path"], "padded-off.md");
+    assert_eq!(after_edit[0]["name"], "MYSTERY");
+}
+
+#[test]
 fn themes_default_cache_rebuilds_on_corruption_fresh_and_new_vaults() {
     let temp = TempDir::new("bob-cli-theme-default-cache");
     let vault = temp.path().join("vault");

@@ -473,22 +473,55 @@ pub(crate) fn frontmatter_scalar(
         .unwrap_or("")
         .trim();
     if raw.is_empty() {
-        let next = frontmatter.lines.get(key_index + 1).copied().unwrap_or("");
-        let trimmed = next.trim_start();
-        if !trimmed.is_empty() && trimmed.len() < next.len() {
-            return FrontmatterScalar::NonScalar(trimmed.to_string());
-        }
-        return FrontmatterScalar::Blank;
+        return classify_empty_scalar_block(
+            &frontmatter.lines[key_index + 1..],
+        );
     }
     if raw.starts_with(['[', '{', '|', '>']) {
         return FrontmatterScalar::NonScalar(raw.to_string());
     }
-    let value = trim_yaml_scalar(raw);
+    let value = trim_yaml_scalar(raw).trim();
     if value.is_empty() {
         FrontmatterScalar::Blank
     } else {
         FrontmatterScalar::Value(value.to_string())
     }
+}
+
+/// Classify `key:` with no same-line value by looking at the following
+/// block: blank/comment lines, then either another top-level key (inherit)
+/// or a list/mapping/indented block (invalid).
+fn classify_empty_scalar_block(following: &[&str]) -> FrontmatterScalar {
+    for line in following {
+        if is_frontmatter_blank_or_comment(line) {
+            continue;
+        }
+        if is_unindented_frontmatter_key(line) {
+            return FrontmatterScalar::Blank;
+        }
+        return FrontmatterScalar::NonScalar(line.trim().to_string());
+    }
+    FrontmatterScalar::Blank
+}
+
+fn is_frontmatter_blank_or_comment(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty() || trimmed.starts_with('#')
+}
+
+fn is_unindented_frontmatter_key(line: &str) -> bool {
+    if line.starts_with([' ', '\t']) || is_yaml_sequence_item(line) {
+        return false;
+    }
+    let Some((key, _)) = line.split_once(':') else {
+        return false;
+    };
+    !key.is_empty() && !key.chars().any(char::is_whitespace)
+}
+
+fn is_yaml_sequence_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed == "-" || trimmed.starts_with("- ") || trimmed.starts_with("-\t")
 }
 
 pub(crate) fn trim_yaml_scalar(value: &str) -> &str {

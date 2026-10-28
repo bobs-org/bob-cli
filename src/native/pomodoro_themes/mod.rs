@@ -39,10 +39,6 @@ pub(crate) use journal::Prefs;
 pub(crate) use rank::{rank_history, RankTheme};
 pub(crate) use rename::{build_cli_rename, renamed_reappeared, run_rename};
 pub(crate) use split::{build_cli_split, run_split};
-#[allow(unused_imports)]
-pub(crate) use suggest::{
-    suggest_for_new_task, suggest_for_task, SuggestResult, ThemeSuggestion,
-};
 pub(crate) use write::{run_color, run_hide, run_unhide};
 
 pub(crate) const THEME_NOT_CONFIGURED: &str = "theme_not_configured";

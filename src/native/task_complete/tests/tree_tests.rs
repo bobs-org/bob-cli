@@ -97,6 +97,22 @@ fn explicit_completes_blocked_root_while_close_link_refuses_it() {
 }
 
 #[test]
+fn complete_task_tree_preserves_authored_theme_field_bytes() {
+    let mut vault = MemoryVault::new();
+    vault.insert("sase.md", "- [ ] #task Ship it (theme::  WRITE) ^ship\n");
+    let root = vault.absolute("sase.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "ship", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    let updated = outcome.changed_files.get(&root).expect("note changed");
+    assert!(updated.contains("(theme::  WRITE)"));
+    assert_eq!(updated.matches("(theme::  WRITE)").count(), 1);
+    assert!(updated.contains(
+        "- [x] #task Ship it (theme::  WRITE)  [completion:: 2026-10-05] ^ship"
+    ));
+}
+
+#[test]
 fn completion_field_spacing_with_and_without_block_id() {
     assert_eq!(
         add_or_replace_completion_field("- [x] #task Done ^done", DATE),

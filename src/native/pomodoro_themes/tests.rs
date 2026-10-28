@@ -24,8 +24,10 @@ use crate::native::{
 use super::{
     journal, rank_history, resolve_hue, scan,
     similar::{similar_to, SimilarTheme},
-    suggest_for_new_task, suggest_for_task, Catalog, HueSource, RankTheme,
-    SuggestResult, ThemeLookup, ThemeSuggestion,
+    suggest::{
+        suggest_for_new_task, suggest_for_task, SuggestResult, ThemeSuggestion,
+    },
+    Catalog, HueSource, RankTheme, ThemeLookup,
 };
 
 fn isolate_catalog_env(cache: &std::path::Path) -> TestEnvGuard {

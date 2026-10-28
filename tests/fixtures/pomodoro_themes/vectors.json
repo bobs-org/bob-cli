@@ -1082,6 +1082,10 @@
       "invalid_block.md": "---\ntype: [[project]]\nparent: [[dev]]\ntheme:\n  - BUILD\n---\n",
       "quoted.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: \"CHORE\"\n---\n",
       "blank.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme:\n---\n",
+      "padded_off.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: \" off \"\n---\n",
+      "quoted_blank.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: \"   \"\n---\n",
+      "unindented_list.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme:\n- WRITE\n---\n",
+      "blank_then_list.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme:\n\n  - WRITE\n---\n",
       "ignored.md": "---\ntype: [[note]]\nparent: [[sase_blog]]\ntheme: BUILD\n---\n",
       "secret.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: SECRET\n---\n",
       "chore_unused.md": "---\ntype: [[project]]\nparent: [[job]]\ntheme: CHORE\n---\n",
@@ -1464,6 +1468,72 @@
         }
       },
       {
+        "id": "padded-quoted-off-stops",
+        "residence": "padded_off.md",
+        "line": "- [ ] Padded off stops ^x",
+        "expected": null
+      },
+      {
+        "id": "quoted-blank-inherits",
+        "residence": "quoted_blank.md",
+        "line": "- [ ] Quoted blank inherits ^x",
+        "expected": {
+          "source": "note",
+          "label": "from job",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "job.md",
+            "stem": "job",
+            "kind": "area",
+            "chain": ["quoted_blank.md", "job.md"]
+          }
+        }
+      },
+      {
+        "id": "unindented-list-invalid",
+        "residence": "unindented_list.md",
+        "line": "- [ ] Unindented list is invalid ^x",
+        "expected": {
+          "source": "note",
+          "label": "from job",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "job.md",
+            "stem": "job",
+            "kind": "area",
+            "chain": ["unindented_list.md", "job.md"]
+          }
+        },
+        "warnings": [
+          { "code": "theme_default_invalid", "path": "unindented_list.md" }
+        ]
+      },
+      {
+        "id": "blank-then-list-invalid",
+        "residence": "blank_then_list.md",
+        "line": "- [ ] Blank then list is invalid ^x",
+        "expected": {
+          "source": "note",
+          "label": "from job",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "job.md",
+            "stem": "job",
+            "kind": "area",
+            "chain": ["blank_then_list.md", "job.md"]
+          }
+        },
+        "warnings": [
+          { "code": "theme_default_invalid", "path": "blank_then_list.md" }
+        ]
+      },
+      {
         "id": "ignored-non-home-theme",
         "residence": "ignored.md",
         "line": "- [ ] Note type theme ignored ^x",
@@ -1685,6 +1755,55 @@
       "name": "BUILD",
       "before": "- [ ] Title [theme:: FIX] (theme:: WRITE) [fresh:: 2026-10-01]",
       "after": "- [ ] Title [theme:: BUILD] [fresh:: 2026-10-01]"
+    },
+    {
+      "id": "set-before-spaced-created",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [created :: 2026-10-28] ^id",
+      "after": "- [ ] Title [theme:: WRITE] [created :: 2026-10-28] ^id"
+    },
+    {
+      "id": "set-before-tabbed-created",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [created\t::\t2026-10-28] ^id",
+      "after": "- [ ] Title [theme:: WRITE] [created\t::\t2026-10-28] ^id"
+    },
+    {
+      "id": "set-malformed-key-stays-title",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [key with spaces:: value] ^id",
+      "after": "- [ ] Title [key with spaces:: value] [theme:: WRITE] ^id"
+    },
+    {
+      "id": "set-replace-lf",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [theme:: FIX]\n",
+      "after": "- [ ] Title [theme:: WRITE]\n"
+    },
+    {
+      "id": "set-replace-crlf",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [theme:: FIX]\r\n",
+      "after": "- [ ] Title [theme:: WRITE]\r\n"
+    },
+    {
+      "id": "set-replace-no-final-newline",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [theme:: FIX]",
+      "after": "- [ ] Title [theme:: WRITE]"
+    },
+    {
+      "id": "set-preserves-trailing-whitespace",
+      "op": "set",
+      "name": "WRITE",
+      "before": "- [ ] Title [theme:: FIX]  \n",
+      "after": "- [ ] Title [theme:: WRITE]  \n"
     }
   ],
   "write_rule": [

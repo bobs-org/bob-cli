@@ -1,7 +1,5 @@
 //! Pure task-theme suggestion resolver over a [`HomeSource`].
 
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::path::Path;
 

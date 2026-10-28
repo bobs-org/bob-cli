@@ -3,13 +3,14 @@
 //! Kept independent of suggestion types so later capture writers can call
 //! these helpers without a module cycle.
 
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use super::{
+    plan_budget::{normalize_component, split_components},
     ref_tasks::strip_blockquote_prefix,
-    task_fields::{canonical_theme_name, inline_fields, InlineField},
+    task_fields::{
+        all_inline_fields, canonical_theme_name, inline_fields, InlineField,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -26,6 +27,8 @@ pub(crate) enum TaskThemeState {
     Repair { kind: RepairKind },
 }
 
+// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ThemeChange {
     None,
@@ -52,8 +55,10 @@ pub(crate) fn parse_task_theme(line: &str) -> TaskThemeState {
     }
 }
 
+// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_task_theme(line: &str, name: &str) -> String {
-    let (body, cr) = split_trailing_cr(line);
+    let (body, ending) = split_line_ending(line);
     let cleared = remove_theme_fields(body);
     let insertion = trailing_metadata_start(&cleared);
     let mut insert = format!("[theme:: {name}]");
@@ -65,25 +70,26 @@ pub(crate) fn set_task_theme(line: &str, name: &str) -> String {
     {
         insert.push(' ');
     }
-    let mut output = String::with_capacity(cleared.len() + insert.len() + 1);
+    let mut output =
+        String::with_capacity(cleared.len() + insert.len() + ending.len());
     output.push_str(&cleared[..insertion]);
     output.push_str(&insert);
     output.push_str(&cleared[insertion..]);
-    if cr {
-        output.push('\r');
-    }
+    output.push_str(ending);
     output
 }
 
+// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn clear_task_theme(line: &str) -> String {
-    let (body, cr) = split_trailing_cr(line);
+    let (body, ending) = split_line_ending(line);
     let mut output = remove_theme_fields(body);
-    if cr {
-        output.push('\r');
-    }
+    output.push_str(ending);
     output
 }
 
+// Capture-write, ledger field writer, and Task Card setters (bob-cli-dm.4/.5/.7).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_theme_change(
     field: &TaskThemeState,
     shown_suggestion_key: Option<&str>,
@@ -140,25 +146,18 @@ fn single_non_exempt_component(
 }
 
 fn component_key(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    normalize_component(value)
 }
 
-fn split_components(name: &str) -> Vec<String> {
-    name.split('+')
-        .map(str::trim)
-        .filter(|component| !component.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn split_trailing_cr(line: &str) -> (&str, bool) {
-    match line.strip_suffix('\r') {
-        Some(body) => (body, true),
-        None => (line, false),
+fn split_line_ending(line: &str) -> (&str, &str) {
+    if let Some(body) = line.strip_suffix("\r\n") {
+        (body, "\r\n")
+    } else if let Some(body) = line.strip_suffix('\n') {
+        (body, "\n")
+    } else if let Some(body) = line.strip_suffix('\r') {
+        (body, "\r")
+    } else {
+        (line, "")
     }
 }
 
@@ -366,19 +365,11 @@ fn trailing_tag_start(trimmed: &str, floor: usize) -> Option<usize> {
 
 fn trailing_field_key(trimmed: &str) -> Option<(usize, String)> {
     let mut end = trimmed.len();
-    if trimmed[..end].ends_with(',') {
+    if trimmed.ends_with(',') {
         end -= 1;
         end = trimmed[..end].trim_end().len();
     }
-    let close = trimmed[..end].chars().next_back()?;
-    let open = match close {
-        ']' => '[',
-        ')' => '(',
-        _ => return None,
-    };
-    let without_close = &trimmed[..end - close.len_utf8()];
-    let start = without_close.rfind(open)?;
-    let inner = without_close[start + open.len_utf8()..].trim();
-    let (key, _) = inner.split_once("::")?;
-    (key == key.trim()).then(|| (start, key.trim().to_string()))
+    let slice = &trimmed[..end];
+    let field = all_inline_fields(slice).into_iter().last()?;
+    (field.end == slice.len()).then_some((field.start, field.key))
 }

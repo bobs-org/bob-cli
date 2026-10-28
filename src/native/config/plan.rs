@@ -315,9 +315,7 @@ fn parse_reading_theme(
 ) -> Result<Option<String>, ConfigError> {
     let path_display = path.display();
     match value {
-        None | Some(serde_yaml::Value::Null) => {
-            Ok(PlanConfig::default().reading_theme)
-        }
+        None => Ok(PlanConfig::default().reading_theme),
         Some(serde_yaml::Value::String(text)) => {
             let trimmed = text.trim();
             if trimmed.eq_ignore_ascii_case("off") {
@@ -454,6 +452,7 @@ mod tests {
             "plan:\n  reading_theme: 7\n",
             "plan:\n  reading_theme: []\n",
             "plan:\n  reading_theme: \"\"\n",
+            "plan:\n  reading_theme: null\n",
             "plan: [1, 2]\n",
         ] {
             let error = parse_plan_config(text, Path::new("/config.yml"))
@@ -533,12 +532,12 @@ mod tests {
         )
         .expect("absent reading_theme");
         assert_eq!(defaulted.reading_theme(), Some("READ"));
-        let nulled = parse_plan_config(
-            "plan:\n  reading_theme: null\n",
+        let padded_off = parse_plan_config(
+            "plan:\n  reading_theme: \" off \"\n",
             Path::new("/config.yml"),
         )
-        .expect("null reading_theme");
-        assert_eq!(nulled.reading_theme(), Some("READ"));
+        .expect("padded off reading_theme");
+        assert_eq!(padded_off.reading_theme(), None);
         let off = parse_plan_config(
             "plan:\n  reading_theme: off\n",
             Path::new("/config.yml"),
@@ -551,6 +550,12 @@ mod tests {
         )
         .expect("named reading_theme");
         assert_eq!(named.reading_theme(), Some("STUDY"));
+        let null_error = parse_plan_config(
+            "plan:\n  reading_theme: null\n",
+            Path::new("/config.yml"),
+        )
+        .expect_err("explicit null is a config error");
+        assert!(matches!(null_error, ConfigError::Invalid(_)));
     }
 
     #[test]
@@ -560,6 +565,7 @@ mod tests {
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  strict: \"yes\"\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  exempt: GTD\n",
             "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  reading_theme: BUILD + FIX\n",
+            "properties:\n  - name: priority\n    values: priority\n    schedules: scheduled\n    levels:\n      - label: P1\n        value: high\n        min_days: 1\n        max_days: 1\nplan:\n  reading_theme: null\n",
         ] {
             let path = Path::new("/config.yml");
             super::super::parse_priority_property(text, path)

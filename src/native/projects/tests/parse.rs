@@ -381,3 +381,70 @@ fn project_parser_reports_invalid_and_duplicate_inline_prj_scheduled() {
         "multiple ^prj scheduled fields found; keep exactly one"
     );
 }
+
+#[test]
+fn frontmatter_scalar_trims_quotes_and_classifies_value_blocks() {
+    let padded_off =
+        parse_frontmatter("---\ntheme: \" off \"\n---\n").expect("frontmatter");
+    assert_eq!(
+        frontmatter_scalar(&padded_off, "theme"),
+        FrontmatterScalar::Value("off".into())
+    );
+    let quoted_blank =
+        parse_frontmatter("---\ntheme: \"   \"\n---\n").expect("frontmatter");
+    assert_eq!(
+        frontmatter_scalar(&quoted_blank, "theme"),
+        FrontmatterScalar::Blank
+    );
+    let unindented =
+        parse_frontmatter("---\ntheme:\n- WRITE\n---\n").expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&unindented, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    let blank_then_list = parse_frontmatter("---\ntheme:\n\n  - WRITE\n---\n")
+        .expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&blank_then_list, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    let comment_then_list =
+        parse_frontmatter("---\ntheme:\n# skip\n- WRITE\n---\n")
+            .expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&comment_then_list, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    let blank_then_key =
+        parse_frontmatter("---\ntheme:\nparent: [[dev]]\n---\n")
+            .expect("frontmatter");
+    assert_eq!(
+        frontmatter_scalar(&blank_then_key, "theme"),
+        FrontmatterScalar::Blank
+    );
+    let indented = parse_frontmatter("---\ntheme:\n  - WRITE\n---\n")
+        .expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&indented, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    let flow =
+        parse_frontmatter("---\ntheme: [WRITE]\n---\n").expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&flow, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    let mapping =
+        parse_frontmatter("---\ntheme: {a: 1}\n---\n").expect("frontmatter");
+    assert!(matches!(
+        frontmatter_scalar(&mapping, "theme"),
+        FrontmatterScalar::NonScalar(_)
+    ));
+    assert_eq!(
+        frontmatter_scalar(
+            &parse_frontmatter("---\ncolor: blue\n---\n").expect("frontmatter"),
+            "theme"
+        ),
+        FrontmatterScalar::Absent
+    );
+}

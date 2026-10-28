@@ -31,12 +31,14 @@ pub(crate) struct InlineField {
     /// Byte range of the trimmed value inside the field.
     pub(crate) value_start: usize,
     pub(crate) value_end: usize,
+    /// Case-sensitive key, without delimiters or `::`.
+    pub(crate) key: String,
     /// The trimmed value.
     pub(crate) value: String,
 }
 
-/// Every `key` field on `line`, in line order.
-pub(crate) fn inline_fields(line: &str, key: &str) -> Vec<InlineField> {
+/// Every recognized `[key:: value]` / `(key:: value)` field on `line`.
+pub(crate) fn all_inline_fields(line: &str) -> Vec<InlineField> {
     INLINE_FIELD_RE
         .captures_iter(line)
         .filter_map(|captures| {
@@ -51,38 +53,41 @@ pub(crate) fn inline_fields(line: &str, key: &str) -> Vec<InlineField> {
                         captures.get(4).map(|value| (group.as_str(), value))
                     })
                 })?;
-            (matched_key == key).then(|| {
-                let raw_text = raw.as_str();
-                let leading = raw_text.len().saturating_sub(
-                    raw_text.trim_start_matches([' ', '\t']).len(),
-                );
-                let trimmed = raw_text.trim_start_matches([' ', '\t']);
-                let trailing = trimmed.len().saturating_sub(
-                    trimmed.trim_end_matches([' ', '\t']).len(),
-                );
-                let value_start = raw.start() + leading;
-                let value_end = raw.end() - trailing;
-                InlineField {
-                    start: whole.start(),
-                    end: whole.end(),
-                    value_start,
-                    value_end,
-                    value: line[value_start..value_end].to_string(),
-                }
+            let raw_text = raw.as_str();
+            let leading = raw_text
+                .len()
+                .saturating_sub(raw_text.trim_start_matches([' ', '\t']).len());
+            let trimmed = raw_text.trim_start_matches([' ', '\t']);
+            let trailing = trimmed
+                .len()
+                .saturating_sub(trimmed.trim_end_matches([' ', '\t']).len());
+            let value_start = raw.start() + leading;
+            let value_end = raw.end() - trailing;
+            Some(InlineField {
+                start: whole.start(),
+                end: whole.end(),
+                value_start,
+                value_end,
+                key: matched_key.to_string(),
+                value: line[value_start..value_end].to_string(),
             })
         })
         .collect()
 }
 
+/// Every `key` field on `line`, in line order.
+pub(crate) fn inline_fields(line: &str, key: &str) -> Vec<InlineField> {
+    all_inline_fields(line)
+        .into_iter()
+        .filter(|field| field.key == key)
+        .collect()
+}
+
 /// Whether `line` carries any field named by `keys`.
 pub(crate) fn has_any_field(line: &str, keys: &[&str]) -> bool {
-    INLINE_FIELD_RE.captures_iter(line).any(|captures| {
-        captures
-            .get(1)
-            .map(|group| group.as_str())
-            .or_else(|| captures.get(3).map(|group| group.as_str()))
-            .is_some_and(|matched_key| keys.contains(&matched_key))
-    })
+    all_inline_fields(line)
+        .iter()
+        .any(|field| keys.contains(&field.key.as_str()))
 }
 
 /// A strict `YYYY-MM-DD` calendar date; anything else (including
@@ -107,45 +112,12 @@ pub(crate) fn format_calendar_date(date: NaiveDate) -> String {
 }
 
 /// Canonical single-component theme name: trimmed, nonempty, no `+`,
-/// and accepted by the Pomodoro-name character class after uppercasing.
+/// and accepted by [`super::capture_pomodoros::canonicalize_pomodoro_name`].
 pub(crate) fn canonical_theme_name(raw: &str) -> Option<String> {
     if raw.contains('+') {
         return None;
     }
-    let name = raw
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_uppercase();
-    is_theme_component(&name).then_some(name)
-}
-
-fn is_theme_component(name: &str) -> bool {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() && !first.is_ascii_digit() {
-        return false;
-    }
-    let mut has_letter = first.is_ascii_uppercase();
-    for character in chars {
-        let allowed = first_or_rest_theme_char(character);
-        if !allowed {
-            return false;
-        }
-        has_letter |= character.is_ascii_uppercase();
-    }
-    has_letter
-}
-
-fn first_or_rest_theme_char(character: char) -> bool {
-    character.is_ascii_uppercase()
-        || character.is_ascii_digit()
-        || matches!(
-            character,
-            ' ' | '\t' | '&' | '\'' | '(' | ')' | ',' | '.' | '/' | '-'
-        )
+    super::capture_pomodoros::canonicalize_pomodoro_name(raw)
 }
 
 #[cfg(test)]
@@ -280,5 +252,27 @@ mod tests {
         assert_eq!(canonical_theme_name(""), None);
         assert_eq!(canonical_theme_name("+++"), None);
         assert_eq!(canonical_theme_name("??"), None);
+    }
+
+    #[test]
+    fn all_inline_fields_reports_keys_and_spaced_separators() {
+        let line =
+            "- [ ] A [created :: 2026-10-28] (mood:: grumpy) [bad key:: x]";
+        let fields = all_inline_fields(line);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["created", "mood"]
+        );
+        assert_eq!(
+            &line[fields[0].start..fields[0].end],
+            "[created :: 2026-10-28]"
+        );
+        assert_eq!(fields[0].value, "2026-10-28");
+        assert_eq!(inline_fields(line, "created").len(), 1);
+        assert!(has_any_field(line, &["mood"]));
+        assert!(!has_any_field(line, &["bad"]));
     }
 }

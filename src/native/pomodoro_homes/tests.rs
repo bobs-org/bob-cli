@@ -153,6 +153,22 @@ fn note_facts_parse_theme_scalars_lists_and_off() {
         "---\ntype: [[note]]\ntheme: BUILD\nparent: [[dev]]\n---\n",
     );
     assert_eq!(ignored.theme, Some(NoteTheme::Name("BUILD".into())));
+    let padded_off =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme: \" off \"\n---\n");
+    assert_eq!(padded_off.theme, Some(NoteTheme::Off));
+    let quoted_blank =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme: \"   \"\n---\n");
+    assert_eq!(quoted_blank.theme, None);
+    let unindented =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme:\n- WRITE\n---\n");
+    assert!(matches!(unindented.theme, Some(NoteTheme::Invalid(_))));
+    let blank_then_list =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme:\n\n  - WRITE\n---\n");
+    assert!(matches!(blank_then_list.theme, Some(NoteTheme::Invalid(_))));
+    let blank_then_key = NoteFacts::parse(
+        "---\ntype: [[project]]\ntheme:\nparent: [[dev]]\n---\n",
+    );
+    assert_eq!(blank_then_key.theme, None);
 }
 
 #[test]
