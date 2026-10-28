@@ -72,6 +72,8 @@ pub(crate) fn inverse_phrase(label: &str) -> Option<&'static str> {
         ("follow-up of", "followed up by"),
         ("superseded by", "supersedes"),
         ("split from", "split into"),
+        ("implemented by", "implements"),
+        ("verified by", "verifies"),
     ];
     let collapsed = collapse_label_text(label);
     INVERSES.iter().find_map(|(stored, inverse)| {

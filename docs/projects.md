@@ -1130,6 +1130,12 @@ cancels that lifecycle task the same way Task Card `x` does: `[-]` and
 residents that were blocked only by the project, with no successor
 offers.
 
+A [complete-label commit](task-relations.md#18-complete-labels) on a
+`^prj` closes that lifecycle task the same way `!` or Ctrl+Enter does:
+`[x]` and `  [completion:: today]`. Open residents stay open; recovery
+unblocks residents that were blocked only by the project, and the
+close offers successors like any other managed Done.
+
 ```markdown
 - [-] #task Add new `Agents` sub-tab to `Artifacts` tab! [priority:: high] [created::
   2026-08-14] [cancelled:: 2026-09-30] ^agents-tab

@@ -8,8 +8,9 @@ text. The relation is authored once on the source's
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
 the target always converges to it. Live chips render both ends
 correctly, and relations never block, promote, consume, schedule,
-stamp, or route anything. The one exception is the commit-time
-cancel of [§17](#17-cancel-labels).
+stamp, or route anything. The exceptions are the commit-time
+cancel of [§17](#17-cancel-labels) and the commit-time complete of
+[§18](#18-complete-labels).
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_relations/` (LINKS and LINKED FROM parsers, label
@@ -47,6 +48,12 @@ vector, fix this doc first in the same change.
   `relations.cancel_labels`. Committing one through an explicit
   relation gesture cancels the relation's source exactly as Task
   Card Cancel would ([§17](#17-cancel-labels)).
+- **Complete label**: a relation label listed in
+  `relations.complete_labels`. Committing one through an explicit
+  relation gesture marks the relation's source Done exactly as that
+  surface's managed Done gesture would ([§18](#18-complete-labels)).
+- **Closing label**: a cancel label or a complete label. One label
+  carries at most one effect.
 - **Task Link** keeps its glossary meaning: a block link to an
   Obsidian task. Entries on a LINKS line are block links to tasks,
   but they are **never** Pomodoro Task Links.
@@ -73,7 +80,10 @@ A relation write, a relation line, or a relation gesture never:
   archived. Relations are history;
 - except the commit-time cancel of [§17](#17-cancel-labels), which
   may cancel the source, prune its links from today's open
-  Pomodoros, and recover blocked dependents.
+  Pomodoros, and recover blocked dependents, and the commit-time
+  complete of [§18](#18-complete-labels), which may mark the source
+  Done, retire its links from today's open Pomodoros, recover
+  blocked dependents, and offer successors.
 
 A link that needs to block is a dependency (`&`, `b`).
 
@@ -257,7 +267,11 @@ T owns a LINKED FROM line ⇔ mirror(T) ≠ ∅ ∧ T is writable (not done/, no
 - **Rename exception (LR7).** `bob relations rename` rewrites matching
   label spans in `LINKS` and `LINKED FROM`, including `done/` and the
   previous daily note. It preserves each edge and every other byte;
-  no other relation writer can change those notes.
+  no other relation writer can change those notes. A reversed rename
+  ([RV10](#rv10-reversing-a-label), planned, phase `reverse-rename`)
+  may move an edge's entry between the two ends' LINKS lines,
+  including in `done/`. It still never changes a status, a field, or
+  another byte.
 
 ## 7. Reconciliation
 
@@ -303,6 +317,7 @@ failed follow-ups are repaired by reconcile.
 | Ctrl+Shift+M, `bob task move`, `bob task archive`, Obsidian rename | The LINKS line moves with its task, and generic link rebasing applies. Reconcile re-sorts and repairs the mirrors. |
 | Closes, cancels, reopens | None. Lifecycle events never write or remove a relation. |
 | Cancel-label commit | [§17](#17-cancel-labels). An explicit add or relabel into a cancel label cancels the source as Task Card Cancel would. |
+| Complete-label commit | [§18](#18-complete-labels). An explicit add or relabel into a complete label marks the source Done as that surface's managed Done gesture would. |
 
 All writers share one planner, implemented in Rust with a JS twin and
 pinned by the same LW vectors. Writers compare canonical output
@@ -366,6 +381,8 @@ stored):
 | `follow-up of` | `followed up by` |
 | `superseded by` | `supersedes` |
 | `split from` | `split into` |
+| `implemented by` | `implements` |
+| `verified by` | `verifies` |
 
 The nav Linked-from stage's CURRENT rows use the same table.
 
@@ -464,8 +481,9 @@ group in the dependency style, and `--dry-run` previews all of it.
 2. **Inertness (LR18, LX13, LG13).** Adding, removing, or relabelling
    any relation leaves every status, lane, field, schedule, Pomodoro
    section, and Depends-On / BLOCKS line byte-identical, apart from a
-   minted `^id`. The one carve-out is the commit-time cancel of
-   [§17](#17-cancel-labels).
+   minted `^id`. The carve-outs are the commit-time cancel of
+   [§17](#17-cancel-labels) and the commit-time complete of
+   [§18](#18-complete-labels).
 3. **Engine agreement (LW14, LK\*).** Rust and JS agree on every LK,
    LW, and LM vector, malformed cases included.
 4. **Live view (LC8).** Chips render from the live index, never from
@@ -475,6 +493,8 @@ group in the dependency style, and `--dry-run` previews all of it.
 6. **Read-only respect (LR7).** Relation writes leave `done/` and the
    previous daily note alone, except `bob relations rename`, which
    rewrites relation-label spans only and preserves every other byte.
+   A reversed rename may move an edge between the two ends' LINKS
+   lines, including in `done/`, and still never changes a status.
 
 ## 14. Lifecycle
 
@@ -483,6 +503,9 @@ group in the dependency style, and `--dry-run` previews all of it.
 - **Relabel away from a cancel label, or unlink.** S stays
   Cancelled. Nothing ever reopens because of a label
   ([§17](#17-cancel-labels)).
+- **Relabel away from a complete label, or unlink.** S stays Done.
+  Nothing ever reopens because of a label
+  ([§18](#18-complete-labels)).
 - **Archive S.** Link repair rewrites T's mirror entry to the
   `[[done/…#^s]]` form; reconcile keeps it unchanged (LR22).
 - **Archive T.** No mirror is written in `done/`; chips show the live
@@ -570,8 +593,9 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LR15 | two LINKED FROM lines | first rewritten, the rest deleted (`deduplicated`) |
 | LR16 | `relations.linked_from_lines: false`, then `true` | every LINKED FROM on writable tasks removed, no mints; then rebuilt |
 | LR17 | invalid `relations.linked_from_lines` | behaves as `true`; stderr warning |
-| LR18 | relation added / removed / relabelled between runs | only LINKED FROM lines and minted ids differ; an open source whose LINKS already carries a cancel label stays open (LR25) |
+| LR18 | relation added / removed / relabelled between runs | only LINKED FROM lines and minted ids differ; an open source whose LINKS already carries a cancel label stays open (LR25); an open source whose LINKS already carries a complete label stays open (LR26) |
 | LR25 | reconcile an open source whose LINKS carries a configured cancel label | status, checkbox, and `[cancelled::]` byte-identical; reconcile never cancels |
+| LR26 | reconcile an open source whose LINKS carries a configured complete label | status, checkbox, and `[completion::]` byte-identical; reconcile never completes |
 | LR19 | A → B and B → A | each lists the other |
 | LR20 | `--dry-run -f json` | identical rows; nothing written; no mints persisted |
 | LR21 | owner's note modified less than 2 s ago | edits deferred |
@@ -595,7 +619,7 @@ group in the dependency style, and `--dry-run` previews all of it.
 | LX10 | T's LINKED FROM malformed | capture succeeds; `mirror_skipped` `malformed_line` and a warning |
 | LX11 | `x ~job:cleanup` | `operator_relation_error` |
 | LX12 | any LX vector, dry run vs live | identical JSON apart from `dry_run` |
-| LX13 | any relation capture | no `[fresh::]`, lane, status, or Pomodoro change on S or T, except a [§17](#17-cancel-labels) cancel-label commit |
+| LX13 | any relation capture | no `[fresh::]`, lane, status, or Pomodoro change on S or T, except a [§17](#17-cancel-labels) cancel-label commit or a [§18](#18-complete-labels) complete-label commit |
 | LX14 | `N ~T1 ~T2 ~T1` / `N ~T1\|a ~T1\|b` | T1 then T2, duplicate no-op / refused |
 | LX15 | `N ~T ~~T` | two independent edges |
 | LX16 | a same-note S and T | both edits composed against staged text; one write of the note |
@@ -660,7 +684,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG10 | hand edit adds / removes / relabels a LINKS entry, cursor leaves | mirrors follow; Ctrl+Z re-fires the mirror |
 | LG11 | hand edit confined to LINKED FROM | notice once; no edge change |
 | LG12 | `3 Ctrl+Shift+L`, choose T with a label | four sources each gain one labelled entry |
-| LG13 | any relation gesture on an inbox task or a `]s` landing | no stamp, lane change, inbox routing, or walk advance, except a [§17](#17-cancel-labels) cancel of the landed source |
+| LG13 | any relation gesture on an inbox task or a `]s` landing | no stamp, lane change, inbox routing, or walk advance, except a [§17](#17-cancel-labels) cancel of the landed source or a [§18](#18-complete-labels) complete of the landed source |
 | LG14 | kill switch off | no mirror writes and no source mints |
 | LG15 | Tab marks two targets, then ↵ | both linked in one gesture and one notice |
 | LG16 | `~` typed anywhere in a Links / Linked-from filter | the stage flips direction in place; filter text and caret kept, the `~` never typed, marks cleared; a counted session refuses the flip to Linked from with "Linked from needs a single task" |
@@ -687,7 +711,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 
 ## 16. Label vocabulary
 
-Rules RV1–RV9 are shipped.
+Rules RV1–RV9 are shipped. RV10 is planned (phase `reverse-rename`).
 
 ### RV1 Words
 
@@ -804,14 +828,15 @@ Every `schema_version` stays 1; JSON grows additively.
   ```text
   bob relations [list] [-a/--all] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]
   bob relations hide LABEL…   [-f/--format human|json] [--allow-unused]
-  bob relations rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]
+  bob relations rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline] [-r/--reverse]
   bob relations unhide LABEL… [-f/--format human|json]
   ```
 
   Hidden internal arguments: `--via CLIENT` (default `bob-cli`) on
   every writer, and `--allow-unused` on `hide`. Clients that hide a
   label they just wrote, before bob can see it on disk, pass
-  `--allow-unused`.
+  `--allow-unused`. `-r/--reverse` is planned (phase `reverse-rename`);
+  see [RV10](#rv10-reversing-a-label).
 
 - **Human list** (mint relation accent on a TTY, dim counts; still
   readable with `NO_COLOR`):
@@ -826,15 +851,20 @@ Every `schema_version` stays 1; JSON grows additively.
   With `relations.cancel_labels` configured the header gains
   `· N cancel`, cancel rows read `N links     ⊘ cancels source`, and
   `-a` lists zero-use configured labels with `configured: true`.
+  Planned (phase `complete-surfaces`): with `relations.complete_labels`
+  configured the header gains `· N complete`, and complete rows read
+  `✓ completes source`.
 
 - **JSON list:**
   `{schema_version, ok, counts:{labels, links, hidden},
   labels:[{key, name, count, hidden, inverse, spellings,
-  replacement, hide_replacement, cancels_source?, configured?}],
-  renamed_reappeared, warnings, cancel_labels?}`. `cancels_source` is true
+  replacement, hide_replacement, cancels_source?, completes_source?, configured?}],
+  renamed_reappeared, warnings, cancel_labels?, complete_labels?}`. `cancels_source` is true
   on configured cancel-label rows; `configured` marks zero-use overlay
   rows; both are omitted otherwise. `cancel_labels` counts the configured
-  labels and is omitted when none are configured.
+  labels and is omitted when none are configured. Planned
+  (phase `complete-surfaces`): `completes_source` and `complete_labels`
+  follow the same omit-when-absent rule.
   `renamed_reappeared` reports an OLD label used again after its rename;
   it reports the row and never rewrites the new use.
 - **Writers** emit `{schema_version, ok, …}`. Human hide output reads:
@@ -873,6 +903,11 @@ Every `schema_version` stays 1; JSON grows additively.
   `relation_cancels[]`, `cancel_effect`, and the
   `relation_cancelled_source` warning. The `capture`, `capture-parse`,
   `capture-complete`, and `relations list` fields are implemented.
+- **Complete labels** ([§18](#18-complete-labels), planned): additive
+  `completes_source` / `configured` row flags, `relation_complete`,
+  `relation_completes[]`, `complete_effect`, and the
+  `relation_completed_source` warning. Fields are omitted when they
+  do not apply. See CP7.
 
 ### RV8 The rename transaction
 
@@ -889,7 +924,11 @@ and changed line, link and mirror counts (including `done/`), state and
 inverse changes, and NEW's `replacement` and `hide_replacement` forms.
 Renaming into or out of a cancel label never cancels; the preview warns
 `“{label}” is a cancel label in config.yml — update
-relations.cancel_labels`.
+relations.cancel_labels`. Renaming into or out of a complete label
+never completes ([§18](#18-complete-labels)); the preview warns
+`“{label}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels`.
+A reversed rename ([RV10](#rv10-reversing-a-label)) never completes or
+cancels either.
 
 Before taking a lock, an online rename requires `-b/--bob-dir` and
 `BOB_DIR` (default `~/bob`) to resolve to the same directory. A mismatch or
@@ -923,6 +962,71 @@ journal fold, `api.relationLabels` v1 with desktop-only
 hide/unhide/rename writes through bob, and the nav relation-label
 stage with the card's keys and copy.
 
+### RV10 Reversing a label
+
+*Status: planned (phase `reverse-rename`).*
+
+`bob relations rename OLD NEW -r/--reverse` moves every accepted LINKS
+entry `S —OLD→ T` to `T —NEW→ S` in one previewed transaction and one
+revertable commit.
+
+**Meaning.** For each accepted OLD entry:
+
+1. Remove the entry from S's LINKS line. Delete the line when it
+   empties, and keep the order of the remaining entries.
+2. Append `NEW [[canonical link to S]]` to T's LINKS line, creating
+   the line in its §4 slot. The link uses §5's `canonical_link`, so
+   `done/` keeps `[[done/…#^id]]`.
+3. Rewrite the LINKED FROM mirrors of S and T to the §6 projection.
+   Only writable notes get mirrors. `linked_from_lines: false` writes
+   none.
+
+**Scope and transaction.** These are RV8's: every note in the RV2
+scope (`done/` and the previous daily note included); pre-sync, the
+lock, the `vault_mismatch` check, `stale_note`, and verify by rescan;
+one `relation_label.rename` journal event (unchanged v1 schema; hidden
+state moves); one commit,
+`bob relations rename: OLD → NEW (reversed)`, undone by
+`git revert`.
+
+LR7 grows one clause: a reversed rename may move an edge's entry
+between the two ends' LINKS lines, including in `done/`. It still
+never changes a status, a field, or another byte.
+
+NEW may equal OLD under `--reverse`, which is a pure reversal of a
+symmetric label. NEW's existing key still needs `-m/--merge`.
+
+**Collisions.**
+
+- If T already links S with NEW's key, merge: drop S's entry and
+  report `merged`.
+- If T already links S with another label, refuse `reverse_conflict`
+  and list each pair.
+
+**Refusals added.**
+
+| Refusal | Meaning | Recovery |
+| --- | --- | --- |
+| `reverse_conflict` | T already links S with a different label | Relabel or unlink the existing edge, then retry |
+| `unresolved_target` | An OLD entry does not resolve to a `#task` | Repair the link, then retry |
+| `source_needs_block_id` | S has no id and lives in `done/` or the previous daily note | Mint an id on a writable S (the same transaction does this silently) or repair the archived source |
+
+**Never completes or cancels**, even when NEW is a closing label. When
+NEW is configured, the preview adds a muted
+`stay open  {k} new sources keep their status — a rename never closes`
+row listing them.
+
+**Output.**
+
+- The human preview groups moves by source note, with mint, mirror,
+  merge, and status counts.
+- JSON adds `reversed: true`,
+  `moves[]: {source: {path, line, block_id, text}, target: {path, line, block_id, text}, from_label, to_label, action: "moved"|"merged"}`,
+  and `minted_block_ids[]`.
+
+Help lists `-r/--reverse` alphabetically after `-o/--offline`. The
+flag is a new option; it is not a contract break.
+
 ### Shared vectors
 
 `tests/fixtures/relation_labels/vectors.json` is the single source.
@@ -932,6 +1036,9 @@ sections are consumed by Rust tests; rename fold cases live in
 
 Cancel-label bytes live in
 `tests/fixtures/task_cancel/vectors.json` ([§17](#17-cancel-labels)).
+Complete-label bytes live in
+`tests/fixtures/relation_complete/vectors.json`
+([§18](#18-complete-labels)).
 
 ## 17. Cancel labels
 
@@ -1006,6 +1113,13 @@ relations:
   boosted. Hidden still wins.
 - **Host-wide YAML**, like `linked_from_lines`. It never goes in the
   per-host label journal, and bob never edits `config.yml`.
+- **One effect per label** (planned, phase `complete-capture`). A key
+  listed in both `cancel_labels` and `complete_labels` closes nothing.
+  bob drops it from **both** lists and warns once:
+  `relations: “{label}” is in both cancel_labels and complete_labels in <path>; it closes nothing`.
+  This is the only change to shipped cancel parsing, and it is
+  reachable only through a misconfiguration. See
+  [§18 CP2](#cp2-config).
 
 ### CL3 Which task is cancelled
 
@@ -1223,3 +1337,321 @@ first.
 | `rule` | verdict and `cancels` for an edge | every CL5 row; every CL1 never path; the CL3 table |
 | `key` | cancel-label matching (`relation_label_key`) | case/spacing/colon; inverses; substrings |
 | `config` | YAML → effective keys and warning count | missing, `null`, `[]`, scalar, mapping, non-string, illegal label, duplicate keys, invalid `linked_from_lines` beside valid `cancel_labels` |
+
+## 18. Complete labels
+
+A **complete label** is a relation label listed in
+`relations.complete_labels`. Committing one through an explicit
+relation gesture marks the relation's **source** Done exactly as that
+surface's managed Done gesture would.
+
+### CP1 The rule
+
+*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+
+When an explicit relation gesture **adds** a complete label to an open
+task, or **relabels** one of its links **into** a complete label, the
+same gesture marks that task (the relation's **source**) Done exactly
+as that surface's managed Done gesture would. Nothing else completes
+because of a label, and nothing ever reopens because of one.
+
+**Explicit gestures** are capture `~` / `~~` (CLI and Mac), the nav
+Links-to and Linked-from stages (`l` / `⇧L` → `⇧↵`), and counted or
+marked batches in those stages.
+
+It **never** fires on: reconcile, `bob relations rename` (including
+`--reverse`), hand edits of LINKS, agent edits, unlink, relabel *away*
+from a complete label, mirrors, vault sync, config changes, or an
+`Unchanged` re-add.
+
+It **fires once, at commit.** It is never a state that reconcile
+enforces. A reopened source stays open. Only a *new* explicit add or
+relabel can complete it again.
+
+**The source closes, always.** Closing labels are phrased from the
+task that closes: "S duplicate of T" cancels S; "S implemented by T"
+and "S verified by T" complete S.
+
+### CP2 Config
+
+*Status: planned (phase `complete-capture`).*
+
+The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
+built-in default is `[]`.
+
+```yaml
+# Task relations (docs/task-relations.md in bob-cli).
+relations:
+  # linked_from_lines: true   # write 🪢 LINKED FROM mirrors (default)
+  cancel_labels:
+    - duplicate of
+    - superseded by
+    # - merged into
+  # Committing a link with one of these labels also completes (marks Done) the task
+  # the label is phrased from ("S implemented by T" completes S), exactly as
+  # Ctrl+Enter or capture `!` would. Matched like cancel_labels. Empty completes
+  # nothing.
+  complete_labels:
+    - implemented by
+    - verified by
+```
+
+- **Matching** uses `relation_label_key`. `Implemented  By:` matches;
+  `implements`, `verifies`, and `implement` do not. There is no
+  substring or fuzzy matching.
+- **Parsing fails toward fewer completes**, and is CL2's verbatim:
+  - A missing key, `null`, or `[]` is a valid empty policy.
+  - A non-sequence value warns
+    `invalid relations.complete_labels in <path>: expected a list of relation labels; completing nothing`
+    and yields an empty set.
+  - An entry that is not a string, or not a legal relation label
+    (the writer's length and character rules in §3.2), warns and is
+    skipped.
+  - Entries that share a key collapse.
+  - A `complete_labels` problem never becomes a `ConfigError`, and
+    never changes `linked_from_lines`.
+- **One effect per label.** A key listed in both lists closes nothing.
+  bob drops it from **both** lists and warns once:
+  `relations: “{label}” is in both cancel_labels and complete_labels in <path>; it closes nothing`.
+  This rule also governs cancel parsing, in Rust and JS. It is the
+  only change to shipped cancel behavior, and it is reachable only
+  through a misconfiguration. See [CL2](#cl2-config).
+- **Hide is not disable.** A hidden or `||` one-off complete label
+  still completes when typed
+  (`relation-label-hide-is-suggestions-only`). To turn the effect
+  off, change the config.
+- **Catalog overlay.** A configured complete label appears in
+  suggestions and in `bob relations list -a` even with zero uses. It
+  is marked `configured`, ranks as a zero-use row, and is never
+  boosted. Hidden still wins.
+- **Host-wide YAML**, like `linked_from_lines`. It never goes in the
+  per-host label journal, and bob never edits `config.yml`.
+
+### CP3 Which task completes
+
+*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+
+The source is always the task the label is phrased from: "S
+implemented by T" completes S.
+
+| Gesture | Source S (completed) | Target T (unchanged) |
+| --- | --- | --- |
+| Task Card `l` → `⇧↵` | task under the cursor | picked task |
+| Task Card `⇧L` → `⇧↵` | **picked task**, possibly in another note | task under the cursor |
+| Capture `@note+id ~t:id\|"implemented by"` | routed existing task | picked task |
+| Capture `New task ~~ref:id\|"implemented by"` | **picked existing task** | the new task |
+| Capture `New task ~old:id\|"verified by"` | — refused `relation_completes_new_task` | — |
+| Counted `N Ctrl+Shift+L` / marked rows | each source | one target (second Return if ≥2 closes) |
+
+### CP4 What one commit writes
+
+*Status: planned (phase `complete-capture`, `cycler-done-api`,
+`nav-complete-writer`).*
+
+There is nothing new about Done. Each surface composes its **existing**
+managed Done with the relation write.
+
+**Capture (CLI and Mac)** runs exactly what `!note:id` runs, against
+the same staged batch as the LINKS edit:
+
+1. tree close: `[x]` plus `  [completion:: today]` on S, and embedded
+   `![[…]]` subtasks per `!`'s rules;
+2. scoped Task Link retirement in today's daily note;
+3. dependent recovery with `[unblocked::]`;
+4. successor offers. They join the batch's single offer set: numbered,
+   picked with `-p/--pull-in`, and gated by
+   `--require-pull-in-choice`.
+
+The LINKS edit, T's mirror, and all of the above are one
+all-or-nothing batch. `!`'s other rules hold verbatim: Blocked roots
+complete, embedded descendants follow `!`, and status-group moves stay
+with reconcile.
+
+**Obsidian (nav)** runs exactly what Ctrl+Enter on the task line runs:
+
+1. S's note, one write: the LINKS add or relabel plus the cycler's own
+   Done line rewrite. One Ctrl+Z restores both.
+2. T's LINKED FROM mirror, as the usual best-effort follow-up.
+3. After the stage closes, the cycler's
+   `finalizeClosedTasks([S], context)`: recovery, embed retirement, the
+   Unblocked notice, and the successor picker.
+
+Ctrl+Enter on a task line strikes no plain Pomodoro Task Link
+immediately, so this path strikes none either; reconcile retires it as
+it does after Ctrl+Enter today.
+
+**No Work Log, no Cancel Log, no freshness stamp.** Done never writes
+them, so neither does this.
+
+### CP5 Verdicts and edge cases
+
+*Status: planned (phase `complete-capture`, `nav-complete-writer`).*
+
+There is one verdict function per engine: Rust
+`task_complete::verdicts` and JS `planRelationCompleteEffects`. Shared
+`rule` vectors pin both, so the cue can never disagree with the write.
+
+| Source state | Verdict | Effect |
+| --- | --- | --- |
+| Completable: `[ ]` Ready, `[*]` Next, `[/]` In Progress, `[?]` Blocked | `completes` | link and complete (Blocked included, as `!` allows) |
+| `^prj` task, completable | `completes` (project) | as `!` / Ctrl+Enter; copy adds "its N open tasks stay open" |
+| Done, Cancelled, or any other status | `already_closed` | link or relabel only; never Cancelled → Done; keep original date |
+| Recurring (`is_recurring_task_line`) | `recurring` | refused before writing; complete-label rows disabled |
+| `~` source is the task this capture item creates | `new_task` | refused before writing, with a `~~` hint |
+| Item also starts, Pomodoro-links, or adds `&` / `*` to S | `conflict` | refused `relation_complete_conflicts_with_item_action` |
+| One commit both cancels and completes the same S | `conflict` | refused `relation_close_effects_conflict` |
+
+More edge cases:
+
+- **Same edge, same label key (`Unchanged`):** no-op. Retries are
+  safe.
+- **Relabel from one complete label to another** on an already-Done
+  S: relabel only.
+- **Relabel away, or unlink:** S stays Done. The nav notice says
+  `stays Done · reopen with Alt+[`.
+- **T is Cancelled or archived:** allowed, with the amber caveat
+  `“{T}” is Cancelled`. T is never changed.
+- **T is open:** normal, and no caveat. `verified by` usually points
+  at an open verification task.
+- **Inverse label typed** (`implements`, `verifies`): no completion,
+  plus a muted flip hint (CP6).
+- **`bob relations rename` into or out of a complete label,**
+  including `--reverse`: never completes. The preview warns that the
+  config needs checking.
+- **Midnight rollover or a config change between cue and commit:**
+  re-plan at commit. If the consequence changed, nav writes nothing
+  and re-renders for a fresh Return. Capture always plans at commit,
+  so its result reports what happened.
+- **Old cycler** (nav finds `api.version < 3`): complete-label rows
+  are disabled with
+  `Update Task Status Cycler to complete from a link`, and nothing
+  completes.
+
+### CP6 The indication
+
+*Status: planned (phase `complete-surfaces`, `nav-complete-cue`,
+`mac-complete-cue`).*
+
+Name the task, change the verb, use ✓, stay calm.
+
+- **✓ plus words**, in the Done-status green, mark the consequence;
+  meaning never depends on color.
+- **Red** stays for errors; **amber** stays for caveats.
+- **No strikethrough** before the write.
+- **Mac:** `checkmark.circle` + green, matching the picker's Done
+  glyph and `!`'s seal.
+
+Canonical strings. `{S}` and `{T}` are task texts. `{note}` is the
+note stem, shown only when S is not in the active note (nav), or for
+`~~` (capture). Plurals follow the count.
+
+| Where | Text |
+| --- | --- |
+| Row meta (nav) / capsule (Mac) / `relations list` / zsh | `✓ completes` / `checkmark.circle completes` / `✓ completes source` / `N links · completes source` |
+| Live sentence (nav, Mac) | `✓ {S} — {label} → {T}`, source dimmed; remote: `✓ {S} ({note}) — …` |
+| Verdict `completes` (bob `relation_complete.message`) | `✓ Completes “{S}” · {Status} → Done` |
+| Consequence strip (nav) | `✓ Completes “{S}” · unblocks dependents · offers successors` |
+| `^prj` suffix | `· its {N} open tasks stay open` |
+| Verdict `already_closed` (muted) | `Already Done · link only` / `Stays Cancelled · link only` / `Stays {Status} · link only` |
+| Verdict `recurring` (disabled row) | `“{S}” repeats — complete it in Obsidian so Tasks writes the next one` |
+| Verdict `new_task` (disabled row, refusal) | `“{S}” is new — it would be born done · to finish “{T}”, use ~~` |
+| Inverse hint (muted) | `“{typed}” never completes · to finish “{T}”, use ~~ with “{label}”` (`~` from `~~`; nav says `⇧L` / `l`) |
+| Return hint (nav) | `↵ link & complete` |
+| Batch banner (nav) | `✓ Completes {N} tasks — ↵ again to confirm`; mixed: `Closes {N} tasks · ✓ {a} · ⊘ {b} — ↵ again to confirm` |
+| Notice (nav) | `🪢 {S} — {label} → {T} · ✓ done · unblocked {k}`, plus the cycler's returned successor text |
+| Capture row / preview (bob-authored) | `✓ completed “{S}” · {Status} → Done · struck {n} Pomodoro link · unblocked “{D}”`, then `!`'s ledger and offer rows; dry run says `would complete` / `would strike` / `would unblock` |
+| Structured warning `relation_completed_source` | `✓ completed “{S}” ({label} “{T}”)`; dry run `✓ would complete …` |
+| Both-effects refusal | `“{S}” can't be both cancelled and completed in one commit` |
+| Hand-edit hint (nav, once per burst) | `✓ “{label}” completes only from the Links stage or capture · this task stays open` |
+| Rename warning | `“{label}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels` |
+| Mac submit hint | `Capture & complete {N} task(s)`; mixed with cancels: `Capture & close {N} tasks` |
+
+### CP7 Contracts
+
+*Status: planned (phase `complete-capture`, `complete-surfaces`).*
+
+All additions are additive, every `schema_version` stays 1, and every
+new field is omitted when it does not apply, so output with no
+`complete_labels` stays byte-identical. Names below are final.
+
+- **`capture-complete`, `relation_label` context:**
+  - Rows gain `completes_source: true` when the row's key is
+    configured, and the shared `configured: true` on overlay rows.
+  - A complete-label row gets the existing `disabled_reason` when the
+    verdict is `recurring` or `new_task`.
+  - The response gains
+    `relation_complete: {source: {path, block_id?, text, status_symbol, status_name, project_open_tasks?}, verdict: "completes"|"already_closed"|"recurring"|"new_task", message, hint?}`.
+    It is present only when at least one complete label is configured.
+    It never scans the vault. It sits beside `relation_cancel` when
+    both kinds are configured.
+- **`capture-parse`:** relation-label spans gain `completes_source: true`.
+- **`capture` (dry run and commit), per item:**
+  - `relation_completes[]: {source: {path, line, block_id, text}, target: {path, block_id, text}, labels[], action: "added"|"relabeled", previous_status, previous_status_name, project_open_tasks?, task_complete, message}`.
+    `task_complete` is exactly the object `!note:id` reports for S,
+    with `raw` set to the relation token. It is serialized only for
+    sources that completed.
+  - `relation_updates[]` rows gain
+    `complete_effect: "completed"|"already_closed"`.
+  - `warnings[]` gains `{code: "relation_completed_source", label, message}`.
+    The human renderer prints the ✓ row once.
+  - Offers join top-level `pull_in` and its numbering.
+  - Refusal codes: `relation_completes_new_task`,
+    `relation_completes_recurring_task`,
+    `relation_complete_conflicts_with_item_action`,
+    `relation_close_effects_conflict`.
+- **`bob relations list`:**
+  - JSON rows gain `completes_source`, and the top level gains
+    `complete_labels?` (a count);
+  - the human header gains `· N complete`;
+  - rows read `✓ completes source`.
+
+### CP8 Architecture
+
+*Status: planned (phase `complete-capture`, `cycler-done-api`).*
+
+- **One Done per engine, never a new one.**
+  - Rust: complete-label commits call the same function `!` calls.
+    `complete-capture` extracts it from `plan_task_complete_item`, so
+    `!` output stays byte-identical.
+  - JS: the cycler owns Done. Nav calls the cycler `api` v3:
+    - `completeTaskLineText(lineText, {date})` returns the exact
+      fallback bytes;
+    - `finalizeClosedTasks(identities, context)` runs the post-Done
+      pass.
+
+    Plugins never import each other's `main.js`.
+
+- **Policy layer shared with cancel:**
+  - Rust: `RelationsConfig::close_effect(key) -> Option<CloseEffect>`,
+    where `enum CloseEffect { Cancel, Complete }`, and one parser for
+    both lists.
+  - JS: one loader, `loadRelationsCloseLabels()` →
+    `{cancel, complete, warnings}`, of which
+    `loadRelationsCancelLabels()` becomes a view.
+- **Shared vectors** are
+  `tests/fixtures/relation_complete/vectors.json`. bob-cli is the
+  source, and bob-plugins copies it byte-for-byte.
+  - `done` is generated from the cycler's
+    `rewriteTaskLineForLocalFallback` +
+    `addOrReplaceCompletionField`, and a Rust test proves
+    `complete_task_tree`'s root rewrite writes the same bytes.
+  - `rule`, `key`, and `config` are hand-authored from this section.
+- **Atomicity, stated honestly:**
+  - Capture is one staged, preimage-checked batch.
+  - Nav writes S's note in one transaction with one undo. The mirror
+    and the post-Done pass are follow-ups, the same contract
+    Ctrl+Enter and cancel labels ship with.
+- **Mac decides nothing** (`mac-capture-is-a-thin-client`).
+
+### CP vector index
+
+`tests/fixtures/relation_complete/vectors.json` is the single source.
+bob-plugins copies it byte-for-byte. A behavior change edits bob-cli
+first.
+
+| Section | Pins | Representative cases |
+| --- | --- | --- |
+| `done` | cycler local-fallback Done bytes (`rewriteTaskLineForLocalFallback` + `addOrReplaceCompletionField`) | each completable status; fields present or absent; `#prj_is_blocked`; `^prj`; existing `[completion::]`; CRLF; already Done or Cancelled unchanged; recurring refused |
+| `rule` | verdict, `effect`, and refusal for an edge | every CP5 row; every CP1 never path; the CP3 table; both-effects; both-lists |
+| `key` | complete-label matching (`relation_label_key`) | case/spacing/colon; inverses `implements` / `verifies`; substring `implement` |
+| `config` | YAML → effective cancel and complete keys and warning count | missing, `null`, `[]`, scalar, mapping, non-string, illegal label, duplicate keys, a key in both lists (dropped from both), `cancel_labels` alone |

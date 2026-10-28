@@ -1,0 +1,1541 @@
+{
+  "done": [
+    {
+      "name": "open-ready-minimal",
+      "line": "- [ ] #task Ship it ^ship",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Ship it  [completion:: 2026-10-29] ^ship"
+      }
+    },
+    {
+      "name": "open-next",
+      "line": "- [*] #task Write introduction! ^write-intro",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Write introduction!  [completion:: 2026-10-29] ^write-intro"
+      }
+    },
+    {
+      "name": "open-in-progress",
+      "line": "- [/] #task Flesh out tasks ^flesh-out",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Flesh out tasks  [completion:: 2026-10-29] ^flesh-out"
+      }
+    },
+    {
+      "name": "open-blocked",
+      "line": "- [?] #task Finish full v1 draft ^v1-draft",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Finish full v1 draft  [completion:: 2026-10-29] ^v1-draft"
+      }
+    },
+    {
+      "name": "fields-present",
+      "line": "- [ ] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [id:: sell-stocks] [dependsOn:: other] [unblocked:: 2026-10-20] [keeps:: 2] ^sell-stocks",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Sell stocks! [fresh:: 2026-10-16] [created::2026-10-12] [priority::high] [scheduled:: 2026-10-22] [id:: sell-stocks] [dependsOn:: other] [unblocked:: 2026-10-20] [keeps:: 2]  [completion:: 2026-10-29] ^sell-stocks"
+      }
+    },
+    {
+      "name": "fields-absent",
+      "line": "- [ ] #task Sell stocks!",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Sell stocks!  [completion:: 2026-10-29]"
+      }
+    },
+    {
+      "name": "id-field-without-block-id",
+      "line": "- [ ] #task Sell stocks! [id:: sell-stocks]",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Sell stocks! [id:: sell-stocks]  [completion:: 2026-10-29]"
+      }
+    },
+    {
+      "name": "prj-is-blocked",
+      "line": "- [?] #task Resident work #prj_is_blocked ^resident",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Resident work #prj_is_blocked  [completion:: 2026-10-29] ^resident"
+      }
+    },
+    {
+      "name": "prj-line",
+      "line": "- [ ] #task #prj Ship the project outcome! [scheduled:: 2026-07-16] #hide ^prj",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task #prj Ship the project outcome! [scheduled:: 2026-07-16] #hide  [completion:: 2026-10-29] ^prj"
+      }
+    },
+    {
+      "name": "existing-completion",
+      "line": "- [ ] #task Reopened work [completion:: 2026-10-01] ^reopened",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Reopened work  [completion:: 2026-10-29] ^reopened"
+      }
+    },
+    {
+      "name": "unblocked-and-keeps",
+      "line": "- [*] #task Recovered work [unblocked:: 2026-10-20] [keeps:: 1] ^recovered",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task Recovered work [unblocked:: 2026-10-20] [keeps:: 1]  [completion:: 2026-10-29] ^recovered"
+      }
+    },
+    {
+      "name": "crlf",
+      "line": "- [ ] #task CRLF line ^crlf",
+      "date": "2026-10-29",
+      "eol": "crlf",
+      "expected": {
+        "ok": true,
+        "unchanged": false,
+        "line": "- [x] #task CRLF line  [completion:: 2026-10-29] ^crlf"
+      }
+    },
+    {
+      "name": "already-done",
+      "line": "- [x] #task Already done  [completion:: 2026-10-01] ^done",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": true,
+        "line": "- [x] #task Already done  [completion:: 2026-10-01] ^done"
+      }
+    },
+    {
+      "name": "already-cancelled",
+      "line": "- [-] #task Already cancelled [cancelled:: 2026-10-01] ^cancelled",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": true,
+        "unchanged": true,
+        "line": "- [-] #task Already cancelled [cancelled:: 2026-10-01] ^cancelled"
+      }
+    },
+    {
+      "name": "recurring-repeat-field",
+      "line": "- [ ] #task Water plants [repeat:: every week] ^water",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": false,
+        "reason": "recurring",
+        "line": "- [ ] #task Water plants [repeat:: every week] ^water"
+      }
+    },
+    {
+      "name": "recurring-paren-repeat",
+      "line": "- [ ] #task Water plants (repeat:: every week) ^water-paren",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": false,
+        "reason": "recurring",
+        "line": "- [ ] #task Water plants (repeat:: every week) ^water-paren"
+      }
+    },
+    {
+      "name": "recurring-emoji",
+      "line": "- [ ] #task Water plants 🔁 ^water-emoji",
+      "date": "2026-10-29",
+      "expected": {
+        "ok": false,
+        "reason": "recurring",
+        "line": "- [ ] #task Water plants 🔁 ^water-emoji"
+      }
+    }
+  ],
+  "rule": [
+    {
+      "name": "cp5-open-ready-added",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-open-next-added",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "verified by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "*",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-open-in-progress-relabeled",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": "see",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "/",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-open-blocked-added",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "?",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-open-prj-added",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": true,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-already-done",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "x",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-already-cancelled",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": "-",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-recurring",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": true,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "recurring",
+        "effect": "none",
+        "refusal": "relation_completes_recurring_task"
+      }
+    },
+    {
+      "name": "cp5-new-task-tilde",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": true,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "new_task",
+        "effect": "none",
+        "refusal": "relation_completes_new_task"
+      }
+    },
+    {
+      "name": "cp5-conflict-complete-bang",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "!"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_complete_conflicts_with_item_action"
+      }
+    },
+    {
+      "name": "cp5-conflict-start",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "="
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_complete_conflicts_with_item_action"
+      }
+    },
+    {
+      "name": "cp5-conflict-pomodoro-link",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        ":"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_complete_conflicts_with_item_action"
+      }
+    },
+    {
+      "name": "cp5-conflict-depends",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "&"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_complete_conflicts_with_item_action"
+      }
+    },
+    {
+      "name": "cp5-conflict-blocks",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "*"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_complete_conflicts_with_item_action"
+      }
+    },
+    {
+      "name": "cp5-conflict-both-effects",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [
+        "cancel_label"
+      ],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "conflict",
+        "effect": "none",
+        "refusal": "relation_close_effects_conflict"
+      }
+    },
+    {
+      "name": "cp5-relabel-complete-to-complete-already-closed",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "verified by",
+      "previous_label": "implemented by",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "x",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "already_closed",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-inverse-implements-never-completes",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implements",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-inverse-verifies-never-completes",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "verifies",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-unchanged-same-edge",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": "implemented by",
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-relabel-away",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "see",
+      "previous_label": "implemented by",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": "x",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "relabel_away",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-unlink",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": "x",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "unlink",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-reconcile",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "reconcile",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-rename",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": "see",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "rename",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-rename-reverse",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": "implements",
+      "action": "relabeled",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "rename_reverse",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-hand-edit",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "hand_edit",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-agent-edit",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "agent_edit",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-mirror",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "mirror",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-sync",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "sync",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp1-config-change",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "unchanged",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "config_change",
+      "gesture": null,
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp3-nav-links-completes-cursor",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp3-nav-linked-from-completes-picked",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_linked_from",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp3-capture-tilde-completes-owner",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp3-capture-tilde-tilde-completes-picked",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "verified by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "linked_from",
+      "source_status": "*",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde_tilde",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp3-counted-batch-each-source",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "counted_batch",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp2-unconfigured-label-never-completes",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp2-hidden-complete-label-still-completes",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "capture_tilde",
+      "label_hidden": true,
+      "expected": {
+        "verdict": "completes",
+        "effect": "complete",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp2-both-lists-closes-nothing",
+      "configured_cancel": [
+        "duplicate of",
+        "implemented by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implemented by",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp2-cancel-label-does-not-complete",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "duplicate of",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "cancels",
+        "effect": "cancel",
+        "refusal": null
+      }
+    },
+    {
+      "name": "cp5-substring-implement-never-completes",
+      "configured_cancel": [
+        "duplicate of",
+        "superseded by"
+      ],
+      "configured_complete": [
+        "implemented by",
+        "verified by"
+      ],
+      "label": "implement",
+      "previous_label": null,
+      "action": "added",
+      "direction": "links_to",
+      "source_status": " ",
+      "source_is_new": false,
+      "source_is_project": false,
+      "source_is_recurring": false,
+      "item_modifiers": [],
+      "trigger": "explicit",
+      "gesture": "nav_links",
+      "label_hidden": false,
+      "expected": {
+        "verdict": "none",
+        "effect": "none",
+        "refusal": null
+      }
+    }
+  ],
+  "key": [
+    {
+      "name": "plain-canonical",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "implemented by",
+      "expected": {
+        "key": "implemented by",
+        "matches": true
+      }
+    },
+    {
+      "name": "case-spacing-trailing-colon",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "Implemented  By:",
+      "expected": {
+        "key": "implemented by",
+        "matches": true
+      }
+    },
+    {
+      "name": "uppercase",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "VERIFIED BY",
+      "expected": {
+        "key": "verified by",
+        "matches": true
+      }
+    },
+    {
+      "name": "inner-spacing-collapsed",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "verified   by",
+      "expected": {
+        "key": "verified by",
+        "matches": true
+      }
+    },
+    {
+      "name": "inverse-implements",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "implements",
+      "expected": {
+        "key": "implements",
+        "matches": false
+      }
+    },
+    {
+      "name": "inverse-verifies",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "verifies",
+      "expected": {
+        "key": "verifies",
+        "matches": false
+      }
+    },
+    {
+      "name": "substring-implement",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "implement",
+      "expected": {
+        "key": "implement",
+        "matches": false
+      }
+    },
+    {
+      "name": "substring-implemented",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "implemented",
+      "expected": {
+        "key": "implemented",
+        "matches": false
+      }
+    },
+    {
+      "name": "prefix-plus-extra",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "implemented by extra",
+      "expected": {
+        "key": "implemented by extra",
+        "matches": false
+      }
+    },
+    {
+      "name": "duplicate-of-not-configured",
+      "configured": [
+        "implemented by",
+        "verified by"
+      ],
+      "input": "duplicate of",
+      "expected": {
+        "key": "duplicate of",
+        "matches": false
+      }
+    }
+  ],
+  "config": [
+    {
+      "name": "missing-key",
+      "yaml": "timezone: America/New_York\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "null-complete",
+      "yaml": "relations:\n  complete_labels: null\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "empty-list",
+      "yaml": "relations:\n  complete_labels: []\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "scalar",
+      "yaml": "relations:\n  complete_labels: implemented by\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [],
+        "warning_count": 1
+      }
+    },
+    {
+      "name": "mapping",
+      "yaml": "relations:\n  complete_labels:\n    implemented by: true\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [],
+        "warning_count": 1
+      }
+    },
+    {
+      "name": "non-string-entry",
+      "yaml": "relations:\n  complete_labels:\n    - implemented by\n    - 1\n    - true\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "implemented by"
+        ],
+        "warning_count": 2
+      }
+    },
+    {
+      "name": "illegal-label",
+      "yaml": "relations:\n  complete_labels:\n    - implemented by\n    - see (old)\n    - \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n    - \"\"\n    - ·leading\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "implemented by"
+        ],
+        "warning_count": 4
+      }
+    },
+    {
+      "name": "duplicate-keys-collapse",
+      "yaml": "relations:\n  complete_labels:\n    - implemented by\n    - \"Implemented  By:\"\n    - verified by\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "implemented by",
+          "verified by"
+        ],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "invalid-linked-from-lines-beside-valid-complete-labels",
+      "yaml": "relations:\n  linked_from_lines: maybe\n  complete_labels:\n    - implemented by\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "implemented by"
+        ],
+        "warning_count": 1,
+        "linked_from_lines": true
+      }
+    },
+    {
+      "name": "canonical-list",
+      "yaml": "relations:\n  complete_labels:\n    - implemented by\n    - verified by\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "implemented by",
+          "verified by"
+        ],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "cancel-labels-alone-unchanged",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n",
+      "expected": {
+        "cancel_keys": [
+          "duplicate of",
+          "superseded by"
+        ],
+        "complete_keys": [],
+        "warning_count": 0
+      }
+    },
+    {
+      "name": "both-lists-drops-from-both",
+      "yaml": "relations:\n  cancel_labels:\n    - duplicate of\n    - implemented by\n  complete_labels:\n    - implemented by\n    - verified by\n",
+      "expected": {
+        "cancel_keys": [
+          "duplicate of"
+        ],
+        "complete_keys": [
+          "verified by"
+        ],
+        "warning_count": 1
+      }
+    },
+    {
+      "name": "null-cancel-valid-complete",
+      "yaml": "relations:\n  cancel_labels: null\n  complete_labels:\n    - verified by\n",
+      "expected": {
+        "cancel_keys": [],
+        "complete_keys": [
+          "verified by"
+        ],
+        "warning_count": 0
+      }
+    }
+  ]
+}

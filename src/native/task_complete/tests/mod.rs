@@ -12,6 +12,7 @@ use super::*;
 
 mod project_pull_in_tests;
 mod recovery_tests;
+mod relation_complete_vectors;
 mod retirement_tests;
 mod successor_tests;
 mod tree_tests;

@@ -317,6 +317,8 @@ fn inverse_phrases_match_the_contract_table() {
         ("follow-up of", "followed up by"),
         ("superseded by", "supersedes"),
         ("split from", "split into"),
+        ("implemented by", "implements"),
+        ("verified by", "verifies"),
     ] {
         assert_eq!(inverse_phrase(stored), Some(inverse));
         assert_eq!(

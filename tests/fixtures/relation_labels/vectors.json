@@ -159,6 +159,45 @@
           "inverse": "split into"
         }
       ]
+    },
+    {
+      "name": "complete-label inverse pairs resolve case-insensitively",
+      "notes": [
+        {
+          "path": "c.md",
+          "body": "- [ ] C #task ^a\n  - 🪢 **LINKS:** Implemented By [[o#^x]] • Verified By [[o#^y]] • implements [[o#^z]] • verifies [[o#^w]]\n"
+        }
+      ],
+      "expected": [
+        {
+          "key": "implemented by",
+          "name": "Implemented By",
+          "count": 1,
+          "spellings": [{ "name": "Implemented By", "count": 1 }],
+          "inverse": "implements"
+        },
+        {
+          "key": "implements",
+          "name": "implements",
+          "count": 1,
+          "spellings": [{ "name": "implements", "count": 1 }],
+          "inverse": null
+        },
+        {
+          "key": "verified by",
+          "name": "Verified By",
+          "count": 1,
+          "spellings": [{ "name": "Verified By", "count": 1 }],
+          "inverse": "verifies"
+        },
+        {
+          "key": "verifies",
+          "name": "verifies",
+          "count": 1,
+          "spellings": [{ "name": "verifies", "count": 1 }],
+          "inverse": null
+        }
+      ]
     }
   ],
   "fold": [

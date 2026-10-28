@@ -969,6 +969,7 @@ offers.
 | nav's PRE/POST walk Ctrl+Enter (`completeTaskAtCursor`) | task-status-cycler + nav |
 | `bob capture '!note:id'` | bob-cli |
 | `bob capture` closes that complete links: `x` with embeds, `x!M`, `x!`, `^route:id=x…` | bob-cli |
+| complete-label commit (`~` / `~~` or nav Links / Linked-from with a `relations.complete_labels` label) | bob-cli / bob-navigation-hotkeys |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
 
 The same complete gestures produce project offers and project-finished

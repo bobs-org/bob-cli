@@ -2046,7 +2046,8 @@ used bare with relationship modifiers. Without `&` or `*`, their existing
 Pomodoro-link behavior remains unchanged. `&`, `*`, `~`, and `~~` are all
 **relationship modifiers**: the first two change status and lanes, while
 `~` / `~~` write inert relation lines, except a
-[cancel-label](task-relations.md#17-cancel-labels) commit
+[cancel-label](task-relations.md#17-cancel-labels) commit or a
+[complete-label](task-relations.md#18-complete-labels) commit
 ([Linking tasks with '~' and '~~'](#linking-tasks)). The
 familiar two-item form still
 keeps a blocked task in a session while it takes over the blocker’s slot:
@@ -2323,6 +2324,9 @@ Labels obey the [relation label rules](task-relations.md#32-labels).
 A label listed in `relations.cancel_labels` is a
 [cancel label](task-relations.md#17-cancel-labels): committing an
 add or relabel into one cancels the relation's source in the same
+batch. A label listed in `relations.complete_labels` is a
+[complete label](task-relations.md#18-complete-labels): committing an
+add or relabel into one marks the relation's source Done in the same
 batch.
 A label after `||` is a one-off: the stored Markdown is identical to
 the `|` form, but the label hides from suggestions once the capture
@@ -2364,9 +2368,11 @@ glob; single-quote the draft.
 
 **Inertness.** Relations never block, consume, schedule, stamp, or
 route anything. `Fix it ~work:foo` leaves every status, lane, and
-Pomodoro link exactly as it was, apart from a minted `^id`. The one
-exception is a [cancel-label](task-relations.md#17-cancel-labels)
-commit, which cancels the source as Task Card Cancel would.
+Pomodoro link exactly as it was, apart from a minted `^id`. The
+exceptions are a [cancel-label](task-relations.md#17-cancel-labels)
+commit, which cancels the source as Task Card Cancel would, and a
+[complete-label](task-relations.md#18-complete-labels) commit, which
+marks the source Done as `!` would.
 
 **Cancel-label commits.** Adding a cancel label — or relabeling into
 one — cancels the relation's source in the same staged batch: the
@@ -2382,6 +2388,25 @@ source through `&` / `*`
 sources link only. A later item sees an earlier cancel through the
 staged batch, so linking, starting, or completing a just-cancelled
 task is refused by the existing closed-task checks.
+
+**Complete-label commits.** Adding a complete label — or relabeling
+into one — marks the relation's source Done in the same staged batch:
+the LINKS edit, `[x]` plus `  [completion:: today]`, today's Pomodoro
+Task Link retirement, dependent recovery, and successor offers share
+one all-or-nothing batch, so a refusal writes nothing. This is
+exactly what `!note:id` runs against the same staged snapshot.
+`~~` finishes the picked task; `~` on the task the item creates is
+refused (`relation_completes_new_task`, with a `~~` hint), as are
+recurring sources (`relation_completes_recurring_task`) and an item
+that also changes the source through `=` / `:` / `&` / `*` / `!`
+(`relation_complete_conflicts_with_item_action`). A source that one
+item or batch would both cancel and complete is refused
+(`relation_close_effects_conflict`). Already-closed sources link
+only. Offers join the batch's single offer set: numbered, picked with
+`-p/--pull-in`, and gated by `--require-pull-in-choice`. A later item
+sees an earlier completion through the staged batch, so linking,
+starting, or completing it again is refused, or no-ops, exactly as
+after a `!`. Planned (phase `complete-capture`).
 
 **Human output.** Successful captures print `🪢` rows in the
 dependency style, for example:
@@ -2423,6 +2448,10 @@ existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-an
 Cancel-label fields (`relation_cancels[]`, `cancel_effect`,
 `relation_cancelled_source`, and `cancels_source` spans) are specified in
 [§17 CL7](task-relations.md#cl7-contracts) and
+[JSON outputs](reference/json-outputs.md).
+Complete-label fields (`relation_completes[]`, `complete_effect`,
+`relation_completed_source`, and `completes_source` spans) are specified in
+[§18 CP7](task-relations.md#cp7-contracts) and
 [JSON outputs](reference/json-outputs.md).
 
 ### Completing tasks with '!'

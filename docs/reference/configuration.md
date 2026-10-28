@@ -149,6 +149,7 @@ See [task dependency links](../task-dependencies.md#14-blocks-lines).
 | --- | --- | --- | --- |
 | `relations.linked_from_lines` | Boolean | `true` | Write `🪢 LINKED FROM` mirrors ([task relations](../task-relations.md)). `false` removes every LINKED FROM line on writable tasks, mints nothing, and leaves LINKS alone. |
 | `relations.cancel_labels` | List of relation labels | `[]` | Committing a link with one of these labels also cancels the source task ([cancel labels](../task-relations.md#17-cancel-labels)). Matched by `relation_label_key` (case, spacing, and a trailing colon ignored). Empty cancels nothing. |
+| `relations.complete_labels` | List of relation labels | `[]` | Committing a link with one of these labels also completes (marks Done) the source task ([complete labels](../task-relations.md#18-complete-labels)). Matched like `cancel_labels`. Empty completes nothing. |
 
 An invalid `relations.linked_from_lines` value falls back to `true` and
 warns. See [Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
@@ -161,6 +162,16 @@ config error and never changes `linked_from_lines`. Hide is not
 disable: a hidden or one-off cancel label still cancels when typed.
 Chezmoi enables `duplicate of` and `superseded by` (see
 [Cancel labels](../task-relations.md#17-cancel-labels)).
+
+`relations.complete_labels` parses the same way, failing toward fewer
+completes, and never becomes a config error. A key listed in both
+`cancel_labels` and `complete_labels` is dropped from both lists and
+warns once:
+`relations: “{label}” is in both cancel_labels and complete_labels in <path>; it closes nothing`.
+Hide is not disable: a hidden or one-off complete label still
+completes when typed. Chezmoi enables `implemented by` and
+`verified by` at rollout (see
+[Complete labels](../task-relations.md#18-complete-labels)).
 
 ### `freshness`
 
