@@ -1390,6 +1390,160 @@ fn vault_sync_ignores_legitimate_rewrites() {
     assert_eq!(status["clobbers"].as_array().map(Vec::len), Some(0));
 }
 
+#[test]
+fn vault_sync_detects_clobber_when_shared_ids_sort_last() {
+    let temp = TempDir::new("bob-cli-vault-sync-clobber-sort-last");
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
+    let head: String = (0..10)
+        .map(|i| format!("Original recovery line {i}\n"))
+        .collect();
+    let other: String = (0..3)
+        .map(|i| format!("- [ ] #task Shared {i} ^z{i}\n"))
+        .collect();
+    write_file(&vault.join("victim.md"), &head);
+    write_file(&vault.join("other.md"), &other);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "seed sort-last fixture"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+
+    let mut work = String::new();
+    for i in 0..5 {
+        work.push_str(&format!("- [ ] #task Unique {i} ^a{i}\n"));
+    }
+    work.push_str(&other);
+    write_file(&vault.join("victim.md"), &work);
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run sort-last clobber vault-sync");
+
+    assert_success(&output);
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("quarantined clobber of victim.md")
+            && stderr.contains("matches other.md"),
+        "full 5+3 case should quarantine:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("victim.md")).expect("read victim"),
+        head,
+        "HEAD bytes should be restored"
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        work,
+        "quarantined bytes should preserve the full worktree"
+    );
+    let committed = stdout(&git([
+        "--git-dir",
+        path_str(&remote),
+        "show",
+        "master:victim.md",
+    ]));
+    assert_eq!(committed, head, "clobbered bytes must not reach the remote");
+}
+
+#[test]
+fn vault_sync_quarantine_with_ignored_conflicts_dir_commits_and_pushes() {
+    let temp = TempDir::new("bob-cli-vault-sync-clobber-ignored");
+    let (vault, remote, _peer) = init_vault_sync_pair(&temp);
+    write_file(&vault.join(".gitignore"), "_conflicts/\n");
+    let (recovery, sase) = seed_clobber_vault(&vault);
+    let work = clobber_worktree(&sase);
+    write_file(&vault.join("sase_agent_recovery.md"), &work);
+
+    let dry = vault_sync_command(&vault, &temp)
+        .arg("--dry-run")
+        .output()
+        .expect("run ignored dry-run");
+    assert_success(&dry);
+    assert!(
+        stderr(&dry).contains("would quarantine sase_agent_recovery.md"),
+        "dry-run should name the would-quarantine action:\n{}",
+        format_output(&dry)
+    );
+    assert!(
+        quarantined_conflict_files(&vault).is_empty(),
+        "dry-run must not write a conflict copy"
+    );
+    assert!(
+        !vault.join("_conflicts/sync_conflicts.md").exists(),
+        "dry-run must not write the conflict log"
+    );
+    assert!(
+        !vault_sync_state_file(&temp).exists(),
+        "dry-run must not write the status file"
+    );
+
+    let output = vault_sync_command(&vault, &temp)
+        .env("HOSTNAME", "athena")
+        .output()
+        .expect("run ignored clobber vault-sync");
+    assert_success(&output);
+    assert!(
+        stderr(&output)
+            .contains("quarantined clobber of sase_agent_recovery.md"),
+        "expected quarantine warning:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase_agent_recovery.md"))
+            .expect("read restored note"),
+        recovery
+    );
+    let copies = quarantined_conflict_files(&vault);
+    assert_eq!(copies.len(), 1, "expected one conflict copy: {copies:?}");
+    assert_eq!(
+        fs::read_to_string(&copies[0]).expect("read conflict copy"),
+        work
+    );
+    let copy_relative = copies[0]
+        .strip_prefix(&vault)
+        .expect("copy under vault")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        stdout(&git_in(
+            &vault,
+            ["ls-files", "--error-unmatch", &copy_relative]
+        )),
+        format!("{copy_relative}\n"),
+        "ignored conflict copy should be force-added"
+    );
+    assert_eq!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:sase_agent_recovery.md"
+        ])),
+        recovery,
+        "restored bytes should reach the remote"
+    );
+    assert!(
+        stdout(&git([
+            "--git-dir",
+            path_str(&remote),
+            "show",
+            "master:_conflicts/sync_conflicts.md"
+        ]))
+        .contains("clobber"),
+        "conflict log should be pushed"
+    );
+    assert_eq!(
+        stdout(&git_in(&vault, ["status", "--porcelain"])),
+        "",
+        "worktree should be clean after quarantine commit"
+    );
+    let status = read_vault_sync_status(&temp);
+    assert_eq!(status["clobbers"].as_array().map(Vec::len), Some(1));
+    assert_eq!(status["recent_clobbers"].as_array().map(Vec::len), Some(1));
+}
+
 fn done_tasks_source(count: usize) -> String {
     let mut text = String::new();
     for index in 1..=count {

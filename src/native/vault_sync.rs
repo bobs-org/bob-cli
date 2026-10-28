@@ -425,21 +425,38 @@ fn run_cycle_inner(
     if !clobber_force_add.is_empty() {
         changed_paths = working_tree_status(vault, child_env)?;
     }
-    if changed_paths.is_empty() {
+    if changed_paths.is_empty() && clobber_force_add.is_empty() {
         print_log(options, "working tree clean; skipping git add -A");
     } else {
         preflight_large_files(vault, &changed_paths, styler)?;
+        if !clobber_force_add.is_empty() {
+            let forced_entries = clobber_force_add
+                .iter()
+                .map(|path| StatusEntry {
+                    code: "M ".to_string(),
+                    path: path.clone(),
+                })
+                .collect::<Vec<_>>();
+            preflight_large_files(vault, &forced_entries, styler)?;
+        }
         if options.dry_run {
             print_log(
                 options,
                 &format!("would stage {} changed path(s)", changed_paths.len()),
             );
         } else {
-            print_log(
-                options,
-                &format!("staging {} changed path(s)", changed_paths.len()),
-            );
-            git_success(vault, child_env, ["add", "-A", "."])?;
+            if changed_paths.is_empty() {
+                print_log(
+                    options,
+                    "staging quarantined clobber paths with no other changes",
+                );
+            } else {
+                print_log(
+                    options,
+                    &format!("staging {} changed path(s)", changed_paths.len()),
+                );
+                git_success(vault, child_env, ["add", "-A", "."])?;
+            }
             for path in &clobber_force_add {
                 git_add_path(vault, child_env, path)?;
             }

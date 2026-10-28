@@ -17,7 +17,6 @@ use super::{
 };
 
 const MIN_HEAD_DISTINCT_LINES: usize = 5;
-const MAX_BLOCK_ID_GREP_NEEDLES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClobberHit {
@@ -144,12 +143,11 @@ fn find_matching_note(
     head_text: &str,
     work_text: &str,
 ) -> Result<Option<MatchedNote>, String> {
+    let needles = grep_needles(head_text, work_text);
     let mut candidates = BTreeSet::new();
-    for needle in grep_needles(head_text, work_text) {
-        for found in git_grep_files(vault, child_env, &needle)? {
-            if found != path && is_clobber_scan_path(&found) {
-                candidates.insert(found);
-            }
+    for found in git_grep_files_multi(vault, child_env, &needles)? {
+        if found != path && is_clobber_scan_path(&found) {
+            candidates.insert(found);
         }
     }
 
@@ -201,7 +199,7 @@ fn grep_needles(head_text: &str, work_text: &str) -> Vec<String> {
 
     let new_ids = new_task_block_ids(head_text, work_text);
     if new_ids.len() >= 3 {
-        for id in new_ids.iter().take(MAX_BLOCK_ID_GREP_NEEDLES) {
+        for id in &new_ids {
             needles.push(format!("^{id}"));
         }
     }
@@ -366,13 +364,22 @@ fn git_head_blob(
     }
 }
 
-fn git_grep_files(
+fn git_grep_files_multi(
     vault: &Path,
     child_env: &ChildEnv,
-    needle: &str,
+    needles: &[String],
 ) -> Result<Vec<PathBuf>, String> {
-    let output = ob::git_command(vault, child_env)
-        .args(["grep", "-F", "-l", "-z", "-I", "--", needle])
+    if needles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut command = ob::git_command(vault, child_env);
+    command.args(["grep", "-F", "-l", "-z", "-I"]);
+    for needle in needles {
+        command.arg("-e");
+        command.arg(needle);
+    }
+    command.arg("--");
+    let output = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

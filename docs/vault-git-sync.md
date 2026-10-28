@@ -132,7 +132,32 @@ status record, and fires a best-effort desktop notification (`osascript` on macO
 Dry runs print `would quarantine A (matches B: evidence)` and change nothing.
 
 Look at `_conflicts/sync_conflicts.md` and `bob vault-sync status` (human panel in red,
-and `--json`). To undo a false positive, copy the conflict copy back onto the live note.
+and `--json`). Copying the conflict copy back alone does not undo a false positive:
+`HEAD` still holds the pre-quarantine note, so the next cycle sees the same
+displaced-plus-foreign-identity signature and quarantines the same bytes again.
+
+To accept the quarantined bytes after review, establish them as `HEAD` in a scoped
+commit while the maintenance lock is held, then let sync resume. Do not run
+`bob vault-sync` between the copy and the commit.
+
+```bash
+git -C ~/bob status --short
+git -C ~/bob diff -- <note> _conflicts/<copy>
+bob vault-sync status --json
+cp ~/bob/_conflicts/<copy> ~/bob/<note>
+lock="${BOB_VAULT_SYNC_LOCK_FILE:-${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock}"
+flock -w 120 "$lock" bash -c 'git -C ~/bob add -- <note> && git -C ~/bob commit -m "vault: accept reviewed <note> after false-positive quarantine" -- <note>'
+bob vault-sync
+bob vault-sync status --json
+```
+
+The `git status` preview protects unrelated staged changes: the scoped
+`git add`/`commit -- <note>` touches only the accepted note and leaves every other
+staged or unstaged path alone. Holding `$BOB_VAULT_SYNC_LOCK_FILE`
+(`bob_sync.lock`) with `flock` makes a concurrent background `bob vault-sync -q`
+exit quietly instead of quarantining mid-acceptance; pausing the athena/apollo
+systemd service or the Mac LaunchAgent works too. The follow-up `bob vault-sync`
+should report no new `clobbers` entry because the working tree now matches `HEAD`.
 
 If a clobber was already committed:
 
