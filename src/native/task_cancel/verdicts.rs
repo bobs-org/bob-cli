@@ -40,7 +40,7 @@ pub(crate) fn cancel_verdict(
     if is_new_task {
         return CancelSourceVerdict::NewTask;
     }
-    if !matches!(status, ' ' | '*' | '/' | '?') {
+    if !crate::native::task_complete::is_completable_status(status) {
         return CancelSourceVerdict::AlreadyClosed { status };
     }
     if is_recurring_task_line(source_line) {
@@ -137,6 +137,12 @@ pub(crate) enum RelationPolicyVerdict {
     None,
 }
 
+pub(crate) enum RelationPolicyCandidate {
+    None,
+    Eligible,
+    Conflict(Vec<ItemActionConflict>),
+}
+
 impl RelationPolicyVerdict {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
@@ -167,12 +173,13 @@ pub(crate) struct RelationPolicyInput<'a> {
     pub(crate) conflicts: Vec<ItemActionConflict>,
 }
 
-/// Only explicit Added/Relabeled edges reach the source verdict. The
-/// caller resolves which task is the relation source before calling this
-/// function; direction never swaps source and target here.
-pub(crate) fn relation_policy_verdict(
-    input: RelationPolicyInput<'_>,
-) -> RelationPolicyVerdict {
+/// Shared action, trigger, and configured-key gate for explicit relation
+/// close effects. The caller supplies the effective labels for its effect;
+/// the completion policy reuses this gate so cancel and complete cannot
+/// drift on which relation writes are eligible.
+pub(crate) fn relation_policy_candidate(
+    input: &RelationPolicyInput<'_>,
+) -> RelationPolicyCandidate {
     let _ = (input.previous_label, input.direction);
     if input.trigger != RelationTrigger::Explicit
         || !matches!(
@@ -180,7 +187,7 @@ pub(crate) fn relation_policy_verdict(
             RelationAction::Added | RelationAction::Relabeled
         )
     {
-        return RelationPolicyVerdict::None;
+        return RelationPolicyCandidate::None;
     }
     let key = relation_label_key(input.label);
     if !input
@@ -188,10 +195,27 @@ pub(crate) fn relation_policy_verdict(
         .iter()
         .any(|configured| relation_label_key(configured) == key)
     {
-        return RelationPolicyVerdict::None;
+        return RelationPolicyCandidate::None;
     }
-    if !input.conflicts.is_empty() {
-        return RelationPolicyVerdict::Conflict(input.conflicts);
+    if input.conflicts.is_empty() {
+        RelationPolicyCandidate::Eligible
+    } else {
+        RelationPolicyCandidate::Conflict(input.conflicts.clone())
+    }
+}
+
+/// Only explicit Added/Relabeled edges reach the source verdict. The
+/// caller resolves which task is the relation source before calling this
+/// function; direction never swaps source and target here.
+pub(crate) fn relation_policy_verdict(
+    input: RelationPolicyInput<'_>,
+) -> RelationPolicyVerdict {
+    match relation_policy_candidate(&input) {
+        RelationPolicyCandidate::None => return RelationPolicyVerdict::None,
+        RelationPolicyCandidate::Conflict(conflicts) => {
+            return RelationPolicyVerdict::Conflict(conflicts);
+        }
+        RelationPolicyCandidate::Eligible => {}
     }
     match cancel_verdict(
         input.source_line,

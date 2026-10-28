@@ -27,6 +27,7 @@ pub(super) fn load_policy() -> config::RelationsConfig {
         Err(error) => config::RelationsConfig {
             linked_from_lines: true,
             cancel_labels: Vec::new(),
+            complete_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; cancelling nothing"
             )],

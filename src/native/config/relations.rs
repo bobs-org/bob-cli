@@ -14,10 +14,19 @@ pub(crate) struct CancelLabel {
     pub(crate) name: String,
 }
 
+pub(crate) type CompleteLabel = CancelLabel;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseEffect {
+    Cancel,
+    Complete,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RelationsConfig {
     pub(crate) linked_from_lines: bool,
     pub(crate) cancel_labels: Vec<CancelLabel>,
+    pub(crate) complete_labels: Vec<CompleteLabel>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -26,6 +35,7 @@ impl Default for RelationsConfig {
         Self {
             linked_from_lines: true,
             cancel_labels: Vec::new(),
+            complete_labels: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -38,12 +48,47 @@ impl RelationsConfig {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn is_complete_label(&self, key: &str) -> bool {
+        self.complete_labels.iter().any(|label| label.key == key)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn close_effect(&self, key: &str) -> Option<CloseEffect> {
+        if self.is_cancel_label(key) {
+            Some(CloseEffect::Cancel)
+        } else if self.is_complete_label(key) {
+            Some(CloseEffect::Complete)
+        } else {
+            None
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn cancel_label_for_inverse(&self, key: &str) -> Option<&str> {
-        self.cancel_labels.iter().find_map(|label| {
-            crate::native::task_relations::label::inverse_phrase(&label.name)
+        self.close_label_for_inverse(key)
+            .filter(|(_, effect)| *effect == CloseEffect::Cancel)
+            .map(|(label, _)| label)
+    }
+
+    pub(crate) fn close_label_for_inverse(
+        &self,
+        key: &str,
+    ) -> Option<(&str, CloseEffect)> {
+        self.cancel_labels
+            .iter()
+            .map(|label| (label, CloseEffect::Cancel))
+            .chain(
+                self.complete_labels
+                    .iter()
+                    .map(|label| (label, CloseEffect::Complete)),
+            )
+            .find_map(|(label, effect)| {
+                crate::native::task_relations::label::inverse_phrase(
+                    &label.name,
+                )
                 .filter(|inverse| relation_label_key(inverse) == key)
-                .map(|_| label.name.as_str())
-        })
+                .map(|_| (label.name.as_str(), effect))
+            })
     }
 }
 
@@ -86,6 +131,7 @@ pub(crate) fn parse_relations_config(
     };
     let key = Value::String("linked_from_lines".to_string());
     let cancel_key = Value::String("cancel_labels".to_string());
+    let complete_key = Value::String("complete_labels".to_string());
     let mut warnings = Vec::new();
     let linked_from_lines = match mapping.get(&key) {
         None | Some(Value::Null) => true,
@@ -98,21 +144,55 @@ pub(crate) fn parse_relations_config(
             true
         }
     };
-    let cancel_labels = parse_cancel_labels(
+    let mut cancel_labels = parse_effect_labels(
         mapping.get(&cancel_key),
         &path_display.to_string(),
+        "cancel_labels",
+        "cancelling",
         &mut warnings,
     );
+    let mut complete_labels = parse_effect_labels(
+        mapping.get(&complete_key),
+        &path_display.to_string(),
+        "complete_labels",
+        "completing",
+        &mut warnings,
+    );
+    let complete_keys = complete_labels
+        .iter()
+        .map(|label| label.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let overlaps = cancel_labels
+        .iter()
+        .filter(|label| complete_keys.contains(label.key.as_str()))
+        .map(|label| (label.key.clone(), label.name.clone()))
+        .collect::<Vec<_>>();
+    for (_, name) in &overlaps {
+        warnings.push(format!(
+            "relations: “{name}” is in both cancel_labels and complete_labels in {path_display}; it closes nothing"
+        ));
+    }
+    if !overlaps.is_empty() {
+        let overlap_keys = overlaps
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<std::collections::BTreeSet<_>>();
+        cancel_labels.retain(|label| !overlap_keys.contains(&label.key));
+        complete_labels.retain(|label| !overlap_keys.contains(&label.key));
+    }
     Ok(RelationsConfig {
         linked_from_lines,
         cancel_labels,
+        complete_labels,
         warnings,
     })
 }
 
-fn parse_cancel_labels(
+fn parse_effect_labels(
     value: Option<&Value>,
     path: &str,
+    field: &str,
+    verb: &str,
     warnings: &mut Vec<String>,
 ) -> Vec<CancelLabel> {
     let Some(value) = value else {
@@ -123,7 +203,7 @@ fn parse_cancel_labels(
     }
     let Some(entries) = value.as_sequence() else {
         warnings.push(format!(
-            "invalid relations.cancel_labels in {path}: expected a list of relation labels; cancelling nothing"
+            "invalid relations.{field} in {path}: expected a list of relation labels; {verb} nothing"
         ));
         return Vec::new();
     };
@@ -133,7 +213,7 @@ fn parse_cancel_labels(
     for (index, entry) in entries.iter().enumerate() {
         let Some(raw) = entry.as_str() else {
             warnings.push(format!(
-                "invalid relations.cancel_labels entry {} in {path}: expected a string; skipping",
+                "invalid relations.{field} entry {} in {path}: expected a string; skipping",
                 index + 1
             ));
             continue;
@@ -142,7 +222,7 @@ fn parse_cancel_labels(
             Ok(name) => name,
             Err(error) => {
                 warnings.push(format!(
-                    "invalid relations.cancel_labels entry {} in {path}: {error:?}; skipping",
+                    "invalid relations.{field} entry {} in {path}: {error:?}; skipping",
                     index + 1
                 ));
                 continue;
@@ -259,6 +339,37 @@ mod tests {
             Some("Duplicate Of")
         );
         assert!(!parsed.is_cancel_label("duplicated by"));
+    }
+
+    #[test]
+    fn close_policy_drops_overlaps_and_inverse_lookup_reports_effect() {
+        let parsed = parse_relations_config(
+            "relations:\n  cancel_labels:\n    - duplicate of\n    - implemented by\n  complete_labels:\n    - implemented by\n    - verified by\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid policy with an overlap");
+        assert_eq!(
+            parsed.warnings,
+            ["relations: “implemented by” is in both cancel_labels and complete_labels in /config.yml; it closes nothing"]
+        );
+        assert_eq!(
+            parsed.close_effect("duplicate of"),
+            Some(CloseEffect::Cancel)
+        );
+        assert_eq!(parsed.close_effect("implemented by"), None);
+        assert_eq!(
+            parsed.close_effect("verified by"),
+            Some(CloseEffect::Complete)
+        );
+        assert_eq!(
+            parsed.close_label_for_inverse("duplicated by"),
+            Some(("duplicate of", CloseEffect::Cancel))
+        );
+        assert_eq!(
+            parsed.close_label_for_inverse("verifies"),
+            Some(("verified by", CloseEffect::Complete))
+        );
+        assert_eq!(parsed.cancel_label_for_inverse("verifies"), None);
     }
 
     #[test]

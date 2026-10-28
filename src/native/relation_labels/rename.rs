@@ -358,6 +358,7 @@ fn load_cancel_policy() -> bob_config::RelationsConfig {
         Err(error) => bob_config::RelationsConfig {
             linked_from_lines: true,
             cancel_labels: Vec::new(),
+            complete_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; cancelling nothing"
             )],

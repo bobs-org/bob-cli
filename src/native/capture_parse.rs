@@ -1365,6 +1365,7 @@ fn load_cancel_policy() -> crate::native::config::RelationsConfig {
         Err(error) => crate::native::config::RelationsConfig {
             linked_from_lines: true,
             cancel_labels: Vec::new(),
+            complete_labels: Vec::new(),
             warnings: vec![format!(
                 "invalid relations config: {error}; cancelling nothing"
             )],

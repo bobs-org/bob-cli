@@ -12,6 +12,8 @@ pub(crate) mod recovery;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;
+#[allow(dead_code)]
+pub(crate) mod verdicts;
 
 pub(crate) use project_pull_in::{
     closed_prj_may_have_parent, inspect_pull_ins,
