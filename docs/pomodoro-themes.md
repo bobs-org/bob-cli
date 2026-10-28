@@ -150,7 +150,10 @@ Filter first, then group:
 5. **E:** Today's query-independent utility rows.
 
 Recent rows exclude hidden themes and any theme that is a component of a
-named Today row in the same menu. An empty query shows at most 5 Recent
+named Today row in the same menu. Only rows the menu actually shows count. A
+theme used today only by a done or cancelled Pomodoro is not a Today row in a
+link or move picker, so it stays in Recent. In the start context it shows as
+an "again" row. An empty query shows at most 5 Recent
 rows; a non-empty query shows at most 12. Matching is ASCII
 case-insensitive on slugs. A partial quoted literal matches on the
 normalized key prefix.
