@@ -17,6 +17,7 @@ use crate::native::{
 
 mod cache;
 pub(crate) mod cli;
+mod defaults;
 mod hints;
 mod hue;
 mod journal;
@@ -26,6 +27,7 @@ mod scan;
 mod similar;
 pub(crate) mod split;
 pub(crate) mod suggest;
+pub(crate) mod suggest_cli;
 #[cfg(test)]
 mod tests;
 pub(crate) mod write;
@@ -190,7 +192,7 @@ impl Catalog {
         today: NaiveDate,
         fresh: bool,
     ) -> std::io::Result<Self> {
-        Self::load_inner(vault, today, fresh, None, None)
+        Self::load_inner(vault, today, fresh, None, None, None)
     }
 
     /// Completion only needs area hues for remembered themes and names in
@@ -201,7 +203,17 @@ impl Catalog {
         extra_keys: BTreeSet<String>,
         live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
     ) -> std::io::Result<Self> {
-        Self::load_inner(vault, today, false, Some(extra_keys), live)
+        Self::load_inner(vault, today, false, Some(extra_keys), live, None)
+    }
+
+    /// Explicit list only: its concurrent default scan supplies root-area
+    /// facts before the catalog is used, so skip a duplicate area scan here.
+    pub(super) fn load_without_areas(
+        vault: &Path,
+        today: NaiveDate,
+        fresh: bool,
+    ) -> std::io::Result<Self> {
+        Self::load_inner(vault, today, fresh, None, None, Some(BTreeMap::new()))
     }
 
     fn load_inner(
@@ -210,6 +222,7 @@ impl Catalog {
         fresh: bool,
         area_keys: Option<BTreeSet<String>>,
         live: Option<&crate::native::capture_pomodoros::PomodoroScan>,
+        cached_areas: Option<BTreeMap<String, Hue>>,
     ) -> std::io::Result<Self> {
         let sources = config::load_theme_sources();
         let (prefs, mut warnings) = journal::load_prefs(vault)?;
@@ -231,7 +244,9 @@ impl Catalog {
                 keys.extend(records.keys().cloned());
                 scan::scan_root_areas_for_keys(vault, &keys)
             }
-            None => scan::scan_root_areas(vault),
+            None => {
+                cached_areas.unwrap_or_else(|| scan::scan_root_areas(vault))
+            }
         };
         Ok(Self {
             today,

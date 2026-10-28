@@ -44,12 +44,31 @@ pub(crate) struct NotConfiguredHint {
     pub(crate) similar_to: Option<String>,
 }
 
-/// Collision and not-configured list hints share one JSON array.
+/// Additive list hints retain each existing JSON object shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum ThemeHint {
     Collision(CollisionHint),
     NotConfigured(NotConfiguredHint),
+    UnknownDefault(UnknownDefaultHint),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct UnknownDefaultHint {
+    pub(crate) code: &'static str,
+    pub(crate) path: String,
+    pub(crate) name: String,
+    pub(crate) similar_to: Vec<String>,
+}
+
+pub(crate) fn human_unknown_default_hint(hint: &UnknownDefaultHint) -> String {
+    let suggestion = hint
+        .similar_to
+        .first()
+        .map(|name| format!("; did you mean {name}?"))
+        .unwrap_or_default();
+    format!("{} suggests unknown theme {}{} → edit theme: in that note or add {} under themes: in {}",
+        hint.path, hint.name, suggestion, hint.name, crate::native::config::display_config_path())
 }
 
 pub(crate) fn not_configured_hints(

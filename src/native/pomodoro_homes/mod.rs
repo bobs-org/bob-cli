@@ -10,7 +10,7 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use facts::{NoteKind, NoteTheme};
+pub(crate) use facts::{NoteFacts, NoteKind, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{

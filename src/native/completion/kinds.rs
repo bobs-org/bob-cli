@@ -567,6 +567,11 @@ const TABLE: &[Entry] = &[
         kind: Kind::Files(None),
     },
     Entry {
+        path: &["themes", "suggest"],
+        arg: "target",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &["relations", "hide"],
         arg: "label",
         kind: Kind::RelationLabel,

@@ -508,6 +508,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["themes", "color", "--help"], "bob themes color"),
         (&["themes", "rename", "--help"], "bob themes rename"),
         (&["themes", "split", "--help"], "bob themes split"),
+        (&["themes", "suggest", "--help"], "bob themes suggest"),
         (&["pomodoro", "tmux", "--help"], "usage: bob pomodoro tmux"),
     ];
 

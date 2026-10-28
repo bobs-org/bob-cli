@@ -194,27 +194,31 @@ fn scan_root_areas_matching(
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
-        let Some(frontmatter) = parse_frontmatter(&contents) else {
+        let Some(hue) = root_area_hue(stem, &contents) else {
             continue;
         };
-        if !frontmatter_is_area(&frontmatter) {
-            continue;
-        }
-        let Some(parent) = frontmatter_value(&frontmatter, "parent")
-            .and_then(wikilink_path_target)
-        else {
-            continue;
-        };
-        let parent_stem = parent.strip_suffix(".md").unwrap_or(&parent);
-        if !parent_stem.eq_ignore_ascii_case("area") {
-            continue;
-        }
-        let hue = frontmatter_value(&frontmatter, "color")
-            .and_then(|value| Hue::parse(trim_yaml_scalar(value)))
-            .unwrap_or_else(|| fallback_hue(stem));
         areas.insert(key, hue);
     }
     areas
+}
+
+/// Shared with the explicit list's note-facts cache.
+pub(super) fn root_area_hue(stem: &str, contents: &str) -> Option<Hue> {
+    let frontmatter = parse_frontmatter(contents)?;
+    if !frontmatter_is_area(&frontmatter) {
+        return None;
+    }
+    let parent = frontmatter_value(&frontmatter, "parent")
+        .and_then(wikilink_path_target)?;
+    let parent_stem = parent.strip_suffix(".md").unwrap_or(&parent);
+    if !parent_stem.eq_ignore_ascii_case("area") {
+        return None;
+    }
+    Some(
+        frontmatter_value(&frontmatter, "color")
+            .and_then(|value| Hue::parse(trim_yaml_scalar(value)))
+            .unwrap_or_else(|| fallback_hue(stem)),
+    )
 }
 
 pub(crate) fn parse_summary_date(raw: &str) -> Option<NaiveDate> {

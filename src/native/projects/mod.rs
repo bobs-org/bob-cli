@@ -215,9 +215,10 @@ pub(crate) use model::{
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_article, frontmatter_is_project,
     frontmatter_scalar, frontmatter_type_names, frontmatter_value,
-    is_markdown_file, list_item_content, parse_frontmatter,
-    project_name_aliases, trim_yaml_scalar, walk_typed_notes,
-    wikilink_path_target, wikilink_spans_in_line, FrontmatterScalar,
+    is_excluded_directory, is_markdown_file, list_item_content,
+    parse_frontmatter, project_name_aliases, trim_yaml_scalar,
+    walk_typed_notes, wikilink_path_target, wikilink_spans_in_line,
+    FrontmatterScalar,
 };
 pub(crate) use surface::{
     project_surface, project_surface_with_closed_child, ProjectSurface,

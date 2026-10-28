@@ -134,7 +134,7 @@ fn fresh_arg() -> Arg {
         .long("fresh")
         .short('F')
         .action(ArgAction::SetTrue)
-        .help("Rebuild the catalog from daily notes, ignoring the cache")
+        .help("Rebuild the catalog and note-default facts, ignoring caches")
 }
 
 fn help_arg() -> Arg {
@@ -272,14 +272,36 @@ enum ListError {
 
 fn list_themes(request: &ListRequest) -> Result<ListReport, ListError> {
     let today = bob_env::current_datetime().date();
-    let catalog = Catalog::load(&request.bob_dir, today, request.fresh)
-        .map_err(|error| {
-            ListError::Io(format!(
-                "read theme catalog in {}: {error}",
-                request.bob_dir.display()
-            ))
-        })?;
-    Ok(build_report(request, &catalog))
+    // The independent caches can be refreshed concurrently. Capture the cache
+    // location on this thread so scoped environment overrides remain effective.
+    let cache_dir = bob_env::bob_cli_cache_dir();
+    let (defaults, catalog) = std::thread::scope(|scope| {
+        let defaults = scope.spawn(|| {
+            super::defaults::load(&request.bob_dir, request.fresh, &cache_dir)
+        });
+        let catalog =
+            Catalog::load_without_areas(&request.bob_dir, today, request.fresh);
+        (
+            defaults.join().expect("note defaults worker panicked"),
+            catalog,
+        )
+    });
+    let mut defaults = defaults.map_err(|error| {
+        ListError::Io(format!("read note defaults: {error}"))
+    })?;
+    let mut catalog = catalog.map_err(|error| {
+        ListError::Io(format!(
+            "read theme catalog in {}: {error}",
+            request.bob_dir.display()
+        ))
+    })?;
+    catalog.areas = std::mem::take(&mut defaults.areas);
+    let mut report = build_report(request, &catalog);
+    let defaults = defaults.unknown(&catalog);
+    report
+        .hints
+        .extend(defaults.into_iter().map(hints::ThemeHint::UnknownDefault));
+    Ok(report)
 }
 
 fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
@@ -536,6 +558,9 @@ fn print_human(report: &ListReport) {
     let mut extra_not_configured = 0usize;
     for hint in &report.hints {
         match hint {
+            hints::ThemeHint::UnknownDefault(hint) => {
+                println!("  hint  {}", hints::human_unknown_default_hint(hint));
+            }
             hints::ThemeHint::Collision(hint) => {
                 println!("  hint  {}", hints::human_hint(hint));
             }

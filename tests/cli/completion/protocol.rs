@@ -469,3 +469,21 @@ fn debug_log_writes_the_file_and_nothing_else() {
     let plain = complete(&["bob", ""]);
     assert_eq!(stdout(&output), stdout(&plain));
 }
+
+#[test]
+fn theme_suggest_is_discoverable_with_options_and_a_text_target() {
+    let group = complete(&["bob", "themes", ""]);
+    assert_success(&group);
+    assert!(values(&group).contains(&"suggest".to_string()));
+    let options = complete(&["bob", "themes", "suggest", "--"]);
+    assert_success(&options);
+    let names = values(&options);
+    for option in ["--bob-dir", "--format", "--help"] {
+        assert!(names.contains(&option.to_string()), "{names:?}");
+    }
+    let target = complete(&["bob", "themes", "suggest", ""]);
+    assert_success(&target);
+    assert!(!directives(&target)
+        .iter()
+        .any(|line| line.starts_with("!files")));
+}

@@ -1041,7 +1041,7 @@ pub(crate) fn is_markdown_file(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "md")
 }
 
-pub(super) fn is_excluded_directory(path: &Path) -> bool {
+pub(crate) fn is_excluded_directory(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
         is_always_excluded_note_directory_name(name)
             || name.to_str() == Some("done")

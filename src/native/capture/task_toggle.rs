@@ -18,35 +18,9 @@ pub(super) fn plan_task_toggle_capture(
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
-    let task = match scan.by_block_id(block_id) {
-        BlockIdLookup::Found(task) => task,
-        BlockIdLookup::NotATask {
-            line_index,
-            excerpt,
-        } => {
-            return Err(CaptureError::io(format!(
-                "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
-                line_index + 1
-            )));
-        }
-        BlockIdLookup::Duplicate(count) => {
-            return Err(CaptureError::io(format!(
-                "block ID ^{block_id} appears {count} times in {route}.md; make it unique before capturing"
-            )));
-        }
-        BlockIdLookup::Missing => {
-            let choices = format!(
-                "run 'bob capture-tasks -r {route}' to list task block IDs"
-            );
-            let message = match scan.suggest_block_id(block_id) {
-                Some(suggestion) => format!(
-                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}? ({choices})"
-                ),
-                None => format!("no task with block ID ^{block_id} in {route}.md ({choices})"),
-            };
-            return Err(CaptureError::io(message));
-        }
-    };
+    let task = scan
+        .lookup_capture_task(route, block_id)
+        .map_err(CaptureError::io)?;
     let task_line_index = task.line_index;
     let previous_status_symbol = task.status_symbol;
     let previous_status_name = task.status_name.clone();

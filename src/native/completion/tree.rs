@@ -138,6 +138,9 @@ impl NativeCommand {
             NativeCommand::ThemesSplit => {
                 crate::native::pomodoro_themes::build_cli_split()
             }
+            NativeCommand::ThemesSuggest => {
+                crate::native::pomodoro_themes::suggest_cli::build_cli()
+            }
             NativeCommand::ThemesUnhide => {
                 crate::native::pomodoro_themes::write::build_cli_unhide()
             }

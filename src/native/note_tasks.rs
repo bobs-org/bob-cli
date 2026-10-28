@@ -183,6 +183,43 @@ impl NoteTaskScan {
         }
     }
 
+    /// Task-toggle lookup and diagnostics shared with read-only explanations.
+    pub(crate) fn lookup_capture_task(
+        &self,
+        route: &str,
+        block_id: &str,
+    ) -> Result<&NoteTask, String> {
+        match self.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => Ok(task),
+        BlockIdLookup::NotATask {
+            line_index,
+            excerpt,
+        } => {
+            Err(format!(
+                "^{block_id} in {route}.md is not a task (line {}: {excerpt})",
+                line_index + 1
+            ))
+        }
+        BlockIdLookup::Duplicate(count) => {
+            Err(format!(
+                "block ID ^{block_id} appears {count} times in {route}.md; make it unique before capturing"
+            ))
+        }
+        BlockIdLookup::Missing => {
+            let choices = format!(
+                "run 'bob capture-tasks -r {route}' to list task block IDs"
+            );
+            let message = match self.suggest_block_id(block_id) {
+                Some(suggestion) => format!(
+                    "no task with block ID ^{block_id} in {route}.md; did you mean ^{suggestion}? ({choices})"
+                ),
+                None => format!("no task with block ID ^{block_id} in {route}.md ({choices})"),
+            };
+            Err(message)
+        }
+        }
+    }
+
     pub(crate) fn suggest_block_id(&self, id: &str) -> Option<&str> {
         let task_ids = self
             .tasks

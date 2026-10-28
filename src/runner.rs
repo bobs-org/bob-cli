@@ -375,6 +375,14 @@ const THEMES_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "suggest",
+        about: "Explain the suggested theme for a task or capture route",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesSuggest,
+            script_command: None,
+        },
+    },
+    Member {
         name: "unhide",
         about: "Show hidden themes in Recent suggestion rows again",
         leaf: Leaf {
@@ -397,6 +405,7 @@ Examples:
   bob themes rename FIXES FIX -d   Preview a global rename
   bob themes split JOB -t > job.tsv
   bob themes split JOB -m job.tsv -d
+  bob themes suggest dev:build    Explain a task’s suggested theme
 
 See docs/pomodoro-themes.md for identity, cache, hue, journal, and JSON.
 Run 'bob themes <command> --help' for more information on a command.";
@@ -562,7 +571,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "themes",
-        about: "List, hide, unhide, color, rename, and split Pomodoro themes",
+        about: "Manage Pomodoro themes and explain task suggestions",
         section: Section::DailyWorkflow,
         target: Target::Group(Group {
             members: THEMES_MEMBERS,
@@ -2064,6 +2073,7 @@ mod tests {
             NativeCommand::ThemesList,
             NativeCommand::ThemesRename,
             NativeCommand::ThemesSplit,
+            NativeCommand::ThemesSuggest,
             NativeCommand::ThemesUnhide,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,

@@ -590,3 +590,468 @@ fn themes_list_emits_not_configured_hints() {
         "{text}"
     );
 }
+
+fn suggest_json(vault: &Path, cache: &Path, target: &str) -> Value {
+    let output = themes_command(vault, cache)
+        .args(["themes", "suggest", target, "-f", "json"])
+        .output()
+        .expect("theme explanation");
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    serde_json::from_slice(&output.stdout).expect("explanation JSON")
+}
+
+fn vault_bytes(
+    root: &Path,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        files: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        for entry in fs::read_dir(dir).expect("list vault") {
+            let entry = entry.expect("entry");
+            if entry.file_type().unwrap().is_dir() {
+                walk(root, &entry.path(), files);
+            } else {
+                files.insert(
+                    entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                    fs::read(entry.path()).unwrap(),
+                );
+            }
+        }
+    }
+    let mut files = std::collections::BTreeMap::new();
+    walk(root, root, &mut files);
+    files
+}
+
+#[test]
+fn themes_suggest_explains_overrides_inheritance_and_new_tasks_without_writes()
+{
+    let temp = TempDir::new("bob-cli-theme-suggest");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: blue\ntheme: FIX\n---\n",
+    );
+    write_file(&vault.join("work.md"), "---\ntype: [[project]]\nparent: [[dev]]\n---\n- [ ] #task Build [theme:: BOB] ^build\n- [ ] #task Read #ref ^reading\n- [x] #task Done [theme:: BOB] ^done\n- [ ] #task Plain ^plain\n");
+    let before = vault_bytes(&vault);
+    let task = suggest_json(&vault, &cache, "WORK:build");
+    assert_eq!(task["schema_version"], 1);
+    assert_eq!(task["ok"], true);
+    assert_eq!(
+        task["target"],
+        serde_json::json!({"route":"work", "block_id":"build", "path":"work.md", "line":5, "new_task":false})
+    );
+    let suggestion = &task["theme_suggestion"];
+    assert_eq!(suggestion["source"], "task");
+    assert!(suggestion.get("from").is_none());
+    assert_eq!(suggestion["inherited"]["theme"]["name"], "FIX");
+    assert_eq!(
+        suggestion["inherited"]["from"]["chain"],
+        serde_json::json!(["work.md", "dev.md"])
+    );
+    assert!(suggestion["inherited"].get("inherited").is_none());
+    let new_task = suggest_json(&vault, &cache, "work");
+    assert_eq!(new_task["target"]["new_task"], true);
+    assert!(new_task["target"]["line"].is_null());
+    assert!(new_task["target"]["block_id"].is_null());
+    assert!(new_task["theme_suggestion"].get("inherited").is_none());
+    assert_eq!(new_task["theme_suggestion"]["from"]["hue"], "blue");
+    let reading = suggest_json(&vault, &cache, "work:reading");
+    assert_eq!(reading["theme_suggestion"]["source"], "reading");
+    assert_eq!(reading["theme_suggestion"]["theme"]["known"], false);
+    assert!(reading["theme_suggestion"].get("from").is_none());
+    let closed = suggest_json(&vault, &cache, "work:done");
+    assert!(closed["theme_suggestion"].is_null());
+    assert_eq!(
+        closed["warnings"],
+        serde_json::json!([{"code":"closed_task"}])
+    );
+    let human = themes_command(&vault, &cache)
+        .args(["themes", "suggest", "work:build"])
+        .output()
+        .unwrap();
+    assert_success(&human);
+    assert_stdout_has_no_ansi(&human);
+    assert!(stdout(&human).contains("without it: ■ FIX from dev"));
+    let human = themes_command(&vault, &cache)
+        .args(["themes", "suggest", "work"])
+        .output()
+        .unwrap();
+    assert!(stdout(&human).contains("chain: work.md → dev.md"));
+    assert_eq!(before, vault_bytes(&vault));
+}
+
+#[test]
+fn themes_suggest_null_inheritance_repair_hidden_and_invalid_default_warnings()
+{
+    let temp = TempDir::new("bob-cli-theme-suggest-null");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    write_file(&vault.join("work.md"), "---\ntype: [[project]]\ntheme: [BAD]\nparent: [[dev]]\n---\n- [ ] #task Own (theme:: FIX) ^own\n- [ ] #task Repair [theme:: A] (theme:: B) ^repair\n");
+    let own = suggest_json(&vault, &cache, "work:own");
+    assert!(own["theme_suggestion"].get("inherited").unwrap().is_null());
+    assert_eq!(
+        own["warnings"],
+        serde_json::json!([{"code":"theme_default_invalid", "path":"work.md"}])
+    );
+    let none = suggest_json(&vault, &cache, "work:repair");
+    assert!(none["theme_suggestion"].is_null());
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: [[area]]\ntheme: FIX\n---\n",
+    );
+    let hidden = themes_command(&vault, &cache)
+        .args(["themes", "hide", "FIX", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_success(&hidden);
+    let repaired = suggest_json(&vault, &cache, "work:repair");
+    assert_eq!(repaired["theme_suggestion"]["repair"], "duplicate");
+    assert_eq!(repaired["theme_suggestion"]["theme"]["name"], "FIX");
+    assert!(repaired["theme_suggestion"]["theme"].get("known").is_none());
+}
+
+#[test]
+fn themes_suggest_reuses_capture_lookup_errors_and_rejects_unsafe_targets() {
+    let temp = TempDir::new("bob-cli-theme-suggest-errors");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_file(&vault.join("work.md"), "- [ ] #task Build ^build\nProse ^prose\n- [ ] #task A ^dup\n- [ ] #task B ^dup\n");
+    for (target, message, status) in [
+        ("work:biuld", "did you mean ^build?", 1),
+        ("work:prose", "is not a task (line 2:", 1),
+        ("work:dup", "appears 2 times", 1),
+        ("work:missing", "run 'bob capture-tasks -r work'", 1),
+        ("missing", "read target missing.md", 1),
+        ("../work", "route must contain only", 2),
+        ("/work", "route must contain only", 2),
+        ("work:", "valid block ID", 2),
+        ("work:a:b", "valid block ID", 2),
+    ] {
+        let output = themes_command(&vault, &cache)
+            .args(["themes", "suggest", target, "-f", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(status),
+            "{target}: {}",
+            stderr(&output)
+        );
+        let value: Value =
+            serde_json::from_slice(&output.stdout).expect("error JSON");
+        assert_eq!(value["ok"], false);
+        assert!(
+            value["message"].as_str().unwrap().contains(message),
+            "{target}: {value}"
+        );
+    }
+    write_file(
+        &cache.join("missing-bob-config.yml"),
+        "plan:\n  reading_theme: [READ]\n",
+    );
+    let output = themes_command(&vault, &cache)
+        .args(["themes", "suggest", "work", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["code"], "config");
+}
+
+#[cfg(unix)]
+#[test]
+fn themes_suggest_refuses_symlink_escape_and_tolerates_closed_stdout() {
+    use std::os::unix::fs::symlink;
+    use std::process::Stdio;
+    let temp = TempDir::new("bob-cli-theme-suggest-pipe");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[area]]\ntheme: NEW\n---\n",
+    );
+    write_file(&temp.path().join("outside.md"), "secret");
+    symlink(temp.path().join("outside.md"), vault.join("escape.md")).unwrap();
+    let output = themes_command(&vault, &cache)
+        .args(["themes", "suggest", "escape", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("outside the Bob vault"));
+    let mut child = themes_command(&vault, &cache)
+        .args(["themes", "suggest", "work"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    assert_success(&output);
+    assert!(stderr(&output).is_empty());
+}
+
+fn unknown_default_hints(
+    vault: &Path,
+    cache: &Path,
+    args: &[&str],
+) -> Vec<Value> {
+    let output = themes_command(vault, cache)
+        .args(["themes", "list", "-f", "json"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    value["hints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|hint| hint["code"] == "theme_default_unknown")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn themes_unknown_defaults_are_vault_wide_sorted_and_do_not_write() {
+    let temp = TempDir::new("bob-cli-theme-default-hints");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    for (path, kind, value) in [
+        ("z.md", "area", "BOBS"),
+        ("sub/a.md", "project", "TYPO"),
+        ("known.md", "project", "FIX"),
+        ("off.md", "area", "OFF"),
+        ("blank.md", "area", "''"),
+        ("invalid.md", "area", "[BAD]"),
+        ("ignored.md", "reference", "UNUSED"),
+        ("done/archive.md", "project", "SKIP"),
+        (".bob/internal.md", "area", "SKIP"),
+        ("_templates/t.md", "project", "SKIP"),
+    ] {
+        write_file(
+            &vault.join(path),
+            &format!("---\ntype: [[{kind}]]\ntheme: {value}\n---\n"),
+        );
+    }
+    let before = vault_bytes(&vault);
+    let expected = unknown_default_hints(&vault, &cache, &[]);
+    assert_eq!(expected.len(), 2);
+    assert_eq!(expected[0]["path"], "sub/a.md");
+    assert_eq!(expected[1]["path"], "z.md");
+    assert_eq!(expected[1]["name"], "BOBS");
+    assert_eq!(expected[1]["similar_to"], serde_json::json!(["BOB"]));
+    for flags in [&["-q", "nomatch"][..], &["-n", "0"], &["-H"], &["-F"]] {
+        assert_eq!(unknown_default_hints(&vault, &cache, flags), expected);
+    }
+    let human = themes_command(&vault, &cache)
+        .args(["themes", "-q", "nomatch"])
+        .output()
+        .unwrap();
+    assert!(stdout(&human)
+        .contains("z.md suggests unknown theme BOBS; did you mean BOB?"));
+    assert_eq!(before, vault_bytes(&vault));
+}
+
+#[test]
+fn themes_default_hints_track_edits_additions_deletions_types_and_knownness() {
+    let temp = TempDir::new("bob-cli-theme-default-refresh");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    let path = vault.join("work.md");
+    write_file(&path, "---\ntype: [[project]]\ntheme: NEW\n---\n");
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 1);
+    write_file(&path, "---\ntype: [[project]]\ntheme: NEXT\n---\n");
+    assert_eq!(
+        unknown_default_hints(&vault, &cache, &[])[0]["name"],
+        "NEXT"
+    );
+    write_file(&path, "---\ntype: [[reference]]\ntheme: NEXT\n---\n");
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(&path, "---\ntype: [[area]]\ntheme: NEXT\n---\n");
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 1);
+    write_file(&path, "---\ntype: [[area]]\n---\n");
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(
+        &vault.join("new/nested.md"),
+        "---\ntype: [[project]]\ntheme: NEXT\n---\n",
+    );
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 1);
+    fs::remove_file(vault.join("new/nested.md")).unwrap();
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(&path, "---\ntype: [[project]]\ntheme: NEXT\n---\n");
+    write_file(
+        &vault.join("2026/20261024.md"),
+        "## Pomodoros\n- [ ] () — NEXT\n",
+    );
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(&path, "---\ntype: [[project]]\ntheme: VOCAB\n---\n");
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 1);
+    write_file(
+        &cache.join("missing-bob-config.yml"),
+        "themes:\n  VOCAB: blue\n",
+    );
+    assert!(unknown_default_hints(&vault, &cache, &[]).is_empty());
+    write_file(&cache.join("missing-bob-config.yml"), "themes: {}\n");
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 1);
+}
+
+#[test]
+fn themes_default_cache_rebuilds_on_corruption_fresh_and_new_vaults() {
+    let temp = TempDir::new("bob-cli-theme-default-cache");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    write_file(
+        &vault.join("work.md"),
+        "---\ntype: [[project]]\ntheme: NEW\n---\n",
+    );
+    let expected = unknown_default_hints(&vault, &cache, &[]);
+    let cache_file = fs::read_dir(cache.join("bob-cli/themes"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("note-defaults-v1-")
+        })
+        .unwrap();
+    fs::write(&cache_file, b"{broken").unwrap();
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]), expected);
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(&cache_file).unwrap()).unwrap();
+    value["root"]["files"]["work.md"]["default"] = serde_json::json!("STALE");
+    fs::write(&cache_file, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(unknown_default_hints(&vault, &cache, &["-F"]), expected);
+    let second = temp.path().join("second");
+    write_file(
+        &second.join("work.md"),
+        "---\ntype: [[area]]\ntheme: SECOND\n---\n",
+    );
+    assert_eq!(
+        unknown_default_hints(&second, &cache, &[])[0]["name"],
+        "SECOND"
+    );
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]), expected);
+}
+
+#[test]
+fn themes_default_cache_rechecks_same_size_edits_and_root_area_colors() {
+    let temp = TempDir::new("bob-cli-theme-default-metadata");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    write_theme_vault(&vault);
+    let path = vault.join("work.md");
+    write_file(&path, "---\ntype: [[project]]\ntheme: NEW\n---\n");
+    let old = fs::metadata(&path).unwrap().modified().unwrap();
+    assert_eq!(unknown_default_hints(&vault, &cache, &[])[0]["name"], "NEW");
+    write_file(&path, "---\ntype: [[project]]\ntheme: OLD\n---\n");
+    // Explicitly change mtime so this test does not depend on FS timestamp resolution.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(old + std::time::Duration::from_secs(1)),
+        )
+        .unwrap();
+    assert_eq!(unknown_default_hints(&vault, &cache, &[])[0]["name"], "OLD");
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: red\n---\n",
+    );
+    let output = themes_command(&vault, &cache)
+        .args(["themes", "-a", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let job = value["themes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|theme| theme["key"] == "job")
+        .unwrap();
+    assert_eq!(job["hue"], "red");
+    assert_eq!(job["hue_source"], "area");
+}
+
+#[test]
+fn themes_default_cache_refreshes_large_vaults_and_propagates_read_errors() {
+    let temp = TempDir::new("bob-cli-theme-default-large-vault");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    // Enough notes for multiple refresh workers, with defaults spread across
+    // the sorted file list and many initially untyped notes between them.
+    for index in 0..1100 {
+        let contents = if index % 137 == 0 {
+            "---\ntype: [[project]]\ntheme: UNKNOWN\n---\n"
+        } else {
+            "ordinary note\n"
+        };
+        write_file(&vault.join(format!("nested/{index:04}.md")), contents);
+    }
+    let cold = unknown_default_hints(&vault, &cache, &[]);
+    assert_eq!(cold.len(), 9);
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]), cold);
+    write_file(
+        &vault.join("nested/0500.md"),
+        "---\ntype: [[area]]\ntheme: RETYPED\n---\n",
+    );
+    fs::remove_file(vault.join("nested/0274.md")).unwrap();
+    write_file(&vault.join("nested/0959.md"), "ordinary again\n");
+    write_file(
+        &vault.join("added/new.md"),
+        "---\ntype: [[project]]\ntheme: ADDED\n---\n",
+    );
+    let before = vault_bytes(&vault);
+    let warm = unknown_default_hints(&vault, &cache, &[]);
+    assert_eq!(warm.len(), 9);
+    assert!(warm.iter().any(|hint| hint["name"] == "RETYPED"));
+    assert!(warm.iter().any(|hint| hint["name"] == "ADDED"));
+    assert!(!warm.iter().any(|hint| hint["path"] == "nested/0274.md"));
+    assert!(!warm.iter().any(|hint| hint["path"] == "nested/0959.md"));
+    assert_eq!(unknown_default_hints(&vault, &cache, &["-F"]), warm);
+    assert_eq!(vault_bytes(&vault), before);
+
+    fs::write(vault.join("nested/0500.md"), [0xff]).unwrap();
+    let output = themes_command(&vault, &cache)
+        .args(["themes", "list", "-f", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["ok"], false);
+    assert!(stdout(&output).contains("read note defaults"));
+}
+
+#[cfg(unix)]
+#[test]
+fn themes_default_cache_discovers_additions_through_a_vault_symlink() {
+    let temp = TempDir::new("bob-cli-theme-default-root-symlink");
+    let vault = temp.path().join("vault");
+    let alias = temp.path().join("alias");
+    let cache = temp.path().join("cache");
+    write_file(
+        &vault.join("one.md"),
+        "---\ntype: [[area]]\ntheme: FIRST\n---\n",
+    );
+    std::os::unix::fs::symlink(&vault, &alias).unwrap();
+    assert_eq!(unknown_default_hints(&alias, &cache, &[]).len(), 1);
+    write_file(
+        &vault.join("two.md"),
+        "---\ntype: [[project]]\ntheme: SECOND\n---\n",
+    );
+    assert_eq!(unknown_default_hints(&alias, &cache, &[]).len(), 2);
+    assert_eq!(unknown_default_hints(&vault, &cache, &[]).len(), 2);
+}

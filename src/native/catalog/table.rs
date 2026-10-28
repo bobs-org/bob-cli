@@ -347,6 +347,14 @@ pub(crate) const ENTRIES: &[Row] = &[
         60,
     ),
     reads(
+        "themes-suggest",
+        &["themes", "suggest"],
+        "Explain a task theme suggestion",
+        &["themes", "suggest", "task", "default"],
+        Presentation::Report,
+        60,
+    ),
+    reads(
         "themes-list",
         &["themes", "list"],
         "List Pomodoro themes",
