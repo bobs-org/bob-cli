@@ -1,6 +1,26 @@
 //! Staging, rollback, temporary files, and clipboard saves.
 use super::*;
 
+#[cfg(test)]
+pub(super) static RENAME_FAIL_TARGET: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn test_rename_failure(target: &Path) -> Option<CaptureError> {
+    if RENAME_FAIL_TARGET
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .is_some_and(|fail| fail == target)
+    {
+        return Some(CaptureError::io(format!(
+            "replace target {}: injected test failure",
+            target.display()
+        )));
+    }
+    None
+}
+
 pub(crate) fn validate_target_parent(
     target: &Path,
 ) -> Result<(), CaptureError> {
@@ -246,6 +266,20 @@ pub(crate) fn write_staged_files(
         if let Err(error) =
             validate_disk_preimages(std::slice::from_ref(pending_file.staged))
         {
+            remove_temporary_file(&pending_file.temporary);
+            if let Some(backup) = &pending_file.backup {
+                remove_temporary_file(backup);
+            }
+            cleanup_pending_text_files(&pending);
+            let mut message = error.message.clone();
+            append_rollback_message(
+                &mut message,
+                rollback_applied_files(&applied),
+            );
+            return Err(CaptureError::io(message));
+        }
+        #[cfg(test)]
+        if let Some(error) = test_rename_failure(&pending_file.staged.target) {
             remove_temporary_file(&pending_file.temporary);
             if let Some(backup) = &pending_file.backup {
                 remove_temporary_file(backup);

@@ -58,14 +58,14 @@ pub(super) fn plan_relation_completes(
     )?;
     let groups = group_closing_edges(updates, edges);
     let mut reports = RelationCompleteReports::default();
-    for group in groups {
+    for group in &groups {
         if let Some(complete) = plan_source_complete(
             ctx,
             planner,
             request,
             parsed,
             updates,
-            &group,
+            group,
             existing_owner,
         )? {
             if complete.effect == RelationCompleteEffect::Completed {
@@ -83,14 +83,14 @@ pub(super) fn plan_relation_completes(
             reports.completes.push(complete.row);
         }
     }
-    for complete in &reports.completes {
+    for (group, complete) in groups.iter().zip(reports.completes.iter()) {
         if complete.effect == RelationCompleteEffect::AlreadyClosed {
             continue;
         }
         let source_text = &complete.source.text;
         let target_text = &complete.target.text;
         for label in &complete.labels {
-            let target_text = complete_target_for_label(updates, label)
+            let target_text = group_target_for_label(updates, group, label)
                 .unwrap_or(target_text);
             warnings.push(CaptureWarning::Structured(
                 StructuredCaptureWarning {
@@ -126,16 +126,6 @@ struct PlannedSourceComplete {
     row: RelationCompleteJson,
     effect: RelationCompleteEffect,
     task_complete_refs: CompleteTracking,
-}
-
-fn complete_target_for_label<'a>(
-    updates: &'a [RelationUpdateJson],
-    label: &str,
-) -> Option<&'a str> {
-    updates
-        .iter()
-        .find(|update| update.label.as_deref() == Some(label))
-        .map(|update| update.target.text.as_str())
 }
 
 /// Refuse an item that also changes the complete source through another

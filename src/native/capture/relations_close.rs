@@ -85,16 +85,27 @@ pub(super) fn group_closing_edges(
     groups
 }
 
-/// One closing-label source, by staged identity: same note, same block
-/// (or same line when the source never gained one), in typed order.
-pub(super) fn source_identity(
-    update: &RelationUpdateJson,
-) -> (String, String, usize) {
-    (
-        update.source.path.clone(),
-        update.source.block_id.clone(),
-        update.source.line,
-    )
+/// One closing-label source, by staged identity: same note and block
+/// ID when the source has one, falling back to the staged line only for
+/// an actually idless source. Mirror staging can shift the line of a
+/// stable block within one item, so the line must not split one source.
+pub(super) fn source_identity(update: &RelationUpdateJson) -> (String, String) {
+    source_registry_key(update)
+}
+
+/// The target text behind one triggering label within its own source
+/// group: the first group edge carrying that label names it. Scoping to
+/// the group keeps mixed-direction items with the same label on both
+/// edges from attributing one source's warning to the other's target.
+pub(super) fn group_target_for_label<'a>(
+    updates: &'a [RelationUpdateJson],
+    group: &[ClosingEdge],
+    label: &str,
+) -> Option<&'a str> {
+    group
+        .iter()
+        .find(|edge| updates[edge.update_index].label.as_deref() == Some(label))
+        .map(|edge| updates[edge.update_index].target.text.as_str())
 }
 
 /// Draft-wide identity for opposite-effect tracking: resolved note path

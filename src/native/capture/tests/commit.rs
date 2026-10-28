@@ -185,6 +185,141 @@ fn commits_matching_multi_file_preimage() {
 }
 
 #[test]
+fn complete_label_batch_stale_preimage_keeps_external_edit() {
+    // A complete-label-shaped batch (source, mirror target, recovered
+    // dependent, daily note): mutating one planned preimage refuses the
+    // whole batch, keeps the external edit, and touches nothing else.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("a.md");
+    let target = dir.path().join("b.md");
+    let dependent = dir.path().join("one.md");
+    let day = dir.path().join("today.md");
+    let source_original = "- [ ] #task Alpha ^alpha\n";
+    let target_original = "- [ ] #task Beta ^beta\n";
+    let dependent_original =
+        "- [?] #task Needs [dependsOn:: a__alpha] ^needs\n";
+    let day_original = "## Pomodoros\n- [ ] Morning\n  - [[a#^alpha]]\n";
+    for (path, contents) in [
+        (&source, source_original),
+        (&target, target_original),
+        (&dependent, dependent_original),
+        (&day, day_original),
+    ] {
+        fs::write(path, contents).expect("write note");
+    }
+    let planned = vec![
+        staged_existing(
+            &source,
+            source_original,
+            "- [x] #task Alpha  [completion:: 2026-10-14] ^alpha\n\t- 🪢 **LINKS:** implemented by [[b#^beta]]\n",
+        ),
+        staged_existing(
+            &target,
+            target_original,
+            "- [ ] #task Beta ^beta\n\t- 🪢 **LINKED FROM:** [[a#^alpha]] (implemented by)\n",
+        ),
+        staged_existing(
+            &dependent,
+            dependent_original,
+            "- [*] #task Needs [fresh:: 2026-10-14] [dependsOn:: a__alpha] ^needs\n",
+        ),
+        staged_existing(&day, day_original, "## Pomodoros\n- [ ] Morning\n  - ~~[[a#^alpha]]~~\n  - [[one#^needs]]\n"),
+    ];
+    let external = "- [ ] #task Beta, edited elsewhere ^beta\n";
+    fs::write(&target, external).expect("external edit");
+    let error = write_staged_files(&planned).expect_err("stale refuses");
+    assert!(
+        error.message.contains("refusing to overwrite"),
+        "refusal message: {}",
+        error.message
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read target"),
+        external,
+        "external edit is retained"
+    );
+    for (path, original) in [
+        (&source, source_original),
+        (&dependent, dependent_original),
+        (&day, day_original),
+    ] {
+        assert_eq!(
+            fs::read_to_string(path).expect("read note"),
+            original,
+            "{} untouched",
+            path.display()
+        );
+    }
+    no_capture_litter(dir.path());
+}
+
+#[test]
+fn complete_label_batch_failure_after_replace_rolls_back() {
+    // A failure after the first replacement restores source, mirror,
+    // dependent, and daily-note bytes through the commit's own failure
+    // path (not by calling the rollback helper directly) and cleans
+    // every temporary file.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = dir.path().join("a.md");
+    let target = dir.path().join("b.md");
+    let dependent = dir.path().join("one.md");
+    let day = dir.path().join("today.md");
+    let source_original = "- [ ] #task Alpha ^alpha\n";
+    let target_original = "- [ ] #task Beta ^beta\n";
+    let dependent_original =
+        "- [?] #task Needs [dependsOn:: a__alpha] ^needs\n";
+    let day_original = "## Pomodoros\n- [ ] Morning\n  - [[a#^alpha]]\n";
+    for (path, contents) in [
+        (&source, source_original),
+        (&target, target_original),
+        (&dependent, dependent_original),
+        (&day, day_original),
+    ] {
+        fs::write(path, contents).expect("write note");
+    }
+    let planned = vec![
+        staged_existing(
+            &source,
+            source_original,
+            "- [x] #task Alpha  [completion:: 2026-10-14] ^alpha\n",
+        ),
+        staged_existing(
+            &target,
+            target_original,
+            "- [ ] #task Beta ^beta\n\t- 🪢 **LINKED FROM:** [[a#^alpha]] (implemented by)\n",
+        ),
+        staged_existing(
+            &dependent,
+            dependent_original,
+            "- [*] #task Needs [fresh:: 2026-10-14] [dependsOn:: a__alpha] ^needs\n",
+        ),
+        staged_existing(&day, day_original, "## Pomodoros\n- [ ] Morning\n  - ~~[[a#^alpha]]~~\n"),
+    ];
+    *RENAME_FAIL_TARGET.lock().expect("lock seam") = Some(dependent.clone());
+    let error = write_staged_files(&planned).expect_err("replace fails");
+    *RENAME_FAIL_TARGET.lock().expect("lock seam") = None;
+    assert!(
+        error.message.contains("rolled back earlier note writes"),
+        "commit invokes rollback: {}",
+        error.message
+    );
+    for (path, original) in [
+        (&source, source_original),
+        (&target, target_original),
+        (&dependent, dependent_original),
+        (&day, day_original),
+    ] {
+        assert_eq!(
+            fs::read_to_string(path).expect("read note"),
+            original,
+            "{} restored",
+            path.display()
+        );
+    }
+    no_capture_litter(dir.path());
+}
+
+#[test]
 fn cumulative_stages_into_one_note_commit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let note = dir.path().join("note.md");

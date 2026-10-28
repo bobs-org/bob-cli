@@ -50,13 +50,13 @@ pub(super) fn plan_relation_cancels(
     refuse_cancel_conflicts(ctx, planner, bob_dir, parsed, updates, &edges)?;
     let groups = group_closing_edges(updates, edges);
     let mut cancels = Vec::new();
-    for group in groups {
+    for group in &groups {
         if let Some(cancel) = plan_source_cancel(
             ctx,
             planner,
             bob_dir,
             updates,
-            &group,
+            group,
             existing_owner,
             dry_run,
         )? {
@@ -65,16 +65,18 @@ pub(super) fn plan_relation_cancels(
     }
     // One structured warning per triggering label on a real cancel, so
     // machines can match the human ⊘ row. The human renderer prints the
-    // ⊘ row once and never repeats these warning messages.
-    for cancel in &cancels {
+    // ⊘ row once and never repeats these warning messages. Each label
+    // resolves within its own source group so mixed-direction items with
+    // the same label keep their own targets.
+    for (group, cancel) in groups.iter().zip(cancels.iter()) {
         if cancel.effect == RelationCancelEffect::AlreadyClosed {
             continue;
         }
         let source_text = &cancel.source.text;
         let target_text = &cancel.target.text;
         for label in &cancel.labels {
-            let target_text =
-                cancel_target_for_label(updates, label).unwrap_or(target_text);
+            let target_text = group_target_for_label(updates, group, label)
+                .unwrap_or(target_text);
             warnings.push(CaptureWarning::Structured(
                 StructuredCaptureWarning {
                     code: "relation_cancelled_source",
@@ -94,18 +96,6 @@ pub(super) fn plan_relation_cancels(
         }
     }
     Ok(cancels)
-}
-
-/// The target text behind one triggering label of a grouped cancel: the
-/// first update carrying that label names it.
-fn cancel_target_for_label<'a>(
-    updates: &'a [RelationUpdateJson],
-    label: &str,
-) -> Option<&'a str> {
-    updates
-        .iter()
-        .find(|update| update.label.as_deref() == Some(label))
-        .map(|update| update.target.text.as_str())
 }
 
 /// Refuse an item that also changes the cancel source through another
