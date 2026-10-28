@@ -1355,3 +1355,57 @@ fn capture_complete_pomodoro_start_drop_protocol() {
         "{json}"
     );
 }
+
+#[test]
+fn capture_complete_relation_label_reports_cancel_cue() {
+    let temp = TempDir::new("bob-cli-capture-complete-cancel-cue");
+    let vault = temp.path().join("vault");
+    write_capture_task_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Sell stocks! ^sell\n");
+    write_file(
+        &vault.join("invest.md"),
+        "- [ ] #task Sell stocks now! ^now\n",
+    );
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n",
+    );
+    let draft = "Use this @cash+sell ~invest:now|dup";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(draft.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run cancel cue completion");
+    assert_success(&output);
+    assert!(
+        stderr(&output).is_empty(),
+        "clean config warns nothing:\n{}",
+        format_output(&output)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["context"], "relation_label");
+    let overlay = json["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .find(|row| row["key"] == "duplicate of")
+        .expect("cancel overlay row");
+    assert_eq!(overlay["cancels_source"], true);
+    assert_eq!(overlay["configured"], true);
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+    assert_eq!(json["relation_cancel"]["source"]["path"], "cash.md");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "⊘ Cancels “Sell stocks!” · Todo → Cancelled"
+    );
+}

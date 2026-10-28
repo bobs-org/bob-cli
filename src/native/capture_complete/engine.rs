@@ -125,6 +125,7 @@ fn build_result_inner(
             query: None,
             owner: None,
             relation: None,
+            relation_cancel: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -198,6 +199,7 @@ fn build_result_inner(
             query: None,
             owner: None,
             relation: None,
+            relation_cancel: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -206,6 +208,7 @@ fn build_result_inner(
 
     let editor_item = capture_language::editor_item_at(raw_text, cursor);
     let mut hidden_count = None;
+    let mut relation_cancel = None;
     // A `||` probe is the `relation_label` context with `one_off`: the
     // scan behind the field already classified the separator, so this
     // never re-lexes the draft.
@@ -380,9 +383,36 @@ fn build_result_inner(
             )
         }
         CompletionContext::RelationLabel => {
-            let (candidates, warnings, count) =
-                relation_label_suggestions(bob_dir, &field.query, one_off);
+            let policy = super::cancel::load_policy();
+            let (mut candidates, warnings, count) = relation_label_suggestions(
+                bob_dir,
+                &field.query,
+                one_off,
+                &policy,
+            );
             hidden_count = Some(count);
+            if !policy.cancel_labels.is_empty()
+                && let Some(plan) = super::cancel::plan_relation_cancel(
+                    bob_dir,
+                    raw_text,
+                    field.replacement.0,
+                    editor_item.as_ref(),
+                    &field.query,
+                    &policy,
+                )
+            {
+                if let Candidates::RelationLabel(rows) = &mut candidates
+                    && let Some(reason) = plan.row_disable.as_deref()
+                {
+                    for row in rows.iter_mut() {
+                        if row.cancels_source {
+                            row.disabled_reason = Some(reason.to_string());
+                            row.replacement.clear();
+                        }
+                    }
+                }
+                relation_cancel = Some(plan.response);
+            }
             (candidates, warnings)
         }
         CompletionContext::WikilinkNote
@@ -488,6 +518,7 @@ fn build_result_inner(
         query,
         owner,
         relation,
+        relation_cancel,
         picker,
         hidden_count,
         one_off: one_off.then_some(true),

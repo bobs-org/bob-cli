@@ -832,3 +832,47 @@ fn is_empty_dir(directory: &Path) -> bool {
     }
     true
 }
+
+#[test]
+fn relation_label_completion_notes_cancel_consequence() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("relations.md"),
+        "- [ ] Source #task ^source\n  - 🪢 **LINKS:** duplicate of [[cash#^buy-milk]] • implements [[cash#^fix-sink]]\n",
+    );
+    write_file(
+        &fixture.config,
+        concat!(
+            "properties:\n",
+            "  - name: priority\n",
+            "    values: priority\n",
+            "    schedules: scheduled\n",
+            "    levels:\n",
+            "      - label: P1\n",
+            "        value: high\n",
+            "        min_days: 2\n",
+            "        max_days: 7\n",
+            "      - label: P2\n",
+            "        value: medium\n",
+            "        min_days: 8\n",
+            "        max_days: 30\n",
+            "relations:\n",
+            "  cancel_labels:\n",
+            "    - duplicate of\n",
+        ),
+    );
+
+    let output = complete(&fixture, &["bob", "relations", "hide", ""]);
+    assert_success(&output);
+    let all = rows(&output);
+    let cancel = all
+        .iter()
+        .find(|row| row[0] == "duplicate of")
+        .expect("cancel label row");
+    assert_eq!(cancel[1], "1 link · cancels source");
+    let plain = all
+        .iter()
+        .find(|row| row[0] == "implements")
+        .expect("plain label row");
+    assert_eq!(plain[1], "1 link");
+}

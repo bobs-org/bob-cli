@@ -353,13 +353,18 @@ pub(super) fn relation_line(item: &RelationCandidate) -> (String, String) {
 pub(super) fn relation_label_line(
     item: &RelationLabelSuggestion,
 ) -> (String, String) {
+    let cancels_suffix = if item.cancels_source {
+        " · ⊘ cancels"
+    } else {
+        ""
+    };
     let detail = if let Some(reason) = &item.disabled_reason {
-        format!("typed label · {reason}")
+        format!("typed label · {reason}{cancels_suffix}")
     } else if item.typed {
-        "typed label · canonical spelling".to_string()
+        format!("typed label · canonical spelling{cancels_suffix}")
     } else {
         format!(
-            "{} use{}",
+            "{} use{}{cancels_suffix}",
             item.count.unwrap_or_default(),
             if item.count == Some(1) { "" } else { "s" }
         )

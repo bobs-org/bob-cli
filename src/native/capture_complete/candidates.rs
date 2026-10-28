@@ -23,6 +23,7 @@ use crate::native::{
         EditorItemParse, RelationDirection, RelationEntry,
     },
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
+    config,
     note_tasks::{self, BlockIdLookup},
     pomodoro, project_dependencies, task_complete, task_relations,
     task_status_hooks,
@@ -1592,10 +1593,14 @@ struct TaskLinks {
 /// Relation label rows for one `relation_label` probe. `one_off` is true
 /// when the probe sits in a `||` label: `replacement` then keeps the
 /// `||` spelling while `hide_replacement` is always the `||` form.
+/// Configured cancel labels mark their rows with `cancels_source`, and
+/// zero-use configured labels appear as a trailing `configured`
+/// overlay that respects hiding.
 pub(super) fn relation_label_suggestions(
     bob_dir: &Path,
     query: &str,
     one_off: bool,
+    policy: &config::RelationsConfig,
 ) -> (Candidates, Vec<String>, usize) {
     let catalog = match crate::native::relation_labels::Catalog::load(bob_dir) {
         Ok(catalog) => catalog,
@@ -1633,8 +1638,17 @@ pub(super) fn relation_label_suggestions(
             disabled_reason: None,
             existing: None,
             hidden: None,
+            cancels_source: policy.is_cancel_label(&record.key),
+            configured: false,
         })
         .collect::<Vec<_>>();
+    append_cancel_overlay(
+        &mut suggestions,
+        &catalog,
+        &normalized_query,
+        one_off,
+        policy,
+    );
     if !normalized_query.is_empty() {
         let (label, disabled_reason) = match validation {
             Ok(label) => (label, None),
@@ -1685,21 +1699,93 @@ pub(super) fn relation_label_suggestions(
                 replacement,
                 hide_replacement,
                 label: canonical_label,
-                key,
+                key: key.clone(),
                 inverse: existing.and_then(|record| record.inverse.clone()),
                 count: existing.map(|record| record.count as usize),
                 typed: true,
                 disabled_reason,
                 existing: Some(existing.is_some()),
                 hidden: Some(hidden),
+                cancels_source: policy.is_cancel_label(&key),
+                configured: false,
             },
         );
     }
+    let mut warnings = catalog.warnings().to_vec();
+    warnings.extend(policy.warnings.iter().cloned());
     (
         Candidates::RelationLabel(suggestions),
-        catalog.warnings().to_vec(),
+        warnings,
         catalog.hidden_count(),
     )
+}
+
+/// Zero-use configured cancel labels, in config order, ranked last.
+/// Hidden labels stay out; the typed query still matches them exactly
+/// through the typed row above.
+fn append_cancel_overlay(
+    suggestions: &mut Vec<RelationLabelSuggestion>,
+    catalog: &crate::native::relation_labels::Catalog,
+    normalized_query: &str,
+    one_off: bool,
+    policy: &config::RelationsConfig,
+) {
+    if policy.cancel_labels.is_empty() {
+        return;
+    }
+    let query_key = crate::native::task_relations::label::collapse_label_text(
+        normalized_query,
+    )
+    .to_lowercase();
+    for cancel in &policy.cancel_labels {
+        if suggestions.iter().any(|item| item.key == cancel.key) {
+            continue;
+        }
+        if catalog.get(&cancel.key).is_some() {
+            continue;
+        }
+        if catalog.is_hidden(&cancel.key) {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &cancel.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        suggestions.push(RelationLabelSuggestion {
+            replacement: if one_off {
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &cancel.name,
+                )
+            } else {
+                crate::native::task_relations::label::relation_label_quoted_form(
+                    &cancel.name,
+                )
+            },
+            hide_replacement:
+                crate::native::task_relations::label::relation_label_hide_form(
+                    &cancel.name,
+                ),
+            label: cancel.name.clone(),
+            key: cancel.key.clone(),
+            inverse:
+                crate::native::task_relations::label::inverse_phrase(
+                    &cancel.name,
+                )
+                .map(str::to_string),
+            count: None,
+            typed: false,
+            disabled_reason: None,
+            existing: None,
+            hidden: None,
+            cancels_source: true,
+            configured: true,
+        });
+    }
 }
 
 fn is_done_path(path: &Path) -> bool {

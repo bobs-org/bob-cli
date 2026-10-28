@@ -1,5 +1,6 @@
 /// Cursor-aware completion for in-progress capture drafts.
 /// Small facade; real logic lives in the child modules.
+mod cancel;
 mod candidates;
 mod cli;
 mod engine;

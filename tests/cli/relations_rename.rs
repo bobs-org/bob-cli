@@ -325,3 +325,117 @@ fn relations_list_reports_a_label_used_again_after_rename() {
         .unwrap()
         .contains("LINKS:** old"));
 }
+
+#[test]
+fn relations_rename_into_and_out_of_cancel_labels_warns_and_never_cancels() {
+    let temp = TempDir::new("bob-cli-relations-rename-cancel");
+    let (vault, cache) = seed_vault(temp.path());
+    let config = cache.join("config.yml");
+    write_file(&config, "relations:\n  cancel_labels:\n    - old\n");
+    let rename_with_config = |args: &[&str]| {
+        relation_command(&vault, &cache)
+            .env("BOB_CONFIG_FILE", &config)
+            .args(["relations", "rename"])
+            .args(args)
+            .args(["-f", "json"])
+            .output()
+            .expect("bob relations rename")
+    };
+
+    // Renaming OUT of a cancel label warns that the config needs updating.
+    let (preview, value) = {
+        let output = rename_with_config(&["old", "prompted by", "-d"]);
+        let value: Value = serde_json::from_str(stdout(&output).trim())
+            .expect("rename preview JSON");
+        (output, value)
+    };
+    assert_success(&preview);
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .expect("warning text")
+            .contains("“old” is a cancel label in config.yml")),
+        "{warnings:?}"
+    );
+    // The preview rewrites label spans only: no status byte changes.
+    for file in value["files"].as_array().expect("files") {
+        for line in file["lines"].as_array().expect("lines") {
+            for side in ["before", "after"] {
+                let text = line[side].as_str().expect("preview line text");
+                assert!(
+                    !text.contains("[cancelled::") && !text.contains("- [-]"),
+                    "preview never cancels ({side}): {text}"
+                );
+            }
+            assert!(
+                line["before"].as_str().expect("before").contains("old"),
+                "preview rewrites OLD: {}",
+                line["before"]
+            );
+        }
+    }
+
+    // Renaming INTO a cancel label warns for the NEW side instead.
+    let other = cache.join("other.yml");
+    write_file(&other, "relations:\n  cancel_labels:\n    - duplicate of\n");
+    let output = relation_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &other)
+        .args([
+            "relations",
+            "rename",
+            "old",
+            "duplicate of",
+            "-d",
+            "-f",
+            "json",
+        ])
+        .output()
+        .expect("rename into cancel preview");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("preview JSON");
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .expect("warning text")
+            .contains("“duplicate of” is a cancel label in config.yml")),
+        "{warnings:?}"
+    );
+
+    // Applying the rename writes label spans and never a cancel: every
+    // task checkpoint keeps its checkbox and gains no cancelled stamp.
+    let before = note_snapshot(&vault);
+    let (applied, report) = {
+        let output = rename_with_config(&["old", "prompted by", "-o"]);
+        let value: Value = serde_json::from_str(stdout(&output).trim())
+            .expect("rename apply JSON");
+        (output, value)
+    };
+    assert_success(&applied);
+    assert_eq!(report["mode"], "write");
+    let warnings = report["warnings"].as_array().expect("warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .expect("warning text")
+            .contains("cancel label in config.yml")),
+        "{warnings:?}"
+    );
+    for (relative, bytes) in note_snapshot(&vault) {
+        let text = String::from_utf8(bytes).expect("note text");
+        if before.contains_key(&relative) {
+            for line in text.lines() {
+                assert!(
+                    !line.contains("[cancelled::"),
+                    "rename never cancels: {relative}: {line}"
+                );
+            }
+        }
+    }
+    let source = fs::read_to_string(vault.join("source.md")).unwrap();
+    assert!(source.contains("- [ ] Source #task ^source"));
+    git_in(&vault, ["revert", "--no-edit", "HEAD"]);
+    assert_eq!(note_snapshot(&vault), before);
+}

@@ -823,10 +823,18 @@ Every `schema_version` stays 1; JSON grows additively.
     duplicate of     1 link     ⇄ duplicated by     ◌ hidden   (with -a)
   ```
 
+  With `relations.cancel_labels` configured the header gains
+  `· N cancel`, cancel rows read `N links     ⊘ cancels source`, and
+  `-a` lists zero-use configured labels with `configured: true`.
+
 - **JSON list:**
   `{schema_version, ok, counts:{labels, links, hidden},
   labels:[{key, name, count, hidden, inverse, spellings,
-  replacement, hide_replacement}], renamed_reappeared, warnings}`.
+  replacement, hide_replacement, cancels_source?, configured?}],
+  renamed_reappeared, warnings, cancel_labels?}`. `cancels_source` is true
+  on configured cancel-label rows; `configured` marks zero-use overlay
+  rows; both are omitted otherwise. `cancel_labels` counts the configured
+  labels and is omitted when none are configured.
   `renamed_reappeared` reports an OLD label used again after its rename;
   it reports the row and never rewrites the new use.
 - **Writers** emit `{schema_version, ok, …}`. Human hide output reads:
@@ -843,7 +851,13 @@ Every `schema_version` stays 1; JSON grows additively.
   and the typed row carry `hide_replacement` (always the `||` form);
   a `||` probe keeps its pipe count in `replacement` and gains
   `one_off: true`; the response carries `hidden_count` (present, possibly 0)
-  in this context.
+  in this context. A row whose key is a configured cancel label carries
+  `cancels_source: true`; zero-use configured labels appear as a trailing
+  `configured: true` overlay that respects hiding. zsh describes a cancel
+  row as `N links · cancels source`. The response gains `relation_cancel`
+  (`source`, `verdict`, `message`, `hint?`) when a cancel label is
+  configured. A cancel-label row for a recurring or new-task source is
+  disabled with the CL6 reason.
 - **`capture` / `--dry-run`**, per item: `relation_label_hides[]`
   (`{label, key, existing_count, was_hidden, action: hide|already_hidden}`;
   pre-capture counts; one entry per distinct hidden label key, omitted when
@@ -857,8 +871,8 @@ Every `schema_version` stays 1; JSON grows additively.
 - **Cancel labels** ([§17](#17-cancel-labels)): additive
   `cancels_source` / `configured` row flags, `relation_cancel`,
   `relation_cancels[]`, `cancel_effect`, and the
-  `relation_cancelled_source` warning. The `capture` fields are
-  implemented; *planned (phase cancel-surfaces)* covers the rest.
+  `relation_cancelled_source` warning. The `capture`, `capture-parse`,
+  `capture-complete`, and `relations list` fields are implemented.
 
 ### RV8 The rename transaction
 
@@ -873,6 +887,9 @@ Merge keeps every edge and its order. The source hidden state moves to
 NEW unless NEW already has explicit state. The preview lists each file
 and changed line, link and mirror counts (including `done/`), state and
 inverse changes, and NEW's `replacement` and `hide_replacement` forms.
+Renaming into or out of a cancel label never cancels; the preview warns
+`“{label}” is a cancel label in config.yml — update
+relations.cancel_labels`.
 
 Before taking a lock, an online rename requires `-b/--bob-dir` and
 `BOB_DIR` (default `~/bob`) to resolve to the same directory. A mismatch or
@@ -988,7 +1005,7 @@ relations:
 - **Catalog overlay.** A configured cancel label appears in
   suggestions and in `bob relations list -a` even with zero uses. It
   is marked `configured`, ranks as a zero-use row, and is never
-  boosted. Hidden still wins. *planned (phase cancel-surfaces).*
+  boosted. Hidden still wins.
 - **Host-wide YAML**, like `linked_from_lines`. It never goes in the
   per-host label journal, and bob never edits `config.yml`.
 
@@ -1092,8 +1109,8 @@ More edge cases:
 
 ### CL6 The indication
 
-*Status: capture implements the capture rows; planned (phase nav-cancel-cue),
-planned (phase cancel-surfaces), planned (phase mac-cancel-cue).*
+*Status: capture and cancel-surfaces implement their rows; planned
+(phase nav-cancel-cue), planned (phase mac-cancel-cue).*
 
 Name the task, change the verb, use ⊘, stay calm.
 
@@ -1130,7 +1147,8 @@ note stem, shown only when S is not in the active note (nav), or for
 
 ### CL7 Contracts
 
-*Status: the `capture` fields are implemented; planned (phase cancel-surfaces).*
+*Status: the `capture`, `capture-parse`, `capture-complete`, and
+`relations list` fields are implemented.*
 
 All additions are additive, every `schema_version` stays 1, and every
 new field is omitted when it does not apply, so older output stays

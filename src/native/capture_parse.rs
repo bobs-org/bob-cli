@@ -61,6 +61,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             kind: span.kind,
             field: span.field,
             themes: span.themes,
+            cancels_source: span.cancels_source,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -119,6 +120,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         {
             attach_theme_refs(&mut result, &catalog);
         }
+    }
+    for warning in load_cancel_policy().warnings {
+        eprintln!("{COMMAND_NAME}: {warning}");
     }
     print_success(&result, output_format);
     0
@@ -731,6 +735,11 @@ pub(crate) struct CaptureParseSpan {
     pub(crate) field: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) themes: Vec<ThemeRef>,
+    /// True when a `relation_label` span's label is a configured cancel
+    /// label (`relations.cancel_labels`). Omitted otherwise, so drafts
+    /// without cancel labels stay byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) cancels_source: bool,
 }
 
 fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
@@ -856,10 +865,11 @@ impl CaptureParseResult {
         }
 
         let parse = capture_language::parse_for_editor_with(&input, options);
-        let spans = wire_spans(merge_spans(
+        let mut spans = wire_spans(merge_spans(
             parse.spans,
             capture_links::wikilink_spans(&input),
         ));
+        stamp_cancel_spans(&mut spans, &input, &load_cancel_policy());
         let items = parse_items(&parse.items);
         let ref_parent = ref_parent_for(
             parse.mode,
@@ -1134,12 +1144,13 @@ impl CaptureParseResult {
         // Wikilinks are intentionally scanned on the masked copy: row text
         // is data and must never be interpreted as editor syntax.
         let wikilinks = capture_links::wikilink_spans(&masked);
-        let spans = template_spans(
+        let mut spans = template_spans(
             &parsed.spans,
             &wikilinks,
             &analysis,
             &row_summaries,
         );
+        stamp_cancel_spans(&mut spans, &masked, &load_cancel_policy());
 
         let mut diagnostics = analysis
             .issues
@@ -1344,6 +1355,50 @@ fn relation_grammar_for(input: &str) -> Option<u8> {
     input.contains('~').then_some(1)
 }
 
+/// Best-effort cancel-label policy for span flags: a broken config
+/// means fewer flags, never a failed parse.
+fn load_cancel_policy() -> crate::native::config::RelationsConfig {
+    match crate::native::config::load_relations_config(
+        &crate::native::config::config_path(),
+    ) {
+        Ok(policy) => policy,
+        Err(error) => crate::native::config::RelationsConfig {
+            linked_from_lines: true,
+            cancel_labels: Vec::new(),
+            warnings: vec![format!(
+                "invalid relations config: {error}; cancelling nothing"
+            )],
+        },
+    }
+}
+
+/// Mark `relation_label` spans whose label is a configured cancel
+/// label. Omitted (false) everywhere else, so output without cancel
+/// labels stays byte-identical.
+fn stamp_cancel_spans(
+    spans: &mut [CaptureParseSpan],
+    input: &str,
+    policy: &crate::native::config::RelationsConfig,
+) {
+    if policy.cancel_labels.is_empty() {
+        return;
+    }
+    for span in spans.iter_mut() {
+        if span.kind != crate::native::capture_language::SpanKind::RelationLabel
+        {
+            continue;
+        }
+        let Some(text) = input.get(span.start..span.end) else {
+            continue;
+        };
+        if policy.is_cancel_label(
+            &crate::native::relation_labels::relation_label_key(text),
+        ) {
+            span.cancels_source = true;
+        }
+    }
+}
+
 fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
     spans
         .into_iter()
@@ -1353,6 +1408,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             kind: span.kind,
             field: None,
             themes: Vec::new(),
+            cancels_source: false,
         })
         .collect()
 }
@@ -1442,6 +1498,7 @@ fn template_spans(
                     kind: span.kind,
                     field: None,
                     themes: Vec::new(),
+                    cancels_source: false,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -1453,6 +1510,7 @@ fn template_spans(
                 kind: span.kind,
                 field: None,
                 themes: Vec::new(),
+                cancels_source: false,
             });
         }
     }
@@ -1464,6 +1522,7 @@ fn template_spans(
             kind: SpanKind::TemplateHeader,
             field: None,
             themes: Vec::new(),
+            cancels_source: false,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -1473,6 +1532,7 @@ fn template_spans(
             kind: SpanKind::TemplatePlaceholder,
             field: Some(placeholder.field),
             themes: Vec::new(),
+            cancels_source: false,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -1482,6 +1542,7 @@ fn template_spans(
             kind: SpanKind::TemplateField,
             field: Some(field.field),
             themes: Vec::new(),
+            cancels_source: false,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));

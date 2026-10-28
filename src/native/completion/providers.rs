@@ -96,23 +96,33 @@ fn theme_names(context: &Context) -> Vec<String> {
 }
 
 /// Relation labels, including hidden labels so rename can recover a label
-/// that is no longer suggested by the default list.
+/// that is no longer suggested by the default list. Configured cancel
+/// labels note their consequence (`N links · cancels source`).
 fn relation_labels(context: &Context) -> Vec<String> {
     let Ok(catalog) =
         crate::native::relation_labels::Catalog::load(&context.bob_dir)
     else {
         return Vec::new();
     };
+    let policy = crate::native::config::load_relations_config(
+        &crate::native::config::config_path(),
+    )
+    .unwrap_or_default();
     catalog
         .records()
         .filter_map(|record| {
             let hidden = catalog.is_hidden(&record.key);
-            let description = format!(
-                "{} link{}{}",
+            let mut description = format!(
+                "{} link{}",
                 record.count,
                 if record.count == 1 { "" } else { "s" },
-                if hidden { " · hidden" } else { "" },
             );
+            if policy.is_cancel_label(&record.key) {
+                description.push_str(" · cancels source");
+            }
+            if hidden {
+                description.push_str(" · hidden");
+            }
             protocol::candidate_line(
                 OsStr::new(&record.name),
                 &description,

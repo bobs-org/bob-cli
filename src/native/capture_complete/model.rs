@@ -243,6 +243,46 @@ pub(super) struct RelationLabelSuggestion {
     pub(super) existing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hidden: Option<bool>,
+    /// True when the row's key is a configured cancel label
+    /// (`relations.cancel_labels`). Omitted when false, so responses
+    /// without cancel labels stay byte-identical.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) cancels_source: bool,
+    /// True on zero-use overlay rows synthesized from config (never a
+    /// vault use). Omitted when false.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) configured: bool,
+}
+
+/// The cancel consequence of the `relation_label` token under the
+/// cursor (`docs/task-relations.md` §17 CL7). Present only when at
+/// least one cancel label is configured. It resolves only the token's
+/// source — the item owner for `~`, the `~~` token's task for `~~` —
+/// and never scans the vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancel {
+    pub(super) source: RelationCancelSource,
+    /// `cancels` | `already_closed` | `recurring` | `new_task`.
+    pub(super) verdict: &'static str,
+    pub(super) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hint: Option<String>,
+}
+
+/// The relation source a cancel label would cancel: vault-relative
+/// `path` with extension, the task `text`, and its status. `block_id`
+/// is omitted for ID-less owners; `project_open_tasks` counts the
+/// source note's open tasks when the source is a `^prj` project task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCancelSource {
+    pub(super) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_open_tasks: Option<usize>,
 }
 
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
@@ -640,6 +680,11 @@ pub(super) struct CaptureCompleteResult {
     /// from every other context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation: Option<CompletionRelation>,
+    /// The cancel consequence of the `relation_label` token (§17 CL7).
+    /// Present only when at least one cancel label is configured, and
+    /// only in the `relation_label` context.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_cancel: Option<RelationCancel>,
     /// True when the `relation_label` probe sits in a `||` label.
     /// Omitted from every other context and from `|` probes, so older
     /// responses stay byte-identical.
@@ -671,6 +716,7 @@ impl CaptureCompleteResult {
             query: None,
             owner: None,
             relation: None,
+            relation_cancel: None,
             picker: None,
             hidden_count: None,
             one_off: None,

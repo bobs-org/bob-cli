@@ -339,3 +339,113 @@ fn relations_hide_lock_busy_when_maintenance_lock_held() {
     assert_eq!(value["code"], "lock_busy");
     assert!(!vault.join(".bob/relations/apollo.jsonl").exists());
 }
+
+#[test]
+fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
+    let temp = TempDir::new("bob-cli-relations-list-cancel");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("work.md"),
+        "- [ ] Ship it #task ^a\n  - 🪢 **LINKS:** duplicate of [[other#^x]]\n",
+    );
+    write_file(&vault.join("other.md"), "- [ ] Other #task ^x\n");
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n",
+    );
+    let mut json_command = relations_command(&vault, &cache);
+    json_command.env("BOB_CONFIG_FILE", &config).args([
+        "relations",
+        "-f",
+        "json",
+    ]);
+    let output = json_command.output().expect("cancel list json");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    assert_eq!(value["cancel_labels"], 2);
+    let labels = value["labels"].as_array().expect("labels");
+    // The used cancel label carries the flag without `configured`.
+    let used = labels
+        .iter()
+        .find(|row| row["key"] == "duplicate of")
+        .expect("used cancel row");
+    assert_eq!(used["cancels_source"], true);
+    assert!(used.get("configured").is_none());
+    // The default list excludes the zero-use configured label.
+    assert!(!labels.iter().any(|row| row["key"] == "superseded by"));
+
+    // `-a` includes the zero-use configured label as an overlay.
+    let output = relations_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["relations", "-a", "-f", "json"])
+        .output()
+        .expect("cancel list all json");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    let overlay = value["labels"]
+        .as_array()
+        .expect("labels")
+        .iter()
+        .find(|row| row["key"] == "superseded by")
+        .expect("overlay row");
+    assert_eq!(overlay["cancels_source"], true);
+    assert_eq!(overlay["configured"], true);
+    assert_eq!(overlay["count"], 0);
+
+    // The human header counts cancel labels and rows name the cue.
+    let human = relations_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["relations", "-a"])
+        .output()
+        .expect("cancel list human");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(text.contains("2 cancel"), "header:\n{text}");
+    assert!(text.contains("⊘ cancels source"), "row cue:\n{text}");
+}
+
+#[test]
+fn relations_list_warns_once_for_invalid_cancel_config() {
+    let temp = TempDir::new("bob-cli-relations-list-cancel-warn");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_relation_vault(&vault);
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - 42\n",
+    );
+    let output = relations_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["relations", "-f", "json"])
+        .output()
+        .expect("warn list json");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("list JSON");
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0]
+        .as_str()
+        .expect("warning text")
+        .contains("relations.cancel_labels"));
+
+    let human = relations_command(&vault, &cache)
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["relations"])
+        .output()
+        .expect("warn list human");
+    assert_success(&human);
+    let errors = stderr(&human);
+    assert_eq!(
+        errors.matches("relations.cancel_labels").count(),
+        1,
+        "warning prints once:\n{errors}"
+    );
+}

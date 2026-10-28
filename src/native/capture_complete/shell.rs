@@ -498,8 +498,13 @@ pub(crate) fn shell_completion(
                 field.replacement.0,
             )
             .is_some_and(|(_, _, hidden)| hidden);
-            let (candidates, _, _) =
-                relation_label_suggestions(bob_dir, &field.query, one_off);
+            let policy = super::cancel::load_policy();
+            let (candidates, _, _) = relation_label_suggestions(
+                bob_dir,
+                &field.query,
+                one_off,
+                &policy,
+            );
             let Candidates::RelationLabel(items) = candidates else {
                 return Ok(None);
             };
@@ -514,9 +519,30 @@ pub(crate) fn shell_completion(
             } else {
                 last_sigil
             };
+            // A refused cancel source disables its cancel-label rows
+            // here too, so zsh never inserts a label that would refuse.
+            let cancel_refused = if policy.cancel_labels.is_empty() {
+                false
+            } else {
+                capture_language::editor_item_at(raw_text, cursor)
+                    .and_then(|editor_item| {
+                        super::cancel::plan_relation_cancel(
+                            bob_dir,
+                            raw_text,
+                            field.replacement.0,
+                            Some(&editor_item),
+                            &field.query,
+                            &policy,
+                        )
+                    })
+                    .is_some_and(|plan| plan.row_disable.is_some())
+            };
             for item in items {
                 if item.disabled_reason.is_some() || item.replacement.is_empty()
                 {
+                    continue;
+                }
+                if cancel_refused && item.cancels_source {
                     continue;
                 }
                 let Some(target_prefix) =
@@ -525,13 +551,15 @@ pub(crate) fn shell_completion(
                     continue;
                 };
                 let full = format!("{target_prefix}{}", item.replacement);
+                let mut description =
+                    format!("{} links", item.count.unwrap_or_default());
+                if item.cancels_source {
+                    description.push_str(" · cancels source");
+                }
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
                     full,
-                    description: format!(
-                        "{} links",
-                        item.count.unwrap_or_default()
-                    ),
+                    description,
                     group: "relation labels".to_string(),
                 });
             }

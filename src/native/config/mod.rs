@@ -21,7 +21,7 @@ pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
-pub(crate) use relations::load_relations_config;
+pub(crate) use relations::{load_relations_config, RelationsConfig};
 #[allow(unused_imports)]
 pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 pub(crate) use themes::{

@@ -389,3 +389,67 @@ fn relation_single_pipe_omits_hidden() {
     let partial = parse_json("Fix bug ~work:foo|");
     assert_eq!(partial["needs"], serde_json::json!(["relation_label"]));
 }
+
+// Cancel-label spans (plan:202610/relation_cancel_labels.md cancel-surfaces):
+// a configured cancel label flags its `relation_label` span.
+#[test]
+fn relation_label_spans_flag_configured_cancel_labels() {
+    let temp = TempDir::new("bob-cli-capture-parse-cancel-spans");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n",
+    );
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix trip ~work:foo|\"duplicate of\" ~work:bar|see")
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run capture-parse cancel spans");
+    assert_success(&parsed);
+    assert!(
+        stderr(&parsed).is_empty(),
+        "clean config warns nothing:\n{}",
+        format_output(&parsed)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
+    let spans = json["spans"].as_array().expect("spans");
+    let cancel = spans
+        .iter()
+        .find(|span| {
+            span["kind"] == "relation_label"
+                && json["input"].as_str().expect("input").get(
+                    span["start"].as_u64().expect("start") as usize
+                        ..span["end"].as_u64().expect("end") as usize,
+                ) == Some("duplicate of")
+        })
+        .expect("cancel label span");
+    assert_eq!(cancel["cancels_source"], true);
+    let plain = spans
+        .iter()
+        .find(|span| {
+            span["kind"] == "relation_label"
+                && json["input"].as_str().expect("input").get(
+                    span["start"].as_u64().expect("start") as usize
+                        ..span["end"].as_u64().expect("end") as usize,
+                ) == Some("see")
+        })
+        .expect("plain label span");
+    assert!(plain.get("cancels_source").is_none());
+
+    // Without config every span stays byte-identical (no flag key).
+    let bare = parse_json("Fix trip ~work:foo|\"duplicate of\"");
+    assert!(
+        bare["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .all(|span| span.get("cancels_source").is_none()),
+        "{}",
+        bare["spans"]
+    );
+}

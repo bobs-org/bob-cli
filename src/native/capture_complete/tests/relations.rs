@@ -1,8 +1,11 @@
-use std::ffi::OsStr;
+use std::{ffi::OsStr, path::Path};
 
 use super::{
     super::{
-        model::Candidates, render::candidate_lines, shell::shell_completion,
+        engine::build_result,
+        model::{Candidates, CaptureCompleteResult},
+        render::candidate_lines,
+        shell::shell_completion,
     },
     result, write_file, write_settings, TempDir,
 };
@@ -490,4 +493,289 @@ fn relation_shell_groups_are_directional_and_skip_guarded_rows() {
             .iter()
             .all(|row| { !row.full.contains("Archived without ID") }));
     }
+}
+
+/// Cancel-label cue vault: an open owner and target, a recurring owner,
+/// closed owners, and a `^prj` project with two open residents.
+fn cancel_fixture() -> TempDir {
+    let temp = TempDir::new("bob-cli-capture-complete-cancel");
+    write_settings(temp.path());
+    write_file(
+        &temp.path().join("cash.md"),
+        "- [ ] #task Sell stocks! ^sell\n",
+    );
+    write_file(
+        &temp.path().join("invest.md"),
+        "- [ ] #task Sell stocks now! ^now\n- [ ] #task Weekly review 🔁 ^weekly\n- [x] #task Old idea ^old\n- [-] #task Gone idea ^gone\n",
+    );
+    write_file(
+        &temp.path().join("proj.md"),
+        "- [ ] #task Big project ^prj\n- [ ] #task Resident one ^r1\n- [ ] #task Resident two ^r2\n",
+    );
+    temp
+}
+
+fn write_cancel_config(path: &Path) {
+    write_file(
+        path,
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n",
+    );
+}
+
+/// `build_result` with a real cancel-label config plus an isolated
+/// relation-catalog cache.
+fn cancel_result(
+    bob_dir: &Path,
+    config: &Path,
+    cache: &Path,
+    raw: &str,
+) -> CaptureCompleteResult {
+    let _guard = TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache.as_os_str())),
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+    ]);
+    let cursor = raw.len();
+    build_result(bob_dir, raw, cursor, false).expect("build cancel result")
+}
+
+fn cancel_json(value: &CaptureCompleteResult) -> serde_json::Value {
+    serde_json::to_value(value).expect("serialize cancel result")
+}
+
+#[test]
+fn cancel_overlay_marks_rows_and_reports_cancels_for_to_owner() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Use this @cash+sell ~invest:now|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    let json = cancel_json(&value);
+    // The typed partial row is not itself a cancel label.
+    assert_eq!(json["candidates"][0]["label"], "dup");
+    assert!(json["candidates"][0].get("cancels_source").is_none());
+    // The zero-use configured overlay carries both flags.
+    let overlay = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "duplicate of")
+        .expect("cancel overlay row");
+    assert_eq!(overlay["cancels_source"], true);
+    assert_eq!(overlay["configured"], true);
+    assert_eq!(overlay["replacement"], "|\"duplicate of\"");
+    assert!(overlay.get("disabled_reason").is_none());
+    // The cue names the source and its transition.
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+    assert_eq!(json["relation_cancel"]["source"]["path"], "cash.md");
+    assert_eq!(json["relation_cancel"]["source"]["block_id"], "sell");
+    assert_eq!(json["relation_cancel"]["source"]["text"], "Sell stocks!");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "⊘ Cancels “Sell stocks!” · Todo → Cancelled"
+    );
+    assert!(json["relation_cancel"].get("hint").is_none());
+    assert!(json["relation_cancel"]["source"]
+        .get("project_open_tasks")
+        .is_none());
+
+    // A fully typed cancel label marks even the typed row.
+    let raw = "Use this @cash+sell ~invest:now|\"duplicate of\"";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    let typed = &json["candidates"][0];
+    assert_eq!(typed["typed"], true);
+    assert_eq!(typed["cancels_source"], true);
+    assert!(typed.get("configured").is_none());
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+}
+
+#[test]
+fn cancel_from_direction_resolves_the_token_source() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Retire this ~~invest:now|sup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    assert_eq!(value.context, Some(CompletionContext::RelationLabel));
+    let json = cancel_json(&value);
+    assert_eq!(json["relation"]["direction"], "from");
+    let cancel = &json["relation_cancel"];
+    assert_eq!(cancel["verdict"], "cancels");
+    assert_eq!(cancel["source"]["path"], "invest.md");
+    assert_eq!(cancel["source"]["block_id"], "now");
+    assert_eq!(cancel["source"]["text"], "Sell stocks now!");
+    assert_eq!(
+        cancel["message"],
+        "⊘ Cancels “Sell stocks now!” · Todo → Cancelled"
+    );
+}
+
+#[test]
+fn cancel_project_source_keeps_residents_open() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Use this @proj+prj ~invest:now|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+    assert_eq!(json["relation_cancel"]["source"]["text"], "Big project");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "⊘ Cancels “Big project” · Todo → Cancelled · its 2 open tasks stay open"
+    );
+    assert_eq!(json["relation_cancel"]["source"]["project_open_tasks"], 2);
+}
+
+#[test]
+fn cancel_recurring_source_disables_cancel_rows() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Use this @invest+weekly ~cash:sell|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    assert_eq!(json["relation_cancel"]["verdict"], "recurring");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "“Weekly review 🔁” repeats — cancel it with Obsidian Tasks first"
+    );
+    // Every cancel row is disabled with an empty replacement; other
+    // rows are untouched (none here beyond the typed row).
+    for row in json["candidates"].as_array().unwrap() {
+        if row["cancels_source"] == true {
+            assert_eq!(
+                row["disabled_reason"],
+                "“Weekly review 🔁” repeats — cancel it with Obsidian Tasks first"
+            );
+            assert_eq!(row["replacement"], "");
+        }
+    }
+    // zsh skips refused cancel rows instead of inserting them, and
+    // describes live cancel rows with the consequence.
+    {
+        let _guard = TestEnvGuard::set(&[
+            ("XDG_CACHE_HOME", Some(cache_home.path().as_os_str())),
+            ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+        ]);
+        let refused =
+            shell_completion(temp.path(), raw, raw.len()).expect("shell");
+        assert!(
+            refused.is_none()
+                || refused
+                    .unwrap()
+                    .rows
+                    .iter()
+                    .all(|row| !row.description.contains("cancels source"))
+        );
+        let live_raw = "Use this @cash+sell ~invest:now|dup";
+        let live = shell_completion(temp.path(), live_raw, live_raw.len())
+            .expect("shell")
+            .expect("live cancel rows");
+        assert!(live
+            .rows
+            .iter()
+            .any(|row| row.description.contains("cancels source")));
+    }
+}
+
+#[test]
+fn cancel_new_owner_is_refused_with_relabel_hint() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Fresh idea ~invest:now|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    assert_eq!(json["relation_cancel"]["verdict"], "new_task");
+    assert_eq!(
+        json["relation_cancel"]["message"],
+        "“Fresh idea” is new — it would be born cancelled · to retire “Sell stocks now!”, use ~~"
+    );
+    assert_eq!(json["relation_cancel"]["source"]["text"], "Fresh idea");
+    assert!(json["relation_cancel"]["source"].get("block_id").is_none());
+}
+
+#[test]
+fn cancel_closed_source_links_only_without_disabling() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    for (owner, message) in [
+        ("old", "Stays Done · link only"),
+        ("gone", "Already Cancelled · link only"),
+    ] {
+        let raw = format!("Use this @invest+{owner} ~cash:sell|dup");
+        let value =
+            cancel_result(temp.path(), &config, cache_home.path(), &raw);
+        let json = cancel_json(&value);
+        assert_eq!(
+            json["relation_cancel"]["verdict"], "already_closed",
+            "{raw}"
+        );
+        assert_eq!(json["relation_cancel"]["message"], message, "{raw}");
+        // Link-only rows stay enabled: no disabled reason anywhere.
+        assert!(
+            json["candidates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row.get("disabled_reason").is_none()),
+            "{raw}"
+        );
+    }
+}
+
+#[test]
+fn cancel_inverse_query_teaches_the_flip() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    let raw = "Use this @cash+sell ~invest:now|supersedes";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    assert_eq!(json["relation_cancel"]["verdict"], "cancels");
+    assert_eq!(
+        json["relation_cancel"]["hint"],
+        "“supersedes” never cancels · to retire “Sell stocks now!”, use ~~ with “superseded by”"
+    );
+    // The typed inverse row itself never cancels.
+    assert!(json["candidates"][0].get("cancels_source").is_none());
+}
+
+#[test]
+fn cancel_hidden_overlay_stays_out_but_typed_match_shows_state() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_cancel_config(&config);
+    write_file(
+        &temp.path().join(".bob/relations/test.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-10-24T09:41:07Z\",\"host\":\"test\",\"kind\":\"relation_label.hide\",\"key\":\"duplicate of\",\"name\":\"duplicate of\",\"via\":\"test\"}\n",
+    );
+    let raw = "Use this @cash+sell ~invest:now|dup";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    // Hidden wins: no overlay row for the hidden cancel label.
+    assert!(!json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["key"] == "duplicate of"));
+    // The exact typed match still surfaces, hidden and cancelling.
+    let raw = "Use this @cash+sell ~invest:now|\"duplicate of\"";
+    let value = cancel_result(temp.path(), &config, cache_home.path(), raw);
+    let json = cancel_json(&value);
+    let typed = &json["candidates"][0];
+    assert_eq!(typed["typed"], true);
+    assert_eq!(typed["hidden"], true);
+    assert_eq!(typed["cancels_source"], true);
 }

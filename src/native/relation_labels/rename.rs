@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::native::{
-    capture_dependency_tasks, env as bob_env,
+    capture_dependency_tasks, config as bob_config, env as bob_env,
     markdown::fenced_lines,
     ob,
     relation_labels::{self, journal, Catalog},
@@ -350,6 +350,21 @@ fn prepare_from_matches(
     )
 }
 
+/// Best-effort cancel-label policy: a broken config never fails the
+/// rename plan. Warnings surface through the report instead.
+fn load_cancel_policy() -> bob_config::RelationsConfig {
+    match bob_config::load_relations_config(&bob_config::config_path()) {
+        Ok(loaded) => loaded,
+        Err(error) => bob_config::RelationsConfig {
+            linked_from_lines: true,
+            cancel_labels: Vec::new(),
+            warnings: vec![format!(
+                "invalid relations config: {error}; cancelling nothing"
+            )],
+        },
+    }
+}
+
 fn normalize_label(raw: &str, which: &str) -> Result<String, RenameFailure> {
     normalize_relation_label(raw).map_err(|error| {
         let detail = match error {
@@ -405,7 +420,9 @@ fn plan_rename(
     let mut total_mirrors = 0usize;
     let mut done_links = 0usize;
     let mut done_notes = 0usize;
-    let warnings = catalog.warnings().to_vec();
+    let cancel_policy = load_cancel_policy();
+    let mut warnings = catalog.warnings().to_vec();
+    warnings.extend(cancel_policy.warnings.iter().cloned());
     for relative in paths {
         let absolute = vault.join(&relative);
         let path = display_relative(&relative);
@@ -495,6 +512,19 @@ fn plan_rename(
         ));
     }
 
+    // Renaming into or out of a cancel label never cancels; the
+    // preview warns that the config needs updating (CL6). The write
+    // path reuses this planned preview, so apply warns too.
+    if cancel_policy.is_cancel_label(&old_key) {
+        warnings.push(format!(
+            "“{old_display}” is a cancel label in config.yml — update relations.cancel_labels"
+        ));
+    }
+    if new_key != old_key && cancel_policy.is_cancel_label(&new_key) {
+        warnings.push(format!(
+            "“{new_name}” is a cancel label in config.yml — update relations.cancel_labels"
+        ));
+    }
     let report = RenameReport {
         schema_version: SCHEMA_VERSION,
         ok: true,

@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::native::{
-    env as bob_env,
+    config as bob_config, env as bob_env,
     relation_labels::LabelSpelling,
     style::{pad_right, Styler},
 };
@@ -209,6 +209,14 @@ struct ListLabel {
     spellings: Vec<LabelSpelling>,
     replacement: String,
     hide_replacement: String,
+    #[serde(skip_serializing_if = "is_false")]
+    cancels_source: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    configured: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,6 +234,12 @@ struct ListReport {
     labels: Vec<ListLabel>,
     renamed_reappeared: Vec<serde_json::Value>,
     warnings: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    cancel_labels: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 enum ListError {
@@ -239,10 +253,30 @@ fn list_labels(request: &ListRequest) -> Result<ListReport, ListError> {
             request.bob_dir.display()
         ))
     })?;
-    Ok(build_report(request, &catalog))
+    let relations_config = load_cancel_policy();
+    Ok(build_report(request, &catalog, &relations_config))
 }
 
-fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
+/// Best-effort cancel-label policy: a broken config never fails the
+/// read-only list. Warnings surface through the report instead.
+fn load_cancel_policy() -> bob_config::RelationsConfig {
+    match bob_config::load_relations_config(&bob_config::config_path()) {
+        Ok(loaded) => loaded,
+        Err(error) => bob_config::RelationsConfig {
+            linked_from_lines: true,
+            cancel_labels: Vec::new(),
+            warnings: vec![format!(
+                "invalid relations config: {error}; cancelling nothing"
+            )],
+        },
+    }
+}
+
+fn build_report(
+    request: &ListRequest,
+    catalog: &Catalog,
+    policy: &bob_config::RelationsConfig,
+) -> ListReport {
     let hidden_filter = if request.hidden_only {
         HiddenFilter::Only
     } else if request.all {
@@ -256,23 +290,31 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
         .map(str::trim)
         .filter(|query| !query.is_empty())
         .unwrap_or("");
-    let mut selected = catalog.rank_for_query(query, hidden_filter);
-    if let Some(limit) = request.limit {
-        selected.truncate(limit);
-    }
-    let labels = selected
+    let selected = catalog.rank_for_query(query, hidden_filter);
+    let mut labels = selected
         .iter()
-        .map(|record| ListLabel {
-            key: record.key.clone(),
-            name: record.name.clone(),
-            count: record.count,
-            hidden: catalog.is_hidden(&record.key),
-            inverse: record.inverse.clone(),
-            spellings: record.spellings.clone(),
-            replacement: record.replacement(),
-            hide_replacement: record.hide_replacement(),
+        .map(|record| {
+            let cancels = policy.is_cancel_label(&record.key);
+            ListLabel {
+                key: record.key.clone(),
+                name: record.name.clone(),
+                count: record.count,
+                hidden: catalog.is_hidden(&record.key),
+                inverse: record.inverse.clone(),
+                spellings: record.spellings.clone(),
+                replacement: record.replacement(),
+                hide_replacement: record.hide_replacement(),
+                cancels_source: cancels,
+                configured: false,
+            }
         })
         .collect::<Vec<_>>();
+    append_configured_overlay(&mut labels, catalog, policy, request, query);
+    if let Some(limit) = request.limit {
+        labels.truncate(limit);
+    }
+    let mut warnings = catalog.warnings().to_vec();
+    warnings.extend(policy.warnings.iter().cloned());
     ListReport {
         schema_version: SCHEMA_VERSION,
         ok: true,
@@ -281,12 +323,83 @@ fn build_report(request: &ListRequest, catalog: &Catalog) -> ListReport {
             links: catalog.links_total(),
             hidden: catalog.hidden_count(),
         },
+        cancel_labels: policy.cancel_labels.len(),
         labels,
         renamed_reappeared: super::rename::renamed_reappeared(
             &request.bob_dir,
             catalog,
         ),
-        warnings: catalog.warnings().to_vec(),
+        warnings,
+    }
+}
+
+/// Zero-use configured cancel labels, in config order, ranked last.
+/// They appear only with `--all` (or `--hidden` when hidden), respect
+/// the query, and never boost above used rows. Hidden still wins.
+fn append_configured_overlay(
+    labels: &mut Vec<ListLabel>,
+    catalog: &Catalog,
+    policy: &bob_config::RelationsConfig,
+    request: &ListRequest,
+    query: &str,
+) {
+    if policy.cancel_labels.is_empty() {
+        return;
+    }
+    if !request.all && !request.hidden_only {
+        return;
+    }
+    let selected_keys: std::collections::BTreeSet<String> =
+        labels.iter().map(|label| label.key.clone()).collect();
+    let query_key =
+        crate::native::task_relations::label::collapse_label_text(query)
+            .to_lowercase();
+    for cancel in &policy.cancel_labels {
+        if selected_keys.contains(&cancel.key) {
+            continue;
+        }
+        if catalog.get(&cancel.key).is_some() {
+            continue;
+        }
+        let hidden = catalog.is_hidden(&cancel.key);
+        if request.hidden_only && !hidden {
+            continue;
+        }
+        if !request.all && hidden {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &cancel.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        let replacement =
+            crate::native::task_relations::label::relation_label_quoted_form(
+                &cancel.name,
+            );
+        let hide_replacement =
+            crate::native::task_relations::label::relation_label_hide_form(
+                &cancel.name,
+            );
+        labels.push(ListLabel {
+            key: cancel.key.clone(),
+            name: cancel.name.clone(),
+            count: 0,
+            hidden,
+            inverse: crate::native::task_relations::label::inverse_phrase(
+                &cancel.name,
+            )
+            .map(str::to_string),
+            spellings: Vec::new(),
+            replacement,
+            hide_replacement,
+            cancels_source: true,
+            configured: true,
+        });
     }
 }
 
@@ -309,7 +422,7 @@ fn print_human(report: &ListReport) {
     } else {
         "RELATIONS".to_string()
     };
-    let counts = format!(
+    let mut counts = format!(
         "{} {} {} {} {} {}",
         report.counts.labels,
         label_word(report.counts.labels),
@@ -318,6 +431,13 @@ fn print_human(report: &ListReport) {
         styler.separator(),
         format!("{} hidden", report.counts.hidden,),
     );
+    if report.cancel_labels > 0 {
+        counts.push_str(&format!(
+            " {} {} cancel",
+            styler.separator(),
+            report.cancel_labels,
+        ));
+    }
     println!("{heading}  {counts}");
     if report.labels.is_empty() {
         println!("  (no relation labels)");
@@ -336,6 +456,9 @@ fn print_human(report: &ListReport) {
             } else {
                 links
             };
+            if label.cancels_source {
+                meta.push_str("     ⊘ cancels source");
+            }
             if let Some(inverse) = label.inverse.as_deref() {
                 meta.push_str(&format!("     ⇄ {inverse}"));
             }
