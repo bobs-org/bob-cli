@@ -240,4 +240,19 @@ mod tests {
             );
         }
     }
+
+    /// Preservation contract (PT13): reconcile's field writer keeps a
+    /// distinctive authored theme field byte-identical while placing
+    /// `id`/`dependsOn` ahead of the trailing block ID.
+    #[test]
+    fn reconcile_field_write_preserves_distinctive_theme() {
+        assert_eq!(
+            set_task_fields(
+                "- [ ] #task Ship it (theme::  WRITE) ^ship",
+                Some("tasks__ship"),
+                &depends(&["tasks__tests"]),
+            ),
+            "- [ ] #task Ship it (theme::  WRITE) [id:: tasks__ship] [dependsOn:: tasks__tests] ^ship"
+        );
+    }
 }

@@ -1259,4 +1259,19 @@ mod tests {
         assert_eq!(result.highlight_fragments.len(), 1);
         assert_eq!(result.rewritten, 0);
     }
+
+    /// Preservation contract (PT13): `bob ref rename`'s alias overwrite
+    /// rewrites the link target while keeping a distinctive authored
+    /// task theme field byte-identical.
+    #[test]
+    fn task_theme_field_survives_ref_rename_alias_overwrite() {
+        let moves = bundle("old", "new");
+        let input =
+            "- [ ] #task Read [[ref/blogs/old.md|alias]] (theme::  WRITE) ^t1\n";
+        let result = rewrite(input, &moves, &["ref/blogs/old.md"]);
+        assert_eq!(
+            result.contents,
+            "- [ ] #task Read [[ref/blogs/new.md|alias]] (theme::  WRITE) ^t1\n"
+        );
+    }
 }

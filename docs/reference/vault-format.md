@@ -43,7 +43,8 @@ Today mark. The source line never stores 🍅 or a Today field.
 
 The freshness group (`fresh`, `refresh`, `keeps`, `unblocked`) sits before
 the trailing Tasks suffix (`scheduled`, `created`, `id`, `dependsOn`). The
-block ID is last.
+block ID is last. The `[theme::]` field sits before the trailing metadata
+run (other fields, tags, `^id`); freshness stamps land after it.
 
 Verified capture of a new blocked dependent (spacing is what `bob capture`
 wrote):
@@ -52,7 +53,8 @@ wrote):
 - [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
 ```
 
-Contract: [Task freshness fields](../freshness.md#2-fields-overrides-and-config),
+Contract: [Task theme suggestions](../pomodoro-themes.md#pt13-task-theme-suggestions),
+[Task freshness fields](../freshness.md#2-fields-overrides-and-config),
 [Task date marks](../date-marks.md),
 [Task tag marks](../task-tag-marks.md),
 [Today marks](../today-marks.md).
@@ -101,6 +103,7 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 | `keeps` | `[keeps:: N]` | Human keep streak, 1–999. Automation never increments it. |
 | `unblocked` | `[unblocked:: YYYY-MM-DD]` | Machine WRITE on automatic Blocked → Ready recovery, unless a skip applies. |
 | `repeat` | `[repeat:: every day when done]` | Authored Tasks recurrence rule that must start with `every`; PRE/POST checklist rows need `when done`; rendered as a [recurrence mark](../date-marks.md#recurrence-not-a-date). |
+| `theme` | `[theme:: NAME]` or `(theme:: NAME)` | Authored deliberate exception to the suggested theme. Exactly one valid field sets the task; duplicates or an invalid value fall back to inheritance with a `repair` marker. Closed tasks keep the field as history. |
 
 `start` on a task line is out of scope for date marks; Pomodoro entries use
 `[t:: 15m]` on the session row, not on the task.

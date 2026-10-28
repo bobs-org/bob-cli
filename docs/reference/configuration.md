@@ -112,6 +112,7 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 | `plan.link_unblocked` | Boolean | `true` | Offer recovered dependents as successor choices after a managed close; false recovers without offering links. |
 | `plan.exempt` | Sequence of nonempty strings | `[PLAN]` | Themes excluded from theme and link budgets. |
 | `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Pomodoro themes. |
+| `plan.reading_theme` | Single Pomodoro theme name or `off` | `READ` | Theme suggested for reading tasks; `off` disables the rule. Invalid values are a normal config error. |
 
 See the [plan configuration contract](../plan.md#config) and
 [dependency successor offers](../task-dependencies.md#12-successor-offers).

@@ -30,7 +30,9 @@ note without either type is `@unfiled`.
 A link to a canonical daily note's `^gtd` block (case-insensitive) is the
 `@review:<first exempt name>` home. An empty target resolves to the current
 daily note. Links to any other task in a canonical daily note resolve to the
-synthetic `@daily` home. The top-level area is the outermost area on the chain.
+synthetic `@daily` home. The same residence chain feeds task theme
+suggestions: the first valid area/project `theme:` default on the chain is
+the note source ([PT13](pomodoro-themes.md#pt13-task-theme-suggestions)). The top-level area is the outermost area on the chain.
 A subarea is the nearest area below that top-level area. A home without an area uses
 `@unfiled` for its area dimension.
 

@@ -607,6 +607,7 @@ plan:
   link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
   exempt: [PLAN] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
+  reading_theme: READ # theme suggested for reading tasks; off disables the rule
 ```
 
 The block is optional. A missing file or a missing block means the
@@ -615,7 +616,10 @@ ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
 `1–999`), `strict` and `link_unblocked` are booleans, and the lists hold
-non-empty strings.
+non-empty strings. `reading_theme` is a single Pomodoro theme name
+(default `READ`); `off` disables the reading-task suggestion rule, and an
+invalid or non-string value is a normal `plan.reading_theme` config
+error. Unrelated config loaders keep their independence.
 
 **Invalid values:**
 

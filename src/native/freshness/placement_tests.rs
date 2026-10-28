@@ -949,3 +949,30 @@ fn ub12_unblocked_before_tasks_fields_parses_invariantly() {
     assert_dataview_fields_equal(before, &marked);
     assert_hooks_fields_equal(before, &marked);
 }
+
+/// Preservation contract (PT13): stamping keeps a distinctive authored
+/// theme field byte-identical and ahead of the fresh/Tasks suffix.
+#[test]
+fn theme_field_survives_stamp_before_fresh_suffix() {
+    let stamped = stamp(
+        "- [ ] #task Write the report (theme::  WRITE) [created::2026-09-29] ^write",
+    );
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Write the report (theme::  WRITE) [fresh:: 2026-10-08] [created::2026-09-29] ^write"
+    );
+    assert!(stamped.changed);
+    assert_eq!(stamped.refused, None);
+}
+
+/// Preservation contract (PT13): a closed task keeps its theme history;
+/// stamping refuses and leaves every byte untouched.
+#[test]
+fn closed_theme_history_survives_stamp_refusal() {
+    let line =
+        "- [x] #task Shipped (theme::  WRITE) [completion:: 2026-10-07] ^ship";
+    let stamped = stamp(line);
+    assert_eq!(stamped.line, line);
+    assert!(!stamped.changed);
+    assert_eq!(stamped.refused, Some(Refusal::Closed));
+}

@@ -417,3 +417,42 @@ mod tests {
         assert!(after_str.starts_with("# Sase\n\r\n"), "{after_str:?}");
     }
 }
+
+#[cfg(test)]
+mod preservation_tests {
+    use super::edit_reading_task_checkbox;
+    use std::path::Path;
+
+    fn vault() -> tempfile::TempDir {
+        tempfile::tempdir().expect("temp vault")
+    }
+
+    fn write(dest: &Path, contents: &str) {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).expect("parents");
+        }
+        std::fs::write(dest, contents).expect("write");
+    }
+
+    /// Preservation contract (PT13): the Highlights reading-status
+    /// checkbox edit flips the mark and stamps the close date while
+    /// keeping a distinctive authored theme field byte-identical.
+    #[test]
+    fn checkbox_close_preserves_distinctive_theme() {
+        let _clock = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_NOW",
+            Some(std::ffi::OsStr::new("2026-10-09")),
+        )]);
+        let temp = vault();
+        let dest = temp.path().join("sase.md");
+        let line = "- [ ] #task #ref [[ref/papers/x|X]] (theme::  WRITE) [created::2026-10-09] ^ref-x";
+        write(&dest, &format!("# Sase\n\n{line}\n"));
+        let out =
+            edit_reading_task_checkbox(&dest, 2, line, 'x').expect("edit");
+        assert_eq!(
+            out.task_line,
+            "- [x] #task #ref [[ref/papers/x|X]] (theme::  WRITE) [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"
+        );
+        assert!(out.wrote);
+    }
+}

@@ -8,7 +8,7 @@ compute a hue of their own.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, Bob Mac
 Capture, and the CLI. Rust owns the meaning. JSON grows additively at
-`schema_version` 1. PT1–PT12 describe shipped behavior across the catalog,
+`schema_version` 1. PT1–PT13 describe shipped behavior across the catalog,
 capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
 
 ## PT1 — Vocabulary and identity
@@ -414,6 +414,211 @@ themes:
   hint `edit themes.BUILD there, or set it to auto to pin colors with bob
   themes color`. Configured `auto` themes pin normally.
 
+## PT13 — Task theme suggestions
+
+Rust suggests one Pomodoro theme per task and remembers deliberate
+exceptions as task fields. `bob themes suggest` explains the suggestion;
+nothing else in this phase writes. Capture pickers and commits, listing
+rows, and other clients follow this same contract in later phases; this
+section does not claim they ship yet.
+
+### Note defaults
+
+An area or project note declares its default with scalar frontmatter:
+
+```yaml
+theme: WRITE
+```
+
+Quotes are honored. An absent or blank value inherits from further up the
+residence chain. ASCII-case-insensitive `off` stops the walk, but only
+when declared by an area or project. Lists (flow and multiline),
+composites, mappings, and bad names are invalid: skipped, with one
+`theme_default_invalid` warning per visited declaring note. A `theme:`
+value on any other note kind is ignored, while that note's scalar
+`parent:` links still carry the walk. Daily notes have no default walk.
+The walk reuses the R1 residence chain with its 16-note and cycle
+limits.
+
+### Task fields
+
+A task line carries none, one set field, or repair state:
+
+- **Set:** exactly one valid field, `[theme:: X]` or `(theme:: X)`.
+- **Repair:** two or more fields mean `duplicate`; one invalid field
+  means `invalid`. Repair falls through to inheritance, carries
+  `repair: "duplicate" | "invalid"` whenever a suggestion exists, and is
+  replaced by the next eligible writer.
+- Closed tasks keep their field as history and have no suggestion.
+
+A no-suggestion result still returns warnings separately; no repair
+marker is fabricated to carry them.
+
+### Precedence and inheritance
+
+First match wins:
+
+1. **Task field.** Source `task`, label `this task`.
+2. **Reading task.** An exact `#ref` token, or a trailing block ID `ref`
+   or `ref-*` (rereads included). Ordinary annotation follow-up tasks do
+   not qualify. Uses `plan.reading_theme` (default `READ`); `off` skips
+   this step. Source `reading`, label `reading task`.
+3. **Daily review.** The canonical daily residence plus a
+   case-insensitive trailing `gtd` block ID, suggesting the first
+   `plan.exempt` name. An empty exempt list skips this step. Source
+   `review`, label `daily review`.
+4. **Note default.** The first valid default on the residence chain.
+   Source `note`, label `from <lowercase declaring stem>`.
+5. Otherwise none: `No suggested theme`.
+
+The inherited suggestion runs the same rule with step 1 skipped. The
+serialized suggestion holds `theme` (a `ThemeRef`), `source`, and
+`label`. Only source `note` adds
+`from: {path, stem, kind, hue, chain}`: vault-relative path, chain from
+residence through declaring note, and the declaring note's root-area hue.
+Only source `task` adds `inherited`, serialized as a suggestion without
+a further `inherited` member, or explicit null. Other optional fields
+are omitted.
+
+### Known, unknown, and hidden
+
+A theme is known when the catalog knows it or when it appears among
+today's live ledger components, even when the catalog cache is stale.
+Unknown names stay reportable (`known: false`, `◌` swatch); downstream
+menus must never preselect them. Hidden themes remain eligible.
+Theme defaults never affect hue, history, or Stats.
+
+### `themes suggest`
+
+`bob themes suggest TARGET [-b/--bob-dir DIR] [-f/--format human|json]`.
+`route:block-id` explains an existing task (capture-route validation,
+no path traversal, one-based line); a bare route explains a new task's
+default. Report closed tasks successfully with no suggestion and one
+`closed_task` warning. Exit 0 explains (including no suggestion or a
+closed task); 1 is a target lookup or I/O failure; 2 is usage or
+config. The vault is never written; byte-identical before and after.
+
+JSON is
+`{schema_version: 1, ok, target: {route, block_id, path, line, new_task}, theme_suggestion: <object or null>, warnings}`.
+Null block ID and line mark new tasks. Warnings are `closed_task` and
+`theme_default_invalid` (with the declaring `path`).
+
+Human output shows the swatch and name plus `suggested · <label>`;
+note defaults add the declaring path and chain, and task overrides add
+the inherited reason:
+
+```text
+■ WRITE  suggested · from sase
+  declaring note: sase.md
+  chain: sase.md
+```
+
+Task overrides render `without it: ■ WRITE from sase_blog` (or the
+equivalent inherited reason, or `without it: none (no default here)`).
+Warnings render as `warning: <code>` plus ` · <path>` when present.
+Color follows NO_COLOR; broken pipes exit silently.
+
+### Placement
+
+`set_task_theme` removes every theme field in either form plus one
+adjacent separating space, then inserts ` [theme:: NAME]` before the
+maximal trailing run of inline fields of any key, tags, and a trailing
+`^id`. With no run it inserts at the trimmed end. `clear_task_theme`
+only removes the fields and the adjacent separator. Both preserve every
+other byte: indentation, blockquote prefixes, tabs, trailing whitespace,
+CRLF, and absence of a final newline. The checkbox and title are never
+consumed as trailing metadata, and overlapping removals from adjacent
+fields stay safe. Catalog spelling is used for X; a semantic no-op
+(exactly one valid field already holding X's key) never rewrites bytes.
+
+### The write rule and never-writers
+
+A deliberate choice for destination name D with shown suggestion S:
+
+1. Not deliberate: no change.
+2. D unnamed, all-exempt, or holding other than exactly one non-exempt
+   component: no change. `PLAN + BUILD` selects BUILD; `BUILD + FIX`
+   does not write.
+3. No suggestion was shown: no change. The explicit Task Card edit
+   escape hatch stays separate, where this guard does not apply.
+4. Chosen key equals inherited: clear every theme field, no-op if
+   absent.
+5. Otherwise set catalog-spelled X, no-op when already exact.
+
+Deliberate capture means an explicit `#NAME` or equivalent `=name`;
+the picker means a changed committed row, a nonempty query, or
+Shift+Enter. Alt+Enter is always link once; untouched preselection is
+not deliberate. Guards refuse before any field edit. Theme edits never
+affect freshness eligibility.
+
+No existing gesture becomes a writer in this phase. In the full
+contract, close, roll, typed `^^`, move, rollover, reconcile, ordinary
+successor placement, and ref-today are never writers.
+
+### Preservation
+
+Task move, archive, Highlights reading-status checkbox edits, ref
+rename's alias overwrite, task-status-hooks reconcile, and freshness
+stamping keep a distinctive authored field (either form, any spacing)
+byte-identical: only each operation's intended bytes change. Freshness
+stamps land after the theme, still before the fresh/Tasks suffix.
+Closed and history fields are preserved, not stripped.
+
+### List hints: unknown defaults
+
+`theme_default_unknown` fires once per typed area/project note whose
+valid default is unknown to the current catalog:
+`{code: "theme_default_unknown", path, name, similar_to}`. Human
+output renders
+`<path> suggests unknown theme <NAME>[; did you mean <X>?] → edit theme: in that note or add <NAME> under themes: in <config>`.
+No hint for absent, blank, `off`, invalid, ignored note kinds, or known
+defaults. Collision hints keep their exact bytes and shape; hint order
+is deterministic. A `--query`, `--limit`, or hidden filter never hides
+this vault-wide diagnostic. The scan follows project discovery
+exclusions, never writes, and knownness re-evaluates from the current
+catalog and config, so new ledger use or vocabulary changes clear hints
+without rewriting defaults.
+
+### The shared menu contract
+
+Menus in every client follow this rule over the suggested theme S.
+Exact entries contain only S after removing exempt keys other than S.
+Prefer a running exact entry, else the first exact entry in ledger
+order, else the first containing entry; keep Today order. Otherwise a
+known S may create a top `New S Pomodoro` row when a Pomodoros section
+exists, at most one timed open entry exists, and strict theme caps
+permit it; remove its Recent duplicate. Otherwise preserve today's
+default and report `unknown_theme`, `creation_blocked`, or
+`strict_cap`; ref-today additionally uses `already_queued`. A nonempty
+query keeps PT7 ranking and first-row behavior while annotating at most
+one best matching row. Ctrl+D on suggested creation is consumed without
+writing. The later completion phase owns implementation and the
+`preselect` vectors.
+
+Pinned copy: `suggested · this task`, `suggested · reading task`,
+`suggested · daily review`, `suggested · from <stem>` (root-area dot
+where supported); `reading tasks suggest READ`,
+`daily review suggests PLAN`, `<stem> suggests WRITE`, and
+`no default here`. Consequences: `this task becomes FIX · <stem>
+suggests WRITE` and `task theme cleared · <stem> suggests WRITE`;
+notices: `Linked under FIX · task theme FIX` and `Linked under WRITE ·
+task theme cleared`. Accessible example: `Pomodoro WRITE, suggested,
+from sase_blog`. Explicit task fields alone get PT6 pills; inherited
+values never become ghost pills. Unknown and repair styling follows the
+established pill rules.
+
+The later capture addition is
+`task_theme: {action: "set" | "cleared", theme, previous, inherited}`,
+omitted on no change. Later listing rows add `suggested` and
+`suggestion_label`; suggestions may gain `fallback`, and ref-today
+`create`, without a schema bump.
+
+### Dataview caveat
+
+`task.theme` can conflate frontmatter note defaults with task fields,
+so it cannot answer what a task itself declares. Use
+`bob themes suggest` for the authoritative suggestion.
+
 ## JSON contract
 
 Additive; `schema_version` stays 1.
@@ -510,6 +715,7 @@ The group is `bob themes`, a top-level catalog noun in Daily workflow after
 - `list [-a/--all] [-F/--fresh] [-f/--format human|json] [-H/--hidden] [-n/--limit N] [-q/--query Q]`
 - `rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]`
 - `split OLD (-m/--map FILE | -t/--template) [-d/--dry-run] [-f/--format human|json] [-o/--offline]`
+- `suggest TARGET [-b/--bob-dir DIR] [-f/--format human|json]`
 - `unhide NAME…`
 
 List defaults: visible themes used in the last 90 days or today, newest
@@ -540,10 +746,13 @@ and writes nothing to the journal.
 
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` and `configured` inputs), `fold`,
-`rank`, and `similar`, `menu`, and `literal`. CLI tests consume the menu and
-literal sections, including capture dry-run round trips. bob-plugins copies
-the file byte-for-byte and runs the same hue, fold, and ranking vectors in
-JavaScript.
+`rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`, and
+`write_rule`. CLI tests consume the menu and literal sections, including
+capture dry-run round trips; Rust tests consume all three new sections,
+including mini-vault suggest cases with expected JSON and warnings.
+bob-plugins copies the file byte-for-byte and runs the same hue, fold, and
+ranking vectors in JavaScript; the suggest vectors are reserved for the
+later JavaScript mirror.
 
 ## Related
 

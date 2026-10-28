@@ -1395,3 +1395,47 @@ fn source_pathless_backlink_to_moved_task_gains_destination_path() {
     );
     assert!(post(&result, "src.md").contains("[[dest#^m]]"));
 }
+
+/// Preservation contract (PT13): `bob task move` keeps a distinctive
+/// authored theme field byte-identical while repairing the moved
+/// task's canonical id to the destination note.
+#[test]
+fn move_preserves_distinctive_theme_field() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Themed move (theme::  WRITE) [id:: inbox__themed] ^themed
+- [ ] #task Stay ^stay
+",
+    );
+    let dest = area(
+        "
+## Tasks
+",
+    );
+    let result = plan(
+        &[("inbox.md", &source), ("dest.md", &dest)],
+        "inbox",
+        "dest",
+        vec![block("themed")],
+    );
+    assert_eq!(result.moves.len(), 1);
+    let dest_post = post(&result, "dest.md");
+    let moved = dest_post
+        .lines()
+        .find(|line| line.contains("Themed move"))
+        .unwrap_or_else(|| panic!("moved line missing: {dest_post}"));
+    assert!(
+        moved.contains("(theme::  WRITE)"),
+        "theme bytes changed: {moved}"
+    );
+    assert!(
+        moved.contains("[id:: dest__themed]"),
+        "id not repaired to dest: {moved}"
+    );
+    assert!(moved.contains("^themed"), "block id lost: {moved}");
+    let source_post = post(&result, "inbox.md");
+    assert!(!source_post.contains("Themed move"));
+    assert!(source_post.contains("- [ ] #task Stay ^stay"));
+}
