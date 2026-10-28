@@ -17,6 +17,7 @@ use crate::native::{
 
 mod cache;
 pub(crate) mod cli;
+mod coverage;
 mod defaults;
 mod hints;
 mod hue;

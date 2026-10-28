@@ -593,3 +593,174 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
         "{merge_warnings:?}"
     );
 }
+
+fn coverage_vault(
+    root: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let vault = root.join("vault");
+    let cache = root.join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: yellow\ntheme: BUILD\n---\n\
+- [ ] #task Open work [theme:: BUILD] ^open-work\n",
+    );
+    write_file(
+        &vault.join("quoted.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\ntheme: \"BUILD\"\n---\n\
+- [x] #task Paren field (theme:: BUILD) ^paren-field\n",
+    );
+    write_file(
+        &vault.join("single.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ntheme: 'BUILD'\n---\n",
+    );
+    write_file(
+        &vault.join("done/old.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\n---\n\
+- [x] #task Archived [theme:: BUILD] ^archived\n",
+    );
+    write_file(
+        &vault.join("prose.md"),
+        "Prose BUILD and [theme:: BUILD] stay.\n\
+```md\n\
+- [ ] #task Fenced [theme:: BUILD]\n\
+```\n",
+    );
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [x] (0800-0830 30m) — BUILD\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+    (vault, cache)
+}
+
+#[test]
+fn themes_rename_rewrites_defaults_and_task_fields() {
+    let temp = TempDir::new("bob-cli-themes-rename-coverage");
+    let (vault, cache) = coverage_vault(temp.path());
+
+    let (output, value) = rename_json(&vault, &cache, &["BUILD", "FIX", "-d"]);
+    assert_success(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["sessions"], 1);
+    assert_eq!(value["defaults"], 3);
+    assert_eq!(value["task_themes"], 3);
+    let notes = value["default_notes"].as_array().expect("default_notes");
+    let listed: Vec<&str> = notes.iter().filter_map(|n| n.as_str()).collect();
+    assert!(listed.contains(&"dev.md"), "{listed:?}");
+    assert!(listed.contains(&"quoted.md"), "{listed:?}");
+    assert!(listed.contains(&"single.md"), "{listed:?}");
+
+    let (output, _) = rename_json(&vault, &cache, &["BUILD", "FIX", "-o"]);
+    assert_success(&output);
+
+    let dev = fs::read_to_string(vault.join("dev.md")).unwrap();
+    assert!(dev.contains("theme: FIX\n"), "{dev}");
+    assert!(dev.contains("[theme:: FIX]"), "{dev}");
+    assert!(!dev.contains("BUILD"), "{dev}");
+
+    let quoted = fs::read_to_string(vault.join("quoted.md")).unwrap();
+    assert!(quoted.contains("theme: \"FIX\"\n"), "{quoted}");
+    assert!(quoted.contains("(theme:: FIX)"), "{quoted}");
+
+    let single = fs::read_to_string(vault.join("single.md")).unwrap();
+    assert!(single.contains("theme: 'FIX'\n"), "{single}");
+
+    let archived = fs::read_to_string(vault.join("done/old.md")).unwrap();
+    assert!(archived.contains("[theme:: FIX]"), "{archived}");
+
+    let prose = fs::read_to_string(vault.join("prose.md")).unwrap();
+    assert!(
+        prose.contains("Prose BUILD and [theme:: BUILD] stay."),
+        "{prose}"
+    );
+    assert!(
+        prose.contains("- [ ] #task Fenced [theme:: BUILD]"),
+        "{prose}"
+    );
+
+    let day = fs::read_to_string(vault.join("2026/20261020.md")).unwrap();
+    assert!(day.contains("— FIX\n"), "{day}");
+}
+
+#[test]
+fn themes_rename_merge_rewrites_task_fields_to_new() {
+    let temp = TempDir::new("bob-cli-themes-rename-merge-fields");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("dev.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ntheme: FIXES\n---\n\
+- [ ] #task Keep [theme:: FIX] ^keep\n\
+- [ ] #task Move [theme:: FIXES] ^move\n",
+    );
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [ ] () — FIXES\n- [x] (0800-0830 30m) — FIX\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let (output, value) =
+        rename_json(&vault, &cache, &["FIXES", "FIX", "--merge", "-o"]);
+    assert_success(&output);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["task_themes"], 1);
+    assert_eq!(value["defaults"], 1);
+
+    let dev = fs::read_to_string(vault.join("dev.md")).unwrap();
+    assert!(dev.contains("theme: FIX\n"), "{dev}");
+    assert!(dev.contains("[theme:: FIX] ^keep"), "{dev}");
+    assert!(dev.contains("[theme:: FIX] ^move"), "{dev}");
+    assert!(!dev.contains("FIXES"), "{dev}");
+}
+
+#[test]
+fn themes_rename_refuses_reading_theme() {
+    let temp = TempDir::new("bob-cli-themes-rename-reading-theme");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_file(
+        &vault.join("2026/20261020.md"),
+        "## Pomodoros\n- [ ] () — READ\n",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.email", "t@t"]);
+    git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "init"]);
+
+    let (output, value) = rename_json(&vault, &cache, &["READ", "STUDY", "-d"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "config_reference");
+    assert!(
+        value["message"]
+            .as_str()
+            .unwrap()
+            .contains("plan.reading_theme"),
+        "{value}"
+    );
+
+    let config = cache.join("reading-off.yml");
+    write_file(&config, "plan:\n  reading_theme: off\n");
+    let mut command = rename_command(&vault, &cache);
+    command
+        .env("BOB_CONFIG_FILE", &config)
+        .args(["themes", "rename", "READ", "STUDY", "-d", "-f", "json"]);
+    let allowed = command.output().expect("reading_theme off");
+    assert_success(&allowed);
+    let allowed_value: Value =
+        serde_json::from_str(stdout(&allowed).trim()).expect("json");
+    assert_eq!(allowed_value["ok"], true);
+    assert_eq!(allowed_value["sessions"], 1);
+}

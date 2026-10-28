@@ -27,7 +27,7 @@ use crate::native::{
 };
 
 use super::{
-    cache,
+    cache, coverage,
     rename::{
         bob_dir_arg, format_arg, help_arg, offline_arg, print_clap_error,
         print_failure, raw_lines_preserving, replace_name_tail, rewrite_name,
@@ -55,8 +55,10 @@ Fill the THEME column (an untouched row keeps OLD), then apply with \
 Only the OLD component in mapped tails changes: separators keep their `+` \
 spelling, a resulting duplicate collapses (`JOB + BUILD` with THEME BUILD \
 becomes `BUILD`), and every other byte is preserved. Unmapped OLD entries \
-are left alone. Split writes no journal event: OLD keeps its hidden state \
-and pin, and every target keeps its own.\n\n\
+are left alone. Note defaults and `[theme::]` / `(theme::)` task fields are \
+left unchanged; a `split_leaves_task_themes` warning reports leftover \
+counts when OLD still appears there. Split writes no journal event: OLD \
+keeps its hidden state and pin, and every target keeps its own.\n\n\
 The preview and the template always rescan from source. A write takes \
 bob_sync.lock, pre-syncs unless --offline, snapshots each target and \
 compares again right before writing, writes atomically, verifies by \
@@ -224,6 +226,11 @@ fn collect_template(
         return Err(unknown_theme(&old_raw));
     }
     let old_name = display_name(&vault, &old_key, &old_raw);
+    let leftover = coverage::leftover_theme_uses(&vault, &old_key);
+    let mut warnings = Vec::new();
+    if let Some(warning) = coverage::leftover_warning(&old_name, &leftover) {
+        warnings.push(warning);
+    }
     Ok(TemplateReport {
         schema_version: SCHEMA_VERSION,
         ok: true,
@@ -233,6 +240,7 @@ fn collect_template(
             name: old_name,
         },
         entries: entries.iter().map(TemplateEntryView::from).collect(),
+        warnings,
     })
 }
 
@@ -267,6 +275,8 @@ struct TemplateReport {
     mode: String,
     theme: ThemeSide,
     entries: Vec<TemplateEntryView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -442,6 +452,10 @@ fn print_template_success(report: &TemplateReport, format: OutputFormat) {
 }
 
 fn print_template_tsv(report: &TemplateReport) {
+    let styler = crate::native::style::Styler::detect();
+    for warning in &report.warnings {
+        eprintln!("{}: {warning}", styler.warning_prefix());
+    }
     println!("# DATE\tREF\tTHEME\tNOTE");
     println!(
         "# Fill THEME with the destination name. Leave THEME as {} to keep the entry. NOTE is ignored on apply.",
@@ -890,6 +904,10 @@ fn plan_split(
         }
         let similar = catalog.similar_to(&target.name);
         warnings.push(theme_not_configured_message(&target.name, &similar));
+    }
+    let leftover = coverage::leftover_theme_uses(vault, old_key);
+    if let Some(warning) = coverage::leftover_warning(&old_name, &leftover) {
+        warnings.push(warning);
     }
 
     if !dry_run {

@@ -230,12 +230,21 @@ bob themes rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [
 
 One previewed, verified, single-commit rewrite of the theme component in
 ` — NAME` tails of canonical daily notes (past, today, and future, open and
-closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
+closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
+`[theme::]` / `(theme::)` task fields (including `done/`), modeled on
+`bob ref rename`.
 
-- **Scope:** only the theme component in Pomodoro tails. Prose, task text,
-  and fenced examples are never touched.
+- **Scope:** Pomodoro tails, note defaults on area/project notes, and task
+  theme fields. Prose, fenced examples, `.bob/`, and `_conflicts/` are
+  never touched.
 - **Byte preservation:** separators keep their `+` spelling. A resulting
-  duplicate collapses (`FIX + FIXES` → `FIX`). Every other byte is preserved.
+  duplicate collapses (`FIX + FIXES` → `FIX`). Quote style on `theme:`
+  scalars is preserved. Task fields keep their bracket or paren form and
+  take NEW's spelling; with `--merge`, fields simply take NEW. Every other
+  byte is preserved.
+- **Counts:** the preview (human and `-f json`) reports `sessions`,
+  `defaults`, and `task_themes` separately and lists the default-bearing
+  notes. JSON is additive; `entries` remains the session count.
 - **NEW** must be a valid single theme. A NEW containing `+` is `invalid_name`.
 - **Vault selection:** before taking a lock, an online write requires
   `-b/--bob-dir` and `BOB_DIR` (default `~/bob`) to resolve to the same
@@ -245,17 +254,21 @@ closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
 - **Flow:** take `bob_sync.lock`, then pre-sync unless `--offline`, then
   replan from the synced files. Snapshot each target and compare again right
   before writing (a change aborts with `stale_note`). Write each file
-  atomically, then append `theme.rename`. Verify by rescanning: OLD is absent,
-  entry counts are unchanged, and only name tails differ. On failure, restore
+  atomically, then append `theme.rename`. Verify by rescanning: OLD is absent
+  from tails, defaults, and task fields, entry counts are unchanged, only
+  name tails differ on session files, and every changed non-daily line
+  differs only in the theme value span. On failure, restore
   the before-images. Make one commit, `bob themes rename: FIXES → FIX`, then
   post-sync. Undo is `git revert`.
 - **Refusals:** `unknown_theme` (OLD never used), `invalid_name` (NEW
   contains `+` or is blank), `unchanged` (OLD and NEW share a key),
   `theme_exists` (NEW already used without `--merge`), `config_reference`
-  (OLD is in `plan.exempt`, `plan.inventory_labels`, a Stats metric filter,
-  or the `themes:` vocabulary, and NEW is not — edit the chezmoi config to
-  add NEW first; a configured OLD reads "OLD is a configured theme; add NEW
-  under themes: first"), plus
+  (OLD is in `plan.exempt`, `plan.inventory_labels`, `plan.reading_theme`,
+  a Stats metric filter, or the `themes:` vocabulary, and NEW is not — edit
+  the chezmoi config to add NEW first; a configured OLD reads "OLD is a
+  configured theme; add NEW under themes: first"; a `plan.reading_theme`
+  OLD reads "OLD is plan.reading_theme; set plan.reading_theme to NEW
+  first"), plus
   `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
   `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
 - **Color and state:** the color follows the new name, and the preview says
@@ -319,7 +332,10 @@ map from stdin. OLD must be a known theme.
   through the shared vault-rewrite transaction (`command_name` `bob themes
   split`, worktree subject "theme splits"). Split writes **no journal
   event**. OLD keeps its hidden state and pin, and every target keeps its
-  own. The commit subject is `bob themes split: OLD → T1, T2, …` with the
+  own. Note defaults and `[theme::]` / `(theme::)` task fields are left
+  unchanged. When OLD still appears in either, the preview and result add a
+  `split_leaves_task_themes` warning with those leftover counts. The commit
+  subject is `bob themes split: OLD → T1, T2, …` with the
   changed target display names in alphabetical order. Verify: reread
   contents equal the planned after-image, line count unchanged, the set of
   changed lines equals the planned set, every changed line differs only in
@@ -563,6 +579,13 @@ stamping keep a distinctive authored field (either form, any spacing)
 byte-identical: only each operation's intended bytes change. Freshness
 stamps land after the theme, still before the fresh/Tasks suffix.
 Closed and history fields are preserved, not stripped.
+
+### Rename coverage
+
+`bob themes rename` rewrites matching note defaults and task fields in the
+same previewed, verified commit as the session tails. Invalid defaults,
+`off`, non-area/project `theme:` lines, fenced examples, and prose stay
+untouched. `bob themes split` never rewrites defaults or fields.
 
 ### List hints: unknown defaults
 

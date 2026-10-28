@@ -466,3 +466,63 @@ fn themes_split_stdin_map_works() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert_eq!(value["code"], "unchanged");
 }
+
+#[test]
+fn themes_split_warns_and_leaves_defaults_and_task_fields() {
+    let temp = TempDir::new("bob-cli-themes-split-leaves-fields");
+    let (vault, cache) = split_vault(temp.path());
+    write_file(
+        &vault.join("job.md"),
+        "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\ntheme: JOB\n---\n\
+- [ ] #task Area task [theme:: JOB] ^area-task\n",
+    );
+    write_file(
+        &vault.join("done/old.md"),
+        "- [x] #task Archived [theme:: JOB] ^archived\n",
+    );
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-qm", "coverage leftovers"]);
+
+    let value = template_json(&vault, &cache, "JOB");
+    let warnings = value["warnings"].as_array().expect("template warnings");
+    assert!(
+        warnings.iter().any(|warning| warning
+            .as_str()
+            .unwrap()
+            .contains("split_leaves_task_themes")),
+        "{warnings:?}"
+    );
+
+    let entries = value["entries"].as_array().unwrap();
+    let tsv = tsv_from_entries(entries, |_, entry| {
+        Some(match entry["name"].as_str().unwrap_or("") {
+            "JOB + BUILD" => "BUILD".into(),
+            _ => "CHORE".into(),
+        })
+    });
+    let map = write_map(&vault, &tsv);
+    let (output, preview) =
+        split_json(&vault, &cache, &["JOB", "-m", path_str(&map), "-d"]);
+    assert_success(&output);
+    let preview_warnings = preview["warnings"].as_array().expect("warnings");
+    assert!(
+        preview_warnings.iter().any(|warning| {
+            let text = warning.as_str().unwrap();
+            text.contains("split_leaves_task_themes")
+                && text.contains("1 default")
+                && text.contains("2 task field")
+        }),
+        "{preview_warnings:?}"
+    );
+
+    let output = split_command(&vault, &cache)
+        .args(["themes", "split", "JOB", "-m", path_str(&map), "-o"])
+        .output()
+        .expect("write");
+    assert_success(&output);
+    let job = fs::read_to_string(vault.join("job.md")).unwrap();
+    assert!(job.contains("theme: JOB\n"), "{job}");
+    assert!(job.contains("[theme:: JOB]"), "{job}");
+    let archived = fs::read_to_string(vault.join("done/old.md")).unwrap();
+    assert!(archived.contains("[theme:: JOB]"), "{archived}");
+}

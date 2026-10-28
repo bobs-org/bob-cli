@@ -21,15 +21,18 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::native::{
-    capture_pomodoros, config, env as bob_env,
+    capture_dependency_tasks, capture_pomodoros, config, env as bob_env,
     markdown::split_line_ending,
+    note_tasks,
     ob::{self},
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
+    stats::index::canonical_daily_date,
 };
 
 use super::{
     cache,
+    coverage::{self, LineEdit},
     journal::{self, EventPayload},
     scan, theme_not_configured_message, Catalog,
 };
@@ -60,17 +63,19 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
         .about("Rename a Pomodoro theme everywhere in one commit")
         .long_about(
             "Rename one Pomodoro theme across every canonical daily note \
-(past, today, and future, open and closed) plus _templates/daily.md, in a \
-single verified Git commit.\n\n\
-Only the theme component in ` — NAME` tails changes: separators keep their \
-`+` spelling, a resulting duplicate collapses (`FIX + FIXES` → `FIX`), and \
-every other byte is preserved. Prose, task text, and fenced examples are \
-never touched.\n\n\
-The preview always rescans from source. The write takes bob_sync.lock, \
-pre-syncs unless --offline, snapshots each target and compares again right \
-before writing, writes atomically, appends one theme.rename journal event, \
-verifies by rescanning, makes one commit, then post-syncs. Undo is \
-`git revert`.\n\n\
+(past, today, and future, open and closed) plus _templates/daily.md, area \
+and project `theme:` defaults, and `[theme::]` / `(theme::)` task fields \
+(including done/), in a single verified Git commit.\n\n\
+Pomodoro ` — NAME` tails keep their `+` spelling, a resulting duplicate \
+collapses (`FIX + FIXES` → `FIX`), and every other byte is preserved. Note \
+defaults and task fields take NEW's spelling (with `--merge`, fields simply \
+take NEW). Prose, fenced examples, `.bob/`, and `_conflicts/` are never \
+touched.\n\n\
+The preview always rescans from source and counts sessions, defaults, and \
+task themes separately. The write takes bob_sync.lock, pre-syncs unless \
+--offline, snapshots each target and compares again right before writing, \
+writes atomically, appends one theme.rename journal event, verifies by \
+rescanning, makes one commit, then post-syncs. Undo is `git revert`.\n\n\
 Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.",
         )
         .after_help(
@@ -231,10 +236,21 @@ struct FilePlan {
     path: String,
     entries: usize,
     tails: Vec<TailChange>,
+    default: Option<ValueChange>,
+    task_themes: Vec<ValueChange>,
+    #[serde(skip_serializing)]
+    edits: Vec<LineEdit>,
     #[serde(skip_serializing)]
     before_contents: String,
     #[serde(skip_serializing)]
     after_contents: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ValueChange {
+    line: usize,
+    before: String,
+    after: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -248,6 +264,10 @@ struct RenameReport {
     merge: bool,
     files: Vec<FilePlanView>,
     entries: usize,
+    sessions: usize,
+    defaults: usize,
+    task_themes: usize,
+    default_notes: Vec<String>,
     state: StateChange,
     color: ColorChange,
     commit: Option<serde_json::Value>,
@@ -266,6 +286,10 @@ struct FilePlanView {
     path: String,
     entries: usize,
     tails: Vec<TailChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<ValueChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    task_themes: Vec<ValueChange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,6 +377,20 @@ impl PreparedRename {
             }
         };
         let _ = hidden_after;
+        let sessions: usize = self.files.iter().map(|file| file.entries).sum();
+        let defaults: usize = self
+            .files
+            .iter()
+            .filter(|file| file.default.is_some())
+            .count();
+        let task_themes: usize =
+            self.files.iter().map(|file| file.task_themes.len()).sum();
+        let default_notes = self
+            .files
+            .iter()
+            .filter(|file| file.default.is_some())
+            .map(|file| file.path.clone())
+            .collect();
         RenameReport {
             schema_version: SCHEMA_VERSION,
             ok: true,
@@ -367,7 +405,11 @@ impl PreparedRename {
                 name: self.new_name.clone(),
             },
             merge: self.merge,
-            entries: self.files.iter().map(|file| file.entries).sum(),
+            entries: sessions,
+            sessions,
+            defaults,
+            task_themes,
+            default_notes,
             files: self
                 .files
                 .iter()
@@ -375,6 +417,8 @@ impl PreparedRename {
                     path: file.path.clone(),
                     entries: file.entries,
                     tails: file.tails.clone(),
+                    default: file.default.clone(),
+                    task_themes: file.task_themes.clone(),
                 })
                 .collect(),
             state: StateChange {
@@ -597,43 +641,45 @@ fn plan_rename(
     }
 
     let scope = scope_files(vault);
+    let settings = note_tasks::read_settings(vault);
     let mut files = Vec::new();
     let mut total_before = 0usize;
     let mut new_occurrences = 0usize;
-    for (relative, absolute) in &scope {
-        let contents = fs::read_to_string(absolute).map_err(|error| {
+    for file in &scope {
+        let contents = fs::read_to_string(&file.absolute).map_err(|error| {
             RenameFailure::new(
                 "io",
-                format!("could not read {}: {error}", relative),
+                format!("could not read {}: {error}", file.relative),
                 None::<String>,
             )
         })?;
-        let scan = capture_pomodoros::scan(&contents);
-        total_before += scan.entries.len();
-        // Count occurrences of NEW in this file for theme_exists.
-        for entry in &scan.entries {
-            let Some(name) = entry.name.as_deref() else {
-                continue;
-            };
-            let keys = split_components(name)
-                .iter()
-                .map(|component| normalize_component(component))
-                .collect::<Vec<_>>();
-            if keys.iter().any(|key| key == &new_key) {
-                new_occurrences += 1;
+        if file.rewrite_tails {
+            let scan = capture_pomodoros::scan(&contents);
+            total_before += scan.entries.len();
+            // Count occurrences of NEW in this file for theme_exists.
+            for entry in &scan.entries {
+                let Some(name) = entry.name.as_deref() else {
+                    continue;
+                };
+                let keys = split_components(name)
+                    .iter()
+                    .map(|component| normalize_component(component))
+                    .collect::<Vec<_>>();
+                if keys.iter().any(|key| key == &new_key) {
+                    new_occurrences += 1;
+                }
             }
         }
-        if let Some((after, tails)) =
-            rewrite_file_contents(&contents, &old_key, new_raw.trim())
-        {
-            let changed_entries = tails.len();
-            files.push(FilePlan {
-                path: relative.clone(),
-                entries: changed_entries,
-                tails,
-                before_contents: contents,
-                after_contents: after,
-            });
+        if let Some(plan) = plan_file(
+            &file.relative,
+            &contents,
+            &old_key,
+            new_raw.trim(),
+            file.rewrite_tails,
+            file.rewrite_defaults_and_fields,
+            &settings,
+        ) {
+            files.push(plan);
         }
     }
     // The preview always rescans from source, so totals above are live.
@@ -732,19 +778,168 @@ fn plan_rename(
     })
 }
 
-fn scope_files(vault: &Path) -> Vec<(String, PathBuf)> {
-    let mut scoped = Vec::new();
+struct ScopedFile {
+    relative: String,
+    absolute: PathBuf,
+    rewrite_tails: bool,
+    rewrite_defaults_and_fields: bool,
+}
+
+fn scope_files(vault: &Path) -> Vec<ScopedFile> {
+    let mut scoped: BTreeMap<String, ScopedFile> = BTreeMap::new();
     for (date, relative, absolute) in scan::list_daily_notes(vault) {
         let _ = date;
-        scoped.push((relative, absolute));
+        scoped.insert(
+            relative.clone(),
+            ScopedFile {
+                relative,
+                absolute,
+                rewrite_tails: true,
+                rewrite_defaults_and_fields: true,
+            },
+        );
     }
     let template_relative = "_templates/daily.md".to_string();
     let template_absolute = vault.join(&template_relative);
     if template_absolute.is_file() {
-        scoped.push((template_relative, template_absolute));
+        scoped.insert(
+            template_relative.clone(),
+            ScopedFile {
+                relative: template_relative,
+                absolute: template_absolute,
+                rewrite_tails: true,
+                rewrite_defaults_and_fields: false,
+            },
+        );
     }
-    scoped.sort();
-    scoped
+    let (paths, _) = capture_dependency_tasks::vault_note_paths(vault);
+    for relative_path in paths {
+        let relative = capture_dependency_tasks::display_path(&relative_path);
+        let absolute = vault.join(&relative_path);
+        scoped
+            .entry(relative.clone())
+            .and_modify(|file| file.rewrite_defaults_and_fields = true)
+            .or_insert(ScopedFile {
+                relative,
+                absolute,
+                rewrite_tails: false,
+                rewrite_defaults_and_fields: true,
+            });
+    }
+    scoped.into_values().collect()
+}
+
+fn plan_file(
+    relative: &str,
+    contents: &str,
+    old_key: &str,
+    new_display: &str,
+    rewrite_tails: bool,
+    rewrite_defaults_and_fields: bool,
+    settings: &note_tasks::NoteTaskSettings,
+) -> Option<FilePlan> {
+    let mut edits = Vec::new();
+    let mut tails = Vec::new();
+    if rewrite_tails {
+        let (tail_edits, tail_changes) =
+            tail_edits_for_contents(contents, old_key, new_display);
+        tails = tail_changes;
+        edits.extend(tail_edits);
+    }
+    let default = if rewrite_defaults_and_fields {
+        coverage::default_edit(contents, old_key, new_display)
+    } else {
+        None
+    };
+    if let Some(edit) = default.clone() {
+        edits.push(edit);
+    }
+    let task_edits = if rewrite_defaults_and_fields {
+        coverage::task_theme_edits(contents, old_key, new_display, settings)
+    } else {
+        Vec::new()
+    };
+    let task_themes = task_edits
+        .iter()
+        .map(|edit| ValueChange {
+            line: edit.line,
+            before: edit.before.clone(),
+            after: edit.after.clone(),
+        })
+        .collect::<Vec<_>>();
+    edits.extend(task_edits);
+    if edits.is_empty() {
+        return None;
+    }
+    let after_contents = coverage::apply_line_edits(contents, &edits);
+    Some(FilePlan {
+        path: relative.to_string(),
+        entries: tails.len(),
+        tails,
+        default: default.map(|edit| ValueChange {
+            line: edit.line,
+            before: edit.before,
+            after: edit.after,
+        }),
+        task_themes,
+        edits,
+        before_contents: contents.to_string(),
+        after_contents,
+    })
+}
+
+fn tail_edits_for_contents(
+    contents: &str,
+    old_key: &str,
+    new_display_trimmed: &str,
+) -> (Vec<LineEdit>, Vec<TailChange>) {
+    let scan = capture_pomodoros::scan(contents);
+    let owned = raw_lines_preserving(contents);
+    let mut edits = Vec::new();
+    let mut tails = Vec::new();
+    for entry in &scan.entries {
+        let Some(old_name) = entry.name.as_deref() else {
+            continue;
+        };
+        if split_components(old_name)
+            .iter()
+            .all(|component| normalize_component(component) != old_key)
+        {
+            continue;
+        }
+        let Some(new_name) =
+            rewrite_name(old_name, old_key, new_display_trimmed)
+        else {
+            continue;
+        };
+        let index = entry.line.saturating_sub(1);
+        let Some(raw) = owned.get(index) else {
+            continue;
+        };
+        let (body, _) = split_line_ending(raw);
+        let Some(start) = name_tail_start(body, old_name) else {
+            continue;
+        };
+        edits.push(LineEdit {
+            line: entry.line,
+            start,
+            end: start + old_name.len(),
+            before: old_name.to_string(),
+            after: new_name.clone(),
+        });
+        tails.push(TailChange {
+            line: entry.line,
+            before: old_name.to_string(),
+            after: new_name,
+        });
+    }
+    (edits, tails)
+}
+
+fn name_tail_start(line: &str, old_name_trimmed: &str) -> Option<usize> {
+    let dash = line.find('—')?;
+    let offset = line[dash..].find(old_name_trimmed)?;
+    Some(dash + offset)
 }
 
 /// Physical lines with their terminators, so concatenating them
@@ -803,72 +998,6 @@ pub(super) fn verify_raw_tail_splice(
         }
     }
     Ok(())
-}
-
-/// Rewrite the theme component in every Pomodoro ` — NAME` tail.
-/// Returns the new contents plus one tail change per rewritten entry.
-///
-/// Every byte outside the precise renamed spans is preserved: each raw
-/// line keeps its original terminator (`\n`, `\r\n`, or none) and all
-/// untouched lines keep their exact bytes. Only the NAME tail body is
-/// spliced; the file is concatenated from raw lines, never rebuilt
-/// from `lines()` with `join("\n")`.
-fn rewrite_file_contents(
-    contents: &str,
-    old_key: &str,
-    new_display_trimmed: &str,
-) -> Option<(String, Vec<TailChange>)> {
-    let scan = capture_pomodoros::scan(contents);
-    if scan.entries.is_empty() {
-        return None;
-    }
-    // Map line number (1-based) to the entry name for lines we may rewrite.
-    let mut by_line: BTreeMap<usize, &str> = BTreeMap::new();
-    for entry in &scan.entries {
-        let Some(name) = entry.name.as_deref() else {
-            continue;
-        };
-        if split_components(name)
-            .iter()
-            .any(|component| normalize_component(component) == old_key)
-        {
-            by_line.insert(entry.line, name);
-        }
-    }
-    if by_line.is_empty() {
-        return None;
-    }
-    // Raw lines keep their terminators so splicing one tail never
-    // normalizes CRLF, mixed endings, trailing spaces, or a missing
-    // final newline elsewhere in the file.
-    let mut owned = raw_lines_preserving(contents);
-    let mut tails = Vec::new();
-    for (line_number, old_name) in by_line {
-        let index = line_number.saturating_sub(1);
-        let Some(raw) = owned.get(index).cloned() else {
-            continue;
-        };
-        let (body, ending) = split_line_ending(&raw);
-        let Some(new_name) =
-            rewrite_name(old_name, old_key, new_display_trimmed)
-        else {
-            continue;
-        };
-        let Some(rewritten) = replace_name_tail(body, old_name, &new_name)
-        else {
-            continue;
-        };
-        owned[index] = format!("{rewritten}{ending}");
-        tails.push(TailChange {
-            line: line_number,
-            before: old_name.to_string(),
-            after: new_name,
-        });
-    }
-    if tails.is_empty() {
-        return None;
-    }
-    Some((owned.concat(), tails))
 }
 
 /// Replace matching `+` components with the new display spelling,
@@ -960,8 +1089,19 @@ fn config_reference(
             ));
         }
     }
-    // plan.exempt and plan.inventory_labels.
+    // plan.exempt, plan.inventory_labels, and plan.reading_theme.
     if let Ok(plan) = config::load_plan_config(&config_path) {
+        if let Some(reading) = plan.reading_theme()
+            && normalize_component(reading) == old_key
+        {
+            return Some(RenameFailure::new(
+                "config_reference",
+                format!(
+                    "{old_raw} is plan.reading_theme; set plan.reading_theme to {new_raw} first"
+                ),
+                Some("edit the chezmoi config to add NEW first"),
+            ));
+        }
         let exempt = plan
             .exempt()
             .iter()
@@ -1155,33 +1295,36 @@ fn verify_renamed(
     // OLD must be absent everywhere in scope.
     let scope = scope_files(vault);
     let mut after_total = 0usize;
-    for (relative, absolute) in &scope {
-        let contents = fs::read_to_string(absolute)
+    for file in &scope {
+        let relative = &file.relative;
+        let contents = fs::read_to_string(&file.absolute)
             .map_err(|error| format!("reread {relative}: {error}"))?;
-        let scan = capture_pomodoros::scan(&contents);
-        after_total += scan.entries.len();
-        for entry in &scan.entries {
-            let Some(name) = entry.name.as_deref() else {
-                continue;
-            };
-            if split_components(name).iter().any(|component| {
-                normalize_component(component) == prepared.old_key
-            }) {
-                return Err(format!(
-                    "{} still contains {}",
-                    relative, prepared.old_name
-                ));
+        if file.rewrite_tails {
+            let scan = capture_pomodoros::scan(&contents);
+            after_total += scan.entries.len();
+            for entry in &scan.entries {
+                let Some(name) = entry.name.as_deref() else {
+                    continue;
+                };
+                if split_components(name).iter().any(|component| {
+                    normalize_component(component) == prepared.old_key
+                }) {
+                    return Err(format!(
+                        "{} still contains {}",
+                        relative, prepared.old_name
+                    ));
+                }
             }
         }
         // Touched files must match the planned after-image exactly.
         if let Some(planned) =
-            prepared.files.iter().find(|file| &file.path == relative)
+            prepared.files.iter().find(|plan| &plan.path == relative)
         {
             if contents != planned.after_contents {
                 return Err(format!("{} changed during the rename", relative));
             }
             let planned_lines: BTreeSet<usize> =
-                planned.tails.iter().map(|tail| tail.line).collect();
+                planned.edits.iter().map(|edit| edit.line).collect();
             verify_raw_tail_splice(
                 relative,
                 &planned.before_contents,
@@ -1190,27 +1333,16 @@ fn verify_renamed(
                 &planned_lines,
                 "rename",
             )?;
-            // Only name tails may differ: every changed line shares the
-            // same ledger prefix before the tail.
-            let before_lines: Vec<&str> =
-                planned.before_contents.lines().collect();
-            let after_lines: Vec<&str> = contents.lines().collect();
-            if before_lines.len() != after_lines.len() {
-                return Err(format!("{} line count changed", relative));
+            if coverage::apply_line_edits(
+                &planned.before_contents,
+                &planned.edits,
+            ) != planned.after_contents
+            {
+                return Err(format!(
+                    "{relative} changed outside a theme value span"
+                ));
             }
-            for (before, after) in before_lines.iter().zip(after_lines.iter()) {
-                if before == after {
-                    continue;
-                }
-                if capture_pomodoros::without_name_tail(before)
-                    != capture_pomodoros::without_name_tail(after)
-                {
-                    return Err(format!(
-                        "{} changed outside a Pomodoro name tail",
-                        relative
-                    ));
-                }
-            }
+            verify_changed_line_spans(relative, planned)?;
         }
     }
     if after_total != prepared.total_before_entries {
@@ -1219,7 +1351,83 @@ fn verify_renamed(
             prepared.total_before_entries, after_total
         ));
     }
+    let leftover = coverage::leftover_theme_uses(vault, &prepared.old_key);
+    if leftover.defaults > 0 || leftover.task_themes > 0 {
+        return Err(format!(
+            "{} still appears in {} default{} and {} task field{}",
+            prepared.old_name,
+            leftover.defaults,
+            if leftover.defaults == 1 { "" } else { "s" },
+            leftover.task_themes,
+            if leftover.task_themes == 1 { "" } else { "s" },
+        ));
+    }
     Ok(())
+}
+
+fn verify_changed_line_spans(
+    relative: &str,
+    planned: &FilePlan,
+) -> Result<(), String> {
+    let before_lines: Vec<&str> = planned.before_contents.lines().collect();
+    let after_lines: Vec<&str> = planned.after_contents.lines().collect();
+    if before_lines.len() != after_lines.len() {
+        return Err(format!("{relative} line count changed"));
+    }
+    let session_file = is_session_file(relative);
+    let tail_lines: BTreeSet<usize> =
+        planned.tails.iter().map(|tail| tail.line).collect();
+    for (index, (before, after)) in
+        before_lines.iter().zip(after_lines.iter()).enumerate()
+    {
+        if before == after {
+            continue;
+        }
+        let line = index + 1;
+        if session_file && tail_lines.contains(&line) {
+            if capture_pomodoros::without_name_tail(before)
+                != capture_pomodoros::without_name_tail(after)
+            {
+                return Err(format!(
+                    "{relative} changed outside a Pomodoro name tail"
+                ));
+            }
+            continue;
+        }
+        if !edits_explain_line(&planned.edits, line, before, after) {
+            return Err(format!(
+                "{relative} changed outside a theme value span"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_session_file(relative: &str) -> bool {
+    relative == "_templates/daily.md"
+        || canonical_daily_date(relative).is_some()
+}
+
+fn edits_explain_line(
+    edits: &[LineEdit],
+    line: usize,
+    before: &str,
+    after: &str,
+) -> bool {
+    let mut reconstructed = before.to_string();
+    let mut line_edits: Vec<&LineEdit> =
+        edits.iter().filter(|edit| edit.line == line).collect();
+    if line_edits.is_empty() {
+        return false;
+    }
+    line_edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
+    for edit in line_edits {
+        if edit.end > reconstructed.len() || edit.start > edit.end {
+            return false;
+        }
+        reconstructed.replace_range(edit.start..edit.end, &edit.after);
+    }
+    reconstructed == after
 }
 
 fn print_success(report: &RenameReport, format: OutputFormat) {
@@ -1252,19 +1460,59 @@ fn print_human(report: &RenameReport) {
         println!("  no files");
     }
     for file in &report.files {
-        println!(
-            "  {}: {} entr{}",
-            file.path,
-            file.entries,
-            if file.entries == 1 { "y" } else { "ies" },
-        );
+        let mut bits = Vec::new();
+        if file.entries > 0 {
+            bits.push(format!(
+                "{} entr{}",
+                file.entries,
+                if file.entries == 1 { "y" } else { "ies" },
+            ));
+        }
+        if file.default.is_some() {
+            bits.push("1 default".to_string());
+        }
+        if !file.task_themes.is_empty() {
+            bits.push(format!(
+                "{} task theme{}",
+                file.task_themes.len(),
+                if file.task_themes.len() == 1 { "" } else { "s" },
+            ));
+        }
+        if bits.is_empty() {
+            println!("  {}:", file.path);
+        } else {
+            println!("  {}: {}", file.path, bits.join(", "));
+        }
         for tail in &file.tails {
             println!(
                 "    line {}: {} → {}",
                 tail.line, tail.before, tail.after
             );
         }
+        if let Some(default) = &file.default {
+            println!(
+                "    default line {}: {} → {}",
+                default.line, default.before, default.after
+            );
+        }
+        for field in &file.task_themes {
+            println!(
+                "    line {}: {} → {}",
+                field.line, field.before, field.after
+            );
+        }
     }
+    println!("  sessions: {}", report.sessions);
+    if report.default_notes.is_empty() {
+        println!("  defaults: {}", report.defaults);
+    } else {
+        println!(
+            "  defaults: {} ({})",
+            report.defaults,
+            report.default_notes.join(", ")
+        );
+    }
+    println!("  task themes: {}", report.task_themes);
     println!("  state: {}", report.state.note);
     println!("  color: {}", report.color.note);
     if let Some(commit) = &report.commit {
@@ -1418,6 +1666,19 @@ pub(crate) fn renamed_reappeared(
 #[cfg(test)]
 mod rename_tests {
     use super::*;
+
+    fn rewrite_file_contents(
+        contents: &str,
+        old_key: &str,
+        new_display_trimmed: &str,
+    ) -> Option<(String, Vec<TailChange>)> {
+        let (edits, tails) =
+            tail_edits_for_contents(contents, old_key, new_display_trimmed);
+        if tails.is_empty() {
+            return None;
+        }
+        Some((coverage::apply_line_edits(contents, &edits), tails))
+    }
 
     #[test]
     fn rewrite_name_replaces_component_and_preserves_separators() {
@@ -1788,6 +2049,15 @@ mod rename_tests {
                     before: "JOB".to_string(),
                     after: "WRITE".to_string(),
                 }],
+                default: None,
+                task_themes: Vec::new(),
+                edits: vec![LineEdit {
+                    line: 2,
+                    start: 0,
+                    end: 0,
+                    before: "JOB".to_string(),
+                    after: "WRITE".to_string(),
+                }],
                 before_contents: before.to_string(),
                 after_contents: malformed.to_string(),
             }],
@@ -1799,6 +2069,58 @@ mod rename_tests {
         let error = verify_renamed(vault, &prepared).expect_err("must reject");
         assert!(
             error.contains("outside a Pomodoro name tail")
+                || error.contains("line count")
+                || error.contains("theme value span"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_non_daily_collateral_bytes() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let relative = "dev.md".to_string();
+        let absolute = vault.join(&relative);
+        let before = "---\ntype: [[area]]\ntheme: BUILD\n---\n";
+        let malformed = "---\ntype: [[note]]\ntheme: FIX\n---\n";
+        std::fs::write(&absolute, malformed).unwrap();
+        let prepared = PreparedRename {
+            vault: vault.to_path_buf(),
+            old_key: "build".to_string(),
+            old_name: "BUILD".to_string(),
+            new_key: "fix".to_string(),
+            new_name: "FIX".to_string(),
+            merge: false,
+            via: "test".to_string(),
+            files: vec![FilePlan {
+                path: relative.clone(),
+                entries: 0,
+                tails: Vec::new(),
+                default: Some(ValueChange {
+                    line: 3,
+                    before: "BUILD".to_string(),
+                    after: "FIX".to_string(),
+                }),
+                task_themes: Vec::new(),
+                edits: vec![LineEdit {
+                    line: 3,
+                    start: 7,
+                    end: 12,
+                    before: "BUILD".to_string(),
+                    after: "FIX".to_string(),
+                }],
+                before_contents: before.to_string(),
+                after_contents: malformed.to_string(),
+            }],
+            total_before_entries: 0,
+            warnings: Vec::new(),
+            sync_pre: "skipped",
+            hidden_before: false,
+        };
+        let error = verify_renamed(vault, &prepared).expect_err("must reject");
+        assert!(
+            error.contains("theme value span")
+                || error.contains("outside a Pomodoro name tail")
                 || error.contains("line count"),
             "{error}"
         );
