@@ -664,6 +664,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 | LG14 | kill switch off | no mirror writes and no source mints |
 | LG15 | Tab marks two targets, then ↵ | both linked in one gesture and one notice |
 | LG16 | `~` typed anywhere in a Links / Linked-from filter | the stage flips direction in place; filter text and caret kept, the `~` never typed, marks cleared; a counted session refuses the flip to Linked from with "Linked from needs a single task" |
+| LG17 | Links / Linked-from stage query that a Blocked task matches best | the Blocked row ranks by score inside RESULTS; the stage never shows a BLOCKED section; equal scores order In Progress, Next, then Ready and Blocked together |
 
 ### LC — chips
 
