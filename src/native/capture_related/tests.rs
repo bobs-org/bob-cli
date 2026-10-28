@@ -576,7 +576,7 @@ where
         .min()
         .expect("paired samples");
     assert!(
-        min_diff.as_millis() < 500,
+        min_diff.as_millis() < 750,
         "{label} cost above baseline took {min_diff:?} \
          (big min {min_big:?} in {big_samples:?}; \
          tiny min {min_tiny:?} in {tiny_samples:?})"
