@@ -630,6 +630,7 @@ fn apply_linked_from(
         previous_label,
         action,
         cancel_effect: None,
+        complete_effect: None,
     });
     if action == RelationAction::Unchanged {
         return Ok(());
@@ -927,6 +928,7 @@ fn relation_update_json(
         previous_label,
         action,
         cancel_effect: None,
+        complete_effect: None,
     }
 }
 

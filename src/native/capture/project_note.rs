@@ -383,6 +383,7 @@ pub(super) fn plan_project_note_item(
             minted_blocker_block_id: None,
             relation_updates: Vec::new(),
             relation_cancels: Vec::new(),
+            relation_completes: Vec::new(),
             linked_from_line_updates: Vec::new(),
             minted_relation_block_ids: Vec::new(),
             mirror_skipped: Vec::new(),

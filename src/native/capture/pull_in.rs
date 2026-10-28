@@ -98,7 +98,7 @@ fn number_draft_offers(
     }
     let mut rows = Vec::new();
     for (item_index, item) in items.iter().enumerate() {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 rows.push(RowRef {
                     item: item_index,
@@ -109,6 +109,14 @@ fn number_draft_offers(
             }
         }
     }
+    // One item with a single completion summary keeps the engine numbering
+    // so old captures stay byte-identical. A single item with nested
+    // relation completions gets one stable ordered number space, like a
+    // multi-item draft.
+    let single_summary = items.len() == 1
+        && items
+            .first()
+            .is_some_and(|item| completion_summary_count(&item.result) <= 1);
     let n_map: BTreeMap<String, usize> = if let Some(probe) = probe_n {
         let mut map = probe.clone();
         let max = map.values().copied().max().unwrap_or(0);
@@ -125,7 +133,7 @@ fn number_draft_offers(
             map.insert(row.key.clone(), max + 1 + index);
         }
         map
-    } else if items.len() == 1 {
+    } else if single_summary {
         rows.iter()
             .map(|row| (row.key.clone(), row.engine_n))
             .collect()
@@ -141,8 +149,8 @@ fn number_draft_offers(
             .collect()
     };
     for item in items.iter_mut() {
-        if let Some(rows) = item_unblocked_mut(item) {
-            for row in rows {
+        for vec in super::output::unblocked_vecs_mut(&mut item.result) {
+            for row in vec {
                 if let Some(offer) = row.offer.as_mut()
                     && let Some(&n) = n_map.get(&offer.key)
                 {
@@ -153,10 +161,24 @@ fn number_draft_offers(
     }
 }
 
+fn completion_summary_count(
+    result: &super::output::CaptureItemResult,
+) -> usize {
+    let mut count = 0;
+    if result.task_complete.is_some() {
+        count += 1;
+    }
+    count += result.relation_completes.len();
+    if result.pomodoro_close.is_some() {
+        count += 1;
+    }
+    count
+}
+
 fn offer_n_map(items: &[PlannedCaptureItem]) -> BTreeMap<String, usize> {
     let mut map = BTreeMap::new();
     for item in items {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 map.insert(offer.key.clone(), offer.n);
             }
@@ -170,7 +192,7 @@ fn key_for_number(
     number: usize,
 ) -> Option<String> {
     for item in items {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref()
                 && offer.n == number
             {
@@ -184,7 +206,7 @@ fn key_for_number(
 fn surviving_keys(items: &[PlannedCaptureItem]) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     for item in items {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 keys.insert(offer.key.clone());
             }
@@ -220,7 +242,7 @@ fn unknown_pick_error(
     )];
     let mut offers: Vec<(usize, String, String)> = Vec::new();
     for item in items {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 offers.push((offer.n, offer.key.clone(), row.text.clone()));
             }
@@ -239,7 +261,7 @@ fn choice_required_error(
 ) -> CaptureError {
     let offers: Vec<TaskCompleteUnblockedJson> = items
         .iter()
-        .flat_map(item_unblocked)
+        .flat_map(|item| super::output::all_unblocked(&item.result))
         .filter(|row| row.offer.is_some())
         .cloned()
         .collect();
@@ -264,7 +286,7 @@ pub(super) fn assemble_pull_in(
     let mut folds: BTreeMap<String, crate::native::task_complete::ProjectFold> =
         BTreeMap::new();
     for item in items {
-        for row in item_unblocked(item) {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(offer) = row.offer.as_ref() {
                 offer_count += 1;
                 if offer.selected {
@@ -272,7 +294,7 @@ pub(super) fn assemble_pull_in(
                 }
             }
         }
-        for fold in item_project_folds(item) {
+        for fold in super::output::all_project_folds(&item.result) {
             folds.insert(display_relative(&fold.project), fold.clone());
         }
     }
@@ -294,42 +316,6 @@ pub(super) fn assemble_pull_in(
         choice: choice.map(str::to_string),
         picked_count,
         groups,
-    }
-}
-
-pub(super) fn item_unblocked(
-    item: &PlannedCaptureItem,
-) -> &[TaskCompleteUnblockedJson] {
-    if let Some(summary) = item.result.task_complete.as_ref() {
-        &summary.unblocked
-    } else if let Some(summary) = item.result.pomodoro_close.as_ref() {
-        &summary.unblocked
-    } else {
-        &[]
-    }
-}
-
-fn item_unblocked_mut(
-    item: &mut PlannedCaptureItem,
-) -> Option<&mut Vec<TaskCompleteUnblockedJson>> {
-    if let Some(summary) = item.result.task_complete.as_mut() {
-        Some(&mut summary.unblocked)
-    } else if let Some(summary) = item.result.pomodoro_close.as_mut() {
-        Some(&mut summary.unblocked)
-    } else {
-        None
-    }
-}
-
-fn item_project_folds(
-    item: &PlannedCaptureItem,
-) -> &[crate::native::task_complete::ProjectFold] {
-    if let Some(summary) = item.result.task_complete.as_ref() {
-        &summary.project_folds
-    } else if let Some(summary) = item.result.pomodoro_close.as_ref() {
-        &summary.project_folds
-    } else {
-        &[]
     }
 }
 

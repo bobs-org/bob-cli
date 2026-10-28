@@ -3164,6 +3164,7 @@ pub(super) fn plan_dependency_only_item(
             minted_blocker_block_id: None,
             relation_updates,
             relation_cancels,
+            relation_completes: Vec::new(),
             linked_from_line_updates,
             minted_relation_block_ids,
             mirror_skipped,

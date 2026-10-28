@@ -563,6 +563,12 @@ pub(super) struct CaptureItemResult {
         serialize_with = "serialize_relation_cancels"
     )]
     pub(super) relation_cancels: Vec<RelationCancelJson>,
+    /// Per-item complete-label outcomes (`docs/task-relations.md` §18
+    /// CP7): one JSON row per source this item completed. Additive:
+    /// omitted when nothing completed, so older output stays
+    /// byte-identical.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) relation_completes: Vec<RelationCompleteJson>,
     /// Per-item `||` one-off hides (`docs/task-relations.md` RV6): one
     /// entry per distinct hidden label key this item typed, in typed
     /// order. Present on dry runs too; the journal append happens only
@@ -1038,6 +1044,11 @@ pub(super) struct RelationUpdateJson {
     /// unchanged edges and labels that cancel nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) cancel_effect: Option<RelationCancelEffect>,
+    /// Complete-label outcome for an Added/Relabeled edge whose label is
+    /// configured (`docs/task-relations.md` §18 CP7). Omitted for
+    /// unchanged edges and labels that complete nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) complete_effect: Option<RelationCompleteEffect>,
 }
 
 /// What a cancel-label edge did to its source
@@ -1048,6 +1059,18 @@ pub(super) struct RelationUpdateJson {
 #[serde(rename_all = "snake_case")]
 pub(super) enum RelationCancelEffect {
     Cancelled,
+    AlreadyClosed,
+}
+
+/// What a complete-label edge did to its source
+/// (`docs/task-relations.md` §18 CP7): the link was written and the
+/// source completed, or the link was written and the already-closed
+/// source was left alone.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelationCompleteEffect {
+    Completed,
     AlreadyClosed,
 }
 
@@ -1120,6 +1143,45 @@ pub(super) struct RelationCancelTargetJson {
 pub(super) struct RelationCancelRecoveredJson {
     pub(super) path: String,
     pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// One complete-label source this item completed
+/// (`docs/task-relations.md` §18 CP7): the staged source completion, one
+/// row per source no matter how many complete edges named it. Only
+/// actually completed sources are recorded; already-closed sources keep
+/// only the link and an optional `complete_effect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCompleteJson {
+    pub(super) source: RelationCompleteSourceJson,
+    pub(super) target: RelationCompleteTargetJson,
+    pub(super) labels: Vec<String>,
+    pub(super) action: RelationAction,
+    pub(super) previous_status: char,
+    pub(super) previous_status_name: String,
+    /// Open tasks that stay open when the completed source is a `^prj`.
+    /// Omitted for non-project sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_open_tasks: Option<usize>,
+    pub(super) task_complete: TaskCompleteSummaryJson,
+    pub(super) message: String,
+}
+
+/// The completed source of one `relation_completes[]` row: where S sits
+/// after this item, with its pre-complete description.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCompleteSourceJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// The surviving target of one `relation_completes[]` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCompleteTargetJson {
+    pub(super) path: String,
     pub(super) block_id: String,
     pub(super) text: String,
 }
@@ -1599,7 +1661,7 @@ fn print_pull_in_hint(result: &CaptureResult) {
             result.captures.as_slice()
         };
         for item in items {
-            for row in item_unblocked(item) {
+            for row in all_unblocked(item) {
                 if let Some(offer) = row.offer.as_ref() {
                     numbers.push(offer.n);
                 }
@@ -1623,14 +1685,157 @@ fn print_pull_in_hint(result: &CaptureResult) {
     }
 }
 
-fn item_unblocked(item: &CaptureItemResult) -> &[TaskCompleteUnblockedJson] {
-    if let Some(summary) = item.task_complete.as_ref() {
-        &summary.unblocked
-    } else if let Some(summary) = item.pomodoro_close.as_ref() {
-        &summary.unblocked
-    } else {
-        &[]
+/// Every successor row an item reports: whole-item `task_complete`, every
+/// nested `relation_completes` summary, then `pomodoro_close`. Used for
+/// draft-level numbering, probes, selection validation, pull-in, and
+/// human offer summaries so nested completions share one number space.
+pub(super) fn all_unblocked(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteUnblockedJson> {
+    item.task_complete
+        .iter()
+        .flat_map(|summary| summary.unblocked.iter())
+        .chain(
+            item.relation_completes
+                .iter()
+                .flat_map(|complete| complete.task_complete.unblocked.iter()),
+        )
+        .chain(
+            item.pomodoro_close
+                .iter()
+                .flat_map(|summary| summary.unblocked.iter()),
+        )
+}
+
+/// Every still-blocked row an item reports, in the same order as
+/// [`all_unblocked`].
+#[allow(dead_code)]
+pub(super) fn all_still_blocked(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &TaskCompleteStillBlockedJson> {
+    item.task_complete
+        .iter()
+        .flat_map(|summary| summary.still_blocked.iter())
+        .chain(
+            item.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.still_blocked.iter()
+            }),
+        )
+        .chain(
+            item.pomodoro_close
+                .iter()
+                .flat_map(|summary| summary.still_blocked.iter()),
+        )
+}
+
+/// Every project fold an item reports, in the same order as
+/// [`all_unblocked`].
+pub(super) fn all_project_folds(
+    item: &CaptureItemResult,
+) -> impl Iterator<Item = &crate::native::task_complete::ProjectFold> {
+    item.task_complete
+        .iter()
+        .flat_map(|summary| summary.project_folds.iter())
+        .chain(
+            item.relation_completes.iter().flat_map(|complete| {
+                complete.task_complete.project_folds.iter()
+            }),
+        )
+        .chain(
+            item.pomodoro_close
+                .iter()
+                .flat_map(|summary| summary.project_folds.iter()),
+        )
+}
+
+/// Mutable access to every unblocked vec an item reports, in the same
+/// order as [`all_unblocked`]: whole-item `task_complete`, each nested
+/// `relation_completes` summary, then `pomodoro_close`.
+pub(super) fn unblocked_vecs_mut(
+    item: &mut CaptureItemResult,
+) -> Vec<&mut Vec<TaskCompleteUnblockedJson>> {
+    let mut vecs = Vec::new();
+    if let Some(summary) = item.task_complete.as_mut() {
+        vecs.push(&mut summary.unblocked);
     }
+    for complete in &mut item.relation_completes {
+        vecs.push(&mut complete.task_complete.unblocked);
+    }
+    if let Some(summary) = item.pomodoro_close.as_mut() {
+        vecs.push(&mut summary.unblocked);
+    }
+    vecs
+}
+
+/// Shared `!` detail rows for reuse by relation rows: closed subtasks,
+/// left-open descendants, ledger effects, unblocked dependents, and
+/// still-blocked dependents. The `!` heading stays with the caller so
+/// old output stays byte-identical.
+pub(super) fn print_task_complete_details(
+    summary: &TaskCompleteSummaryJson,
+    dry_run: bool,
+    styler: &Styler,
+) {
+    for subtask in &summary.subtasks {
+        let previous =
+            style_task_status_marker(styler, subtask.previous_status_symbol);
+        let current = style_task_status_marker(styler, subtask.status_symbol);
+        let locator =
+            task_complete_locator(&subtask.note_path, &subtask.block_id);
+        if subtask.text.is_empty() {
+            println!("    {previous} → {current}  {locator}");
+        } else {
+            println!("    {previous} → {current} {}  {locator}", subtask.text);
+        }
+    }
+    for left in &summary.subtasks_left_open {
+        let marker = style_task_status_marker(styler, left.status_symbol);
+        let locator = task_complete_locator(&left.note_path, &left.block_id);
+        if left.text.is_empty() {
+            println!("    left {} {marker}  {locator}", left.status_name);
+        } else {
+            println!(
+                "    left {} {marker} {}  {locator}",
+                left.status_name, left.text
+            );
+        }
+    }
+    if let Some(ledger) = summary.ledger.as_ref() {
+        let mut parts: Vec<String> = Vec::new();
+        for struck in &ledger.struck_in {
+            let label = ledger_entry_label(&struck.name, struck.line);
+            if struck.status == "completed" {
+                parts.push(format!("Task Link struck in {label} (completed)"));
+            } else {
+                parts.push(format!("Task Link struck in {label}"));
+            }
+        }
+        for item in &ledger.moved {
+            parts.push(format!(
+                "Task Link moved {} → {} (struck)",
+                ledger_entry_label(&item.from.name, item.from.line),
+                ledger_entry_label(&item.to.name, item.to.line),
+            ));
+        }
+        for item in &ledger.dropped {
+            parts.push(format!(
+                "Task Link already in {}; dropped the {} copy",
+                ledger_entry_label(&item.to.name, item.to.line),
+                ledger_entry_label(&item.from.name, item.from.line),
+            ));
+        }
+        for removed in &ledger.removed_placeholders {
+            parts.push(format!("removed empty {}", removed.name));
+        }
+        parts.push(ledger.day_file.clone());
+        println!("  ledger  {}", parts.join(" · "));
+    }
+    print_human_successor_rows(
+        &summary.unblocked,
+        &summary.still_blocked,
+        dry_run,
+        styler,
+    );
 }
 
 fn pulled_in_phrase(unblocked: &[TaskCompleteUnblockedJson]) -> String {
@@ -3381,66 +3586,7 @@ pub(super) fn print_human_task_complete_success(
     println!(
         "{prefix} {verb} {head}  {ordinal}{target_label} {block_label}{pulled}"
     );
-    for subtask in &summary.subtasks {
-        let previous =
-            style_task_status_marker(styler, subtask.previous_status_symbol);
-        let current = style_task_status_marker(styler, subtask.status_symbol);
-        let locator =
-            task_complete_locator(&subtask.note_path, &subtask.block_id);
-        if subtask.text.is_empty() {
-            println!("    {previous} → {current}  {locator}");
-        } else {
-            println!("    {previous} → {current} {}  {locator}", subtask.text);
-        }
-    }
-    for left in &summary.subtasks_left_open {
-        let marker = style_task_status_marker(styler, left.status_symbol);
-        let locator = task_complete_locator(&left.note_path, &left.block_id);
-        if left.text.is_empty() {
-            println!("    left {} {marker}  {locator}", left.status_name);
-        } else {
-            println!(
-                "    left {} {marker} {}  {locator}",
-                left.status_name, left.text
-            );
-        }
-    }
-    if let Some(ledger) = summary.ledger.as_ref() {
-        let mut parts: Vec<String> = Vec::new();
-        for struck in &ledger.struck_in {
-            let label = ledger_entry_label(&struck.name, struck.line);
-            if struck.status == "completed" {
-                parts.push(format!("Task Link struck in {label} (completed)"));
-            } else {
-                parts.push(format!("Task Link struck in {label}"));
-            }
-        }
-        for item in &ledger.moved {
-            parts.push(format!(
-                "Task Link moved {} → {} (struck)",
-                ledger_entry_label(&item.from.name, item.from.line),
-                ledger_entry_label(&item.to.name, item.to.line),
-            ));
-        }
-        for item in &ledger.dropped {
-            parts.push(format!(
-                "Task Link already in {}; dropped the {} copy",
-                ledger_entry_label(&item.to.name, item.to.line),
-                ledger_entry_label(&item.from.name, item.from.line),
-            ));
-        }
-        for removed in &ledger.removed_placeholders {
-            parts.push(format!("removed empty {}", removed.name));
-        }
-        parts.push(ledger.day_file.clone());
-        println!("  ledger  {}", parts.join(" · "));
-    }
-    print_human_successor_rows(
-        &summary.unblocked,
-        &summary.still_blocked,
-        result.dry_run,
-        styler,
-    );
+    print_task_complete_details(summary, result.dry_run, styler);
 }
 
 /// Successor rows shared by `!` closes and Pomodoro closes
@@ -4114,5 +4260,270 @@ mod tests {
             typed_work_log_lines(&short, "    "),
             vec!["    *2026-09-28* — wired the lexer".to_string()]
         );
+    }
+
+    fn minimal_summary(text: &str) -> TaskCompleteSummaryJson {
+        TaskCompleteSummaryJson {
+            raw: "!a^1".to_string(),
+            note: "a".to_string(),
+            note_path: "a.md".to_string(),
+            block_id: "1".to_string(),
+            action: "completed",
+            completion_date: Some("2026-10-28".to_string()),
+            text: text.to_string(),
+            subtasks: Vec::new(),
+            subtasks_left_open: Vec::new(),
+            ledger: None,
+            unblocked: Vec::new(),
+            still_blocked: Vec::new(),
+            unblocked_check: "checked",
+            project_folds: Vec::new(),
+        }
+    }
+
+    fn unblocked_row(
+        text: &str,
+        key: &str,
+        n: usize,
+    ) -> TaskCompleteUnblockedJson {
+        TaskCompleteUnblockedJson {
+            note_path: "b.md".to_string(),
+            block_id: format!("{key}-id"),
+            line: 1,
+            text: text.to_string(),
+            previous_status_symbol: ' ',
+            previous_status_name: "Ready".to_string(),
+            status_symbol: '?',
+            status_name: "Blocked".to_string(),
+            inbox: false,
+            unblocked_by: Vec::new(),
+            link: None,
+            not_linked: Some("not_selected".to_string()),
+            trigger: "recovery",
+            hide_removed: false,
+            offer: Some(TaskCompleteOfferJson {
+                key: key.to_string(),
+                n,
+                group: "hand_off",
+                selected: false,
+                block_id_needed: false,
+                project: None,
+                destination: TaskCompleteOfferDestinationJson {
+                    day_file: "today.md".to_string(),
+                    entry_name: "work".to_string(),
+                    entry_role: "slot",
+                    fallback: false,
+                },
+                order_key: (0, (0, 0), std::path::PathBuf::from("b.md"), 0),
+            }),
+        }
+    }
+
+    fn minimal_result() -> CaptureItemResult {
+        CaptureItemResult {
+            ok: true,
+            dry_run: false,
+            routed: true,
+            route: None,
+            route_label: "a.md".to_string(),
+            relative_target: "a.md".to_string(),
+            target: "/tmp/bob/a.md".to_string(),
+            text: String::new(),
+            task_line: "- [x] done".to_string(),
+            kind: "task_complete",
+            created: "2026-10-28".to_string(),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Completed,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: Some("1".to_string()),
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: None,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update: None,
+            consumed_links: Vec::new(),
+            task_complete: None,
+            r#ref: None,
+            toggle_task_description: None,
+            link_guard: None,
+            dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            relation_cancels: Vec::new(),
+            relation_completes: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn relation_completes_omitted_when_empty() {
+        let result = minimal_result();
+        let value = to_value(&result).expect("serialize");
+        assert!(value.get("relation_completes").is_none(), "{value}");
+    }
+
+    #[test]
+    fn all_unblocked_covers_nested_relation_summaries_in_order() {
+        let mut whole = minimal_summary("whole");
+        whole
+            .unblocked
+            .push(unblocked_row("whole-row", "whole-key", 7));
+        let mut nested = minimal_summary("nested");
+        nested
+            .unblocked
+            .push(unblocked_row("nested-row", "nested-key", 7));
+        let mut result = minimal_result();
+        result.task_complete = Some(whole);
+        result.relation_completes.push(RelationCompleteJson {
+            source: RelationCompleteSourceJson {
+                path: "a.md".to_string(),
+                line: 1,
+                block_id: "1".to_string(),
+                text: "source".to_string(),
+            },
+            target: RelationCompleteTargetJson {
+                path: "b.md".to_string(),
+                block_id: "2".to_string(),
+                text: "target".to_string(),
+            },
+            labels: vec!["implemented by".to_string()],
+            action: RelationAction::Added,
+            previous_status: ' ',
+            previous_status_name: "Ready".to_string(),
+            project_open_tasks: None,
+            task_complete: nested,
+            message: "✓ completed".to_string(),
+        });
+        let texts: Vec<String> =
+            all_unblocked(&result).map(|row| row.text.clone()).collect();
+        assert_eq!(
+            texts,
+            vec!["whole-row".to_string(), "nested-row".to_string()]
+        );
+        let value = to_value(&result).expect("serialize");
+        assert_eq!(
+            value["relation_completes"].as_array().unwrap().len(),
+            1,
+            "{value}"
+        );
+        assert_eq!(
+            value["relation_completes"][0]["labels"],
+            json!(["implemented by"]),
+            "{value}"
+        );
+    }
+
+    #[test]
+    fn unblocked_vecs_mut_reaches_nested_rows() {
+        let mut whole = minimal_summary("whole");
+        whole
+            .unblocked
+            .push(unblocked_row("whole-row", "whole-key", 1));
+        let mut nested = minimal_summary("nested");
+        nested
+            .unblocked
+            .push(unblocked_row("nested-row", "nested-key", 1));
+        let mut result = minimal_result();
+        result.task_complete = Some(whole);
+        result.relation_completes.push(RelationCompleteJson {
+            source: RelationCompleteSourceJson {
+                path: "a.md".to_string(),
+                line: 1,
+                block_id: "1".to_string(),
+                text: "source".to_string(),
+            },
+            target: RelationCompleteTargetJson {
+                path: "b.md".to_string(),
+                block_id: "2".to_string(),
+                text: "target".to_string(),
+            },
+            labels: Vec::new(),
+            action: RelationAction::Added,
+            previous_status: ' ',
+            previous_status_name: "Ready".to_string(),
+            project_open_tasks: None,
+            task_complete: nested,
+            message: String::new(),
+        });
+        for vec in unblocked_vecs_mut(&mut result) {
+            for row in vec.iter_mut() {
+                if let Some(offer) = row.offer.as_mut() {
+                    offer.selected = true;
+                }
+            }
+        }
+        assert!(all_unblocked(&result)
+            .all(|row| row.offer.as_ref().is_some_and(|offer| offer.selected)));
+    }
+
+    #[test]
+    fn complete_effect_omitted_when_none() {
+        let update = RelationUpdateJson {
+            direction: RelationDirection::To,
+            source: RelationEndpointJson {
+                path: "a.md".to_string(),
+                line: 1,
+                block_id: "1".to_string(),
+                text: "s".to_string(),
+                archived: None,
+            },
+            target: RelationEndpointJson {
+                path: "b.md".to_string(),
+                line: 2,
+                block_id: "2".to_string(),
+                text: "t".to_string(),
+                archived: None,
+            },
+            label: Some("implemented by".to_string()),
+            previous_label: None,
+            action: RelationAction::Added,
+            cancel_effect: None,
+            complete_effect: None,
+        };
+        let value = to_value(&update).expect("serialize");
+        assert!(value.get("complete_effect").is_none(), "{value}");
+        let completed = RelationUpdateJson {
+            complete_effect: Some(RelationCompleteEffect::Completed),
+            ..update
+        };
+        let value = to_value(&completed).expect("serialize");
+        assert_eq!(value["complete_effect"], json!("completed"), "{value}");
     }
 }

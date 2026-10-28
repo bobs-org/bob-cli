@@ -6,6 +6,31 @@ use crate::native::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Reusable existing-task completion for `!` and relation closes
+/// (`docs/task-relations.md` §18 CP8): validates the staged source, runs
+/// the shared Done tree/successor/retirement, stages every changed file,
+/// and reports the existing `TaskCompleteSummaryJson` plus the transition
+/// details, daily-note effect, and tracking refs adapters need. `!` token
+/// parsing and its whole-item conflict check stay in
+/// [`plan_task_complete_item`]; the relation adapter preflights its
+/// different already-closed semantics before calling here.
+pub(super) struct CompleteExistingTaskOutcome {
+    pub(super) summary: TaskCompleteSummaryJson,
+    #[allow(dead_code)]
+    pub(super) relative: PathBuf,
+    pub(super) absolute: PathBuf,
+    pub(super) rel_display: String,
+    pub(super) previous_task_line: String,
+    pub(super) previous_status_symbol: char,
+    pub(super) previous_status_name: String,
+    pub(super) task_line: String,
+    pub(super) final_status_symbol: char,
+    pub(super) final_status_name: String,
+    pub(super) top_day_file: Option<String>,
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
+    pub(super) task_block_refs: Vec<TaskBlockRef>,
+}
+
 /// Plan one `TaskComplete` item: resolve vault-wide, validate status and
 /// recurrence, run the engine (tree close, scoped ledger retirement,
 /// dependent recovery), and stage every changed file.
@@ -21,6 +46,107 @@ pub(super) fn plan_task_complete_item(
     dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_task_complete_conflicts(parsed, request, raw)?;
+    let outcome = complete_existing_task(
+        request,
+        raw,
+        note,
+        block_id,
+        today,
+        planner,
+        dependency_ctx,
+    )?;
+    let summary = outcome.summary.clone();
+    let status_changed =
+        outcome.previous_status_symbol != outcome.final_status_symbol;
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: true,
+            route: None,
+            route_label: outcome.rel_display.clone(),
+            relative_target: outcome.rel_display.clone(),
+            target: outcome.absolute.display().to_string(),
+            text: String::new(),
+            task_line: outcome.task_line.clone(),
+            kind: "task_complete",
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Completed,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: Some(block_id.to_string()),
+            day_file: outcome.top_day_file.clone(),
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: Some(outcome.previous_task_line.clone()),
+            status_symbol: Some(outcome.final_status_symbol),
+            status_name: Some(outcome.final_status_name.clone()),
+            previous_status_symbol: Some(outcome.previous_status_symbol),
+            previous_status_name: Some(outcome.previous_status_name.clone()),
+            pomodoro_name: None,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: Some(status_changed),
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update: None,
+            consumed_links: Vec::new(),
+            toggle_task_description: None,
+            r#ref: None,
+            task_complete: Some(summary),
+            link_guard: None,
+            dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
+            relation_updates: Vec::new(),
+            relation_cancels: Vec::new(),
+            relation_completes: Vec::new(),
+            linked_from_line_updates: Vec::new(),
+            minted_relation_block_ids: Vec::new(),
+            mirror_skipped: Vec::new(),
+            relation_label_hides: Vec::new(),
+        },
+        clip_plan: None,
+        pomodoro_refs: outcome.pomodoro_refs.clone(),
+        task_block_refs: outcome.task_block_refs.clone(),
+    })
+}
+
+/// Shared Done path for one existing source after `!` token resolution.
+/// See [`CompleteExistingTaskOutcome`] for the contract.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn complete_existing_task(
+    request: &CaptureRequest,
+    raw: &str,
+    note: &str,
+    block_id: &str,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    dependency_ctx: &mut DependencyContext,
+) -> Result<CompleteExistingTaskOutcome, CaptureError> {
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
     // Resolve the note vault-wide, exactly like `&`: an explicit relative
@@ -45,19 +171,46 @@ pub(super) fn plan_task_complete_item(
     let task_description = task.description.clone();
     // Validate the status before any staging.
     if is_done_status(task.status_symbol, &settings) {
-        return Ok(already_done_item(
-            request,
-            raw,
-            note,
-            &relative,
-            &absolute,
-            block_id,
+        let _ = task_description;
+        let _ = note;
+        let global_filter =
+            note_tasks::read_settings(&request.bob_dir).global_filter;
+        let clean_text = task_complete_display_text(
             &previous_task_line,
+            &global_filter,
+            Some(block_id),
+        );
+        let summary = TaskCompleteSummaryJson {
+            raw: raw.to_string(),
+            note: note.to_string(),
+            note_path: rel_display.clone(),
+            block_id: block_id.to_string(),
+            action: "already_done",
+            completion_date: None,
+            text: clean_text,
+            subtasks: Vec::new(),
+            subtasks_left_open: Vec::new(),
+            ledger: None,
+            unblocked: Vec::new(),
+            still_blocked: Vec::new(),
+            unblocked_check: "checked",
+            project_folds: Vec::new(),
+        };
+        return Ok(CompleteExistingTaskOutcome {
+            summary,
+            relative: relative.clone(),
+            absolute: absolute.clone(),
+            rel_display: rel_display.clone(),
+            previous_task_line: previous_task_line.clone(),
             previous_status_symbol,
-            &previous_status_name,
-            &task_description,
-            today,
-        ));
+            previous_status_name: previous_status_name.clone(),
+            task_line: previous_task_line.clone(),
+            final_status_symbol: previous_status_symbol,
+            final_status_name: previous_status_name.clone(),
+            top_day_file: None,
+            pomodoro_refs: Vec::new(),
+            task_block_refs: Vec::new(),
+        });
     }
     if task.status_symbol == '-'
         || settings.status_types.get(&task.status_symbol)
@@ -336,13 +489,7 @@ pub(super) fn plan_task_complete_item(
         .nth(final_task.line_index)
         .unwrap_or_default()
         .to_string();
-    let created = date_string(today);
-    let relative_target = rel_display.clone();
-    let target = absolute.display().to_string();
-    let route_label_value = rel_display.clone();
-    let mut without_extension = relative.clone();
-    without_extension.set_extension("");
-    let _route_value = display_relative(&without_extension);
+    let _created = date_string(today);
     // Subtasks JSON in close order. Engine descriptions keep the
     // `#task` tag (looked up with the global filter cleared) and
     // recovery descriptions keep inline fields, so clean both for
@@ -530,81 +677,20 @@ pub(super) fn plan_task_complete_item(
             },
         );
     }
-    Ok(PlannedCaptureItem {
-        result: CaptureItemResult {
-            ok: true,
-            dry_run: request.dry_run,
-            routed: true,
-            route: None,
-            route_label: route_label_value,
-            relative_target: relative_target.clone(),
-            target: target.clone(),
-            text: String::new(),
-            task_line,
-            kind: "task_complete",
-            created,
-            scheduled: None,
-            priority: None,
-            priority_label: None,
-            placement: Placement::Completed,
-            sub_bullets: Vec::new(),
-            clip: None,
-            schedule_log: None,
-            block_id: Some(block_id.to_string()),
-            day_file: top_day_file,
-            block_link: None,
-            pomodoro_link_placement: None,
-            parent_line: None,
-            parent_text: None,
-            parent_section: None,
-            parent_status_symbol: None,
-            parent_status_name: None,
-            toggle_direction: None,
-            previous_task_line: Some(previous_task_line),
-            status_symbol: Some(final_task.status_symbol),
-            status_name: Some(final_task.status_name.clone()),
-            previous_status_symbol: Some(previous_status_symbol),
-            previous_status_name: Some(previous_status_name),
-            pomodoro_name: None,
-            creates_pomodoro: None,
-            pomodoro_already_linked: None,
-            removed_pomodoro_links: None,
-            removed_scheduled: None,
-            pomodoro_selector_unused: None,
-            toggle_behavior: None,
-            status_changed: Some(
-                previous_status_symbol != final_task.status_symbol,
-            ),
-            pomodoro_link_action: None,
-            pomodoro_link_source: None,
-            pomodoro_link_destination: None,
-            project_note: None,
-            pomodoro_start: None,
-            pomodoro_adjust: None,
-            pomodoro_shift: None,
-            pomodoro_close: None,
-            pomodoro_reset: None,
-            dependency_update: None,
-            consumed_links: Vec::new(),
-            toggle_task_description: None,
-            r#ref: None,
-            task_complete: Some(summary),
-            link_guard: None,
-            dropped_dependencies: Vec::new(),
-            blocks_line_updates: Vec::new(),
-            minted_dependent_block_id: None,
-            dependency_updates: Vec::new(),
-            minted_blocker_block_id: None,
-            relation_updates: Vec::new(),
-            relation_cancels: Vec::new(),
-            linked_from_line_updates: Vec::new(),
-            minted_relation_block_ids: Vec::new(),
-            mirror_skipped: Vec::new(),
-            relation_label_hides: Vec::new(),
-        },
-        clip_plan: None,
-        pomodoro_refs,
-        task_block_refs,
+    Ok(CompleteExistingTaskOutcome {
+        summary,
+        relative: relative.clone(),
+        absolute: absolute.clone(),
+        rel_display: rel_display.clone(),
+        previous_task_line: previous_task_line.clone(),
+        previous_status_symbol,
+        previous_status_name: previous_status_name.clone(),
+        task_line: task_line.clone(),
+        final_status_symbol: final_task.status_symbol,
+        final_status_name: final_task.status_name.clone(),
+        top_day_file: top_day_file.clone(),
+        pomodoro_refs: pomodoro_refs.clone(),
+        task_block_refs: task_block_refs.clone(),
     })
 }
 
@@ -649,126 +735,6 @@ fn removal_refs(
             Some(PomodoroBlockRef::removed(headline))
         })
         .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn already_done_item(
-    request: &CaptureRequest,
-    raw: &str,
-    note: &str,
-    relative: &Path,
-    absolute: &Path,
-    block_id: &str,
-    previous_task_line: &str,
-    previous_status_symbol: char,
-    previous_status_name: &str,
-    task_description: &str,
-    today: NaiveDate,
-) -> PlannedCaptureItem {
-    let _ = task_description;
-    let rel_display = display_relative(relative);
-    let mut without_extension = relative.to_path_buf();
-    without_extension.set_extension("");
-    let route_value = display_relative(&without_extension);
-    let _ = route_value;
-    // Clean display text with the configured global filter, matching the
-    // human already-done line and the completed path.
-    let global_filter =
-        note_tasks::read_settings(&request.bob_dir).global_filter;
-    let clean_text = task_complete_display_text(
-        previous_task_line,
-        &global_filter,
-        Some(block_id),
-    );
-    PlannedCaptureItem {
-        result: CaptureItemResult {
-            ok: true,
-            dry_run: request.dry_run,
-            routed: true,
-            route: None,
-            route_label: rel_display.clone(),
-            relative_target: rel_display,
-            target: absolute.display().to_string(),
-            text: String::new(),
-            task_line: previous_task_line.to_string(),
-            kind: "task_complete",
-            created: date_string(today),
-            scheduled: None,
-            priority: None,
-            priority_label: None,
-            placement: Placement::Completed,
-            sub_bullets: Vec::new(),
-            clip: None,
-            schedule_log: None,
-            block_id: Some(block_id.to_string()),
-            day_file: None,
-            block_link: None,
-            pomodoro_link_placement: None,
-            parent_line: None,
-            parent_text: None,
-            parent_section: None,
-            parent_status_symbol: None,
-            parent_status_name: None,
-            toggle_direction: None,
-            previous_task_line: Some(previous_task_line.to_string()),
-            status_symbol: Some(previous_status_symbol),
-            status_name: Some(previous_status_name.to_string()),
-            previous_status_symbol: Some(previous_status_symbol),
-            previous_status_name: Some(previous_status_name.to_string()),
-            pomodoro_name: None,
-            creates_pomodoro: None,
-            pomodoro_already_linked: None,
-            removed_pomodoro_links: None,
-            removed_scheduled: None,
-            pomodoro_selector_unused: None,
-            toggle_behavior: None,
-            status_changed: Some(false),
-            pomodoro_link_action: None,
-            pomodoro_link_source: None,
-            pomodoro_link_destination: None,
-            project_note: None,
-            pomodoro_start: None,
-            pomodoro_adjust: None,
-            pomodoro_shift: None,
-            pomodoro_close: None,
-            pomodoro_reset: None,
-            dependency_update: None,
-            consumed_links: Vec::new(),
-            toggle_task_description: None,
-            r#ref: None,
-            link_guard: None,
-            dropped_dependencies: Vec::new(),
-            blocks_line_updates: Vec::new(),
-            minted_dependent_block_id: None,
-            dependency_updates: Vec::new(),
-            minted_blocker_block_id: None,
-            relation_updates: Vec::new(),
-            relation_cancels: Vec::new(),
-            linked_from_line_updates: Vec::new(),
-            minted_relation_block_ids: Vec::new(),
-            mirror_skipped: Vec::new(),
-            relation_label_hides: Vec::new(),
-            task_complete: Some(TaskCompleteSummaryJson {
-                raw: raw.to_string(),
-                note: note.to_string(),
-                note_path: display_relative(relative),
-                block_id: block_id.to_string(),
-                action: "already_done",
-                completion_date: None,
-                text: clean_text,
-                subtasks: Vec::new(),
-                subtasks_left_open: Vec::new(),
-                ledger: None,
-                unblocked: Vec::new(),
-                still_blocked: Vec::new(),
-                unblocked_check: "checked",
-                project_folds: Vec::new(),
-            }),
-        },
-        clip_plan: None,
-        pomodoro_refs: Vec::new(),
-        task_block_refs: Vec::new(),
-    }
 }
 
 pub(super) fn reject_task_complete_conflicts(
@@ -1034,17 +1000,20 @@ pub(super) fn apply_successor_net_post_pass(
     dependency_ctx: &DependencyContext,
     bob_dir: &Path,
 ) {
-    let any_linked = items
-        .iter()
-        .any(|item| item_unblocked(item).iter().any(|row| row.link.is_some()));
+    // Traverse whole-item `task_complete`, nested `relation_completes`,
+    // and `pomodoro_close` rows together so nested completions share the
+    // final net filtering with `!` closes.
+    let any_linked = items.iter().any(|item| {
+        super::output::all_unblocked(&item.result).any(|row| row.link.is_some())
+    });
     let any_pull_in = items.iter().any(|item| {
-        item_unblocked(item)
-            .iter()
+        super::output::all_unblocked(&item.result)
             .any(|row| row.trigger == "project_empty")
     });
-    let any_offer = items
-        .iter()
-        .any(|item| item_unblocked(item).iter().any(|row| row.offer.is_some()));
+    let any_offer = items.iter().any(|item| {
+        super::output::all_unblocked(&item.result)
+            .any(|row| row.offer.is_some())
+    });
     if !any_linked && !any_pull_in && !any_offer {
         return;
     }
@@ -1068,19 +1037,8 @@ pub(super) fn apply_successor_net_post_pass(
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
     for item in items.iter_mut() {
-        if let Some(summary) = item.result.task_complete.as_mut() {
-            summary.unblocked.retain(|row| {
-                keep_unblocked_row(
-                    row,
-                    &live,
-                    planner,
-                    bob_dir,
-                    &tasks_settings,
-                )
-            });
-        }
-        if let Some(summary) = item.result.pomodoro_close.as_mut() {
-            summary.unblocked.retain(|row| {
+        for vec in super::output::unblocked_vecs_mut(&mut item.result) {
+            vec.retain(|row| {
                 keep_unblocked_row(
                     row,
                     &live,
@@ -1243,24 +1201,15 @@ fn project_has_open_work(
 }
 
 /// Block links of every linked row left after the net post-pass: the
-/// set Pomodoro-block diffs mark with `reason: "unblocked"`.
+/// set Pomodoro-block diffs mark with `reason: "unblocked"`. Includes
+/// nested `relation_completes` rows so relation closes share the
+/// surviving-link set with `!` closes.
 pub(super) fn surviving_successor_links(
     items: &[PlannedCaptureItem],
 ) -> BTreeSet<String> {
     let mut links = BTreeSet::new();
     for item in items {
-        let rows = item
-            .result
-            .task_complete
-            .iter()
-            .flat_map(|summary| summary.unblocked.iter())
-            .chain(
-                item.result
-                    .pomodoro_close
-                    .iter()
-                    .flat_map(|summary| summary.unblocked.iter()),
-            );
-        for row in rows {
+        for row in super::output::all_unblocked(&item.result) {
             if let Some(link) = row.link.as_ref() {
                 links.insert(link.block_link.clone());
             }
