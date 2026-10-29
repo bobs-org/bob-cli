@@ -511,6 +511,18 @@ fn source_cancel_preserves_authored_theme_field_bytes() {
 }
 
 #[test]
+fn source_cancel_preserves_authored_root_field_bytes() {
+    let source = "- [ ] #task Sell stocks (root::  sase) ^sell-stocks\n";
+    let edit = line::edit_source(source, 0, date("2026-10-22"), &[]);
+    assert_eq!(
+        edit.content,
+        "- [-] #task Sell stocks (root::  sase) [cancelled:: 2026-10-22] ^sell-stocks\n"
+    );
+    assert!(edit.content.contains("(root::  sase)"));
+    assert_eq!(edit.content.matches("(root::  sase)").count(), 1);
+}
+
+#[test]
 fn source_cancel_log_preserves_crlf_and_final_newline_state() {
     let source = "- [ ] #task T ^t\r\n  - ❌ **CANCEL LOG**\r\n    - *2026-10-01* — older";
     let edit = line::edit_source(

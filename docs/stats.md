@@ -280,7 +280,10 @@ optional ratio `num`/`den` in basis points, a quality, an optional non-ok
 reason, and dimension parts (`area`, `root_parent`, `project`, `theme`,
 `kind`, `note`, `tier`, `outcome`, `met`/`missed`). Pomodoro and task
 metrics add `area`, `root_parent`, and `project` homes from the shared
-resolver in [pomodoro-homes.md](pomodoro-homes.md). `root_parent` is the
+resolver in [pomodoro-homes.md](pomodoro-homes.md), including a set
+`[root:: X]` field (R11): task-metric `area` / `root_parent` / `project`
+parts and `in:` / `exclude_in:` follow X's chain, while the `note` part
+stays the file that holds the checkbox. `root_parent` is the
 additive working-time grouping by root parent; every metric that carries
 `area` and `project` parts also carries it, in grouped and prior points too,
 with no `other` collapse.
@@ -339,9 +342,12 @@ task counts once per limitation, never once per metric or day),
 counts with the latest timestamp and day), and `health.homes` (in-window
 `unlinked_minutes` / `unlinked_sessions` / `unfiled_links` /
 `ambiguous_links` / `unresolved_links`, plus global
-`area_color_invalid` and hue-collision lists). Matching
-`warning <message>  <code>` lines use `area_color_invalid`
-and `area_hue_collision`. `invalid_dates` counts a task
+`area_color_invalid` and hue-collision lists, and additive
+`root_field_invalid` / `root_field_not_root` lists keyed by
+`(path, line)`). Matching
+`warning <message>  <code>` lines use `area_color_invalid`,
+`area_hue_collision`, `root_field_invalid`, and
+`root_field_not_root`. `invalid_dates` counts a task
 when created, done, or cancelled is malformed or future, or when scheduled
 is malformed. A future `scheduled` date is ordinary planning data and does
 not count. Daily-note field extraction skips task lines and ordered-list

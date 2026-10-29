@@ -54,6 +54,14 @@ pub(crate) fn session_links_from_scan(
     ))
 }
 
+fn is_today_gtd_link(link: &ResolvedLink, daily_path: &Path) -> bool {
+    link.block_id.eq_ignore_ascii_case("gtd")
+        && matches!(&link.resolution, LinkResolution::Found(path)
+            if path == daily_path
+                && crate::native::task_status_hooks::canonical_daily_date(path)
+                    .is_some())
+}
+
 fn map_session_links(links: Vec<StartLink>) -> Vec<SessionLink> {
     links
         .into_iter()
@@ -115,16 +123,21 @@ pub(crate) fn attribute_session<S: HomeSource>(
             .iter()
             .all(|component| exempt_names.contains(component));
     // R4: the ^gtd link, not the name, marks the ritual.
-    let links_today_gtd = resolved.iter().any(|link| {
-        link.block_id.eq_ignore_ascii_case("gtd")
-            && matches!(&link.resolution, LinkResolution::Found(path)
-                if path == daily_path
-                    && crate::native::task_status_hooks::canonical_daily_date(path)
-                        .is_some())
+    let links_today_gtd = resolved
+        .iter()
+        .any(|link| is_today_gtd_link(link, daily_path));
+    let unrooted_today_gtd = resolved.iter().any(|link| {
+        is_today_gtd_link(link, daily_path)
+            && match &link.resolution {
+                LinkResolution::Found(path) => {
+                    !resolver.block_has_set_root(path, &link.block_id)
+                }
+                _ => true,
+            }
     });
     let named_review =
         all_exempt_name && (resolved.is_empty() || links_today_gtd);
-    let bridge = name.is_none() && !exempt.is_empty() && links_today_gtd;
+    let bridge = name.is_none() && !exempt.is_empty() && unrooted_today_gtd;
 
     if named_review || bridge {
         let names = if named_review {

@@ -24,7 +24,10 @@ use super::{
     report::StatsWarning,
     value::{ChecklistState, DailyValue, DataQuality},
 };
-use crate::native::pomodoro_homes::{split_minutes, Home, SessionKind};
+use crate::native::{
+    pomodoro_homes::{split_minutes, Home, SessionKind},
+    task_root::{parse_task_root, TaskRootState},
+};
 
 /// Evaluated daily facts for a single non-journal, non-formula metric.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +72,7 @@ pub(crate) fn evaluate_with_homes(
             (since, values, Vec::new())
         }
         MetricSpec::Tasks { .. } => {
-            let since = task_since(metric, index);
+            let since = task_since(metric, index, homes);
             let effective_since = effective_since(metric, since, global_since);
             let values = if dates.is_empty() {
                 Vec::new()
@@ -620,14 +623,18 @@ fn resplit_theme_minutes(
         .collect()
 }
 
-fn task_since(metric: &MetricDef, index: &StatsIndex) -> Option<NaiveDate> {
+fn task_since(
+    metric: &MetricDef,
+    index: &StatsIndex,
+    homes: &HomesEngine<'_>,
+) -> Option<NaiveDate> {
     let MetricSpec::Tasks { event, .. } = &metric.spec else {
         return None;
     };
     index
         .tasks
         .iter()
-        .filter(|task| task_matches(metric, index, task))
+        .filter(|task| task_matches(metric, index, task, homes))
         .filter_map(|task| task_event_date(task, *event))
         .filter(|date| date.diagnostic == DateDiagnostic::Ok)
         .filter_map(|date| date.date)
@@ -649,7 +656,7 @@ fn evaluate_tasks(
     let mut parts =
         BTreeMap::<NaiveDate, BTreeMap<String, BTreeMap<String, i64>>>::new();
     for task in &index.tasks {
-        if !task_matches(metric, index, task) {
+        if !task_matches(metric, index, task, homes) {
             continue;
         }
         let Some(date) = task_event_date(task, *event) else {
@@ -670,7 +677,11 @@ fn evaluate_tasks(
         };
         add_dimension_part(parts_for_day, "kind", kind, 1);
         add_dimension_part(parts_for_day, "note", &task.source_path, 1);
-        let home = homes.home_for_note(&task.source_path);
+        let home = homes.home_for_task(
+            &task.source_path,
+            task.line_number,
+            &task.line,
+        );
         add_dimension_part(parts_for_day, "area", &home.area, 1);
         add_dimension_part(parts_for_day, "root_parent", &home.root_parent, 1);
         add_dimension_part(parts_for_day, "project", &home.key, 1);
@@ -739,6 +750,7 @@ fn task_matches(
     metric: &MetricDef,
     index: &StatsIndex,
     task: &IndexedTask,
+    homes: &HomesEngine<'_>,
 ) -> bool {
     let MetricSpec::Tasks {
         tags_any,
@@ -782,6 +794,11 @@ fn task_matches(
     }
     if in_notes.is_empty() {
         return true;
+    }
+    let home =
+        homes.home_for_task(&task.source_path, task.line_number, &task.line);
+    if matches!(parse_task_root(&task.line), TaskRootState::Set { .. }) {
+        return home_chain_matches(&home, in_notes, index);
     }
     let mut paths = vec![task.source_path.as_str()];
     let ancestors = index.parent_ancestors(&task.source_path);
@@ -1423,6 +1440,8 @@ mod tests {
             block_id: block_id.map(str::to_string),
             description: description.to_string(),
             task_kind: kind,
+            line_number: 1,
+            line: String::new(),
         }
     }
 
@@ -1983,6 +2002,68 @@ mod tests {
             evaluate_metric(&bare, &index, &[date(10)], date(11), None)
                 .unwrap();
         assert_eq!(result.values[0].value, Some(2));
+    }
+
+    #[test]
+    fn task_in_filter_follows_root_field_residence_chain() {
+        use std::path::PathBuf;
+        let mut index = StatsIndex::default();
+        index.note_index = crate::native::vault_links::NoteIndex::from_paths([
+            PathBuf::from("dev.md"),
+            PathBuf::from("sase.md"),
+            PathBuf::from("inbox.md"),
+        ]);
+        index.buffers = vec![
+            (
+                "dev.md".into(),
+                "---\ntype: [[area]]\ncolor: blue\n---\n".into(),
+            ),
+            (
+                "sase.md".into(),
+                "---\ntype: [[project]]\nparent: [[dev]]\n---\n".into(),
+            ),
+            (
+                "inbox.md".into(),
+                "---\ntype: [[area]]\ncolor: aqua\n---\n\n- [x] #task Rooted [root:: sase] [completion:: 2026-10-10] ^t\n".into(),
+            ),
+        ];
+        let mut rooted = task(
+            "inbox.md",
+            "DONE",
+            Some("2026-10-10"),
+            Some("2026-10-10"),
+            None,
+            None,
+            "Rooted",
+            &[],
+            Some("t"),
+            TaskKindPart::Task,
+        );
+        rooted.line_number = 6;
+        rooted.line =
+            "- [x] #task Rooted [root:: sase] [completion:: 2026-10-10] ^t"
+                .to_string();
+        index.tasks = vec![rooted];
+
+        let in_sase = custom_metric(
+            "label: In sase\nkind: tasks\nevent: done\nin: [sase]\nunit: count",
+            "in_sase",
+        );
+        let result =
+            evaluate_metric(&in_sase, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(1));
+        assert_eq!(result.values[0].parts["root_parent"]["sase.md"], 1);
+        assert_eq!(result.values[0].parts["note"]["inbox.md"], 1);
+
+        let in_inbox = custom_metric(
+            "label: In inbox\nkind: tasks\nevent: done\nin: [inbox]\nunit: count",
+            "in_inbox",
+        );
+        let result =
+            evaluate_metric(&in_inbox, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, None);
     }
 
     #[test]

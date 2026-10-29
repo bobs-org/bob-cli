@@ -12,7 +12,8 @@ use super::{
     index::{PomodoroSession, StatsIndex},
     report::{
         HomeCatalogEntry, HomeLintReport, HomesHealthReport,
-        HueCollisionReport, SessionFact, StatsWarning,
+        HueCollisionReport, RootFieldInvalidReport, RootFieldNotRootReport,
+        SessionFact, StatsWarning,
     },
     session_facts::session_fact,
 };
@@ -64,6 +65,24 @@ impl<'a> HomesEngine<'a> {
         } else {
             self.resolver.borrow_mut().resolve_note(Path::new(path))
         };
+        self.remember(&home);
+        home
+    }
+
+    pub(crate) fn home_for_task(
+        &self,
+        path: &str,
+        line_number: usize,
+        line: &str,
+    ) -> Home {
+        if path.is_empty() {
+            return self.home_for_note(path);
+        }
+        let home = self.resolver.borrow_mut().home_for_task(
+            Path::new(path),
+            line_number,
+            line,
+        );
         self.remember(&home);
         home
     }
@@ -144,6 +163,26 @@ impl<'a> HomesEngine<'a> {
                 .map(|lint| HomeLintReport {
                     path: lint.path.clone(),
                     raw: lint.raw.clone(),
+                })
+                .collect();
+            health.root_field_invalid = resolver_health
+                .root_field_invalid
+                .iter()
+                .map(|lint| RootFieldInvalidReport {
+                    path: lint.path.clone(),
+                    line: lint.line,
+                    raw: lint.raw.clone(),
+                    reason: lint.reason.clone(),
+                })
+                .collect();
+            health.root_field_not_root = resolver_health
+                .root_field_not_root
+                .iter()
+                .map(|lint| RootFieldNotRootReport {
+                    path: lint.path.clone(),
+                    line: lint.line,
+                    raw: lint.raw.clone(),
+                    root: lint.root.clone(),
                 })
                 .collect();
         }
@@ -695,6 +734,40 @@ fn homes_warnings(health: &HomesHealthReport) -> Vec<StatsWarning> {
             message: format!(
                 "{names} share hue {}; set color: on one of them",
                 collision.hue.name()
+            ),
+        });
+    }
+    for lint in &health.root_field_invalid {
+        let hint = match lint.reason.as_str() {
+            "invalid" => "write the bare note name",
+            "duplicate" => "keep a single root field",
+            "missing" => "name an existing note",
+            "ambiguous" => "use a unique path",
+            "no_home" => "file that note in an area or project",
+            _ => "repair the field",
+        };
+        warnings.push(StatsWarning {
+            code: "root_field_invalid".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{}:{}: root field {:?} ignored ({}); {hint}",
+                lint.path, lint.line, lint.raw, lint.reason
+            ),
+        });
+    }
+    for lint in &health.root_field_not_root {
+        let root_stem = Path::new(&lint.root)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(lint.root.as_str());
+        warnings.push(StatsWarning {
+            code: "root_field_not_root".to_string(),
+            metric: None,
+            date: None,
+            message: format!(
+                "{}:{}: {} groups under {root_stem}; write [root:: {root_stem}] or set root: true on {}",
+                lint.path, lint.line, lint.raw, lint.raw
             ),
         });
     }

@@ -5,8 +5,9 @@ use std::{
 };
 
 use super::{facts::NoteFacts, palette::Hue, NoteKind};
-use crate::native::vault_links::{
-    LinkResolution, NoteIndex, VaultLinkResolver,
+use crate::native::{
+    task_root::{parse_task_root, RootRepairKind, TaskRootState},
+    vault_links::{LinkResolution, NoteIndex, VaultLinkResolver},
 };
 
 const MAX_PROJECT_DEPTH: usize = 16;
@@ -121,12 +122,30 @@ pub(crate) struct NoteLint {
     pub(crate) raw: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootFieldInvalidLint {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) raw: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RootFieldNotRootLint {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) raw: String,
+    pub(crate) root: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ResolverHealth {
     pub(crate) unfiled_links: u32,
     pub(crate) ambiguous_links: u32,
     pub(crate) unresolved_links: u32,
     pub(crate) area_color_invalid: Vec<NoteLint>,
+    pub(crate) root_field_invalid: Vec<RootFieldInvalidLint>,
+    pub(crate) root_field_not_root: Vec<RootFieldNotRootLint>,
 }
 
 pub(crate) struct HomeResolver<S> {
@@ -134,6 +153,8 @@ pub(crate) struct HomeResolver<S> {
     homes: HashMap<PathBuf, Home>,
     facts: HashMap<PathBuf, Option<NoteFacts>>,
     color_linted: BTreeSet<PathBuf>,
+    root_invalid_linted: BTreeSet<(String, usize)>,
+    root_not_root_linted: BTreeSet<(String, usize)>,
     health: ResolverHealth,
 }
 
@@ -144,6 +165,8 @@ impl<S: HomeSource> HomeResolver<S> {
             homes: HashMap::new(),
             facts: HashMap::new(),
             color_linted: BTreeSet::new(),
+            root_invalid_linted: BTreeSet::new(),
+            root_not_root_linted: BTreeSet::new(),
             health: ResolverHealth::default(),
         }
     }
@@ -159,6 +182,8 @@ impl<S: HomeSource> HomeResolver<S> {
         self.homes.clear();
         self.facts.clear();
         self.color_linted.clear();
+        self.root_invalid_linted.clear();
+        self.root_not_root_linted.clear();
         self.health = ResolverHealth::default();
     }
 
@@ -187,6 +212,12 @@ impl<S: HomeSource> HomeResolver<S> {
     ) -> Home {
         match resolution {
             LinkResolution::Found(path) => {
+                if let Some(home) = self.apply_block_root(&path, block_id) {
+                    if home.key == "@unfiled" {
+                        self.health.unfiled_links += 1;
+                    }
+                    return home;
+                }
                 if block_id.eq_ignore_ascii_case("gtd")
                     && crate::native::task_status_hooks::canonical_daily_date(
                         &path,
@@ -211,6 +242,105 @@ impl<S: HomeSource> HomeResolver<S> {
                 self.health.unresolved_links += 1;
                 self.health.unfiled_links += 1;
                 unfiled_home()
+            }
+        }
+    }
+
+    pub(crate) fn home_for_task(
+        &mut self,
+        path: &Path,
+        line_number: usize,
+        line: &str,
+    ) -> Home {
+        let state = parse_task_root(line);
+        if let Some(home) = self.apply_root_state(path, line_number, &state) {
+            return home;
+        }
+        self.resolve_note(path)
+    }
+
+    pub(crate) fn block_has_set_root(
+        &mut self,
+        path: &Path,
+        block_id: &str,
+    ) -> bool {
+        self.facts_for(path)
+            .as_ref()
+            .and_then(|facts| facts.task_roots.get(block_id))
+            .is_some_and(|fact| matches!(fact.state, TaskRootState::Set { .. }))
+    }
+
+    fn apply_block_root(
+        &mut self,
+        path: &Path,
+        block_id: &str,
+    ) -> Option<Home> {
+        let fact = self
+            .facts_for(path)
+            .and_then(|facts| facts.task_roots.get(block_id).cloned())?;
+        self.apply_root_state(path, fact.line_number, &fact.state)
+    }
+
+    fn apply_root_state(
+        &mut self,
+        path: &Path,
+        line_number: usize,
+        state: &TaskRootState,
+    ) -> Option<Home> {
+        match state {
+            TaskRootState::None => None,
+            TaskRootState::Repair { kind, raw } => {
+                let reason = match kind {
+                    RootRepairKind::Duplicate => "duplicate",
+                    RootRepairKind::Invalid => "invalid",
+                };
+                self.lint_root_invalid(path, line_number, raw, reason);
+                None
+            }
+            TaskRootState::Set { raw } => {
+                match self.source.resolve(path, raw) {
+                    LinkResolution::Found(target) if target == path => None,
+                    LinkResolution::Found(target) => {
+                        let home = self.resolve_note(&target);
+                        if home.key == "@unfiled" {
+                            self.lint_root_invalid(
+                                path,
+                                line_number,
+                                raw,
+                                "no_home",
+                            );
+                            None
+                        } else {
+                            if home.root_parent != path_string(&target) {
+                                self.lint_root_not_root(
+                                    path,
+                                    line_number,
+                                    raw,
+                                    &home.root_parent,
+                                );
+                            }
+                            Some(home)
+                        }
+                    }
+                    LinkResolution::Missing => {
+                        self.lint_root_invalid(
+                            path,
+                            line_number,
+                            raw,
+                            "missing",
+                        );
+                        None
+                    }
+                    LinkResolution::Ambiguous => {
+                        self.lint_root_invalid(
+                            path,
+                            line_number,
+                            raw,
+                            "ambiguous",
+                        );
+                        None
+                    }
+                }
             }
         }
     }
@@ -389,6 +519,42 @@ impl<S: HomeSource> HomeResolver<S> {
             self.health.area_color_invalid.push(NoteLint {
                 path: path_string(path),
                 raw: raw.to_string(),
+            });
+        }
+    }
+
+    fn lint_root_invalid(
+        &mut self,
+        path: &Path,
+        line: usize,
+        raw: &str,
+        reason: &str,
+    ) {
+        let path_key = path_string(path);
+        if self.root_invalid_linted.insert((path_key.clone(), line)) {
+            self.health.root_field_invalid.push(RootFieldInvalidLint {
+                path: path_key,
+                line,
+                raw: raw.to_string(),
+                reason: reason.to_string(),
+            });
+        }
+    }
+
+    fn lint_root_not_root(
+        &mut self,
+        path: &Path,
+        line: usize,
+        raw: &str,
+        root: &str,
+    ) {
+        let path_key = path_string(path);
+        if self.root_not_root_linted.insert((path_key.clone(), line)) {
+            self.health.root_field_not_root.push(RootFieldNotRootLint {
+                path: path_key,
+                line,
+                raw: raw.to_string(),
+                root: root.to_string(),
             });
         }
     }

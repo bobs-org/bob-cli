@@ -976,3 +976,41 @@ fn closed_theme_history_survives_stamp_refusal() {
     assert!(!stamped.changed);
     assert_eq!(stamped.refused, Some(Refusal::Closed));
 }
+
+/// Preservation contract (R11): stamping keeps a distinctive authored
+/// root field byte-identical and ahead of the fresh/Tasks suffix.
+#[test]
+fn root_field_survives_stamp_before_fresh_suffix() {
+    let stamped = stamp(
+        "- [ ] #task Write the report (root::  sase) [created::2026-09-29] ^write",
+    );
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Write the report (root::  sase) [fresh:: 2026-10-08] [created::2026-09-29] ^write"
+    );
+    assert!(stamped.changed);
+    assert_eq!(stamped.refused, None);
+}
+
+#[test]
+fn root_field_survives_keep_preserve_and_unblock() {
+    let preserved = stamp_fresh_preserve_keeps(
+        "- [ ] #task Work (root::  sase) [keeps:: 2] [created:: 2026-09-29] ^t",
+        day(),
+    );
+    assert_eq!(
+        preserved.line,
+        "- [ ] #task Work (root::  sase) [fresh:: 2026-10-08] [keeps:: 2] [created:: 2026-09-29] ^t"
+    );
+    let marked = mark_unblocked(
+        "- [ ] #task Recovered (root::  sase) [fresh:: 2026-10-01] [scheduled:: 2026-10-09] ^t",
+        day(),
+        ' ',
+        &unblock_scope(),
+    )
+    .expect("unblock writes");
+    assert_eq!(
+        marked,
+        "- [ ] #task Recovered (root::  sase) [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [scheduled:: 2026-10-09] ^t"
+    );
+}

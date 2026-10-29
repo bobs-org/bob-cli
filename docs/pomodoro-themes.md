@@ -457,7 +457,8 @@ composites, mappings, and bad names are invalid: skipped, with one
 value on any other note kind is ignored, while that note's scalar
 `parent:` links still carry the walk. Daily notes have no default walk.
 The walk reuses the R1 residence chain with its 16-note and cycle
-limits.
+limits. A set `[root:: X]` field starts that walk at X, including when
+the task lives in a daily note.
 
 ### Task fields
 
@@ -597,11 +598,13 @@ placement, and ref-today remain never-writers.
 ### Preservation
 
 Task move, archive, Highlights reading-status checkbox edits, ref
-rename's alias overwrite, task-status-hooks reconcile, and freshness
-stamping keep a distinctive authored field (either form, any spacing)
-byte-identical: only each operation's intended bytes change. Freshness
-stamps land after the theme, still before the fresh/Tasks suffix.
-Closed and history fields are preserved, not stripped.
+rename's alias overwrite, task-status-hooks reconcile, complete and
+cancel, and freshness stamping keep a distinctive authored field
+(either form, any spacing) byte-identical: only each operation's
+intended bytes change. Freshness stamps land after the theme and after
+a `[root::]` field, still before the fresh/Tasks suffix. Closed and
+history fields are preserved, not stripped. The same writers keep a
+distinctive `[root::]` / `(root::)` field byte-identical.
 
 ### Rename coverage
 

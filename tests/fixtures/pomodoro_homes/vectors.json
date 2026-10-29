@@ -46,7 +46,11 @@
     "depth16.md": "---\ntype: [[area]]\n---\n",
     "quoted_parent.md": "---\ntype: [[article]]\nparent: \"[[dev]]\"\n---\n",
     "single_list_parent.md": "---\ntype: [[article]]\nparent: [\"[[dev]]\"]\n---\n",
-    "bare_parent.md": "---\ntype: [[article]]\nparent: dev\n---\n"
+    "bare_parent.md": "---\ntype: [[article]]\nparent: dev\n---\n",
+    "gtd_daily.md": "---\ntype: [[area]]\nparent: [[gtd]]\n---\n",
+    "sase_goals.md": "---\ntype: [[project]]\nparent: [[sase]]\n---\n",
+    "inbox.md": "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n\n- [ ] #task Inbox sase [root:: sase] ^inbox-sase\n- [ ] #task Inbox paren (root:: sase) ^inbox-paren\n- [ ] #task Inbox goals [root:: sase_goals] ^inbox-goals\n- [ ] #task Inbox missing [root:: nope] ^inbox-missing\n- [ ] #task Inbox dup [root:: sase] [root:: gtd] ^inbox-dup\n- [ ] #task Inbox invalid [root:: [[sase]]] ^inbox-invalid\n- [ ] #task Inbox nohome [root:: unfiled] ^inbox-nohome\n- [x] #task Inbox closed [root:: sase] [completion:: 2026-10-01] ^inbox-closed\n",
+    "2026/20261028.md": "# 2026-10-28\n\n- [ ] #task [[gtd_daily]] [root:: gtd_daily] [created:: 2026-10-28] ^gtd\n\n## Pomodoros\n"
   },
   "cases": [
     {
@@ -1162,6 +1166,215 @@
       ],
       "expected_lead_homes": [
         "@daily"
+      ]
+    },
+    {
+      "name": "root-fields",
+      "daily_path": "2026/20261028.md",
+      "exempt": [
+        "PLAN"
+      ],
+      "expected_health": {
+        "unfiled_links": 0,
+        "ambiguous_links": 0,
+        "unresolved_links": 0,
+        "area_color_invalid": 0,
+        "root_field_invalid": 4,
+        "root_field_not_root": 1
+      },
+      "expected_lead_homes": [
+        "gtd_daily.md",
+        "sase.md",
+        "sase.md",
+        "sase_goals.md",
+        "inbox.md",
+        "inbox.md",
+        "inbox.md",
+        "inbox.md",
+        "sase.md"
+      ],
+      "pomodoros": "- [x] (0800-0805 5m)\n  - [[#^gtd]]\n- [x] (0805-0810 5m)\n  - [[inbox#^inbox-sase]]\n- [x] (0810-0815 5m)\n  - [[inbox#^inbox-paren]]\n- [x] (0815-0820 5m)\n  - [[inbox#^inbox-goals]]\n- [x] (0820-0825 5m)\n  - [[inbox#^inbox-missing]]\n- [x] (0825-0830 5m)\n  - [[inbox#^inbox-dup]]\n- [x] (0830-0835 5m)\n  - [[inbox#^inbox-invalid]]\n- [x] (0835-0840 5m)\n  - [[inbox#^inbox-nohome]]\n- [x] (0840-0845 5m)\n  - [[inbox#^inbox-closed]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "gtd_daily",
+          "chip": "gtd_daily",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "gtd_daily.md",
+              "label": "gtd_daily",
+              "kind": "area",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase_goals",
+          "chip": "sase_goals",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase_goals.md",
+              "label": "sase_goals",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "inbox",
+          "chip": "inbox",
+          "hue": "aqua",
+          "parts": [
+            {
+              "key": "inbox.md",
+              "label": "inbox",
+              "kind": "area",
+              "area": "inbox.md",
+              "area_label": "inbox",
+              "hue": "aqua",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "inbox",
+          "chip": "inbox",
+          "hue": "aqua",
+          "parts": [
+            {
+              "key": "inbox.md",
+              "label": "inbox",
+              "kind": "area",
+              "area": "inbox.md",
+              "area_label": "inbox",
+              "hue": "aqua",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "inbox",
+          "chip": "inbox",
+          "hue": "aqua",
+          "parts": [
+            {
+              "key": "inbox.md",
+              "label": "inbox",
+              "kind": "area",
+              "area": "inbox.md",
+              "area_label": "inbox",
+              "hue": "aqua",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "inbox",
+          "chip": "inbox",
+          "hue": "aqua",
+          "parts": [
+            {
+              "key": "inbox.md",
+              "label": "inbox",
+              "kind": "area",
+              "area": "inbox.md",
+              "area_label": "inbox",
+              "hue": "aqua",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "sase",
+          "chip": "sase",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase.md",
+              "label": "sase",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        }
       ]
     }
   ]

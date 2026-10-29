@@ -25,7 +25,8 @@ notes have no home of their own and are walked through.
 
 The first `type: [[area]]` or `type: [[project]]` on the chain, starting at the
 linked note, is the home. Closed and canceled projects remain valid homes. A
-note without either type is `@unfiled`.
+note without either type is `@unfiled`. A set `[root:: X]` field starts this
+walk at X instead of the linked note ([R11](#r11-task-root-fields)).
 
 A link to a canonical daily note's `^gtd` block (case-insensitive) is the
 `@review:<first exempt name>` home. An empty target resolves to the current
@@ -86,6 +87,9 @@ review tiers, capture routing, plan budget, or `bob projects` output.
 | orphan project `o.md` (no area above) | `o → …` | `o`, area `@unfiled` |
 | PLAN review session / `[[#^gtd]]` bridge | — | `@daily` |
 | task defined in any canonical daily note | — | `@daily` |
+| `^gtd` with `[root:: gtd_daily]` | `gtd_daily → gtd` | `gtd_daily` |
+| inbox task with `[root:: sase]` | `sase → dev` | `sase` |
+| `[root:: sase_goals]` (no `root: true`) | `sase_goals → sase → dev` | `sase`, plus a `root_field_not_root` lint |
 | closed session with no Task Link | — | `@unlinked` |
 | missing or ambiguous link | — | `@unfiled` |
 
@@ -172,7 +176,8 @@ two or more distinct homes in that dimension. A session can be apportioned in
 `@unfiled` is a linked task whose note has no area or project, or whose link is
 ambiguous or unresolved. Both buckets remain visible outside any `other` group.
 They are never guessed from the session name. Their repair hints are “link the
-task to attribute it” and “file the task in an area or project”. An open entry
+task to attribute it” and “file the task in an area or project, or give it a
+root field”. An open entry
 with no links has no parts and an empty label. Any other task defined in a
 canonical daily note resolves to `@daily` instead of `@unfiled`; it adds no
 unfiled-link health or warning.
@@ -271,6 +276,93 @@ Moving a task or changing a project parent can regroup past minutes by root,
 but cannot change the total time. Stats surfaces say “Grouped by today's
 note tree · from Task Links”. V1 does not store snapshots.
 
+## R11 — Task root fields
+
+A task may name its root parent with `[root:: NOTE]` or `(root:: NOTE)`.
+Recognition is the shared `task_fields::inline_fields(line, "root")` scanner:
+the key is case-sensitive and any spacing around `::` is allowed. The
+canonical written form is `[root:: gtd_daily]`: one space after `::` and a
+bare note name.
+
+**Value.** A note name or a vault-relative path, with or without `.md`. It
+resolves relative to the task's own note using Bob's link rules
+(`HomeSource::resolve`: an exact vault path, then a unique case-insensitive
+basename).
+
+**States**, mirroring the PT13 theme field:
+
+- _none_: no field.
+- _set_: exactly one field whose value resolves to one note X.
+- _repair_: the field is ignored and the task attributes from its own note
+  exactly as if it had no field. Bob reports the repair. Reasons:
+  - `duplicate`: two or more root fields.
+  - `invalid`: blank, or contains any of `[ ] | # ^`. A wikilink value is
+    invalid, and the hint says to write the bare name.
+  - `missing`: no note matches.
+  - `ambiguous`: two or more basename matches.
+  - `no_home`: X's walk reaches no area or project.
+- Closed tasks keep their field, and it keeps applying, so history stays
+  attributed.
+- Root fields never chain. Only the linked task's own field counts; fields
+  on tasks inside X are irrelevant. A field naming the task's own note is a
+  silent no-op.
+
+**Meaning: as-if residence.** With a set field naming X, Bob resolves the
+task's homes exactly as if the checkbox lived in X:
+
+- The R1 chain starts at X: X, then X's scalar `parent:` walk, with the same
+  16-note and cycle limits and the same archive/ref walk-through.
+- R2 picks the root from that chain.
+- The task's own note contributes nothing.
+
+So an area at any depth, a `root: true` project, or a top-level project names
+itself as the root parent. When the chain from X yields a root R ≠ X (for
+example X is a sub-project without `root: true`, or a ref note), the time
+still follows X's chain and groups under R. Bob reports `root_field_not_root`
+naming R, with the fix: "sase_goals groups under sase; write [root:: sase] or
+set root: true on sase_goals". This keeps the set of root parents a function
+of note frontmatter: `root: true` stays the one way to create a root, and a
+per-task field can never invent a stray root.
+
+A set root field wins over the `^gtd` → review-home and canonical-daily →
+`@daily` mappings. An unnamed session whose only same-day `^gtd` link has a
+set root field is a work session; named all-exempt sessions stay review
+sessions until those buckets retire.
+
+**Scope: reporting only, like `root: true`.** The field applies to:
+
+- Pomodoro homes on every homes surface: `bob plan`, capture outputs,
+  `capture-pomodoros --tasks`, the Obsidian ledger chips, and `bob stats`
+  sessions, parts, and catalog.
+- Stats task metrics (done/created/dropped project, area, subarea, and
+  `root_parent` parts).
+- Stats `in:` / `exclude_in:` matching (against X's chain, not the task's
+  own note).
+- The PT13 note-default theme walk, which starts at X.
+
+The Stats `note` part stays the file that holds the checkbox. The field never
+changes residence, blocking (`#prj_is_blocked`), Ready caps, `task_refresh`
+freshness intervals, review tiers and the `]s` walk, capture routing, task
+move, archive, `## Tasks` grouping, `bob projects`, or the plan budget.
+
+**Placement and preservation.** The canonical position is the left edge of
+the trailing metadata run, the same position `set_task_theme` uses. A field
+authored anywhere on the line is still recognized. Root is a
+description-region field: it is never part of the Obsidian Tasks suffix,
+freshness stamps land after it, and it is not a run-extending freshness key.
+Task move and archive, freshness stamping, keeps, and unblock, theme
+set/clear, reconcile, complete, and cancel, and ref rename's link rewrite
+keep the authored bytes identical.
+
+**Lints.** `bob stats` reports two additive health lists, once per
+`(path, line)`, for root fields it reads while attributing in-window sessions
+and task rows. The human output has matching `warning <message>  <code>`
+lines.
+
+- `health.homes.root_field_invalid: [{path, line, raw, reason}]`, reason from
+  the repair list above.
+- `health.homes.root_field_not_root: [{path, line, raw, root}]`.
+
 ## Shared conformance vectors
 
 [`tests/fixtures/pomodoro_homes/vectors.json`](https://github.com/bobs-org/bob-cli/blob/master/tests/fixtures/pomodoro_homes/vectors.json)
@@ -293,6 +385,7 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
 | `review-decisions` | all-exempt work without `^gtd`, same-day bridge, and mixed named work |
 | `exempt-name-gtd-link` | all-exempt review needs that day's `^gtd` or no links; other-day `^gtd` stays a work share; open all-exempt forecasts work |
+| `root-fields` | set `[root::]` re-homes `^gtd` and inbox tasks, paren form, `sase_goals` rolls up with a lint, and missing/duplicate/invalid/no_home fall back; a closed task keeps attributing |
 
 ## Limits and rejected alternatives
 

@@ -13,8 +13,10 @@ use crate::native::{
     pomodoro_homes::{HomeResolver, HomeSource, Hue, NoteKind, NoteTheme},
     ref_tasks::{has_ref_token, strip_blockquote_prefix, task_mark},
     task_fields::canonical_theme_name,
+    task_root::{parse_task_root, TaskRootState},
     task_status_hooks::canonical_daily_date,
     task_theme::{parse_task_theme, RepairKind, TaskThemeState},
+    vault_links::LinkResolution,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -132,7 +134,7 @@ pub(crate) fn suggest_for_new_task<S: HomeSource>(
     _cfg: &PlanConfig,
     residence_path: &Path,
 ) -> SuggestResult {
-    note_default(source, catalog, residence_path)
+    note_default(source, catalog, residence_path, false)
 }
 
 fn resolve_without_task_field<S: HomeSource>(
@@ -178,15 +180,36 @@ fn resolve_without_task_field<S: HomeSource>(
             warnings: Vec::new(),
         };
     }
-    note_default(source, catalog, residence_path)
+    if let Some(root_path) = set_root_walk_start(source, residence_path, line) {
+        return note_default(source, catalog, &root_path, true);
+    }
+    note_default(source, catalog, residence_path, false)
+}
+
+fn set_root_walk_start<S: HomeSource>(
+    source: &mut HomeResolver<S>,
+    residence_path: &Path,
+    line: &str,
+) -> Option<std::path::PathBuf> {
+    let TaskRootState::Set { raw } = parse_task_root(line) else {
+        return None;
+    };
+    match source.resolve_target(residence_path, &raw) {
+        LinkResolution::Found(path) => {
+            let home = source.resolve_note(&path);
+            (home.key != "@unfiled").then_some(path)
+        }
+        LinkResolution::Ambiguous | LinkResolution::Missing => None,
+    }
 }
 
 fn note_default<S: HomeSource>(
     source: &mut HomeResolver<S>,
     catalog: &Catalog,
     residence_path: &Path,
+    from_root_field: bool,
 ) -> SuggestResult {
-    if canonical_daily_date(residence_path).is_some() {
+    if !from_root_field && canonical_daily_date(residence_path).is_some() {
         return SuggestResult {
             suggestion: None,
             warnings: Vec::new(),

@@ -495,6 +495,8 @@ fn gap_uses_the_registry_review_closed_evaluation() {
             block_id: None,
             description: "Morning review".to_string(),
             task_kind: TaskKindPart::Task,
+            line_number: 1,
+            line: String::new(),
         }],
         ..StatsIndex::default()
     };

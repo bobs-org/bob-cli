@@ -1224,6 +1224,24 @@
         "expected": null
       },
       {
+        "id": "root-field-note-default",
+        "residence": "2026/20261028.md",
+        "line": "- [ ] Chore [root:: sase_blog] ^chore",
+        "expected": {
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": ["sase_blog.md"]
+          }
+        }
+      },
+      {
         "id": "nearest-default",
         "residence": "sase_blog.md",
         "line": "- [ ] Write the post ^post",

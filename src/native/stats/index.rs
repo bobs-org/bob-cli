@@ -44,6 +44,8 @@ pub(crate) struct IndexedTask {
     pub(crate) block_id: Option<String>,
     pub(crate) description: String,
     pub(crate) task_kind: TaskKindPart,
+    pub(crate) line_number: usize,
+    pub(crate) line: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -470,6 +472,8 @@ fn parse_markdown_file(
             block_id: task.block_id,
             description: task.description,
             task_kind,
+            line_number: task.line_number,
+            line: task.line,
         });
     }
 
@@ -1086,6 +1090,8 @@ mod tests {
             block_id: Some("ref".to_string()),
             description: "read".to_string(),
             task_kind: TaskKindPart::Ref,
+            line_number: 1,
+            line: String::new(),
         };
         assert_eq!(task.task_kind, TaskKindPart::Ref);
         assert_eq!(TaskKindPart::Prj, TaskKindPart::Prj);

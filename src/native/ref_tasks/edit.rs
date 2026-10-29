@@ -455,4 +455,26 @@ mod preservation_tests {
         );
         assert!(out.wrote);
     }
+
+    /// Preservation contract (R11): the Highlights reading-status
+    /// checkbox edit keeps a distinctive authored root field
+    /// byte-identical.
+    #[test]
+    fn checkbox_close_preserves_distinctive_root() {
+        let _clock = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_NOW",
+            Some(std::ffi::OsStr::new("2026-10-09")),
+        )]);
+        let temp = vault();
+        let dest = temp.path().join("sase.md");
+        let line = "- [ ] #task #ref [[ref/papers/x|X]] (root::  sase) [created::2026-10-09] ^ref-x";
+        write(&dest, &format!("# Sase\n\n{line}\n"));
+        let out =
+            edit_reading_task_checkbox(&dest, 2, line, 'x').expect("edit");
+        assert_eq!(
+            out.task_line,
+            "- [x] #task #ref [[ref/papers/x|X]] (root::  sase) [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"
+        );
+        assert!(out.wrote);
+    }
 }

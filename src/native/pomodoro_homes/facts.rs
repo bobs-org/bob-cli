@@ -1,9 +1,17 @@
-use super::super::projects::{
-    frontmatter_is_area, frontmatter_is_project, frontmatter_scalar,
-    frontmatter_value, parse_frontmatter, trim_yaml_scalar,
-    wikilink_path_target, FrontmatterScalar,
+use std::collections::HashMap;
+
+use super::super::{
+    collect_done::trailing_block_id_in_line,
+    markdown,
+    projects::{
+        frontmatter_is_area, frontmatter_is_project, frontmatter_scalar,
+        frontmatter_value, parse_frontmatter, trim_yaml_scalar,
+        wikilink_path_target, FrontmatterScalar,
+    },
+    ref_tasks::strip_blockquote_prefix,
+    task_fields::canonical_theme_name,
+    task_root::{parse_task_root, TaskRootState},
 };
-use super::super::task_fields::canonical_theme_name;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoteKind {
@@ -21,12 +29,21 @@ pub(crate) enum NoteTheme {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskRootFact {
+    pub(crate) line_number: usize,
+    pub(crate) state: TaskRootState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NoteFacts {
     pub(crate) kind: NoteKind,
     pub(crate) parent: Option<String>,
     pub(crate) color: Option<String>,
     pub(crate) root: bool,
     pub(crate) theme: Option<NoteTheme>,
+    /// Unique trailing block id → root field on that task line.
+    /// Duplicate block ids are omitted, matching `note_tasks::by_block_id`.
+    pub(crate) task_roots: HashMap<String, TaskRootFact>,
 }
 
 impl NoteFacts {
@@ -63,8 +80,80 @@ impl NoteFacts {
             color,
             root,
             theme,
+            task_roots: collect_task_roots(contents),
         }
     }
+}
+
+fn collect_task_roots(contents: &str) -> HashMap<String, TaskRootFact> {
+    if !contents.contains("root::") {
+        return HashMap::new();
+    }
+    let lines: Vec<&str> = contents.lines().collect();
+    let frontmatter_end = markdown::strictly_closed_frontmatter_end(&lines);
+    let scan_start = frontmatter_end.map_or(0, |end| end + 1);
+    let fenced = markdown::fenced_lines(&lines, scan_start..lines.len());
+    let mut occurrences: HashMap<String, Vec<(usize, TaskRootState)>> =
+        HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        if frontmatter_end.is_some_and(|end| index <= end)
+            || fenced.contains(&index)
+            || !line.contains("root::")
+            || !is_checkbox_line(line)
+        {
+            continue;
+        }
+        let Some(block_id) = trailing_block_id_in_line(line) else {
+            continue;
+        };
+        let state = parse_task_root(line);
+        if matches!(state, TaskRootState::None) {
+            continue;
+        }
+        occurrences
+            .entry(block_id)
+            .or_default()
+            .push((index + 1, state));
+    }
+    occurrences
+        .into_iter()
+        .filter_map(|(block_id, found)| {
+            let [(line_number, state)] = found.as_slice() else {
+                return None;
+            };
+            Some((
+                block_id,
+                TaskRootFact {
+                    line_number: *line_number,
+                    state: state.clone(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn is_checkbox_line(line: &str) -> bool {
+    let stripped = strip_blockquote_prefix(line).trim_start();
+    let after_marker = stripped
+        .strip_prefix('-')
+        .or_else(|| stripped.strip_prefix('*'))
+        .or_else(|| stripped.strip_prefix('+'))
+        .or_else(|| {
+            let digits =
+                stripped.bytes().take_while(u8::is_ascii_digit).count();
+            if digits == 0 {
+                return None;
+            }
+            stripped[digits..]
+                .strip_prefix('.')
+                .or_else(|| stripped[digits..].strip_prefix(')'))
+        });
+    let Some(rest) =
+        after_marker.and_then(|rest| rest.strip_prefix([' ', '\t']))
+    else {
+        return false;
+    };
+    rest.len() >= 3 && rest.as_bytes()[0] == b'[' && rest.as_bytes()[2] == b']'
 }
 
 fn parse_note_theme(

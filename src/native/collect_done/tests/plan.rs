@@ -758,3 +758,33 @@ fn archive_preserves_distinctive_theme_field() {
         "{archived}"
     );
 }
+
+/// Preservation contract (R11): `bob task archive` carries a closed
+/// task's distinctive authored root field into the archive file
+/// byte-identical, as history.
+#[test]
+fn archive_preserves_distinctive_root_field() {
+    let vault = TempDir::new("bob-cli-collect-done-root-history");
+    write_file(
+        &vault.path().join("sase.md"),
+        "\
+- [x] Shipped #task (root::  sase) [completion:: 2026-10-01]
+- [ ] Active #task
+",
+    );
+
+    let plan = build_collection_plan(vault.path(), 1).expect("build plan");
+
+    assert_eq!(plan.files.len(), 1);
+    let file = &plan.files[0];
+    let archived = file
+        .archive_contents
+        .as_deref()
+        .expect("archive contents planned");
+    assert!(
+        archived.contains(
+            "- [x] Shipped #task (root::  sase) [completion:: 2026-10-01]"
+        ),
+        "{archived}"
+    );
+}

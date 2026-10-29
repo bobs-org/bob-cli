@@ -76,6 +76,8 @@ pub(crate) struct StatsTaskRecord {
     pub(crate) tags: Vec<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) description: String,
+    pub(crate) line_number: usize,
+    pub(crate) line: String,
 }
 
 /// Reusable one-file parser context. Settings and status configuration are
@@ -132,6 +134,8 @@ impl StatsTaskParser {
                 tags: task.tags,
                 block_id: task.block_id,
                 description: task.description,
+                line_number: task.line_number.saturating_add(1),
+                line: task.original_markdown,
             })
             .collect()
     }

@@ -197,7 +197,7 @@ fn one_space_removal_range(line: &str, field: &InlineField) -> (usize, usize) {
 /// Byte offset of the trailing metadata run: inline fields of any key,
 /// tags, and a trailing `^id`, scanned back from the trimmed end. The
 /// run does not include the task checkbox or title.
-fn trailing_metadata_start(line: &str) -> usize {
+pub(crate) fn trailing_metadata_start(line: &str) -> usize {
     let trimmed_len = line.trim_end().len();
     suffix_start_inner(line).unwrap_or(trimmed_len)
 }

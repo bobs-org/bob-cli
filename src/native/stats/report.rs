@@ -328,12 +328,32 @@ pub(crate) struct HomesHealthReport {
     pub(crate) area_color_invalid: Vec<HomeLintReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) hue_collisions: Vec<HueCollisionReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) root_field_invalid: Vec<RootFieldInvalidReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) root_field_not_root: Vec<RootFieldNotRootReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct HomeLintReport {
     pub(crate) path: String,
     pub(crate) raw: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RootFieldInvalidReport {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) raw: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RootFieldNotRootReport {
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) raw: String,
+    pub(crate) root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

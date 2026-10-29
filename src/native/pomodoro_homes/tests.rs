@@ -46,6 +46,10 @@ struct ExpectedHealth {
     ambiguous_links: u32,
     unresolved_links: u32,
     area_color_invalid: usize,
+    #[serde(default)]
+    root_field_invalid: usize,
+    #[serde(default)]
+    root_field_not_root: usize,
 }
 
 #[test]
@@ -169,6 +173,83 @@ fn note_facts_parse_theme_scalars_lists_and_off() {
         "---\ntype: [[project]]\ntheme:\nparent: [[dev]]\n---\n",
     );
     assert_eq!(blank_then_key.theme, None);
+}
+
+#[test]
+fn note_facts_collect_unique_task_roots_and_skip_duplicates() {
+    use crate::native::task_root::{RootRepairKind, TaskRootState};
+    let facts = NoteFacts::parse(
+        "---\ntype: [[area]]\n---\n\n- [ ] #task A [root:: sase] ^a\n- [ ] #task B (root:: gtd) ^b\n- [ ] #task C [root:: sase] ^dup\n- [ ] #task D [root:: gtd] ^dup\n```\n- [ ] #task Fence [root:: sase] ^fence\n```\n",
+    );
+    assert_eq!(facts.task_roots.len(), 2);
+    assert_eq!(
+        facts.task_roots["a"].state,
+        TaskRootState::Set { raw: "sase".into() }
+    );
+    assert_eq!(facts.task_roots["a"].line_number, 5);
+    assert_eq!(
+        facts.task_roots["b"].state,
+        TaskRootState::Set { raw: "gtd".into() }
+    );
+    assert!(!facts.task_roots.contains_key("dup"));
+    assert!(!facts.task_roots.contains_key("fence"));
+    let invalid = NoteFacts::parse("- [ ] #task Bad [root:: [[sase]]] ^bad\n");
+    assert!(matches!(
+        invalid.task_roots["bad"].state,
+        TaskRootState::Repair {
+            kind: RootRepairKind::Invalid,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn home_for_task_uses_set_root_as_if_residence() {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("dev.md"),
+        "---\ntype: [[area]]\ncolor: blue\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("sase.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("sase_goals.md"),
+        "---\ntype: [[project]]\nparent: [[sase]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("inbox.md"),
+        "---\ntype: [[area]]\ncolor: aqua\n---\n".to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+    let rooted = resolver.home_for_task(
+        Path::new("inbox.md"),
+        7,
+        "- [ ] #task Inbox sase [root:: sase] ^inbox-sase",
+    );
+    assert_eq!(rooted.key, "sase.md");
+    assert_eq!(rooted.root_parent, "sase.md");
+    assert_eq!(rooted.residence_chain[0], "sase.md");
+    let goals = resolver.home_for_task(
+        Path::new("inbox.md"),
+        9,
+        "- [ ] #task Inbox goals [root:: sase_goals] ^inbox-goals",
+    );
+    assert_eq!(goals.key, "sase_goals.md");
+    assert_eq!(goals.root_parent, "sase.md");
+    assert_eq!(resolver.health().root_field_not_root.len(), 1);
+    let missing = resolver.home_for_task(
+        Path::new("inbox.md"),
+        10,
+        "- [ ] #task Inbox missing [root:: nope] ^inbox-missing",
+    );
+    assert_eq!(missing.key, "inbox.md");
+    assert_eq!(resolver.health().root_field_invalid.len(), 1);
 }
 
 #[test]
@@ -646,5 +727,15 @@ fn assert_health(
         actual.area_color_invalid.len(),
         expected.area_color_invalid,
         "area color lints: {case}"
+    );
+    assert_eq!(
+        actual.root_field_invalid.len(),
+        expected.root_field_invalid,
+        "root field invalid: {case}"
+    );
+    assert_eq!(
+        actual.root_field_not_root.len(),
+        expected.root_field_not_root,
+        "root field not root: {case}"
     );
 }

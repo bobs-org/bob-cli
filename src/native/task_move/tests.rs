@@ -1439,3 +1439,44 @@ fn move_preserves_distinctive_theme_field() {
     assert!(!source_post.contains("Themed move"));
     assert!(source_post.contains("- [ ] #task Stay ^stay"));
 }
+
+/// Preservation contract (R11): `bob task move` keeps a distinctive
+/// authored root field byte-identical while repairing the moved
+/// task's canonical id to the destination note.
+#[test]
+fn move_preserves_distinctive_root_field() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Rooted move (root::  sase) [id:: inbox__rooted] ^rooted
+- [ ] #task Stay ^stay
+",
+    );
+    let dest = area(
+        "
+## Tasks
+",
+    );
+    let result = plan(
+        &[("inbox.md", &source), ("dest.md", &dest)],
+        "inbox",
+        "dest",
+        vec![block("rooted")],
+    );
+    assert_eq!(result.moves.len(), 1);
+    let dest_post = post(&result, "dest.md");
+    let moved = dest_post
+        .lines()
+        .find(|line| line.contains("Rooted move"))
+        .unwrap_or_else(|| panic!("moved line missing: {dest_post}"));
+    assert!(
+        moved.contains("(root::  sase)"),
+        "root bytes changed: {moved}"
+    );
+    assert!(
+        moved.contains("[id:: dest__rooted]"),
+        "id not repaired to dest: {moved}"
+    );
+    assert!(moved.contains("^rooted"), "block id lost: {moved}");
+}
