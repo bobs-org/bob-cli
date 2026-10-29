@@ -1352,7 +1352,7 @@ surface's managed Done gesture would.
 
 ### CP1 The rule
 
-*Status: implemented in capture; planned (phase `nav-complete-writer`).*
+*Status: implemented in capture and nav.*
 
 When an explicit relation gesture **adds** a complete label to an open
 task, or **relabels** one of its links **into** a complete label, the
@@ -1434,7 +1434,7 @@ relations:
 
 ### CP3 Which task completes
 
-*Status: implemented in capture; planned (phase `nav-complete-writer`).*
+*Status: implemented in capture and nav.*
 
 The source is always the task the label is phrased from: "S
 implemented by T" completes S.
@@ -1450,8 +1450,7 @@ implemented by T" completes S.
 
 ### CP4 What one commit writes
 
-*Status: implemented in capture; planned (phase `cycler-done-api`,
-`nav-complete-writer`).*
+*Status: implemented in capture and nav.*
 
 There is nothing new about Done. Each surface composes its **existing**
 managed Done with the relation write.
@@ -1490,7 +1489,7 @@ them, so neither does this.
 
 ### CP5 Verdicts and edge cases
 
-*Status: implemented in capture; planned (phase `nav-complete-writer`).*
+*Status: implemented in capture and nav.*
 
 There is one verdict function per engine: Rust
 `task_complete::verdicts` and JS `planRelationCompleteEffects`. Shared
@@ -1611,7 +1610,7 @@ new field is omitted when it does not apply, so output with no
 
 ### CP8 Architecture
 
-*Status: implemented in Rust capture; planned (phase `cycler-done-api`).*
+*Status: implemented in Rust capture and nav.*
 
 - **One Done per engine, never a new one.**
   - Rust: complete-label commits call the same function `!` calls.
