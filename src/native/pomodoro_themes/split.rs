@@ -55,7 +55,8 @@ Fill the TYPE column (an untouched row keeps OLD), then apply with \
 Only the OLD component in mapped tails changes: separators keep their `+` \
 spelling, a resulting duplicate collapses (`JOB + BUILD` with TYPE BUILD \
 becomes `BUILD`), and every other byte is preserved. Unmapped OLD entries \
-are left alone. Note defaults and `[theme::]` / `(theme::)` task fields are \
+are left alone. Note defaults (`task_type:` / `theme:`) and `[type::]` / \
+`(type::)` plus legacy `[theme::]` / `(theme::)` task fields are \
 left unchanged; a `split_leaves_task_themes` warning reports leftover \
 counts when OLD still appears there. Split writes no journal event: OLD \
 keeps its hidden state and pin, and every target keeps its own.\n\n\

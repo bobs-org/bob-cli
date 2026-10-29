@@ -1,4 +1,7 @@
-//! Canonical `[theme::]` / `(theme::)` field parse, placement, and write rule.
+//! Canonical `[type::]` / `(type::)` field parse, placement, and write rule.
+//!
+//! `type` is canonical and `theme` is a legacy alias still read. Every
+//! writer emits `[type::]` and removes both spellings.
 //!
 //! Kept independent of suggestion types so later capture writers can call
 //! these helpers without a module cycle.
@@ -35,7 +38,9 @@ pub(crate) enum ThemeChange {
 }
 
 pub(crate) fn parse_task_theme(line: &str) -> TaskThemeState {
-    let fields = inline_fields(line, "theme");
+    let mut fields = inline_fields(line, "type");
+    fields.extend(inline_fields(line, "theme"));
+    fields.sort_by_key(|field| field.start);
     match fields.as_slice() {
         [] => TaskThemeState::None,
         [field] => match canonical_theme_name(&field.value) {
@@ -57,7 +62,7 @@ pub(crate) fn set_task_theme(line: &str, name: &str) -> String {
     let (body, ending) = split_line_ending(line);
     let cleared = remove_theme_fields(body);
     let insertion = trailing_metadata_start(&cleared);
-    let mut insert = format!("[theme:: {name}]");
+    let mut insert = format!("[type:: {name}]");
     if insertion > 0 && !cleared[..insertion].ends_with([' ', '\t']) {
         insert.insert(0, ' ');
     }
@@ -154,7 +159,8 @@ fn split_line_ending(line: &str) -> (&str, &str) {
 }
 
 fn remove_theme_fields(line: &str) -> String {
-    let fields = inline_fields(line, "theme");
+    let mut fields = inline_fields(line, "type");
+    fields.extend(inline_fields(line, "theme"));
     if fields.is_empty() {
         return line.to_string();
     }

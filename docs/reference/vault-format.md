@@ -43,9 +43,9 @@ Today mark. The source line never stores 🍅 or a Today field.
 
 The freshness group (`fresh`, `refresh`, `keeps`, `unblocked`) sits before
 the trailing Tasks suffix (`scheduled`, `created`, `id`, `dependsOn`). The
-block ID is last. The `[theme::]` and `[root::]` fields sit before the
-trailing metadata run (other fields, tags, `^id`); freshness stamps land
-after them.
+block ID is last. The `[type::]` (`[theme::]` legacy) and `[root::]` fields
+sit before the trailing metadata run (other fields, tags, `^id`); freshness
+stamps land after them.
 
 Verified capture of a new blocked dependent (spacing is what `bob capture`
 wrote):
@@ -104,7 +104,7 @@ Edit the human-owned inputs. Reconciliation and capture project the rest.
 | `keeps` | `[keeps:: N]` | Human keep streak, 1–999. Automation never increments it. |
 | `unblocked` | `[unblocked:: YYYY-MM-DD]` | Machine WRITE on automatic Blocked → Ready recovery, unless a skip applies. |
 | `repeat` | `[repeat:: every day when done]` | Authored Tasks recurrence rule that must start with `every`; PRE/POST checklist rows need `when done`; rendered as a [recurrence mark](../date-marks.md#recurrence-not-a-date). |
-| `theme` | `[theme:: NAME]` or `(theme:: NAME)` | Authored deliberate exception to the suggested theme. Exactly one valid field sets the task; duplicates or an invalid value fall back to inheritance with a `repair` marker. Closed tasks keep the field as history. |
+| `type` (`theme` legacy) | `[type:: NAME]` or `(type:: NAME)` (`[theme:: NAME]` / `(theme:: NAME)` still read) | Authored deliberate exception to the suggested type. Exactly one valid field across both keys sets the task; duplicates or an invalid value fall back to inheritance with a `repair` marker. Closed tasks keep the field as history. |
 | `root` | `[root:: NOTE]` or `(root:: NOTE)` | Authored as-if-residence home. Exactly one field whose value resolves to a note X attributes the task as if it lived in X; duplicates, invalid values, missing/ambiguous notes, and notes with no area or project are ignored with a stats lint. Closed tasks keep the field, and it keeps applying. |
 
 `start` on a task line is out of scope for date marks; Pomodoro entries use

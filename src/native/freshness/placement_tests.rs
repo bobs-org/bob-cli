@@ -965,6 +965,27 @@ fn theme_field_survives_stamp_before_fresh_suffix() {
     assert_eq!(stamped.refused, None);
 }
 
+/// Preservation contract (PT13 storage): stamping keeps a canonical
+/// `[type::]` field and a mixed duplicate byte-identical.
+#[test]
+fn type_field_survives_stamp_before_fresh_suffix() {
+    let stamped = stamp(
+        "- [ ] #task Write the report (type::  WRITE) [created::2026-09-29] ^write",
+    );
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Write the report (type::  WRITE) [fresh:: 2026-10-08] [created::2026-09-29] ^write"
+    );
+    assert!(stamped.changed);
+    assert_eq!(stamped.refused, None);
+    let mixed = stamp(
+        "- [ ] #task Write the report [type:: WRITE] (theme::  WRITE) [created::2026-09-29] ^write",
+    );
+    assert!(mixed.line.contains("[type:: WRITE]"));
+    assert!(mixed.line.contains("(theme::  WRITE)"));
+    assert!(mixed.line.contains("[fresh:: 2026-10-08]"));
+}
+
 /// Preservation contract (PT13): a closed task keeps its theme history;
 /// stamping refuses and leaves every byte untouched.
 #[test]

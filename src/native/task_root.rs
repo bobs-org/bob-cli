@@ -233,7 +233,7 @@ mod tests {
         let themed = set_task_theme(line, "WRITE");
         assert_eq!(
             themed,
-            "- [ ] #task Work [theme:: WRITE] (root::  sase) [created:: 2026-01-01] ^t"
+            "- [ ] #task Work [type:: WRITE] (root::  sase) [created:: 2026-01-01] ^t"
         );
         assert!(themed.contains("(root::  sase)"));
         assert_eq!(clear_task_theme(&themed), line);

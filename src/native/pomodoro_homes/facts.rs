@@ -20,7 +20,8 @@ pub(crate) enum NoteKind {
     Other,
 }
 
-/// A `theme:` frontmatter value on a note. Absent/blank inherit.
+/// A `task_type:` frontmatter value on a note (`theme:` is the legacy alias).
+/// Absent/blank inherit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NoteTheme {
     Name(String),
@@ -41,6 +42,7 @@ pub(crate) struct NoteFacts {
     pub(crate) color: Option<String>,
     pub(crate) root: bool,
     pub(crate) theme: Option<NoteTheme>,
+    pub(crate) theme_conflict: bool,
     /// Unique trailing block id → root field on that task line.
     /// Duplicate block ids are omitted, matching `note_tasks::by_block_id`.
     pub(crate) task_roots: HashMap<String, TaskRootFact>,
@@ -73,13 +75,17 @@ impl NoteFacts {
             .is_some_and(|value| {
                 trim_yaml_scalar(value).eq_ignore_ascii_case("true")
             });
-        let theme = frontmatter.as_ref().and_then(parse_note_theme);
+        let (theme, theme_conflict) = frontmatter
+            .as_ref()
+            .map(parse_note_theme)
+            .unwrap_or((None, false));
         Self {
             kind,
             parent,
             color,
             root,
             theme,
+            theme_conflict,
             task_roots: collect_task_roots(contents),
         }
     }
@@ -170,8 +176,27 @@ fn is_checkbox_line(line: &str) -> bool {
 
 fn parse_note_theme(
     frontmatter: &super::super::projects::Frontmatter<'_>,
+) -> (Option<NoteTheme>, bool) {
+    let canonical = parse_single_note_theme(frontmatter, "task_type");
+    let legacy = parse_single_note_theme(frontmatter, "theme");
+    let conflict = match (&canonical, &legacy) {
+        (Some(canonical_theme), Some(legacy_theme)) => {
+            canonical_theme != legacy_theme
+        }
+        _ => false,
+    };
+    let theme = match canonical {
+        Some(theme) => Some(theme),
+        None => legacy,
+    };
+    (theme, conflict)
+}
+
+fn parse_single_note_theme(
+    frontmatter: &super::super::projects::Frontmatter<'_>,
+    key: &str,
 ) -> Option<NoteTheme> {
-    match frontmatter_scalar(frontmatter, "theme") {
+    match frontmatter_scalar(frontmatter, key) {
         FrontmatterScalar::Absent | FrontmatterScalar::Blank => None,
         FrontmatterScalar::NonScalar(raw) => Some(NoteTheme::Invalid(raw)),
         FrontmatterScalar::Value(raw) => {

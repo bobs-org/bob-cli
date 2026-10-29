@@ -301,3 +301,20 @@ fn reopen_insert_leaves_archived_theme_history_untouched() {
         fs::read_to_string(bob.join("archive/done.md")).expect("read archive");
     assert_eq!(archive_after, archive_before);
 }
+
+#[test]
+fn reopen_insert_leaves_archived_type_history_untouched() {
+    let bob = temp_bob_dir("reading-execute-reopen-type");
+    write_test_file(&bob.join("sase.md"), "# Sase\n");
+    let archived_line = "- [x] #task #ref [[ref/papers/other|Other]] [type:: WRITE] [created::2026-10-09] [completion:: 2026-10-09] ^ref-other";
+    let archive_before = format!("# Archive\n\n{archived_line}\n");
+    write_test_file(&bob.join("archive/done.md"), &archive_before);
+    let execution =
+        execute_reading_insert(insert_inputs(&bob, "sase", ' ', None))
+            .expect("reopen insert");
+    assert_eq!(execution.action, ReadingTaskExecutionAction::Inserted);
+    assert_eq!(execution.destination, bob.join("sase.md"));
+    let archive_after =
+        fs::read_to_string(bob.join("archive/done.md")).expect("read archive");
+    assert_eq!(archive_after, archive_before);
+}

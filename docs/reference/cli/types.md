@@ -217,7 +217,7 @@ See docs/task-types.md for identity, cache, hue, JSON, and journal writers.
 Rename a task type everywhere in one commit
 
 ```text title="bob types rename --help"
-Rename one task type across every canonical daily note (past, today, and future, open and closed) plus _templates/daily.md, area and project `theme:` defaults, and `[theme::]` / `(theme::)` task fields (including done/), in a single verified Git commit.
+Rename one task type across every canonical daily note (past, today, and future, open and closed) plus _templates/daily.md, area and project `task_type:` / `theme:` defaults, and `[type::]` / `(type::)` plus legacy `[theme::]` / `(theme::)` task fields (including done/), in a single verified Git commit.
 
 Pomodoro ` — NAME` tails keep their `+` spelling, a resulting duplicate collapses (`FIX + FIXES` → `FIX`), and every other byte is preserved. Note defaults and task fields take NEW's spelling (with `--merge`, fields simply take NEW). Prose, fenced examples, `.bob/`, and `_conflicts/` are never touched.
 
@@ -286,7 +286,7 @@ Rewrite selected task type components in ` — NAME` tails of canonical daily no
 
 `-t/--template` prints a TSV map of every entry whose name contains OLD; it never takes the lock or writes. `_templates/daily.md` is out of scope. Fill the TYPE column (an untouched row keeps OLD), then apply with `-m/--map`. `-m -` reads the map from stdin.
 
-Only the OLD component in mapped tails changes: separators keep their `+` spelling, a resulting duplicate collapses (`JOB + BUILD` with TYPE BUILD becomes `BUILD`), and every other byte is preserved. Unmapped OLD entries are left alone. Note defaults and `[theme::]` / `(theme::)` task fields are left unchanged; a `split_leaves_task_themes` warning reports leftover counts when OLD still appears there. Split writes no journal event: OLD keeps its hidden state and pin, and every target keeps its own.
+Only the OLD component in mapped tails changes: separators keep their `+` spelling, a resulting duplicate collapses (`JOB + BUILD` with TYPE BUILD becomes `BUILD`), and every other byte is preserved. Unmapped OLD entries are left alone. Note defaults (`task_type:` / `theme:`) and `[type::]` / `(type::)` plus legacy `[theme::]` / `(theme::)` task fields are left unchanged; a `split_leaves_task_themes` warning reports leftover counts when OLD still appears there. Split writes no journal event: OLD keeps its hidden state and pin, and every target keeps its own.
 
 The preview and the template always rescan from source. A write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again right before writing, writes atomically, verifies by rescanning, makes one commit, then post-syncs. Undo is `git revert`.
 

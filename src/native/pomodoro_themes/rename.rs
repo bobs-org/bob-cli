@@ -63,7 +63,8 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
         .long_about(
             "Rename one task type across every canonical daily note \
 (past, today, and future, open and closed) plus _templates/daily.md, area \
-and project `theme:` defaults, and `[theme::]` / `(theme::)` task fields \
+and project `task_type:` / `theme:` defaults, and `[type::]` / `(type::)` \
+plus legacy `[theme::]` / `(theme::)` task fields \
 (including done/), in a single verified Git commit.\n\n\
 Pomodoro ` — NAME` tails keep their `+` spelling, a resulting duplicate \
 collapses (`FIX + FIXES` → `FIX`), and every other byte is preserved. Note \
@@ -847,14 +848,13 @@ fn plan_file(
         tails = tail_changes;
         edits.extend(tail_edits);
     }
-    let default = if rewrite_defaults_and_fields {
-        coverage::default_edit(contents, old_key, new_display)
+    let default_edits = if rewrite_defaults_and_fields {
+        coverage::default_edits(contents, old_key, new_display)
     } else {
-        None
+        Vec::new()
     };
-    if let Some(edit) = default.clone() {
-        edits.push(edit);
-    }
+    let default = default_edits.first().cloned();
+    edits.extend(default_edits);
     let task_edits = if rewrite_defaults_and_fields {
         coverage::task_theme_edits(contents, old_key, new_display, settings)
     } else {

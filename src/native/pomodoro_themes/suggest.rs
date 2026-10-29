@@ -197,6 +197,7 @@ fn note_default<S: HomeSource>(
     let home = source.resolve_note(residence_path);
     let mut warnings = Vec::new();
     let mut seen_invalid = BTreeSet::new();
+    let mut seen_conflict = BTreeSet::new();
     for (index, path_str) in home.residence_chain.iter().enumerate() {
         let path = Path::new(path_str);
         let Some(facts) = source.facts(path) else {
@@ -204,6 +205,12 @@ fn note_default<S: HomeSource>(
         };
         if !matches!(facts.kind, NoteKind::Area | NoteKind::Project) {
             continue;
+        }
+        if facts.theme_conflict && seen_conflict.insert(path_str.clone()) {
+            warnings.push(SuggestWarning {
+                code: "type_default_conflict".to_string(),
+                path: Some(path_str.clone()),
+            });
         }
         match facts.theme {
             None => continue,

@@ -1440,6 +1440,62 @@ fn move_preserves_distinctive_theme_field() {
     assert!(source_post.contains("- [ ] #task Stay ^stay"));
 }
 
+#[test]
+fn move_preserves_canonical_type_field() {
+    let source = area(
+        "
+## Tasks
+
+- [ ] #task Typed move [type:: WRITE] [id:: inbox__themed] ^themed
+- [ ] #task Stay ^stay
+",
+    );
+    let dest = area(
+        "
+## Tasks
+",
+    );
+    let result = plan(
+        &[("inbox.md", &source), ("dest.md", &dest)],
+        "inbox",
+        "dest",
+        vec![block("themed")],
+    );
+    assert_eq!(result.moves.len(), 1);
+    let dest_post = post(&result, "dest.md");
+    let moved = dest_post
+        .lines()
+        .find(|line| line.contains("Typed move"))
+        .unwrap_or_else(|| panic!("moved line missing: {dest_post}"));
+    assert!(
+        moved.contains("[type:: WRITE]"),
+        "type bytes changed: {moved}"
+    );
+    let mixed_source = area(
+        "
+## Tasks
+
+- [ ] #task Mixed move [type:: WRITE] (theme::  WRITE) [id:: inbox__mixed] ^mixed
+",
+    );
+    let mixed_result = plan(
+        &[
+            ("inbox.md", &mixed_source),
+            ("dest.md", &area("\n## Tasks\n")),
+        ],
+        "inbox",
+        "dest",
+        vec![block("mixed")],
+    );
+    let mixed_post = post(&mixed_result, "dest.md");
+    let mixed_moved = mixed_post
+        .lines()
+        .find(|line| line.contains("Mixed move"))
+        .expect("mixed moved line missing");
+    assert!(mixed_moved.contains("[type:: WRITE]"), "{mixed_moved}");
+    assert!(mixed_moved.contains("(theme::  WRITE)"), "{mixed_moved}");
+}
+
 /// Preservation contract (R11): `bob task move` keeps a distinctive
 /// authored root field byte-identical while repairing the moved
 /// task's canonical id to the destination note.

@@ -511,6 +511,17 @@ fn source_cancel_preserves_authored_theme_field_bytes() {
 }
 
 #[test]
+fn source_cancel_preserves_canonical_type_field_bytes() {
+    let source = "- [ ] #task Sell stocks [type:: WRITE] ^sell-stocks\n";
+    let edit = line::edit_source(source, 0, date("2026-10-22"), &[]);
+    assert_eq!(
+        edit.content,
+        "- [-] #task Sell stocks [type:: WRITE] [cancelled:: 2026-10-22] ^sell-stocks\n"
+    );
+    assert!(edit.content.contains("[type:: WRITE]"));
+}
+
+#[test]
 fn source_cancel_preserves_authored_root_field_bytes() {
     let source = "- [ ] #task Sell stocks (root::  sase) ^sell-stocks\n";
     let edit = line::edit_source(source, 0, date("2026-10-22"), &[]);

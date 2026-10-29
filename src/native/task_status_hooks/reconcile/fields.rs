@@ -256,6 +256,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn reconcile_field_write_preserves_canonical_type() {
+        assert_eq!(
+            set_task_fields(
+                "- [ ] #task Ship it [type:: WRITE] ^ship",
+                Some("tasks__ship"),
+                &depends(&["tasks__tests"]),
+            ),
+            "- [ ] #task Ship it [type:: WRITE] [id:: tasks__ship] [dependsOn:: tasks__tests] ^ship"
+        );
+    }
+
     /// Preservation contract (R11): reconcile's field writer keeps a
     /// distinctive authored root field byte-identical while placing
     /// `id`/`dependsOn` ahead of the trailing block ID.

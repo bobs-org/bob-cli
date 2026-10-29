@@ -1275,6 +1275,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn task_type_field_survives_ref_rename_alias_overwrite() {
+        let moves = bundle("old", "new");
+        let input =
+            "- [ ] #task Read [[ref/blogs/old.md|alias]] [type:: WRITE] ^t1\n";
+        let result = rewrite(input, &moves, &["ref/blogs/old.md"]);
+        assert_eq!(
+            result.contents,
+            "- [ ] #task Read [[ref/blogs/new.md|alias]] [type:: WRITE] ^t1\n"
+        );
+    }
+
     /// Preservation contract (R11): `bob ref rename`'s alias overwrite
     /// rewrites the link target while keeping a distinctive authored
     /// task root field byte-identical.

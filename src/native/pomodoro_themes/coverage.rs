@@ -1,7 +1,8 @@
 //! Note-default and task-field coverage for `bob types rename` / `split`.
 //!
-//! Rename rewrites matching `theme:` frontmatter on area/project notes and
-//! `[theme::]` / `(theme::)` fields on task lines. Split leaves both alone
+//! Rename rewrites matching `task_type:` / `theme:` frontmatter on
+//! area/project notes and `[type::]` / `(type::)` plus legacy `[theme::]` /
+//! `(theme::)` fields on task lines. Split leaves both alone
 //! and warns with leftover counts.
 
 use std::{fs, path::Path};
@@ -49,7 +50,7 @@ pub(super) fn leftover_theme_uses(
             continue;
         };
         let path = capture_dependency_tasks::display_path(&relative);
-        if default_edit(&contents, old_key, "").is_some() {
+        if !default_edits(&contents, old_key, "").is_empty() {
             uses.defaults += 1;
             uses.default_notes.push(path);
         }
@@ -57,6 +58,56 @@ pub(super) fn leftover_theme_uses(
             task_theme_edits(&contents, old_key, "", &settings).len();
     }
     uses
+}
+
+#[allow(dead_code)]
+pub(super) fn default_edit(
+    contents: &str,
+    old_key: &str,
+    new_display: &str,
+) -> Option<LineEdit> {
+    default_edits(contents, old_key, new_display)
+        .into_iter()
+        .next()
+}
+
+pub(super) fn default_edits(
+    contents: &str,
+    old_key: &str,
+    new_display: &str,
+) -> Vec<LineEdit> {
+    let facts = NoteFacts::parse(contents);
+    match (facts.kind, facts.theme) {
+        (NoteKind::Area | NoteKind::Project, Some(NoteTheme::Name(name)))
+            if normalize_component(&name) == old_key => {}
+        _ => return Vec::new(),
+    }
+    let owned = raw_lines_preserving(contents);
+    let mut edits = Vec::new();
+    for (index, raw) in owned.iter().enumerate() {
+        if index == 0 {
+            continue;
+        }
+        let (body, _) = split_line_ending(raw);
+        if body.trim() == "---" {
+            break;
+        }
+        for key in ["task_type", "theme"] {
+            let Some((start, end, before)) =
+                frontmatter_default_value_span(body, key, old_key)
+            else {
+                continue;
+            };
+            edits.push(LineEdit {
+                line: index + 1,
+                start,
+                end,
+                before,
+                after: new_display.to_string(),
+            });
+        }
+    }
+    edits
 }
 
 pub(super) fn leftover_warning(
@@ -87,42 +138,6 @@ pub(super) fn leftover_warning(
     ))
 }
 
-pub(super) fn default_edit(
-    contents: &str,
-    old_key: &str,
-    new_display: &str,
-) -> Option<LineEdit> {
-    let facts = NoteFacts::parse(contents);
-    match (facts.kind, facts.theme) {
-        (NoteKind::Area | NoteKind::Project, Some(NoteTheme::Name(name)))
-            if normalize_component(&name) == old_key => {}
-        _ => return None,
-    }
-    let owned = raw_lines_preserving(contents);
-    for (index, raw) in owned.iter().enumerate() {
-        if index == 0 {
-            continue;
-        }
-        let (body, _) = split_line_ending(raw);
-        if body.trim() == "---" {
-            break;
-        }
-        let Some((start, end, before)) =
-            frontmatter_theme_value_span(body, old_key)
-        else {
-            continue;
-        };
-        return Some(LineEdit {
-            line: index + 1,
-            start,
-            end,
-            before,
-            after: new_display.to_string(),
-        });
-    }
-    None
-}
-
 pub(super) fn task_theme_edits(
     contents: &str,
     old_key: &str,
@@ -137,7 +152,10 @@ pub(super) fn task_theme_edits(
             continue;
         };
         let (body, _) = split_line_ending(raw);
-        for field in inline_fields(body, "theme") {
+        let mut fields = inline_fields(body, "type");
+        fields.extend(inline_fields(body, "theme"));
+        fields.sort_by_key(|field| field.value_start);
+        for field in fields {
             let Some(name) = canonical_theme_name(&field.value) else {
                 continue;
             };
@@ -187,11 +205,12 @@ pub(super) fn apply_line_edits(contents: &str, edits: &[LineEdit]) -> String {
     owned.concat()
 }
 
-fn frontmatter_theme_value_span(
+fn frontmatter_default_value_span(
     line: &str,
+    key: &str,
     old_key: &str,
 ) -> Option<(usize, usize, String)> {
-    let rest = line.strip_prefix("theme:")?;
+    let rest = line.strip_prefix(&format!("{key}:"))?;
     let leading = rest.len().saturating_sub(rest.trim_start().len());
     let trimmed = rest.trim();
     if trimmed.is_empty() {
@@ -202,7 +221,7 @@ fn frontmatter_theme_value_span(
     if normalize_component(&name) != old_key {
         return None;
     }
-    let start = "theme:".len() + leading + quote_prefix;
+    let start = key.len() + 1 + leading + quote_prefix;
     let end = start + inner.len();
     Some((start, end, inner.to_string()))
 }
@@ -259,6 +278,30 @@ mod coverage_tests {
     }
 
     #[test]
+    fn default_edits_cover_canonical_and_legacy_spellings() {
+        let canonical = "---\ntype: [[area]]\ntask_type: BUILD\n---\n";
+        let edits = default_edits(canonical, "build", "FIX");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            apply_line_edits(canonical, &edits),
+            "---\ntype: [[area]]\ntask_type: FIX\n---\n"
+        );
+        let both = "---\ntype: [[area]]\ntask_type: BUILD\ntheme: BUILD\n---\n";
+        let edits = default_edits(both, "build", "FIX");
+        assert_eq!(edits.len(), 2);
+        assert_eq!(
+            apply_line_edits(both, &edits),
+            "---\ntype: [[area]]\ntask_type: FIX\ntheme: FIX\n---\n"
+        );
+        let quoted = "---\ntype: [[project]]\ntask_type: \"BUILD\"\n---\n";
+        let edits = default_edits(quoted, "build", "FIX");
+        assert_eq!(
+            apply_line_edits(quoted, &edits),
+            "---\ntype: [[project]]\ntask_type: \"FIX\"\n---\n"
+        );
+    }
+
+    #[test]
     fn default_edit_skips_other_kinds_and_off() {
         let other = "---\ntype: [[ref]]\ntheme: BUILD\n---\n";
         let off = "---\ntype: [[area]]\ntheme: off\n---\n";
@@ -293,6 +336,32 @@ Prose [theme:: BUILD] stays.\n\
         );
         assert!(
             after.contains("- [ ] not a task [theme:: BUILD]"),
+            "{after}"
+        );
+    }
+
+    #[test]
+    fn task_theme_edits_cover_canonical_and_mixed_spellings() {
+        let contents = "\
+---\ntype: [[area]]\n---\n\
+- [ ] #task Open [type:: BUILD] ^open\n\
+- [ ] #task Legacy (theme:: BUILD) ^legacy\n\
+- [ ] #task Mixed [type:: BUILD] (theme:: BUILD) ^mixed\n";
+        let edits = task_theme_edits(contents, "build", "FIX", &settings());
+        assert_eq!(edits.len(), 4);
+        let after = apply_line_edits(contents, &edits);
+        assert!(
+            after.contains("- [ ] #task Open [type:: FIX] ^open"),
+            "{after}"
+        );
+        assert!(
+            after.contains("- [ ] #task Legacy (theme:: FIX) ^legacy"),
+            "{after}"
+        );
+        assert!(
+            after.contains(
+                "- [ ] #task Mixed [type:: FIX] (theme:: FIX) ^mixed"
+            ),
             "{after}"
         );
     }

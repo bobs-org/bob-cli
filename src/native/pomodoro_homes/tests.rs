@@ -135,6 +135,7 @@ fn fallback_palette_fnv_vector_is_pinned() {
 fn note_facts_parse_theme_scalars_lists_and_off() {
     let named = NoteFacts::parse("---\ntype: [[project]]\ntheme: WRITE\n---\n");
     assert_eq!(named.theme, Some(NoteTheme::Name("WRITE".into())));
+    assert!(!named.theme_conflict);
     let quoted =
         NoteFacts::parse("---\ntype: [[area]]\ntheme: \"BUILD\"\n---\n");
     assert_eq!(quoted.theme, Some(NoteTheme::Name("BUILD".into())));
@@ -172,6 +173,33 @@ fn note_facts_parse_theme_scalars_lists_and_off() {
         "---\ntype: [[project]]\ntheme:\nparent: [[dev]]\n---\n",
     );
     assert_eq!(blank_then_key.theme, None);
+}
+
+#[test]
+fn note_facts_parse_canonical_task_type_and_conflict() {
+    let canonical =
+        NoteFacts::parse("---\ntype: [[area]]\ntask_type: BUILD\n---\n");
+    assert_eq!(canonical.theme, Some(NoteTheme::Name("BUILD".into())));
+    assert!(!canonical.theme_conflict);
+    let wins = NoteFacts::parse(
+        "---\ntype: [[area]]\ntask_type: FIX\ntheme: BUILD\n---\n",
+    );
+    assert_eq!(wins.theme, Some(NoteTheme::Name("FIX".into())));
+    assert!(wins.theme_conflict);
+    let same = NoteFacts::parse(
+        "---\ntype: [[area]]\ntask_type: BUILD\ntheme: BUILD\n---\n",
+    );
+    assert_eq!(same.theme, Some(NoteTheme::Name("BUILD".into())));
+    assert!(!same.theme_conflict);
+    let legacy_only =
+        NoteFacts::parse("---\ntype: [[project]]\ntheme: WRITE\n---\n");
+    assert_eq!(legacy_only.theme, Some(NoteTheme::Name("WRITE".into())));
+    assert!(!legacy_only.theme_conflict);
+    let off_conflict = NoteFacts::parse(
+        "---\ntype: [[area]]\ntask_type: off\ntheme: BUILD\n---\n",
+    );
+    assert_eq!(off_conflict.theme, Some(NoteTheme::Off));
+    assert!(off_conflict.theme_conflict);
 }
 
 #[test]

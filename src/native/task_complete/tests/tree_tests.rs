@@ -113,6 +113,19 @@ fn complete_task_tree_preserves_authored_theme_field_bytes() {
 }
 
 #[test]
+fn complete_task_tree_preserves_canonical_type_field_bytes() {
+    let mut vault = MemoryVault::new();
+    vault.insert("sase.md", "- [ ] #task Ship it [type:: WRITE] ^ship\n");
+    let root = vault.absolute("sase.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "ship", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    let updated = outcome.changed_files.get(&root).expect("note changed");
+    assert!(updated.contains("[type:: WRITE]"));
+    assert_eq!(updated.matches("[type:: WRITE]").count(), 1);
+}
+
+#[test]
 fn complete_task_tree_preserves_authored_root_field_bytes() {
     let mut vault = MemoryVault::new();
     vault.insert("sase.md", "- [ ] #task Ship it (root::  sase) ^ship\n");

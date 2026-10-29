@@ -736,7 +736,7 @@
       "name": "today-prefix-create-substring",
       "draft": "=#bo",
       "today": [
-        "- [ ] () \u2014 ROBOT"
+        "- [ ] () — ROBOT"
       ],
       "history": {
         "2026-10-23": [
@@ -777,7 +777,7 @@
       "name": "prefix-shadowing",
       "draft": "=#sase",
       "today": [
-        "- [ ] () \u2014 SASE V18"
+        "- [ ] () — SASE V18"
       ],
       "history": {
         "2026-10-23": [
@@ -801,8 +801,8 @@
       "name": "again-prefix-shadowing",
       "draft": "=#sase",
       "today": [
-        "- [x] () \u2014 SASE",
-        "- [ ] () \u2014 SASE V18"
+        "- [x] () — SASE",
+        "- [ ] () — SASE V18"
       ],
       "history": {},
       "hidden": [],
@@ -847,7 +847,7 @@
       "name": "completed-link-context",
       "draft": "@inbox_t:foo1#bob",
       "today": [
-        "- [x] () \u2014 BOB"
+        "- [x] () — BOB"
       ],
       "history": {},
       "hidden": [],
@@ -864,7 +864,7 @@
       "name": "completed-start-context",
       "draft": "=#bob",
       "today": [
-        "- [x] () \u2014 BOB"
+        "- [x] () — BOB"
       ],
       "history": {},
       "hidden": [],
@@ -1017,7 +1017,7 @@
       "name": "create-before-utilities",
       "draft": "=#zzz",
       "today": [
-        "- [ ] (0900-0930) \u2014 RUN",
+        "- [ ] (0900-0930) — RUN",
         "- [ ] ()"
       ],
       "history": {
@@ -1047,7 +1047,7 @@
       "name": "today-component-exclusion-before-query",
       "draft": "=#decks",
       "today": [
-        "- [ ] () \u2014 BOB + DECKS"
+        "- [ ] () — BOB + DECKS"
       ],
       "history": {
         "2026-10-23": [
@@ -1094,7 +1094,7 @@
       "name": "hidden-today-stays",
       "draft": "=#bob",
       "today": [
-        "- [ ] () \u2014 BOB"
+        "- [ ] () — BOB"
       ],
       "history": {
         "2026-10-23": [
@@ -1115,8 +1115,8 @@
       "name": "literal-distinguishes-today-slug-collision",
       "draft": "=#\"SASE-V18",
       "today": [
-        "- [ ] () \u2014 SASE V18",
-        "- [ ] () \u2014 SASE-V18"
+        "- [ ] () — SASE V18",
+        "- [ ] () — SASE-V18"
       ],
       "history": {},
       "hidden": [],
@@ -1235,7 +1235,7 @@
       "name": "bob-2",
       "theme": "BOB",
       "today": [
-        "- [ ] () \u2014 BOB BUILD"
+        "- [ ] () — BOB BUILD"
       ],
       "draft": "=#bo",
       "replacement": "\"BOB\""
@@ -1244,7 +1244,7 @@
       "name": "bob-3",
       "theme": "BOB",
       "today": [
-        "- [ ] () \u2014 BOB BUILD"
+        "- [ ] () — BOB BUILD"
       ],
       "draft": "=bo",
       "replacement": "#\"BOB\""
@@ -1288,15 +1288,15 @@
       "name": "deep-work-9",
       "theme": "DEEP WORK",
       "today": [],
-      "draft": "=#\u201cDEEP",
+      "draft": "=#“DEEP",
       "replacement": "\"DEEP WORK\""
     },
     {
       "name": "again-prefix-shadowing",
       "theme": "SASE",
       "today": [
-        "- [x] () \u2014 SASE",
-        "- [ ] () \u2014 SASE V18"
+        "- [x] () — SASE",
+        "- [ ] () — SASE V18"
       ],
       "draft": "=#sase",
       "replacement": "\"SASE\""
@@ -2049,42 +2049,42 @@
       "op": "set",
       "name": "FIX",
       "before": "- [*] #task Make gates more reliable [fresh:: 2026-10-27] [created::2026-10-20] ^gates-more-reliable",
-      "after": "- [*] #task Make gates more reliable [theme:: FIX] [fresh:: 2026-10-27] [created::2026-10-20] ^gates-more-reliable"
+      "after": "- [*] #task Make gates more reliable [type:: FIX] [fresh:: 2026-10-27] [created::2026-10-20] ^gates-more-reliable"
     },
     {
       "id": "set-with-tags-no-id",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Draft the post #task #write",
-      "after": "- [ ] Draft the post [theme:: WRITE] #task #write"
+      "after": "- [ ] Draft the post [type:: WRITE] #task #write"
     },
     {
       "id": "set-blockquote",
       "op": "set",
       "name": "BUILD",
       "before": "> - [ ] Quoted task ^qid",
-      "after": "> - [ ] Quoted task [theme:: BUILD] ^qid"
+      "after": "> - [ ] Quoted task [type:: BUILD] ^qid"
     },
     {
       "id": "set-crlf",
       "op": "set",
       "name": "CHORE",
       "before": "- [ ] Windows line\r",
-      "after": "- [ ] Windows line [theme:: CHORE]\r"
+      "after": "- [ ] Windows line [type:: CHORE]\r"
     },
     {
       "id": "set-unicode-title",
       "op": "set",
       "name": "WRITE",
-      "before": "- [ ] Caf\u00e9 r\u00e9sum\u00e9 \u65e5\u672c\u8a9e ^id",
-      "after": "- [ ] Caf\u00e9 r\u00e9sum\u00e9 \u65e5\u672c\u8a9e [theme:: WRITE] ^id"
+      "before": "- [ ] Café résumé 日本語 ^id",
+      "after": "- [ ] Café résumé 日本語 [type:: WRITE] ^id"
     },
     {
       "id": "set-unknown-trailing-key",
       "op": "set",
       "name": "FIX",
       "before": "- [ ] Keep custom [mood:: grumpy] ^id",
-      "after": "- [ ] Keep custom [theme:: FIX] [mood:: grumpy] ^id"
+      "after": "- [ ] Keep custom [type:: FIX] [mood:: grumpy] ^id"
     },
     {
       "id": "clear-theme",
@@ -2103,56 +2103,110 @@
       "op": "set",
       "name": "BUILD",
       "before": "- [ ] Title [theme:: FIX] (theme:: WRITE) [fresh:: 2026-10-01]",
-      "after": "- [ ] Title [theme:: BUILD] [fresh:: 2026-10-01]"
+      "after": "- [ ] Title [type:: BUILD] [fresh:: 2026-10-01]"
     },
     {
       "id": "set-before-spaced-created",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [created :: 2026-10-28] ^id",
-      "after": "- [ ] Title [theme:: WRITE] [created :: 2026-10-28] ^id"
+      "after": "- [ ] Title [type:: WRITE] [created :: 2026-10-28] ^id"
     },
     {
       "id": "set-before-tabbed-created",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [created\t::\t2026-10-28] ^id",
-      "after": "- [ ] Title [theme:: WRITE] [created\t::\t2026-10-28] ^id"
+      "after": "- [ ] Title [type:: WRITE] [created\t::\t2026-10-28] ^id"
     },
     {
       "id": "set-malformed-key-stays-title",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [key with spaces:: value] ^id",
-      "after": "- [ ] Title [key with spaces:: value] [theme:: WRITE] ^id"
+      "after": "- [ ] Title [key with spaces:: value] [type:: WRITE] ^id"
     },
     {
       "id": "set-replace-lf",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [theme:: FIX]\n",
-      "after": "- [ ] Title [theme:: WRITE]\n"
+      "after": "- [ ] Title [type:: WRITE]\n"
     },
     {
       "id": "set-replace-crlf",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [theme:: FIX]\r\n",
-      "after": "- [ ] Title [theme:: WRITE]\r\n"
+      "after": "- [ ] Title [type:: WRITE]\r\n"
     },
     {
       "id": "set-replace-no-final-newline",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [theme:: FIX]",
-      "after": "- [ ] Title [theme:: WRITE]"
+      "after": "- [ ] Title [type:: WRITE]"
     },
     {
       "id": "set-preserves-trailing-whitespace",
       "op": "set",
       "name": "WRITE",
       "before": "- [ ] Title [theme:: FIX]  \n",
-      "after": "- [ ] Title [theme:: WRITE]  \n"
+      "after": "- [ ] Title [type:: WRITE]  \n"
+    },
+    {
+      "id": "parse-type",
+      "op": "parse",
+      "line": "- [ ] Title [type:: FIX] ^id",
+      "state": "set",
+      "value": "FIX"
+    },
+    {
+      "id": "parse-type-paren",
+      "op": "parse",
+      "line": "- [ ] Title (type:: WRITE)",
+      "state": "set",
+      "value": "WRITE"
+    },
+    {
+      "id": "parse-mixed-duplicate",
+      "op": "parse",
+      "line": "- [ ] Title [type:: FIX] [theme:: WRITE] ^id",
+      "state": "repair",
+      "repair": "duplicate"
+    },
+    {
+      "id": "parse-mixed-duplicate-paren",
+      "op": "parse",
+      "line": "- [ ] Title (type:: FIX) (theme:: WRITE)",
+      "state": "repair",
+      "repair": "duplicate"
+    },
+    {
+      "id": "set-replaces-legacy",
+      "op": "set",
+      "before": "- [ ] Title [theme:: FIX] ^id",
+      "name": "BUILD",
+      "after": "- [ ] Title [type:: BUILD] ^id"
+    },
+    {
+      "id": "set-replaces-legacy-paren",
+      "op": "set",
+      "before": "- [ ] Title (theme:: FIX) ^id",
+      "name": "BUILD",
+      "after": "- [ ] Title [type:: BUILD] ^id"
+    },
+    {
+      "id": "clear-removes-both",
+      "op": "clear",
+      "before": "- [ ] Title [type:: FIX] [theme:: WRITE] ^id",
+      "after": "- [ ] Title ^id"
+    },
+    {
+      "id": "clear-removes-type",
+      "op": "clear",
+      "before": "- [ ] Title [type:: FIX] ^id",
+      "after": "- [ ] Title ^id"
     }
   ],
   "write_rule": [

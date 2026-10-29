@@ -248,18 +248,18 @@ bob types rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-
 
 One previewed, verified, single-commit rewrite of the type component in
 ` — NAME` tails of canonical daily notes (past, today, and future, open and
-closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
-`[theme::]` / `(theme::)` task fields (including `done/`), modeled on
-`bob ref rename`.
+closed) plus `_templates/daily.md`, area and project `task_type:` / `theme:`
+defaults, and `[type::]` / `(type::)` plus legacy `[theme::]` / `(theme::)`
+task fields (including `done/`), modeled on `bob ref rename`.
 
 - **Scope:** Pomodoro tails, note defaults on area/project notes, and task
   type fields. Prose, fenced examples, `.bob/`, and `_conflicts/` are
   never touched.
 - **Byte preservation:** separators keep their `+` spelling. A resulting
-  duplicate collapses (`FIX + FIXES` → `FIX`). Quote style on `theme:`
-  scalars is preserved. Task fields keep their bracket or paren form and
-  take NEW's spelling; with `--merge`, fields simply take NEW. Every other
-  byte is preserved.
+  duplicate collapses (`FIX + FIXES` → `FIX`). Quote style on default
+  scalars is preserved. Task fields and defaults keep their key spelling;
+  task fields keep their bracket or paren form and take NEW's spelling;
+  with `--merge`, fields simply take NEW. Every other byte is preserved.
 - **Counts:** the preview (human and `-f json`) reports `sessions`,
   `defaults`, and `task_themes` separately and lists the default-bearing
   notes. JSON is additive; `entries` remains the session count.
@@ -461,29 +461,33 @@ section does not claim they ship yet.
 An area or project note declares its default with scalar frontmatter:
 
 ```yaml
-theme: WRITE
+task_type: WRITE
 ```
 
-Quotes are honored. An absent or blank value inherits from further up the
-residence chain. ASCII-case-insensitive `off` stops the walk, but only
-when declared by an area or project. Lists (flow and multiline),
-composites, mappings, and bad names are invalid: skipped, with one
-`theme_default_invalid` warning per visited declaring note. A `theme:`
-value on any other note kind is ignored, while that note's scalar
-`parent:` links still carry the walk. Daily notes have no default walk.
-The walk reuses the R1 residence chain with its 16-note and cycle
-limits. A set `[root:: X]` field starts that walk at X, including when
-the task lives in a daily note.
+`task_type:` is canonical; `theme:` is a legacy alias still read.
+Quotes are honored. When both keys are present, `task_type:` wins. A
+different legacy value adds one `type_default_conflict` warning through
+the same channel as `theme_default_invalid`. An absent or blank value
+inherits from further up the residence chain. ASCII-case-insensitive
+`off` (either key) stops the walk, but only when declared by an area or
+project. Lists (flow and multiline), composites, mappings, and bad names
+are invalid: skipped, with one `theme_default_invalid` warning per
+visited declaring note. A default value on any other note kind is
+ignored, while that note's scalar `parent:` links still carry the walk.
+Daily notes have no default walk. The walk reuses the R1 residence chain
+with its 16-note and cycle limits. A set `[root:: X]` field starts that
+walk at X, including when the task lives in a daily note.
 
 ### Task fields
 
 A task line carries none, one set field, or repair state:
 
-- **Set:** exactly one valid field, `[theme:: X]` or `(theme:: X)`.
-- **Repair:** two or more fields mean `duplicate`; one invalid field
-  means `invalid`. Repair falls through to inheritance, carries
-  `repair: "duplicate" | "invalid"` whenever a suggestion exists, and is
-  replaced by the next eligible writer.
+- **Set:** exactly one valid field, `[type:: X]` or `(type:: X)` (legacy
+  `[theme:: X]` / `(theme:: X)` still read).
+- **Repair:** two or more fields across both keys mean `duplicate`; one
+  invalid field means `invalid`. Repair falls through to inheritance,
+  carries `repair: "duplicate" | "invalid"` whenever a suggestion exists,
+  and is replaced by the next eligible writer.
 - Closed tasks keep their field as history and have no suggestion.
 
 A no-suggestion result still returns warnings separately; no repair
@@ -502,7 +506,7 @@ First match wins:
    Source `note`, label `from <lowercase declaring stem>`. A set
    `[root:: X]` field starts this walk at X, so a daily `^gtd` row
    carrying `[root:: gtd_daily]` suggests `gtd_daily`'s default
-   (`theme: PLAN`).
+   (`task_type: PLAN`).
 4. Otherwise none: `No suggested type`.
 
 The inherited suggestion runs the same rule with step 1 skipped. The
@@ -534,8 +538,9 @@ config. The vault is never written; byte-identical before and after.
 
 JSON is
 `{schema_version: 1, ok, target: {route, block_id, path, line, new_task}, theme_suggestion: <object or null>, warnings}`.
-Null block ID and line mark new tasks. Warnings are `closed_task` and
-`theme_default_invalid` (with the declaring `path`).
+Null block ID and line mark new tasks. Warnings are `closed_task`,
+`theme_default_invalid`, and `type_default_conflict` (with the declaring
+`path`).
 
 Human output shows the swatch and name plus `suggested · <label>`;
 note defaults add the declaring path and chain, and task overrides add
@@ -554,8 +559,8 @@ Color follows NO_COLOR; broken pipes exit silently.
 
 ### Placement
 
-`set_task_theme` removes every type field in either form plus one
-adjacent separating space, then inserts ` [theme:: NAME]` before the
+`set_task_theme` removes every `type` and `theme` field in either form
+plus one adjacent separating space, then inserts ` [type:: NAME]` before the
 maximal trailing run of inline fields of any key, tags, and a trailing
 `^id`. With no run it inserts at the trimmed end. `clear_task_theme`
 only removes the fields and the adjacent separator. Both preserve every
@@ -622,10 +627,13 @@ distinctive `[root::]` / `(root::)` field byte-identical.
 
 ### Rename coverage
 
-`bob types rename` rewrites matching note defaults and task fields in the
+`bob types rename` rewrites matching note defaults (`task_type:` and
+`theme:`, keeping each key's spelling) and task fields (`[type::]` and
+`[theme::]`, keeping each field's spelling and bracket/paren form) in the
 same previewed, verified commit as the session tails. Invalid defaults,
-`off`, non-area/project `theme:` lines, fenced examples, and prose stay
-untouched. `bob types split` never rewrites defaults or fields.
+`off`, non-area/project default lines, fenced examples, and prose stay
+untouched. `bob types split` never rewrites defaults or fields; its
+`split_leaves_task_themes` leftover counts cover both spellings.
 
 ### List hints: unknown defaults
 
@@ -696,9 +704,12 @@ change.
 
 ### Dataview caveat
 
-`task.theme` can conflate frontmatter note defaults with task fields,
-so it cannot answer what a task itself declares. Use
-`bob types suggest` for the authoritative suggestion.
+Dataview merges list-item inline fields into page fields, so page `type`
+on a note with typed tasks can become a list. Bob reads note kinds from
+frontmatter and Bases read `note.type`, so neither is affected. No vault
+Dataview query filters on page `type` today (verified 2026-10-29). Raw
+Dataview `task.type` / `task.theme` is not an effective-type API; point
+readers at `bob types suggest`.
 
 ## JSON contract
 
