@@ -65,6 +65,10 @@ pub(crate) enum CompletionContext {
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
+    /// A `((query` Task Wikilink field: vault-wide task search whose
+    /// accept inserts a backend-formatted `[[target#^id]]` replacement.
+    /// Draft-only trigger, never stored syntax.
+    WikilinkTask,
 }
 
 /// The active marker component at one cursor position, ready for a

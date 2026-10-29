@@ -42,6 +42,7 @@ mod capture_targets;
 mod capture_task_id;
 mod capture_task_sections;
 mod capture_task_toggle;
+mod capture_task_wikilinks;
 mod capture_tasks;
 mod capture_templates;
 mod capture_work_log;

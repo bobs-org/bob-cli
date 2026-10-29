@@ -26,7 +26,7 @@ use crate::native::{
         self, CompletionContext, DependencyTarget, DependencyTargetKind,
         RelationDirection,
     },
-    capture_links, pomodoro,
+    capture_links, capture_task_wikilinks, pomodoro,
 };
 
 /// `true` when `cursor` sits in Work Log text: a bullet line or an inline
@@ -63,9 +63,11 @@ fn build_result_inner(
         .as_deref()
         .map(capture::route_label)
         .unwrap_or_else(|| capture::route_label(capture::inbox_route()));
-    if let Some(field) =
-        capture_links::completion_field_at(raw_text, cursor, current_note_path)
-    {
+    if let Some(field) = capture_links::completion_field_at(
+        raw_text,
+        cursor,
+        current_note_path.clone(),
+    ) {
         // In Work Log text, block-link candidates are suppressed because
         // entries reject block links; note and heading completion keeps
         // working.
@@ -104,7 +106,8 @@ fn build_result_inner(
             | CompletionContext::RelationTo
             | CompletionContext::RelationFrom
             | CompletionContext::RelationLabel
-            | CompletionContext::TaskComplete => {
+            | CompletionContext::TaskComplete
+            | CompletionContext::WikilinkTask => {
                 unreachable!("link field context")
             }
         };
@@ -129,6 +132,54 @@ fn build_result_inner(
             relation_cancel: None,
             relation_complete: None,
             picker: None,
+            hidden_count: None,
+            one_off: None,
+        });
+    }
+
+    if let Some(field) = capture_task_wikilinks::completion_field_at(
+        raw_text,
+        cursor,
+        &current_note_path,
+    ) {
+        let (rows, warnings) = capture_task_wikilinks::candidates(
+            bob_dir,
+            &field,
+            &current_note_path,
+        );
+        let marker_range = Replacement {
+            start: field.replacement.0,
+            end: field.replacement.1,
+        };
+        return Ok(CaptureCompleteResult {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            cursor,
+            replacement: marker_range,
+            context: Some(CompletionContext::WikilinkTask),
+            candidates: Candidates::WikilinkTask(rows),
+            theme_suggestion: None,
+            r#override: None,
+            block_id: None,
+            warnings,
+            query: Some(field.query),
+            owner: None,
+            relation: None,
+            relation_cancel: None,
+            relation_complete: None,
+            picker: Some(PickerDescriptor {
+                kind: PickerKind::WikilinkTask,
+                scope: PickerScope::Vault,
+                scope_token: "((".to_string(),
+                note_target: None,
+                marker_range,
+                trigger_removal_range: Replacement {
+                    start: field.replacement.0 + 1,
+                    end: field.replacement.1,
+                },
+                action_continuation_keys: None,
+                relationship: None,
+            }),
             hidden_count: None,
             one_off: None,
         });
@@ -454,7 +505,8 @@ fn build_result_inner(
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
-        | CompletionContext::WikilinkBlock => {
+        | CompletionContext::WikilinkBlock
+        | CompletionContext::WikilinkTask => {
             unreachable!("marker field context")
         }
     };

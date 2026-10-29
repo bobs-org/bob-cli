@@ -6545,7 +6545,30 @@ for `[[##...]]`. `wikilink_block` searches named block IDs in the analogous
 target, current-destination, or `[[^^...]]` vault-wide scope, except on a
 Work Log bullet line under a whole-item `x`, where block candidates are
 suppressed (entries reject block links) while note and heading completion
-keeps working. The note index is
+keeps working. A `((query` token in free text — at line start or after a
+space or tab, outside code and existing `[[…]]`, outside Work Log text, and
+not on a whole-item action — opens `wikilink_task`. It searches every task
+in the vault (open and completed history, including ID-less rows, hidden
+tasks, ref notes, daily notes, and `done/` archive). `--all-tasks` has no
+effect. Empty-query order is this-note, In Progress, Next, other open notes,
+then completed history, with `#hide` last inside each group. A query ranks
+by the same fields as the dependency picker, with open matches ahead of
+completed ones at equal score. Identified rows insert a backend-formatted
+`[[target#^id]]` (shortest unique basename, or the vault-relative path
+without `.md` when the name collides; `done/` archive always keeps the
+path). ID-less and guarded rows have an empty replacement: duplicate block
+IDs are always guarded, and ID-less rows in `done/`, the previous daily
+snapshot, or a read-only note are guarded with Bob's `disabled_reason`.
+Each row also carries `link_target` (the text before `#^`, display only)
+and `cursor_after` when `replacement` is non-empty (draft-global UTF-8
+bytes after the splice). `query` is the bytes after `((` up to the cursor.
+The replacement covers the `((query` token, including a closed
+`((query))`. The vault-scoped `picker` descriptor uses `kind:
+wikilink_task`, `scope_token: "(("`, `marker_range` equal to the
+replacement range, and `trigger_removal_range` from the second `(` to the
+range end. Shell completion returns nothing for this field. `((` is a
+draft-only trigger: captured bytes are always a plain Obsidian block link.
+The note index is
 read-only, skips hidden directories plus `.git`, `.obsidian`, `_generated`, and
 `_templates`, never follows directory symlinks, and returns bounded warnings for
 individual unreadable notes or malformed alias frontmatter while keeping path
@@ -6570,11 +6593,11 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, `wikilink_task`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `relation_to`, `relation_from`, and `relation_label`; it
+`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_task`, `relation_to`, `relation_from`, and `relation_label`; it
 contains the selector text after its sigil (and a decoded locator for a
 dependency, blocked-task, or relation query). `blocked_task` is the `*` twin of
 `task_dependency`: same owner and replacement-range rules, `*` replacements,
@@ -6589,8 +6612,47 @@ bare selector or only the `+` through the scoped ID. All offsets are
 half-open UTF-8 byte ranges. Only the exact lone `+` includes
 `action_continuation_keys` (`0` through `9`, then `+`). The `task_complete`
 context carries its own vault-scoped `picker` descriptor (`kind:
-task_complete`, `scope_token: "!"`) instead; the descriptor is omitted from
-all other contexts. `task_block_id` covers `@route^prefix` once the route resolves;
+task_complete`, `scope_token: "!"`) instead. The `wikilink_task` context
+carries a vault-scoped `picker` descriptor (`kind: wikilink_task`,
+`scope_token: "(("`) whose `marker_range` is the `((query` token and whose
+`trigger_removal_range` runs from the second `(` to the range end. The
+descriptor is omitted from all other contexts. For `Follow up ((s` at
+cursor 13:
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "cursor": 13,
+  "replacement": {"start": 10, "end": 13},
+  "context": "wikilink_task",
+  "query": "s",
+  "picker": {
+    "kind": "wikilink_task",
+    "scope": "vault",
+    "scope_token": "((",
+    "marker_range": {"start": 10, "end": 13},
+    "trigger_removal_range": {"start": 11, "end": 13}
+  },
+  "candidates": [
+    {
+      "replacement": "[[sase_cleanup#^no-idle]]",
+      "ref": "12:abcd1234",
+      "note_path": "sase_cleanup.md",
+      "locator": "sase_cleanup",
+      "group": "open",
+      "hidden": false,
+      "block_id": "no-idle",
+      "requires_block_id": false,
+      "link_target": "sase_cleanup",
+      "cursor_after": 25,
+      "text": "Stop idling when no agents run"
+    }
+  ]
+}
+```
+
+`task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a
 trailing ` :` / ` ^` task ID token on a first-level bullet of a project-note
 item with a resolved route and block ID, from just after the sigil to the
@@ -6947,7 +7009,7 @@ bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id 
 
 Assigns a user-authored Obsidian block ID to one open task in a Bob note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
-`task_link`, `task_parent`, `task_dependency`, `blocked_task`, or `task_complete` candidate into an identified task. The command validates
+`task_link`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, or `wikilink_task` candidate into an identified task. The command validates
 `--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
@@ -6977,7 +7039,10 @@ the backend-formatted
 both modes) for splicing the new ID into the Complete picker, the
 backend-formatted `relation_to_replacement` (`~note:id`) and
 `relation_from_replacement` (`~~note:id`), quoted when the locator needs
-it, for splicing the new ID into the relation pickers, the canonical
+it, for splicing the new ID into the relation pickers, the
+backend-formatted `wikilink_replacement` (`[[note#^id]]`, the shortest
+unambiguous Obsidian block link, in both modes) for splicing the new ID
+into the Task Wikilink Picker, the canonical
 `block_id`,
 the updated one-based `line`, the updated `ref`, and a `task` object with
 the same picker metadata as `capture-tasks` after the assignment. In `--route`

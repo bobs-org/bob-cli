@@ -15,8 +15,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture, capture_dependency_tasks, capture_language, capture_tasks,
-    collect_done, env as bob_env,
+    capture, capture_dependency_tasks, capture_language,
+    capture_task_wikilinks, capture_tasks, collect_done, env as bob_env,
     note_tasks::{self, RefLookup, TaskRef},
     style::Styler,
     task_status_hooks,
@@ -102,7 +102,9 @@ locator needs it, in both modes) so the Complete picker can splice the new ID, \
 plus `relation_to_replacement` (`~note:block-id`) and \
 `relation_from_replacement` (`~~note:block-id`), quoted when the locator \
 needs it, so either relation picker can splice the new ID, \
-plus `parent_replacement` (`@route+block-id`) in routable \
+plus `wikilink_replacement` (`[[note#^id]]`, the shortest unambiguous \
+Obsidian block link, in both modes) so the Task Wikilink Picker can splice \
+the new ID, plus `parent_replacement` (`@route+block-id`) in routable \
 `--route` mode. Dry-run plans the same \
 mutation and returns the same success shape without writing. Stale, \
 ambiguous, terminal, already-identified, duplicate, missing, unreadable, \
@@ -348,6 +350,12 @@ struct CaptureTaskIdResult {
     /// the locator needs it. Present in both target modes.
     relation_to_replacement: String,
     relation_from_replacement: String,
+    /// Backend-formatted `[[note#^id]]` Obsidian block link (shortest
+    /// unique basename, or the vault-relative path without `.md` when
+    /// needed; `done/` archive always keeps the path). Present in both
+    /// `--route` and `--note-path` modes so the Task Wikilink Picker can
+    /// splice a just-assigned ID.
+    wikilink_replacement: String,
     /// Backend-formatted parent-task marker, present only when `--route`
     /// identifies a routable note.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -560,6 +568,11 @@ fn plan_assignment(
             &request.block_id,
             "~~",
         );
+    let wikilink_replacement = capture_task_wikilinks::wikilink_replacement(
+        &discovered.index,
+        &target_path,
+        &request.block_id,
+    );
     let parent_replacement = route
         .as_deref()
         .map(|route| format!("@{route}+{}", request.block_id));
@@ -583,6 +596,7 @@ fn plan_assignment(
             complete_replacement,
             relation_to_replacement,
             relation_from_replacement,
+            wikilink_replacement,
             parent_replacement,
             line: assigned.line,
             task_ref: assigned.task_ref.clone(),
@@ -1068,6 +1082,7 @@ mod tests {
             complete_replacement: "!file:report-id".to_string(),
             relation_to_replacement: "~file:report-id".to_string(),
             relation_from_replacement: "~~file:report-id".to_string(),
+            wikilink_replacement: "[[file#^report-id]]".to_string(),
             parent_replacement: Some("@file+report-id".to_string()),
             line: 2,
             task_ref: "2:abcd1234".to_string(),
@@ -1098,6 +1113,7 @@ mod tests {
         assert_eq!(value["complete_replacement"], "!file:report-id");
         assert_eq!(value["relation_to_replacement"], "~file:report-id");
         assert_eq!(value["relation_from_replacement"], "~~file:report-id");
+        assert_eq!(value["wikilink_replacement"], "[[file#^report-id]]");
         assert_eq!(value["block_id"], "report-id");
         assert_eq!(value["line"], 2);
         assert_eq!(value["ref"], "2:abcd1234");

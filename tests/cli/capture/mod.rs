@@ -17,6 +17,7 @@ mod complete_relationship_owner;
 mod complete_task_complete;
 mod complete_task_link;
 mod complete_themes;
+mod complete_wikilink_task;
 mod ensure_next;
 mod flag_guard;
 mod freshness_stamps;

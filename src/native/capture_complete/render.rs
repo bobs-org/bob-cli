@@ -7,6 +7,7 @@ use super::model::{
     TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use super::COMMAND_NAME;
+use crate::native::capture_task_wikilinks::WikilinkTaskCandidate;
 use crate::native::{
     capture_block_ids,
     capture_completable_tasks::{group_label, role_label},
@@ -521,7 +522,38 @@ pub(super) fn candidate_lines(
                 )
             })
             .collect(),
+        Candidates::WikilinkTask(items) => {
+            items.iter().map(wikilink_task_line).collect()
+        }
     }
+}
+
+/// One human line for a `wikilink_task` candidate: the insertable
+/// `[[target#^id]]` (or a needs-ID marker) plus task text, locator,
+/// group, and any guard reason.
+pub(super) fn wikilink_task_line(
+    item: &WikilinkTaskCandidate,
+) -> (String, String) {
+    let mut detail = format!(
+        "[{}] {}  · {}  · {}",
+        item.status_symbol, item.text, item.locator, item.group
+    );
+    if let Some(reason) = item.disabled_reason.as_deref() {
+        detail.push_str(&format!("  · {reason}"));
+    } else if item.requires_block_id {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => {
+                detail.push_str(&format!(" · needs ID (^{suggestion})"))
+            }
+            None => detail.push_str(" · needs ID"),
+        }
+    }
+    let label = if item.replacement.is_empty() {
+        "…".to_string()
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
 }
 
 /// Human row for one `pomodoro_start_name` candidate: the visible name
@@ -603,6 +635,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",
+        CompletionContext::WikilinkTask => "wikilink_task",
     }
 }
 

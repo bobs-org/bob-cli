@@ -42,17 +42,41 @@ pub(crate) fn canonical_link(
     if target == source {
         return format!("[[#^{block_id}]]");
     }
+    cross_note_link(target, block_id, index)
+}
+
+/// The target text bob puts before `#^` in a cross-note block link:
+/// archive paths always keep the explicit vault-relative path without
+/// `.md`; otherwise the basename when it uniquely resolves through
+/// `index`, else the full path without `.md`. Drafts use this instead
+/// of [`canonical_link`]'s same-note `#^id` form, because a capture
+/// destination can change after insert.
+pub(crate) fn cross_note_link_target(
+    target: &Path,
+    index: &NoteIndex,
+) -> String {
     // Basename links do not search `done/`, so archive targets always
     // keep the explicit path (`docs/task-dependencies.md` §3).
     if super::is_archive_path(target) {
-        return format!("[[{}#^{block_id}]]", path_without_extension(target));
+        return path_without_extension(target);
     }
     if let Some(basename) = target.file_stem().and_then(OsStr::to_str)
         && index.resolve(None, basename).as_deref() == Some(target)
     {
-        return format!("[[{basename}#^{block_id}]]");
+        return basename.to_string();
     }
-    format!("[[{}#^{block_id}]]", path_without_extension(target))
+    path_without_extension(target)
+}
+
+/// `[[<cross_note_link_target>#^<block_id>]]` — the insertable form
+/// shared by `((` candidates and `capture-task-id`'s
+/// `wikilink_replacement`.
+pub(crate) fn cross_note_link(
+    target: &Path,
+    block_id: &str,
+    index: &NoteIndex,
+) -> String {
+    format!("[[{}#^{block_id}]]", cross_note_link_target(target, index))
 }
 
 fn path_without_extension(path: &Path) -> String {

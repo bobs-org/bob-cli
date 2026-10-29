@@ -14,7 +14,7 @@ use super::{
 use crate::native::{
     capture, capture_block_ids, capture_completable_tasks,
     capture_language::{self, CompletionContext, RelationDirection},
-    capture_links,
+    capture_links, capture_task_wikilinks,
 };
 
 use super::candidates::dependency_candidates;
@@ -72,8 +72,21 @@ pub(crate) fn shell_completion(
         .as_deref()
         .map(capture::route_label)
         .unwrap_or_else(|| capture::route_label(capture::inbox_route()));
-    if capture_links::completion_field_at(raw_text, cursor, current_note_path)
-        .is_some()
+    if capture_links::completion_field_at(
+        raw_text,
+        cursor,
+        current_note_path.clone(),
+    )
+    .is_some()
+    {
+        return Ok(None);
+    }
+    if capture_task_wikilinks::completion_field_at(
+        raw_text,
+        cursor,
+        &current_note_path,
+    )
+    .is_some()
     {
         return Ok(None);
     }
@@ -802,7 +815,8 @@ pub(crate) fn shell_completion(
         }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
-        | CompletionContext::WikilinkBlock => return Ok(None),
+        | CompletionContext::WikilinkBlock
+        | CompletionContext::WikilinkTask => return Ok(None),
     }
     Ok(Some(ShellCompletion { marker_start, rows }))
 }

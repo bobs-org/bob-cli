@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use super::super::task_status_hooks::{fenced_lines, logical_lines};
 use super::super::vault_links::NoteIndex;
 use super::format::{
-    canonical_link, child_indent_for_parent, format_dependency_line,
-    has_final_newline, note_line_ending,
+    canonical_link, child_indent_for_parent, cross_note_link,
+    cross_note_link_target, format_dependency_line, has_final_newline,
+    note_line_ending,
 };
 use super::parse::{dependency_child_of, DependencyLine};
 
@@ -261,6 +262,43 @@ fn dw_link_form_vectors() {
             &index
         ),
         "[[money/cash#^unemployment]]"
+    );
+}
+
+#[test]
+fn cross_note_link_skips_the_same_note_form() {
+    let index = NoteIndex::from_paths([
+        PathBuf::from("cash.md"),
+        PathBuf::from("body.md"),
+        PathBuf::from("money/cash.md"),
+        PathBuf::from("done/old.md"),
+    ]);
+    // Drafts never use `[[#^id]]`: the capture destination can change.
+    assert_eq!(
+        cross_note_link(&PathBuf::from("body.md"), "hospital-swarm", &index),
+        "[[body#^hospital-swarm]]"
+    );
+    assert_eq!(
+        cross_note_link_target(&PathBuf::from("body.md"), &index),
+        "body"
+    );
+    assert_eq!(
+        cross_note_link(
+            &PathBuf::from("money/cash.md"),
+            "unemployment",
+            &index
+        ),
+        "[[money/cash#^unemployment]]"
+    );
+    // Archive targets always keep the explicit path, even when the
+    // basename is unique.
+    assert_eq!(
+        cross_note_link(&PathBuf::from("done/old.md"), "kept", &index),
+        "[[done/old#^kept]]"
+    );
+    assert_eq!(
+        cross_note_link_target(&PathBuf::from("done/old.md"), &index),
+        "done/old"
     );
 }
 

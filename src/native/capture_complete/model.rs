@@ -10,6 +10,7 @@ use crate::native::{
     },
     capture_pomodoros::{self, PomodoroState},
     capture_targets::CaptureTargetKind,
+    capture_task_wikilinks::WikilinkTaskCandidate,
 };
 
 /// Bump only for a breaking change to the JSON object below; new optional
@@ -460,6 +461,7 @@ pub(super) struct TaskCompleteCandidate {
 pub(super) enum PickerKind {
     ParentTask,
     TaskComplete,
+    WikilinkTask,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -626,6 +628,7 @@ pub(super) enum Candidates {
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
+    WikilinkTask(Vec<WikilinkTaskCandidate>),
 }
 
 impl Candidates {
@@ -652,6 +655,7 @@ impl Candidates {
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
+            Self::WikilinkTask(items) => items.len(),
         }
     }
 }
@@ -703,10 +707,10 @@ pub(super) struct CaptureCompleteResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Search text for `task_dependency`, `blocked_task`, scoped `task`,
-    /// bare-plus `task_parent`, `task_complete`, and relation target and
-    /// label completion. Relation queries have their sigil,
-    /// opening quote, and escapes decoded so clients never parse a quoted
-    /// note component. Omitted from other contexts.
+    /// bare-plus `task_parent`, `task_complete`, `wikilink_task`, and
+    /// relation target and label completion. Relation queries have their
+    /// sigil, opening quote, and escapes decoded so clients never parse a
+    /// quoted note component. Omitted from other contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) query: Option<String>,
     /// Lexical owner of the `task_dependency`, `blocked_task`, `relation_to`,
@@ -734,8 +738,9 @@ pub(super) struct CaptureCompleteResult {
     /// responses stay byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) one_off: Option<bool>,
-    /// Parent-task picker scope and editing ranges; omitted from every
-    /// other completion context.
+    /// Server-authored picker scope and editing ranges for `task_parent`,
+    /// `task_complete`, and `wikilink_task`; omitted from every other
+    /// completion context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) picker: Option<PickerDescriptor>,
     #[serde(skip_serializing_if = "Option::is_none")]
