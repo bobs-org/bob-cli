@@ -502,6 +502,104 @@ fn words_in(text: &str) -> Vec<String> {
     words
 }
 
+/// Closed `)` byte after an opening `(` at `open`, when present.
+fn closing_paren_end(body: &str, open: usize) -> Option<usize> {
+    let close = body.get(open + 1..)?.find(')')?;
+    Some(open + 1 + close + 1)
+}
+
+/// `[label](destination)` starting at `index`. Wikilinks are not links.
+fn markdown_link_at(body: &str, index: usize) -> Option<(&str, usize)> {
+    if !body[index..].starts_with('[') || body[index..].starts_with("[[") {
+        return None;
+    }
+    let close = body.get(index + 1..)?.find(']')?;
+    let label = &body[index + 1..index + 1 + close];
+    let after_label = index + 1 + close + 1;
+    if !body
+        .get(after_label..)
+        .is_some_and(|rest| rest.starts_with('('))
+    {
+        return None;
+    }
+    let end = closing_paren_end(body, after_label)?;
+    Some((label, end))
+}
+
+/// `scheme://…` or `www.` run starting at `index`.
+fn url_run_end(body: &str, index: usize) -> Option<usize> {
+    let rest = body.get(index..)?;
+    let prefix = if rest.len() >= 4
+        && rest.is_char_boundary(4)
+        && rest[..4].eq_ignore_ascii_case("www.")
+    {
+        4
+    } else {
+        scheme_uri_prefix(rest)?
+    };
+    let mut end = index + prefix;
+    while end < body.len() {
+        if body.as_bytes()[end].is_ascii_whitespace() {
+            break;
+        }
+        end += 1;
+    }
+    Some(end)
+}
+
+fn scheme_uri_prefix(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    if !bytes.first()?.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut i = 1;
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric()
+            || matches!(bytes[i], b'+' | b'.' | b'-'))
+    {
+        i += 1;
+    }
+    if rest.get(i..)?.starts_with("://") {
+        Some(i + 3)
+    } else {
+        None
+    }
+}
+
+/// Body with Markdown link destinations and bare URLs removed, labels kept.
+fn prose_text(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut index = 0;
+    while index < body.len() {
+        if !body.is_char_boundary(index) {
+            index += 1;
+            continue;
+        }
+        if let Some(end) = url_run_end(body, index) {
+            out.push(' ');
+            index = end;
+            continue;
+        }
+        if let Some((label, end)) = markdown_link_at(body, index) {
+            out.push_str(label);
+            index = end;
+            continue;
+        }
+        if body.as_bytes()[index] == b'('
+            && index > 0
+            && body.as_bytes()[index - 1] == b']'
+            && let Some(end) = closing_paren_end(body, index)
+        {
+            index = end;
+            continue;
+        }
+        let ch = body[index..].chars().next().expect("index in range");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
+}
+
 fn phrase_spans(body: &str) -> Vec<String> {
     let mut phrases = Vec::new();
     let bytes = body.as_bytes();
@@ -553,6 +651,15 @@ fn phrase_spans(body: &str) -> Vec<String> {
             }
             index += open_len;
         } else if byte == b'(' {
+            // A `(` that directly follows `]` is a Markdown link destination.
+            if index > 0 && bytes[index - 1] == b']' {
+                if let Some(end) = closing_paren_end(body, index) {
+                    index = end;
+                    continue;
+                }
+                index += 1;
+                continue;
+            }
             if let Some(close) = body[index + 1..].find(')') {
                 phrases.push(body[index + 1..index + 1 + close].to_string());
                 index = index + 1 + close + 1;
@@ -567,6 +674,11 @@ fn phrase_spans(body: &str) -> Vec<String> {
                 continue;
             }
             index += 2;
+        } else if let Some((label, end)) = markdown_link_at(body, index) {
+            if !words_in(label).is_empty() {
+                phrases.push(label.to_string());
+            }
+            index = end;
         } else {
             index += 1;
         }
@@ -665,7 +777,7 @@ pub(crate) fn suggest_ids_with_used(
 ) -> Vec<String> {
     let mut candidates: Vec<String> = Vec::new();
 
-    let prose = words_in(body);
+    let prose = words_in(&prose_text(body));
     // Candidate 1: the first phrase with at least one word, as its first 4.
     for phrase in phrase_spans(body) {
         let words = words_in(&phrase);
@@ -795,6 +907,36 @@ mod tests {
             ),
             ("Release v0.18.0!", '^', vec!["release-v0-18"]),
             ("Tool", '^', vec!["tool-2"]),
+            (
+                "Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x)",
+                '^',
+                vec!["try-opus-blender", "opus-blender"],
+            ),
+            (
+                "Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x \"Open in Google Keep\")",
+                '^',
+                vec!["try-opus-blender", "opus-blender"],
+            ),
+            (
+                "See https://example.com/docs for details",
+                '^',
+                vec!["see-details"],
+            ),
+            (
+                "See www.example.com for details",
+                '^',
+                vec!["see-details"],
+            ),
+            (
+                "Fix (gkeep) flaky test",
+                '^',
+                vec!["gkeep", "fix-gkeep-flaky", "gkeep-flaky-test"],
+            ),
+            (
+                "Read [the handbook](https://example.com/guide) tonight",
+                '^',
+                vec!["handbook", "read-handbook-tonight", "handbook-tonight"],
+            ),
         ];
         for (body, marker, expected) in cases {
             let used = if body == "Tool" {

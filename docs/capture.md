@@ -6625,14 +6625,19 @@ the item. A `used` entry carries `line` (1-based physical draft line),
 `task: true`, null `status_symbol` / `status_name`, and `text`. The object
 reads no routed note except to set `note_exists` for the project note.
 Suggestions derive from the task text: the first phrase with a word (code
-spans, quoted phrases with mixed `"`/`“` quotes, parentheticals, and
-`[[wikilink]]` alias-or-target, in text order) as its first 4 words, then the
-first 3 prose words, then — when the first prose word is a leading verb — the
-next 3 words; words are ASCII alphanumeric runs, lowercased, minus stopwords;
-joined with `-`, truncated at a word boundary to at most 32 bytes, validated,
-deduplicated, and suffixed with the first free `-2`…`-9` when taken (dropped
-when none is free). For example `Fix flaky gkeep test` suggests
-`fix-flaky-gkeep` and `flaky-gkeep-test`. Older clients without the
+spans, quoted phrases with mixed `"`/`“` quotes, parentheticals, Markdown
+`[label](destination)` labels that contain a word — never the destination; a
+`(` that directly follows `]` is a link destination, not a parenthetical —
+and `[[wikilink]]` alias-or-target, in text order) as its first 4 words, then
+the first 3 prose words, then — when the first prose word is a leading verb —
+the next 3 words; words are ASCII alphanumeric runs, lowercased, minus
+stopwords; prose drops bare URLs (`scheme://…` runs and `www.` runs) and
+link destinations before splitting; joined with `-`, truncated at a word
+boundary to at most 32 bytes, validated, deduplicated, and suffixed with the
+first free `-2`…`-9` when taken (dropped when none is free). For example
+`Fix flaky gkeep test` suggests `fix-flaky-gkeep` and `flaky-gkeep-test`, and
+`Try Opus with Blender. [💡](https://keep.google.com/u/0/#NOTE/x)` suggests
+`try-opus-blender` and `opus-blender`. Older clients without the
 `block_id` object treat `pomodoro_block_id` as a link list and see no picker
 for `task_block_id`; the app never falls back to the inline list for these
 three contexts. Older clients route the unknown `project_task_block_id`
