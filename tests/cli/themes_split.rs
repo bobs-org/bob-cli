@@ -395,8 +395,8 @@ fn themes_split_refusals_are_json_on_nonzero_exit() {
 }
 
 #[test]
-fn themes_split_preserves_crlf_bytes_in_offline_write() {
-    let temp = TempDir::new("bob-cli-themes-split-crlf");
+fn themes_split_preserves_trailing_whitespace_and_mixed_endings_offline() {
+    let temp = TempDir::new("bob-cli-themes-split-trailing-whitespace");
     let vault = temp.path().join("vault");
     let cache = temp.path().join("cache");
     fs::create_dir_all(&cache).unwrap();
@@ -404,36 +404,46 @@ fn themes_split_preserves_crlf_bytes_in_offline_write() {
         &vault.join("job.md"),
         "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n",
     );
-    let before: &[u8] =
-        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB\r\n\t- keep this child\r\n- [ ] () \xe2\x80\x94 KEEP\r\n";
+    // Open and completed entries carry trailing spaces/tabs, with mixed
+    // line endings and a changed final row without a newline. autocrlf
+    // off keeps the fixture and committed bytes exact.
+    let before: &[u8] = b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB \t\r\n- [x] (0800-0830 30m) \xe2\x80\x94 JOB  \n- [ ] () \xe2\x80\x94 JOB\t";
     fs::create_dir_all(vault.join("2026")).unwrap();
     fs::write(vault.join("2026/20261020.md"), before).unwrap();
     git_in(&vault, ["init", "-q"]);
     git_in(&vault, ["config", "user.email", "t@t"]);
     git_in(&vault, ["config", "user.name", "t"]);
+    git_in(&vault, ["config", "core.autocrlf", "false"]);
     git_in(&vault, ["add", "-A"]);
     git_in(&vault, ["commit", "-qm", "init"]);
 
     let value = template_json(&vault, &cache, "JOB");
     let entries = value["entries"].as_array().expect("entries");
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    let date = entries[0]["date"].as_str().unwrap().to_string();
-    let pomodoro_ref = entries[0]["ref"].as_str().unwrap().to_string();
-    let map = write_map(&vault, &format!("{date}\t{pomodoro_ref}\tWRITE\n"));
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    let mut tsv = String::from("# DATE\tREF\tTHEME\tNOTE\n");
+    for entry in entries {
+        tsv.push_str(&format!(
+            "{}\t{}\tWRITE\t\n",
+            entry["date"].as_str().unwrap(),
+            entry["ref"].as_str().unwrap(),
+        ));
+    }
+    let map = write_map(&vault, &tsv);
 
     let output = split_command(&vault, &cache)
         .args(["themes", "split", "JOB", "-m", path_str(&map), "-o"])
         .output()
-        .expect("crlf split");
+        .expect("trailing-whitespace split");
     assert_success(&output);
 
     let after = fs::read(vault.join("2026/20261020.md")).unwrap();
-    let expected: &[u8] =
-        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE\r\n\t- keep this child\r\n- [ ] () \xe2\x80\x94 KEEP\r\n";
+    let expected: &[u8] = b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE \t\r\n- [x] (0800-0830 30m) \xe2\x80\x94 WRITE  \n- [ ] () \xe2\x80\x94 WRITE\t";
     assert_eq!(after, expected);
 
     let log = git_in(&vault, ["log", "--oneline"]);
     assert_eq!(stdout(&log).lines().count(), 2);
+    let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
+    assert_eq!(stdout(&subject).trim(), "bob themes split: JOB → WRITE");
     assert!(!vault.join(".bob/themes/apollo.jsonl").exists());
 }
 

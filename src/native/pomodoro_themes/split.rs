@@ -1074,7 +1074,16 @@ fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
         let absolute = vault.join(&file.path);
         let contents = fs::read_to_string(&absolute)
             .map_err(|error| format!("reread {}: {error}", file.path))?;
-        if contents != file.after_contents {
+        let expected_after =
+            apply_changes(&file.before_contents, &file.changes)
+                .map_err(|failure| failure.message)?;
+        if expected_after != file.after_contents {
+            return Err(format!(
+                "{} changed outside a Pomodoro name tail",
+                file.path
+            ));
+        }
+        if contents != expected_after {
             return Err(format!("{} changed during the split", file.path));
         }
         let planned: BTreeSet<usize> =
@@ -1082,39 +1091,11 @@ fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
         verify_raw_tail_splice(
             &file.path,
             &file.before_contents,
-            &file.after_contents,
+            &expected_after,
             &contents,
             &planned,
             "split",
         )?;
-        let before_lines: Vec<&str> = file.before_contents.lines().collect();
-        let after_lines: Vec<&str> = contents.lines().collect();
-        if before_lines.len() != after_lines.len() {
-            return Err(format!("{} line count changed", file.path));
-        }
-        let mut actual_changed = BTreeSet::new();
-        for (index, (before, after)) in
-            before_lines.iter().zip(after_lines.iter()).enumerate()
-        {
-            if before == after {
-                continue;
-            }
-            actual_changed.insert(index + 1);
-            if capture_pomodoros::without_name_tail(before)
-                != capture_pomodoros::without_name_tail(after)
-            {
-                return Err(format!(
-                    "{} changed outside a Pomodoro name tail",
-                    file.path
-                ));
-            }
-        }
-        if actual_changed != planned {
-            return Err(format!(
-                "{} changed a different set of lines",
-                file.path
-            ));
-        }
         let after_scan = capture_pomodoros::scan(&contents);
         let before_scan = capture_pomodoros::scan(&file.before_contents);
         if after_scan.entries.len() != before_scan.entries.len() {
@@ -1311,26 +1292,27 @@ mod split_tests {
         assert_eq!(after, "## Pomodoros\n- [ ] () — WRITE");
     }
 
-    #[test]
-    fn verify_split_rejects_collateral_terminator_rewrite() {
-        let temp = tempfile::tempdir().expect("scratch vault");
-        let vault = temp.path();
+    fn split_verifier_fixture(
+        vault: &Path,
+        before: &str,
+        changes: Vec<PlannedChange>,
+        planned_after: Option<&str>,
+    ) -> PreparedSplit {
         let relative = "2026/20261020.md".to_string();
         let absolute = vault.join(&relative);
         std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
-        let before =
-            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
-        // Malformed planned image normalizes every CRLF to LF.
-        let malformed = "## Pomodoros\n- [ ] () — WRITE\n\t- keep this child\n";
-        std::fs::write(&absolute, malformed).unwrap();
-        let prepared = PreparedSplit {
+        let expected_after = apply_changes(before, &changes).expect("apply");
+        let after_contents =
+            planned_after.unwrap_or(&expected_after).to_string();
+        std::fs::write(&absolute, &after_contents).unwrap();
+        PreparedSplit {
             old_key: "job".to_string(),
             old_name: "JOB".to_string(),
             files: vec![FilePlan {
-                path: relative.clone(),
-                changes: vec![test_change(2, "JOB", "WRITE")],
+                path: relative,
+                changes,
                 before_contents: before.to_string(),
-                after_contents: malformed.to_string(),
+                after_contents,
             }],
             targets: Vec::new(),
             kept: 0,
@@ -1338,12 +1320,91 @@ mod split_tests {
             remaining: 0,
             warnings: Vec::new(),
             sync_pre: "skipped",
-        };
-        let error = verify_split(vault, &prepared).expect_err("must reject");
-        assert!(
-            error.contains("outside a Pomodoro name tail")
-                || error.contains("different set"),
-            "{error}"
+        }
+    }
+
+    #[test]
+    fn verify_split_accepts_open_and_completed_rows_with_suffix_spaces_and_tabs(
+    ) {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let before = "## Pomodoros\r\n- [ ] () — JOB \t\r\n- [x] (0800-0830 30m) — JOB  \n\t- keep this child\r\n";
+        let expected = "## Pomodoros\r\n- [ ] () — WRITE \t\r\n- [x] (0800-0830 30m) — WRITE  \n\t- keep this child\r\n";
+        let prepared = split_verifier_fixture(
+            vault,
+            before,
+            vec![
+                test_change(2, "JOB", "WRITE"),
+                test_change(3, "JOB", "WRITE"),
+            ],
+            None,
         );
+        assert_eq!(prepared.files[0].after_contents, expected);
+        verify_split(vault, &prepared).expect("exact raw split should pass");
+    }
+
+    #[test]
+    fn verify_split_rejects_malformed_after_images_even_when_disk_matches() {
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB + KEEP \t\r\n\t- untouched\r\n";
+        let changes = vec![test_change(2, "JOB", "WRITE")];
+        let expected = apply_changes(before, &changes).expect("apply");
+        let cases = [
+            (
+                "separator whitespace",
+                expected.replacen(") — WRITE", ")  — WRITE", 1),
+            ),
+            (
+                "unrelated component",
+                expected.replacen("WRITE + KEEP", "WRITE + OTHER", 1),
+            ),
+            (
+                "suffix whitespace",
+                expected.replacen("KEEP \t\r\n", "KEEP\r\n", 1),
+            ),
+            (
+                "line terminator",
+                expected.replacen(
+                    "WRITE + KEEP \t\r\n",
+                    "WRITE + KEEP \t\n",
+                    1,
+                ),
+            ),
+        ];
+
+        for (label, malformed) in cases {
+            let temp = tempfile::tempdir().expect("scratch vault");
+            let vault = temp.path();
+            let prepared = split_verifier_fixture(
+                vault,
+                before,
+                changes.clone(),
+                Some(&malformed),
+            );
+            let error = verify_split(vault, &prepared)
+                .expect_err("malformed after-image must be rejected");
+            assert!(
+                error.contains("outside a Pomodoro name tail"),
+                "{label}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_split_rejects_collateral_terminator_rewrite() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
+        // Malformed planned image normalizes every CRLF to LF.
+        let malformed = "## Pomodoros\n- [ ] () — WRITE\n\t- keep this child\n";
+        let prepared = split_verifier_fixture(
+            vault,
+            before,
+            vec![test_change(2, "JOB", "WRITE")],
+            Some(malformed),
+        );
+        let error = verify_split(vault, &prepared).expect_err("must reject");
+        assert!(error.contains("outside a Pomodoro name tail"), "{error}");
     }
 }

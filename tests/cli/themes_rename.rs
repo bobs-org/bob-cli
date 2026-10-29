@@ -475,8 +475,8 @@ fn hold_vault_lock(path: &std::path::Path) -> fs::File {
 }
 
 #[test]
-fn themes_rename_preserves_crlf_bytes_in_offline_write() {
-    let temp = TempDir::new("bob-cli-themes-rename-crlf");
+fn themes_rename_preserves_trailing_whitespace_and_mixed_endings_offline() {
+    let temp = TempDir::new("bob-cli-themes-rename-trailing-whitespace");
     let vault = temp.path().join("vault");
     let cache = temp.path().join("cache");
     fs::create_dir_all(&cache).unwrap();
@@ -484,10 +484,10 @@ fn themes_rename_preserves_crlf_bytes_in_offline_write() {
         &vault.join("job.md"),
         "---\ntype: [[area]]\nparent: [[area]]\ncolor: aqua\n---\n",
     );
-    // Isolated Git fixture with CRLF terminators, one JOB placeholder,
-    // and an untouched indented child; autocrlf off keeps bytes exact.
-    let before: &[u8] =
-        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB\r\n\t- keep this child\r\n";
+    // Open and completed entries carry trailing spaces/tabs, with mixed
+    // line endings and a changed final row without a newline. autocrlf
+    // off keeps the fixture and committed bytes exact.
+    let before: &[u8] = b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 JOB \t\r\n- [x] (0800-0830 30m) \xe2\x80\x94 JOB  \n- [ ] () \xe2\x80\x94 JOB\t";
     fs::create_dir_all(vault.join("2026")).unwrap();
     fs::write(vault.join("2026/20261020.md"), before).unwrap();
     git_in(&vault, ["init", "-q"]);
@@ -501,19 +501,23 @@ fn themes_rename_preserves_crlf_bytes_in_offline_write() {
     assert_success(&output);
     assert_eq!(value["ok"], true);
     assert_eq!(value["mode"], "write");
+    assert_eq!(value["files"][0]["entries"], 3);
+    assert_eq!(value["files"][0]["tails"].as_array().unwrap().len(), 3);
 
-    // Committed file keeps every untouched byte: heading and child
-    // stay CRLF, only the NAME tail changes.
+    // All bytes outside the component spans survive, including trailing
+    // whitespace and each line's original terminator.
     let after = fs::read(vault.join("2026/20261020.md")).unwrap();
-    let expected: &[u8] =
-        b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE\r\n\t- keep this child\r\n";
+    let expected: &[u8] = b"## Pomodoros\r\n- [ ] () \xe2\x80\x94 WRITE \t\r\n- [x] (0800-0830 30m) \xe2\x80\x94 WRITE  \n- [ ] () \xe2\x80\x94 WRITE\t";
     assert_eq!(after, expected);
 
     // Transaction semantics hold: one commit plus the journal event.
     let log = git_in(&vault, ["log", "--oneline"]);
     assert_eq!(stdout(&log).lines().count(), 2);
+    let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
+    assert_eq!(stdout(&subject).trim(), "bob themes rename: JOB → WRITE");
     let journal =
         fs::read_to_string(vault.join(".bob/themes/apollo.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1, "{journal}");
     assert!(journal.contains("\"kind\":\"theme.rename\""), "{journal}");
     assert!(journal.contains("\"from\":\"job\""), "{journal}");
     assert!(journal.contains("\"to\":\"write\""), "{journal}");

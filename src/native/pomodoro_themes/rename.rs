@@ -27,7 +27,6 @@ use crate::native::{
     ob::{self},
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
-    stats::index::canonical_daily_date,
 };
 
 use super::{
@@ -224,7 +223,7 @@ impl RenameFailure {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct TailChange {
     line: usize,
     before: String,
@@ -1294,7 +1293,9 @@ fn verify_renamed(
 ) -> Result<(), String> {
     // OLD must be absent everywhere in scope.
     let scope = scope_files(vault);
+    let settings = note_tasks::read_settings(vault);
     let mut after_total = 0usize;
+    let mut verified_paths = BTreeSet::new();
     for file in &scope {
         let relative = &file.relative;
         let contents = fs::read_to_string(&file.absolute)
@@ -1316,34 +1317,60 @@ fn verify_renamed(
                 }
             }
         }
-        // Touched files must match the planned after-image exactly.
+        // Touched files must match an independently re-derived after-image.
         if let Some(planned) =
             prepared.files.iter().find(|plan| &plan.path == relative)
         {
-            if contents != planned.after_contents {
-                return Err(format!("{} changed during the rename", relative));
+            let Some(replanned) = plan_file(
+                relative,
+                &planned.before_contents,
+                &prepared.old_key,
+                &prepared.new_name,
+                file.rewrite_tails,
+                file.rewrite_defaults_and_fields,
+                &settings,
+            ) else {
+                return Err(format!(
+                    "{relative} no longer contains a selected theme tail"
+                ));
+            };
+            if file.rewrite_tails
+                && (replanned.tails != planned.tails
+                    || planned.entries != replanned.tails.len())
+            {
+                return Err(format!(
+                    "{relative} selected theme tails changed in the rename plan"
+                ));
+            }
+            if replanned.after_contents != planned.after_contents {
+                return Err(if file.rewrite_tails {
+                    format!("{relative} changed outside a Pomodoro name tail")
+                } else {
+                    format!("{relative} changed outside a theme value span")
+                });
+            }
+            if contents != replanned.after_contents {
+                return Err(format!("{relative} changed during the rename"));
             }
             let planned_lines: BTreeSet<usize> =
-                planned.edits.iter().map(|edit| edit.line).collect();
+                replanned.edits.iter().map(|edit| edit.line).collect();
             verify_raw_tail_splice(
                 relative,
                 &planned.before_contents,
-                &planned.after_contents,
+                &replanned.after_contents,
                 &contents,
                 &planned_lines,
                 "rename",
             )?;
-            if coverage::apply_line_edits(
-                &planned.before_contents,
-                &planned.edits,
-            ) != planned.after_contents
-            {
-                return Err(format!(
-                    "{relative} changed outside a theme value span"
-                ));
-            }
-            verify_changed_line_spans(relative, planned)?;
+            verified_paths.insert(relative.as_str());
         }
+    }
+    if prepared
+        .files
+        .iter()
+        .any(|planned| !verified_paths.contains(planned.path.as_str()))
+    {
+        return Err("a planned rename file is missing after the rename".into());
     }
     if after_total != prepared.total_before_entries {
         return Err(format!(
@@ -1363,71 +1390,6 @@ fn verify_renamed(
         ));
     }
     Ok(())
-}
-
-fn verify_changed_line_spans(
-    relative: &str,
-    planned: &FilePlan,
-) -> Result<(), String> {
-    let before_lines: Vec<&str> = planned.before_contents.lines().collect();
-    let after_lines: Vec<&str> = planned.after_contents.lines().collect();
-    if before_lines.len() != after_lines.len() {
-        return Err(format!("{relative} line count changed"));
-    }
-    let session_file = is_session_file(relative);
-    let tail_lines: BTreeSet<usize> =
-        planned.tails.iter().map(|tail| tail.line).collect();
-    for (index, (before, after)) in
-        before_lines.iter().zip(after_lines.iter()).enumerate()
-    {
-        if before == after {
-            continue;
-        }
-        let line = index + 1;
-        if session_file && tail_lines.contains(&line) {
-            if capture_pomodoros::without_name_tail(before)
-                != capture_pomodoros::without_name_tail(after)
-            {
-                return Err(format!(
-                    "{relative} changed outside a Pomodoro name tail"
-                ));
-            }
-            continue;
-        }
-        if !edits_explain_line(&planned.edits, line, before, after) {
-            return Err(format!(
-                "{relative} changed outside a theme value span"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn is_session_file(relative: &str) -> bool {
-    relative == "_templates/daily.md"
-        || canonical_daily_date(relative).is_some()
-}
-
-fn edits_explain_line(
-    edits: &[LineEdit],
-    line: usize,
-    before: &str,
-    after: &str,
-) -> bool {
-    let mut reconstructed = before.to_string();
-    let mut line_edits: Vec<&LineEdit> =
-        edits.iter().filter(|edit| edit.line == line).collect();
-    if line_edits.is_empty() {
-        return false;
-    }
-    line_edits.sort_by_key(|edit| std::cmp::Reverse(edit.start));
-    for edit in line_edits {
-        if edit.end > reconstructed.len() || edit.start > edit.end {
-            return false;
-        }
-        reconstructed.replace_range(edit.start..edit.end, &edit.after);
-    }
-    reconstructed == after
 }
 
 fn print_success(report: &RenameReport, format: OutputFormat) {
@@ -2021,19 +1983,21 @@ mod rename_tests {
         );
     }
 
-    #[test]
-    fn verify_rejects_collateral_terminator_rewrite() {
-        let temp = tempfile::tempdir().expect("scratch vault");
-        let vault = temp.path();
+    fn verifier_fixture(
+        vault: &Path,
+        before: &str,
+        planned_after: Option<&str>,
+    ) -> PreparedRename {
         let relative = "2026/20261020.md".to_string();
         let absolute = vault.join(&relative);
         std::fs::create_dir_all(absolute.parent().unwrap()).unwrap();
-        let before =
-            "## Pomodoros\r\n- [ ] () — JOB\r\n\t- keep this child\r\n";
-        // Malformed planned image normalizes every CRLF to LF.
-        let malformed = "## Pomodoros\n- [ ] () — WRITE\n\t- keep this child\n";
-        std::fs::write(&absolute, malformed).unwrap();
-        let prepared = PreparedRename {
+        let (expected_after, tails) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        let (edits, _) = tail_edits_for_contents(before, "job", "WRITE");
+        let after_contents =
+            planned_after.unwrap_or(&expected_after).to_string();
+        std::fs::write(&absolute, &after_contents).unwrap();
+        PreparedRename {
             vault: vault.to_path_buf(),
             old_key: "job".to_string(),
             old_name: "JOB".to_string(),
@@ -2042,37 +2006,92 @@ mod rename_tests {
             merge: false,
             via: "test".to_string(),
             files: vec![FilePlan {
-                path: relative.clone(),
-                entries: 1,
-                tails: vec![TailChange {
-                    line: 2,
-                    before: "JOB".to_string(),
-                    after: "WRITE".to_string(),
-                }],
+                path: relative,
+                entries: tails.len(),
+                tails,
                 default: None,
                 task_themes: Vec::new(),
-                edits: vec![LineEdit {
-                    line: 2,
-                    start: 0,
-                    end: 0,
-                    before: "JOB".to_string(),
-                    after: "WRITE".to_string(),
-                }],
+                edits,
                 before_contents: before.to_string(),
-                after_contents: malformed.to_string(),
+                after_contents,
             }],
-            total_before_entries: 1,
+            total_before_entries: capture_pomodoros::scan(before).entries.len(),
             warnings: Vec::new(),
             sync_pre: "skipped",
             hidden_before: false,
-        };
+        }
+    }
+
+    #[test]
+    fn verify_accepts_open_and_completed_rows_with_suffix_spaces_and_tabs() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let before = "## Pomodoros\r\n- [ ] () — JOB \t\r\n- [x] (0800-0830 30m) — JOB  \n\t- keep this child\r\n";
+        let expected = "## Pomodoros\r\n- [ ] () — WRITE \t\r\n- [x] (0800-0830 30m) — WRITE  \n\t- keep this child\r\n";
+        let prepared = verifier_fixture(vault, before, None);
+
+        assert_eq!(prepared.files[0].after_contents, expected);
+        verify_renamed(vault, &prepared).expect("exact raw rename should pass");
+    }
+
+    #[test]
+    fn verify_rejects_malformed_after_images_even_when_disk_matches() {
+        let before =
+            "## Pomodoros\r\n- [ ] () — JOB + KEEP \t\r\n\t- untouched\r\n";
+        let (expected, _) =
+            rewrite_file_contents(before, "job", "WRITE").expect("rewrite");
+        let cases = [
+            (
+                "separator whitespace",
+                expected.replacen(") — WRITE", ")  — WRITE", 1),
+            ),
+            (
+                "unrelated component",
+                expected.replacen("WRITE + KEEP", "WRITE + OTHER", 1),
+            ),
+            (
+                "suffix whitespace",
+                expected.replacen("KEEP \t\r\n", "KEEP\r\n", 1),
+            ),
+            (
+                "line terminator",
+                expected.replacen(
+                    "WRITE + KEEP \t\r\n",
+                    "WRITE + KEEP \t\n",
+                    1,
+                ),
+            ),
+        ];
+
+        for (label, malformed) in cases {
+            let temp = tempfile::tempdir().expect("scratch vault");
+            let vault = temp.path();
+            let prepared = verifier_fixture(vault, before, Some(&malformed));
+            let error = verify_renamed(vault, &prepared)
+                .expect_err("malformed after-image must be rejected");
+            assert!(
+                error.contains("outside a Pomodoro name tail"),
+                "{label}: {error}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(vault.join(&prepared.files[0].path))
+                    .unwrap(),
+                malformed,
+                "{label}: disk must match malformed plan"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_incorrect_selected_line_mapping() {
+        let temp = tempfile::tempdir().expect("scratch vault");
+        let vault = temp.path();
+        let before = "## Pomodoros\n- [ ] () — JOB\n";
+        let mut prepared = verifier_fixture(vault, before, None);
+        prepared.files[0].tails[0].line = 1;
+
         let error = verify_renamed(vault, &prepared).expect_err("must reject");
-        assert!(
-            error.contains("outside a Pomodoro name tail")
-                || error.contains("line count")
-                || error.contains("theme value span"),
-            "{error}"
-        );
+        assert!(error.contains("selected theme tails changed"), "{error}");
     }
 
     #[test]
