@@ -22,12 +22,12 @@ use crate::native::{
     style::Styler,
 };
 
-const COMMAND: &str = "bob themes suggest";
+const COMMAND: &str = "bob types suggest";
 
 pub(crate) fn build_cli() -> Command {
     Command::new(COMMAND)
-        .about("Explain the suggested theme for a task or capture route")
-        .long_about("Explain a task's suggested Pomodoro theme without changing the vault.\n\nUse route:block-id for an existing task, or a bare route for a new task's\ndefault. Task fields take precedence over reading and note\ndefaults. Hidden and unknown themes are reported; closed tasks have no suggestion.")
+        .about("Explain the suggested type for a task or capture route")
+        .long_about("Explain a task's suggested type without changing the vault.\n\nUse route:block-id for an existing task, or a bare route for a new task's\ndefault. Task fields take precedence over reading and note\ndefaults. Hidden and unknown types are reported; closed tasks have no suggestion.")
         .disable_help_flag(true)
         .arg(Arg::new("target").value_name("TARGET").required(true)
             .help("Capture route or route:block-id (without @ or ^)"))
@@ -38,7 +38,7 @@ pub(crate) fn build_cli() -> Command {
             .value_parser(["human", "json"]).default_value("human")
             .help("Output format: human or json"))
         .arg(Arg::new("help").long("help").short('h').action(ArgAction::Help).help("Show help"))
-        .after_help("Examples:\n  bob themes suggest dev\n  bob themes suggest dev:build -f json\n\nEnvironment:\n  BOB_CONFIG_FILE  Exact Bob config file\n  BOB_DIR          Vault root when --bob-dir is omitted\n  BOB_NOW          Local datetime override\n  NO_COLOR         Disable colored output\n\nExit codes:\n  0  explanation (including no suggestion or a closed task)\n  1  target lookup or I/O failure\n  2  usage or config error\n\nSee docs/pomodoro-themes.md for the suggestion contract.")
+        .after_help("Examples:\n  bob types suggest dev\n  bob types suggest dev:build -f json\n\nEnvironment:\n  BOB_CONFIG_FILE  Exact Bob config file\n  BOB_DIR          Vault root when --bob-dir is omitted\n  BOB_NOW          Local datetime override\n  NO_COLOR         Disable colored output\n\nExit codes:\n  0  explanation (including no suggestion or a closed task)\n  1  target lookup or I/O failure\n  2  usage or config error\n\nSee docs/task-types.md for the suggestion contract.")
 }
 
 #[derive(Serialize)]
@@ -177,7 +177,7 @@ fn explain(root: &Path, input: &str) -> Result<Report, Error> {
     let catalog =
         Catalog::load(&root, bob_env::current_datetime().date(), false)
             .map_err(|error| {
-                Error::io(format!("read theme catalog: {error}"))
+                Error::io(format!("read type catalog: {error}"))
             })?;
     let mut source = HomeResolver::new(DiskHomeSource::new(&root));
     let result = match task {
@@ -257,7 +257,7 @@ fn human_report(report: &Report) -> String {
                 });
             }
         }
-        None => lines.push("No suggested theme".to_string()),
+        None => lines.push("No suggested type".to_string()),
     }
     for warning in &report.warnings {
         lines.push(format!(

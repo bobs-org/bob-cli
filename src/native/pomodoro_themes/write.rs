@@ -73,9 +73,9 @@ pub(crate) fn build_cli_color() -> ClapCommand {
 
 fn command_name(kind: WriteKind) -> &'static str {
     match kind {
-        WriteKind::Hide => "bob themes hide",
-        WriteKind::Unhide => "bob themes unhide",
-        WriteKind::Color => "bob themes color",
+        WriteKind::Hide => "bob types hide",
+        WriteKind::Unhide => "bob types unhide",
+        WriteKind::Color => "bob types color",
     }
 }
 
@@ -132,37 +132,37 @@ fn build_cli(kind: WriteKind) -> ClapCommand {
 
 fn about(kind: WriteKind) -> &'static str {
     match kind {
-        WriteKind::Hide => "Hide themes from Recent suggestion rows",
+        WriteKind::Hide => "Hide types from Recent suggestion rows",
         WriteKind::Unhide => {
-            "Show hidden themes in Recent suggestion rows again"
+            "Show hidden types in Recent suggestion rows again"
         }
-        WriteKind::Color => "Pin or unpin a theme's hue",
+        WriteKind::Color => "Pin or unpin a type's hue",
     }
 }
 
 fn long_about(kind: WriteKind) -> &'static str {
     match kind {
         WriteKind::Hide => {
-            "Hide one or more Pomodoro themes from Recent suggestion rows \
+            "Hide one or more task types from Recent suggestion rows \
 only. Today's ledger, typing the name, history, Stats, and colors stay \
 unchanged. Using a hidden name never unhides it.\n\n\
 Each hide appends one theme.hide event to .bob/themes/<host>.jsonl under \
-bob_sync.lock (wait at most 3s). A theme that is already hidden is a \
+bob_sync.lock (wait at most 3s). A type that is already hidden is a \
 no-op."
         }
         WriteKind::Unhide => {
-            "Put hidden Pomodoro themes back in Recent suggestion rows.\n\n\
+            "Put hidden task types back in Recent suggestion rows.\n\n\
 Each unhide appends one theme.unhide event to .bob/themes/<host>.jsonl \
-under bob_sync.lock (wait at most 3s). A theme that is not hidden is a \
+under bob_sync.lock (wait at most 3s). A type that is not hidden is a \
 no-op."
         }
         WriteKind::Color => {
-            "Pin a Pomodoro theme to a palette slot, or pass auto to drop \
+            "Pin a task type to a palette slot, or pass auto to drop \
 the pin so the hue rule (config, pin, exempt, unconfigured, area, then \
 name hash) applies again.\n\n\
 The write appends one theme.color event to .bob/themes/<host>.jsonl under \
 bob_sync.lock (wait at most 3s). A pin that already matches is a no-op. \
-A theme whose color comes from the `themes:` block refuses with \
+A type whose color comes from the `themes:` block refuses with \
 `config_color`: edit the config file instead."
         }
     }
@@ -172,9 +172,9 @@ fn after_help(kind: WriteKind) -> &'static str {
     match kind {
         WriteKind::Hide => {
             "Examples:\n  \
-bob themes hide BOOKS\n  \
-bob themes hide FIXES BOOKS -f json\n  \
-bob themes hide BOOKS --via bob-mac-capture -f json\n\n\
+bob types hide BOOKS\n  \
+bob types hide FIXES BOOKS -f json\n  \
+bob types hide BOOKS --via bob-mac-capture -f json\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -183,14 +183,14 @@ HOSTNAME                  Host label for the journal file; same slug vault-sync 
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  wrote the hide event\n  \
-1  unknown theme, unchanged, lock busy, or I/O failure\n  \
+1  unknown type, unchanged, lock busy, or I/O failure\n  \
 2  usage error\n\n\
-See docs/pomodoro-themes.md for hide semantics and the journal contract."
+See docs/task-types.md for hide semantics and the journal contract."
         }
         WriteKind::Unhide => {
             "Examples:\n  \
-bob themes unhide BOOKS\n  \
-bob themes unhide FIXES -f json\n\n\
+bob types unhide BOOKS\n  \
+bob types unhide FIXES -f json\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -199,15 +199,15 @@ HOSTNAME                  Host label for the journal file; same slug vault-sync 
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  wrote the unhide event\n  \
-1  unknown theme, unchanged, lock busy, or I/O failure\n  \
+1  unknown type, unchanged, lock busy, or I/O failure\n  \
 2  usage error\n\n\
-See docs/pomodoro-themes.md for hide semantics and the journal contract."
+See docs/task-types.md for hide semantics and the journal contract."
         }
         WriteKind::Color => {
             "Examples:\n  \
-bob themes color BLOG red\n  \
-bob themes color BLOG auto\n  \
-bob themes color BLOG red -f json\n\n\
+bob types color BLOG red\n  \
+bob types color BLOG auto\n  \
+bob types color BLOG red -f json\n\n\
 Slots: blue, orange, aqua, yellow, magenta, green, violet, red.\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
@@ -217,10 +217,10 @@ HOSTNAME                  Host label for the journal file; same slug vault-sync 
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  wrote the color event\n  \
-1  unknown theme, invalid hue, unchanged, config color, lock busy, or I/O failure\n  \
+1  unknown type, invalid hue, unchanged, config color, lock busy, or I/O failure\n  \
 2  usage error\n\n\
 Refusal codes: `unknown_theme`, `invalid_hue`, `unchanged`, `config_color`, `lock_busy`, `io`.\n\n\
-See docs/pomodoro-themes.md for the hue rule and the journal contract."
+See docs/task-types.md for the hue rule and the journal contract."
         }
     }
 }
@@ -264,7 +264,7 @@ fn name_arg(kind: WriteKind) -> Arg {
     let arg = Arg::new("name")
         .value_name("NAME")
         .required(true)
-        .help("Theme name as it appears in a Pomodoro tail");
+        .help("Task type name as it appears in a Pomodoro name");
     match kind {
         WriteKind::Color => arg.num_args(1),
         WriteKind::Hide | WriteKind::Unhide => arg.num_args(1..),
@@ -401,7 +401,7 @@ fn execute(
     let catalog =
         Catalog::load(&request.bob_dir, today, false).map_err(|error| {
             WriteError::Io(format!(
-                "read theme catalog in {}: {error}",
+                "read task type catalog in {}: {error}",
                 request.bob_dir.display()
             ))
         })?;
@@ -418,7 +418,7 @@ fn execute(
                         hue.name(),
                     ),
                     hint: format!(
-                        "edit themes.{} there, or set it to auto to pin colors with bob themes color",
+                        "edit themes.{} there, or set it to auto to pin colors with bob types color",
                         record.name,
                     ),
                 });
@@ -484,7 +484,7 @@ fn resolve_names(
             }
             continue;
         }
-        return Err(WriteError::UnknownTheme(format!("unknown theme: {name}")));
+        return Err(WriteError::UnknownTheme(format!("unknown type: {name}")));
     }
     Ok(records)
 }
@@ -576,7 +576,7 @@ fn write_payloads(
         journal::append_event_at(vault, &host, payload, via, ts).map_err(
             |error| {
                 WriteError::Io(format!(
-                    "append theme journal in {}: {error}",
+                    "append task type journal in {}: {error}",
                     vault.display()
                 ))
             },

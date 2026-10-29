@@ -48,13 +48,13 @@ links too. Exemption is a budget rule; session names never choose a home, so
 Stats attributes every entry through its Task Links
 ([R4](pomodoro-homes.md#r4-session-names-never-choose-a-home)).
 
-## Themes
+## Types
 
-The number of distinct non-exempt components across open entries. An
-**unnamed** open entry counts as one theme, shown as `(unnamed)`,
-but only when it holds at least one counted link. An empty `()`
-placeholder never counts. The remembered catalog, hues, hide state, and
-`bob themes` command live in [Pomodoro themes](pomodoro-themes.md).
+The number of distinct non-exempt type components across open entries. An
+**unnamed** open entry counts as one unit in the type budget, shown as
+`(unnamed)`, but only when it holds at least one counted link. An empty
+`()` placeholder never counts. The remembered catalog, hues, hide state,
+and `bob types` command live in [Task types](task-types.md).
 
 ## Links
 
@@ -618,7 +618,7 @@ ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
 `1–999`), `strict` and `link_unblocked` are booleans, and the lists hold
-non-empty strings. `reading_theme` is a single Pomodoro theme name
+non-empty strings. `reading_theme` is a single task type name
 (default `READ`); `off` disables the reading-task suggestion rule, and an
 invalid or non-string value is a normal `plan.reading_theme` config
 error. Unrelated config loaders keep their independence.

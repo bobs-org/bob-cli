@@ -1444,23 +1444,22 @@ pub(super) fn print_plan_budget(result: &CaptureResult) {
         return;
     };
     let styler = Styler::detect();
-    let themes =
-        format!("{}/{} themes", budget.themes.count, budget.themes.cap);
+    let types = format!("{}/{} types", budget.themes.count, budget.themes.cap);
     let links = format!("{}/{} links", budget.links.count, budget.links.cap);
-    let themes = if budget.themes.over {
-        styler.red(&themes)
+    let types = if budget.themes.over {
+        styler.red(&types)
     } else {
-        styler.green(&themes)
+        styler.green(&types)
     };
     let links = if budget.links.over {
         styler.red(&links)
     } else {
         styler.green(&links)
     };
-    let mut line = format!("plan {themes} · {links}");
+    let mut line = format!("plan {types} · {links}");
     if !budget.added_themes.is_empty() {
         let count = budget.added_themes.len();
-        let noun = if count == 1 { "theme" } else { "themes" };
+        let noun = if count == 1 { "type" } else { "types" };
         line.push_str(&format!(
             "  (+{count} {noun}: {})",
             budget.added_themes.join(", ")
@@ -3607,21 +3606,21 @@ fn format_task_theme_row(
             )
             .unwrap_or_else(|| theme.name.clone());
             if result.dry_run {
-                format!("would set task theme → {name} · {inherited}")
+                format!("would set task type → {name} · {inherited}")
             } else {
-                format!("task theme → {name} · {inherited}")
+                format!("task type → {name} · {inherited}")
             }
         }
         "cleared" => {
             if result.dry_run {
-                format!("would clear task theme · {inherited}")
+                format!("would clear task type · {inherited}")
             } else {
-                format!("task theme cleared · {inherited}")
+                format!("task type cleared · {inherited}")
             }
         }
         _ => return None,
     };
-    Some(format!("  theme  {row}\n"))
+    Some(format!("  type  {row}\n"))
 }
 
 pub(super) fn print_removed_pomodoro_links(

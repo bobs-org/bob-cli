@@ -67,7 +67,7 @@ pub(crate) fn human_unknown_default_hint(hint: &UnknownDefaultHint) -> String {
         .first()
         .map(|name| format!("; did you mean {name}?"))
         .unwrap_or_default();
-    format!("{} suggests unknown theme {}{} → edit theme: in that note or add {} under themes: in {}",
+    format!("{} suggests unknown type {}{} → edit theme: in that note or add {} under themes: in {}",
         hint.path, hint.name, suggestion, hint.name, crate::native::config::display_config_path())
 }
 
@@ -307,7 +307,7 @@ pub(crate) fn human_hint(hint: &CollisionHint) -> String {
     let left = hint.themes.first().map(String::as_str).unwrap_or("?");
     let right = hint.themes.get(1).map(String::as_str).unwrap_or("?");
     format!(
-        "{left} and {right} share {} and met on {} days → bob themes color {} {}",
+        "{left} and {right} share {} and met on {} days → bob types color {} {}",
         hint.hue.name(),
         hint.days_together,
         hint.suggest.name,

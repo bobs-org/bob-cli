@@ -46,7 +46,7 @@ pub(crate) use write::{run_color, run_hide, run_unhide};
 pub(crate) const THEME_NOT_CONFIGURED: &str = "theme_not_configured";
 pub(crate) const THEMES_CONFIG_INVALID: &str = "themes_config_invalid";
 
-/// `SNACK isn't one of your configured themes`, plus `; did you mean
+/// `SNACK isn't one of your types`, plus `; did you mean
 /// CHORE?` when PT7 similarity matches a configured theme.
 pub(crate) fn theme_not_configured_message(
     name: &str,
@@ -54,9 +54,9 @@ pub(crate) fn theme_not_configured_message(
 ) -> String {
     match similar.first() {
         Some(suggestion) => format!(
-            "{name} isn't one of your configured themes; did you mean {suggestion}?"
+            "{name} isn't one of your types; did you mean {suggestion}?"
         ),
-        None => format!("{name} isn't one of your configured themes"),
+        None => format!("{name} isn't one of your types"),
     }
 }
 
@@ -69,10 +69,10 @@ pub(crate) fn theme_not_configured_list_hint(
     let path = config::display_config_path();
     match similar {
         Some(suggestion) => format!(
-            "{name} isn't one of your configured themes → add it under themes: in {path}, or fold it in: bob themes rename {name} {suggestion}"
+            "{name} isn't one of your types → add it under themes: in {path}, or fold it in: bob types rename {name} {suggestion}"
         ),
         None => format!(
-            "{name} isn't one of your configured themes → add it under themes: in {path}"
+            "{name} isn't one of your types → add it under themes: in {path}"
         ),
     }
 }

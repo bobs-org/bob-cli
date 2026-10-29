@@ -1,5 +1,5 @@
 //! Shared append-only preference journals (`docs/task-relations.md` §16,
-//! `docs/pomodoro-themes.md`).
+//! `docs/task-types.md`).
 //!
 //! Every vocabulary preference (Pomodoro theme hides, relation label
 //! hides) lives in one namespaced directory of per-host JSONL files:

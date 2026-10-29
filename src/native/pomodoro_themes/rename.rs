@@ -1,6 +1,6 @@
 //! Previewed, verified, single-commit global rename for Pomodoro themes.
 //!
-//! `bob themes rename OLD NEW` rewrites the theme component in ` — NAME`
+//! `bob types rename OLD NEW` rewrites the theme component in ` — NAME`
 //! tails of canonical daily notes (past, today, and future, open and
 //! closed) plus `_templates/daily.md`, modeled on `bob ref rename`.
 
@@ -36,7 +36,7 @@ use super::{
     scan, theme_not_configured_message, Catalog,
 };
 
-const COMMAND_NAME: &str = "bob themes rename";
+const COMMAND_NAME: &str = "bob types rename";
 pub(super) const SCHEMA_VERSION: u32 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OutputFormat {
@@ -59,9 +59,9 @@ impl OutputFormat {
 
 pub(crate) fn build_cli_rename() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Rename a Pomodoro theme everywhere in one commit")
+        .about("Rename a task type everywhere in one commit")
         .long_about(
-            "Rename one Pomodoro theme across every canonical daily note \
+            "Rename one task type across every canonical daily note \
 (past, today, and future, open and closed) plus _templates/daily.md, area \
 and project `theme:` defaults, and `[theme::]` / `(theme::)` task fields \
 (including done/), in a single verified Git commit.\n\n\
@@ -71,7 +71,7 @@ defaults and task fields take NEW's spelling (with `--merge`, fields simply \
 take NEW). Prose, fenced examples, `.bob/`, and `_conflicts/` are never \
 touched.\n\n\
 The preview always rescans from source and counts sessions, defaults, and \
-task themes separately. The write takes bob_sync.lock, pre-syncs unless \
+task types separately. The write takes bob_sync.lock, pre-syncs unless \
 --offline, snapshots each target and compares again right before writing, \
 writes atomically, appends one theme.rename journal event, verifies by \
 rescanning, makes one commit, then post-syncs. Undo is `git revert`.\n\n\
@@ -79,10 +79,10 @@ Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the
         )
         .after_help(
             "Examples:\n  \
-bob themes rename FIXES FIX -d\n  \
-bob themes rename FIXES FIX -d -f json\n  \
-bob themes rename OLD NEW --merge\n  \
-bob themes rename FIXES FIX -o\n\n\
+bob types rename FIXES FIX -d\n  \
+bob types rename FIXES FIX -d -f json\n  \
+bob types rename OLD NEW --merge\n  \
+bob types rename FIXES FIX -o\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -91,9 +91,9 @@ HOSTNAME                  Host label for the journal file; same slug vault-sync 
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  renamed (or dry-run planned)\n  \
-1  unknown theme, invalid name, unchanged, theme exists, config reference, lock busy, dirty paths, not a worktree, sync failed, verify failed, stale note, or I/O failure\n  \
+1  unknown type, invalid name, unchanged, type exists, config reference, lock busy, dirty paths, not a worktree, sync failed, verify failed, stale note, or I/O failure\n  \
 2  usage error\n\n\
-See docs/pomodoro-themes.md for the rename contract, refusal table, and revert runbook.",
+See docs/task-types.md for the rename contract, refusal table, and revert runbook.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -170,14 +170,14 @@ fn old_arg() -> Arg {
     Arg::new("old")
         .value_name("OLD")
         .required(true)
-        .help("Current theme name as it appears in a Pomodoro tail")
+        .help("Current type name as it appears in a Pomodoro name")
 }
 
 fn new_arg() -> Arg {
     Arg::new("new")
         .value_name("NEW")
         .required(true)
-        .help("New single theme name (must not contain +)")
+        .help("New single type name (must not contain +)")
 }
 
 pub(crate) fn run_rename(args: Vec<OsString>) -> i32 {
@@ -595,14 +595,16 @@ fn plan_rename(
         return Err(RenameFailure::new(
             "usage",
             "OLD and NEW are required",
-            Some("usage: bob themes rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]"),
+            Some("usage: bob types rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]"),
         ));
     }
     // NEW must be a valid single theme: no `+`, non-empty key.
     if new_raw.contains('+') || split_components(new_raw).len() != 1 {
         return Err(RenameFailure::new(
             "invalid_name",
-            format!("invalid theme name: {new_raw} (a theme never contains +)"),
+            format!(
+                "invalid type name: {new_raw} (a type name never contains +)"
+            ),
             Some("choose a single + component without +"),
         ));
     }
@@ -611,7 +613,7 @@ fn plan_rename(
     {
         return Err(RenameFailure::new(
             "invalid_name",
-            format!("invalid theme name: {old_raw}"),
+            format!("invalid type name: {old_raw}"),
             Some("rename one + component at a time"),
         ));
     }
@@ -619,16 +621,16 @@ fn plan_rename(
     if new_key.is_empty() {
         return Err(RenameFailure::new(
             "invalid_name",
-            format!("invalid theme name: {new_raw}"),
-            Some("choose a non-blank theme name"),
+            format!("invalid type name: {new_raw}"),
+            Some("choose a non-blank type name"),
         ));
     }
     let old_key = normalize_component(old_raw);
     if old_key.is_empty() {
         return Err(RenameFailure::new(
             "invalid_name",
-            format!("invalid theme name: {old_raw}"),
-            Some("choose a non-blank theme name"),
+            format!("invalid type name: {old_raw}"),
+            Some("choose a non-blank type name"),
         ));
     }
     if old_key == new_key {
@@ -685,8 +687,8 @@ fn plan_rename(
     if files.is_empty() {
         return Err(RenameFailure::new(
             "unknown_theme",
-            format!("unknown theme: {old_raw}"),
-            Some("list known themes with bob themes list -a"),
+            format!("unknown type: {old_raw}"),
+            Some("list known types with bob types list -a"),
         ));
     }
     if new_occurrences > 0 && !merge {
@@ -734,7 +736,7 @@ fn plan_rename(
     let catalog = Catalog::load(vault, today, false).map_err(|error| {
         RenameFailure::new(
             "io",
-            format!("read theme catalog in {}: {error}", vault.display()),
+            format!("read type catalog in {}: {error}", vault.display()),
             None::<String>,
         )
     })?;
@@ -1082,7 +1084,7 @@ fn config_reference(
             return Some(RenameFailure::new(
                 "config_reference",
                 format!(
-                    "{old_raw} is a configured theme; add {new_raw} under themes: first"
+                    "{old_raw} is a configured type; add {new_raw} under themes: first"
                 ),
                 Some("edit the chezmoi config to add NEW first"),
             ));
@@ -1176,7 +1178,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
         &vault,
         &child_env,
         COMMAND_NAME,
-        "theme renames",
+        "task type renames",
         offline,
         json_mode,
         || {
@@ -1199,7 +1201,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                 })
                 .collect::<Vec<_>>();
             let subject = format!(
-                "bob themes rename: {} → {}",
+                "bob types rename: {} → {}",
                 inner.old_name, inner.new_name
             );
             let post_inner = Rc::clone(&inner);
@@ -1221,7 +1223,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
                     )
                     .map(|relative| vec![PathBuf::from(relative)])
                     .map_err(|message| {
-                        format!("could not append theme.rename: {message}")
+                        format!("could not append task type rename journal event: {message}")
                     })
                 }),
                 verify: Box::new(move || {
@@ -1331,7 +1333,7 @@ fn verify_renamed(
                 &settings,
             ) else {
                 return Err(format!(
-                    "{relative} no longer contains a selected theme tail"
+                    "{relative} no longer contains a selected type component"
                 ));
             };
             if file.rewrite_tails
@@ -1339,14 +1341,14 @@ fn verify_renamed(
                     || planned.entries != replanned.tails.len())
             {
                 return Err(format!(
-                    "{relative} selected theme tails changed in the rename plan"
+                    "{relative} selected type components changed in the rename plan"
                 ));
             }
             if replanned.after_contents != planned.after_contents {
                 return Err(if file.rewrite_tails {
                     format!("{relative} changed outside a Pomodoro name tail")
                 } else {
-                    format!("{relative} changed outside a theme value span")
+                    format!("{relative} changed outside a type value span")
                 });
             }
             if contents != replanned.after_contents {
@@ -1435,7 +1437,7 @@ fn print_human(report: &RenameReport) {
         }
         if !file.task_themes.is_empty() {
             bits.push(format!(
-                "{} task theme{}",
+                "{} task type{}",
                 file.task_themes.len(),
                 if file.task_themes.len() == 1 { "" } else { "s" },
             ));
@@ -1474,7 +1476,7 @@ fn print_human(report: &RenameReport) {
             report.default_notes.join(", ")
         );
     }
-    println!("  task themes: {}", report.task_themes);
+    println!("  task types: {}", report.task_themes);
     println!("  state: {}", report.state.note);
     println!("  color: {}", report.color.note);
     if let Some(commit) = &report.commit {
@@ -1485,13 +1487,13 @@ fn print_human(report: &RenameReport) {
         let subject = commit
             .get("subject")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("bob themes rename");
+            .unwrap_or("bob types rename");
         println!("  committed {sha} {subject}");
     }
     println!("  sync: pre {}, post {}", report.sync.pre, report.sync.post);
     for warning in &report.warnings {
-        if warning.contains("isn't one of your configured themes") {
-            println!("  ◌ {} not configured", report.to.name);
+        if warning.contains("isn't one of your types") {
+            println!("  ◌ {} not one of your types", report.to.name);
         }
         eprintln!("{}: {warning}", styler.warning_prefix());
     }
@@ -1576,7 +1578,7 @@ fn re_adopted_later(
     })
 }
 
-/// `renamed_reappeared` for `bob themes list`: every rename source key
+/// `renamed_reappeared` for `bob types list`: every rename source key
 /// that still has occurrences after its rename event.
 pub(crate) fn renamed_reappeared(
     vault: &Path,
@@ -2091,7 +2093,10 @@ mod rename_tests {
         prepared.files[0].tails[0].line = 1;
 
         let error = verify_renamed(vault, &prepared).expect_err("must reject");
-        assert!(error.contains("selected theme tails changed"), "{error}");
+        assert!(
+            error.contains("selected type components changed"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -2138,7 +2143,7 @@ mod rename_tests {
         };
         let error = verify_renamed(vault, &prepared).expect_err("must reject");
         assert!(
-            error.contains("theme value span")
+            error.contains("type value span")
                 || error.contains("outside a Pomodoro name tail")
                 || error.contains("line count"),
             "{error}"

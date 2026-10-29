@@ -9,7 +9,7 @@ Daily workflow:
   pomodoro    Show Pomodoro status, print the tmux line, or notify on completion
   ready       Show each area/project note's Ready lane against the per-note cap
   stats       Show derived daily metrics as a glance, detail chart, or catalog
-  themes      Manage Pomodoro themes and explain task suggestions
+  types       Manage task types and explain task suggestions
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
@@ -48,7 +48,7 @@ Examples:
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
   bob stats                         Glance at derived daily metrics
-  bob themes                        List recently used Pomodoro themes
+  bob types                         List recently used task types
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status

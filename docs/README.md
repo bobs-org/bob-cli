@@ -48,7 +48,7 @@ queued intake; full scans also synchronize annotations. The
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [pomodoro-homes.md](pomodoro-homes.md) | Derived Pomodoro homes, labels, chips, hues, and JSON contract |
-| [pomodoro-themes.md](pomodoro-themes.md) | Pomodoro theme catalog, hues, hide journal, `bob themes`, and JSON |
+| [task-types.md](task-types.md) | Task type catalog, hues, hide journal, `bob types`, and JSON |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
 | [ref.md](ref.md) | Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |

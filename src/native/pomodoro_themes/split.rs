@@ -1,6 +1,6 @@
 //! Previewed, verified, single-commit per-entry theme split.
 //!
-//! `bob themes split OLD` rewrites selected ` — NAME` tails of canonical
+//! `bob types split OLD` rewrites selected ` — NAME` tails of canonical
 //! daily notes from a TSV map (or prints that map with `-t`). Unlike
 //! rename, it writes no journal event.
 
@@ -36,24 +36,24 @@ use super::{
     scan, theme_not_configured_message, Catalog,
 };
 
-const COMMAND_NAME: &str = "bob themes split";
+const COMMAND_NAME: &str = "bob types split";
 const SCHEMA_VERSION: u32 = 1;
 
 type SplitFailure = RenameFailure;
 
 pub(crate) fn build_cli_split() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Split one Pomodoro theme across selected entries in one commit")
+        .about("Split one task type across selected entries in one commit")
         .long_about(
-            "Rewrite selected Pomodoro theme components in ` — NAME` tails of \
+            "Rewrite selected task type components in ` — NAME` tails of \
 canonical daily notes (past, today, and future, open and closed) from a \
 tab-separated map, in a single verified Git commit.\n\n\
 `-t/--template` prints a TSV map of every entry whose name contains OLD; \
 it never takes the lock or writes. `_templates/daily.md` is out of scope. \
-Fill the THEME column (an untouched row keeps OLD), then apply with \
+Fill the TYPE column (an untouched row keeps OLD), then apply with \
 `-m/--map`. `-m -` reads the map from stdin.\n\n\
 Only the OLD component in mapped tails changes: separators keep their `+` \
-spelling, a resulting duplicate collapses (`JOB + BUILD` with THEME BUILD \
+spelling, a resulting duplicate collapses (`JOB + BUILD` with TYPE BUILD \
 becomes `BUILD`), and every other byte is preserved. Unmapped OLD entries \
 are left alone. Note defaults and `[theme::]` / `(theme::)` task fields are \
 left unchanged; a `split_leaves_task_themes` warning reports leftover \
@@ -70,14 +70,14 @@ writes do not require this match.",
         )
         .after_help(
             "Examples:\n  \
-bob themes split JOB -t > job.tsv\n  \
-bob themes split JOB -m job.tsv -d\n  \
-bob themes split JOB -m job.tsv -d -f json\n  \
-bob themes split JOB -m - -o\n\n\
+bob types split JOB -t > job.tsv\n  \
+bob types split JOB -m job.tsv -d\n  \
+bob types split JOB -m job.tsv -d -f json\n  \
+bob types split JOB -m - -o\n\n\
 Map format:\n  \
 # comment lines and blank lines are skipped\n  \
-DATE<TAB>REF<TAB>THEME[<TAB>NOTE]\n  \
-DATE is YYYY-MM-DD; REF is LINE:DIGEST; THEME is one + component; NOTE is ignored.\n\n\
+DATE<TAB>REF<TAB>TYPE[<TAB>NOTE]\n  \
+DATE is YYYY-MM-DD; REF is LINE:DIGEST; TYPE is one + component; NOTE is ignored.\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -86,9 +86,9 @@ HOSTNAME                  Host label vault-sync uses (split does not write a jou
 BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock\n\n\
 Exit codes:\n  \
 0  split (or dry-run planned, or template printed)\n  \
-1  unknown theme, invalid name, unchanged, stale entry, lock busy, dirty paths, not a worktree, sync failed, verify failed, stale note, or I/O failure\n  \
+1  unknown type, invalid name, unchanged, stale entry, lock busy, dirty paths, not a worktree, sync failed, verify failed, stale note, or I/O failure\n  \
 2  usage error or invalid map\n\n\
-See docs/pomodoro-themes.md for the split contract, map format, refusal table, and revert runbook.",
+See docs/task-types.md for the split contract, map format, refusal table, and revert runbook.",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -119,7 +119,7 @@ fn map_arg() -> Arg {
         .long("map")
         .short('m')
         .value_name("FILE")
-        .help("Tab-separated map of DATE, REF, THEME; - reads stdin")
+        .help("Tab-separated map of DATE, REF, TYPE; - reads stdin")
 }
 
 fn template_arg() -> Arg {
@@ -134,7 +134,7 @@ fn old_arg() -> Arg {
     Arg::new("old")
         .value_name("OLD")
         .required(true)
-        .help("Theme name to split, as it appears in a Pomodoro tail")
+        .help("Type name to split, as it appears in a Pomodoro tail")
 }
 
 pub(crate) fn run_split(args: Vec<OsString>) -> i32 {
@@ -194,13 +194,13 @@ fn validate_old(old_raw: &str) -> Result<(String, String), SplitFailure> {
         return Err(SplitFailure::new(
             "usage",
             "OLD is required",
-            Some("usage: bob themes split OLD (-m/--map FILE | -t/--template)"),
+            Some("usage: bob types split OLD (-m/--map FILE | -t/--template)"),
         ));
     }
     if old_raw.contains('+') || split_components(old_raw).len() != 1 {
         return Err(SplitFailure::new(
             "invalid_name",
-            format!("invalid theme name: {old_raw}"),
+            format!("invalid type name: {old_raw}"),
             Some("split one + component at a time"),
         ));
     }
@@ -208,8 +208,8 @@ fn validate_old(old_raw: &str) -> Result<(String, String), SplitFailure> {
     if old_key.is_empty() {
         return Err(SplitFailure::new(
             "invalid_name",
-            format!("invalid theme name: {old_raw}"),
-            Some("choose a non-blank theme name"),
+            format!("invalid type name: {old_raw}"),
+            Some("choose a non-blank type name"),
         ));
     }
     Ok((old_key, old_raw.to_string()))
@@ -247,8 +247,8 @@ fn collect_template(
 fn unknown_theme(old_raw: &str) -> SplitFailure {
     SplitFailure::new(
         "unknown_theme",
-        format!("unknown theme: {old_raw}"),
-        Some("list known themes with bob themes list -a"),
+        format!("unknown type: {old_raw}"),
+        Some("list known types with bob types list -a"),
     )
 }
 
@@ -456,9 +456,9 @@ fn print_template_tsv(report: &TemplateReport) {
     for warning in &report.warnings {
         eprintln!("{}: {warning}", styler.warning_prefix());
     }
-    println!("# DATE\tREF\tTHEME\tNOTE");
+    println!("# DATE\tREF\tTYPE\tNOTE");
     println!(
-        "# Fill THEME with the destination name. Leave THEME as {} to keep the entry. NOTE is ignored on apply.",
+        "# Fill TYPE with the destination name. Leave TYPE as {} to keep the entry. NOTE is ignored on apply.",
         report.theme.name
     );
     for entry in &report.entries {
@@ -633,7 +633,7 @@ fn parse_map_rows(text: &str) -> Result<Vec<MapRow>, SplitFailure> {
         if columns.len() < 3 {
             return Err(SplitFailure::new(
                 "invalid_map",
-                format!("map line {line_number}: expected DATE, REF, THEME"),
+                format!("map line {line_number}: expected DATE, REF, TYPE"),
                 Some("regenerate with -t"),
             ));
         }
@@ -660,7 +660,7 @@ fn parse_map_rows(text: &str) -> Result<Vec<MapRow>, SplitFailure> {
         if theme.is_empty() {
             return Err(SplitFailure::new(
                 "invalid_name",
-                format!("map line {line_number}: invalid theme name: (blank)"),
+                format!("map line {line_number}: invalid type name: (blank)"),
                 Some("choose a single + component without +"),
             ));
         }
@@ -668,7 +668,7 @@ fn parse_map_rows(text: &str) -> Result<Vec<MapRow>, SplitFailure> {
             return Err(SplitFailure::new(
                 "invalid_name",
                 format!(
-                    "map line {line_number}: invalid theme name: {theme} (a theme never contains +)"
+                    "map line {line_number}: invalid type name: {theme} (a type name never contains +)"
                 ),
                 Some("choose a single + component without +"),
             ));
@@ -677,8 +677,8 @@ fn parse_map_rows(text: &str) -> Result<Vec<MapRow>, SplitFailure> {
         if theme_key.is_empty() {
             return Err(SplitFailure::new(
                 "invalid_name",
-                format!("map line {line_number}: invalid theme name: {theme}"),
-                Some("choose a non-blank theme name"),
+                format!("map line {line_number}: invalid type name: {theme}"),
+                Some("choose a non-blank type name"),
             ));
         }
         let identity = (date, pomodoro_ref.to_string());
@@ -758,7 +758,7 @@ fn plan_split(
     let catalog = Catalog::load(vault, today, true).map_err(|error| {
         SplitFailure::new(
             "io",
-            format!("read theme catalog in {}: {error}", vault.display()),
+            format!("read type catalog in {}: {error}", vault.display()),
             None::<String>,
         )
     })?;
@@ -853,7 +853,7 @@ fn plan_split(
         return Err(SplitFailure::new(
             "unchanged",
             format!("every mapped entry keeps {old_name}"),
-            Some("edit THEME in the map, then re-run"),
+            Some("edit TYPE in the map, then re-run"),
         ));
     }
 
@@ -994,7 +994,7 @@ fn run_live(matches: &ArgMatches, format: OutputFormat) -> i32 {
         &vault,
         &child_env,
         COMMAND_NAME,
-        "theme splits",
+        "task type splits",
         offline,
         json_mode,
         || {
@@ -1066,7 +1066,7 @@ fn commit_subject(old_name: &str, targets: &[TargetSummary]) -> String {
         .map(|target| target.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    format!("bob themes split: {old_name} → {names}")
+    format!("bob types split: {old_name} → {names}")
 }
 
 fn verify_split(vault: &Path, prepared: &PreparedSplit) -> Result<(), String> {
@@ -1154,7 +1154,7 @@ fn print_human(report: &SplitReport) {
             flags.push("exempt");
         }
         if target.not_configured {
-            flags.push("◌ not configured");
+            flags.push("◌ not one of your types");
         }
         if flags.is_empty() {
             println!("  {}: {}", target.name, target.entries);

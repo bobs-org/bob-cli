@@ -16,7 +16,7 @@ use crate::native::{
 
 use super::{hints, Catalog, HueSource, ThemeRecord, TodayPresence};
 
-const COMMAND_NAME: &str = "bob themes list";
+const COMMAND_NAME: &str = "bob types list";
 const SCHEMA_VERSION: u32 = 1;
 const DEFAULT_WINDOW_DAYS: i64 = 90;
 
@@ -57,28 +57,28 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("List remembered Pomodoro themes (default)")
+        .about("List remembered task types (default)")
         .long_about(
-            "List Pomodoro themes derived from canonical daily notes.\n\n\
-A theme is one + component of a Pomodoro name. The catalog is read-only: \
-it never writes the vault. Bare `bob themes` runs this command.\n\n\
-By default the list shows visible themes used in the last 90 days or \
-today, newest first. Hidden themes stay out of the default list; they \
+            "List task types derived from canonical daily notes.\n\n\
+A task type names the kind of work a task represents; a Pomodoro name may contain several type components. The catalog is read-only: \
+it never writes the vault. Bare `bob types` runs this command.\n\n\
+By default the list shows visible types used in the last 90 days or \
+today, newest first. Hidden types stay out of the default list; they \
 still exist in history, Stats, and colors. Use --all to include every \
-known theme, --hidden to show only hidden themes, --query to rank \
+known type, --hidden to show only hidden types, --query to rank \
 exact/prefix matches before substring matches, and --fresh to ignore \
 the machine-local cache. When a `themes:` vocabulary is configured in \
 the config file, the default list also shows every visible configured \
-theme, even ones never used.",
+type, even ones never used.",
         )
         .after_help(
             "Examples:\n  \
-bob themes\n  \
-bob themes list\n  \
-bob themes -q fix -f json\n  \
-bob themes -a -F\n  \
-bob themes -H\n  \
-bob themes -n 10 -q bo\n\n\
+bob types\n  \
+bob types list\n  \
+bob types -q fix -f json\n  \
+bob types -a -F\n  \
+bob types -H\n  \
+bob types -n 10 -q bo\n\n\
 Environment:\n  \
 BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n  \
 BOB_DIR                   Bob vault root when --bob-dir is omitted\n  \
@@ -89,7 +89,7 @@ Exit codes:\n  \
 0  list\n  \
 1  vault I/O failure\n  \
 2  usage or config error\n\n\
-See docs/pomodoro-themes.md for identity, cache, hue, JSON, and journal writers.",
+See docs/task-types.md for identity, cache, hue, JSON, and journal writers.",
         )
         .disable_help_flag(true)
         .arg(all_arg())
@@ -107,7 +107,7 @@ fn all_arg() -> Arg {
         .long("all")
         .short('a')
         .action(ArgAction::SetTrue)
-        .help("List every known theme, flagging hidden ones")
+        .help("List every known type, flagging hidden ones")
 }
 
 fn bob_dir_arg() -> Arg {
@@ -150,7 +150,7 @@ fn hidden_arg() -> Arg {
         .long("hidden")
         .short('H')
         .action(ArgAction::SetTrue)
-        .help("List only hidden themes")
+        .help("List only hidden types")
 }
 
 fn limit_arg() -> Arg {
@@ -159,7 +159,7 @@ fn limit_arg() -> Arg {
         .short('n')
         .value_name("N")
         .value_parser(clap::value_parser!(usize))
-        .help("Show at most N themes after filtering and ranking")
+        .help("Show at most N types after filtering and ranking")
 }
 
 fn query_arg() -> Arg {
@@ -291,7 +291,7 @@ fn list_themes(request: &ListRequest) -> Result<ListReport, ListError> {
     })?;
     let mut catalog = catalog.map_err(|error| {
         ListError::Io(format!(
-            "read theme catalog in {}: {error}",
+            "read task type catalog in {}: {error}",
             request.bob_dir.display()
         ))
     })?;
@@ -511,7 +511,7 @@ fn print_human(report: &ListReport) {
     let window = format!("last {} days", report.window_days);
     if let Some(configured) = report.counts.configured {
         println!(
-            "THEMES  {configured} configured {} {} known {} {} today {} {} hidden {} {window}",
+            "TYPES   {configured} configured {} {} known {} {} today {} {} hidden {} {window}",
             styler.separator(),
             report.counts.known,
             styler.separator(),
@@ -522,7 +522,7 @@ fn print_human(report: &ListReport) {
         );
     } else {
         println!(
-            "THEMES  {} known {} {} today {} {} hidden {} {window}",
+            "TYPES   {} known {} {} today {} {} hidden {} {window}",
             report.counts.known,
             styler.separator(),
             report.counts.today,
@@ -532,7 +532,7 @@ fn print_human(report: &ListReport) {
         );
     }
     if report.themes.is_empty() {
-        println!("  (no themes)");
+        println!("  (no types)");
     } else {
         let name_width = report
             .themes
@@ -578,7 +578,7 @@ fn print_human(report: &ListReport) {
         }
     }
     if extra_not_configured > 0 {
-        println!("  hint  … and {extra_not_configured} more · bob themes -a");
+        println!("  hint  … and {extra_not_configured} more · bob types -a");
     }
     for warning in &report.warnings {
         eprintln!("{}: {}", COMMAND_NAME, styler.yellow(warning));
@@ -638,7 +638,9 @@ fn human_meta(theme: &ListTheme) -> String {
         HueSource::Pin => parts.push("pinned".to_string()),
         HueSource::Area => parts.push("area".to_string()),
         HueSource::Exempt => parts.push("exempt".to_string()),
-        HueSource::Unconfigured => parts.push("not configured".to_string()),
+        HueSource::Unconfigured => {
+            parts.push("not one of your types".to_string());
+        }
         HueSource::Hash => {}
     }
     if theme.hidden {
@@ -647,7 +649,7 @@ fn human_meta(theme: &ListTheme) -> String {
     if theme.configured == Some(false)
         && theme.hue_source != HueSource::Unconfigured
     {
-        parts.push("not configured".to_string());
+        parts.push("not one of your types".to_string());
     }
     parts.join(" · ")
 }

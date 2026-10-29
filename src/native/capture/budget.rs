@@ -5,7 +5,7 @@
 //! section changed, a top-level `plan_budget` joins the result with
 //! before/after meters; warnings fire only when a meter grows past its
 //! cap. With `plan.strict: true` the whole batch is refused, atomically,
-//! when a non-start item creates a new named Pomodoro past the theme cap.
+//! when a non-start item creates a new named Pomodoro past the type cap.
 use super::*;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -363,7 +363,7 @@ pub(super) fn append_plan_budget(
     Ok(())
 }
 
-/// `today's plan now has 4/3 themes (adds BOB); queue it with ^ or
+/// `today's plan now has 4/3 types (adds BOB); queue it with ^ or
 /// defer with $<N>`.
 fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
     let adds = if added.is_empty() {
@@ -372,7 +372,7 @@ fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
         format!(" (adds {})", added.join(", "))
     };
     format!(
-        "today's plan now has {count}/{cap} themes{adds}; queue it with ^ \
+        "today's plan now has {count}/{cap} types{adds}; queue it with ^ \
         or defer with $<N>"
     )
 }
@@ -406,7 +406,7 @@ fn theme_refusal(
     };
     format!(
         "refusing capture: today's plan would grow to {count}/{cap} \
-        themes{adds}; current themes: {current}; queue it with ^ or defer \
+        types{adds}; current types: {current}; queue it with ^ or defer \
         with $<N>"
     )
 }
@@ -416,10 +416,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_warning_names_added_themes_with_hint() {
+    fn type_warning_names_added_types_with_hint() {
         assert_eq!(
             theme_warning(4, 3, &["BOB".to_string()]),
-            "today's plan now has 4/3 themes (adds BOB); queue it with ^ \
+            "today's plan now has 4/3 types (adds BOB); queue it with ^ \
             or defer with $<N>"
         );
     }

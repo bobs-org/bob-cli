@@ -1,4 +1,4 @@
-//! `bob themes` list: catalog, hues, ranking, and cache.
+//! `bob types` list: catalog, hues, ranking, and cache.
 
 use crate::support::*;
 use serde_json::Value;
@@ -70,15 +70,15 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
     let output = bob_command()
         .args(["themes", "--help"])
         .output()
-        .expect("bob themes --help");
+        .expect("bob types --help");
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("List remembered Pomodoro themes"),
+        help.contains("Manage task types and explain task suggestions"),
         "group about:\n{help}"
     );
     assert!(
-        help.contains("Bare `bob themes` runs the read-only list"),
+        help.contains("Bare `bob types` runs the read-only list"),
         "default list:\n{help}"
     );
     assert!(help.contains("list"), "member list:\n{help}");
@@ -88,14 +88,14 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
     assert!(help.contains("split"), "member split:\n{help}");
     assert!(help.contains("unhide"), "member unhide:\n{help}");
     assert!(
-        help.contains("docs/pomodoro-themes.md"),
+        help.contains("docs/task-types.md"),
         "contract link:\n{help}"
     );
 
     let list = bob_command()
         .args(["themes", "list", "--help"])
         .output()
-        .expect("bob themes list --help");
+        .expect("bob types list --help");
     assert_success(&list);
     let list_help = stdout(&list);
     assert_text_order(
@@ -149,11 +149,38 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
         let output = bob_command()
             .args(["themes", verb, "--help"])
             .output()
-            .unwrap_or_else(|error| {
-                panic!("bob themes {verb} --help: {error}")
-            });
+            .unwrap_or_else(|error| panic!("bob types {verb} --help: {error}"));
         assert_success(&output);
         assert_text_order(&stdout(&output), flags);
+    }
+}
+
+#[test]
+fn themes_alias_matches_types_for_list_and_bare_group() {
+    let temp = TempDir::new("bob-cli-themes-alias-parity");
+    let vault = temp.path().join("vault");
+    let cache = temp.path().join("cache");
+    fs::create_dir_all(&cache).unwrap();
+    write_theme_vault(&vault);
+
+    for (alias_args, canonical_args) in [
+        (
+            &["themes", "list", "-f", "json"][..],
+            &["types", "list", "-f", "json"][..],
+        ),
+        (&["themes", "-f", "json"][..], &["types", "-f", "json"][..]),
+    ] {
+        let alias = themes_command(&vault, &cache)
+            .args(alias_args)
+            .output()
+            .expect("bob themes list");
+        let canonical = themes_command(&vault, &cache)
+            .args(canonical_args)
+            .output()
+            .expect("bob types list");
+        assert_eq!(alias.status.code(), canonical.status.code());
+        assert_eq!(alias.stdout, canonical.stdout);
+        assert_eq!(alias.stderr, canonical.stderr);
     }
 }
 
@@ -168,10 +195,10 @@ fn themes_lists_expected_hues_on_scratch_vault() {
     let output = themes_command(&vault, &cache)
         .args(["themes", "-a"])
         .output()
-        .expect("bob themes -a");
+        .expect("bob types -a");
     assert_success(&output);
     let text = stdout(&output);
-    assert!(text.contains("THEMES"), "header:\n{text}");
+    assert!(text.contains("TYPES"), "header:\n{text}");
     assert!(text.contains("BOB"), "BOB:\n{text}");
     assert!(
         text.contains("JOB") && text.contains("aqua"),
@@ -195,7 +222,7 @@ fn themes_json_schema_and_query_ranks_fix_before_fixes() {
     let output = themes_command(&vault, &cache)
         .args(["themes", "-q", "fix", "-a", "-f", "json"])
         .output()
-        .expect("bob themes -q fix -f json");
+        .expect("bob types -q fix -f json");
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
@@ -263,11 +290,11 @@ fn themes_bare_is_list() {
     let bare = themes_command(&vault, &cache)
         .arg("themes")
         .output()
-        .expect("bob themes");
+        .expect("bob types");
     let listed = themes_command(&vault, &cache)
         .args(["themes", "list"])
         .output()
-        .expect("bob themes list");
+        .expect("bob types list");
     assert_success(&bare);
     assert_success(&listed);
     assert_eq!(stdout(&bare), stdout(&listed));
@@ -585,7 +612,7 @@ fn themes_list_emits_not_configured_hints() {
     assert_success(&human);
     let text = stdout(&human);
     assert!(
-        text.contains("SNACK isn't one of your configured themes")
+        text.contains("SNACK isn't one of your types")
             && text.contains("themes:"),
         "{text}"
     );
@@ -856,7 +883,7 @@ fn themes_unknown_defaults_are_vault_wide_sorted_and_do_not_write() {
         .output()
         .unwrap();
     assert!(stdout(&human)
-        .contains("z.md suggests unknown theme BOBS; did you mean BOB?"));
+        .contains("z.md suggests unknown type BOBS; did you mean BOB?"));
     assert_eq!(before, vault_bytes(&vault));
 }
 

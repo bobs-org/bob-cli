@@ -6299,7 +6299,7 @@ whole-item `=name` named start instead completes the name as
 completes it, while a cursor on `=<X>` or at the `#` byte itself returns an
 empty success. The name is located through the lexer's recorded offset and marked bare-spelled (e.g. a `bare_name` bool); any candidate whose slug fails `can_spell_bare` gets the replacement `#<slug>`, so accepting it yields a valid `=#2fa` (substring matches matter). A cursor anywhere inside a drop part, including a dangling `~`/`,`, returns an empty success. Near misses complete the same way valid tokens do. The name `replacement` covers only the name part (it ends before `~`), so accepting
 a candidate preserves the typed `=<X>#` and any typed `~<K>` list. Candidates
-follow [PT7 menu composition](pomodoro-themes.md#pt7-menu-composition):
+follow [PT7 menu composition](task-types.md#pt7-menu-composition):
 matching Today rows first, Recent exact/prefix matches, a create row when no
 Today or Recent name matches exactly, Recent substring matches, then utility
 rows. Today rows keep their existing order: planned placeholders (with

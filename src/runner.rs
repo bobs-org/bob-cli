@@ -154,6 +154,10 @@ pub(crate) const ALIASES: &[Alias] = &[
         to: &["task", "reconcile"],
     },
     Alias {
+        from: "themes",
+        to: &["types"],
+    },
+    Alias {
         from: "tmux-pomodoro",
         to: &["pomodoro", "tmux"],
     },
@@ -333,10 +337,10 @@ Examples:
 See docs/task-relations.md for the label-vocabulary contract.
 Run 'bob relations <command> --help' for more information on a command.";
 
-const THEMES_MEMBERS: &[Member] = &[
+const TYPES_MEMBERS: &[Member] = &[
     Member {
         name: "color",
-        about: "Pin or unpin a theme's hue",
+        about: "Pin or unpin a type's hue",
         leaf: Leaf {
             native_command: NativeCommand::ThemesColor,
             script_command: None,
@@ -344,7 +348,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "hide",
-        about: "Hide themes from Recent suggestion rows",
+        about: "Hide types from Recent suggestion rows",
         leaf: Leaf {
             native_command: NativeCommand::ThemesHide,
             script_command: None,
@@ -352,7 +356,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "list",
-        about: "List remembered Pomodoro themes (default)",
+        about: "List remembered task types (default)",
         leaf: Leaf {
             native_command: NativeCommand::ThemesList,
             script_command: None,
@@ -360,7 +364,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "rename",
-        about: "Rename a Pomodoro theme everywhere in one commit",
+        about: "Rename a task type everywhere in one commit",
         leaf: Leaf {
             native_command: NativeCommand::ThemesRename,
             script_command: None,
@@ -368,7 +372,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "split",
-        about: "Split one Pomodoro theme across selected entries in one commit",
+        about: "Split one task type across selected entries in one commit",
         leaf: Leaf {
             native_command: NativeCommand::ThemesSplit,
             script_command: None,
@@ -376,7 +380,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "suggest",
-        about: "Explain the suggested theme for a task or capture route",
+        about: "Explain the suggested type for a task or capture route",
         leaf: Leaf {
             native_command: NativeCommand::ThemesSuggest,
             script_command: None,
@@ -384,7 +388,7 @@ const THEMES_MEMBERS: &[Member] = &[
     },
     Member {
         name: "unhide",
-        about: "Show hidden themes in Recent suggestion rows again",
+        about: "Show hidden types in Recent suggestion rows again",
         leaf: Leaf {
             native_command: NativeCommand::ThemesUnhide,
             script_command: None,
@@ -392,23 +396,23 @@ const THEMES_MEMBERS: &[Member] = &[
     },
 ];
 
-const THEMES_AFTER_HELP: &str = "\
-Bare `bob themes` runs the read-only list.
+const TYPES_AFTER_HELP: &str = "\
+Bare `bob types` runs the read-only list.
 
 Examples:
-  bob themes                   Visible themes from the last 90 days
-  bob themes -q fix -f json    Rank FIX before FIXES as JSON
-  bob themes hide BOOKS        Hide BOOKS from Recent rows
-  bob themes unhide BOOKS      Put BOOKS back in Recent rows
-  bob themes color BLOG red    Pin BLOG to red
-  bob themes color BLOG auto   Drop the BLOG pin
-  bob themes rename FIXES FIX -d   Preview a global rename
-  bob themes split JOB -t > job.tsv
-  bob themes split JOB -m job.tsv -d
-  bob themes suggest dev:build    Explain a task’s suggested theme
+  bob types                   Visible types from the last 90 days
+  bob types -q fix -f json    Rank FIX before FIXES as JSON
+  bob types hide BOOKS        Hide BOOKS from Recent rows
+  bob types unhide BOOKS      Put BOOKS back in Recent rows
+  bob types color BLOG red    Pin BLOG to red
+  bob types color BLOG auto   Drop the BLOG pin
+  bob types rename FIXES FIX -d   Preview a global rename
+  bob types split JOB -t > job.tsv
+  bob types split JOB -m job.tsv -d
+  bob types suggest dev:build    Explain a task’s suggested type
 
-See docs/pomodoro-themes.md for identity, cache, hue, journal, and JSON.
-Run 'bob themes <command> --help' for more information on a command.";
+See docs/task-types.md for identity, cache, hue, journal, and JSON.
+Run 'bob types <command> --help' for more information on a command.";
 
 const GROUP_HELP_TEMPLATE: &str = "\
 {about-with-newline}
@@ -570,17 +574,17 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
-        name: "themes",
-        about: "Manage Pomodoro themes and explain task suggestions",
+        name: "types",
+        about: "Manage task types and explain task suggestions",
         section: Section::DailyWorkflow,
         target: Target::Group(Group {
-            members: THEMES_MEMBERS,
+            members: TYPES_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob themes` runs the read-only list. hide, unhide, color, and rename append to the vault journal.",
+                "Bare `bob types` runs the read-only list. hide, unhide, color, and rename append to the vault journal.",
             ),
-            after_help: THEMES_AFTER_HELP,
-            usage: "bob themes [COMMAND]",
+            after_help: TYPES_AFTER_HELP,
+            usage: "bob types [COMMAND]",
         }),
     },
     Subcommand {
@@ -1312,7 +1316,7 @@ Examples:
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
   bob stats                         Glance at derived daily metrics
-  bob themes                        List recently used Pomodoro themes
+  bob types                         List recently used task types
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status
@@ -1992,7 +1996,7 @@ mod tests {
     }
 
     #[test]
-    fn aliases_resolve_to_leaves_and_do_not_collide_with_root_names() {
+    fn aliases_resolve_to_canonical_paths_and_do_not_collide_with_root_names() {
         let roots: Vec<&str> =
             SUBCOMMANDS.iter().map(|entry| entry.name).collect();
         for alias in super::ALIASES {
@@ -2001,12 +2005,35 @@ mod tests {
                 "alias {} collides with a root command",
                 alias.from
             );
+            let targets_group = alias.to.len() == 1
+                && super::find_entry(alias.to[0]).is_some_and(|entry| {
+                    matches!(entry.target, super::Target::Group(_))
+                });
             assert!(
-                super::resolve_path(alias.to).is_some(),
+                super::resolve_path(alias.to).is_some() || targets_group,
                 "alias {} target {:?} is not a leaf",
                 alias.from,
                 alias.to
             );
+        }
+    }
+
+    #[test]
+    fn themes_group_alias_rewrites_every_suffix_to_types() {
+        for suffix in [
+            &[][..],
+            &["list"][..],
+            &["rename", "FIX", "FIXES", "-d"][..],
+        ] {
+            let args: Vec<OsString> = std::iter::once(OsString::from("themes"))
+                .chain(suffix.iter().map(OsString::from))
+                .collect();
+            let rewritten = rewrite_alias_args(&args);
+            let expected: Vec<OsString> =
+                std::iter::once(OsString::from("types"))
+                    .chain(suffix.iter().map(OsString::from))
+                    .collect();
+            assert_eq!(rewritten, expected);
         }
     }
 

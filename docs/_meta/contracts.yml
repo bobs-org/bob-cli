@@ -60,8 +60,8 @@ groups:
         summary: "Derived Pomodoro homes, labels, chips, hues, and JSON contract"
         order: 17
         reader: concepts/today-and-the-pomodoro-ledger.md
-      - stem: pomodoro-themes
-        summary: "Pomodoro theme catalog, hues, hide journal, `bob themes`, and JSON"
+      - stem: task-types
+        summary: "Task type catalog, hues, hide journal, `bob types`, and JSON"
         order: 18
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: randomize

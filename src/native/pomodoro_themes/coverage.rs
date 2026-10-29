@@ -1,4 +1,4 @@
-//! Note-default and task-field coverage for `bob themes rename` / `split`.
+//! Note-default and task-field coverage for `bob types rename` / `split`.
 //!
 //! Rename rewrites matching `theme:` frontmatter on area/project notes and
 //! `[theme::]` / `(theme::)` fields on task lines. Split leaves both alone

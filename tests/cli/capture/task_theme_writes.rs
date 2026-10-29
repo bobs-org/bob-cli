@@ -156,7 +156,7 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         .expect("dry-run capture human output");
     assert_success(&human);
     assert!(
-        stdout(&human).contains("would set task theme →"),
+        stdout(&human).contains("  type  would set task type →"),
         "{}",
         format_output(&human)
     );

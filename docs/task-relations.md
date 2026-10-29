@@ -827,7 +827,7 @@ Every `schema_version` stays 1; JSON grows additively.
 
 - **`bob relations`**: a group in **Tasks and projects**, between
   `projects` and `task`. Its membership rule is "the
-  relation-label vocabulary" (the `bob themes` precedent: a catalog
+  relation-label vocabulary" (the `bob types` precedent: a catalog
   noun whose `rename` also rewrites notes). A bare group runs the
   read-only `list`. Hide and unhide do not rewrite task lines, so
   they stay out of `bob task`, and nothing goes under `bob capture`.

@@ -81,8 +81,8 @@ pub(crate) fn build_cli() -> ClapCommand {
             Today's tasks with a dedicated Task Link under today's open \
             Pomodoros, and the NEXT/PENDING lane counts from the Tasks \
             index.\n\n\
-            The command is read-only. Themes are the distinct open Pomodoro \
-            names besides the exempt ones; links are the distinct Task Links \
+            The command is read-only. Types are the distinct open Pomodoro \
+            name components besides the exempt ones; links are the distinct Task Links \
             under them. See docs/plan.md for the full definition. A missing \
             daily note or missing Pomodoros section still reports TODAY 0 \
             and the lanes, and exits 0.",
@@ -358,7 +358,7 @@ fn human_success(result: &PlanSuccess, styler: &Styler) -> String {
     output.push('\n');
 
     let themes_meter =
-        format!("{}/{} themes", report.themes.count, report.themes.cap);
+        format!("{}/{} types", report.themes.count, report.themes.cap);
     let links_meter =
         format!("{}/{} links", report.links.count, report.links.cap);
     let today_meter = format!("TODAY {}", report.today.count);

@@ -908,7 +908,7 @@ prose. Completion uses exact literals when a slug would lose the spelling
 or select a different name.
 
 Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro)
-and [Lossless acceptance](../pomodoro-themes.md#pt8-lossless-acceptance).
+and [Lossless acceptance](../task-types.md#pt8-lossless-acceptance).
 
 ### `~<K>` {#tilde-drop}
 

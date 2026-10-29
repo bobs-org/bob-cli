@@ -370,9 +370,9 @@ its absence is expected until then. Do not move or delete host files to
 make a metric look complete. The journal contract lives in
 [stats.md](stats.md#review-journal).
 
-## Pomodoro theme journal
+## task type journal
 
-`.bob/themes/<host>.jsonl` is the per-host Pomodoro theme preference
+`.bob/themes/<host>.jsonl` is the per-host task type preference
 journal (hide, unhide, color pin, and rename). Each host appends
 to its own file; readers union every `*.jsonl` in the directory and
 never rewrite them. Bob is the only writer. JSON is otherwise allowed
@@ -392,15 +392,15 @@ A negated last match (`!/.bob/themes/*.jsonl`) means the file is
 trackable. The directory is created on the first hide, unhide, color, or
 rename write; its absence is expected until then. A host that has not synced
 this allowlist keeps its hides local until it does. The journal contract
-lives in [pomodoro-themes.md](pomodoro-themes.md#pt4-preferences-journal).
+lives in [task-types.md](task-types.md#pt4-preferences-journal).
 
-`bob themes rename` commits once (`bob themes rename: OLD → NEW`) and
+`bob types rename` commits once (`bob types rename: OLD → NEW`) and
 post-syncs; undo is `git revert` per the
-[pomodoro-themes rename runbook](pomodoro-themes.md#pt10-global-rename).
+[task type rename runbook](task-types.md#pt10-global-rename).
 
-`bob themes split` commits once (`bob themes split: OLD → T1, T2, …`) and
+`bob types split` commits once (`bob types split: OLD → T1, T2, …`) and
 post-syncs; it writes no journal event. Undo is `git revert` per the
-[pomodoro-themes split runbook](pomodoro-themes.md#pt11-split-by-entry).
+[task type split runbook](task-types.md#pt11-split-by-entry).
 
 `bob relations rename` also commits once (`bob relations rename: OLD → NEW`)
 and post-syncs. Its verified rewrite changes relation-label spans only,

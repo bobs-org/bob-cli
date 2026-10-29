@@ -1,4 +1,4 @@
-//! `bob themes split`: template, map-driven rewrite, and refusals.
+//! `bob types split`: template, map-driven rewrite, and refusals.
 
 use crate::support::*;
 use serde_json::Value;
@@ -72,7 +72,7 @@ fn split_json(
         .args(args)
         .arg("-f")
         .arg("json");
-    let output = command.output().expect("bob themes split");
+    let output = command.output().expect("bob types split");
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("split JSON");
     (output, value)
@@ -90,7 +90,7 @@ fn tsv_from_entries(
     entries: &[Value],
     map_theme: impl Fn(usize, &Value) -> Option<String>,
 ) -> String {
-    let mut out = String::from("# DATE\tREF\tTHEME\tNOTE\n");
+    let mut out = String::from("# DATE\tREF\tTYPE\tNOTE\n");
     for (index, entry) in entries.iter().enumerate() {
         let Some(theme) = map_theme(index, entry) else {
             continue;
@@ -132,7 +132,7 @@ fn themes_split_template_lists_old_entries_and_round_trips_as_keep() {
         .expect("template");
     assert_success(&output);
     let tsv = stdout(&output);
-    assert!(tsv.contains("# DATE\tREF\tTHEME\tNOTE"), "{tsv}");
+    assert!(tsv.contains("# DATE\tREF\tTYPE\tNOTE"), "{tsv}");
     assert!(tsv.contains("JOB"), "{tsv}");
     assert!(!tsv.contains("_templates/"), "{tsv}");
     assert!(!tsv.contains("BOB"), "{tsv}");
@@ -267,7 +267,7 @@ fn themes_split_write_commits_without_journal_and_invalidates_cache() {
     let text = stdout(&output);
     assert!(text.contains("committed"), "{text}");
     assert!(
-        text.contains("bob themes split: JOB → BUILD, CHORE"),
+        text.contains("bob types split: JOB → BUILD, CHORE"),
         "{text}"
     );
     assert!(
@@ -420,7 +420,7 @@ fn themes_split_preserves_trailing_whitespace_and_mixed_endings_offline() {
     let value = template_json(&vault, &cache, "JOB");
     let entries = value["entries"].as_array().expect("entries");
     assert_eq!(entries.len(), 3, "{entries:?}");
-    let mut tsv = String::from("# DATE\tREF\tTHEME\tNOTE\n");
+    let mut tsv = String::from("# DATE\tREF\tTYPE\tNOTE\n");
     for entry in entries {
         tsv.push_str(&format!(
             "{}\t{}\tWRITE\t\n",
@@ -443,7 +443,7 @@ fn themes_split_preserves_trailing_whitespace_and_mixed_endings_offline() {
     let log = git_in(&vault, ["log", "--oneline"]);
     assert_eq!(stdout(&log).lines().count(), 2);
     let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
-    assert_eq!(stdout(&subject).trim(), "bob themes split: JOB → WRITE");
+    assert_eq!(stdout(&subject).trim(), "bob types split: JOB → WRITE");
     assert!(!vault.join(".bob/themes/apollo.jsonl").exists());
 }
 

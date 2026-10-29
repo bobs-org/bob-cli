@@ -51,5 +51,5 @@ Exempt PLAN entries can still contribute Today tasks. The plan budget ignores ex
 - [Understand Bob](index.md) — the eight nouns and where Today fits.
 - [Plan budget, Today, and lanes](../plan.md) — the authoritative Today and budget definitions.
 - [Pomodoro homes](../pomodoro-homes.md) — how ledger entries derive their labels.
-- [Pomodoro themes](../pomodoro-themes.md) — remembered names, hues, and `bob themes`.
+- [Task types](../task-types.md) — remembered names, hues, and `bob types`.
 - [Today marks](../today-marks.md) — the display-only mark on Today tasks.

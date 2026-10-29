@@ -305,7 +305,7 @@ fn configured_shell_describes_never_used_and_unconfigured_create() {
     assert_success(&never_used);
     let never_text = stdout(&never_used);
     assert!(
-        never_text.contains("your theme · never used"),
+        never_text.contains("your type · never used"),
         "{never_text}"
     );
     assert!(
@@ -329,7 +329,7 @@ fn configured_shell_describes_never_used_and_unconfigured_create() {
     assert_success(&create);
     let create_text = stdout(&create);
     assert!(
-        create_text.contains("new · not in your themes"),
+        create_text.contains("new · not one of your types"),
         "{create_text}"
     );
 }

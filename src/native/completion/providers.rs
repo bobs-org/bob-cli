@@ -47,7 +47,7 @@ pub(crate) fn vault_lines(
     }
 }
 
-/// Remembered Pomodoro themes, including hidden names so hide, unhide,
+/// Remembered task types, including hidden names so hide, unhide,
 /// color, and rename can all operate on the existing catalog. This uses
 /// the completion-only catalog load and performs no vault writes.
 fn theme_names(context: &Context) -> Vec<String> {
@@ -67,8 +67,8 @@ fn theme_names(context: &Context) -> Vec<String> {
         .filter_map(|record| {
             protocol::candidate_line(
                 OsStr::new(&record.name),
-                "remembered theme",
-                "themes",
+                "remembered type",
+                "types",
                 false,
             )
         })
@@ -84,8 +84,8 @@ fn theme_names(context: &Context) -> Vec<String> {
             }
             if let Some(line) = protocol::candidate_line(
                 OsStr::new(&entry.name),
-                "configured theme",
-                "themes",
+                "configured type",
+                "types",
                 false,
             ) {
                 names.push(line);

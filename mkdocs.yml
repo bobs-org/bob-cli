@@ -66,7 +66,10 @@ extra_css:
 
 plugins:
   - search
-  - redirects: {}
+  - redirects:
+      redirect_maps:
+        pomodoro-themes.md: task-types.md
+        reference/cli/themes.md: reference/cli/types.md
   - tags:
       listings: false
       export: false
@@ -98,7 +101,7 @@ plugins:
           - plan.md
           - projects.md
           - pomodoro-homes.md
-          - pomodoro-themes.md
+          - task-types.md
           - randomize.md
           - stats.md
           - task-dependencies.md
@@ -201,7 +204,7 @@ nav:
               - "bob pomodoro": reference/cli/pomodoro.md
               - "bob ready": reference/cli/ready.md
               - "bob stats": reference/cli/stats.md
-              - "bob themes": reference/cli/themes.md
+              - "bob types": reference/cli/types.md
           - "Tasks and projects":
               - "bob projects": reference/cli/projects.md
               - "bob relations": reference/cli/relations.md
@@ -285,7 +288,7 @@ nav:
               - "Plan budget, Today, and lanes": plan.md
               - "Project Task Sync": projects.md
               - "Pomodoro homes": pomodoro-homes.md
-              - "Pomodoro themes": pomodoro-themes.md
+              - "Task types": task-types.md
               - "Randomize": randomize.md
               - "Daily Stats": stats.md
               - "Task dependency links": task-dependencies.md

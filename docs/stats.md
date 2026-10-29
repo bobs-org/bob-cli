@@ -286,7 +286,7 @@ additive working-time grouping by root parent; every metric that carries
 with no `other` collapse.
 The `theme` dimension splits a named session on the same `+` components as
 the plan budget; catalog identity and hues are in
-[pomodoro-themes.md](pomodoro-themes.md). Minutes-mode days also carry
+[task-types.md](task-types.md). Minutes-mode days also carry
 `apportioned`, the share of each part that came
 from sessions with two or more keys in that dimension. Consumers never
 recalculate a display string, summary, percentage, or delta — the report
@@ -1267,7 +1267,7 @@ keep full labels: each legend item's `title` reads `<label> <display>`, and
 bar segment titles, the `+N` title, and the legend and group `aria-label`
 sentences do too.
 
-The theme lane splits the same `worked` minutes by Pomodoro theme. One
+The theme lane splits the same `worked` minutes by task type. One
 segment per positive key in D's `parts.theme`, displayed with
 `parts_display.theme[key]`. Labels come from `report.theme_hues[normalize(key)].name`
 when present, else the part key; `(unnamed)` and `other` keep their keys.
@@ -1277,7 +1277,7 @@ follow, with `(unnamed)` last. Colour is identity from Bob's theme hues
 hue, or gray for exempt, `(unnamed)`, and `other`. Among coloured
 segments that share a hue, the largest keeps the exact hue, the second
 is `color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
-later one is `42%`. Gray is never shaded. `bob themes color` pins remove
+later one is `42%`. Gray is never shaded. `bob types color` pins remove
 a recurring collision. Each theme legend item is a rounded-square swatch
 (the legend-dot footprint), the ALL-CAPS name, and the value. The fitter
 is the same as the roots legend, independently. Titles read

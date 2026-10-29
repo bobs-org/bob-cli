@@ -54,7 +54,7 @@ wrote):
 - [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
 ```
 
-Contract: [Task theme suggestions](../pomodoro-themes.md#pt13-task-theme-suggestions),
+Contract: [Task type suggestions](../task-types.md#pt13-task-type-suggestions),
 [Task freshness fields](../freshness.md#2-fields-overrides-and-config),
 [Task date marks](../date-marks.md),
 [Task tag marks](../task-tag-marks.md),
@@ -333,7 +333,7 @@ Each daily note also templates a `^gtd` task for review chores, carrying
 Canonical daily-note Next tasks are the R9 carve-out from sticky lanes.
 
 Contract: [The ledger](../plan.md#the-ledger), [Pomodoro](glossary.md#pomodoro),
-[Pomodoro homes](../pomodoro-homes.md), [Pomodoro themes](../pomodoro-themes.md).
+[Pomodoro homes](../pomodoro-homes.md), [Task types](../task-types.md).
 
 ### Reference notes
 

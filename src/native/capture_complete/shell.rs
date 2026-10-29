@@ -287,13 +287,11 @@ pub(crate) fn shell_completion(
                 let description = if item.suggested {
                     format!(
                         "suggested · {}",
-                        item.suggestion_label
-                            .as_deref()
-                            .unwrap_or("task theme")
+                        item.suggestion_label.as_deref().unwrap_or("task type")
                     )
                 } else if item.origin == Some("history") {
                     if item.last_used.is_none() {
-                        "your theme · never used".to_string()
+                        "your type · never used".to_string()
                     } else {
                         let date = item
                             .last_used
@@ -318,7 +316,7 @@ pub(crate) fn shell_completion(
                         .iter()
                         .any(|theme| theme.configured == Some(false))
                     {
-                        "new · not in your themes".to_string()
+                        "new · not one of your types".to_string()
                     } else {
                         "new Pomodoro".to_string()
                     }

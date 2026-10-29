@@ -87,7 +87,7 @@ fn capture_warns_on_unconfigured_start_again_and_name_field() {
         start["warnings"][0]["message"]
             .as_str()
             .unwrap()
-            .contains("SNACK isn't one of your configured themes"),
+            .contains("SNACK isn't one of your types"),
         "{start}"
     );
 

@@ -102,7 +102,7 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `plan.max_themes` | Positive integer | `3` | Maximum distinct non-exempt Pomodoro themes before the plan reports over budget. |
+| `plan.max_themes` | Positive integer | `3` | Maximum distinct non-exempt Task types before the plan reports over budget. |
 | `plan.max_links` | Positive integer | `10` | Maximum distinct Task Links in today's open Pomodoros before the plan reports over budget. |
 | `plan.max_next` | Positive integer | `15` | NEXT lane count cap. It is reported; it does not refuse work. |
 | `plan.max_pending` | Positive integer | `10` | PENDING lane count cap. It is reported; it does not refuse work. |
@@ -111,8 +111,8 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 | `plan.strict` | Boolean | `false` | When true, refuse a `#NAME` capture that would add a theme past `max_themes`. |
 | `plan.link_unblocked` | Boolean | `true` | Offer recovered dependents as successor choices after a managed close; false recovers without offering links. |
 | `plan.exempt` | Sequence of nonempty strings | `[PLAN]` | Themes excluded from theme and link budgets. |
-| `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Pomodoro themes. |
-| `plan.reading_theme` | Single Pomodoro theme name or `off` | `READ` | Theme suggested for reading tasks; `off` disables the rule. Invalid values are a normal config error. |
+| `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Task types. |
+| `plan.reading_theme` | Single task type name or `off` | `READ` | Theme suggested for reading tasks; `off` disables the rule. Invalid values are a normal config error. |
 
 See the [plan configuration contract](../plan.md#config) and
 [dependency successor offers](../task-dependencies.md#12-successor-offers).
@@ -121,20 +121,20 @@ See the [plan configuration contract](../plan.md#config) and
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `themes` | Mapping from theme name to palette slot, `auto`, or empty | Unset (no configured themes) | Declares the Pomodoro theme vocabulary and each theme's color. |
+| `themes` | Mapping from task type name to palette slot, `auto`, or empty | Unset (no configured types) | Declares the task type vocabulary and each type's color. |
 
-Each key must be a valid single theme name (YAML strings only; quote names
+Each key must be a valid single type name (YAML strings only; quote names
 YAML reads as numbers or booleans). Each value is a palette slot (`blue`,
 `orange`, `aqua`, `yellow`, `magenta`, `green`, `violet`, `red`,
 case-insensitive), `auto`, or empty/null. `auto` and null mean configured
 with no fixed color: the hue falls through to pin, exempt, area, then hash.
 A value of anything else, a duplicate normalized name, or a non-mapping
-`themes` block is invalid, and the whole block is ignored as if no themes
-were configured (`bob themes list` carries the warning; `bob plan` and
-`bob capture` surface it on their own). Colors win over `bob themes color`
-pins: coloring a configured theme refuses with `config_color`.
+`themes` block is invalid, and the whole block is ignored as if no types
+were configured (`bob types list` carries the warning; `bob plan` and
+`bob capture` surface it on their own). Colors win over `bob types color`
+pins: coloring a configured type refuses with `config_color`.
 
-See [task theme suggestions](../pomodoro-themes.md#pt12-task-theme-suggestions).
+See [task type suggestions](../task-types.md#pt12-type-vocabulary-and-display).
 
 ### `dependencies`
 

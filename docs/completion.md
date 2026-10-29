@@ -441,7 +441,7 @@ another thin client of that service (see `docs/capture.md`
   at most 5 appear for an empty query and 12 for a nonempty query. They are
   grouped `Recent` with last-use and day-count descriptions. Acceptance
   preserves the name with an exact quoted literal when needed, and never
-  changes theme preferences. See [Menu composition](pomodoro-themes.md#pt7-menu-composition).
+  changes theme preferences. See [Menu composition](task-types.md#pt7-menu-composition).
 - **Whole-item `!` completes open tasks.** A leading `!` token opens the
   Complete picker over every open task in the vault, and shell completion
   offers only identified, enabled `!note:block-id` values (ID-less and

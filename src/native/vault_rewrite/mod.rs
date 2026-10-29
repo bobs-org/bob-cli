@@ -1,6 +1,6 @@
 //! One shared vault-rewrite transaction for global renames.
 //!
-//! Extracted from `bob themes rename` (`src/native/pomodoro_themes/rename.rs`)
+//! Extracted from `bob types rename` (`src/native/pomodoro_themes/rename.rs`)
 //! so every vocabulary rename — themes today, relation labels next — runs the
 //! same steps: online vault identity check (`vault_mismatch`), bounded
 //! lock wait (`lock_busy`), the worktree check
@@ -15,7 +15,7 @@
 //!
 //! The caller owns everything domain-specific: planning and validation,
 //! the journal event, verification, the success report, and all output. The
-//! failure codes and message shapes below are the `bob themes rename`
+//! failure codes and message shapes below are the `bob types rename`
 //! contract, kept so that move stays byte-for-byte.
 
 use std::{
@@ -660,7 +660,7 @@ mod tests {
 
     use crate::native::env::TestEnvGuard;
 
-    const COMMAND: &str = "bob themes rename";
+    const COMMAND: &str = "bob types rename";
     const SUBJECT: &str = "theme renames";
 
     fn git(vault: &Path, args: &[&str]) {
@@ -820,7 +820,7 @@ mod tests {
                 .hint
                 .as_deref()
                 .unwrap_or("")
-                .contains("bob themes rename"),
+                .contains("bob types rename"),
             "{:?}",
             failure.hint
         );

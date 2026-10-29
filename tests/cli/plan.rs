@@ -638,7 +638,7 @@ fn plan_lints_unconfigured_theme_and_invalid_themes_block() {
             warning["message"]
                 .as_str()
                 .unwrap()
-                .contains("GOALS isn't one of your configured themes")
+                .contains("GOALS isn't one of your types")
                 && warning["line"] == 5
         }),
         "{warnings:?}"

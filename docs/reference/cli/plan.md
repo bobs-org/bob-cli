@@ -11,7 +11,7 @@ Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
 ```text title="bob plan --help"
 Show today's Pomodoro plan budget from the daily note ledger, Today's tasks with a dedicated Task Link under today's open Pomodoros, and the NEXT/PENDING lane counts from the Tasks index.
 
-The command is read-only. Themes are the distinct open Pomodoro names besides the exempt ones; links are the distinct Task Links under them. See docs/plan.md for the full definition. A missing daily note or missing Pomodoros section still reports TODAY 0 and the lanes, and exits 0.
+The command is read-only. Types are the distinct open Pomodoro name components besides the exempt ones; links are the distinct Task Links under them. See docs/plan.md for the full definition. A missing daily note or missing Pomodoros section still reports TODAY 0 and the lanes, and exits 0.
 
 Usage: bob plan [OPTIONS]
 

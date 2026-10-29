@@ -1,4 +1,4 @@
-//! `bob themes rename`: previewed, verified, single-commit global rename.
+//! `bob types rename`: previewed, verified, single-commit global rename.
 
 use crate::support::*;
 use serde_json::Value;
@@ -80,7 +80,7 @@ fn rename_json(
         .args(args)
         .arg("-f")
         .arg("json");
-    let output = command.output().expect("bob themes rename");
+    let output = command.output().expect("bob types rename");
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("rename JSON");
     (output, value)
@@ -123,6 +123,25 @@ fn themes_rename_dry_run_previews_collapse_and_leaves_vault_untouched() {
     assert!(tails.iter().any(|tail| {
         tail["before"] == "FIX + FIXES" && tail["after"] == "FIX"
     }));
+}
+
+#[test]
+fn themes_alias_matches_types_for_rename_dry_run() {
+    let temp = TempDir::new("bob-cli-themes-rename-alias-parity");
+    let (vault, cache) = rename_vault(temp.path());
+
+    let alias = rename_command(&vault, &cache)
+        .args(["themes", "rename", "FIXES", "FIX", "-d"])
+        .output()
+        .expect("bob themes rename dry-run");
+    let canonical = rename_command(&vault, &cache)
+        .args(["types", "rename", "FIXES", "FIX", "-d"])
+        .output()
+        .expect("bob types rename dry-run");
+
+    assert_eq!(alias.status.code(), canonical.status.code());
+    assert_eq!(alias.stdout, canonical.stdout);
+    assert_eq!(alias.stderr, canonical.stderr);
 }
 
 #[test]
@@ -514,7 +533,7 @@ fn themes_rename_preserves_trailing_whitespace_and_mixed_endings_offline() {
     let log = git_in(&vault, ["log", "--oneline"]);
     assert_eq!(stdout(&log).lines().count(), 2);
     let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
-    assert_eq!(stdout(&subject).trim(), "bob themes rename: JOB → WRITE");
+    assert_eq!(stdout(&subject).trim(), "bob types rename: JOB → WRITE");
     let journal =
         fs::read_to_string(vault.join(".bob/themes/apollo.jsonl")).unwrap();
     assert_eq!(journal.lines().count(), 1, "{journal}");
@@ -550,7 +569,7 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
         value["message"]
             .as_str()
             .unwrap()
-            .contains("configured theme"),
+            .contains("configured type"),
         "{value}"
     );
 
@@ -572,7 +591,7 @@ fn themes_rename_refuses_configured_old_and_warns_unconfigured_new() {
         warnings.iter().any(|warning| warning
             .as_str()
             .unwrap()
-            .contains("SNACK isn't one of your configured themes")),
+            .contains("SNACK isn't one of your types")),
         "{warnings:?}"
     );
 

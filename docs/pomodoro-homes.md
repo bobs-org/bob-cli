@@ -32,7 +32,7 @@ An empty target resolves to the current daily note. A daily note walks
 like any other note: without an area, project, or root field, a task in one
 is `@unfiled`. The same residence chain feeds task theme
 suggestions: the first valid area/project `theme:` default on the chain is
-the note source ([PT13](pomodoro-themes.md#pt13-task-theme-suggestions)). The top-level area is the outermost area on the chain.
+the note source ([PT13](task-types.md#pt13-task-type-suggestions)). The top-level area is the outermost area on the chain.
 A subarea is the nearest area below that top-level area. A home without an area uses
 `@unfiled` for its area dimension.
 

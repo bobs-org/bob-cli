@@ -1,30 +1,45 @@
-# Pomodoro themes
+# Task types
 
-A Pomodoro **theme** is one `+`-separated component of a named ledger entry's
-` — NAME` tail. Bob derives a catalog of themes from canonical daily notes,
-folds hide and color pins from a per-host journal, and assigns each theme a
-stable hue. Clients render what Bob reports; they never scan the vault or
-compute a hue of their own.
+A **task type** is the kind of work a task represents, named by one
+ALL-CAPS word such as `BUILD` or `READ`. A ledger entry's full ` — NAME`
+tail is a **Pomodoro name**. It may contain several `+`-separated
+**components**. A **type component** names a task type; a **label** is any
+other component. Bob derives the Pomodoro-name catalog from canonical daily
+notes, folds hide and color pins from a per-host journal, and assigns each
+component a stable hue. Clients render what Bob reports; they never scan the
+vault or compute a hue of their own.
 
 This is the shared contract for Rust, the Obsidian ledger mirror, Bob Mac
 Capture, and the CLI. Rust owns the meaning. JSON grows additively at
-`schema_version` 1. PT1–PT13 describe shipped behavior across the catalog,
-capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
+`schema_version` 1. PT1–PT13 describe behavior across the catalog, capture
+menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator. PT numbering
+is historical.
 
 ## PT1 — Vocabulary and identity
 
-- **Theme:** one `+`-separated component of a Pomodoro entry's ` — NAME` tail.
-  Split with `split_components`. The key is `normalize_component`: whitespace
-  collapsed, lowercased. The display name is the most recent authored spelling
-  for that key.
+- **Task type:** the kind of work a task represents, named by one ALL-CAPS
+  word. The effective type can be computed from the task field, reading rule,
+  note default, or configured default; see PT13.
 - **Pomodoro name:** the whole tail. `— BOB + DECKS` is one name with two
-  themes.
-- **Not themes:** an unnamed entry, the budget's `(unnamed)` placeholder, a
-  Pomodoro home, or an Obsidian appearance theme.
+  components, not two Pomodoro names.
+- **Component:** one `+`-separated part of a Pomodoro name. Its key is
+  `normalize_component`: whitespace collapsed, lowercased. The display name
+  is the most recent authored spelling for that key.
+- **Type component and label:** a type component names a task type; a label
+  is any other component. When a configured vocabulary exists, its names
+  identify type components and the remaining names are labels. Without a
+  configured vocabulary, every component except an inventory label is a type
+  component. A name with no type components is a container.
+- **Not task types:** an unnamed entry, the budget's `(unnamed)` placeholder,
+  a Pomodoro home, or an Obsidian appearance theme.
 - **Naming in code:** `pomodoro_themes` (Rust), `bob-pomo-theme-*` (CSS),
   `PomodoroTheme*` (Swift), `api.themes` (JS).
-- **User-facing words:** **theme**, **Recent**, **Hide**/**Unhide**, **Pin
-  color**, and **Rename theme**. Hiding changes suggestions only.
+- **Compatibility names:** `bob themes` is the permanent hidden CLI alias
+  for `bob types`. The current configured vocabulary and task field still use
+  `themes:` and `theme:`; later storage phases add the canonical `types:` and
+  `[type::]` spellings. New person-facing copy uses **task type**,
+  **Recent**, **Hide**/**Unhide**, **Pin color**, and **Rename type**.
+  Hiding changes suggestions only.
 
 ## PT2 — Catalog
 
@@ -32,10 +47,10 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
   Not `_templates/`, `done/`, `_conflicts/`, or `*_done.md` / `*_poms.md`
   siblings. Read column-0 entries in `## Pomodoros`, open and closed, through
   `capture_pomodoros::scan`. Fenced lines are skipped.
-- **Per-theme fields:** `key`, `name`, `first_used`, `last_used`, `days_used`,
+- **Per-type fields:** `key`, `name`, `first_used`, `last_used`, `days_used`,
   and `entries`. Only days up to and including today count. Future-dated notes
   feed rename, not recency.
-- **`today`:** `open`, `closed`, or absent, for the theme's presence in
+- **`today`:** `open`, `closed`, or absent, for the type's presence in
   today's ledger. Open wins when both occur.
 - History is derived only from ledger entries. Never infer it from task text
   or homes.
@@ -46,10 +61,10 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
   `known-keys-v1.json`, each keyed by vault root. Machine-local, never synced,
   disposable.
 - **Contents:** a per-file `(mtime_ns, size)` fingerprint and that file's
-  theme summary.
+  type summary.
 - Completion also keeps a disposable per-vault
-  `themes/completion-v1-<vault-hash>.json` view containing precomputed past-theme totals and the days on which
-  those themes occurred. It checks the source cache fingerprint, date, year-directory
+  `themes/completion-v1-<vault-hash>.json` view containing precomputed past-type totals and the days on which
+  those types occurred. It checks the source cache fingerprint, date, year-directory
   fingerprints, and sweep age before reuse; corruption, rename, and a fresh
   catalog rebuild invalidate it.
 - Today's note is always read live. Completion reuses its current ledger scan
@@ -64,7 +79,7 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
   remaining vault and atomic-write temp files older than ten minutes, keeping
   the machine-local cache bounded by live vaults.
 - **Budget:** warm `capture-complete` and `capture-parse` stay within +5 ms
-  p95 of today's baseline on apollo against the live vault. `bob themes list`
+  p95 of today's baseline on apollo against the live vault. `bob types list`
   uses the same source cache.
 
 ## PT4 — Preferences journal
@@ -80,16 +95,16 @@ capture menus, CLI, Obsidian plugins, Mac Capture, and menu-bar indicator.
   for the hidden state and for the pin. A rename moves the source key's
   explicit state to the target unless the target already has explicit state.
   Events after the rename on the old key apply to the old key.
-- **Writers:** bob is the only writer. `bob themes hide`, `unhide`,
+- **Writers:** bob is the only writer. `bob types hide`, `unhide`,
   `color`, and `rename` append under `bob_sync.lock` (wait at most 3 s; a busy
-  lock is `lock_busy`). `bob themes split` rewrites daily notes under the same
+  lock is `lock_busy`). `bob types split` rewrites daily notes under the same
   lock and writes no journal event. Each event is one `O_APPEND` write. The
   directory is created on first use.
 - **Allowlist:** the vault tracks `.bob/themes/*.jsonl` (`!/.bob/themes/*.jsonl`
   in `.gitignore`) and unions concurrent appends
   (`.bob/themes/*.jsonl merge=union`). A host that has not synced the
   allowlist keeps its hides local until it does. See
-  [Vault Git sync](vault-git-sync.md#pomodoro-theme-journal).
+  [Vault Git sync](vault-git-sync.md#task-type-journal).
 
 ## PT5 — Hue rule
 
@@ -101,7 +116,7 @@ In order:
 3. Else a key in normalized `plan.exempt` is muted: `hue: null`,
    `hue_source: "exempt"` (PLAN by default).
 4. Else, when a `themes:` vocabulary is configured and the key is not in
-   it (and is not an inventory label), the theme is muted: `hue: null`,
+   it (and is not an inventory label), the type is muted: `hue: null`,
    `hue_source: "unconfigured"`.
 5. Else a key equal to a **top-level area note's stem** (an area whose
    `parent` is `[[area]]`) wears that area's resolved hue
@@ -129,25 +144,25 @@ Names wear a tint; places wear a dot.
   text (16 % light / 24 % dark; hover 24 % / 32 %). Corner radius 4 px,
   horizontal padding about 0.3 em, no border, `box-decoration-break: clone`.
   The hue is never the text color.
-- **Muted pill:** exempt themes such as PLAN: a neutral gray tint (no hue)
+- **Muted pill:** exempt types such as PLAN: a neutral gray tint (no hue)
   behind muted text, rising on hover, so a configured exempt name still
-  reads as a theme.
-- **Unconfigured pill:** a theme outside the configured vocabulary wears a
+  reads as a type.
+- **Unconfigured pill:** a type outside the configured vocabulary wears a
   1 px dashed outline in the platform warning color (Obsidian
   `--text-warning`, macOS `systemOrange`) at about 70 % opacity, over muted
-  text without the gray fill, with a "not in your themes" tooltip/AX suffix.
+  text without the gray fill, with a "not one of your types" tooltip/AX suffix.
   The Mac keeps its muted fill. Like the typing rule, the mark appears only
   once the name is committed or the cursor leaves it.
 - **Swatch:** in dense rows, an 8 pt rounded square (radius 2) before the
-  name. The Day strip theme legend uses the same rounded square at the
+  name. The Day strip type legend uses the same rounded square at the
   legend-dot footprint. Area homes keep their ● circle. The Day strip and
-  the Stats window bars shade smaller same-hue themes; every other surface
+  the Stats window bars shade smaller same-hue types; every other surface
   uses the exact hue.
 - **Composites:** each component gets its own pill; the `+` stays neutral.
 - **CLI:** an xterm-256 `■` before a default-color name when color is
-  enabled (TTY and no `NO_COLOR`). An exempt theme gets `□`; an
-  unconfigured theme gets `◌` (dim). `bob themes list` already draws these
-  swatches; `bob plan`, capture destinations, and the Stats theme dimension
+  enabled (TTY and no `NO_COLOR`). An exempt type gets `□`; an
+  unconfigured type gets `◌` (dim). `bob types list` already draws these
+  swatches; `bob plan`, capture destinations, and the Stats type dimension
   use the same squares, and tmux uses its native format color before each
   named component. Under `NO_COLOR` the glyph and the
   `not configured` text still carry the meaning.
@@ -171,23 +186,23 @@ Filter first, then group:
 4. **D:** Recent substring matches, in B's order.
 5. **E:** Today's query-independent utility rows.
 
-Recent rows exclude hidden themes and any theme that is a component of a
+Recent rows exclude hidden types and any type that is a component of a
 named Today row in the same menu. Only rows the menu actually shows count. A
-theme used today only by a done or cancelled Pomodoro is not a Today row in a
+type used today only by a done or cancelled Pomodoro is not a Today row in a
 link or move picker, so it stays in Recent. In the start context it shows as
 an "again" row. When a `themes:` vocabulary is configured, Recent rows come
-only from that set: never-used configured themes rank after used ones, in
+only from that set: never-used configured types rank after used ones, in
 config order, with no `last_used`/`days_used`, and `similar_to` draws only
-from visible configured themes. An empty query shows at most 5 Recent
-rows, or 12 when themes are configured so the whole vocabulary can show; a
+from visible configured types. An empty query shows at most 5 Recent
+rows, or 12 when types are configured so the whole vocabulary can show; a
 non-empty query shows at most 12. Matching is ASCII
 case-insensitive on slugs. A partial quoted literal matches on the
 normalized key prefix.
 
-`bob themes list -q` ranks B then D over the catalog. Capture completion
+`bob types list -q` ranks B then D over the catalog. Capture completion
 adds Today rows, applies the caps, and folds an exact Recent match into the
 create action. Recent rows carry `origin: "history"`, `last_used`, and
-`days_used`; they create a Pomodoro, report the plan-theme preview, and omit
+`days_used`; they create a Pomodoro, report the plan-type preview, and omit
 `ref` and `line`. Every named row carries component `themes`.
 
 A create row carries `hidden: true` when its exact key is hidden, and
@@ -195,10 +210,10 @@ A create row carries `hidden: true` when its exact key is hidden, and
 needs at least three characters. Similarity means equality ignoring spaces
 and punctuation, a singular/plural pair (`s` or `es`), or edit distance one
 when both keys have at least five characters. This badge never changes
-ranking or Return. When themes are configured, an unconfigured create row's
+ranking or Return. When types are configured, an unconfigured create row's
 `themes` refs carry `configured: false`. Zsh descriptions show
-`recent · Oct 21 · 3 days` for used Recent rows, `your theme · never used`
-for never-used configured Recent rows, and `new · not in your themes` on
+  `recent · Oct 21 · 3 days` for used Recent rows, `your type · never used`
+  for never-used configured Recent rows, and `new · not one of your types` on
 unconfigured create rows.
 
 Fetching, filtering, and accepting suggestions never touch the journal.
@@ -217,10 +232,10 @@ accepting completed SASE creates SASE instead of starting SASE V18.
 
 ## PT9 — Hide
 
-Hiding removes a theme from **Recent** rows only. Today's rows, typing the
+Hiding removes a type from **Recent** rows only. Today's rows, typing the
 name, history, Stats, and colors are unaffected. Using a hidden name never
-unhides it. `bob themes hide NAME…` and `bob themes unhide NAME…` append
-journal events; `bob themes list -H` lists hidden themes. Ctrl+D in a
+unhides it. `bob types hide NAME…` and `bob types unhide NAME…` append
+journal events; `bob types list -H` lists hidden types. Ctrl+D in a
 Pomodoro-name menu hides a Recent row in place; the ghost remains selectable
 and Ctrl+D again restores it. Exact hidden create rows can be unhidden, while
 Today and ordinary create rows consume Ctrl+D without writing.
@@ -228,17 +243,17 @@ Today and ordinary create rows consume Ctrl+D without writing.
 ## PT10 — Global rename
 
 ```text
-bob themes rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]
+bob types rename OLD NEW [-d/--dry-run] [-f/--format human|json] [-m/--merge] [-o/--offline]
 ```
 
-One previewed, verified, single-commit rewrite of the theme component in
+One previewed, verified, single-commit rewrite of the type component in
 ` — NAME` tails of canonical daily notes (past, today, and future, open and
 closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
 `[theme::]` / `(theme::)` task fields (including `done/`), modeled on
 `bob ref rename`.
 
 - **Scope:** Pomodoro tails, note defaults on area/project notes, and task
-  theme fields. Prose, fenced examples, `.bob/`, and `_conflicts/` are
+  type fields. Prose, fenced examples, `.bob/`, and `_conflicts/` are
   never touched.
 - **Byte preservation:** separators keep their `+` spelling. A resulting
   duplicate collapses (`FIX + FIXES` → `FIX`). Quote style on `theme:`
@@ -248,7 +263,7 @@ closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
 - **Counts:** the preview (human and `-f json`) reports `sessions`,
   `defaults`, and `task_themes` separately and lists the default-bearing
   notes. JSON is additive; `entries` remains the session count.
-- **NEW** must be a valid single theme. A NEW containing `+` is `invalid_name`.
+- **NEW** must be a valid single type. A NEW containing `+` is `invalid_name`.
 - **Vault selection:** before taking a lock, an online write requires
   `-b/--bob-dir` and `BOB_DIR` (default `~/bob`) to resolve to the same
   directory. A mismatch or unresolved path refuses with `vault_mismatch`.
@@ -260,8 +275,8 @@ closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
   atomically, then append `theme.rename`. Verify by rescanning: OLD is absent
   from tails, defaults, and task fields, entry counts are unchanged, only
   name tails differ on session files, and every changed non-daily line
-  differs only in the theme value span. On failure, restore
-  the before-images. Make one commit, `bob themes rename: FIXES → FIX`, then
+  differs only in the type value span. On failure, restore
+  the before-images. Make one commit, `bob types rename: FIXES → FIX`, then
   post-sync. Undo is `git revert`.
 - **Refusals:** `unknown_theme` (OLD never used), `invalid_name` (NEW
   contains `+` or is blank), `unchanged` (OLD and NEW share a key),
@@ -269,7 +284,7 @@ closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
   (OLD is in `plan.exempt`, `plan.inventory_labels`, `plan.reading_theme`,
   a Stats metric filter, or the `themes:` vocabulary, and NEW is not — edit
   the chezmoi config to add NEW first; a configured OLD reads "OLD is a
-  configured theme; add NEW under themes: first"; a `plan.reading_theme`
+  configured type; add NEW under types: first"; a `plan.reading_theme`
   OLD reads "OLD is plan.reading_theme; set plan.reading_theme to NEW
   first"), plus
   `lock_busy`, `dirty_paths` (offline with dirty targets), `not_a_worktree`,
@@ -278,10 +293,10 @@ closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
   so. Hidden state and pins move with the rename per PT4.
 - **Unconfigured NEW:** a NEW outside the vocabulary adds a `warnings`
   entry (`theme_not_configured` message) to the preview and result; human
-  output marks it `◌ NEW not configured`. A `--merge` of two configured
-  themes notes that OLD stays in `themes:` until you remove it.
+  output marks it `◌ NEW not one of your types`. A `--merge` of two configured
+  types notes that OLD stays in `themes:` until you remove it.
 - **Reappearance:** if OLD's spelling reappears after a rename event (an
-  offline host, muscle memory), `bob themes list` reports it in
+  offline host, muscle memory), `bob types list` reports it in
   `renamed_reappeared`. It only reports; it never rewrites on its own. The
   latest rename *from* each key is the candidate, using the fold's
   `(ts, host, path, line)` writer order. A later event in that order that
@@ -289,56 +304,56 @@ closed) plus `_templates/daily.md`, area and project `theme:` defaults, and
   key, or a `theme.color` (pin or unpin) or `theme.unhide` naming the key.
   A later `theme.hide` does not re-adopt a name.
 
-Runbook: `git log --oneline -3`, confirm the `bob themes rename: OLD → NEW`
+Runbook: `git log --oneline -3`, confirm the `bob types rename: OLD → NEW`
 commit, then `git revert <sha>` and `bob vault-sync` to restore every byte.
 
 ## PT11 — Split by entry
 
 ```text
-bob themes split OLD (-m/--map FILE | -t/--template) [-b/--bob-dir DIR] [-d/--dry-run]
+bob types split OLD (-m/--map FILE | -t/--template) [-b/--bob-dir DIR] [-d/--dry-run]
                      [-f/--format human|json] [-o/--offline]
 ```
 
-Rewrite selected Pomodoro theme components in ` — NAME` tails of canonical
+Rewrite selected task type components in ` — NAME` tails of canonical
 daily notes (past, today, and future, open and closed). `_templates/daily.md`
 is out of scope. Exactly one of `-m` and `-t` is required. `-m -` reads the
-map from stdin. OLD must be a known theme.
+map from stdin. OLD must be a known type.
 
 - **Template (`-t`):** read-only; never takes the lock. Lists every entry
   where some `+` component normalizes to OLD's key, ordered by date then
   line. Human output is TSV the map parser accepts unchanged: `#` comment
   lines naming the columns and the fill-in rule, then
-  `DATE<TAB>REF<TAB>THEME<TAB>NOTE`. DATE is `YYYY-MM-DD`. REF is
-  `LINE:DIGEST`. THEME is prefilled with OLD's display name (an untouched
+  `DATE<TAB>REF<TAB>TYPE<TAB>NOTE`. DATE is `YYYY-MM-DD`. REF is
+  `LINE:DIGEST`. TYPE is prefilled with OLD's display name (an untouched
   row is a keep). NOTE is `[x]`/`[ ]`, the time range or `()`, the full
   current name, and the Task Link targets from the entry's child lines,
   joined with `, `. Plain-text children with no link appear as their first
   60 characters. `-f json` emits `{schema_version: 1, ok: true,
   mode: "template", theme: {key, name}, entries: [{date, path, ref, line,
   state, time_range, name, links, notes}]}`.
-- **Map (`-m FILE`):** rows are `DATE<TAB>REF<TAB>THEME[<TAB>NOTE]`. Blank
+- **Map (`-m FILE`):** rows are `DATE<TAB>REF<TAB>TYPE[<TAB>NOTE]`. Blank
   lines and lines starting with `#` are skipped; NOTE is ignored. Refuse
   with `invalid_map` (a usage error), citing the map line number, when a
   row has fewer than three columns, the date is malformed or has no
   canonical daily note, the ref is malformed, or two rows resolve to the
-  same entry. A blank THEME or one containing `+` is `invalid_name`.
+  same entry. A blank TYPE or one containing `+` is `invalid_name`.
   Resolve each row with `PomodoroScan::by_ref`. `Stale` or `Ambiguous`, or
   an entry with no OLD component, is `stale_entry` (hint: regenerate with
-  `-t`). A row whose THEME key equals OLD's key is a keep. Otherwise
-  replace the OLD component with THEME's trimmed spelling; separators keep
+  `-t`). A row whose TYPE key equals OLD's key is a keep. Otherwise
+  replace the OLD component with TYPE's trimmed spelling; separators keep
   their `+` spelling and a resulting duplicate collapses. OLD entries with
   no row are left alone and counted as `unmapped`. If every row is a keep,
-  refuse with `unchanged`. THEME may not exist yet (`new` in the preview).
-  Targets in normalized `plan.exempt` are `exempt`. An unconfigured THEME
-  adds a `warnings` entry and human output marks it `◌ not configured`.
+  refuse with `unchanged`. TYPE may not exist yet (`new` in the preview).
+  Targets in normalized `plan.exempt` are `exempt`. An unconfigured TYPE
+  adds a `warnings` entry and human output marks it `◌ not one of your types`.
 - **Writing:** `-d` prints the plan and changes nothing. A write runs
-  through the shared vault-rewrite transaction (`command_name` `bob themes
-  split`, worktree subject "theme splits"). Split writes **no journal
+  through the shared vault-rewrite transaction (`command_name` `bob types
+  split`, worktree subject "type splits"). Split writes **no journal
   event**. OLD keeps its hidden state and pin, and every target keeps its
   own. Note defaults and `[theme::]` / `(theme::)` task fields are left
   unchanged. When OLD still appears in either, the preview and result add a
   `split_leaves_task_themes` warning with those leftover counts. The commit
-  subject is `bob themes split: OLD → T1, T2, …` with the
+  subject is `bob types split: OLD → T1, T2, …` with the
   changed target display names in alphabetical order. Verify: reread
   contents equal the planned after-image, line count unchanged, the set of
   changed lines equals the planned set, every changed line differs only in
@@ -348,14 +363,14 @@ map from stdin. OLD must be a known theme.
   `stale_entry`, plus `lock_busy`, `dirty_paths`, `not_a_worktree`,
   `vault_mismatch`, `sync_failed`, `verify_failed`, and `stale_note`.
 
-Runbook: `bob themes split JOB -t > job.tsv`, edit THEME, preview with
-`bob themes split JOB -m job.tsv -d`, apply with `bob themes split JOB -m
+Runbook: `bob types split JOB -t > job.tsv`, edit TYPE, preview with
+`bob types split JOB -m job.tsv -d`, apply with `bob types split JOB -m
 job.tsv`. Undo with `git revert <sha>` and `bob vault-sync`.
 
-## PT12 — Task theme suggestions
+## PT12 — Type vocabulary and display
 
-A `themes:` block in the config file declares the Pomodoro theme vocabulary
-and each theme's palette color. Bob reads the file and never writes it.
+A `themes:` block in the config file declares the task type vocabulary
+and each type's palette color. Bob reads the file and never writes it.
 
 ```yaml
 themes:
@@ -367,76 +382,76 @@ themes:
   FIX: red
 ```
 
-- **Shape.** A mapping from theme name to palette slot (`blue`, `orange`,
+- **Shape.** A mapping from type name to palette slot (`blue`, `orange`,
   `aqua`, `yellow`, `magenta`, `green`, `violet`, `red`; case-insensitive,
   trimmed), `auto`, or empty/null. `auto` and null both mean "configured,
   but bob picks the color" (pin, then exempt, then area, then hash). No hex
   values: every surface already has a light/dark pair and an xterm-256
   code for each slot.
 - **"Configured" means** the block is present, valid, and has at least one
-  entry. Missing, `null`, or `{}` means no configured themes, which is
+  entry. Missing, `null`, or `{}` means no configured types, which is
   exactly today's behavior.
 - **Validation** is strict, and a failure drops the whole block, so behavior
-  is as if no themes were configured: `themes` must be a mapping; each key
-  must be a YAML string (a number or boolean key fails with "quote theme
+  is as if no types were configured: `themes` must be a mapping; each key
+  must be a YAML string (a number or boolean key fails with "quote type
   names YAML reads as numbers or booleans"); each name must be a valid
-  single theme (not blank, no `+`); two names with the same normalized key
+  single type (not blank, no `+`); two names with the same normalized key
   fail, naming both spellings; a value that is not a slot, `auto`, or null
   fails, listing the valid colors. Every message names the config path and
   the offending `themes.NAME`.
-- **Where an invalid block is reported.** Never fatal: `bob themes list`
+- **Where an invalid block is reported.** Never fatal: `bob types list`
   carries it as a `warnings` entry (yellow in human output), `bob plan`
   reports the `themes_config_invalid` lint, and `bob capture` prints a
-  plain warning string. `bob themes list` never exits 2 over it.
-- **Identity and display.** A configured theme's key is its normalized
+  plain warning string. `bob types list` never exits 2 over it.
+- **Identity and display.** A configured type's key is its normalized
   name. The history catalog itself does not change: it is still derived
   only from daily notes plus the journal. Reports combine the catalog with
-  the configured set. A configured theme with no history displays its
+  the configured set. A configured type with no history displays its
   config spelling; otherwise the most recently authored spelling wins.
-- **Configured flag and `known`.** When themes are configured, every
+- **Configured flag and `known`.** When types are configured, every
   `ThemeRef` and every `themes list` row carries
   `configured: true|false`. When none are configured, the field is absent.
-  `known` is also true for configured themes with no history. Inventory
-  labels are storage, not themes: they never warn, are never muted as
-  unconfigured, and report `configured: true`. `(unnamed)` is not a theme.
+  `known` is also true for configured types with no history. Inventory
+  labels are storage, not types: they never warn, are never muted as
+  unconfigured, and report `configured: true`. `(unnamed)` is not a type.
 - **Warning code.** One code everywhere: `theme_not_configured`
-  (`SNACK isn't one of your configured themes`, plus `; did you mean
-  CHORE?` when the similarity rule matches a configured theme). Warnings
-  never block anything; there is no strict mode. Surfaces: theme-name
-  menus scope Recent rows to configured themes (never-used configured
-  themes rank after used ones in config order, the empty-query cap rises
-  from 5 to 12, `similar_to` draws only from visible configured themes,
+  (`SNACK isn't one of your types`, plus `; did you mean
+  CHORE?` when the similarity rule matches a configured type). Warnings
+  never block anything; there is no strict mode. Surfaces: type-name
+  menus scope Recent rows to configured types (never-used configured
+  types rank after used ones in config order, the empty-query cap rises
+  from 5 to 12, `similar_to` draws only from visible configured types,
   create rows warn), `bob capture` (structured top-level warnings),
   `capture-pomodoro-name` (Name-it), Obsidian pickers that write names,
-  `bob themes rename`/`split`, `bob plan` (`theme_not_configured` lint),
-  pills and swatches everywhere, and `bob themes list` hints.
-- **`bob themes list`.** The default view always includes visible configured
-  themes, even never-used ones (`first_used: null`, `last_used: null`,
+  `bob types rename`/`split`, `bob plan` (`theme_not_configured` lint),
+  pills and swatches everywhere, and `bob types list` hints.
+- **`bob types list`.** The default view always includes visible configured
+  types, even never-used ones (`first_used: null`, `last_used: null`,
   `days_used: 0`, `entries: 0`, no `today`; human output shows `never`
   and `0 days`, sorted last). The header reads
   `6 configured · 76 known · …`. Human meta labels read `blue · config`
   for config colors, today's labels (`aqua`, `red · pinned`,
-  `muted · exempt`, `aqua · area`) for configured `auto` themes, and
-  `muted · not configured` with the `◌` swatch for the rest. JSON adds
+  `muted · exempt`, `aqua · area`) for configured `auto` types, and
+  `muted · not one of your types` with the `◌` swatch for the rest. JSON adds
   `counts.configured`, top-level `configured_themes` (`[{key, name,
   color}]`, color a slot or null, in config order), per-row `configured`,
   and `hue_source` values `config` and `unconfigured`.
-  `theme_hue_collision` skips config-colored and muted themes.
+  `theme_hue_collision` skips config-colored and muted types.
   `theme_not_configured` hints cover visible unconfigured, non-inventory
-  themes used today or in the last 7 days, one JSON object per theme
+  types used today or in the last 7 days, one JSON object per type
   (`{code, theme: {key, name}, last_used, days_used, similar_to?}`). Human
   output prints at most 3 of those hint lines, then
-  `… and N more · bob themes -a`.
-- **`bob themes color`.** Pinning a theme whose config sets a color refuses
+  `… and N more · bob types -a`.
+- **`bob types color`.** Pinning a type whose config sets a color refuses
   with `config_color` (exit 1, no journal write):
   `BUILD's color comes from themes: in ~/.config/bob/config.yml (yellow)`,
   hint `edit themes.BUILD there, or set it to auto to pin colors with bob
-  themes color`. Configured `auto` themes pin normally.
+  themes color`. Configured `auto` types pin normally.
 
-## PT13 — Task theme suggestions
+## PT13 — Task type suggestions
 
-Rust suggests one Pomodoro theme per task and remembers deliberate
-exceptions as task fields. `bob themes suggest` explains the suggestion;
+Rust suggests one task type per task and remembers deliberate
+exceptions as task fields. `bob types suggest` explains the suggestion;
 nothing else in this phase writes. Capture pickers and commits, listing
 rows, and other clients follow this same contract in later phases; this
 section does not claim they ship yet.
@@ -488,7 +503,7 @@ First match wins:
    `[root:: X]` field starts this walk at X, so a daily `^gtd` row
    carrying `[root:: gtd_daily]` suggests `gtd_daily`'s default
    (`theme: PLAN`).
-4. Otherwise none: `No suggested theme`.
+4. Otherwise none: `No suggested type`.
 
 The inherited suggestion runs the same rule with step 1 skipped. The
 serialized suggestion holds `theme` (a `ThemeRef`), `source`, and
@@ -501,15 +516,15 @@ are omitted.
 
 ### Known, unknown, and hidden
 
-A theme is known when the catalog knows it or when it appears among
+A type is known when the catalog knows it or when it appears among
 today's live ledger components, even when the catalog cache is stale.
 Unknown names stay reportable (`known: false`, `◌` swatch); downstream
-menus must never preselect them. Hidden themes remain eligible.
-Theme defaults never affect hue, history, or Stats.
+menus must never preselect them. Hidden types remain eligible.
+Type defaults never affect hue, history, or Stats.
 
 ### `themes suggest`
 
-`bob themes suggest TARGET [-b/--bob-dir DIR] [-f/--format human|json]`.
+`bob types suggest TARGET [-b/--bob-dir DIR] [-f/--format human|json]`.
 `route:block-id` explains an existing task (capture-route validation,
 no path traversal, one-based line); a bare route explains a new task's
 default. Report closed tasks successfully with no suggestion and one
@@ -539,7 +554,7 @@ Color follows NO_COLOR; broken pipes exit silently.
 
 ### Placement
 
-`set_task_theme` removes every theme field in either form plus one
+`set_task_theme` removes every type field in either form plus one
 adjacent separating space, then inserts ` [theme:: NAME]` before the
 maximal trailing run of inline fields of any key, tags, and a trailing
 `^id`. With no run it inserts at the trimmed end. `clear_task_theme`
@@ -560,17 +575,17 @@ A deliberate choice for destination name D with shown suggestion S:
    does not write.
 3. No suggestion was shown: no change. The explicit Task Card edit
    escape hatch stays separate, where this guard does not apply.
-4. Chosen key equals inherited: clear every theme field, no-op if
+4. Chosen key equals inherited: clear every type field, no-op if
    absent.
 5. Otherwise set catalog-spelled X, no-op when already exact.
 
 Deliberate capture means an explicit `#NAME` or equivalent `=name`;
 the picker means a changed committed row, a nonempty query, or
 Shift+Enter. Alt+Enter is always link once; untouched preselection is
-not deliberate. Guards refuse before any field edit. Theme edits never
+not deliberate. Guards refuse before any field edit. Type edits never
 affect freshness eligibility.
 
-Capture writes task themes only for an explicit Pomodoro name: a new
+Capture writes task types only for an explicit Pomodoro name: a new
 Pomodoro-linked task (`<text> @route:id#NAME`), a whole-item existing-task
 link (`@route:id#NAME` or `^route:id#NAME`), or Ensure Next
 (`@route+id#NAME`). The equivalent `=name` link-and-start shorthand is also
@@ -586,7 +601,7 @@ Capture JSON omits `task_theme` unless the field changes. When present it is
 `{action, theme, previous, inherited}`: `action` is `set` or `cleared`,
 `theme` is the selected `ThemeRef` (null on clear), `previous` is the prior
 valid task field (null when absent or needing repair), and `inherited` is the
-suggestion without the task's own field (or null). Human output adds a theme
+suggestion without the task's own field (or null). Human output adds a type
 row that names the choice and its inherited reason; dry-run reports the same
 post-image without writing.
 
@@ -600,17 +615,17 @@ Task move, archive, Highlights reading-status checkbox edits, ref
 rename's alias overwrite, task-status-hooks reconcile, complete and
 cancel, and freshness stamping keep a distinctive authored field
 (either form, any spacing) byte-identical: only each operation's
-intended bytes change. Freshness stamps land after the theme and after
+intended bytes change. Freshness stamps land after the type and after
 a `[root::]` field, still before the fresh/Tasks suffix. Closed and
 history fields are preserved, not stripped. The same writers keep a
 distinctive `[root::]` / `(root::)` field byte-identical.
 
 ### Rename coverage
 
-`bob themes rename` rewrites matching note defaults and task fields in the
+`bob types rename` rewrites matching note defaults and task fields in the
 same previewed, verified commit as the session tails. Invalid defaults,
 `off`, non-area/project `theme:` lines, fenced examples, and prose stay
-untouched. `bob themes split` never rewrites defaults or fields.
+untouched. `bob types split` never rewrites defaults or fields.
 
 ### List hints: unknown defaults
 
@@ -618,7 +633,7 @@ untouched. `bob themes split` never rewrites defaults or fields.
 valid default is unknown to the current catalog:
 `{code: "theme_default_unknown", path, name, similar_to}`. Human
 output renders
-`<path> suggests unknown theme <NAME>[; did you mean <X>?] → edit theme: in that note or add <NAME> under themes: in <config>`.
+`<path> suggests unknown type <NAME>[; did you mean <X>?] → edit theme: in that note or add <NAME> under themes: in <config>`.
 No hint for absent, blank, `off`, invalid, ignored note kinds, or known
 defaults. Collision hints keep their exact bytes and shape; hint order
 is deterministic. A `--query`, `--limit`, or hidden filter never hides
@@ -629,12 +644,12 @@ without rewriting defaults.
 
 ### The shared menu contract
 
-Menus in every client follow this rule over the suggested theme S.
+Menus in every client follow this rule over the suggested type S.
 Exact entries contain only S after removing exempt keys other than S.
 Prefer a running exact entry, else the first exact entry in ledger
 order, else the first containing entry; keep Today order. Otherwise a
 known S may create a top `New S Pomodoro` row when a Pomodoros section
-exists, at most one timed open entry exists, and strict theme caps
+exists, at most one timed open entry exists, and strict type caps
 permit it; remove its Recent duplicate. Otherwise preserve today's
 default and report `unknown_theme`, `creation_blocked`, or
 `strict_cap`; ref-today additionally uses `already_queued`. A nonempty
@@ -648,9 +663,9 @@ Pinned copy: `suggested · this task`, `suggested · reading task`,
 where supported); `reading tasks suggest READ`,
 `<stem> suggests WRITE`, and
 `no default here`. Consequences: `this task becomes FIX · <stem>
-suggests WRITE` and `task theme cleared · <stem> suggests WRITE`;
-notices: `Linked under FIX · task theme FIX` and `Linked under WRITE ·
-task theme cleared`. Accessible example: `Pomodoro WRITE, suggested,
+suggests WRITE` and `task type cleared · <stem> suggests WRITE`;
+notices: `Linked under FIX · task type FIX` and `Linked under WRITE ·
+task type cleared`. Accessible example: `Pomodoro WRITE, suggested,
 from sase_blog`. Explicit task fields alone get PT6 pills; inherited
 values never become ghost pills. Unknown and repair styling follows the
 established pill rules.
@@ -659,9 +674,9 @@ Capture completion emits a top-level `theme_suggestion` in
 `pomodoro_name` context (null when there is no suggestion). At most one
 candidate adds `suggested: true` and `suggestion_label`. With an empty
 query, a known suggestion with no matching open entry becomes a suggested
-create row at the top when the daily note and theme cap allow it; the row
+create row at the top when the daily note and type cap allow it; the row
 uses the normal Recent/create shape and is removed from Recent to avoid a
-duplicate. A hidden theme can appear in this row. With a nonempty query,
+duplicate. A hidden type can appear in this row. With a nonempty query,
 PT7 order and first-row behavior stay fixed and a matching row only gets the
 suggested marker. `theme_suggestion.fallback` is
 `unknown_theme`, `creation_blocked`, or `strict_cap` when no row can be
@@ -672,7 +687,7 @@ listing, plus a top-level `theme_suggestion`. Its `fallback` also includes
 `already_queued` when the task already has a live link; that queue takes
 priority. When a known suggestion has no matching open bucket and a new
 entry is allowed, `theme_suggestion.create: true` tells clients to offer a
-new suggested Pomodoro. This command never writes a theme field.
+new suggested Pomodoro. This command never writes a type field.
 
 The capture command and `bob ref today` consume the shared `preselect`
 vectors. `task_theme: {action: "set" | "cleared", theme, previous,
@@ -683,7 +698,7 @@ change.
 
 `task.theme` can conflate frontmatter note defaults with task fields,
 so it cannot answer what a task itself declares. Use
-`bob themes suggest` for the authoritative suggestion.
+`bob types suggest` for the authoritative suggestion.
 
 ## JSON contract
 
@@ -701,12 +716,12 @@ attaches `themes` to every entry. `bob plan` returns `theme_refs` beside
 plan-budget fields. These arrays preserve source order. `hue_source` is
 one of `config`, `pin`, `exempt`, `unconfigured`, `area`, `hash`.
 
-Stats reports include `theme_hues` beside `homes`, keyed by normalized theme
-key, for theme-dimension values present in the report. Exempt themes have
+Stats reports include `theme_hues` beside `homes`, keyed by normalized type
+key, for type-dimension values present in the report. Exempt types have
 `hue: null` and `hue_source: "exempt"`. Unknown names carry `known: false`;
 while typing, clients keep them neutral.
 
-**`bob themes list -f json`:**
+**`bob types list -f json`:**
 
 ```json
 {
@@ -751,10 +766,10 @@ while typing, clients keep them neutral.
 }
 ```
 
-`theme_hue_collision` pairs are unpinned, non-exempt themes that share a hue
-and met on at least 2 of the last 30 days. The theme with fewer `days_used`
+`theme_hue_collision` pairs are unpinned, non-exempt types that share a hue
+and met on at least 2 of the last 30 days. The type with fewer `days_used`
 is the one to move. The suggested slot is the least used by the last 30
-days' themes, excluding hues of themes that met the moved theme in that
+days' types, excluding hues of types that met the moved type in that
 window; ties follow palette order. `renamed_reappeared` lists every rename
 source key that still has occurrences after its latest rename-from event
 and that a later rename-to, color, or unhide has not re-adopted, as
@@ -766,15 +781,15 @@ on refusal, even on a nonzero exit. Refusal codes: `unknown_theme`,
 `invalid_hue`, `invalid_name`, `unchanged` (no journal write), `theme_exists`,
 `config_reference`, `invalid_map`, `stale_entry`, `lock_busy`, `dirty_paths`,
 `not_a_worktree`, `vault_mismatch`, `sync_failed`, `verify_failed`,
-`stale_note`, plus `config_color` for `color` on a theme whose color comes
+`stale_note`, plus `config_color` for `color` on a type whose color comes
 from the `themes:` block. The Obsidian manager previews with `rename -d -f
 json` (files, entries, before/after tails, state and color change) and
 confirms with `--merge` when needed.
 
-## `bob themes` CLI
+## `bob types` CLI
 
-The group is `bob themes`, a top-level catalog noun in Daily workflow after
-`stats`. Bare `bob themes` is `list`. Members, alphabetical in help:
+The group is `bob types`, a top-level catalog noun in Daily workflow after
+`stats`. Bare `bob types` is `list`. Members, alphabetical in help:
 
 - `color NAME HUE|auto`
 - `hide NAME…`
@@ -784,28 +799,28 @@ The group is `bob themes`, a top-level catalog noun in Daily workflow after
 - `suggest TARGET [-b/--bob-dir DIR] [-f/--format human|json]`
 - `unhide NAME…`
 
-List defaults: visible themes used in the last 90 days or today, newest
-first, plus every visible configured theme even when never used (sorted
-last, showing `never` and `0 days`). `-a` shows every theme and flags
-hidden ones. `-H` shows only hidden themes. `-q` ranks per PT7 groups B
+List defaults: visible types used in the last 90 days or today, newest
+first, plus every visible configured type even when never used (sorted
+last, showing `never` and `0 days`). `-a` shows every type and flags
+hidden ones. `-H` shows only hidden types. `-q` ranks per PT7 groups B
 then D.
 
 Human list:
 
 ```text
-THEMES  81 known · 4 today · 2 hidden · last 90 days
+TYPES  81 known · 4 today · 2 hidden · last 90 days
   ■ BOB        today     26 days   magenta
   ■ JOB        Oct 23    24 days   aqua · area
   ■ BLOG       Oct 23    14 days   red · pinned
   □ PLAN       today     51 days   muted · exempt
-  hint  SASE and BLOG share orange and met on 6 days → bob themes color BLOG red
+  hint  SASE and BLOG share orange and met on 6 days → bob types color BLOG red
 ```
 
 With a vocabulary configured, the header reads
 `6 configured · 81 known · …`, configured rows show `blue · config`, and
-unconfigured rows show `◌ SNACK … muted · not configured`.
+unconfigured rows show `◌ SNACK … muted · not one of your types`.
 
-`color` on a theme whose config sets a color refuses with `config_color`
+`color` on a type whose config sets a color refuses with `config_color`
 and writes nothing to the journal.
 
 ## Shared vectors
@@ -822,7 +837,7 @@ later JavaScript mirror.
 
 ## Related
 
-- [Plan budget](plan.md#themes)
+- [Plan budget](plan.md#types)
 - [Daily Stats](stats.md)
 - [Pomodoro homes](pomodoro-homes.md)
 - [Vault Git sync](vault-git-sync.md)
