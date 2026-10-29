@@ -196,7 +196,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
-| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default), including linked `^gtd` task shares inside work sessions. |
+| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default, that link that day's `^gtd` row or have no Task Links), including linked `^gtd` task shares inside work sessions. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
 
 ## `stats:` config

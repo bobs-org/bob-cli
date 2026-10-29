@@ -44,7 +44,9 @@ unnamed entry still shows its derived homes.
 
 Components listed in `plan.exempt` (default `[PLAN]`) are never
 themes. An entry whose components are all exempt is ignored for
-links too.
+links too. Exemption is a budget rule; Stats charges an all-exempt session to
+review only when it links that day's `^gtd` row or has no Task Links
+([R4](pomodoro-homes.md#r4-review-sessions)).
 
 ## Themes
 

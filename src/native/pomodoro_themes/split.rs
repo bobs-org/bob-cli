@@ -1169,7 +1169,9 @@ fn print_human(report: &SplitReport) {
     }
     println!("  kept {} · unmapped {}", report.kept, report.unmapped);
     if report.targets.iter().any(|target| target.exempt) {
-        println!("  exempt: these sessions count as review time in Stats");
+        println!(
+            "  exempt: these sessions count as review time in Stats when they link that day's ^gtd"
+        );
     }
     for file in &report.files {
         for change in &file.changes {

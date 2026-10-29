@@ -624,7 +624,7 @@ review: only
 unit: minutes
 direction: neutral
 color: orange
-description: "Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default), including linked ^gtd task shares inside work sessions."
+description: "Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default, that link that day's `^gtd` row or have no Task Links), including linked ^gtd task shares inside work sessions."
 limits:
   - Attributed from Task Links.
   - Grouped by today's note tree.

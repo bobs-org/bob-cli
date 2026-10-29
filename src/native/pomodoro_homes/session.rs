@@ -109,20 +109,22 @@ pub(crate) fn attribute_session<S: HomeSource>(
         .map(|name| name.to_ascii_lowercase())
         .collect::<BTreeSet<_>>();
     let components = name_components(name);
-    let named_review = name.is_some()
+    let all_exempt_name = name.is_some()
         && !components.is_empty()
         && components
             .iter()
             .all(|component| exempt_names.contains(component));
-    let bridge = name.is_none()
-        && !exempt.is_empty()
-        && resolved.iter().any(|link| {
-            link.block_id.eq_ignore_ascii_case("gtd")
-                && matches!(&link.resolution, LinkResolution::Found(path)
-                    if path == daily_path
-                        && crate::native::task_status_hooks::canonical_daily_date(path)
-                            .is_some())
-        });
+    // R4: the ^gtd link, not the name, marks the ritual.
+    let links_today_gtd = resolved.iter().any(|link| {
+        link.block_id.eq_ignore_ascii_case("gtd")
+            && matches!(&link.resolution, LinkResolution::Found(path)
+                if path == daily_path
+                    && crate::native::task_status_hooks::canonical_daily_date(path)
+                        .is_some())
+    });
+    let named_review =
+        all_exempt_name && (resolved.is_empty() || links_today_gtd);
+    let bridge = name.is_none() && !exempt.is_empty() && links_today_gtd;
 
     if named_review || bridge {
         let names = if named_review {

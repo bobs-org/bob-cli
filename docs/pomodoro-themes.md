@@ -129,13 +129,15 @@ Names wear a tint; places wear a dot.
   text (16 % light / 24 % dark; hover 24 % / 32 %). Corner radius 4 px,
   horizontal padding about 0.3 em, no border, `box-decoration-break: clone`.
   The hue is never the text color.
-- **Muted pill:** exempt themes such as PLAN. Hover background, muted text.
+- **Muted pill:** exempt themes such as PLAN: a neutral gray tint (no hue)
+  behind muted text, rising on hover, so a configured exempt name still
+  reads as a theme.
 - **Unconfigured pill:** a theme outside the configured vocabulary wears a
   1 px dashed outline in the platform warning color (Obsidian
-  `--text-warning`, macOS `systemOrange`) at about 70 % opacity, over the
-  muted pill, with a "not in your themes" tooltip/AX suffix. Like the
-  typing rule, the mark appears only once the name is committed or the
-  cursor leaves it.
+  `--text-warning`, macOS `systemOrange`) at about 70 % opacity, over muted
+  text without the gray fill, with a "not in your themes" tooltip/AX suffix.
+  The Mac keeps its muted fill. Like the typing rule, the mark appears only
+  once the name is committed or the cursor leaves it.
 - **Swatch:** in dense rows, an 8 pt rounded square (radius 2) before the
   name. The Day strip theme legend uses the same rounded square at the
   legend-dot footprint. Area homes keep their ● circle. The Day strip and

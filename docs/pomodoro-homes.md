@@ -120,11 +120,15 @@ the same link rule. Open homes are forecasts and never count as worked time.
 ## R4 — Review sessions
 
 A named session is a review session when every `+`-separated name component is
-in `plan.exempt` (default `[PLAN]`). Its minutes go to one `@review:<NAME>` part
+in `plan.exempt` (default `[PLAN]`) and it links that day's `^gtd` row or has
+no dedicated Task Links. Its minutes go to one `@review:<NAME>` part
 per exempt component; composite names split their minutes evenly, with any
 remainder going to the first component. The bucket label is `<NAME> review`.
 Its task links do not attribute. Review buckets group under root `@daily`;
 their project and area dimensions remain `@review:<NAME>` and its resolved area.
+An all-exempt name without that day's `^gtd` is a work session: its links decide
+its homes, exactly as in any work session, and another day's canonical `^gtd`
+is still a review-home share. Its name still feeds the Stats theme dimension.
 
 An unnamed session is also a review session when one of its dedicated links is
 that day's `^gtd` row. This historical bridge uses the first configured exempt
@@ -137,9 +141,10 @@ lowercase review name (`PLAN` → `plan.md`, whose parent is `gtd`). If that not
 has no area or project, the bucket itself is the area key. Review parts inherit
 that area's hue.
 
-The named-session rule remains based on the session name: an all-PLAN named
-session is review even when it links project tasks. Its root parent is still
-`@daily`.
+The `^gtd` link marks the ritual, not the name: a morning entry that links
+`^gtd` plus dispatched tasks stays whole in review, while an all-exempt entry
+that links only project tasks attributes like any work session. A review
+session's root parent is still `@daily`.
 
 ## R5 — Splitting and lead home
 
@@ -286,7 +291,8 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 | `depth-and-parent-shapes` | direct child and grandchild homes, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |
 | `parent-scalar-shapes` | quoted scalar wikilinks resolve; single-item YAML lists and bare strings do not |
 | `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
-| `review-decisions` | named review sessions, same-day bridge, and mixed named work |
+| `review-decisions` | all-exempt work without `^gtd`, same-day bridge, and mixed named work |
+| `exempt-name-gtd-link` | all-exempt review needs that day's `^gtd` or no links; other-day `^gtd` stays a work share; open all-exempt forecasts work |
 
 ## Limits and rejected alternatives
 

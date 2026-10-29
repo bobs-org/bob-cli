@@ -111,7 +111,7 @@
         "GTD"
       ],
       "expected_lead_homes": [
-        "@review:GTD",
+        "bob.md",
         "@review:GTD",
         "@review:GTD"
       ],
@@ -119,19 +119,19 @@
       "expected": [
         {
           "state": "attributed",
-          "kind": "review",
-          "label": "GTD review",
-          "chip": null,
+          "kind": "work",
+          "label": "bob",
+          "chip": "bob",
           "hue": "orange",
           "parts": [
             {
-              "key": "@review:GTD",
-              "label": "GTD review",
-              "kind": "bucket",
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
               "area": "gtd.md",
               "area_label": "gtd",
               "hue": "orange",
-              "tasks": 0,
+              "tasks": 1,
               "share": 100,
               "minutes": 25
             }
@@ -185,6 +185,112 @@
               "tasks": 1,
               "share": 40,
               "minutes": 2
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exempt-name-gtd-link",
+      "daily_path": "2026/20261018.md",
+      "exempt": [
+        "GTD"
+      ],
+      "expected_lead_homes": [
+        "@review:GTD",
+        "@review:GTD",
+        "@review:GTD",
+        "sase_blog.md"
+      ],
+      "pomodoros": "- [x] (0900-0925 25m) \u2014 GTD\n  - [[#^gtd]]\n  - [[bob#^work]]\n- [x] (0930-0935 5m) \u2014 GTD\n- [x] (1000-1010 10m) \u2014 GTD\n  - [[2026/20261017#^gtd]]\n  - [[bob#^work]]\n- [ ] () \u2014 GTD\n  - [[sase_blog#^work]]\n",
+      "expected": [
+        {
+          "state": "attributed",
+          "kind": "review",
+          "label": "GTD review",
+          "chip": null,
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 0,
+              "share": 100,
+              "minutes": 25
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "review",
+          "label": "GTD review",
+          "chip": null,
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 0,
+              "share": 100,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "attributed",
+          "kind": "work",
+          "label": "GTD review \u00b7 bob",
+          "chip": "GTD review \u00b7 bob",
+          "hue": "orange",
+          "parts": [
+            {
+              "key": "@review:GTD",
+              "label": "GTD review",
+              "kind": "bucket",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            },
+            {
+              "key": "bob.md",
+              "label": "bob",
+              "kind": "project",
+              "area": "gtd.md",
+              "area_label": "gtd",
+              "hue": "orange",
+              "tasks": 1,
+              "share": 50,
+              "minutes": 5
+            }
+          ]
+        },
+        {
+          "state": "forecast",
+          "kind": "work",
+          "label": "sase_blog",
+          "chip": "sase_blog",
+          "hue": "blue",
+          "parts": [
+            {
+              "key": "sase_blog.md",
+              "label": "sase_blog",
+              "kind": "project",
+              "area": "dev.md",
+              "area_label": "dev",
+              "hue": "blue",
+              "tasks": 1,
+              "share": 100
             }
           ]
         }
