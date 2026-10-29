@@ -125,8 +125,11 @@ check-release-tools:
 release-preview *args:
     python3 tools/release/release_preview.py {{args}}
 
-# Install bob and its shims from this checkout, then install or refresh shell
-# completion. Pass shells to choose explicitly: `just install zsh bash`.
+# Install bob and its shims from this checkout with the incremental
+# local-install profile, then install or refresh shell completion.
+# Pass shells to choose explicitly: `just install zsh bash`.
+# BOB_INSTALL_PROFILE=release installs the exact published-build profile
+# (useful for performance comparisons or when an incremental build looks suspect).
 [positional-arguments]
 install *shells: (_banner "35" "📦" "INSTALL")
     #!/usr/bin/env bash
@@ -134,7 +137,11 @@ install *shells: (_banner "35" "📦" "INSTALL")
     source scripts/lib/bob_shell.sh
     root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
     bob_prepare_install_root "$root"
-    cargo install --path . --locked --root "$root"
+    profile="${BOB_INSTALL_PROFILE:-local-install}"
+    # An empty RUSTC_WRAPPER disables any configured rustc wrapper (sccache or
+    # sase-rustc-wrapper), which would strip or refuse -C incremental. sccache
+    # cannot cache the changed bob_cli crate on a reinstall anyway.
+    RUSTC_WRAPPER= cargo install --path . --locked --profile "$profile" --root "$root"
     if ! "$root/bin/bob" completion install "$@"; then
         printf '\nbob is installed at %s; shell completion needs attention (see above).\n' \
             "$root/bin/bob" >&2

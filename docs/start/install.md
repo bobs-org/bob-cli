@@ -46,6 +46,12 @@ just install
 `just install` builds with Cargo and installs `bob` plus shell completion
 into `${CARGO_INSTALL_ROOT:-${CARGO_HOME:-~/.cargo}}`, overriding cargo's
 `install.root` so the recipe refreshes the binary it installed.
+It builds with the `local-install` Cargo profile: release optimizations plus
+incremental compilation, so later reinstalls from the same checkout recompile only
+what changed. The first install after this change, or after the build directory is
+cleaned, is still a full build.
+For that build it ignores any configured `rustc-wrapper` (for example sccache).
+`BOB_INSTALL_PROFILE=release` installs with the plain release profile instead.
 Before it installs, `just install` removes a path or Git install registered as
 `bob-cli`. If `bob-cli` came from a registry, the recipe stops because that is
 another project. The recipe does not use `--force`. Ensure that `bin` directory

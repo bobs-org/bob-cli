@@ -97,3 +97,10 @@ path = "src/bin/bob_notify.rs"
 [[bin]]
 name = "tmux_bob_pomodoro"
 path = "src/bin/tmux_bob_pomodoro.rs"
+
+# `just install` builds with this profile: release optimizations plus an incremental
+# cache, so a reinstall recompiles only what changed. Published binaries keep the
+# plain `release` profile.
+[profile.local-install]
+inherits = "release"
+incremental = true
