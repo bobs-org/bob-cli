@@ -65,8 +65,10 @@ impl RewriteRule {
 /// appended trigger is dropped. That rule never searches the draft: no
 /// cursor means absorption-only, matching the historical `@@` contract.
 ///
-/// With an explicit cursor at byte 3, a first-line `@@@` starts a template
-/// draft. Otherwise apply Rule A1's absorption to the bare `@@` at (or before, when
+/// With an explicit `cursor` right after a standalone `@@@` token at the
+/// end of a physical line, that token starts a template draft: it is erased
+/// (plus any spaces or tabs before it) and `@@template:` becomes the draft's
+/// first line. Otherwise apply Rule A1's absorption to the bare `@@` at (or before, when
 /// no cursor is given, the last one in source order at) `cursor`: claim the
 /// item's own absorbable local destination marker, or else the draft's one
 /// other declaration token, rewriting the bare token to `@@<payload>` and
@@ -81,8 +83,10 @@ pub(crate) fn rewrite_draft(
     if super::template::analyze(raw_text).header.is_some() {
         return unchanged_rewrite(raw_text, cursor, Vec::new());
     }
-    if let Some(3) = cursor
-        && let Some(rewrite) = start_template(raw_text)
+    if let Some(position) = cursor
+        && position <= raw_text.len()
+        && raw_text.is_char_boundary(position)
+        && let Some(rewrite) = start_template(raw_text, position)
     {
         return rewrite;
     }
@@ -100,35 +104,88 @@ pub(crate) fn rewrite_draft(
     absorb_bare_declaration(raw_text, cursor)
 }
 
-/// Typing the third `@` at the start of an otherwise empty first line starts
-/// a template. The output adds a fresh line for the template body while
-/// preserving the draft's existing line ending and following text.
-fn start_template(raw_text: &str) -> Option<DraftRewrite> {
-    let rest = raw_text.strip_prefix("@@@")?;
-    let terminator = if rest.starts_with("\r\n") {
-        "\r\n"
-    } else if rest.starts_with('\n') {
-        "\n"
-    } else if rest.is_empty() {
-        "\n"
-    } else {
+/// Typing the third `@` right after a standalone `@@` at the end of any
+/// physical line starts a template. The `@@@` token (plus any spaces or tabs
+/// immediately before it on the same line) is erased and `@@template:`
+/// becomes the draft's first line, reusing the draft's first line break
+/// (`\r\n`, `\n`, or `\r`; `\n` when the draft has none). The caret stays
+/// where the erased token began, mapped past the inserted header. A first
+/// line that is exactly `@@@` keeps today's single merged edit.
+fn start_template(raw_text: &str, cursor: usize) -> Option<DraftRewrite> {
+    if cursor > raw_text.len() || !raw_text.is_char_boundary(cursor) {
         return None;
+    }
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor && token.text == "@@@")?;
+    match raw_text.as_bytes().get(cursor) {
+        None | Some(b'\n') | Some(b'\r') => {}
+        Some(_) => return None,
+    }
+    let mut erase_start = token.start;
+    while erase_start > 0
+        && matches!(raw_text.as_bytes()[erase_start - 1], b' ' | b'\t')
+    {
+        erase_start -= 1;
+    }
+    let terminator = first_rewrite_line_terminator(raw_text).unwrap_or("\n");
+    let header = format!("@@template:{terminator}");
+    let (edits, mapped_cursor) = if erase_start == 0 {
+        (
+            vec![TextEdit {
+                start: 0,
+                end: cursor,
+                replacement: header.clone(),
+            }],
+            header.len(),
+        )
+    } else {
+        (
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: erase_start,
+                    end: cursor,
+                    replacement: String::new(),
+                },
+            ],
+            erase_start + header.len(),
+        )
     };
-    let replacement = format!("@@template:{terminator}");
-    let edits = vec![TextEdit {
-        start: 0,
-        end: 3,
-        replacement,
-    }];
     let text = apply_text_edits(raw_text, &edits);
     Some(DraftRewrite {
         rule: Some(RewriteRule::StartTemplate),
         edits,
         text,
-        cursor: Some(11 + terminator.len()),
+        cursor: Some(mapped_cursor),
         summary: Some("Started a @@template: draft".to_string()),
         notices: Vec::new(),
     })
+}
+
+/// The draft's first physical line break, reused verbatim by
+/// [`start_template`] for its header. Scans the raw bytes so `\r\n` stays a
+/// single terminator.
+fn first_rewrite_line_terminator(raw_text: &str) -> Option<&'static str> {
+    let bytes = raw_text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\r' => {
+                if bytes.get(index + 1) == Some(&b'\n') {
+                    return Some("\r\n");
+                }
+                return Some("\r");
+            }
+            b'\n' => return Some("\n"),
+            _ => index += 1,
+        }
+    }
+    None
 }
 
 fn absorb_bare_declaration(

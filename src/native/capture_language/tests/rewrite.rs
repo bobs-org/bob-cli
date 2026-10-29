@@ -162,21 +162,183 @@ fn rewrite_draft_starts_a_template_reusing_crlf() {
 }
 
 #[test]
+fn rewrite_draft_starts_a_template_at_a_line_end() {
+    let header = "@@template:\n".to_string();
+    let crlf_header = "@@template:\r\n".to_string();
+    for (raw, cursor, expected, expected_cursor, expected_edits) in [
+        (
+            "Read {0} @@@",
+            12usize,
+            "@@template:\nRead {0}",
+            20usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: 8,
+                    end: 12,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+        (
+            "Buy milk\nRead {0} @@@",
+            21usize,
+            "@@template:\nBuy milk\nRead {0}",
+            29usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: 17,
+                    end: 21,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+        (
+            "Buy milk @dev @@@",
+            17usize,
+            "@@template:\nBuy milk @dev",
+            25usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: 13,
+                    end: 17,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+        (
+            "Buy\r\nRead\t@@@",
+            13usize,
+            "@@template:\r\nBuy\r\nRead",
+            22usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: crlf_header.clone(),
+                },
+                TextEdit {
+                    start: 9,
+                    end: 13,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+        (
+            "x\n@@@",
+            5usize,
+            "@@template:\nx\n",
+            14usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: 2,
+                    end: 5,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+        (
+            "  @@@\nApply {0}",
+            5usize,
+            "@@template:\n\nApply {0}",
+            12usize,
+            vec![TextEdit {
+                start: 0,
+                end: 5,
+                replacement: header.clone(),
+            }],
+        ),
+        (
+            "\n@@@",
+            4usize,
+            "@@template:\n\n",
+            13usize,
+            vec![
+                TextEdit {
+                    start: 0,
+                    end: 0,
+                    replacement: header.clone(),
+                },
+                TextEdit {
+                    start: 1,
+                    end: 4,
+                    replacement: String::new(),
+                },
+            ],
+        ),
+    ] {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, Some(RewriteRule::StartTemplate), "{raw:?}");
+        assert_eq!(rewrite.text, expected, "{raw:?}");
+        assert_eq!(rewrite.cursor, Some(expected_cursor), "{raw:?}");
+        assert_eq!(
+            rewrite.summary.as_deref(),
+            Some("Started a @@template: draft"),
+            "{raw:?}"
+        );
+        assert!(rewrite.notices.is_empty(), "{raw:?}");
+        assert_eq!(rewrite.edits, expected_edits, "{raw:?}");
+        let mut applied = String::new();
+        let mut position = 0usize;
+        for edit in &rewrite.edits {
+            applied.push_str(&raw[position..edit.start]);
+            applied.push_str(&edit.replacement);
+            position = edit.end;
+        }
+        applied.push_str(&raw[position..]);
+        assert_eq!(applied, expected, "edits reproduce text for {raw:?}");
+    }
+}
+
+#[test]
 fn rewrite_draft_template_start_requires_the_exact_typing_gesture() {
     for (raw, cursor) in [
         ("@@@", None),
         ("@@@", Some(1)),
         ("@@@", Some(2)),
         (" @@@", Some(5)),
-        ("\n@@@", Some(4)),
         ("@@@@", Some(3)),
+        ("@@@@", Some(4)),
+        ("x@@@", Some(4)),
         ("@@@ x", Some(3)),
-        ("x\n@@@", Some(5)),
+        ("Read @@@ ", Some(8)),
+        ("@@@", Some(4)),
+        (
+            "@@template:\nDo work @@@",
+            Some("@@template:\nDo work @@@".len()),
+        ),
     ] {
         let rewrite = rewrite_draft(raw, cursor);
         assert_ne!(rewrite.rule, Some(RewriteRule::StartTemplate), "{raw:?}");
         assert_eq!(rewrite.text, raw, "{raw:?}");
     }
+    // A cursor past the end or off a char boundary must not panic.
+    let emoji = "🧪 @@@";
+    let rewrite = rewrite_draft(emoji, Some(2));
+    assert_ne!(rewrite.rule, Some(RewriteRule::StartTemplate), "{emoji:?}");
+    assert_eq!(rewrite.text, emoji);
+    let rewrite = rewrite_draft("@@@", Some(99));
+    assert_ne!(rewrite.rule, Some(RewriteRule::StartTemplate));
+    assert_eq!(rewrite.text, "@@@");
 }
 
 #[test]
@@ -185,6 +347,12 @@ fn rewrite_draft_template_start_is_idempotent() {
     let second = rewrite_draft(&first.text, first.cursor);
     assert_eq!(first.rule, Some(RewriteRule::StartTemplate));
     assert_eq!(second.rule, None);
+    assert_eq!(second.text, first.text);
+
+    let first = rewrite_draft("Read {0} @@@", Some(12));
+    assert_eq!(first.rule, Some(RewriteRule::StartTemplate));
+    let second = rewrite_draft(&first.text, first.cursor);
+    assert_eq!(second.rule, None, "end-of-line template repeats");
     assert_eq!(second.text, first.text);
 }
 

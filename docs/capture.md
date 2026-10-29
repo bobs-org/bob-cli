@@ -542,7 +542,9 @@ template capture has the same results, ordering, and all-or-nothing writes as
 capturing that expansion directly.
 Editors that run [`capture-rewrite`](#bob-capture-rewrite), including the Mac
 capture panel, turn a typed `@@@` at the very start of a draft into the template
-header and place the caret on the next line.
+header and place the caret on the next line. Typing `@@@` at the end of any
+line does the same, so a line already written becomes the template: the token
+is erased and `@@template:` becomes the draft's first line.
 
 ```text
 @@template:
@@ -6060,10 +6062,14 @@ Template drafts are never rewritten: `capture-rewrite` returns
 `changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
 template marker.
 
-**Template start.** Typing a third `@` at byte 3 when the first physical line
-is exactly `@@@` replaces it with `@@template:` and a line ending. The existing
-LF or CRLF is reused, and the cursor moves to a fresh blank line. This typing
-gesture requires `--cursor`; without it, the rule is skipped.
+**Template start.** Typing a third `@` right after a standalone `@@@` token
+at the end of any physical line erases that token (plus any spaces or tabs
+before it) and inserts `@@template:` plus a line ending as the draft's new
+first line. Only the whitespace-delimited token ending at `--cursor` is
+examined, and the cursor must sit at the end of its physical line. The draft's
+first line break is reused (`\r\n`, `\n`, or `\r`; `\n` when the draft has
+none). This typing gesture requires `--cursor`; without it, the rule is
+skipped.
 
 ```bash
 bob capture-rewrite -c 3 -f json -- '@@@'
@@ -6071,8 +6077,15 @@ bob capture-rewrite -c 3 -f json -- '@@@'
 
 The result is `@@template:\n` with cursor 12 and summary
 `Started a @@template: draft`. If the draft already has following lines, they
-move down so the cursor still lands on a blank line. Feeding the result back
-through the command is a no-op.
+move down so the cursor still lands on a blank line. At the end of any other
+line, the same gesture erases `@@@` there instead:
+
+```bash
+bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'
+```
+
+The result is `@@template:\nRead {0}` with cursor 20. Feeding either result
+back through the command is a no-op.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id`, or `:` immediately after `@route^id`, consumes that
@@ -6210,10 +6223,13 @@ JSON output is a single versioned object:
 `rule` is `start_template`, `switch_block_id_separator`,
 `attach_relation_label`, `absorb_local_marker`, or `absorb_declaration`,
 omitted when nothing changed. `cursor` is present only when `--cursor` was
-supplied and is mapped through every edit. For `start_template`, it lands at
-the start of the fresh line; separator toggles land just past the unchanged
-ID, pipe attaches land just past the glued `|`, and absorption lands just
-past the rewritten `@@<payload>` token.
+supplied and is mapped through every edit. For `start_template`, it lands
+where the erased `@@@` began, after the inserted header; that is the start
+of the fresh line when `@@@` was the whole first line. Separator toggles land
+just past the unchanged ID, pipe attaches land just past the glued `|`, and
+absorption lands just past the rewritten `@@<payload>` token. A
+`start_template` rewrite returns one edit when the erasure starts at byte 0,
+and otherwise two: the header insertion at 0, then the erasure.
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`

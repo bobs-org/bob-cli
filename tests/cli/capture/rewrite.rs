@@ -102,6 +102,37 @@ fn capture_rewrite_json_starts_a_template() {
 }
 
 #[test]
+fn capture_rewrite_json_starts_a_template_at_a_line_end() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("12")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Read {0} @@@")
+        .output()
+        .expect("run capture-rewrite template start at line end");
+
+    assert_success(&output);
+    assert!(stderr(&output).is_empty(), "{}", format_output(&output));
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["text"], "@@template:\nRead {0}");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 20);
+    assert_eq!(json["rule"], "start_template");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 0, "end": 0 }, "replacement": "@@template:\n" },
+            { "range": { "start": 8, "end": 12 }, "replacement": "" },
+        ])
+    );
+    assert_eq!(json["summary"], "Started a @@template: draft");
+}
+
+#[test]
 fn capture_rewrite_json_reports_a_rule_a5_notice_without_changing_text() {
     let output = bob_command()
         .arg("capture-rewrite")

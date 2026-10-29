@@ -13,7 +13,10 @@ Apply the capture grammar's editor typing assists to TEXT and report the resulti
 
 The command is purely lexical and completely read-only: it never opens the vault, never reads the clipboard, never touches the filesystem, and takes no --bob-dir. It implements four rules.
 
-Template start (requires --cursor): typing a third '@' at byte 3 when the first physical line is exactly '@@@' replaces it with '@@template:' and a line ending, then places the caret on a fresh blank line. Existing LF or CRLF is reused, and the result is idempotent (`start_template`). Without --cursor this typing gesture is skipped.
+Template start (requires --cursor): typing a third '@' right after a standalone '@@@' token at the end of any physical line erases that token (plus any spaces or tabs before it) and inserts '@@template:' plus a line ending as the draft's new first line. Only the whitespace-delimited token ending at --cursor is examined, and it must be exactly '@@@' with the cursor at the end of its physical line. The draft's first line break is reused (`
+`, `
+`, or ``; `
+` when the draft has none). The caret lands where the erased '@@@' began, after the inserted header -- so a first line that is exactly '@@@' becomes the header with the caret on a fresh line. The result is idempotent (`start_template`). Without --cursor this typing gesture is skipped.
 
 Block-ID separator toggle (requires --cursor): typing '^' immediately after a complete plain '@route:id', or ':' immediately after '@route^id', consumes that character and switches the separator so '@file:id^' becomes '@file^id' and '@file^id:' becomes '@file:id' (`switch_block_id_separator`). The caret stays just past the unchanged ID. Only the token ending at --cursor is examined; the key must sit against the ID with no space, and it must end the token. Suffix families ('@route:id#name', '+', '=...'), '@@', '@!', standalone '^route:id', '&note:id', '!note:id', project-task ':id'/'^id', incomplete markers, same-separator repeats, and tokens the contextual parser does not select are left unchanged. Without --cursor this rule is skipped rather than searching the draft.
 
@@ -44,6 +47,7 @@ Options:
 
 Examples:
   bob capture-rewrite -c 3 -f json -- '@@@'
+  bob capture-rewrite -c 12 -f json -- 'Read {0} @@@'
   bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'
   bob capture-rewrite -c 20 -f json -- 'Fix trip ~work:foo |'
   bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'
