@@ -178,9 +178,9 @@ fn note_facts_parse_theme_scalars_lists_and_off() {
 fn note_facts_collect_unique_task_roots_and_skip_duplicates() {
     use crate::native::task_root::{RootRepairKind, TaskRootState};
     let facts = NoteFacts::parse(
-        "---\ntype: [[area]]\n---\n\n- [ ] #task A [root:: sase] ^a\n- [ ] #task B (root:: gtd) ^b\n- [ ] #task C [root:: sase] ^dup\n- [ ] #task D [root:: gtd] ^dup\n```\n- [ ] #task Fence [root:: sase] ^fence\n```\n",
+        "---\ntype: [[area]]\n---\n\n- [ ] #task A [root:: sase] ^a\n- [ ] #task B (root:: gtd) ^b\n- [ ] #task C [root:: sase] ^dup\n- [ ] #task D [root:: gtd] ^dup\n- [ ] #task S [root :: sase] ^spaced\n- [ ] #task P (root  ::gtd) ^paren\n```\n- [ ] #task Fence [root:: sase] ^fence\n```\n",
     );
-    assert_eq!(facts.task_roots.len(), 2);
+    assert_eq!(facts.task_roots.len(), 4);
     assert_eq!(
         facts.task_roots["a"].state,
         TaskRootState::Set { raw: "sase".into() }
@@ -188,6 +188,14 @@ fn note_facts_collect_unique_task_roots_and_skip_duplicates() {
     assert_eq!(facts.task_roots["a"].line_number, 5);
     assert_eq!(
         facts.task_roots["b"].state,
+        TaskRootState::Set { raw: "gtd".into() }
+    );
+    assert_eq!(
+        facts.task_roots["spaced"].state,
+        TaskRootState::Set { raw: "sase".into() }
+    );
+    assert_eq!(
+        facts.task_roots["paren"].state,
         TaskRootState::Set { raw: "gtd".into() }
     );
     assert!(!facts.task_roots.contains_key("dup"));
@@ -223,6 +231,10 @@ fn home_for_task_uses_set_root_as_if_residence() {
         PathBuf::from("inbox.md"),
         "---\ntype: [[area]]\ncolor: aqua\n---\n".to_string(),
     );
+    notes.insert(
+        PathBuf::from("My Area.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
     let note_index = NoteIndex::from_paths(notes.keys().cloned());
     let mut resolver =
         HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
@@ -249,6 +261,43 @@ fn home_for_task_uses_set_root_as_if_residence() {
     );
     assert_eq!(missing.key, "inbox.md");
     assert_eq!(resolver.health().root_field_invalid.len(), 1);
+    let spaced = resolver.home_for_task(
+        Path::new("inbox.md"),
+        11,
+        "- [ ] #task X [root:: My Area] ^x",
+    );
+    assert_eq!(spaced.key, "My Area.md");
+    assert_eq!(resolver.health().root_field_invalid.len(), 1);
+}
+
+#[test]
+fn home_for_link_uses_spaced_root_key_on_the_block() {
+    use crate::native::vault_links::LinkResolution;
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        PathBuf::from("dev.md"),
+        "---\ntype: [[area]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("sase.md"),
+        "---\ntype: [[project]]\nparent: [[dev]]\n---\n".to_string(),
+    );
+    notes.insert(
+        PathBuf::from("inbox.md"),
+        "---\ntype: [[area]]\ncolor: aqua\n---\n\n- [ ] #task S [root :: sase] ^spaced\n"
+            .to_string(),
+    );
+    let note_index = NoteIndex::from_paths(notes.keys().cloned());
+    let mut resolver =
+        HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
+    let home = resolver.home_for_link(
+        Path::new("2026/20261029.md"),
+        LinkResolution::Found(PathBuf::from("inbox.md")),
+        "spaced",
+    );
+    assert_eq!(home.key, "sase.md");
 }
 
 #[test]

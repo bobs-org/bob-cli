@@ -91,10 +91,9 @@ pub(crate) fn clear_task_root(line: &str) -> String {
 
 pub(crate) fn is_invalid_root_value(value: &str) -> bool {
     value.is_empty()
-        || value.chars().any(|character| {
-            character.is_whitespace()
-                || matches!(character, '[' | ']' | '|' | '#' | '^')
-        })
+        || value
+            .chars()
+            .any(|character| matches!(character, '[' | ']' | '|' | '#' | '^'))
 }
 
 fn split_line_ending(line: &str) -> (&str, &str) {
@@ -174,6 +173,12 @@ mod tests {
                 raw: "gtd_daily.md".into(),
             }
         );
+        assert_eq!(
+            parse_task_root("- [ ] #task Work [root:: My Area] ^t"),
+            TaskRootState::Set {
+                raw: "My Area".into(),
+            }
+        );
         let wikilink = parse_task_root("- [ ] #task Work [root:: [[sase]]] ^t");
         assert_eq!(
             wikilink,
@@ -214,6 +219,12 @@ mod tests {
             set_task_root(paren, "gtd"),
             "- [ ] #task Work [root:: gtd] [created:: 2026-01-01] ^t\n"
         );
+        let spaced = set_task_root(before, "My Area");
+        assert_eq!(
+            spaced,
+            "- [ ] #task Work [root:: My Area] [created:: 2026-01-01] ^t"
+        );
+        assert_eq!(clear_task_root(&spaced), before);
     }
 
     #[test]

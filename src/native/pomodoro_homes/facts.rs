@@ -85,8 +85,20 @@ impl NoteFacts {
     }
 }
 
+fn contains_root_field_key(text: &str) -> bool {
+    let mut remainder = text;
+    while let Some(index) = remainder.find("root") {
+        let after = remainder[index + 4..].trim_start_matches([' ', '\t']);
+        if after.starts_with("::") {
+            return true;
+        }
+        remainder = &remainder[index + 1..];
+    }
+    false
+}
+
 fn collect_task_roots(contents: &str) -> HashMap<String, TaskRootFact> {
-    if !contents.contains("root::") {
+    if !contains_root_field_key(contents) {
         return HashMap::new();
     }
     let lines: Vec<&str> = contents.lines().collect();
@@ -98,7 +110,7 @@ fn collect_task_roots(contents: &str) -> HashMap<String, TaskRootFact> {
     for (index, line) in lines.iter().enumerate() {
         if frontmatter_end.is_some_and(|end| index <= end)
             || fenced.contains(&index)
-            || !line.contains("root::")
+            || !contains_root_field_key(line)
             || !is_checkbox_line(line)
         {
             continue;
