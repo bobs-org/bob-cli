@@ -179,14 +179,16 @@ end
 
 local function has_manual_number(text)
   text = text:match("^%s*(.-)%s*$") or ""
+  if text == "" then return false end
+  if text:match("^%d+[%.%)]%s+") then return true end
   local token = text:match("^(%S+)")
   if not token then return false end
-  if token:match("^%d+[%.%)]$") then return true end
-  if not token:find(".", 1, true) then return false end
-  local stripped = token:gsub("[%.%)]$", "")
-  if stripped:find("..", 1, true) then return false end
-  if not stripped:match("^%d+%.%d") then return false end
-  if not stripped:match("^[%d%.]+$") then return false end
+  if token:match("[%.%)][%.%)]$") then return false end
+  local core = token:gsub("[%.%)]$", "")
+  if not core:find(".", 1, true) then return false end
+  if not core:match("^%d+(%.%d+)+$") then return false end
+  local after = text:sub(#token + 1, #token + 1)
+  if after == "" or not after:match("%s") then return false end
   return true
 end
 
@@ -6408,6 +6410,119 @@ mod tests {
             toc.contains(r"\addcontentsline{toc}{section}{2. Details}"),
             "{toc}"
         );
+    }
+
+    #[test]
+    fn section_numbering_bare_and_malformed_prefixes_keep_numbering() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        for source in [
+            "## 1.\n\n## Ordinary\n",
+            "## 1)\n\n## Ordinary\n",
+            "## 2.3.. Topic\n\n## Ordinary\n",
+            "## 2..3 Topic\n\n## Ordinary\n",
+        ] {
+            let latex = section_latex(source, true, false);
+            assert!(latex.contains(r"\section{Ordinary}"), "{source}: {latex}");
+            assert!(
+                !latex.contains(r"\section*{Ordinary}"),
+                "{source}: {latex}"
+            );
+            assert!(!latex.contains(r"\section*{"), "{source}: {latex}");
+        }
+    }
+
+    #[test]
+    fn section_numbering_valid_prefix_variants_print_author_numbers_only() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let source = "## 1. Evidence\n\n## 10) Risks\n\n## 2.3 Details\n\n## 2.3. Details\n\n## 2.3) Details\n";
+        let latex = section_latex(source, true, false);
+        assert!(latex.contains(r"\section*{1. Evidence}"), "{latex}");
+        assert!(latex.contains(r"\section*{10) Risks}"), "{latex}");
+        assert!(latex.contains(r"\section*{2.3 Details}"), "{latex}");
+        assert!(latex.contains(r"\section*{2.3. Details}"), "{latex}");
+        assert!(latex.contains(r"\section*{2.3) Details}"), "{latex}");
+        assert!(!latex.contains(r"\section{1. Evidence}"), "{latex}");
+        assert!(!latex.contains(r"\section{10) Risks}"), "{latex}");
+        assert!(!latex.contains(r"\section{2.3 Details}"), "{latex}");
+        assert!(latex.contains(r"\label{evidence}"), "{latex}");
+        assert!(latex.contains(r"\label{risks}"), "{latex}");
+        assert!(latex.contains(r"\label{details}"), "{latex}");
+        assert!(latex.contains(r"\label{details-1}"), "{latex}");
+        assert!(latex.contains(r"\label{details-2}"), "{latex}");
+        let toc = section_latex(source, true, true);
+        assert!(toc.contains(r"\tableofcontents"), "{toc}");
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{1. Evidence}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{10) Risks}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{2.3 Details}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{2.3. Details}"),
+            "{toc}"
+        );
+        assert!(
+            toc.contains(r"\addcontentsline{toc}{section}{2.3) Details}"),
+            "{toc}"
+        );
+    }
+
+    #[test]
+    fn section_numbering_lone_h1_and_unlisted_do_not_trigger_self_numbering() {
+        let Some(_) = pandoc_command() else {
+            eprintln!("skipping section numbering test: pandoc is required");
+            return;
+        };
+        let lone = section_latex(
+            "# 1. Report\n\n## Setup\n\n## Results\n",
+            true,
+            false,
+        );
+        assert!(lone.contains(r"\section*{1. Report}"), "{lone}");
+        assert!(lone.contains(r"\label{report}"), "{lone}");
+        assert!(lone.contains(r"\section{Setup}"), "{lone}");
+        assert!(lone.contains(r"\section{Results}"), "{lone}");
+        assert!(!lone.contains(r"\section*{Setup}"), "{lone}");
+        assert!(!lone.contains(r"\section*{Results}"), "{lone}");
+        let lone_toc = section_latex(
+            "# 1. Report\n\n## Setup\n\n## Results\n",
+            true,
+            true,
+        );
+        assert!(lone_toc.contains(r"\tableofcontents"), "{lone_toc}");
+        assert!(
+            !lone_toc.contains(r"\addcontentsline{toc}{section}{1. Report}"),
+            "lone H1 stays out of Contents: {lone_toc}"
+        );
+
+        let unlisted = section_latex(
+            "## 1. Numbered {.unlisted}\n\n## Plain\n",
+            true,
+            false,
+        );
+        assert!(unlisted.contains(r"\section{1. Numbered}"), "{unlisted}");
+        assert!(unlisted.contains(r"\section{Plain}"), "{unlisted}");
+        assert!(unlisted.contains(r"\label{numbered}"), "{unlisted}");
+        assert!(unlisted.contains(r"\label{plain}"), "{unlisted}");
+        assert!(!unlisted.contains(r"\section*{"), "{unlisted}");
+        let unlisted_toc = section_latex(
+            "## 1. Numbered {.unlisted}\n\n## Plain\n",
+            true,
+            true,
+        );
+        assert!(unlisted_toc.contains(r"\tableofcontents"), "{unlisted_toc}");
     }
 
     #[test]
