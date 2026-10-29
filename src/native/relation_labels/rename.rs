@@ -178,6 +178,8 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
         .long_about(concat!(
             "Rename one relation label across every task note, including done/ and the previous daily note, in one verified Git commit. ",
             "Only label spans on LINKS and LINKED FROM lines change; entries keep their order and every other byte is preserved.\n\n",
+            "With -r/--reverse, every accepted S —OLD→ T link becomes T —NEW→ S: entries move between the two ends' LINKS lines, mirrors are reprojected, and the commit reads \"(reversed)\". ",
+            "Example: bob relations rename implements \"implemented by\" --reverse --dry-run.\n\n",
             "The preview scans the current vault. A write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again before writing, ",
             "appends one relation_label.rename event, verifies the result, makes one commit, then post-syncs. Undo with git revert.\n\n",
             "Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match."
@@ -187,6 +189,7 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
             "  bob relations rename \"inspired by\" \"prompted by\" -d\n",
             "  bob relations rename \"inspired by\" \"prompted by\" -d -f json\n",
             "  bob relations rename old new --merge\n",
+            "  bob relations rename \"implements\" \"implemented by\" --reverse --dry-run\n",
             "  bob relations rename old new -o\n\n",
             "Environment:\n",
             "  BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml\n",
@@ -195,7 +198,7 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
             "  BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to the runtime bob_sync.lock\n\n",
             "Exit codes:\n",
             "  0  renamed (or dry-run planned)\n",
-            "  1  unknown label, invalid label, unchanged, label exists, malformed line, lock busy, dirty paths, not a worktree, sync failed, stale note, verify failed, or I/O failure\n",
+            "  1  unknown label, invalid label, unchanged, label exists, reverse_conflict, unresolved_target, source_needs_block_id, malformed line, lock busy, dirty paths, not a worktree, sync failed, stale note, verify failed, or I/O failure\n",
             "  2  usage error\n\n",
             "See docs/task-relations.md for the rename contract, refusal table, and revert runbook."
         ))
@@ -206,6 +209,7 @@ pub(crate) fn build_cli_rename() -> ClapCommand {
         .arg(help_arg())
         .arg(merge_arg())
         .arg(offline_arg())
+        .arg(reverse_arg())
         .arg(via_arg())
         .arg(old_arg())
         .arg(new_arg())
@@ -262,6 +266,14 @@ fn offline_arg() -> Arg {
         .help("Commit locally; skip vault sync before and after")
 }
 
+fn reverse_arg() -> Arg {
+    Arg::new("reverse")
+        .long("reverse")
+        .short('r')
+        .action(ArgAction::SetTrue)
+        .help("Reverse every OLD link so T links NEW to S (example: bob relations rename implements \"implemented by\" --reverse --dry-run)")
+}
+
 fn via_arg() -> Arg {
     Arg::new("via")
         .long("via")
@@ -303,6 +315,9 @@ pub(crate) fn run_rename(args: Vec<OsString>) -> i32 {
             return exit_code;
         }
     };
+    if matches.get_flag("reverse") {
+        return super::reverse::run_reverse_with_matches(&matches);
+    }
     let format = OutputFormat::from_matches(&matches);
     if matches.get_flag("dry-run") {
         return match prepare_from_matches(&matches) {

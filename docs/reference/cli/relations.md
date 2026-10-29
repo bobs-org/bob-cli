@@ -152,6 +152,8 @@ Rename a relation label everywhere in one commit
 ```text title="bob relations rename --help"
 Rename one relation label across every task note, including done/ and the previous daily note, in one verified Git commit. Only label spans on LINKS and LINKED FROM lines change; entries keep their order and every other byte is preserved.
 
+With -r/--reverse, every accepted S —OLD→ T link becomes T —NEW→ S: entries move between the two ends' LINKS lines, mirrors are reprojected, and the commit reads "(reversed)". Example: bob relations rename implements "implemented by" --reverse --dry-run.
+
 The preview scans the current vault. A write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again before writing, appends one relation_label.rename event, verifies the result, makes one commit, then post-syncs. Undo with git revert.
 
 Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.
@@ -187,10 +189,14 @@ Options:
   -o, --offline
           Commit locally; skip vault sync before and after
 
+  -r, --reverse
+          Reverse every OLD link so T links NEW to S (example: bob relations rename implements "implemented by" --reverse --dry-run)
+
 Examples:
   bob relations rename "inspired by" "prompted by" -d
   bob relations rename "inspired by" "prompted by" -d -f json
   bob relations rename old new --merge
+  bob relations rename "implements" "implemented by" --reverse --dry-run
   bob relations rename old new -o
 
 Environment:
@@ -201,7 +207,7 @@ Environment:
 
 Exit codes:
   0  renamed (or dry-run planned)
-  1  unknown label, invalid label, unchanged, label exists, malformed line, lock busy, dirty paths, not a worktree, sync failed, stale note, verify failed, or I/O failure
+  1  unknown label, invalid label, unchanged, label exists, reverse_conflict, unresolved_target, source_needs_block_id, malformed line, lock busy, dirty paths, not a worktree, sync failed, stale note, verify failed, or I/O failure
   2  usage error
 
 See docs/task-relations.md for the rename contract, refusal table, and revert runbook.

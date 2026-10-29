@@ -26,6 +26,7 @@ pub(crate) use rename::run_rename;
 pub(crate) use write::{run_hide, run_unhide};
 pub(crate) mod cli;
 pub(crate) mod rename;
+pub(crate) mod reverse;
 #[cfg(test)]
 mod tests;
 pub(crate) mod write;

@@ -718,7 +718,7 @@ The executable cases live in `tests/fixtures/relation_labels/vectors.json`
 
 ## 16. Label vocabulary
 
-Rules RV1–RV9 are shipped. RV10 is planned (phase `reverse-rename`).
+Rules RV1–RV10 are shipped.
 
 ### RV1 Words
 
@@ -842,7 +842,7 @@ Every `schema_version` stays 1; JSON grows additively.
   Hidden internal arguments: `--via CLIENT` (default `bob-cli`) on
   every writer, and `--allow-unused` on `hide`. Clients that hide a
   label they just wrote, before bob can see it on disk, pass
-  `--allow-unused`. `-r/--reverse` is planned (phase `reverse-rename`);
+  `--allow-unused`. `-r/--reverse` reverses every OLD link;
   see [RV10](#rv10-reversing-a-label).
 
 - **Human list** (mint relation accent on a TTY, dim counts; still
@@ -969,7 +969,7 @@ stage with the card's keys and copy.
 
 ### RV10 Reversing a label
 
-*Status: planned (phase `reverse-rename`).*
+*Status: shipped.*
 
 `bob relations rename OLD NEW -r/--reverse` moves every accepted LINKS
 entry `S —OLD→ T` to `T —NEW→ S` in one previewed transaction and one

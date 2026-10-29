@@ -394,7 +394,10 @@ written. Sources without a `^block-id` are minted silently in the same
 pass (no `[id::]`, no `[fresh::]`), except when the owning note is
 quiet-deferred — that source is skipped until the next run and never
 listed on uncertainty (malformed LINKS, duplicate block ids).
-Reconcile never edits a LINKS line: it only reads, warns, and mints.
+Reconcile never edits a LINKS line: it only reads, warns, and mints. The
+only writer that moves a LINKS entry between notes, including in `done/`,
+is `bob relations rename --reverse` ([Task relations](task-relations.md) §16
+RV10); reconcile stays read-only there.
 
 `relations.linked_from_lines: false` removes every LINKED FROM line on
 a writable task, mints nothing, and leaves LINKS alone.

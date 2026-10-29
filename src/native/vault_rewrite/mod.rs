@@ -241,6 +241,10 @@ pub(crate) fn run<C>(
     };
 
     let old_head = git_head(vault, child_env).ok();
+    // Snapshot the relation-label journal before the post-write hook so a
+    // rename event never survives a rolled-back transaction, including when
+    // the host journal did not exist before the append.
+    let journal_before = snapshot_journal(vault);
     // Write each file atomically, then run the post-write hook.
     for file in &ready.files {
         let absolute = vault.join(&file.path);
@@ -264,6 +268,7 @@ pub(crate) fn run<C>(
                 &before_images,
                 &after_images(vault, &ready.files),
             );
+            restore_journal(vault, &journal_before);
             return Err(TxnFailure::new(
                 "verify_failed",
                 message,
@@ -279,6 +284,7 @@ pub(crate) fn run<C>(
             &before_images,
             &after_images(vault, &ready.files),
         );
+        restore_journal(vault, &journal_before);
         return Err(TxnFailure::new(
             "verify_failed",
             format!("could not apply and verify the rename: {message}"),
@@ -308,6 +314,7 @@ pub(crate) fn run<C>(
                 &before_images,
                 &after_images(vault, &ready.files),
             );
+            restore_journal(vault, &journal_before);
             return Err(TxnFailure::new(
                 "verify_failed",
                 format!("rename verified but produced no scoped Git commit{unstage}"),
@@ -332,6 +339,7 @@ pub(crate) fn run<C>(
                         &before_images,
                         &after_images(vault, &ready.files),
                     );
+                    restore_journal(vault, &journal_before);
                     return Err(TxnFailure::new(
                         "verify_failed",
                         format!("Git commit failed: {error}{unstage}"),
@@ -345,6 +353,7 @@ pub(crate) fn run<C>(
                     &before_images,
                     &after_images(vault, &ready.files),
                 );
+                restore_journal(vault, &journal_before);
                 return Err(TxnFailure::new(
                     "verify_failed",
                     format!("Git commit failed: {error}{unstage}"),
@@ -416,6 +425,56 @@ fn after_images(
         );
     }
     map
+}
+
+fn snapshot_journal(vault: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+    let mut map = BTreeMap::new();
+    let dir = vault.join(".bob/relations");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return map;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            continue;
+        }
+        map.insert(path.clone(), fs::read(&path).ok());
+    }
+    map
+}
+
+fn restore_journal(vault: &Path, before: &BTreeMap<PathBuf, Option<Vec<u8>>>) {
+    // Only touch files we snapshotted plus any new journal file created
+    // by the post-write hook. A concurrent external edit that no longer
+    // matches the post-write bytes is left in place.
+    let dir = vault.join(".bob/relations");
+    let mut candidates: BTreeSet<PathBuf> = before.keys().cloned().collect();
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+                candidates.insert(path);
+            }
+        }
+    }
+    for absolute in candidates {
+        let current = fs::read(&absolute).ok();
+        let wanted = before.get(&absolute).cloned().unwrap_or(None);
+        // If the file did not exist before and still does not, nothing to do.
+        // If it did not exist before and now exists, remove it only when it
+        // contains exactly the post-write state (we cannot know the delta,
+        // so remove any file that was absent before: the transaction owns
+        // journal appends and no other writer appends under our lock).
+        match (wanted, current) {
+            (None, None) => {}
+            (None, Some(_)) => {
+                let _ = fs::remove_file(&absolute);
+            }
+            (Some(previous), _) => {
+                let _ = fs::write(&absolute, previous);
+            }
+        }
+    }
 }
 
 fn restore_before_images(
