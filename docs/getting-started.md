@@ -220,8 +220,9 @@ completion. Hidden, blocked, and future-scheduled tasks stay out.
 Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.
 
-With the review plugins enabled in Obsidian, `[S` or `]s` from outside the
-queue starts at PRE. Every gesture that answers the landed row advances the
+With the review plugins enabled in Obsidian, `]s` from outside the
+queue starts at PRE when PRE is due. `[S` / `]S` cycle occupied review
+groups and always land on the destination group's first due task. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
 Ctrl+Alt+F keeps an ordinary non-recurring task, Alt+N releases,
@@ -238,7 +239,8 @@ commitment groups from PRE through TICKLER until the footer says
 a PRE/POST checklist row. On RECURRING it writes nothing and stays;
 complete the occurrence with Ctrl+Enter, reschedule it into the future,
 link it to Today, or cancel it. `]s` skips a row without resolving it.
-ROTTEN follows for backlog upkeep. `]S` jumps to POST; complete the
+ROTTEN follows for backlog upkeep. From ROTTEN, `]S` jumps to POST's first
+row; complete the
 Morning review checklist last with Ctrl+Enter or Alt+F (on a checklist,
 Alt+F completes the row).
 Ctrl+Alt+J/K also walks due tasks. Alt+F confirms an eligible non-recurring,

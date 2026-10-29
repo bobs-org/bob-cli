@@ -624,7 +624,7 @@ same default as any other generic stamp.
 
 **Morning:**
 
-1. `[S`, or `]s` from outside the queue when no review task is current, starts at PRE.
+1. `]s` from outside the queue when no review task is current starts at PRE (the first nonempty group). `[S` / `]S` cycle occupied review groups and always land on the destination group's first due task. With no origin, `]S` enters the first nonempty group and `[S` enters the last.
 2. Complete each PRE chore with Ctrl+Enter or Ctrl+Alt+F, or skip it with
    `]s`. On the PRE/POST row the walk just landed on, Ctrl+Enter completes
    it through Tasks (including a still-`[?]` chore) and moves to the next
@@ -636,7 +636,7 @@ same default as any other generic stamp.
    never crosses the PRE/POST boundary: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
-3. Walk commitments through NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER with ]s / Ctrl+Alt+F until the notice says Commitments done. N]s / N[s move N entries along that queue and wrap with the existing notice, while [S / ]S stay at the first and last entries. NEW is never capped or skipped. In PROJECTS, replenish the empty project with Ctrl+Alt+F; stamping a project advances to the correct next entry with its block ID and #hide preserved. References follow the ordinary NEW, lane, TICKLER, and ROTTEN rules as other tasks. In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
+3. Walk commitments through NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER with ]s / Ctrl+Alt+F until the notice says Commitments done. N]s / N[s move N entries along that queue and wrap with the existing notice. N]S / N[S move N occupied groups and wrap at the occupied ends. NEW is never capped or skipped. In PROJECTS, replenish the empty project with Ctrl+Alt+F; stamping a project advances to the correct next entry with its block ID and #hide preserved. References follow the ordinary NEW, lane, TICKLER, and ROTTEN rules as other tasks. In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
    (Ctrl+Shift+Enter), or move its scheduled date past today (Ctrl+Shift+P);
    recurring rows are never stamped and cancel only through Obsidian Tasks.
    Ctrl+Alt+F on a landed RECURRING row behaves like Alt+F: it writes nothing,
@@ -670,10 +670,12 @@ same default as any other generic stamp.
    scheduled TICKLER row asks "Why keep it as written?" and writes one
    dated Rotten Log entry with the stamp; a blank Enter logs `🤷 no
    reason given`, while Esc writes nothing.
-5. `]S` jumps to POST; complete Morning review last with Ctrl+Enter or
-   Alt+F. On a multi-row POST checklist, Ctrl+Enter and Ctrl+Alt+F move to
-   the next row, Alt+F stays and counts remaining rows, and the review
-   closes on the last row. POST never wraps.
+5. From ROTTEN, `]S` jumps to POST's first row when POST remains. Complete
+   Morning review last with Ctrl+Enter or Alt+F. On a multi-row POST
+   checklist, Ctrl+Enter and Ctrl+Alt+F move to the next row, Alt+F stays
+   and counts remaining rows, and the review closes on the last row. POST
+   answer advancement never wraps; manual `[S` / `]S` still cycle occupied
+   groups.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
 visible while the cursor is on a review task, including the compact Alt+P
@@ -711,8 +713,8 @@ The current review task is the row the walk last landed on, and it outlives
 the landing (cursor moves and other notes). On a relative walk key, when a
 live current review task exists and is not selected, `]s` / `[s` (and
 Ctrl+Alt+J/K) first return to it: `[s` returns too, the count is ignored,
-there is a `<C-o>` jump back, the landing is re-armed, and `[S` / `]S` are
-unchanged. It ends on a new landing, an answer on its landing, a landed
+there is a `<C-o>` jump back, the landing is re-armed, and `[S` / `]S` group
+jumps never return. It ends on a new landing, an answer on its landing, a landed
 Ctrl+Shift+M park, a stamp or applied decision-card choice on the row
 itself, an empty queue, the day change or a reload, or when its row is no
 longer due with the same path and text; a stamp or answer elsewhere does

@@ -51,7 +51,9 @@ rows; counts still cover the whole vault.
 ## 2. Enter the walk in Obsidian
 
 Press `]s` or `Ctrl+Alt+J` to land on the next due row (`[s` /
-`Ctrl+Alt+K` go backward). `[S` starts at PRE; `]S` jumps to POST. The
+`Ctrl+Alt+K` go backward). `]s` from outside starts at PRE when PRE is due.
+`[S` / `]S` cycle occupied review groups and always land on the destination
+group's first due task. From ROTTEN, `]S` jumps to POST's first row. The
 status-bar review footer shows the remaining due count and the current tier
 while the cursor is on a queue row.
 
