@@ -82,6 +82,7 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
         "default list:\n{help}"
     );
     assert!(help.contains("list"), "member list:\n{help}");
+    assert!(help.contains("migrate"), "member migrate:\n{help}");
     assert!(help.contains("color"), "member color:\n{help}");
     assert!(help.contains("hide"), "member hide:\n{help}");
     assert!(help.contains("rename"), "member rename:\n{help}");
@@ -121,6 +122,16 @@ fn themes_help_is_in_daily_workflow_and_lists_options() {
         (
             "color",
             &["-b, --bob-dir", "-f, --format", "-h, --help"][..],
+        ),
+        (
+            "migrate",
+            &[
+                "-b, --bob-dir",
+                "-d, --dry-run",
+                "-f, --format",
+                "-h, --help",
+                "-o, --offline",
+            ][..],
         ),
         (
             "rename",

@@ -475,6 +475,7 @@ fn theme_suggest_is_discoverable_with_options_and_a_text_target() {
     let group = complete(&["bob", "themes", ""]);
     assert_success(&group);
     assert!(values(&group).contains(&"suggest".to_string()));
+    assert!(values(&group).contains(&"migrate".to_string()));
     let options = complete(&["bob", "themes", "suggest", "--"]);
     assert_success(&options);
     let names = values(&options);

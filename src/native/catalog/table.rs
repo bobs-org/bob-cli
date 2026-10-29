@@ -363,6 +363,18 @@ pub(crate) const ENTRIES: &[Row] = &[
         60,
     ),
     Row {
+        invalidates: &["themes"],
+        ..syncs(
+            "themes-migrate",
+            &["types", "migrate"],
+            "Rewrite legacy theme spellings",
+            &["types", "migrate", "theme", "rewrite"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            180,
+        )
+    },
+    Row {
         fixed: JSON,
         slots: &[("NAME", "theme"), ("name", "theme")],
         adapter: Some("json-write"),

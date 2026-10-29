@@ -363,6 +363,14 @@ const TYPES_MEMBERS: &[Member] = &[
         },
     },
     Member {
+        name: "migrate",
+        about: "Rewrite legacy theme spellings to type in one commit",
+        leaf: Leaf {
+            native_command: NativeCommand::ThemesMigrate,
+            script_command: None,
+        },
+    },
+    Member {
         name: "rename",
         about: "Rename a task type everywhere in one commit",
         leaf: Leaf {
@@ -406,6 +414,7 @@ Examples:
   bob types unhide BOOKS      Put BOOKS back in Recent rows
   bob types color BLOG red    Pin BLOG to red
   bob types color BLOG auto   Drop the BLOG pin
+  bob types migrate -d            Preview rewriting theme: and [theme::]
   bob types rename FIXES FIX -d   Preview a global rename
   bob types split JOB -t > job.tsv
   bob types split JOB -m job.tsv -d
@@ -581,7 +590,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
             members: TYPES_MEMBERS,
             default: Some("list"),
             extra_about: Some(
-                "Bare `bob types` runs the read-only list. hide, unhide, color, and rename append to the vault journal.",
+                "Bare `bob types` runs the read-only list. hide, unhide, color, and rename append to the vault journal. migrate rewrites legacy theme spellings in one commit.",
             ),
             after_help: TYPES_AFTER_HELP,
             usage: "bob types [COMMAND]",
@@ -2098,6 +2107,7 @@ mod tests {
             NativeCommand::ThemesColor,
             NativeCommand::ThemesHide,
             NativeCommand::ThemesList,
+            NativeCommand::ThemesMigrate,
             NativeCommand::ThemesRename,
             NativeCommand::ThemesSplit,
             NativeCommand::ThemesSuggest,

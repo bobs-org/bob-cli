@@ -11,7 +11,7 @@ Manage task types and explain task suggestions
 ```text title="bob types --help"
 Manage task types and explain task suggestions
 
-Bare `bob types` runs the read-only list. hide, unhide, color, and rename append to the vault journal.
+Bare `bob types` runs the read-only list. hide, unhide, color, and rename append to the vault journal. migrate rewrites legacy theme spellings in one commit.
 
 Usage: bob types [COMMAND]
 
@@ -19,6 +19,7 @@ Commands:
   color    Pin or unpin a type's hue
   hide     Hide types from Recent suggestion rows
   list     List remembered task types (default)
+  migrate  Rewrite legacy theme spellings to type in one commit
   rename   Rename a task type everywhere in one commit
   split    Split one task type across selected entries in one commit
   suggest  Explain the suggested type for a task or capture route
@@ -36,6 +37,7 @@ Examples:
   bob types unhide BOOKS      Put BOOKS back in Recent rows
   bob types color BLOG red    Pin BLOG to red
   bob types color BLOG auto   Drop the BLOG pin
+  bob types migrate -d            Preview rewriting theme: and [theme::]
   bob types rename FIXES FIX -d   Preview a global rename
   bob types split JOB -t > job.tsv
   bob types split JOB -m job.tsv -d
@@ -210,6 +212,58 @@ Exit codes:
   2  usage or config error
 
 See docs/task-types.md for identity, cache, hue, JSON, and journal writers.
+```
+
+## bob types migrate
+
+Rewrite legacy theme spellings to type in one commit
+
+```text title="bob types migrate --help"
+Rewrite open-task `[theme::]` / `(theme::)` fields to `[type::]` / `(type::)` and area/project `theme:` defaults to `task_type:` in a single verified Git commit.
+
+Each rewritten field keeps its bracket or paren form, spacing around `::`, and value bytes. Each rewritten default keeps its value bytes and quote style. When a note already has `task_type:`, a matching `theme:` line is removed; a different value is reported as `conflict` and left alone. Closed tasks, `done/`, repair-state lines, prose, fenced examples, `.bob/`, and `_conflicts/` are never touched. Repair lines are listed as `needs_repair`.
+
+The preview always rescans from source. The write takes bob_sync.lock, pre-syncs unless --offline, snapshots each target and compares again right before writing, writes atomically, verifies that every changed line differs only in the key span (or is a removed matching `theme:` default), makes one commit, then post-syncs. Undo is `git revert`. When nothing is legacy, the command refuses with `unchanged` and does not commit.
+
+Online writes require -b/--bob-dir and BOB_DIR (default ~/bob) to resolve to the same vault; a mismatch refuses before locks or sync. Set BOB_DIR to the selected vault or use --offline. Previews and offline writes do not require this match.
+
+Usage: bob types migrate [OPTIONS]
+
+Options:
+  -b, --bob-dir <DIR>
+          Bob vault root; defaults to BOB_DIR or ~/bob
+
+  -d, --dry-run
+          Preview the rewrite without writing, committing, or syncing
+
+  -f, --format <FORMAT>
+          Output format: human or json
+          
+          [default: human]
+          [possible values: human, json]
+
+  -h, --help
+          Show help
+
+  -o, --offline
+          Commit locally; skip vault sync before and after
+
+Examples:
+  bob types migrate -d
+  bob types migrate -d -f json
+  bob types migrate -o
+
+Environment:
+  BOB_CONFIG_FILE         Exact Bob config file; defaults to ~/.config/bob/config.yml
+  BOB_DIR                   Bob vault root when --bob-dir is omitted
+  BOB_VAULT_SYNC_LOCK_FILE  Maintenance lock; defaults to ${XDG_RUNTIME_DIR:-/tmp}/bob_sync.lock
+
+Exit codes:
+  0  migrated (or dry-run planned)
+  1  unchanged, lock busy, dirty paths, not a worktree, sync failed, verify failed, stale note, or I/O failure
+  2  usage error
+
+See docs/task-types.md for the migrate contract and revert runbook.
 ```
 
 ## bob types rename

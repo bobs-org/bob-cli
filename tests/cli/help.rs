@@ -503,6 +503,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["stats", "metrics", "--help"], "bob stats metrics"),
         (&["themes", "--help"], "Usage: bob types"),
         (&["themes", "list", "--help"], "bob types list"),
+        (&["themes", "migrate", "--help"], "bob types migrate"),
         (&["themes", "hide", "--help"], "bob types hide"),
         (&["themes", "unhide", "--help"], "bob types unhide"),
         (&["themes", "color", "--help"], "bob types color"),

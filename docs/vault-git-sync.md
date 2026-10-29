@@ -394,6 +394,10 @@ rename write; its absence is expected until then. A host that has not synced
 this allowlist keeps its hides local until it does. The journal contract
 lives in [task-types.md](task-types.md#pt4-preferences-journal).
 
+`bob types migrate` commits once (`bob types migrate: N fields, M defaults`)
+and post-syncs; undo is `git revert` per the
+[migrate runbook](task-types.md#migrating-theme-spellings).
+
 `bob types rename` commits once (`bob types rename: OLD → NEW`) and
 post-syncs; undo is `git revert` per the
 [task type rename runbook](task-types.md#pt10-global-rename).

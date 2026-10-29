@@ -132,7 +132,7 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         dry["task_line"]
             .as_str()
             .unwrap()
-            .contains("[theme:: FIX] [created::2026-10-28] ^new-fix"),
+            .contains("[type:: FIX] [created::2026-10-28] ^new-fix"),
         "{dry}"
     );
     assert_eq!(
@@ -174,7 +174,7 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         fs::read_to_string(vault.join("sase.md")).unwrap(),
         concat!(
             "---\ntype: [[project]]\ntheme: WRITE\n---\n# Sase\n\n## Tasks\n\n",
-            "- [*] #task Draft a fix [theme:: FIX] [created::2026-10-28] ^new-fix\n",
+            "- [*] #task Draft a fix [type:: FIX] [created::2026-10-28] ^new-fix\n",
         )
     );
 }
@@ -265,13 +265,13 @@ fn a_two_item_batch_stages_and_reports_both_task_theme_writes() {
     assert!(
         fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("Draft a fix [theme:: FIX]"),
+            .contains("Draft a fix [type:: FIX]"),
         "first task theme should be committed"
     );
     assert!(
         fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("Build a thing [theme:: BUILD]"),
+            .contains("Build a thing [type:: BUILD]"),
         "second task theme should be committed"
     );
 }
@@ -295,7 +295,7 @@ fn ensure_next_named_relocation_sets_a_theme_after_freshness_edits() {
     assert_eq!(json["task_theme"]["action"], "set", "{json}");
     let line = json["task_line"].as_str().unwrap();
     assert!(
-        line.starts_with("- [*] #task Work [theme:: FIX] [fresh:: 2026-10-28]"),
+        line.starts_with("- [*] #task Work [type:: FIX] [fresh:: 2026-10-28]"),
         "{line}"
     );
     assert!(
@@ -456,7 +456,7 @@ fn active_existing_task_link_start_shorthand_uses_the_resolved_name() {
     assert!(
         fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[theme:: FIX]"),
+            .contains("[type:: FIX]"),
         "the task line should carry the selected theme"
     );
 }

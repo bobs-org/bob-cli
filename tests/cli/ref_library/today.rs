@@ -266,7 +266,7 @@ fn today_matches_unnamed_capture_and_named_capture_remembers_theme() {
     let right_task =
         fs::read_to_string(named_right.vault.join("sase.md")).expect("right");
     assert!(!left_task.contains("[theme::"), "{left_task}");
-    assert!(right_task.contains("[theme:: BUGS]"), "{right_task}");
+    assert!(right_task.contains("[type:: BUGS]"), "{right_task}");
     assert_eq!(
         fs::read_to_string(&named_left.day_file).expect("left day"),
         fs::read_to_string(&named_right.day_file).expect("right day")

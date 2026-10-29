@@ -307,6 +307,46 @@ task fields (including `done/`), modeled on `bob ref rename`.
 Runbook: `git log --oneline -3`, confirm the `bob types rename: OLD → NEW`
 commit, then `git revert <sha>` and `bob vault-sync` to restore every byte.
 
+## Migrating theme spellings
+
+```text
+bob types migrate [-b/--bob-dir DIR] [-d/--dry-run] [-f/--format human|json] [-o/--offline]
+```
+
+One previewed, verified, single-commit rewrite that moves open-task
+`[theme::]` / `(theme::)` fields to `[type::]` / `(type::)` and
+area/project `theme:` defaults to `task_type:`.
+
+- **Fields:** every open task's single valid legacy field becomes the
+  canonical key in the same bracket or paren form, with spacing around
+  `::` and the value bytes kept. Canonical `[type::]` / `(type::)`
+  fields are left alone.
+- **Defaults:** every area/project legacy `theme:` scalar becomes
+  `task_type:`, keeping value bytes and quote style (including `off`).
+  When `task_type:` already exists, the legacy line is removed only if
+  its value matches; otherwise the note is reported as `conflict` and
+  left alone.
+- **Never touched:** closed tasks, `done/`, repair-state lines, prose,
+  fenced examples, `.bob/`, and `_conflicts/`. Repair lines are listed
+  as `needs_repair` (`duplicate` or `invalid`).
+- **Vault selection:** the same online identity check as rename. A
+  mismatch refuses with `vault_mismatch`. Previews and `--offline`
+  writes do not require this match.
+- **Flow:** take `bob_sync.lock`, then pre-sync unless `--offline`, then
+  replan from the synced files. Snapshot each target and compare again
+  right before writing (a change aborts with `stale_note`). Write each
+  file atomically. Verify that every changed line differs only in the
+  key span, or is a removed matching `theme:` default. Make one commit,
+  `bob types migrate: N fields, M defaults`, then post-sync. Undo is
+  `git revert`. When nothing is legacy, refuse with `unchanged` (exit 1,
+  no commit).
+- **Output:** the preview lists per-file counts. JSON is
+  `{schema_version: 1, ok, fields, defaults, files: [{path, fields, defaults}], needs_repair, conflicts}`.
+  Writes also include `mode`, `commit`, and `sync`.
+
+Runbook: run `bob types migrate -d`, then the write; undo with
+`git revert <sha>` and `bob vault-sync`.
+
 ## PT11 — Split by entry
 
 ```text
@@ -641,6 +681,10 @@ same previewed, verified commit as the session tails. Invalid defaults,
 `off`, non-area/project default lines, fenced examples, and prose stay
 untouched. `bob types split` never rewrites defaults or fields; its
 `split_leaves_task_themes` leftover counts cover both spellings.
+`bob types migrate` is the spelling rewrite: it turns open-task
+`[theme::]` fields and area/project `theme:` defaults into the
+canonical keys, and leaves closed tasks, `done/`, and repair lines
+alone.
 
 ### List hints: unknown defaults
 

@@ -792,7 +792,7 @@ fn exact_human_output_for_strike_move_dedupe_and_done() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [*] \u{2192} [x] Fix flaky gkeep test  sase.md ^fix-flaky\n  ledger  Task Link struck in CAPTURE \u{00B7} 20261005.md\nplan 1/3 themes \u{00B7} 0/10 links\n"
+        "\u{2713} completed [*] \u{2192} [x] Fix flaky gkeep test  sase.md ^fix-flaky\n  ledger  Task Link struck in CAPTURE \u{00B7} 20261005.md\nplan 1/3 types \u{00B7} 0/10 links\n"
     );
 
     // Strike under a completed entry.
@@ -807,7 +807,7 @@ fn exact_human_output_for_strike_move_dedupe_and_done() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [*] \u{2192} [x] Plan task  sase.md ^plantask\n  ledger  Task Link struck in PLAN (completed) \u{00B7} removed empty CAPTURE \u{00B7} 20261005.md\nplan 0/3 themes \u{00B7} 0/10 links\n"
+        "\u{2713} completed [*] \u{2192} [x] Plan task  sase.md ^plantask\n  ledger  Task Link struck in PLAN (completed) \u{00B7} removed empty CAPTURE \u{00B7} 20261005.md\nplan 0/3 types \u{00B7} 0/10 links\n"
     );
 
     // Placeholder move with removal.
@@ -825,7 +825,7 @@ fn exact_human_output_for_strike_move_dedupe_and_done() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [ ] \u{2192} [x] Move me  sase.md ^mv1\n  ledger  Task Link struck in SASE \u{00B7} Task Link moved SASE \u{2192} CAPTURE (struck) \u{00B7} removed empty SASE \u{00B7} 20261005.md\nplan 1/3 themes \u{00B7} 1/10 links\n"
+        "\u{2713} completed [ ] \u{2192} [x] Move me  sase.md ^mv1\n  ledger  Task Link struck in SASE \u{00B7} Task Link moved SASE \u{2192} CAPTURE (struck) \u{00B7} removed empty SASE \u{00B7} 20261005.md\nplan 1/3 types \u{00B7} 1/10 links\n"
     );
 
     // Dedupe.
@@ -840,7 +840,7 @@ fn exact_human_output_for_strike_move_dedupe_and_done() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [*] \u{2192} [x] Carried  sase.md ^carry\n  ledger  Task Link already in MORNING; dropped the SASE copy \u{00B7} removed empty SASE \u{00B7} 20261005.md\nplan 0/3 themes \u{00B7} 0/10 links\n"
+        "\u{2713} completed [*] \u{2192} [x] Carried  sase.md ^carry\n  ledger  Task Link already in MORNING; dropped the SASE copy \u{00B7} removed empty SASE \u{00B7} 20261005.md\nplan 0/3 types \u{00B7} 0/10 links\n"
     );
 
     // Already done.

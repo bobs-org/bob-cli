@@ -132,6 +132,9 @@ impl NativeCommand {
             NativeCommand::ThemesList => {
                 crate::native::pomodoro_themes::cli::build_cli()
             }
+            NativeCommand::ThemesMigrate => {
+                crate::native::pomodoro_themes::build_cli_migrate()
+            }
             NativeCommand::ThemesRename => {
                 crate::native::pomodoro_themes::build_cli_rename()
             }

@@ -299,7 +299,7 @@ fn plan_reports_human_budget_without_ansi_when_piped() {
         "expected plan header:\n{human}"
     );
     assert!(
-        human.contains("3/3 themes")
+        human.contains("3/3 types")
             && human.contains("6/10 links")
             && human.contains("TODAY 6")
             && human.contains("PENDING 2/10")

@@ -28,6 +28,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob types color`](types.md#bob-types-color) | Pin or unpin a type's hue |
 | [`bob types hide`](types.md#bob-types-hide) | Hide types from Recent suggestion rows |
 | [`bob types list`](types.md#bob-types-list) | List remembered task types (default) |
+| [`bob types migrate`](types.md#bob-types-migrate) | Rewrite legacy theme spellings to type in one commit |
 | [`bob types rename`](types.md#bob-types-rename) | Rename a task type everywhere in one commit |
 | [`bob types split`](types.md#bob-types-split) | Split one task type across selected entries in one commit |
 | [`bob types suggest`](types.md#bob-types-suggest) | Explain the suggested type for a task or capture route |

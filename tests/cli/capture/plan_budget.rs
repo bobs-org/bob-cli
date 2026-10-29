@@ -83,7 +83,7 @@ fn capture_plan_budget_warns_when_new_theme_grows_past_cap() {
         budget["warnings"][0]["message"]
             .as_str()
             .expect("warning message")
-            .contains("4/3 themes (adds NEWT)"),
+            .contains("4/3 types (adds NEWT)"),
         "{budget}"
     );
     assert!(
@@ -116,7 +116,7 @@ fn capture_plan_budget_human_reports_meter_and_destination() {
     assert_success(&output);
     let out = stdout(&output);
     assert!(
-        out.contains("plan 4/3 themes · 4/10 links  (+1 theme: NEWT)"),
+        out.contains("plan 4/3 types · 4/10 links  (+1 type: NEWT)"),
         "{out}"
     );
     assert!(out.contains("→ new Pomodoro NEWT"), "{out}");
@@ -416,7 +416,7 @@ fn capture_strict_mode_refuses_new_theme_past_cap_atomically() {
     assert_eq!(json["ok"], false);
     assert_eq!(json["code"], "plan_theme_cap_exceeded");
     let error = json["error"].as_str().expect("error message");
-    assert!(error.contains("4/3 themes"), "{error}");
+    assert!(error.contains("4/3 types"), "{error}");
     assert!(error.contains("GOALS"), "{error}");
     assert!(error.contains("queue it with ^"), "{error}");
     assert!(!error.contains("#now"), "{error}");

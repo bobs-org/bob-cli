@@ -31,6 +31,7 @@ mod support;
 mod task_move;
 mod task_status_hooks;
 mod themes;
+mod themes_migrate;
 mod themes_rename;
 mod themes_split;
 mod vault_sync;
