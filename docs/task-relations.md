@@ -268,7 +268,7 @@ T owns a LINKED FROM line ⇔ mirror(T) ≠ ∅ ∧ T is writable (not done/, no
   label spans in `LINKS` and `LINKED FROM`, including `done/` and the
   previous daily note. It preserves each edge and every other byte;
   no other relation writer can change those notes. A reversed rename
-  ([RV10](#rv10-reversing-a-label), planned, phase `reverse-rename`)
+  ([RV10](#rv10-reversing-a-label))
   may move an edge's entry between the two ends' LINKS lines,
   including in `done/`. It still never changes a status, a field, or
   another byte.
@@ -1379,7 +1379,7 @@ and "S verified by T" complete S.
 
 ### CP2 Config
 
-*Status: implemented in capture; live config rollout stays with the outer phases.*
+*Status: implemented; chezmoi enables `implemented by` and `verified by`.*
 
 The config lives in chezmoi `home/dot_config/bob/config.yml`. bob's
 built-in default is `[]`.
@@ -1533,7 +1533,7 @@ More edge cases:
 
 ### CP6 The indication
 
-*Status: implemented in capture; planned (`nav-complete-cue`, `mac-complete-cue`).*
+*Status: implemented in capture, nav, and Mac.*
 
 Name the task, change the verb, use ✓, stay calm.
 
@@ -1571,7 +1571,7 @@ note stem, shown only when S is not in the active note (nav), or for
 
 ### CP7 Contracts
 
-*Status: capture fields implemented.*
+*Status: implemented.*
 
 All additions are additive, every `schema_version` stays 1, and every
 new field is omitted when it does not apply, so output with no
@@ -1617,8 +1617,11 @@ new field is omitted when it does not apply, so output with no
     `complete-capture` extracts it from `plan_task_complete_item`, so
     `!` output stays byte-identical.
   - JS: the cycler owns Done. Nav calls the cycler `api` v3:
-    - `completeTaskLineText(lineText, {date})` returns the exact
-      fallback bytes;
+    - `completeTaskLineText(lineText, {date})` returns
+      `{ok: true, unchanged, lineText}` with the exact fallback bytes;
+      already-closed lines have `unchanged: true`, while recurring and
+      non-task lines return `{ok: false, reason}`. Ctrl+Enter shares the
+      same rewrite;
     - `finalizeClosedTasks(identities, context)` runs the post-Done
       pass.
 
