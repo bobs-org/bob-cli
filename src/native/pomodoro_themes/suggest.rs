@@ -24,6 +24,7 @@ pub(crate) enum SuggestionSource {
     Task,
     Reading,
     Note,
+    Default,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -129,10 +130,14 @@ pub(crate) fn suggest_for_task<S: HomeSource>(
 pub(crate) fn suggest_for_new_task<S: HomeSource>(
     source: &mut HomeResolver<S>,
     catalog: &Catalog,
-    _cfg: &PlanConfig,
+    cfg: &PlanConfig,
     residence_path: &Path,
 ) -> SuggestResult {
-    note_default(source, catalog, residence_path, false)
+    with_global_default(
+        note_default(source, catalog, residence_path, false),
+        catalog,
+        cfg,
+    )
 }
 
 fn resolve_without_task_field<S: HomeSource>(
@@ -160,9 +165,39 @@ fn resolve_without_task_field<S: HomeSource>(
         };
     }
     if let Some(root_path) = set_root_walk_start(source, residence_path, line) {
-        return note_default(source, catalog, &root_path, true);
+        return with_global_default(
+            note_default(source, catalog, &root_path, true),
+            catalog,
+            cfg,
+        );
     }
-    note_default(source, catalog, residence_path, false)
+    with_global_default(
+        note_default(source, catalog, residence_path, false),
+        catalog,
+        cfg,
+    )
+}
+
+fn with_global_default(
+    mut result: SuggestResult,
+    catalog: &Catalog,
+    cfg: &PlanConfig,
+) -> SuggestResult {
+    if result.suggestion.is_none()
+        && let Some(name) = cfg.default_type()
+    {
+        let key = normalize_component(name);
+        let display = catalog.display_name(&key, name);
+        result.suggestion = Some(ThemeSuggestion {
+            theme: catalog.theme_ref(&key, &display),
+            source: SuggestionSource::Default,
+            label: "default type".to_string(),
+            from: None,
+            inherited: None,
+            repair: None,
+        });
+    }
+    result
 }
 
 fn set_root_walk_start<S: HomeSource>(

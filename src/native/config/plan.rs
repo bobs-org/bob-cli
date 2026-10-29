@@ -16,8 +16,10 @@ pub(crate) struct PlanConfig {
     pub(crate) link_unblocked: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
-    /// Canonical reading-task theme, or `None` when the rule is `off`.
+    /// Canonical reading-task type, or `None` when the rule is `off`.
     pub(crate) reading_theme: Option<String>,
+    /// Last-resort inherited type for tasks without a more specific source.
+    pub(crate) default_type: Option<String>,
 }
 
 impl Default for PlanConfig {
@@ -39,6 +41,7 @@ impl Default for PlanConfig {
                 "SASE".to_string(),
             ],
             reading_theme: Some("READ".to_string()),
+            default_type: None,
         }
     }
 }
@@ -86,6 +89,10 @@ impl PlanConfig {
 
     pub(crate) fn reading_theme(&self) -> Option<&str> {
         self.reading_theme.as_deref()
+    }
+
+    pub(crate) fn default_type(&self) -> Option<&str> {
+        self.default_type.as_deref()
     }
 }
 
@@ -283,7 +290,17 @@ pub(crate) fn parse_plan_config(
             .collect::<Result<Vec<_>, _>>()
     };
 
-    let reading_theme = parse_reading_theme(get("reading_theme"), path)?;
+    if get("reading_type").is_some() && get("reading_theme").is_some() {
+        return Err(ConfigError::Invalid(format!(
+            "plan.reading_type and plan.reading_theme in {path_display} cannot both be set"
+        )));
+    }
+    let (reading_key, reading_value) = match get("reading_type") {
+        Some(value) => ("reading_type", Some(value)),
+        None => ("reading_theme", get("reading_theme")),
+    };
+    let reading_theme = parse_reading_type(reading_value, reading_key, path)?;
+    let default_type = parse_default_type(get("default_type"), path)?;
 
     // A stale `max_now` stays ignored like any other unknown key.
     Ok(PlanConfig {
@@ -306,11 +323,13 @@ pub(crate) fn parse_plan_config(
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
         reading_theme,
+        default_type,
     })
 }
 
-fn parse_reading_theme(
+fn parse_reading_type(
     value: Option<serde_yaml::Value>,
+    key: &str,
     path: &Path,
 ) -> Result<Option<String>, ConfigError> {
     let path_display = path.display();
@@ -323,12 +342,37 @@ fn parse_reading_theme(
             }
             canonical_theme_name(trimmed).map(Some).ok_or_else(|| {
                 ConfigError::Invalid(format!(
-                    "plan.reading_theme in {path_display} must be a single Pomodoro theme name or off; got {text:?}"
+                    "plan.{key} in {path_display} must be a single task type name or off; got {text:?}"
                 ))
             })
         }
         Some(other) => Err(ConfigError::Invalid(format!(
-            "plan.reading_theme in {path_display} must be a single Pomodoro theme name or off; got {}",
+            "plan.{key} in {path_display} must be a single task type name or off; got {}",
+            render_scalar(&other)
+        ))),
+    }
+}
+
+fn parse_default_type(
+    value: Option<serde_yaml::Value>,
+    path: &Path,
+) -> Result<Option<String>, ConfigError> {
+    let path_display = path.display();
+    match value {
+        None | Some(serde_yaml::Value::Null) => Ok(None),
+        Some(serde_yaml::Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("off") {
+                return Ok(None);
+            }
+            canonical_theme_name(trimmed).map(Some).ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "plan.default_type in {path_display} must be a single task type name, off, or null; got {text:?}"
+                ))
+            })
+        }
+        Some(other) => Err(ConfigError::Invalid(format!(
+            "plan.default_type in {path_display} must be a single task type name, off, or null; got {}",
             render_scalar(&other)
         ))),
     }
@@ -556,6 +600,44 @@ mod tests {
         )
         .expect_err("explicit null is a config error");
         assert!(matches!(null_error, ConfigError::Invalid(_)));
+    }
+
+    #[test]
+    fn reading_type_is_canonical_and_theme_is_legacy_alias() {
+        for key in ["reading_type", "reading_theme"] {
+            let text = format!("plan:\n  {key}: study\n");
+            let parsed = parse_plan_config(&text, Path::new("/config.yml"))
+                .expect("reading type parses");
+            assert_eq!(parsed.reading_theme(), Some("STUDY"));
+        }
+        let error = parse_plan_config(
+            "plan:\n  reading_type: READ\n  reading_theme: READ\n",
+            Path::new("/config.yml"),
+        )
+        .expect_err("both spellings conflict");
+        assert!(error.message().contains("plan.reading_type"));
+        assert!(error.message().contains("plan.reading_theme"));
+    }
+
+    #[test]
+    fn default_type_parses_name_off_and_null() {
+        for (text, expected) in [
+            ("plan:\n  default_type: CHORE\n", Some("CHORE")),
+            ("plan:\n  default_type: off\n", None),
+            ("plan:\n  default_type: null\n", None),
+            ("plan:\n", None),
+        ] {
+            let parsed = parse_plan_config(text, Path::new("/config.yml"))
+                .expect("default type parses");
+            assert_eq!(parsed.default_type(), expected);
+        }
+        for text in [
+            "plan:\n  default_type: 'BUILD + FIX'\n",
+            "plan:\n  default_type: 7\n",
+            "plan:\n  default_type: []\n",
+        ] {
+            assert!(parse_plan_config(text, Path::new("/config.yml")).is_err());
+        }
     }
 
     #[test]

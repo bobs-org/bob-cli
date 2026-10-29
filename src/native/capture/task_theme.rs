@@ -135,11 +135,15 @@ impl CaptureTaskThemeContext {
         let residence_path = relative_target(Some(route));
         let residence = Path::new(&residence_path);
         let suggested = if new_task {
-            pomodoro_themes::suggest::suggest_for_new_task(
+            // The staged line carries authored fields and ref-task markers;
+            // resolve it as the task that will be written instead of using
+            // a blank-task-only note default.
+            pomodoro_themes::suggest::suggest_for_task(
                 &mut self.resolver,
                 catalog,
                 cfg,
                 residence,
+                source_line,
             )
         } else {
             pomodoro_themes::suggest::suggest_for_task(

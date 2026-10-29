@@ -386,8 +386,6 @@ pub(crate) struct RawConfig {
     #[allow(dead_code)]
     #[serde(default)]
     pub(crate) stats: Option<serde_yaml::Value>,
-    #[serde(default)]
-    pub(crate) themes: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]

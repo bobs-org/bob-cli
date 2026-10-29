@@ -37,6 +37,8 @@ pub(crate) const LINT_THEME_NOT_CONFIGURED: &str =
     super::pomodoro_themes::THEME_NOT_CONFIGURED;
 pub(crate) const LINT_THEMES_CONFIG_INVALID: &str =
     super::pomodoro_themes::THEMES_CONFIG_INVALID;
+pub(crate) const LINT_DEFAULT_TYPE_NOT_CONFIGURED: &str =
+    "default_type_not_configured";
 
 /// Display name used when an unnamed open entry holds counted links.
 pub(crate) const UNNAMED_THEME: &str = "(unnamed)";
@@ -229,11 +231,13 @@ pub(crate) fn with_theme_refs(
     report
 }
 
-/// CLI-layer lints that need the theme catalog: a broken `themes:`
-/// block, and each unconfigured open component at its first line.
+/// CLI-layer lints that need the type catalog: a broken config block, each
+/// unconfigured open component at its first line, and an unconfigured
+/// `plan.default_type`.
 pub(crate) fn with_configured_theme_lints(
     mut report: PlanReport,
     catalog: &ThemeCatalog,
+    config: &PlanConfig,
 ) -> PlanReport {
     if let Some(warning) = catalog.config_warning() {
         report.warnings.push(PlanLint {
@@ -241,6 +245,22 @@ pub(crate) fn with_configured_theme_lints(
             message: warning.to_string(),
             line: None,
         });
+    }
+    if let Some(name) = config.default_type()
+        && let Some(configured) = catalog.configured_themes()
+    {
+        let key = normalize_component(name);
+        if !configured.iter().any(|entry| entry.key == key) {
+            let similar = catalog.similar_to(name);
+            let detail = super::pomodoro_themes::theme_not_configured_message(
+                name, &similar,
+            );
+            report.warnings.push(PlanLint {
+                code: LINT_DEFAULT_TYPE_NOT_CONFIGURED.to_string(),
+                message: format!("default type: {detail}"),
+                line: None,
+            });
+        }
     }
     if !catalog.has_configured() {
         return report;

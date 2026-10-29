@@ -3594,6 +3594,9 @@ fn format_task_theme_row(
                     .unwrap_or(&suggestion.label);
                 format!("{stem} suggests {}", suggestion.theme.name)
             }
+            super::super::pomodoro_themes::suggest::SuggestionSource::Default => {
+                format!("default type suggests {}", suggestion.theme.name)
+            }
         })
         .unwrap_or_else(|| "no default here".to_string());
     let row = match change.action {

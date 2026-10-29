@@ -667,3 +667,42 @@ fn plan_lints_unconfigured_theme_and_invalid_themes_block() {
         "{invalid_value}"
     );
 }
+
+#[test]
+fn plan_lints_a_default_type_outside_the_configured_vocabulary() {
+    let temp = plan_vault("bob-cli-plan-default-type-lint");
+    let vault = vault_dir(&temp);
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  PLAN: blue\n",
+    );
+
+    let output = bob_command()
+        .arg("plan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260930.md"))
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob plan with an unconfigured default type");
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(&stdout(&output)).expect("plan JSON parses");
+    let lint = value["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|warning| warning["code"] == "default_type_not_configured")
+        .expect("default type lint");
+    assert!(
+        lint["message"]
+            .as_str()
+            .unwrap()
+            .contains("default type: CHORE isn't one of your types"),
+        "{lint}"
+    );
+    assert!(lint["line"].is_null(), "{lint}");
+}

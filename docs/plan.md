@@ -106,7 +106,8 @@ one applies:
 | `note_ready_in_terminal_project` | a done/canceled project still holds counted Ready tasks; not capped, listed under "not capped" |
 | `today_link_unresolved` | a ledger link resolves to no countable task (missing or ambiguous note, unreadable file, or no open task behind the block ID) |
 | `theme_not_configured` | an open entry uses a theme outside the `themes:` vocabulary; once per key, at the first open-entry line |
-| `themes_config_invalid` | the `themes:` block is present but invalid; the catalog degrades to no configured themes |
+| `themes_config_invalid` | the `types:` block (or legacy `themes:` alias) is invalid, or both keys are present; the catalog degrades to no configured types |
+| `default_type_not_configured` | `plan.default_type` is outside a configured `types:` vocabulary; it still applies to task suggestions |
 
 ## Today
 
@@ -609,7 +610,8 @@ plan:
   link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
   exempt: [PLAN] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
-  reading_theme: READ # theme suggested for reading tasks; off disables the rule
+  reading_type: READ # type suggested for reading tasks; off disables the rule
+  default_type: CHORE # final fallback for task suggestions; off or null disables it
 ```
 
 The block is optional. A missing file or a missing block means the
@@ -618,10 +620,13 @@ ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
 `1–999`), `strict` and `link_unblocked` are booleans, and the lists hold
-non-empty strings. `reading_theme` is a single task type name
-(default `READ`); `off` disables the reading-task suggestion rule, and an
-invalid or non-string value is a normal `plan.reading_theme` config
-error. Unrelated config loaders keep their independence.
+non-empty strings. `reading_type` is a single task type name (default
+`READ`); `off` disables the reading-task suggestion rule. The legacy
+`reading_theme` alias is accepted, but setting both is a config error.
+`default_type` is a single task type name, `off`, or `null`; unset, `off`,
+and `null` mean no global default. An unconfigured name still applies and
+adds a `default_type_not_configured` lint to `bob plan`. Unrelated config
+loaders keep their independence.
 
 **Invalid values:**
 

@@ -710,6 +710,7 @@ fn assert_suggestion(
                 super::suggest::SuggestionSource::Task => "task",
                 super::suggest::SuggestionSource::Reading => "reading",
                 super::suggest::SuggestionSource::Note => "note",
+                super::suggest::SuggestionSource::Default => "default",
             };
             assert_eq!(source, expected.source, "{id}");
             assert_eq!(got.label, expected.label, "{id}");

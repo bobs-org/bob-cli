@@ -39,8 +39,9 @@ plan:
   max_themes: 3
   max_links: 10
   link_unblocked: true
+  default_type: CHORE
 
-themes:
+types:
   PLAN: blue
   BUILD: yellow
 ```
@@ -112,16 +113,17 @@ exit 2; capture and hook surfaces warn and use their established fallback.
 | `plan.link_unblocked` | Boolean | `true` | Offer recovered dependents as successor choices after a managed close; false recovers without offering links. |
 | `plan.exempt` | Sequence of nonempty strings | `[PLAN]` | Themes excluded from theme and link budgets. |
 | `plan.inventory_labels` | Sequence of nonempty strings | `[LATER, MISC, NEW FEATURES, SASE]` | Labels that produce an inventory warning when used as open Task types. |
-| `plan.reading_theme` | Single task type name or `off` | `READ` | Theme suggested for reading tasks; `off` disables the rule. Invalid values are a normal config error. |
+| `plan.default_type` | Single task type name, `off`, or `null` | Unset | Last type suggestion after the task field, reading rule, and note defaults; `off` and `null` disable it. A name outside `types:` still applies and produces a `default_type_not_configured` lint in `bob plan`. |
+| `plan.reading_type` | Single task type name or `off` | `READ` | Type suggested for reading tasks; `off` disables the rule. `plan.reading_theme` remains a legacy alias. Setting both is a config error. |
 
 See the [plan configuration contract](../plan.md#config) and
 [dependency successor offers](../task-dependencies.md#12-successor-offers).
 
-### `themes`
+### `types` (legacy alias: `themes`)
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
-| `themes` | Mapping from task type name to palette slot, `auto`, or empty | Unset (no configured types) | Declares the task type vocabulary and each type's color. |
+| `types` | Mapping from task type name to palette slot, `auto`, or empty | Unset (no configured types) | Declares the task type vocabulary and each type's color. `themes` remains a legacy alias with the same shape. |
 
 Each key must be a valid single type name (YAML strings only; quote names
 YAML reads as numbers or booleans). Each value is a palette slot (`blue`,
@@ -129,8 +131,8 @@ YAML reads as numbers or booleans). Each value is a palette slot (`blue`,
 case-insensitive), `auto`, or empty/null. `auto` and null mean configured
 with no fixed color: the hue falls through to pin, exempt, area, then hash.
 A value of anything else, a duplicate normalized name, or a non-mapping
-`themes` block is invalid, and the whole block is ignored as if no types
-were configured (`bob types list` carries the warning; `bob plan` and
+`types` / `themes` block is invalid. Configuring both keys is also invalid;
+the whole vocabulary is ignored as if no types were configured (`bob types list` carries the warning; `bob plan` and
 `bob capture` surface it on their own). Colors win over `bob types color`
 pins: coloring a configured type refuses with `config_color`.
 

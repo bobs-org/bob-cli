@@ -244,6 +244,7 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
         Ok(catalog) => with_configured_theme_lints(
             with_theme_refs(report, &catalog),
             &catalog,
+            &config,
         ),
         Err(_) => report,
     };

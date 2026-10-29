@@ -3,13 +3,13 @@ use std::{
     path::Path,
 };
 
-use super::{ConfigError, RawConfig};
+use super::ConfigError;
 use crate::native::{
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::Hue,
 };
 
-/// One entry of the user-owned `themes:` vocabulary block.
+/// One entry of the user-owned task-type vocabulary block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfiguredTheme {
     pub(crate) key: String,
@@ -17,8 +17,8 @@ pub(crate) struct ConfiguredTheme {
     pub(crate) color: Option<Hue>,
 }
 
-/// The parsed `themes:` block in config order. `None` means no configured
-/// themes (missing, null, or empty), which is exactly today's behavior.
+/// The parsed `types:` block in config order. `None` means no configured
+/// types (missing, null, or empty), which is exactly today's behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ThemesConfig {
     pub(crate) entries: Vec<ConfiguredTheme>,
@@ -43,7 +43,7 @@ impl ThemesConfig {
 }
 
 /// Everything the theme catalog needs from the config file, read once per
-/// catalog load so `plan.exempt` and `themes:` share one file read.
+/// catalog load so `plan.exempt` and `types:` share one file read.
 #[derive(Debug, Clone)]
 pub(crate) struct ThemeSources {
     pub(crate) exempt: BTreeSet<String>,
@@ -72,9 +72,9 @@ impl ThemeSources {
 }
 
 /// Read the config file once and return the exempt set, the inventory set,
-/// the optional themes vocabulary, and a warning when the `themes:` block
-/// is present but invalid. An invalid block degrades to no configured
-/// themes; it never fails the load.
+/// the optional type vocabulary, and a warning when the `types:` block is
+/// present but invalid. An invalid block degrades to no configured types;
+/// it never fails the load.
 pub(crate) fn load_theme_sources() -> ThemeSources {
     load_theme_sources_from(&super::config_path())
 }
@@ -133,24 +133,49 @@ fn theme_sources_from_text(text: &str, path: &Path) -> ThemeSources {
     sources
 }
 
-/// Parse the `themes:` block. `Ok(None)` means no configured themes:
-/// missing, null, or an empty mapping.
+/// Parse the canonical `types:` block or its legacy `themes:` alias.
+/// `Ok(None)` means no configured vocabulary: missing, null, or empty.
 pub(crate) fn parse_themes_config(
     text: &str,
     path: &Path,
 ) -> Result<Option<ThemesConfig>, ConfigError> {
-    let config: RawConfig = serde_yaml::from_str(text).map_err(|error| {
-        ConfigError::Invalid(format!("parse {}: {error}", path.display()))
-    })?;
-    let Some(themes) = config.themes else {
+    let config: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|error| {
+            ConfigError::Invalid(format!("parse {}: {error}", path.display()))
+        })?;
+    let Some(root) = config.as_mapping() else {
+        if config.is_null() {
+            return Ok(None);
+        }
+        return Err(ConfigError::Invalid(format!(
+            "parse {}: config must be a mapping",
+            path.display()
+        )));
+    };
+    let themes_key = serde_yaml::Value::String("themes".to_string());
+    let types_key = serde_yaml::Value::String("types".to_string());
+    let has_themes = root.contains_key(&themes_key);
+    let has_types = root.contains_key(&types_key);
+    if has_themes && has_types {
+        return Err(ConfigError::Invalid(format!(
+            "types and themes in {} cannot both be set; keep only types",
+            path.display()
+        )));
+    }
+    let (config_key, themes) = if has_types {
+        ("types", root.get(&types_key))
+    } else {
+        ("themes", root.get(&themes_key))
+    };
+    let Some(themes) = themes else {
         return Ok(None);
     };
     if themes.is_null() {
         return Ok(None);
     };
-    let serde_yaml::Value::Mapping(mapping) = &themes else {
+    let serde_yaml::Value::Mapping(mapping) = themes else {
         return Err(ConfigError::Invalid(format!(
-            "themes in {} must be a mapping",
+            "{config_key} in {} must be a mapping",
             path.display()
         )));
     };
@@ -165,7 +190,7 @@ pub(crate) fn parse_themes_config(
             serde_yaml::Value::String(name) => name.clone(),
             other => {
                 return Err(ConfigError::Invalid(format!(
-                    "themes.{} in {path_display} must be a string; quote theme names YAML reads as numbers or booleans",
+                    "{config_key}.{} in {path_display} must be a string; quote type names YAML reads as numbers or booleans",
                     render_key(other)
                 )));
             }
@@ -175,13 +200,13 @@ pub(crate) fn parse_themes_config(
             || normalize_component(&name).is_empty()
         {
             return Err(ConfigError::Invalid(format!(
-                "themes.{name} in {path_display} must be a valid single theme (a theme never contains +)"
+                "{config_key}.{name} in {path_display} must be a valid single task type (a type never contains +)"
             )));
         }
         let key = normalize_component(&name);
         if let Some(first) = seen.get(&key) {
             return Err(ConfigError::Invalid(format!(
-                "themes.{first} and themes.{name} in {path_display} normalize to the same theme {key:?}"
+                "{config_key}.{first} and {config_key}.{name} in {path_display} normalize to the same task type {key:?}"
             )));
         }
         seen.insert(key.clone(), name.clone());
@@ -194,14 +219,14 @@ pub(crate) fn parse_themes_config(
                 } else {
                     Some(Hue::parse(trimmed).ok_or_else(|| {
                         ConfigError::Invalid(format!(
-                            "themes.{name} in {path_display} must be blue, orange, aqua, yellow, magenta, green, violet, red, auto, or empty; got {raw:?}"
+                            "{config_key}.{name} in {path_display} must be blue, orange, aqua, yellow, magenta, green, violet, red, auto, or empty; got {raw:?}"
                         ))
                     })?)
                 }
             }
             other => {
                 return Err(ConfigError::Invalid(format!(
-                    "themes.{name} in {path_display} must be blue, orange, aqua, yellow, magenta, green, violet, red, auto, or empty; got {}",
+                    "{config_key}.{name} in {path_display} must be blue, orange, aqua, yellow, magenta, green, violet, red, auto, or empty; got {}",
                     render_scalar(other)
                 )));
             }
@@ -303,6 +328,31 @@ mod tests {
     }
 
     #[test]
+    fn types_is_canonical_and_themes_is_a_legacy_alias() {
+        for key in ["types", "themes"] {
+            let text = format!("{key}:\n  BUILD: yellow\n");
+            let parsed = parse_themes_config(&text, &path())
+                .expect("vocabulary parses")
+                .expect("configured vocabulary");
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed.color("build"), Some(Hue::Yellow));
+        }
+    }
+
+    #[test]
+    fn both_vocabulary_keys_are_invalid_even_when_one_is_null() {
+        for text in [
+            "types: {}\nthemes:\n  BUILD: yellow\n",
+            "types:\nthemes: {}\n",
+        ] {
+            let error = parse_themes_config(text, &path())
+                .expect_err("both spellings conflict");
+            assert!(error.message().contains("types"));
+            assert!(error.message().contains("themes"));
+        }
+    }
+
+    #[test]
     fn rejects_non_mapping() {
         let error = parse_themes_config("themes: [PLAN]\n", &path())
             .expect_err("sequence fails");
@@ -321,7 +371,7 @@ mod tests {
             .expect_err("number key fails");
         assert!(
             error.message().contains(
-                "quote theme names YAML reads as numbers or booleans"
+                "quote type names YAML reads as numbers or booleans"
             ),
             "unexpected: {}",
             error.message()
@@ -345,7 +395,7 @@ mod tests {
         let plus = parse_themes_config("themes:\n  'A+B': blue\n", &path())
             .expect_err("plus fails");
         assert!(
-            plus.message().contains("a theme never contains +"),
+            plus.message().contains("a type never contains +"),
             "unexpected: {}",
             plus.message()
         );

@@ -180,6 +180,62 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
 }
 
 #[test]
+fn new_named_capture_uses_the_staged_task_field() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-type-staged-field",
+        &project(None, ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["Draft a fix [type:: BUILD] @sase:new-fix#fi"],
+        false,
+    );
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["previous"]["name"], "BUILD", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert!(
+        json["task_line"].as_str().unwrap().contains("[type:: FIX]"),
+        "{json}"
+    );
+}
+
+#[test]
+fn new_named_capture_uses_the_global_default_after_note_defaults() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-type-default",
+        &project(None, ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    write_file(
+        &config,
+        concat!(
+            "plan:\n  max_themes: 30\n  default_type: CHORE\n",
+            "types:\n  CHORE: magenta\n  FIX: blue\n",
+        ),
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["Draft a fix @sase:new-fix#fi"],
+        false,
+    );
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert_eq!(
+        json["task_theme"]["inherited"]["source"], "default",
+        "{json}"
+    );
+    assert_eq!(
+        json["task_theme"]["inherited"]["theme"]["name"], "CHORE",
+        "{json}"
+    );
+}
+
+#[test]
 fn a_two_item_batch_stages_and_reports_both_task_theme_writes() {
     let day_before = "## Pomodoros\n- [ ] () — FIX\n- [ ] () — BUILD\n";
     let (_temp, vault, day_file, config) = fixture(

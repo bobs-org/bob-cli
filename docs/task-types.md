@@ -35,9 +35,9 @@ is historical.
 - **Naming in code:** `pomodoro_themes` (Rust), `bob-pomo-theme-*` (CSS),
   `PomodoroTheme*` (Swift), `api.themes` (JS).
 - **Compatibility names:** `bob themes` is the permanent hidden CLI alias
-  for `bob types`. The current configured vocabulary and task field still use
-  `themes:` and `theme:`; later storage phases add the canonical `types:` and
-  `[type::]` spellings. New person-facing copy uses **task type**,
+  for `bob types`. The canonical configured vocabulary and task field use
+  `types:` and `[type::]`; `themes:` and `[theme::]` are permanent legacy
+  aliases. New person-facing copy uses **task type**,
   **Recent**, **Hide**/**Unhide**, **Pin color**, and **Rename type**.
   Hiding changes suggestions only.
 
@@ -369,11 +369,12 @@ job.tsv`. Undo with `git revert <sha>` and `bob vault-sync`.
 
 ## PT12 — Type vocabulary and display
 
-A `themes:` block in the config file declares the task type vocabulary
-and each type's palette color. Bob reads the file and never writes it.
+A `types:` block in the config file declares the task type vocabulary
+and each type's palette color. `themes:` is a permanent legacy alias with
+the same shape. Bob reads the file and never writes it.
 
 ```yaml
-themes:
+types:
   PLAN: blue
   BUILD: yellow
   READ: green
@@ -392,13 +393,14 @@ themes:
   entry. Missing, `null`, or `{}` means no configured types, which is
   exactly today's behavior.
 - **Validation** is strict, and a failure drops the whole block, so behavior
-  is as if no types were configured: `themes` must be a mapping; each key
+  is as if no types were configured: `types` must be a mapping; each key
   must be a YAML string (a number or boolean key fails with "quote type
   names YAML reads as numbers or booleans"); each name must be a valid
   single type (not blank, no `+`); two names with the same normalized key
   fail, naming both spellings; a value that is not a slot, `auto`, or null
   fails, listing the valid colors. Every message names the config path and
-  the offending `themes.NAME`.
+  the offending `types.NAME`. Setting both `types:` and `themes:` is also
+  invalid and drops the vocabulary.
 - **Where an invalid block is reported.** Never fatal: `bob types list`
   carries it as a `warnings` entry (yellow in human output), `bob plan`
   reports the `themes_config_invalid` lint, and `bob capture` prints a
@@ -500,14 +502,19 @@ First match wins:
 1. **Task field.** Source `task`, label `this task`.
 2. **Reading task.** An exact `#ref` token, or a trailing block ID `ref`
    or `ref-*` (rereads included). Ordinary annotation follow-up tasks do
-   not qualify. Uses `plan.reading_theme` (default `READ`); `off` skips
-   this step. Source `reading`, label `reading task`.
+   not qualify. Uses `plan.reading_type` (default `READ`); `off` skips
+   this step. `plan.reading_theme` is a legacy alias. Source `reading`,
+   label `reading task`.
 3. **Note default.** The first valid default on the residence chain.
    Source `note`, label `from <lowercase declaring stem>`. A set
    `[root:: X]` field starts this walk at X, so a daily `^gtd` row
    carrying `[root:: gtd_daily]` suggests `gtd_daily`'s default
    (`task_type: PLAN`).
-4. Otherwise none: `No suggested type`.
+4. **Global default.** `plan.default_type`, when set to a type name.
+   `off`, `null`, or unset skips this step. Source `default`, label
+   `default type`. A name outside `types:` still applies and adds a
+   `default_type_not_configured` lint to `bob plan`.
+5. Otherwise none: `No suggested type`.
 
 The inherited suggestion runs the same rule with step 1 skipped. The
 serialized suggestion holds `theme` (a `ThemeRef`), `source`, and
