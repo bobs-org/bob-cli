@@ -32,10 +32,9 @@ pub(super) fn label(parts: &[HomePart]) -> String {
 pub(super) fn chip(
     name: Option<&str>,
     parts: &[HomePart],
-    named_review: bool,
     unlinked: bool,
 ) -> Option<String> {
-    if unlinked || named_review {
+    if unlinked {
         return None;
     }
     let value = label(parts);

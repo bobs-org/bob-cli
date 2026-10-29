@@ -449,10 +449,6 @@ fn unnamed_home_chip(
     }
     let bob_dir = bob_env::bob_dir();
     let daily_path = day_file.strip_prefix(&bob_dir).unwrap_or(day_file);
-    let exempt = config::load_plan_config(&config::config_path())
-        .unwrap_or_default()
-        .exempt()
-        .to_vec();
     let mut resolver = pomodoro_homes::HomeResolver::new(
         pomodoro_homes::DiskHomeSource::new(bob_dir),
     );
@@ -462,7 +458,6 @@ fn unnamed_home_chip(
         None,
         false,
         None,
-        &exempt,
         daily_path,
         &mut resolver,
     )

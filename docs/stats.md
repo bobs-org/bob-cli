@@ -136,14 +136,11 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   path, basename, and parent-ancestry rules as task `in:`. Minutes mode
   keeps those tasks' even shares and re-splits theme parts only when a filter
   removes a task share; count mode keeps the session when any task matches and
-  picks the lead home among kept tasks. Whole review and unlinked sessions never
-  match `in:` and are never removed by `exclude_in`. `review: include`
-  (default), `only`, or `exclude` selects review-bucket shares: whole named or
-  bridged review sessions are all review, while a work session's `^gtd` task
-  share is review and its other task shares are not. `only` keeps those review
-  shares; `exclude` drops them. Count mode counts a session once if any share
-  remains and chooses the lead home among the kept tasks. Home and review
-  filters AND with `themes` / `exclude_themes`.
+  picks the lead home among kept tasks. Whole unlinked sessions never
+  match `in:` and are never removed by `exclude_in`. A leftover `review:`
+  key is ignored like any other unknown key. Count mode counts a session once
+  if any share remains and chooses the lead home among the kept tasks. Home
+  and `in:` filters AND with `themes` / `exclude_themes`.
 - `tasks`: `event: created` (any status on its created date), `done`
   (status type `DONE` with a completion date), or `dropped` (status type
   `CANCELLED` with a cancelled date). `recurring: exclude` (default), `only`,
@@ -196,7 +193,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
-| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default, that link that day's `^gtd` row or have no Task Links), including linked `^gtd` task shares inside work sessions. |
+| `review_time` | pomodoro, minutes, `in: [gtd_daily]` | minutes / orange / neutral | Minutes attributed to tasks in, or rooted at, `gtd_daily`, the morning review's area; redefine `stats.metrics.review_time` if your review lives elsewhere. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
 
 ## `stats:` config
@@ -457,7 +454,7 @@ Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
 `subarea`, `path`, `hue`, `root_parent`; `project_label` on area-kind
-entries, `short_label` on review-bucket entries, and every referenced root
+entries, and every referenced root
 present even when only a leaf carries minutes),
 and a top-level `sessions` array when the
 report includes at least one pomodoro metric. The catalog and `sessions`
@@ -484,7 +481,7 @@ bare catalog label. Points add an optional `apportioned` map,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`short_label`, `health.homes` lint lists, `typical`, and `sessions`.
+`health.homes` lint lists, `typical`, and `sessions`.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -607,8 +604,8 @@ the top five homes plus
 `other`, with buckets always shown outside those five. The theme line shows
 the top five plus `other`. When apportioned
 minutes are non-zero, a dim `split` line reports the share of project
-minutes that came from sessions with several homes. Review bucket dots use
-their area's hue; `@daily`, `@unlinked`, and `@unfiled` stay dim. Reports with area or
+minutes that came from sessions with several homes. Buckets render dim:
+`@unlinked` and `@unfiled` stay dim. Reports with area or
 project parts add the dim line `grouped by today's note tree · from Task Links`.
 Metrics is a catalog table with a dim definition line per id.
 
@@ -646,7 +643,7 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M7 | dropped | U | U | 2 | 0·prov | `[!]` and `[-]` CANCELLED rows with cancelled dates |
 | M8 | habits | U | 0/2 missed | 1/2 met | 0/2·prov | Skipped Journal, late Meditate, deferred Stretch; ratios pool 25% |
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |
-| M10 | review_time | U | 25 | 0 | 0·prov | `review: only`; Oct 9 `PLAN + SASE` no longer counts; SASE-only today is zero |
+| M10 | review_time | U | 0 | 0 | 0·prov | `in: [gtd_daily]`; unlinked PLAN rows never match |
 | M11 | sessions | U | 2 | 0 | 1·prov | Count mode counts rows once; parts still attribute PLAN |
 | M12 | sase_time (custom pomodoro) | U | 3 | 0 | 10·prov | Custom theme metric through the same path |
 | M13 | ref_done (custom tasks) | U | 1 | 0 | 0·prov | `task_kind: ref` spelling with the `ref` part |
@@ -697,32 +694,37 @@ metric total.
 | # | Metric | What it proves |
 | --- | --- | --- |
 | H1 | worked total 167m | Complete-window minutes; today 15m is provisional |
-| H2 | worked area | gtd 45, dev 90, job 7, @unlinked 10, @unfiled 15; sums to 167 |
-| H3 | worked project | sase 30, sase_blog 50, @review:PLAN 35, bob 10, dev 10, job 4, job_apply 3, @unlinked 10, @unfiled 15; sums to 167 |
+| H2 | worked area | gtd 20, dev 90, job 7, @unlinked 35, @unfiled 15; sums to 167 |
+| H3 | worked project | sase 30, sase_blog 50, gtd_daily 10, bob 10, dev 10, job 4, job_apply 3, @unlinked 35, @unfiled 15; sums to 167 |
 | H4 | apportioned | sase 10 and job 4 from multi-home sessions; gtd area 10 from HACK |
-| H5 | sessions | 8 closed rows; lead homes put 1 on sase, 1 on sase_blog, and 2 on @review:PLAN; their root-parent parts group at @daily |
+| H5 | sessions | 8 closed rows; lead homes put 1 on sase, 1 on sase_blog, and 2 on @unlinked; their root-parent parts group 2 on sase and 2 on @unlinked |
 | H6 | done | 7 completions; 2 on sase, 1 @unfiled; job area tasks use `job · area tasks` |
 | H7 | sase_time | themes:[SASE] counted C is 10m, then split onto sase/dev |
-| H8 | health | 1 unlinked session / 10m, 1 unfiled link, hue collision gtd+body orange |
-| H9 | sase_in | `in: [sase]` is 80m (blog 50 + HACK sase share 10 + PLAN+SASE 20); review/unlinked never match |
+| H8 | health | 2 unlinked sessions / 35m, 1 unfiled link, hue collision gtd+body orange |
+| H9 | sase_in | `in: [sase]` is 80m (blog 50 + HACK sase share 10 + PLAN+SASE 20); unlinked sessions never match |
 | H10 | sase_blog_in | `in: [sase_blog]` is 50m on sase_blog — blog time measures on its own |
-| H11 | exclude_sase | `exclude_in: [sase]` is 87m (167 − 80); review 35m and unlinked 10m stay |
-| H12 | review_only | `review: only` is 35m on `@review:PLAN` (named 25 + unnamed bridge 10) |
+| H11 | exclude_sase | `exclude_in: [sase]` is 87m (167 − 80); unlinked 35m stays, plus 10m on gtd_daily |
+| H12 | gtd_daily_in | `in: [gtd_daily]` is 10m on gtd_daily (the Oct 16 `[[#^gtd]]` session) |
 | H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
 | H14 | sase_count_in | `measure: count`, `in: [sase]` keeps 3 complete-window sessions when any linked task matches |
-| H15 | review_time / review_count | Oct 14 work session splits 50m into 25m `@review:PLAN` and 25m `bob`; the root-parent split is 25m `@daily` and 25m `bob`; review-only minutes and count keep the review share/session |
-| H16 | worked `root_parent` | sase 80 (blog 50 + sase 30), `@daily` 35, bob 10, dev 10, job 4, job_apply 3, `@unlinked` 10, `@unfiled` 15; sums to 167 |
+| H15 | review_time / gtd_daily_count | Oct 14 work session splits 50m into 25m gtd_daily and 25m `bob`; the root-parent split is 25m gtd_daily and 25m `bob`; review_time and count keep the gtd_daily share/session |
+| H16 | worked `root_parent` | sase 80 (blog 50 + sase 30), gtd_daily 10, bob 10, dev 10, job 4, job_apply 3, `@unlinked` 35, `@unfiled` 15; sums to 167 |
 | H17 | worked `root_parent` with `root: true` on sase_blog | root_parent sase 30, sase_blog 50; area, project, and `in:` values unchanged |
 
 Oct 14 adds the separate H15 check: an unnamed 50m work session links the
-Oct 15 `^gtd` row and `bob`; it is not treated as the same-day review bridge.
-Oct 15: named PLAN review 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
+Oct 15 `^gtd` row (rooted at `gtd_daily`) and `bob`. Session names never
+choose a home, so it splits into 25m gtd_daily and 25m bob.
+Oct 15: unlinked PLAN 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
 sase_blog, HACK 30m split bob/sase/dev, JOB 7m split 4/3,
 MISC 15m on an article (@unfiled), PLAN+SASE 20m all on sase (theme remainder
-gives SASE 10m), unnamed 10m review via `[[#^gtd]]`. Oct 17 is an empty
+gives SASE 10m), unnamed 10m on gtd_daily via `[[#^gtd]]`. Oct 17 is an empty
 Pomodoros section (real zero). Oct 18 (today) BLOG 15m is in `sessions` and
 provisional on metrics. Repeated `compute` calls return byte-identical
 JSON. H17 copies that fixture with `root: true` added to `sase_blog.md`.
+
+The fixture's `^gtd` rows carry `[root:: gtd_daily]` except the Oct 18 row,
+which stays unrooted for the `@unfiled` path; `gtd_daily.md` is an area under
+`gtd`. The `plan.md` review anchor is gone with the retired buckets.
 
 ## Limitations
 
@@ -1105,16 +1107,15 @@ entry for them.
 Every segment has `tone` = `hue` | `gray` | `none`. `none` is time bob
 cannot attribute in that dimension (`@unlinked`, `@unfiled`, and
 `(unnamed)`): a fine diagonal hatch in `--text-faint` over a faint base,
-and a hollow legend mark. `gray` is the existing muted fill: `@daily`
-(GTD), exempt PLAN, unconfigured themes, and `other`.
+and a hollow legend mark. `gray` is the existing muted fill:
+exempt PLAN, unconfigured themes, and `other`.
 
 The legend uses `bob-day-strip-legend` markup and the Day strip fitter.
 Items appear in bar order, the lowest-ranked items drop first, one `+N`
 counter replaces them, and the legend switches to names-only mode when that
 names more items. Legend items never shrink or ellipsize. Roots legend
-labels use the Day strip `legendLabel` rule: the bare catalog label
-(`@daily` → `GTD`), `short_label` for review buckets, and the full label
-for case-insensitive collisions. Tooltips and accessible text use full
+labels use the Day strip `legendLabel` rule: the bare catalog label,
+and the full label for case-insensitive collisions. Tooltips and accessible text use full
 labels. Item and segment titles read `<label> · <display> · <share>`.
 Unconfigured themes append ` · not in your themes`. Each legend item shows
 bob's `display` (window time). The right end of the first shown lane row
@@ -1259,10 +1260,7 @@ listing every segment, and the group `aria-label` sentence uses the same
 phrase.
 
 Each legend item paints a `legendLabel`: for `root_parent`, the bare catalog
-`label` (so the synthetic daily root paints `GTD`; on a day when the `gtd` area
-also has time, the collision rule paints `GTD` and `gtd · area tasks`); in other
-dimensions it uses a non-empty `short_label` when Bob supplies one (review
-buckets carry their theme name), else the row label. When
+`label`; in other dimensions it uses the row label. When
 two or more of the day's segments share a `legendLabel` ignoring case, each
 of them paints its full `label` instead. Tooltips and accessible sentences
 keep full labels: each legend item's `title` reads `<label> <display>`, and

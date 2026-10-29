@@ -64,7 +64,13 @@ hint. A link's close suffix still uses the separator `=`, as in
 | Surface | Current behavior | Consumer impact |
 | --- | --- | --- |
 | `plan.exempt` default | `[PLAN]` | Explicit configured lists still apply. GTD is an ordinary theme unless included in that list. |
-| Pomodoro root parent | Review buckets and tasks defined in canonical daily notes group under `@daily`, labeled `GTD` | Keep that key distinct from `@unfiled`; project and area attribution still use the shared home resolver. |
+| Pomodoro root parent | The area a task lives in, else the nearest `root: true` project, else the top-level project; `[root:: X]` re-homes a task as if it lived in X | Keep bucket keys distinct from `@unfiled`; project and area attribution still use the shared home resolver. |
+| Homes buckets | `@daily` and `@review:<NAME>` buckets are retired; only `@unlinked` and `@unfiled` remain | Treat unknown `@daily` / `@review:*` keys as missing; daily-note tasks without a root field are `@unfiled`. |
+| Session `kind` | `review` is retired; `kind` is `work` or `unlinked` | Map unknown kinds to the unlinked/unknown fallback instead of a review bucket. |
+| Catalog `short_label` | Removed from home catalog entries | Use `label`; do not require the field. |
+| Pomodoro `review:` metric key | Ignored like any other unknown key | Filter review time with `in: [gtd_daily]` instead. |
+| Built-in `review_time` | `kind: pomodoro, measure: minutes, in: [gtd_daily]` | Redefine `stats.metrics.review_time` if review lives outside `gtd_daily`. |
+| Theme suggestion `source: review` | Removed with the `daily review` step; note defaults now start at a set `[root:: X]` field | Expect `task`, `reading`, or `note` sources only. |
 | Project reporting | `root: true` selects a project's own root parent; `rollup:` is ignored | Update frontmatter used for Stats grouping. |
 | Task dependencies | Only the managed Depends-On line supplies dependency links | Ordinary child links remain content and are not adopted automatically. |
 | `bob task reconcile -f json` | `legacy_dependency_children` is absent | Consumers must not require the zero-valued compatibility field shipped in v0.4.0. |

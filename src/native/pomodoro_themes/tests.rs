@@ -709,7 +709,6 @@ fn assert_suggestion(
             let source = match got.source {
                 super::suggest::SuggestionSource::Task => "task",
                 super::suggest::SuggestionSource::Reading => "reading",
-                super::suggest::SuggestionSource::Review => "review",
                 super::suggest::SuggestionSource::Note => "note",
             };
             assert_eq!(source, expected.source, "{id}");

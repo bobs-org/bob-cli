@@ -3,37 +3,69 @@
     {
       "name": "single",
       "input": "BOB",
-      "expected": [{ "raw": "BOB", "key": "bob" }]
+      "expected": [
+        {
+          "raw": "BOB",
+          "key": "bob"
+        }
+      ]
     },
     {
       "name": "composite",
       "input": "BOB + DECKS",
       "expected": [
-        { "raw": "BOB", "key": "bob" },
-        { "raw": "DECKS", "key": "decks" }
+        {
+          "raw": "BOB",
+          "key": "bob"
+        },
+        {
+          "raw": "DECKS",
+          "key": "decks"
+        }
       ]
     },
     {
       "name": "spaces-and-case",
       "input": "Deep  Work",
-      "expected": [{ "raw": "Deep  Work", "key": "deep work" }]
+      "expected": [
+        {
+          "raw": "Deep  Work",
+          "key": "deep work"
+        }
+      ]
     },
     {
       "name": "hyphen-stays",
       "input": "SASE-V18",
-      "expected": [{ "raw": "SASE-V18", "key": "sase-v18" }]
+      "expected": [
+        {
+          "raw": "SASE-V18",
+          "key": "sase-v18"
+        }
+      ]
     },
     {
       "name": "spaced-version",
       "input": "SASE V18",
-      "expected": [{ "raw": "SASE V18", "key": "sase v18" }]
+      "expected": [
+        {
+          "raw": "SASE V18",
+          "key": "sase v18"
+        }
+      ]
     },
     {
       "name": "empty-plus-dropped",
       "input": "GTD + + BOB",
       "expected": [
-        { "raw": "GTD", "key": "gtd" },
-        { "raw": "BOB", "key": "bob" }
+        {
+          "raw": "GTD",
+          "key": "gtd"
+        },
+        {
+          "raw": "BOB",
+          "key": "bob"
+        }
       ]
     }
   ],
@@ -42,145 +74,267 @@
       "name": "job-is-area-aqua",
       "key": "job",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "job": "aqua", "dev": "blue", "love": "yellow", "gtd": "orange" },
-      "expected": { "hue": "aqua", "hue_source": "area" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "job": "aqua",
+        "dev": "blue",
+        "love": "yellow",
+        "gtd": "orange"
+      },
+      "expected": {
+        "hue": "aqua",
+        "hue_source": "area"
+      }
     },
     {
       "name": "dev-is-area-blue",
       "key": "dev",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "job": "aqua", "dev": "blue", "love": "yellow" },
-      "expected": { "hue": "blue", "hue_source": "area" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "job": "aqua",
+        "dev": "blue",
+        "love": "yellow"
+      },
+      "expected": {
+        "hue": "blue",
+        "hue_source": "area"
+      }
     },
     {
       "name": "love-is-area-yellow",
       "key": "love",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "love": "yellow" },
-      "expected": { "hue": "yellow", "hue_source": "area" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "love": "yellow"
+      },
+      "expected": {
+        "hue": "yellow",
+        "hue_source": "area"
+      }
     },
     {
       "name": "gtd-is-exempt-muted",
       "key": "gtd",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "gtd": "orange" },
-      "expected": { "hue": null, "hue_source": "exempt" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "gtd": "orange"
+      },
+      "expected": {
+        "hue": null,
+        "hue_source": "exempt"
+      }
     },
     {
       "name": "pin-wins-over-hash",
       "key": "blog",
       "pin": "red",
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "expected": { "hue": "red", "hue_source": "pin" }
+      "expected": {
+        "hue": "red",
+        "hue_source": "pin"
+      }
     },
     {
       "name": "pin-wins-over-exempt",
       "key": "gtd",
       "pin": "green",
-      "exempt": ["gtd"],
-      "areas": { "gtd": "orange" },
-      "expected": { "hue": "green", "hue_source": "pin" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "gtd": "orange"
+      },
+      "expected": {
+        "hue": "green",
+        "hue_source": "pin"
+      }
     },
     {
       "name": "pin-wins-over-area",
       "key": "job",
       "pin": "red",
-      "exempt": ["gtd"],
-      "areas": { "job": "aqua" },
-      "expected": { "hue": "red", "hue_source": "pin" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "job": "aqua"
+      },
+      "expected": {
+        "hue": "red",
+        "hue_source": "pin"
+      }
     },
     {
       "name": "bob-hash-magenta",
       "key": "bob",
       "pin": null,
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "expected": { "hue": "magenta", "hue_source": "hash" }
+      "expected": {
+        "hue": "magenta",
+        "hue_source": "hash"
+      }
     },
     {
       "name": "blog-hash-orange",
       "key": "blog",
       "pin": null,
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "expected": { "hue": "orange", "hue_source": "hash" }
+      "expected": {
+        "hue": "orange",
+        "hue_source": "hash"
+      }
     },
     {
       "name": "config-beats-pin",
       "key": "build",
       "pin": "red",
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "configured": { "build": "yellow" },
-      "expected": { "hue": "yellow", "hue_source": "config" }
+      "configured": {
+        "build": "yellow"
+      },
+      "expected": {
+        "hue": "yellow",
+        "hue_source": "config"
+      }
     },
     {
       "name": "config-beats-exempt",
       "key": "plan",
       "pin": null,
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "areas": {},
-      "configured": { "plan": "blue" },
-      "expected": { "hue": "blue", "hue_source": "config" }
+      "configured": {
+        "plan": "blue"
+      },
+      "expected": {
+        "hue": "blue",
+        "hue_source": "config"
+      }
     },
     {
       "name": "configured-auto-falls-through-to-pin",
       "key": "blog",
       "pin": "red",
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "configured": { "blog": null },
-      "expected": { "hue": "red", "hue_source": "pin" }
+      "configured": {
+        "blog": null
+      },
+      "expected": {
+        "hue": "red",
+        "hue_source": "pin"
+      }
     },
     {
       "name": "configured-auto-falls-through-to-area",
       "key": "job",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "job": "aqua" },
-      "configured": { "job": null },
-      "expected": { "hue": "aqua", "hue_source": "area" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "job": "aqua"
+      },
+      "configured": {
+        "job": null
+      },
+      "expected": {
+        "hue": "aqua",
+        "hue_source": "area"
+      }
     },
     {
       "name": "configured-auto-falls-through-to-hash",
       "key": "bob",
       "pin": null,
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "configured": { "bob": null },
-      "expected": { "hue": "magenta", "hue_source": "hash" }
+      "configured": {
+        "bob": null
+      },
+      "expected": {
+        "hue": "magenta",
+        "hue_source": "hash"
+      }
     },
     {
       "name": "unconfigured-is-muted",
       "key": "snack",
       "pin": null,
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "configured": { "build": "yellow" },
-      "expected": { "hue": null, "hue_source": "unconfigured" }
+      "configured": {
+        "build": "yellow"
+      },
+      "expected": {
+        "hue": null,
+        "hue_source": "unconfigured"
+      }
     },
     {
       "name": "unconfigured-pin-still-applies",
       "key": "snack",
       "pin": "red",
-      "exempt": ["gtd"],
+      "exempt": [
+        "gtd"
+      ],
       "areas": {},
-      "configured": { "build": "yellow" },
-      "expected": { "hue": "red", "hue_source": "pin" }
+      "configured": {
+        "build": "yellow"
+      },
+      "expected": {
+        "hue": "red",
+        "hue_source": "pin"
+      }
     },
     {
       "name": "unconfigured-area-still-muted",
       "key": "snack",
       "pin": null,
-      "exempt": ["gtd"],
-      "areas": { "snack": "aqua" },
-      "configured": { "build": "yellow" },
-      "expected": { "hue": null, "hue_source": "unconfigured" }
+      "exempt": [
+        "gtd"
+      ],
+      "areas": {
+        "snack": "aqua"
+      },
+      "configured": {
+        "build": "yellow"
+      },
+      "expected": {
+        "hue": null,
+        "hue_source": "unconfigured"
+      }
     }
   ],
   "fold": [
@@ -202,7 +356,12 @@
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T10:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.unhide\",\"key\":\"books\",\"name\":\"BOOKS\",\"via\":\"bob-cli\"}"
         }
       ],
-      "expected": { "books": { "hidden": false, "pin": null } }
+      "expected": {
+        "books": {
+          "hidden": false,
+          "pin": null
+        }
+      }
     },
     {
       "name": "pin-last-writer-wins",
@@ -214,7 +373,12 @@
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:01:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":\"blue\",\"via\":\"bob-mac-capture\"}"
         }
       ],
-      "expected": { "blog": { "hidden": false, "pin": "blue" } }
+      "expected": {
+        "blog": {
+          "hidden": false,
+          "pin": "blue"
+        }
+      }
     },
     {
       "name": "unpin-with-null-hue",
@@ -226,7 +390,12 @@
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:02:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.color\",\"key\":\"blog\",\"name\":\"BLOG\",\"hue\":null,\"via\":\"bob-cli\"}"
         }
       ],
-      "expected": { "blog": { "hidden": false, "pin": null } }
+      "expected": {
+        "blog": {
+          "hidden": false,
+          "pin": null
+        }
+      }
     },
     {
       "name": "rename-moves-hidden-state",
@@ -238,7 +407,12 @@
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T10:02:11-04:00\",\"host\":\"apollo\",\"kind\":\"theme.rename\",\"from\":\"fixes\",\"to\":\"fix\",\"from_name\":\"FIXES\",\"to_name\":\"FIX\",\"via\":\"bob-cli\"}"
         }
       ],
-      "expected": { "fix": { "hidden": true, "pin": null } }
+      "expected": {
+        "fix": {
+          "hidden": true,
+          "pin": null
+        }
+      }
     },
     {
       "name": "rename-does-not-clobber-target-state",
@@ -254,8 +428,14 @@
         }
       ],
       "expected": {
-        "fix": { "hidden": false, "pin": "green" },
-        "fixes": { "hidden": true, "pin": null }
+        "fix": {
+          "hidden": false,
+          "pin": "green"
+        },
+        "fixes": {
+          "hidden": true,
+          "pin": null
+        }
       }
     },
     {
@@ -268,18 +448,32 @@
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T11:00:00-04:00\",\"host\":\"mac\",\"kind\":\"theme.hide\",\"key\":\"fixes\",\"name\":\"FIXES\",\"via\":\"bob-mac-capture\"}"
         }
       ],
-      "expected": { "fixes": { "hidden": true, "pin": null } }
+      "expected": {
+        "fixes": {
+          "hidden": true,
+          "pin": null
+        }
+      }
     },
     {
       "name": "malformed-lines-are-skipped",
       "events": [
-        { "raw": "not-json" },
+        {
+          "raw": "not-json"
+        },
         {
           "raw": "{\"v\":1,\"ts\":\"2026-10-24T09:00:00-04:00\",\"host\":\"apollo\",\"kind\":\"theme.hide\",\"key\":\"books\",\"name\":\"BOOKS\",\"via\":\"bob-cli\"}"
         },
-        { "raw": "{\"v\":2,\"kind\":\"theme.hide\",\"key\":\"nope\"}" }
+        {
+          "raw": "{\"v\":2,\"kind\":\"theme.hide\",\"key\":\"nope\"}"
+        }
       ],
-      "expected": { "books": { "hidden": true, "pin": null } }
+      "expected": {
+        "books": {
+          "hidden": true,
+          "pin": null
+        }
+      }
     }
   ],
   "rank": [
@@ -307,7 +501,10 @@
           "days_used": 26
         }
       ],
-      "expected": ["FIX", "FIXES"]
+      "expected": [
+        "FIX",
+        "FIXES"
+      ]
     },
     {
       "name": "prefix-then-substring",
@@ -333,7 +530,10 @@
           "days_used": 4
         }
       ],
-      "expected": ["SASE", "SASE V18"]
+      "expected": [
+        "SASE",
+        "SASE V18"
+      ]
     },
     {
       "name": "quoted-key-prefix",
@@ -353,12 +553,16 @@
           "days_used": 21
         }
       ],
-      "expected": ["SASE V18"]
+      "expected": [
+        "SASE V18"
+      ]
     },
     {
       "name": "exclusions-drop-today-components",
       "query": "bo",
-      "exclusions": ["bob"],
+      "exclusions": [
+        "bob"
+      ],
       "themes": [
         {
           "key": "bob",
@@ -373,7 +577,9 @@
           "days_used": 3
         }
       ],
-      "expected": ["BOOKS"]
+      "expected": [
+        "BOOKS"
+      ]
     },
     {
       "name": "recent-tie-breaks-on-days-then-name",
@@ -399,7 +605,11 @@
           "days_used": 9
         }
       ],
-      "expected": ["BETA", "ALPHA", "GAMMA"]
+      "expected": [
+        "BETA",
+        "ALPHA",
+        "GAMMA"
+      ]
     }
   ],
   "similar": [
@@ -420,7 +630,9 @@
           "hidden": false
         }
       ],
-      "expected": ["SASE-V18"]
+      "expected": [
+        "SASE-V18"
+      ]
     },
     {
       "name": "plural-fixes",
@@ -439,7 +651,9 @@
           "hidden": false
         }
       ],
-      "expected": ["FIXES"]
+      "expected": [
+        "FIXES"
+      ]
     },
     {
       "name": "query-too-short",
@@ -471,7 +685,9 @@
           "hidden": false
         }
       ],
-      "expected": ["BOOKZ"]
+      "expected": [
+        "BOOKZ"
+      ]
     },
     {
       "name": "hidden-excluded",
@@ -509,7 +725,10 @@
           "hidden": false
         }
       ],
-      "expected": ["THEMA", "THEMES"]
+      "expected": [
+        "THEMA",
+        "THEMES"
+      ]
     }
   ],
   "menu": [
@@ -517,7 +736,7 @@
       "name": "today-prefix-create-substring",
       "draft": "=#bo",
       "today": [
-        "- [ ] () — ROBOT"
+        "- [ ] () \u2014 ROBOT"
       ],
       "history": {
         "2026-10-23": [
@@ -558,7 +777,7 @@
       "name": "prefix-shadowing",
       "draft": "=#sase",
       "today": [
-        "- [ ] () — SASE V18"
+        "- [ ] () \u2014 SASE V18"
       ],
       "history": {
         "2026-10-23": [
@@ -582,8 +801,8 @@
       "name": "again-prefix-shadowing",
       "draft": "=#sase",
       "today": [
-        "- [x] () — SASE",
-        "- [ ] () — SASE V18"
+        "- [x] () \u2014 SASE",
+        "- [ ] () \u2014 SASE V18"
       ],
       "history": {},
       "hidden": [],
@@ -628,7 +847,7 @@
       "name": "completed-link-context",
       "draft": "@inbox_t:foo1#bob",
       "today": [
-        "- [x] () — BOB"
+        "- [x] () \u2014 BOB"
       ],
       "history": {},
       "hidden": [],
@@ -645,7 +864,7 @@
       "name": "completed-start-context",
       "draft": "=#bob",
       "today": [
-        "- [x] () — BOB"
+        "- [x] () \u2014 BOB"
       ],
       "history": {},
       "hidden": [],
@@ -798,7 +1017,7 @@
       "name": "create-before-utilities",
       "draft": "=#zzz",
       "today": [
-        "- [ ] (0900-0930) — RUN",
+        "- [ ] (0900-0930) \u2014 RUN",
         "- [ ] ()"
       ],
       "history": {
@@ -828,7 +1047,7 @@
       "name": "today-component-exclusion-before-query",
       "draft": "=#decks",
       "today": [
-        "- [ ] () — BOB + DECKS"
+        "- [ ] () \u2014 BOB + DECKS"
       ],
       "history": {
         "2026-10-23": [
@@ -875,7 +1094,7 @@
       "name": "hidden-today-stays",
       "draft": "=#bob",
       "today": [
-        "- [ ] () — BOB"
+        "- [ ] () \u2014 BOB"
       ],
       "history": {
         "2026-10-23": [
@@ -896,8 +1115,8 @@
       "name": "literal-distinguishes-today-slug-collision",
       "draft": "=#\"SASE-V18",
       "today": [
-        "- [ ] () — SASE V18",
-        "- [ ] () — SASE-V18"
+        "- [ ] () \u2014 SASE V18",
+        "- [ ] () \u2014 SASE-V18"
       ],
       "history": {},
       "hidden": [],
@@ -920,8 +1139,14 @@
       },
       "hidden": [],
       "configured": [
-        {"name": "BUILD", "color": "yellow"},
-        {"name": "WRITE", "color": "violet"}
+        {
+          "name": "BUILD",
+          "color": "yellow"
+        },
+        {
+          "name": "WRITE",
+          "color": "violet"
+        }
       ],
       "expected": [
         {
@@ -949,8 +1174,14 @@
         "hide me"
       ],
       "configured": [
-        {"name": "BUILD", "color": "yellow"},
-        {"name": "HIDE ME", "color": "auto"}
+        {
+          "name": "BUILD",
+          "color": "yellow"
+        },
+        {
+          "name": "HIDE ME",
+          "color": "auto"
+        }
       ],
       "expected": [
         {
@@ -971,7 +1202,10 @@
       },
       "hidden": [],
       "configured": [
-        {"name": "BUILD", "color": "yellow"}
+        {
+          "name": "BUILD",
+          "color": "yellow"
+        }
       ],
       "expected": [
         {
@@ -1001,7 +1235,7 @@
       "name": "bob-2",
       "theme": "BOB",
       "today": [
-        "- [ ] () — BOB BUILD"
+        "- [ ] () \u2014 BOB BUILD"
       ],
       "draft": "=#bo",
       "replacement": "\"BOB\""
@@ -1010,7 +1244,7 @@
       "name": "bob-3",
       "theme": "BOB",
       "today": [
-        "- [ ] () — BOB BUILD"
+        "- [ ] () \u2014 BOB BUILD"
       ],
       "draft": "=bo",
       "replacement": "#\"BOB\""
@@ -1054,15 +1288,15 @@
       "name": "deep-work-9",
       "theme": "DEEP WORK",
       "today": [],
-      "draft": "=#“DEEP",
+      "draft": "=#\u201cDEEP",
       "replacement": "\"DEEP WORK\""
     },
     {
       "name": "again-prefix-shadowing",
       "theme": "SASE",
       "today": [
-        "- [x] () — SASE",
-        "- [ ] () — SASE V18"
+        "- [x] () \u2014 SASE",
+        "- [ ] () \u2014 SASE V18"
       ],
       "draft": "=#sase",
       "replacement": "\"SASE\""
@@ -1181,7 +1415,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1189,7 +1425,12 @@
         "id": "reading-off",
         "residence": "sase_blog.md",
         "line": "- [ ] Read it #ref ^ref-paper",
-        "config": { "reading_theme": "off", "exempt": ["PLAN"] },
+        "config": {
+          "reading_theme": "off",
+          "exempt": [
+            "PLAN"
+          ]
+        },
         "expected": {
           "source": "note",
           "label": "from sase_blog",
@@ -1200,27 +1441,36 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
       {
-        "id": "daily-review",
+        "id": "root-field-daily-gtd-note-default",
         "residence": "2026/20261028.md",
-        "line": "- [ ] Morning review ^gtd",
+        "line": "- [ ] Morning review [root:: sase_blog] ^gtd",
         "expected": {
-          "source": "review",
-          "label": "daily review",
-          "theme_key": "plan",
-          "theme_name": "PLAN",
-          "known": true
+          "source": "note",
+          "label": "from sase_blog",
+          "theme_key": "write",
+          "theme_name": "WRITE",
+          "known": true,
+          "from": {
+            "path": "sase_blog.md",
+            "stem": "sase_blog",
+            "kind": "project",
+            "chain": [
+              "sase_blog.md"
+            ]
+          }
         }
       },
       {
-        "id": "daily-review-empty-exempt",
+        "id": "root-field-invalid-falls-back-to-daily",
         "residence": "2026/20261028.md",
-        "line": "- [ ] Morning review ^gtd",
-        "config": { "reading_theme": "READ", "exempt": [] },
+        "line": "- [ ] Morning review [root:: missing] ^gtd",
         "expected": null
       },
       {
@@ -1237,7 +1487,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1255,7 +1507,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1273,7 +1527,10 @@
             "path": "dev.md",
             "stem": "dev",
             "kind": "area",
-            "chain": ["sase.md", "dev.md"]
+            "chain": [
+              "sase.md",
+              "dev.md"
+            ]
           }
         }
       },
@@ -1297,7 +1554,10 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["done/sase_blog.md", "sase_blog.md"]
+            "chain": [
+              "done/sase_blog.md",
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1315,7 +1575,10 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["ref/paper.md", "sase_blog.md"]
+            "chain": [
+              "ref/paper.md",
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1333,12 +1596,23 @@
             "path": "dev.md",
             "stem": "dev",
             "kind": "area",
-            "chain": ["invalid_list.md", "invalid_scalar.md", "sase.md", "dev.md"]
+            "chain": [
+              "invalid_list.md",
+              "invalid_scalar.md",
+              "sase.md",
+              "dev.md"
+            ]
           }
         },
         "warnings": [
-          { "code": "theme_default_invalid", "path": "invalid_list.md" },
-          { "code": "theme_default_invalid", "path": "invalid_scalar.md" }
+          {
+            "code": "theme_default_invalid",
+            "path": "invalid_list.md"
+          },
+          {
+            "code": "theme_default_invalid",
+            "path": "invalid_scalar.md"
+          }
         ]
       },
       {
@@ -1355,11 +1629,17 @@
             "path": "dev.md",
             "stem": "dev",
             "kind": "area",
-            "chain": ["invalid_block.md", "dev.md"]
+            "chain": [
+              "invalid_block.md",
+              "dev.md"
+            ]
           }
         },
         "warnings": [
-          { "code": "theme_default_invalid", "path": "invalid_block.md" }
+          {
+            "code": "theme_default_invalid",
+            "path": "invalid_block.md"
+          }
         ]
       },
       {
@@ -1368,7 +1648,10 @@
         "line": "- [ ] Cycle walk ^c",
         "expected": null,
         "warnings": [
-          { "code": "theme_default_invalid", "path": "cycle_a.md" }
+          {
+            "code": "theme_default_invalid",
+            "path": "cycle_a.md"
+          }
         ]
       },
       {
@@ -1391,7 +1674,10 @@
             "path": "dev.md",
             "stem": "dev",
             "kind": "area",
-            "chain": ["daily.md", "dev.md"]
+            "chain": [
+              "daily.md",
+              "dev.md"
+            ]
           }
         }
       },
@@ -1409,7 +1695,9 @@
             "path": "secret.md",
             "stem": "secret",
             "kind": "project",
-            "chain": ["secret.md"]
+            "chain": [
+              "secret.md"
+            ]
           }
         }
       },
@@ -1427,7 +1715,9 @@
             "path": "chore_unused.md",
             "stem": "chore_unused",
             "kind": "project",
-            "chain": ["chore_unused.md"]
+            "chain": [
+              "chore_unused.md"
+            ]
           }
         }
       },
@@ -1445,7 +1735,9 @@
             "path": "quoted.md",
             "stem": "quoted",
             "kind": "project",
-            "chain": ["quoted.md"]
+            "chain": [
+              "quoted.md"
+            ]
           }
         }
       },
@@ -1463,7 +1755,9 @@
             "path": "quoted.md",
             "stem": "quoted",
             "kind": "project",
-            "chain": ["quoted.md"]
+            "chain": [
+              "quoted.md"
+            ]
           }
         }
       },
@@ -1481,7 +1775,10 @@
             "path": "job.md",
             "stem": "job",
             "kind": "area",
-            "chain": ["blank.md", "job.md"]
+            "chain": [
+              "blank.md",
+              "job.md"
+            ]
           }
         }
       },
@@ -1505,7 +1802,10 @@
             "path": "job.md",
             "stem": "job",
             "kind": "area",
-            "chain": ["quoted_blank.md", "job.md"]
+            "chain": [
+              "quoted_blank.md",
+              "job.md"
+            ]
           }
         }
       },
@@ -1523,11 +1823,17 @@
             "path": "job.md",
             "stem": "job",
             "kind": "area",
-            "chain": ["unindented_list.md", "job.md"]
+            "chain": [
+              "unindented_list.md",
+              "job.md"
+            ]
           }
         },
         "warnings": [
-          { "code": "theme_default_invalid", "path": "unindented_list.md" }
+          {
+            "code": "theme_default_invalid",
+            "path": "unindented_list.md"
+          }
         ]
       },
       {
@@ -1544,11 +1850,17 @@
             "path": "job.md",
             "stem": "job",
             "kind": "area",
-            "chain": ["blank_then_list.md", "job.md"]
+            "chain": [
+              "blank_then_list.md",
+              "job.md"
+            ]
           }
         },
         "warnings": [
-          { "code": "theme_default_invalid", "path": "blank_then_list.md" }
+          {
+            "code": "theme_default_invalid",
+            "path": "blank_then_list.md"
+          }
         ]
       },
       {
@@ -1565,7 +1877,10 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["ignored.md", "sase_blog.md"]
+            "chain": [
+              "ignored.md",
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1589,7 +1904,9 @@
               "path": "sase_blog.md",
               "stem": "sase_blog",
               "kind": "project",
-              "chain": ["sase_blog.md"]
+              "chain": [
+                "sase_blog.md"
+              ]
             }
           }
         }
@@ -1609,7 +1926,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1628,7 +1947,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1637,7 +1958,11 @@
         "residence": "sase_blog.md",
         "line": "- [x] Done [theme:: FIX] ^x",
         "expected": null,
-        "warnings": [{ "code": "closed_task" }]
+        "warnings": [
+          {
+            "code": "closed_task"
+          }
+        ]
       },
       {
         "id": "new-task-note-default",
@@ -1653,7 +1978,9 @@
             "path": "sase_blog.md",
             "stem": "sase_blog",
             "kind": "project",
-            "chain": ["sase_blog.md"]
+            "chain": [
+              "sase_blog.md"
+            ]
           }
         }
       },
@@ -1661,7 +1988,9 @@
         "id": "live-day-known",
         "residence": "secret.md",
         "line": "- [ ] Live known ^x",
-        "live": ["secret"],
+        "live": [
+          "secret"
+        ],
         "expected": {
           "source": "note",
           "label": "from secret",
@@ -1672,7 +2001,9 @@
             "path": "secret.md",
             "stem": "secret",
             "kind": "project",
-            "chain": ["secret.md"]
+            "chain": [
+              "secret.md"
+            ]
           }
         }
       }
@@ -1745,8 +2076,8 @@
       "id": "set-unicode-title",
       "op": "set",
       "name": "WRITE",
-      "before": "- [ ] Café résumé 日本語 ^id",
-      "after": "- [ ] Café résumé 日本語 [theme:: WRITE] ^id"
+      "before": "- [ ] Caf\u00e9 r\u00e9sum\u00e9 \u65e5\u672c\u8a9e ^id",
+      "after": "- [ ] Caf\u00e9 r\u00e9sum\u00e9 \u65e5\u672c\u8a9e [theme:: WRITE] ^id"
     },
     {
       "id": "set-unknown-trailing-key",
@@ -1831,7 +2162,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "FIX",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": false,
       "expected": "none"
     },
@@ -1841,7 +2174,9 @@
       "suggestion": null,
       "inherited": null,
       "destination": "FIX",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     },
@@ -1852,7 +2187,9 @@
       "suggestion": "fix",
       "inherited": "write",
       "destination": "WRITE",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "clear"
     },
@@ -1862,7 +2199,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "WRITE",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     },
@@ -1872,7 +2211,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "FIX",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "set",
       "name": "FIX"
@@ -1884,7 +2225,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "FIX",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     },
@@ -1894,7 +2237,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "PLAN + BUILD",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "set",
       "name": "BUILD"
@@ -1905,7 +2250,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "BUILD + FIX",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     },
@@ -1915,7 +2262,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "PLAN",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     },
@@ -1925,7 +2274,9 @@
       "suggestion": "write",
       "inherited": "write",
       "destination": "(unnamed)",
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "deliberate": true,
       "expected": "none"
     }
@@ -1933,58 +2284,128 @@
   "preselect": [
     {
       "id": "running-exact-before-ledger-exact",
-      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "suggestion": {
+        "key": "build",
+        "name": "BUILD",
+        "known": true
+      },
       "entries": [
-        {"name": "PLAN + BUILD", "open": true, "running": false},
-        {"name": "BUILD", "open": true, "running": true},
-        {"name": "BUILD + FIX", "open": true, "running": false}
+        {
+          "name": "PLAN + BUILD",
+          "open": true,
+          "running": false
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": true
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false
+        }
       ],
-      "exempt": ["PLAN"],
-      "ledger_keys": ["plan", "build"],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "plan",
+        "build"
+      ],
       "creation_allowed": true,
       "strict": false,
       "themes_before": 2,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "entry", "index": 1}
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
     },
     {
       "id": "first-exact-in-ledger-order",
-      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "suggestion": {
+        "key": "build",
+        "name": "BUILD",
+        "known": true
+      },
       "entries": [
-        {"name": "PLAN + BUILD", "open": true, "running": false},
-        {"name": "BUILD", "open": true, "running": false}
+        {
+          "name": "PLAN + BUILD",
+          "open": true,
+          "running": false
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false
+        }
       ],
-      "exempt": ["PLAN"],
-      "ledger_keys": ["plan", "build"],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "plan",
+        "build"
+      ],
       "creation_allowed": true,
       "strict": false,
       "themes_before": 2,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "entry", "index": 0}
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
     },
     {
       "id": "first-containing-entry",
-      "suggestion": {"key": "build", "name": "BUILD", "known": true},
+      "suggestion": {
+        "key": "build",
+        "name": "BUILD",
+        "known": true
+      },
       "entries": [
-        {"name": "FIX + BUILD", "open": true, "running": false},
-        {"name": "FIX + BUILD + PLAN", "open": true, "running": false}
+        {
+          "name": "FIX + BUILD",
+          "open": true,
+          "running": false
+        },
+        {
+          "name": "FIX + BUILD + PLAN",
+          "open": true,
+          "running": false
+        }
       ],
-      "exempt": ["PLAN"],
-      "ledger_keys": ["fix", "build"],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "fix",
+        "build"
+      ],
       "creation_allowed": true,
       "strict": false,
       "themes_before": 2,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "entry", "index": 0}
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
     },
     {
       "id": "known-theme-creates",
-      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "suggestion": {
+        "key": "write",
+        "name": "WRITE",
+        "known": true
+      },
       "entries": [],
-      "exempt": ["plan"],
+      "exempt": [
+        "plan"
+      ],
       "ledger_keys": [],
       "creation_allowed": true,
       "strict": false,
@@ -1992,24 +2413,45 @@
       "cap": 3,
       "already_queued": false,
       "query": "",
-      "expected": {"kind": "create"}
+      "expected": {
+        "kind": "create"
+      }
     },
     {
       "id": "unknown-theme-does-not-preselect-existing-match",
-      "suggestion": {"key": "secret", "name": "SECRET", "known": false},
-      "entries": [{"name": "SECRET", "open": true, "running": false}],
+      "suggestion": {
+        "key": "secret",
+        "name": "SECRET",
+        "known": false
+      },
+      "entries": [
+        {
+          "name": "SECRET",
+          "open": true,
+          "running": false
+        }
+      ],
       "exempt": [],
-      "ledger_keys": ["secret"],
+      "ledger_keys": [
+        "secret"
+      ],
       "creation_allowed": true,
       "strict": false,
       "themes_before": 1,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "fallback", "code": "unknown_theme"}
+      "expected": {
+        "kind": "fallback",
+        "code": "unknown_theme"
+      }
     },
     {
       "id": "creation-blocked-by-timed-entry",
-      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "suggestion": {
+        "key": "write",
+        "name": "WRITE",
+        "known": true
+      },
       "entries": [],
       "exempt": [],
       "ledger_keys": [],
@@ -2018,33 +2460,60 @@
       "themes_before": 0,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "fallback", "code": "creation_blocked"}
+      "expected": {
+        "kind": "fallback",
+        "code": "creation_blocked"
+      }
     },
     {
       "id": "strict-cap-blocks-new-theme",
-      "suggestion": {"key": "write", "name": "WRITE", "known": true},
+      "suggestion": {
+        "key": "write",
+        "name": "WRITE",
+        "known": true
+      },
       "entries": [],
       "exempt": [],
-      "ledger_keys": ["build"],
+      "ledger_keys": [
+        "build"
+      ],
       "creation_allowed": true,
       "strict": true,
       "themes_before": 3,
       "cap": 3,
       "already_queued": false,
-      "expected": {"kind": "fallback", "code": "strict_cap"}
+      "expected": {
+        "kind": "fallback",
+        "code": "strict_cap"
+      }
     },
     {
       "id": "queued-link-wins",
-      "suggestion": {"key": "build", "name": "BUILD", "known": true},
-      "entries": [{"name": "BUILD", "open": true, "running": false}],
+      "suggestion": {
+        "key": "build",
+        "name": "BUILD",
+        "known": true
+      },
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false
+        }
+      ],
       "exempt": [],
-      "ledger_keys": ["build"],
+      "ledger_keys": [
+        "build"
+      ],
       "creation_allowed": true,
       "strict": false,
       "themes_before": 1,
       "cap": 3,
       "already_queued": true,
-      "expected": {"kind": "fallback", "code": "already_queued"}
+      "expected": {
+        "kind": "fallback",
+        "code": "already_queued"
+      }
     }
   ]
 }

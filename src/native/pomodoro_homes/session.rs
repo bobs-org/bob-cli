@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     path::Path,
 };
 
@@ -10,7 +10,7 @@ use crate::native::{
 
 use super::{
     json::{HomePart, Homes},
-    label::{chip, label, name_components, percentages},
+    label::{chip, label, percentages},
     resolve::{path_string, unlinked_home},
     Home, HomeResolver, HomeSource, SessionKind, SessionState,
 };
@@ -54,14 +54,6 @@ pub(crate) fn session_links_from_scan(
     ))
 }
 
-fn is_today_gtd_link(link: &ResolvedLink, daily_path: &Path) -> bool {
-    link.block_id.eq_ignore_ascii_case("gtd")
-        && matches!(&link.resolution, LinkResolution::Found(path)
-            if path == daily_path
-                && crate::native::task_status_hooks::canonical_daily_date(path)
-                    .is_some())
-}
-
 fn map_session_links(links: Vec<StartLink>) -> Vec<SessionLink> {
     links
         .into_iter()
@@ -92,14 +84,11 @@ pub(crate) fn attribute_ledger_entry<S: HomeSource>(
     name: Option<&str>,
     closed: bool,
     minutes: Option<u32>,
-    exempt: &[String],
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
     let links = session_links(contents, entry_line.saturating_sub(1));
-    attribute_session(
-        name, &links, closed, minutes, exempt, daily_path, resolver,
-    )
+    attribute_session(name, &links, closed, minutes, daily_path, resolver)
 }
 
 pub(crate) fn attribute_session<S: HomeSource>(
@@ -107,54 +96,12 @@ pub(crate) fn attribute_session<S: HomeSource>(
     links: &[SessionLink],
     closed: bool,
     minutes: Option<u32>,
-    exempt: &[String],
     daily_path: &Path,
     resolver: &mut HomeResolver<S>,
 ) -> SessionHomes {
+    // R4: session names never choose a home. Every link attributes through
+    // the linked task's residence or its `[root:: X]` field.
     let resolved = deduplicated_links(links, daily_path, resolver);
-    let exempt_names = exempt
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
-    let components = name_components(name);
-    let all_exempt_name = name.is_some()
-        && !components.is_empty()
-        && components
-            .iter()
-            .all(|component| exempt_names.contains(component));
-    // R4: the ^gtd link, not the name, marks the ritual.
-    let links_today_gtd = resolved
-        .iter()
-        .any(|link| is_today_gtd_link(link, daily_path));
-    let unrooted_today_gtd = resolved.iter().any(|link| {
-        is_today_gtd_link(link, daily_path)
-            && match &link.resolution {
-                LinkResolution::Found(path) => {
-                    !resolver.block_has_set_root(path, &link.block_id)
-                }
-                _ => true,
-            }
-    });
-    let named_review =
-        all_exempt_name && (resolved.is_empty() || links_today_gtd);
-    let bridge = name.is_none() && !exempt.is_empty() && unrooted_today_gtd;
-
-    if named_review || bridge {
-        let names = if named_review {
-            raw_name_components(name)
-        } else {
-            vec![exempt[0].clone()]
-        };
-        return review_session(
-            name,
-            &names,
-            closed,
-            minutes,
-            named_review,
-            daily_path,
-            resolver,
-        );
-    }
 
     let state = if closed {
         SessionState::Attributed
@@ -182,16 +129,10 @@ pub(crate) fn attribute_session<S: HomeSource>(
         };
     }
 
-    let bridge_name = exempt.first().map(String::as_str);
     let task_homes = resolved
         .into_iter()
         .map(|link| {
-            resolver.home_for_link(
-                daily_path,
-                link.resolution,
-                &link.block_id,
-                bridge_name,
-            )
+            resolver.home_for_link(daily_path, link.resolution, &link.block_id)
         })
         .collect::<Vec<_>>();
     let per_task_minutes =
@@ -254,7 +195,7 @@ pub(crate) fn attribute_session<S: HomeSource>(
         })
         .map(|group| group.home.clone());
     let lead_hue = lead_home.as_ref().and_then(|home| home.hue);
-    let display_chip = chip(name, &parts, false, false);
+    let display_chip = chip(name, &parts, false);
 
     SessionHomes {
         homes: Homes {
@@ -275,69 +216,6 @@ struct HomeGroup {
     tasks: u32,
     minutes: u32,
     first: usize,
-}
-
-fn review_session<S: HomeSource>(
-    name: Option<&str>,
-    names: &[String],
-    closed: bool,
-    minutes: Option<u32>,
-    named_review: bool,
-    daily_path: &Path,
-    resolver: &mut HomeResolver<S>,
-) -> SessionHomes {
-    let state = if closed {
-        SessionState::Attributed
-    } else {
-        SessionState::Forecast
-    };
-    let minute_shares =
-        closed.then(|| split_minutes(minutes.unwrap_or(0), names.len()));
-    let mut weights = names
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            minute_shares
-                .as_ref()
-                .map_or(1, |shares| u64::from(shares[index]))
-        })
-        .collect::<Vec<_>>();
-    if weights.iter().sum::<u64>() == 0 {
-        weights.fill(1);
-    }
-    let shares = percentages(&weights);
-    let mut homes = Vec::new();
-    let mut parts = Vec::new();
-    for (index, review_name) in names.iter().enumerate() {
-        let home = resolver.review_home(review_name, daily_path);
-        parts.push(home_part(
-            &home,
-            0,
-            shares[index],
-            minute_shares.as_ref().map(|shares| shares[index]),
-        ));
-        homes.push(home);
-    }
-    let display_label = label(&parts);
-    let lead_hue = homes.first().and_then(|home| home.hue);
-    let lead_home = homes.first().cloned();
-    let display_chip = if named_review {
-        None
-    } else {
-        chip(name, &parts, false, false)
-    };
-    SessionHomes {
-        homes: Homes {
-            state,
-            kind: SessionKind::Review,
-            label: display_label,
-            chip: display_chip,
-            hue: lead_hue,
-            parts,
-        },
-        task_homes: Vec::new(),
-        lead_home,
-    }
 }
 
 fn deduplicated_links<S: HomeSource>(
@@ -370,15 +248,6 @@ fn deduplicated_links<S: HomeSource>(
         }
     }
     resolved
-}
-
-fn raw_name_components(name: Option<&str>) -> Vec<String> {
-    name.into_iter()
-        .flat_map(|name| name.split('+'))
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(ToString::to_string)
-        .collect()
 }
 
 fn home_part(

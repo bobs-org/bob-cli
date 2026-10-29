@@ -41,7 +41,6 @@ pub(crate) enum MetricSpec {
         exclude_themes: Vec<String>,
         in_notes: Vec<String>,
         exclude_in: Vec<String>,
-        review: ReviewFilter,
     },
     Tasks {
         event: TaskEvent,
@@ -96,13 +95,6 @@ pub(crate) enum RecurringFilter {
     Exclude,
     Only,
     Include,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReviewFilter {
-    Include,
-    Only,
-    Exclude,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,7 +260,6 @@ impl MetricDef {
             themes: Vec::new(),
             exclude_themes: Vec::new(),
             exclude_in: Vec::new(),
-            review: None,
             event: None,
             tags_any: Vec::new(),
             tags_all: Vec::new(),
@@ -291,7 +282,6 @@ impl MetricDef {
                 exclude_themes,
                 in_notes,
                 exclude_in,
-                review,
             } => {
                 parameters.measure = Some(match measure {
                     PomodoroMeasure::Minutes => "minutes".to_string(),
@@ -301,11 +291,6 @@ impl MetricDef {
                 parameters.exclude_themes = exclude_themes.clone();
                 parameters.in_notes = in_notes.clone();
                 parameters.exclude_in = exclude_in.clone();
-                parameters.review = Some(match review {
-                    ReviewFilter::Include => "include".to_string(),
-                    ReviewFilter::Only => "only".to_string(),
-                    ReviewFilter::Exclude => "exclude".to_string(),
-                });
             }
             MetricSpec::Tasks {
                 event,
@@ -620,11 +605,11 @@ limits:
 label: Review time
 kind: pomodoro
 measure: minutes
-review: only
+in: [gtd_daily]
 unit: minutes
 direction: neutral
 color: orange
-description: "Minutes attributed to review rows (sessions named only with `plan.exempt` themes, PLAN by default, that link that day's `^gtd` row or have no Task Links), including linked ^gtd task shares inside work sessions."
+description: "Minutes attributed to tasks in, or rooted at, gtd_daily, the morning review's area; redefine stats.metrics.review_time if your review lives elsewhere."
 limits:
   - Attributed from Task Links.
   - Grouped by today's note tree.
@@ -1028,6 +1013,8 @@ fn parse_pomodoro(
     path: &Path,
     errors: &mut Vec<String>,
 ) -> MetricSpec {
+    // A leftover `review:` key is ignored like any other unknown key; only
+    // `in:` / `exclude_in:` filter Pomodoro time now.
     let measure = optional_enum(
         mapping,
         "measure",
@@ -1042,21 +1029,6 @@ fn parse_pomodoro(
         "minutes or count",
     )
     .unwrap_or(PomodoroMeasure::Minutes);
-    let review = optional_enum(
-        mapping,
-        "review",
-        id,
-        path,
-        errors,
-        |text| match text {
-            "include" => Some(ReviewFilter::Include),
-            "only" => Some(ReviewFilter::Only),
-            "exclude" => Some(ReviewFilter::Exclude),
-            _ => None,
-        },
-        "include, only, or exclude",
-    )
-    .unwrap_or(ReviewFilter::Include);
     MetricSpec::Pomodoro {
         measure,
         themes: optional_string_list(mapping, "themes", id, path, errors)
@@ -1079,7 +1051,6 @@ fn parse_pomodoro(
             errors,
         )
         .unwrap_or_default(),
-        review,
     }
 }
 
@@ -1795,7 +1766,6 @@ mod tests {
             MetricSpec::Pomodoro {
                 measure: PomodoroMeasure::Minutes,
                 themes,
-                review: ReviewFilter::Include,
                 ..
             } => assert!(themes.is_empty()),
             other => panic!("worked spec {other:?}"),
@@ -1806,12 +1776,18 @@ mod tests {
             MetricSpec::Pomodoro {
                 measure: PomodoroMeasure::Minutes,
                 themes,
-                review: ReviewFilter::Only,
+                in_notes,
                 ..
-            } => assert!(themes.is_empty()),
+            } => {
+                assert!(themes.is_empty());
+                assert_eq!(in_notes, &["gtd_daily"]);
+            }
             other => panic!("review_time spec {other:?}"),
         }
-        assert_eq!(review_time.parameters().review.as_deref(), Some("only"));
+        assert_eq!(
+            review_time.parameters().in_notes,
+            vec!["gtd_daily".to_string()]
+        );
 
         let net = registry.get("net").unwrap();
         assert_eq!(net.unit, MetricUnit::Signed);
@@ -1945,7 +1921,7 @@ stats:
     }
 
     #[test]
-    fn pomodoro_in_and_review_filters_parse() {
+    fn pomodoro_in_filters_parse() {
         let registry = registry(
             "
 stats:
@@ -1956,7 +1932,6 @@ stats:
       measure: minutes
       in: [sase]
       exclude_in: [sase_blog]
-      review: exclude
 ",
         );
         let def = registry.get("sase_in").unwrap();
@@ -1964,7 +1939,6 @@ stats:
             MetricSpec::Pomodoro {
                 in_notes,
                 exclude_in,
-                review: ReviewFilter::Exclude,
                 ..
             } => {
                 assert_eq!(in_notes, &["sase"]);
@@ -1975,25 +1949,29 @@ stats:
         let json = serde_json::to_value(def.parameters()).unwrap();
         assert_eq!(json["in"], serde_json::json!(["sase"]));
         assert_eq!(json["exclude_in"], serde_json::json!(["sase_blog"]));
-        assert_eq!(json["review"], "exclude");
     }
 
     #[test]
-    fn invalid_pomodoro_review_is_a_local_warning() {
+    fn leftover_pomodoro_review_key_is_ignored() {
         let registry = registry(
             "
 stats:
   metrics:
-    bad_review:
-      label: Bad review
+    legacy_review:
+      label: Legacy review
       kind: pomodoro
-      review: maybe
+      review: only
 ",
         );
-        assert!(registry.get("bad_review").is_none());
-        assert!(registry.warnings.iter().any(|warning| {
-            warning.message.contains("stats.metrics.bad_review.review")
-        }));
+        // A leftover `review:` key is ignored like any other unknown key.
+        let def = registry.get("legacy_review").unwrap();
+        match &def.spec {
+            MetricSpec::Pomodoro { in_notes, .. } => {
+                assert!(in_notes.is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(registry.warnings.is_empty());
         assert!(registry.get("worked").is_some());
     }
 

@@ -1048,11 +1048,6 @@ fn format_part_cell(
         return body;
     }
     if bucket {
-        if part.key.starts_with("@review:")
-            && let Some(hue) = entry.and_then(|entry| entry.hue)
-        {
-            return format!("{} {body}", hue_dot(styler, hue));
-        }
         return styler.dim(&body);
     }
     let hue = entry.and_then(|entry| entry.hue);
@@ -1302,27 +1297,26 @@ mod tests {
         report.metrics[0].parts_summary.insert(
             "project".to_string(),
             vec![PartSummary {
-                key: "@review:GTD".to_string(),
+                key: "gtd_daily.md".to_string(),
                 value: 25,
                 display: "25m".to_string(),
                 share: "78%".to_string(),
-                label: Some("GTD review".to_string()),
+                label: Some("gtd_daily".to_string()),
                 apportioned: None,
                 apportioned_display: None,
             }],
         );
         report.homes.insert(
-            "@review:GTD".to_string(),
+            "gtd_daily.md".to_string(),
             HomeCatalogEntry {
-                label: "GTD review".to_string(),
-                kind: HomeKind::Bucket,
+                label: "gtd_daily".to_string(),
+                kind: HomeKind::Area,
                 area: Some("gtd.md".to_string()),
                 subarea: None,
-                path: None,
+                path: Some("gtd_daily.md".to_string()),
                 hue: Some(Hue::Orange),
-                project_label: None,
-                short_label: None,
-                root_parent: "@daily".to_string(),
+                project_label: Some("gtd_daily · area tasks".to_string()),
+                root_parent: "gtd_daily.md".to_string(),
             },
         );
         report.homes.insert(
@@ -1335,7 +1329,6 @@ mod tests {
                 path: Some("sase.md".to_string()),
                 hue: Some(Hue::Blue),
                 project_label: None,
-                short_label: None,
                 root_parent: "sase.md".to_string(),
             },
         );
@@ -1361,7 +1354,7 @@ mod tests {
             "{text:?}"
         );
         assert!(
-            text.contains("project") && text.contains("GTD review 25m 78%"),
+            text.contains("project") && text.contains("gtd_daily 25m 78%"),
             "{text:?}"
         );
         assert!(

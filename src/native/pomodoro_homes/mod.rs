@@ -14,8 +14,8 @@ pub(crate) use facts::{NoteFacts, NoteKind, NoteTheme};
 pub(crate) use json::{HomeKind, Homes, SessionKind, SessionState};
 pub(crate) use palette::{fallback_hue, Hue};
 pub(crate) use resolve::{
-    daily_home, path_string, unfiled_home, unlinked_home, DiskHomeSource, Home,
-    HomeResolver, HomeSource, IndexedHomeSource, ResolverHealth, DAILY_KEY,
+    path_string, unfiled_home, unlinked_home, DiskHomeSource, Home,
+    HomeResolver, HomeSource, IndexedHomeSource, ResolverHealth,
 };
 #[cfg(test)]
 pub(crate) use session::session_links;

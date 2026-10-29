@@ -13,7 +13,6 @@ pub(crate) enum SessionState {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SessionKind {
     Work,
-    Review,
     Unlinked,
 }
 

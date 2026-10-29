@@ -357,7 +357,7 @@ Explain the suggested theme for a task or capture route
 Explain a task's suggested Pomodoro theme without changing the vault.
 
 Use route:block-id for an existing task, or a bare route for a new task's
-default. Task fields take precedence over reading, daily review, and note
+default. Task fields take precedence over reading and note
 defaults. Hidden and unknown themes are reported; closed tasks have no suggestion.
 
 Usage: bob themes suggest [OPTIONS] <TARGET>

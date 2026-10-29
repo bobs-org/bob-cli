@@ -11,15 +11,14 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use super::{
-    homes::{default_exempt, split_from_homes, split_from_kept, HomesEngine},
+    homes::{split_from_homes, split_from_kept, HomesEngine},
     index::{
         canonical_daily_date, DailyNoteInputs, DateDiagnostic, DatedValue,
         IndexedTask, StatsIndex, TaskKindPart,
     },
     registry::{
         ChecklistMeasure, FieldSource, MetricDef, MetricSpec, MetricUnit,
-        PomodoroMeasure, RecurringFilter, ReviewFilter, TaskEvent,
-        TaskKindFilter,
+        PomodoroMeasure, RecurringFilter, TaskEvent, TaskKindFilter,
     },
     report::StatsWarning,
     value::{ChecklistState, DailyValue, DataQuality},
@@ -48,8 +47,7 @@ pub(crate) fn evaluate_metric(
     today: NaiveDate,
     global_since: Option<NaiveDate>,
 ) -> Option<MetricEvaluation> {
-    let exempt = default_exempt();
-    let homes = HomesEngine::new(index, &exempt);
+    let homes = HomesEngine::new(index);
     evaluate_with_homes(metric, index, dates, today, global_since, &homes)
 }
 
@@ -203,7 +201,6 @@ fn evaluate_pomodoros(
         exclude_themes,
         in_notes,
         exclude_in,
-        review,
     } = &metric.spec
     else {
         return Vec::new();
@@ -258,13 +255,9 @@ fn evaluate_pomodoros(
                 .as_ref()
                 .map(|(minutes, _, _)| u32::try_from(*minutes).unwrap_or(0));
             let attributed = homes.attribute(session, daily_path, counted_u32);
-            if !review_kept_session(attributed.homes.kind, *review) {
-                continue;
-            }
-            let bucket = matches!(
-                attributed.homes.kind,
-                SessionKind::Review | SessionKind::Unlinked
-            );
+            // Unlinked sessions never match `in:`; every linked session
+            // attributes through its Task Links.
+            let bucket = matches!(attributed.homes.kind, SessionKind::Unlinked);
             let kept = if bucket {
                 if !in_notes.is_empty() {
                     continue;
@@ -275,7 +268,6 @@ fn evaluate_pomodoros(
                     &attributed.task_homes,
                     in_notes,
                     exclude_in,
-                    *review,
                     index,
                 );
                 if kept.is_empty() {
@@ -533,36 +525,21 @@ fn theme_matches(
     has_included && !excluded
 }
 
-fn review_kept_session(kind: SessionKind, review: ReviewFilter) -> bool {
-    match kind {
-        SessionKind::Review => review != ReviewFilter::Exclude,
-        SessionKind::Unlinked => review != ReviewFilter::Only,
-        SessionKind::Work => true,
-    }
-}
-
 fn kept_task_indices(
     task_homes: &[Home],
     in_notes: &[String],
     exclude_in: &[String],
-    review: ReviewFilter,
     index: &StatsIndex,
 ) -> Vec<usize> {
     task_homes
         .iter()
         .enumerate()
         .filter(|(_, home)| {
-            let is_review_share = home.key.starts_with("@review:");
-            let review_included = match review {
-                ReviewFilter::Include => true,
-                ReviewFilter::Only => is_review_share,
-                ReviewFilter::Exclude => !is_review_share,
-            };
             let included = in_notes.is_empty()
                 || home_chain_matches(home, in_notes, index);
             let excluded = !exclude_in.is_empty()
                 && home_chain_matches(home, exclude_in, index);
-            review_included && included && !excluded
+            included && !excluded
         })
         .map(|(index, _)| index)
         .collect()
@@ -1528,8 +1505,28 @@ mod tests {
     }
 
     #[test]
-    fn review_time_predicate_drops_composite_theme_sessions() {
+    fn review_time_keeps_only_gtd_daily_shares() {
+        use std::path::PathBuf;
         let mut index = StatsIndex::default();
+        index.note_index = crate::native::vault_links::NoteIndex::from_paths([
+            PathBuf::from("gtd.md"),
+            PathBuf::from("gtd_daily.md"),
+            PathBuf::from("2026/20261010.md"),
+        ]);
+        index.buffers = vec![
+            (
+                "gtd.md".to_string(),
+                "---\ntype: [[area]]\ncolor: orange\n---\n".to_string(),
+            ),
+            (
+                "gtd_daily.md".to_string(),
+                "---\ntype: [[area]]\nparent: [[gtd]]\n---\n".to_string(),
+            ),
+            (
+                "2026/20261010.md".to_string(),
+                "# 2026-10-10\n\n- [ ] #task [[gtd_daily]] [root:: gtd_daily] [created:: 2026-10-10] ^gtd\n".to_string(),
+            ),
+        ];
         index.daily_notes.insert(
             date(10),
             DailyNoteInputs {
@@ -1545,12 +1542,19 @@ mod tests {
                         links: Vec::new(),
                     },
                     super::super::index::PomodoroSession {
-                        name: Some("PLAN + SASE".to_string()),
-                        recorded_minutes: Some(7),
-                        range_minutes: Some(7),
-                        time_range: Some("0900-0907".to_string()),
+                        name: Some("PLAN".to_string()),
+                        recorded_minutes: Some(10),
+                        range_minutes: Some(10),
+                        time_range: Some("0900-0910".to_string()),
                         line: 3,
-                        links: Vec::new(),
+                        links: vec![
+                            crate::native::pomodoro_homes::SessionLink {
+                                target: "2026/20261010".to_string(),
+                                block_id: "gtd".to_string(),
+                                line: 4,
+                                embedded: false,
+                            },
+                        ],
                     },
                 ],
                 ..DailyNoteInputs::default()
@@ -1560,8 +1564,12 @@ mod tests {
         let result =
             evaluate_metric(&metric, &index, &[date(10)], date(11), None)
                 .unwrap();
-        assert_eq!(result.values[0].value, Some(25));
-        assert_eq!(result.values[0].parts["theme"]["PLAN"], 25);
+        // The unlinked PLAN session never matches `in:`; only the session
+        // linking the rooted ^gtd counts.
+        assert_eq!(result.values[0].value, Some(10));
+        assert_eq!(result.values[0].parts["theme"]["PLAN"], 10);
+        assert_eq!(result.values[0].parts["project"]["gtd_daily.md"], 10);
+        assert_eq!(result.values[0].parts["root_parent"]["gtd_daily.md"], 10);
     }
 
     #[test]

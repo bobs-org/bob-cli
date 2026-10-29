@@ -328,8 +328,9 @@ theme catalog comes from canonical daily notes, with hide and color
 preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
 the ledger and its history remain intact.
 
-Each daily note also templates a `^gtd` task for review chores. Canonical
-daily-note Next tasks are the R9 carve-out from sticky lanes.
+Each daily note also templates a `^gtd` task for review chores, carrying
+`[root:: gtd_daily]` so morning review time attributes to `gtd_daily`.
+Canonical daily-note Next tasks are the R9 carve-out from sticky lanes.
 
 Contract: [The ledger](../plan.md#the-ledger), [Pomodoro](glossary.md#pomodoro),
 [Pomodoro homes](../pomodoro-homes.md), [Pomodoro themes](../pomodoro-themes.md).

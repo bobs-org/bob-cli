@@ -18,20 +18,13 @@ use super::{
     session_facts::session_fact,
 };
 use crate::native::pomodoro_homes::{
-    attribute_session, daily_home, path_string, unfiled_home, unlinked_home,
-    Home, HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind,
-    ResolverHealth, SessionHomes, SessionKind, DAILY_KEY,
+    attribute_session, path_string, unfiled_home, unlinked_home, Home,
+    HomeKind, HomeResolver, Hue, IndexedHomeSource, NoteKind, ResolverHealth,
+    SessionHomes, SessionKind,
 };
-
-pub(crate) fn default_exempt() -> Vec<String> {
-    crate::native::config::PlanConfig::default()
-        .exempt()
-        .to_vec()
-}
 
 pub(crate) struct HomesEngine<'a> {
     resolver: RefCell<HomeResolver<IndexedHomeSource<'a>>>,
-    exempt: Vec<String>,
     seen: RefCell<BTreeMap<String, Home>>,
 }
 
@@ -49,12 +42,11 @@ pub(crate) struct SessionSplit {
 }
 
 impl<'a> HomesEngine<'a> {
-    pub(crate) fn new(index: &'a StatsIndex, exempt: &[String]) -> Self {
+    pub(crate) fn new(index: &'a StatsIndex) -> Self {
         let source =
             IndexedHomeSource::from_buffers(&index.note_index, &index.buffers);
         Self {
             resolver: RefCell::new(HomeResolver::new(source)),
-            exempt: exempt.to_vec(),
             seen: RefCell::new(BTreeMap::new()),
         }
     }
@@ -98,7 +90,6 @@ impl<'a> HomesEngine<'a> {
             &session.links,
             true,
             counted_minutes,
-            &self.exempt,
             daily_path,
             &mut self.resolver.borrow_mut(),
         );
@@ -228,6 +219,8 @@ impl<'a> HomesEngine<'a> {
                         }
                     }
                     SessionKind::Work => {
+                        // Session names never choose a home: every closed
+                        // session attributes through its Task Links.
                         let (unfiled, ambiguous, unresolved) = {
                             let mut resolver = self.resolver.borrow_mut();
                             link_health(session, daily_path, &mut resolver)
@@ -239,7 +232,6 @@ impl<'a> HomesEngine<'a> {
                         health.unresolved_links =
                             health.unresolved_links.saturating_add(unresolved);
                     }
-                    SessionKind::Review => {}
                 }
             }
         }
@@ -299,13 +291,8 @@ impl<'a> HomesEngine<'a> {
     }
 
     fn ensure_root(&self, home: &Home) {
-        if home.root_parent == DAILY_KEY {
-            self.seen
-                .borrow_mut()
-                .entry(DAILY_KEY.to_string())
-                .or_insert_with(daily_home);
-            return;
-        }
+        // Only `unlinked` and `unfiled` remain as reserved buckets; every
+        // other root is a real note resolved through the note tree.
         if home.root_parent == home.key || home.root_parent.starts_with('@') {
             return;
         }
@@ -355,7 +342,6 @@ fn yaml_frontmatter_head(contents: &str) -> Option<&str> {
 
 fn bucket_home(key: &str, label: &str) -> Home {
     match key {
-        "@daily" => daily_home(),
         "@unlinked" => unlinked_home(),
         "@unfiled" => unfiled_home(),
         _ => Home {
@@ -376,10 +362,6 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
     let path = (!home.key.starts_with('@')).then(|| home.key.clone());
     let project_label = (home.kind == HomeKind::Area)
         .then(|| format!("{} · area tasks", home.label));
-    let short_label = home
-        .key
-        .strip_prefix("@review:")
-        .map(|name| name.to_string());
     HomeCatalogEntry {
         label: home.label.clone(),
         kind: home.kind,
@@ -388,7 +370,6 @@ fn catalog_entry(home: &Home) -> HomeCatalogEntry {
         path,
         hue: home.hue,
         project_label,
-        short_label,
         root_parent: home.root_parent.clone(),
     }
 }
@@ -693,7 +674,6 @@ fn link_health(
                     daily_path,
                     resolution,
                     &link.block_id,
-                    None,
                 );
                 if home.key == "@unfiled" {
                     unfiled += 1;
@@ -869,16 +849,16 @@ mod tests {
                 "      kind: pomodoro",
                 "      measure: minutes",
                 "      exclude_in: [sase]",
-                "    review_only:",
-                "      label: Review only",
+                "    gtd_daily_in:",
+                "      label: gtd_daily in",
                 "      kind: pomodoro",
                 "      measure: minutes",
-                "      review: only",
-                "    review_count:",
-                "      label: Review session count",
+                "      in: [gtd_daily]",
+                "    gtd_daily_count:",
+                "      label: gtd_daily session count",
                 "      kind: pomodoro",
                 "      measure: count",
-                "      review: only",
+                "      in: [gtd_daily]",
                 "",
             ]
             .join("\n"),
@@ -903,7 +883,7 @@ mod tests {
                 "sase_count_in",
                 "sase_blog_in",
                 "exclude_sase",
-                "review_only",
+                "gtd_daily_in",
             ]
             .into_iter()
             .map(str::to_string)
@@ -959,32 +939,32 @@ mod tests {
         assert_eq!(dimension_total(worked, "project"), 167);
         assert_eq!(dimension_total(worked, "theme"), 167);
 
-        assert_eq!(part_value(worked, "area", "gtd.md"), 45);
+        assert_eq!(part_value(worked, "area", "gtd.md"), 20);
         assert_eq!(part_value(worked, "area", "dev.md"), 90);
         assert_eq!(part_value(worked, "area", "job.md"), 7);
-        assert_eq!(part_value(worked, "area", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "area", "@unlinked"), 35);
         assert_eq!(part_value(worked, "area", "@unfiled"), 15);
 
         assert_eq!(part_value(worked, "project", "sase.md"), 30);
         assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "project", "@review:PLAN"), 35);
+        assert_eq!(part_value(worked, "project", "gtd_daily.md"), 10);
         assert_eq!(part_value(worked, "project", "bob.md"), 10);
         assert_eq!(part_value(worked, "project", "dev.md"), 10);
         assert_eq!(part_value(worked, "project", "job.md"), 4);
         assert_eq!(part_value(worked, "project", "job_apply.md"), 3);
-        assert_eq!(part_value(worked, "project", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "project", "@unlinked"), 35);
         assert_eq!(part_value(worked, "project", "@unfiled"), 15);
 
         // H16 worked root_parent sums to 167 with leaf projects folded
         // into their top-level root.
         assert_eq!(dimension_total(worked, "root_parent"), 167);
         assert_eq!(part_value(worked, "root_parent", "sase.md"), 80);
-        assert_eq!(part_value(worked, "root_parent", "@daily"), 35);
+        assert_eq!(part_value(worked, "root_parent", "gtd_daily.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
         assert_eq!(part_value(worked, "root_parent", "job_apply.md"), 3);
-        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 35);
         assert_eq!(part_value(worked, "root_parent", "@unfiled"), 15);
 
         let sase = worked.parts_summary["project"]
@@ -1030,14 +1010,14 @@ mod tests {
             .find(|part| part.key == "job_apply.md")
             .unwrap();
         assert_eq!(job_apply_root.apportioned, Some(3));
-        let review_root = worked.parts_summary["root_parent"]
+        let gtd_daily_root = worked.parts_summary["root_parent"]
             .iter()
-            .find(|part| part.key == "@daily")
+            .find(|part| part.key == "gtd_daily.md")
             .unwrap();
-        assert_eq!(review_root.apportioned, None);
+        assert_eq!(gtd_daily_root.apportioned, None);
         // Root labels are bare catalog labels.
         assert_eq!(sase_root.label.as_deref(), Some("sase"));
-        assert_eq!(review_root.label.as_deref(), Some("GTD"));
+        assert_eq!(gtd_daily_root.label.as_deref(), Some("gtd_daily"));
 
         let sessions = metric(&report, "sessions");
         assert_eq!(sessions.summary.total.as_ref().unwrap().value, Some(8));
@@ -1046,10 +1026,10 @@ mod tests {
         assert_eq!(dimension_total(sessions, "root_parent"), 8);
         assert_eq!(part_value(sessions, "project", "sase.md"), 1);
         assert_eq!(part_value(sessions, "project", "sase_blog.md"), 1);
-        assert_eq!(part_value(sessions, "project", "@review:PLAN"), 2);
+        assert_eq!(part_value(sessions, "project", "@unlinked"), 2);
         // Count-mode lead roots group distinct tasks by root.
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 2);
-        assert_eq!(part_value(sessions, "root_parent", "@daily"), 2);
+        assert_eq!(part_value(sessions, "root_parent", "@unlinked"), 2);
 
         let done = metric(&report, "done");
         assert_eq!(done.summary.total.as_ref().unwrap().value, Some(7));
@@ -1086,7 +1066,7 @@ mod tests {
         assert_eq!(part_value(sase_time, "theme", "SASE"), 10);
 
         // H9 in:[sase] keeps residence-chain matches, including sase_blog
-        // and the sase share of HACK; review/unlinked never match.
+        // and the sase share of HACK; unlinked sessions never match.
         let sase_in = metric(&report, "sase_in");
         assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
         assert_eq!(dimension_total(sase_in, "area"), 80);
@@ -1123,11 +1103,15 @@ mod tests {
         );
         assert_eq!(report.homes["sase.md"].root_parent, "sase.md".to_string());
         assert_eq!(
-            report.homes["@review:PLAN"].root_parent,
-            "@daily".to_string()
+            report.homes["gtd_daily.md"].root_parent,
+            "gtd_daily.md".to_string()
+        );
+        assert_eq!(
+            report.homes["gtd_daily.md"].area.as_deref(),
+            Some("gtd.md")
         );
 
-        // H11 exclude_in:[sase] never drops review/unlinked; work tasks
+        // H11 exclude_in:[sase] never drops unlinked sessions; work tasks
         // whose chain matches sase are removed (HACK keeps bob+dev = 20).
         let exclude_sase = metric(&report, "exclude_sase");
         assert_eq!(
@@ -1135,24 +1119,30 @@ mod tests {
             Some(87)
         );
         assert_eq!(dimension_total(exclude_sase, "project"), 87);
-        assert_eq!(part_value(exclude_sase, "project", "@review:PLAN"), 35);
-        assert_eq!(part_value(exclude_sase, "project", "@unlinked"), 10);
+        assert_eq!(part_value(exclude_sase, "project", "@unlinked"), 35);
+        assert_eq!(part_value(exclude_sase, "project", "gtd_daily.md"), 10);
 
-        // H12 review: only is the PLAN review row (named + unnamed bridge).
-        let review_only = metric(&report, "review_only");
-        assert_eq!(review_only.summary.total.as_ref().unwrap().value, Some(35));
-        assert_eq!(part_value(review_only, "project", "@review:PLAN"), 35);
+        // H12 in:[gtd_daily] is the Oct 16 session linking the rooted ^gtd.
+        let gtd_daily_in = metric(&report, "gtd_daily_in");
+        assert_eq!(
+            gtd_daily_in.summary.total.as_ref().unwrap().value,
+            Some(10)
+        );
+        assert_eq!(part_value(gtd_daily_in, "project", "gtd_daily.md"), 10);
+        assert_eq!(part_value(gtd_daily_in, "area", "gtd.md"), 10);
+        assert_eq!(part_value(gtd_daily_in, "root_parent", "gtd_daily.md"), 10);
 
         // H13 sessions list: facts for every closed row, today included.
         assert_eq!(report.sessions.len(), 9);
         assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));
         assert_eq!(report.sessions[0].minutes, Some(25));
-        assert_eq!(report.sessions[0].homes.kind, SessionKind::Review);
+        assert_eq!(report.sessions[0].homes.kind, SessionKind::Unlinked);
         assert_eq!(report.sessions[1].name.as_deref(), Some("HACK"));
         assert_eq!(report.sessions[1].homes.kind, SessionKind::Unlinked);
         assert_eq!(report.sessions[2].name.as_deref(), Some("BLOG"));
         assert_eq!(report.sessions[7].name, None);
-        assert_eq!(report.sessions[7].homes.kind, SessionKind::Review);
+        assert_eq!(report.sessions[7].homes.kind, SessionKind::Work);
+        assert_eq!(report.sessions[7].homes.label, "gtd_daily");
         assert_eq!(report.sessions[8].name.as_deref(), Some("BLOG"));
         assert_eq!(report.sessions[8].minutes, Some(15));
         assert_eq!(
@@ -1162,8 +1152,8 @@ mod tests {
 
         assert!(!report.homes.contains_key("body.md"));
         assert!(!report.homes.contains_key("invalid.md"));
-        assert_eq!(report.health.homes.unlinked_sessions, 1);
-        assert_eq!(report.health.homes.unlinked_minutes, 10);
+        assert_eq!(report.health.homes.unlinked_sessions, 2);
+        assert_eq!(report.health.homes.unlinked_minutes, 35);
         assert_eq!(report.health.homes.unfiled_links, 1);
         assert!(!report.health.homes.hue_collisions.is_empty());
         assert!(report
@@ -1188,7 +1178,7 @@ mod tests {
             .unwrap();
         let mut request = StatsRequest::at(homes_vault(), config, today);
         request.selection = MetricSelection::Explicit(
-            ["worked", "review_time", "review_count"]
+            ["worked", "review_time", "gtd_daily_count"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
@@ -1198,13 +1188,19 @@ mod tests {
         let report = compute(&request).expect("review share vector computes");
         let worked = metric(&report, "worked");
         let review_time = metric(&report, "review_time");
-        let review_count = metric(&report, "review_count");
+        let review_count = metric(&report, "gtd_daily_count");
+        // H15: the Oct 14 work session links another day's rooted ^gtd, so
+        // it splits 50m into 25m gtd_daily and 25m bob; the root-parent
+        // split matches, and review_time keeps the gtd_daily share.
         assert_eq!(worked.summary.total.as_ref().unwrap().value, Some(50));
-        assert_eq!(part_value(worked, "project", "@review:PLAN"), 25);
+        assert_eq!(part_value(worked, "project", "gtd_daily.md"), 25);
+        assert_eq!(part_value(worked, "project", "bob.md"), 25);
+        assert_eq!(part_value(worked, "root_parent", "gtd_daily.md"), 25);
+        assert_eq!(part_value(worked, "root_parent", "bob.md"), 25);
         assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
-        assert_eq!(part_value(review_time, "project", "@review:PLAN"), 25);
+        assert_eq!(part_value(review_time, "project", "gtd_daily.md"), 25);
         assert_eq!(review_count.summary.total.as_ref().unwrap().value, Some(1));
-        assert_eq!(part_value(review_count, "project", "@review:PLAN"), 1);
+        assert_eq!(part_value(review_count, "project", "gtd_daily.md"), 1);
     }
 
     #[test]
@@ -1390,26 +1386,27 @@ mod tests {
         assert_eq!(dimension_total(worked, "root_parent"), 167);
         assert_eq!(part_value(worked, "root_parent", "sase.md"), 30);
         assert_eq!(part_value(worked, "root_parent", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "root_parent", "@daily"), 35);
+        assert_eq!(part_value(worked, "root_parent", "gtd_daily.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "bob.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "dev.md"), 10);
         assert_eq!(part_value(worked, "root_parent", "job.md"), 4);
         assert_eq!(part_value(worked, "root_parent", "job_apply.md"), 3);
-        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "root_parent", "@unlinked"), 35);
         assert_eq!(part_value(worked, "root_parent", "@unfiled"), 15);
         // Area and project dimensions match H2 and H3.
-        assert_eq!(part_value(worked, "area", "gtd.md"), 45);
+        assert_eq!(part_value(worked, "area", "gtd.md"), 20);
         assert_eq!(part_value(worked, "area", "dev.md"), 90);
         assert_eq!(part_value(worked, "area", "job.md"), 7);
-        assert_eq!(part_value(worked, "area", "@unlinked"), 10);
+        assert_eq!(part_value(worked, "area", "@unlinked"), 35);
         assert_eq!(part_value(worked, "area", "@unfiled"), 15);
         assert_eq!(part_value(worked, "project", "sase.md"), 30);
         assert_eq!(part_value(worked, "project", "sase_blog.md"), 50);
-        assert_eq!(part_value(worked, "project", "@review:PLAN"), 35);
+        assert_eq!(part_value(worked, "project", "gtd_daily.md"), 10);
         assert_eq!(part_value(worked, "project", "bob.md"), 10);
         assert_eq!(part_value(worked, "project", "dev.md"), 10);
         assert_eq!(part_value(worked, "project", "job.md"), 4);
         assert_eq!(part_value(worked, "project", "job_apply.md"), 3);
+        assert_eq!(part_value(worked, "project", "@unlinked"), 35);
         // in: filters still match the full residence chain.
         let sase_in = metric(&report, "sase_in");
         assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
@@ -1430,47 +1427,40 @@ mod tests {
         assert_eq!(dimension_total(sessions, "root_parent"), 8);
         assert_eq!(part_value(sessions, "root_parent", "sase.md"), 1);
         assert_eq!(part_value(sessions, "root_parent", "sase_blog.md"), 1);
-        assert_eq!(part_value(sessions, "root_parent", "@daily"), 2);
+        assert_eq!(part_value(sessions, "root_parent", "@unlinked"), 2);
     }
 
     #[test]
-    fn review_bucket_carries_short_label_for_compact_views() {
+    fn only_unlinked_and_unfiled_buckets_remain_in_the_catalog() {
         let dir = TempDir::new().unwrap();
         let report = compute(&homes_request(homes_vault(), write_config(&dir)))
             .expect("homes fixture computes");
-        let review = report
-            .homes
-            .get("@review:PLAN")
-            .expect("review bucket catalog entry");
-        assert_eq!(review.label, "PLAN review");
-        assert_eq!(review.short_label.as_deref(), Some("PLAN"));
-        let daily = report
-            .homes
-            .get("@daily")
-            .expect("daily root catalog entry");
-        assert_eq!(daily.label, "GTD");
-        assert_eq!(daily.kind, HomeKind::Bucket);
-        assert_eq!(daily.hue, None);
-        assert_eq!(daily.short_label, None);
         for (key, entry) in &report.homes {
-            if key.starts_with("@review:") {
-                continue;
+            if key.starts_with('@') {
+                assert!(
+                    key == "@unlinked" || key == "@unfiled",
+                    "unexpected bucket {key}"
+                );
+                assert_eq!(entry.kind, HomeKind::Bucket);
             }
-            assert_eq!(
-                entry.short_label, None,
-                "only review buckets carry short_label ({key})"
-            );
         }
+        let unlinked = report
+            .homes
+            .get("@unlinked")
+            .expect("unlinked catalog entry");
+        assert_eq!(unlinked.label, "unlinked");
+        assert_eq!(unlinked.root_parent, "@unlinked");
+        let gtd_daily = report
+            .homes
+            .get("gtd_daily.md")
+            .expect("gtd_daily catalog entry");
+        assert_eq!(gtd_daily.kind, HomeKind::Area);
+        assert_eq!(gtd_daily.root_parent, "gtd_daily.md");
         let value = serde_json::to_value(&report).expect("report serializes");
         let catalog = value["homes"].as_object().unwrap();
-        assert_eq!(catalog["@review:PLAN"]["short_label"], "PLAN");
-        assert_eq!(catalog["@daily"]["label"], "GTD");
-        assert_eq!(catalog["@daily"]["kind"], "bucket");
-        assert!(catalog["@daily"]["hue"].is_null());
-        assert!(catalog["@daily"].get("short_label").is_none());
-        assert!(
-            catalog["sase.md"].get("short_label").is_none(),
-            "non-review entries omit short_label"
-        );
+        assert!(catalog.get("@daily").is_none());
+        assert!(catalog.get("@review:PLAN").is_none());
+        assert_eq!(catalog["gtd_daily.md"]["root_parent"], "gtd_daily.md");
+        assert_eq!(catalog["@unlinked"]["label"], "unlinked");
     }
 }

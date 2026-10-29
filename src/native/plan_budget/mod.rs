@@ -277,7 +277,7 @@ pub(crate) fn with_entry_homes(
     bob_dir: &Path,
     daily_path: &Path,
     contents: &str,
-    config: &PlanConfig,
+    _config: &PlanConfig,
 ) -> PlanReport {
     if report.entries.is_empty() {
         return report;
@@ -295,7 +295,6 @@ pub(crate) fn with_entry_homes(
                 found.and_then(|found| found.name.as_deref()),
                 false,
                 None,
-                config.exempt(),
                 daily_path,
                 &mut resolver,
             )

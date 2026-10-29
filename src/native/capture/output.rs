@@ -3588,9 +3588,6 @@ fn format_task_theme_row(
             super::super::pomodoro_themes::suggest::SuggestionSource::Reading => {
                 format!("reading tasks suggest {}", suggestion.theme.name)
             }
-            super::super::pomodoro_themes::suggest::SuggestionSource::Review => {
-                format!("daily review suggests {}", suggestion.theme.name)
-            }
             super::super::pomodoro_themes::suggest::SuggestionSource::Note => {
                 let stem = suggestion
                     .label

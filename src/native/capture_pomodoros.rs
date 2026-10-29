@@ -366,10 +366,6 @@ fn list_capture_pomodoros(
         .include_tasks
         .then(|| completed_summary_for(&scan.entries, &contents));
     let daily_path = PathBuf::from(&relative_day_file);
-    let exempt = plan_config
-        .as_ref()
-        .map(|config| config.exempt().to_vec())
-        .unwrap_or_else(|| config::PlanConfig::default().exempt().to_vec());
     let mut homes_resolver = request.include_tasks.then(|| {
         pomodoro_homes::HomeResolver::new(pomodoro_homes::DiskHomeSource::new(
             &request.bob_dir,
@@ -391,7 +387,6 @@ fn list_capture_pomodoros(
                 entry.name.as_deref(),
                 entry.state == PomodoroState::Completed,
                 attributed_minutes(&entry, &contents),
-                &exempt,
                 &daily_path,
                 resolver,
             )

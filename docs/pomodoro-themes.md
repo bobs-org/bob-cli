@@ -483,13 +483,12 @@ First match wins:
    or `ref-*` (rereads included). Ordinary annotation follow-up tasks do
    not qualify. Uses `plan.reading_theme` (default `READ`); `off` skips
    this step. Source `reading`, label `reading task`.
-3. **Daily review.** The canonical daily residence plus a
-   case-insensitive trailing `gtd` block ID, suggesting the first
-   `plan.exempt` name. An empty exempt list skips this step. Source
-   `review`, label `daily review`.
-4. **Note default.** The first valid default on the residence chain.
-   Source `note`, label `from <lowercase declaring stem>`.
-5. Otherwise none: `No suggested theme`.
+3. **Note default.** The first valid default on the residence chain.
+   Source `note`, label `from <lowercase declaring stem>`. A set
+   `[root:: X]` field starts this walk at X, so a daily `^gtd` row
+   carrying `[root:: gtd_daily]` suggests `gtd_daily`'s default
+   (`theme: PLAN`).
+4. Otherwise none: `No suggested theme`.
 
 The inherited suggestion runs the same rule with step 1 skipped. The
 serialized suggestion holds `theme` (a `ThemeRef`), `source`, and
@@ -645,9 +644,9 @@ writing. The later completion phase owns implementation and the
 `preselect` vectors.
 
 Pinned copy: `suggested · this task`, `suggested · reading task`,
-`suggested · daily review`, `suggested · from <stem>` (root-area dot
+`suggested · from <stem>` (root-area dot
 where supported); `reading tasks suggest READ`,
-`daily review suggests PLAN`, `<stem> suggests WRITE`, and
+`<stem> suggests WRITE`, and
 `no default here`. Consequences: `this task becomes FIX · <stem>
 suggests WRITE` and `task theme cleared · <stem> suggests WRITE`;
 notices: `Linked under FIX · task theme FIX` and `Linked under WRITE ·

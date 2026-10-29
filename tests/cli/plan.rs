@@ -168,9 +168,9 @@ fn plan_reports_full_budget_as_json() {
     assert_eq!(entries[0]["homes"]["state"], Value::from("forecast"));
     assert_eq!(entries[0]["homes"]["kind"], Value::from("work"));
     assert!(entries[0]["homes"]["parts"].as_array().is_some());
-    assert_eq!(entries[3]["homes"]["kind"], Value::from("review"));
-    assert_eq!(entries[3]["homes"]["label"], Value::from("PLAN review"));
-    assert_eq!(entries[3]["homes"]["chip"], Value::Null);
+    assert_eq!(entries[3]["homes"]["kind"], Value::from("work"));
+    assert_eq!(entries[3]["homes"]["label"], Value::from("unfiled"));
+    assert_eq!(entries[3]["homes"]["chip"], Value::from("unfiled"));
 
     let codes: Vec<&str> = value["warnings"]
         .as_array()

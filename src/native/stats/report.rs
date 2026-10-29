@@ -127,8 +127,6 @@ pub(crate) struct MetricParameters {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) exclude_in: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) review: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) event: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) tags_any: Vec<String>,
@@ -305,8 +303,6 @@ pub(crate) struct HomeCatalogEntry {
     pub(crate) hue: Option<Hue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) project_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) short_label: Option<String>,
     pub(crate) root_parent: String,
 }
 
@@ -502,7 +498,6 @@ mod tests {
                     tags_all: Vec::new(),
                     in_notes: Vec::new(),
                     exclude_in: Vec::new(),
-                    review: None,
                     task_kind: None,
                     recurring: None,
                     tags: Vec::new(),

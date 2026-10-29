@@ -277,13 +277,13 @@ without that tag remain recognized. Follow-up tasks track separate work. See
 
 ### Root Parent {#root-parent}
 
-The [Area Note](#area-note) a task lives in, else the nearest project marked
+The [Area Note](#area-note) a task lives in, or the note its `[root:: X]` field
+names (resolved as if the task lived there), else the nearest project marked
 `root: true` on the walk up to that area, else the [Top-Level Project](#top-level-project)
 above its project note. Archive and reference wrappers are walked through, and
-an area-less walk falls back to the outermost project. Review buckets and tasks
-defined in canonical daily notes group under the `GTD` bucket (key `@daily`); `unlinked`
-and `unfiled` stay buckets. Derived at read time
-from today's note tree and never written; `rollup:` no longer exists. The
+an area-less walk falls back to the outermost project. `unlinked`
+and `unfiled` are the only buckets. Derived at read time
+from today's note tree plus task root fields; Bob never writes it. The
 [Day Strip](#day-strip)'s root-parent bar and the default [Stats Dash](#stats-dash) view group by it; Stats
 JSON calls the dimension `root_parent`. It is not the nearest home
 (`project`), a top-level area, or a [Pomodoro Theme](#pomodoro-theme); see

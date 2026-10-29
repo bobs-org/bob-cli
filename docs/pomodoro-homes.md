@@ -28,10 +28,9 @@ linked note, is the home. Closed and canceled projects remain valid homes. A
 note without either type is `@unfiled`. A set `[root:: X]` field starts this
 walk at X instead of the linked note ([R11](#r11-task-root-fields)).
 
-A link to a canonical daily note's `^gtd` block (case-insensitive) is the
-`@review:<first exempt name>` home. An empty target resolves to the current
-daily note. Links to any other task in a canonical daily note resolve to the
-synthetic `@daily` home. The same residence chain feeds task theme
+An empty target resolves to the current daily note. A daily note walks
+like any other note: without an area, project, or root field, a task in one
+is `@unfiled`. The same residence chain feeds task theme
 suggestions: the first valid area/project `theme:` default on the chain is
 the note source ([PT13](pomodoro-themes.md#pt13-task-theme-suggestions)). The top-level area is the outermost area on the chain.
 A subarea is the nearest area below that top-level area. A home without an area uses
@@ -58,9 +57,8 @@ Take `chain` as built in R1 and `h` as the nearest-home index:
 - If the walk never reaches an area, the outermost project reached stands
   in as the root. It is not a top-level project, and its area stays
   `@unfiled`.
-- Buckets are their own root except review buckets, which roll up to `@daily`:
-  `@review:<NAME>` has root `@daily`; `@daily`, `@unlinked`, and `@unfiled`
-  are their own roots.
+- Buckets are their own root. Only `@unlinked` and `@unfiled` remain as
+  reserved buckets; every other root is a real note.
 
 Root projects (`root: true`): a project note may set `root: true` in its
 frontmatter to become its own root parent, grouping its own and its
@@ -85,8 +83,7 @@ review tiers, capture routing, plan budget, or `bob projects` output.
 | `ref/x.md` (parent `bob`) | `→ bob → dev` | `bob` |
 | `ref/y.md` (parent `dev`) | `→ dev` | `dev` |
 | orphan project `o.md` (no area above) | `o → …` | `o`, area `@unfiled` |
-| PLAN review session / `[[#^gtd]]` bridge | — | `@daily` |
-| task defined in any canonical daily note | — | `@daily` |
+| unrooted task defined in a daily note | — | `@unfiled` |
 | `^gtd` with `[root:: gtd_daily]` | `gtd_daily → gtd` | `gtd_daily` |
 | inbox task with `[root:: sase]` | `sase → dev` | `sase` |
 | `[root:: sase_goals]` (no `root: true`) | `sase_goals → sase → dev` | `sase`, plus a `root_field_not_root` lint |
@@ -96,7 +93,7 @@ review tiers, capture routing, plan budget, or `bob projects` output.
 Roots are derived from today's note tree at read time, never written. A
 leftover `rollup:` frontmatter key is silently ignored: project rollup is
 retired and never regroups homes. Labels use the bare root stem (`sase`,
-`gtd`); buckets keep `PLAN review`, `GTD` (key `@daily`), `unlinked`, and `unfiled`.
+`gtd`); buckets keep `unlinked` and `unfiled`.
 Hues follow R8:
 bob reports each root's area hue (R8); bars give every root they show a distinct
 colour (see stats.md). Stats splits each session per task first, then sums shares by root,
@@ -121,34 +118,15 @@ De-duplicate resolved links by `(note path, block id)`. If resolution fails,
 de-duplicate by the raw `(target, block id)` pair. Open and closed entries use
 the same link rule. Open homes are forecasts and never count as worked time.
 
-## R4 — Review sessions
+## R4 — Session names never choose a home
 
-A named session is a review session when every `+`-separated name component is
-in `plan.exempt` (default `[PLAN]`) and it links that day's `^gtd` row or has
-no dedicated Task Links. Its minutes go to one `@review:<NAME>` part
-per exempt component; composite names split their minutes evenly, with any
-remainder going to the first component. The bucket label is `<NAME> review`.
-Its task links do not attribute. Review buckets group under root `@daily`;
-their project and area dimensions remain `@review:<NAME>` and its resolved area.
-An all-exempt name without that day's `^gtd` is a work session: its links decide
-its homes, exactly as in any work session, and another day's canonical `^gtd`
-is still a review-home share. Its name still feeds the Stats theme dimension.
-
-An unnamed session is also a review session when one of its dedicated links is
-that day's `^gtd` row. This historical bridge uses the first configured exempt
-name and is disabled when `plan.exempt` is empty. The link still maps to that
-review home in a work session. A named composite such as `PLAN + BOB` is a work
-session unless every component is exempt.
-
-The review bucket's area is the top-level area of the note resolved from the
-lowercase review name (`PLAN` → `plan.md`, whose parent is `gtd`). If that note
-has no area or project, the bucket itself is the area key. Review parts inherit
-that area's hue.
-
-The `^gtd` link marks the ritual, not the name: a morning entry that links
-`^gtd` plus dispatched tasks stays whole in review, while an all-exempt entry
-that links only project tasks attributes like any work session. A review
-session's root parent is still `@daily`.
+A session's name never chooses its home. Every linked task attributes through
+its residence or its `[root:: X]` field, exactly as R1 resolves it. A `PLAN`
+session linking `[[#^gtd]]` attributes to `gtd_daily` when that row carries
+`[root:: gtd_daily]`. A `PLAN` session linking `[[sase_blog#^s0-spike]]`
+attributes to `sase_blog`. An unlinked closed `PLAN` session is `@unlinked`.
+"How much PLAN" remains the Stats theme dimension, which already reads
+`PLAN` time, while the homes read the linked tasks' notes.
 
 ## R5 — Splitting and lead home
 
@@ -172,28 +150,24 @@ two or more distinct homes in that dimension. A session can be apportioned in
 
 ## R6 — Unattributed buckets
 
-`@unlinked` is a closed, non-review session with no dedicated Task Links.
+`@unlinked` is a closed session with no dedicated Task Links.
 `@unfiled` is a linked task whose note has no area or project, or whose link is
 ambiguous or unresolved. Both buckets remain visible outside any `other` group.
 They are never guessed from the session name. Their repair hints are “link the
 task to attribute it” and “file the task in an area or project, or give it a
 root field”. An open entry
-with no links has no parts and an empty label. Any other task defined in a
-canonical daily note resolves to `@daily` instead of `@unfiled`; it adds no
-unfiled-link health or warning.
+with no links has no parts and an empty label.
 
 ## R7 — Labels, chips, and dots
 
-Use a lowercase note stem for project and area labels. Use `<NAME> review`,
-`GTD`, `unlinked`, and `unfiled` for reserved buckets. Review buckets also carry
-`short_label` `<NAME>` for compact views. Sort labels by share, descending;
+Use a lowercase note stem for project and area labels. Use `unlinked` and
+`unfiled` for reserved buckets. Sort labels by share, descending;
 show up to two joined by ` · `, then append ` +N` for additional homes. A
 session with no homes has an empty label.
 
-The chip is the label unless suppressed for an unlinked session, a named review
-session, or a name whose case-insensitive component set equals the set of home
-labels. An unnamed review bridge chip says `PLAN review`. An unfiled-only chip
-says `unfiled`.
+The chip is the label unless suppressed for an unlinked session, or a name
+whose case-insensitive component set equals the set of home
+labels. An unfiled-only chip says `unfiled`.
 
 Use a filled `●` for an attributed session and a hollow `○` for a forecast.
 The dot takes the lead home's area hue. A chip never routes a capture, changes
@@ -204,8 +178,8 @@ status, reorders a session, or feeds the plan budget. Homes are not capture
 
 The palette uses these fixed categorical slots. An area's own `color:` selects
 one slot only when the area is top-level. Invalid top-level values produce one
-`area_color_invalid` lint and use the local FNV-1a fallback. A subarea, project,
-and review bucket inherit the top-level area's hue. `color:` elsewhere is
+`area_color_invalid` lint and use the local FNV-1a fallback. A subarea and
+project inherit the top-level area's hue. `color:` elsewhere is
 ignored. `bob stats` reports `area_hue_collision` when top-level areas share a
 slot and suggests setting `color:` on one of them.
 
@@ -261,7 +235,7 @@ Every emitting surface uses this additive shape:
 ```
 
 `state` is `attributed` for every closed entry and `forecast` for every open
-entry; `kind` is `work`, `review`, or
+entry; `kind` is `work` or
 `unlinked`. `chip` and `hue` are nullable. Each part's kind is `project`,
 `area`, or `bucket`. `share` is a whole percentage: minute-based for attributed
 sessions with a duration, and task-based when a closed entry has no duration or
@@ -324,10 +298,9 @@ set root: true on sase_goals". This keeps the set of root parents a function
 of note frontmatter: `root: true` stays the one way to create a root, and a
 per-task field can never invent a stray root.
 
-A set root field wins over the `^gtd` → review-home and canonical-daily →
-`@daily` mappings. An unnamed session whose only same-day `^gtd` link has a
-set root field is a work session; named all-exempt sessions stay review
-sessions until those buckets retire.
+A set root field applies before residence is read: R1 starts at X, so the
+old `^gtd` and daily-note special cases are gone. Session names never choose
+a home (R4).
 
 **Scope: reporting only, like `root: true`.** The field applies to:
 
@@ -373,18 +346,19 @@ is marked `rust_only` because Obsidian's resolver owns that behavior.
 
 | Case | What it proves |
 | --- | --- |
-| `subproject-archive-review` | archive/ref chain, struck links, de-duplication, review sessions and same-day bridge |
+| `subproject-archive-homes` | archive/ref chain, struck links, de-duplication |
 | `resolution-and-lints` | archived/ref/project/area homes, cycles, explicit and fallback hues |
 | `ambiguous-basename` | duplicate basename resolves to `@unfiled`; the sole `rust_only` case |
 | `chips, forecast shares, empty forecasts, and session identity` | chip suppression, forecast and unlinked shapes, ties, named sessions |
 | `split-rounding-and-duration` | 50m across 3 tasks is 18/16/16; `[t:: 40m]` takes precedence over a 50m range |
 | `share-rounding` | equal task weights round to 34/33/33, giving the tied remainder to ledger order rather than the last part |
-| `daily-review-link` | another day's canonical `^gtd` is a review-home task share; only a same-day link triggers the unnamed review bridge |
+| `gtd-root-across-days` | another day's rooted `^gtd` attributes to `gtd_daily`; an unrooted one is `@unfiled` |
 | `depth-and-parent-shapes` | direct child and grandchild homes, list/self parents stop, the depth cap is 16, and unquoted scalar `parent: [[x]]` resolves |
 | `parent-scalar-shapes` | quoted scalar wikilinks resolve; single-item YAML lists and bare strings do not |
 | `unresolved-and-closed-zero` | unresolved links are `@unfiled`; closed `- [x] ()` stays attributed with zero-minute parts |
-| `review-decisions` | all-exempt work without `^gtd`, same-day bridge, and mixed named work |
-| `exempt-name-gtd-link` | all-exempt review needs that day's `^gtd` or no links; other-day `^gtd` stays a work share; open all-exempt forecasts work |
+| `session-names-never-home` | named `PLAN` linking a rooted `^gtd`, linking a project, an unlinked closed `PLAN`, and `PLAN + BOB` |
+| `named-sessions-use-task-homes` | named sessions attribute through their task links; unrooted `^gtd` links are `@unfiled` |
+| `daily-note-task-home` | an unrooted daily-note task is `@unfiled` |
 | `root-fields` | set `[root::]` re-homes `^gtd` and inbox tasks, paren form, `sase_goals` rolls up with a lint, and missing/duplicate/invalid/no_home fall back; a closed task keeps attributing |
 
 ## Limits and rejected alternatives

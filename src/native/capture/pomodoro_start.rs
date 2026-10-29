@@ -1689,9 +1689,6 @@ fn override_running_homes(
     if running.name.as_deref().is_some_and(|name| !name.is_empty()) {
         return None;
     }
-    let exempt = config::load_plan_config(&config::config_path())
-        .map(|loaded| loaded.exempt().to_vec())
-        .unwrap_or_else(|_| config::PlanConfig::default().exempt().to_vec());
     let daily_path = day_file
         .strip_prefix(&request.bob_dir)
         .map(Path::to_path_buf)
@@ -1706,7 +1703,6 @@ fn override_running_homes(
             None,
             false,
             None,
-            &exempt,
             &daily_path,
             &mut resolver,
         )

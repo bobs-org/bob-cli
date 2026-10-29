@@ -44,9 +44,9 @@ unnamed entry still shows its derived homes.
 
 Components listed in `plan.exempt` (default `[PLAN]`) are never
 themes. An entry whose components are all exempt is ignored for
-links too. Exemption is a budget rule; Stats charges an all-exempt session to
-review only when it links that day's `^gtd` row or has no Task Links
-([R4](pomodoro-homes.md#r4-review-sessions)).
+links too. Exemption is a budget rule; session names never choose a home, so
+Stats attributes every entry through its Task Links
+([R4](pomodoro-homes.md#r4-session-names-never-choose-a-home)).
 
 ## Themes
 
@@ -714,22 +714,11 @@ shows all report fields for one open theme and one exempt entry:
       "links": 0,
       "homes": {
         "state": "forecast",
-        "kind": "review",
-        "label": "PLAN review",
+        "kind": "unlinked",
+        "label": "",
         "chip": null,
-        "hue": "orange",
-        "parts": [
-          {
-            "key": "@review:PLAN",
-            "label": "PLAN review",
-            "kind": "bucket",
-            "area": "gtd.md",
-            "area_label": "gtd",
-            "hue": "orange",
-            "tasks": 0,
-            "share": 100
-          }
-        ]
+        "hue": null,
+        "parts": []
       }
     }
   ],

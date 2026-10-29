@@ -11,8 +11,6 @@ use crate::native::{
 };
 
 const MAX_PROJECT_DEPTH: usize = 16;
-pub(crate) const DAILY_KEY: &str = "@daily";
-pub(crate) const DAILY_LABEL: &str = "GTD";
 
 pub(crate) trait HomeSource {
     fn resolve(&self, current: &Path, target: &str) -> LinkResolution;
@@ -112,7 +110,7 @@ pub(crate) struct Home {
     /// Root parent grouping for stats: the area the task lives in, else
     /// the nearest project marked `root: true` on the walk up to that area,
     /// else the top-level project above its project note. Buckets are their
-    /// own root, except review buckets, which roll up to `@daily`.
+    /// own root.
     pub(crate) root_parent: String,
 }
 
@@ -205,10 +203,9 @@ impl<S: HomeSource> HomeResolver<S> {
 
     pub(crate) fn home_for_link(
         &mut self,
-        current: &Path,
+        _current: &Path,
         resolution: LinkResolution,
         block_id: &str,
-        bridge_name: Option<&str>,
     ) -> Home {
         match resolution {
             LinkResolution::Found(path) => {
@@ -217,15 +214,6 @@ impl<S: HomeSource> HomeResolver<S> {
                         self.health.unfiled_links += 1;
                     }
                     return home;
-                }
-                if block_id.eq_ignore_ascii_case("gtd")
-                    && crate::native::task_status_hooks::canonical_daily_date(
-                        &path,
-                    )
-                    .is_some()
-                {
-                    return self
-                        .review_home(bridge_name.unwrap_or("PLAN"), current);
                 }
                 let home = self.resolve_note(&path);
                 if home.key == "@unfiled" {
@@ -257,17 +245,6 @@ impl<S: HomeSource> HomeResolver<S> {
             return home;
         }
         self.resolve_note(path)
-    }
-
-    pub(crate) fn block_has_set_root(
-        &mut self,
-        path: &Path,
-        block_id: &str,
-    ) -> bool {
-        self.facts_for(path)
-            .as_ref()
-            .and_then(|facts| facts.task_roots.get(block_id))
-            .is_some_and(|fact| matches!(fact.state, TaskRootState::Set { .. }))
     }
 
     fn apply_block_root(
@@ -346,13 +323,8 @@ impl<S: HomeSource> HomeResolver<S> {
     }
 
     pub(crate) fn resolve_note(&mut self, path: &Path) -> Home {
-        if crate::native::task_status_hooks::canonical_daily_date(path)
-            .is_some()
-        {
-            let home = daily_home();
-            self.homes.insert(path.to_path_buf(), home.clone());
-            return home;
-        }
+        // Daily notes walk like any other note: without an area, project,
+        // or root field, their tasks attribute as `@unfiled`.
         if let Some(home) = self.homes.get(path) {
             return home.clone();
         }
@@ -475,36 +447,6 @@ impl<S: HomeSource> HomeResolver<S> {
         home
     }
 
-    pub(crate) fn review_home(&mut self, name: &str, current: &Path) -> Home {
-        let bucket = format!("@review:{name}");
-        let target = name.to_ascii_lowercase();
-        let reviewed = match self.source.resolve(current, &target) {
-            LinkResolution::Found(path) => Some(self.resolve_note(&path)),
-            LinkResolution::Ambiguous | LinkResolution::Missing => None,
-        };
-        let residence_chain = reviewed
-            .as_ref()
-            .map(|home| home.residence_chain.clone())
-            .unwrap_or_default();
-        let (area, area_label, hue) = reviewed
-            .filter(|home| home.area != "@unfiled")
-            .map(|home| (home.area, home.area_label, home.hue))
-            .unwrap_or_else(|| {
-                (bucket.clone(), format!("{name} review"), None)
-            });
-        Home {
-            key: bucket.clone(),
-            label: format!("{name} review"),
-            kind: super::HomeKind::Bucket,
-            area,
-            area_label,
-            subarea: None,
-            hue,
-            residence_chain,
-            root_parent: DAILY_KEY.to_string(),
-        }
-    }
-
     fn facts_for(&mut self, path: &Path) -> Option<NoteFacts> {
         if let Some(facts) = self.facts.get(path) {
             return facts.clone();
@@ -600,19 +542,5 @@ pub(crate) fn unlinked_home() -> Home {
         hue: None,
         residence_chain: Vec::new(),
         root_parent: "@unlinked".to_string(),
-    }
-}
-
-pub(crate) fn daily_home() -> Home {
-    Home {
-        key: DAILY_KEY.to_string(),
-        label: DAILY_LABEL.to_string(),
-        kind: super::HomeKind::Bucket,
-        area: DAILY_KEY.to_string(),
-        area_label: DAILY_LABEL.to_string(),
-        subarea: None,
-        hue: None,
-        residence_chain: Vec::new(),
-        root_parent: DAILY_KEY.to_string(),
     }
 }

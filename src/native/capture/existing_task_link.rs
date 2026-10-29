@@ -120,9 +120,6 @@ pub(crate) fn list_today_link_pomodoros(
     block_link: &str,
     today: NaiveDate,
 ) -> Vec<TodayPomodoroRow> {
-    let exempt = config::load_plan_config(&config::config_path())
-        .map(|loaded| loaded.exempt().to_vec())
-        .unwrap_or_else(|_| config::PlanConfig::default().exempt().to_vec());
     let mut resolver = crate::native::pomodoro_homes::HomeResolver::new(
         crate::native::pomodoro_homes::DiskHomeSource::new(bob_dir),
     );
@@ -170,7 +167,6 @@ pub(crate) fn list_today_link_pomodoros(
                     None,
                     false,
                     None,
-                    &exempt,
                     daily_path,
                     &mut resolver,
                 )

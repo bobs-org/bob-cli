@@ -12,7 +12,6 @@ use crate::native::{
     plan_budget::normalize_component,
     pomodoro_homes::{HomeResolver, HomeSource, Hue, NoteKind, NoteTheme},
     ref_tasks::{has_ref_token, strip_blockquote_prefix, task_mark},
-    task_fields::canonical_theme_name,
     task_root::{parse_task_root, TaskRootState},
     task_status_hooks::canonical_daily_date,
     task_theme::{parse_task_theme, RepairKind, TaskThemeState},
@@ -24,7 +23,6 @@ use crate::native::{
 pub(crate) enum SuggestionSource {
     Task,
     Reading,
-    Review,
     Note,
 }
 
@@ -161,25 +159,6 @@ fn resolve_without_task_field<S: HomeSource>(
             warnings: Vec::new(),
         };
     }
-    if is_daily_review(residence_path, line)
-        && let Some(name) = cfg.exempt().first()
-    {
-        let canonical = canonical_theme_name(name)
-            .unwrap_or_else(|| name.to_ascii_uppercase());
-        let key = normalize_component(&canonical);
-        let display = catalog.display_name(&key, &canonical);
-        return SuggestResult {
-            suggestion: Some(ThemeSuggestion {
-                theme: catalog.theme_ref(&key, &display),
-                source: SuggestionSource::Review,
-                label: "daily review".to_string(),
-                from: None,
-                inherited: None,
-                repair: None,
-            }),
-            warnings: Vec::new(),
-        };
-    }
     if let Some(root_path) = set_root_walk_start(source, residence_path, line) {
         return note_default(source, catalog, &root_path, true);
     }
@@ -296,14 +275,6 @@ fn is_reading_task(line: &str) -> bool {
         let lower = id.to_ascii_lowercase();
         lower == "ref" || lower.starts_with("ref-")
     })
-}
-
-fn is_daily_review(residence_path: &Path, line: &str) -> bool {
-    if canonical_daily_date(residence_path).is_none() {
-        return false;
-    }
-    trailing_block_id_in_line(line)
-        .is_some_and(|id| id.eq_ignore_ascii_case("gtd"))
 }
 
 fn note_stem(path: &Path) -> String {

@@ -15,7 +15,7 @@ use crate::native::{
 
 use super::facts::{NoteFacts, NoteTheme};
 use super::{
-    attribute_session, daily_home, fallback_hue, session_links, split_minutes,
+    attribute_session, fallback_hue, session_links, split_minutes,
     DiskHomeSource, HomeResolver, HomeSource, Hue, IndexedHomeSource,
 };
 
@@ -29,7 +29,6 @@ struct Vectors {
 struct VectorCase {
     name: String,
     daily_path: PathBuf,
-    exempt: Vec<String>,
     pomodoros: String,
     expected: Vec<Value>,
     #[serde(default)]
@@ -416,14 +415,10 @@ fn root_parent_follows_the_examples_table() {
     // Buckets are their own root.
     assert_eq!(unlinked_home_root(), "@unlinked");
     assert_eq!(unfiled_home_root(), "@unfiled");
-    let review = resolver.review_home("GTD", Path::new("dev.md"));
-    assert_eq!(review.key, "@review:GTD");
-    assert_eq!(review.root_parent, "@daily");
-    assert_eq!(review.area, "gtd.md");
 }
 
 #[test]
-fn canonical_daily_notes_resolve_to_daily_bucket_only() {
+fn daily_notes_walk_like_any_other_note() {
     let mut notes = BTreeMap::new();
     notes.insert(
         PathBuf::from("2026/20261017.md"),
@@ -433,17 +428,27 @@ fn canonical_daily_notes_resolve_to_daily_bucket_only() {
         PathBuf::from("2026/2026-10-17.md"),
         "---\ntype: [[area]]\n---\n".to_string(),
     );
+    notes.insert(
+        PathBuf::from("2026/20261018.md"),
+        "# plain daily\n".to_string(),
+    );
     let note_index = NoteIndex::from_paths(notes.keys().cloned());
     let mut resolver =
         HomeResolver::new(IndexedHomeSource::new(&note_index, &notes));
 
-    assert_eq!(
-        resolver.resolve_note(Path::new("2026/20261017.md")),
-        daily_home()
-    );
+    // A canonical daily path is not a bucket: an area frontmatter still
+    // makes the note its own area home.
+    let area_home = resolver.resolve_note(Path::new("2026/20261017.md"));
+    assert_eq!(area_home.key, "2026/20261017.md");
+    assert_eq!(area_home.root_parent, "2026/20261017.md");
     assert_eq!(
         resolver.resolve_note(Path::new("2026/2026-10-17.md")).key,
         "2026/2026-10-17.md"
+    );
+    // Without an area or project, a daily-note task is unfiled.
+    assert_eq!(
+        resolver.resolve_note(Path::new("2026/20261018.md")).key,
+        "@unfiled"
     );
 }
 
@@ -695,7 +700,6 @@ fn evaluate_case<S: HomeSource>(
                 &links,
                 entry.state == PomodoroState::Completed,
                 minutes,
-                &case.exempt,
                 &case.daily_path,
                 &mut resolver,
             );

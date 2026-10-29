@@ -13,7 +13,7 @@ use chrono::NaiveDate;
 use super::{
     error::StatsError,
     formula::evaluate_formula,
-    homes::{default_exempt, label_parts, HomesEngine},
+    homes::{label_parts, HomesEngine},
     index::StatsIndex,
     journal::evaluate_journal,
     metrics::{effective_since, evaluate_with_homes, MetricEvaluation},
@@ -28,7 +28,7 @@ use super::{
         build_metric_series, lead_in_start, resolve_range, ResolvedRange,
     },
 };
-use crate::native::config::{load_plan_config, load_stats_config};
+use crate::native::config::load_stats_config;
 use crate::native::{
     plan_budget::normalize_component,
     pomodoro_themes::{Catalog as ThemeCatalog, ThemeRef},
@@ -57,10 +57,7 @@ pub(crate) fn compute(
     let selected = registry.select(&request.selection)?;
     let ordered = evaluation_set(&registry, &selected);
     let index = StatsIndex::read(&request.vault, request.now)?;
-    let exempt = load_plan_config(&request.config)
-        .map(|plan| plan.exempt().to_vec())
-        .unwrap_or_else(|_| default_exempt());
-    let homes = HomesEngine::new(&index, &exempt);
+    let homes = HomesEngine::new(&index);
 
     // Probe pass over an empty date span: tracking starts are index-derived,
     // so this yields every metric's inferred since without any daily values.
@@ -1126,17 +1123,14 @@ mod tests {
         assert_eq!(keep.warnings.len(), 1);
         assert_eq!(keep.warnings[0].code, "journal_gap");
 
-        // M10 review_time: review sessions only. The Oct 9 PLAN + SASE
-        // composite is not a review session, so it no longer counts;
-        // SASE-only today is a provisional zero rather than missing.
+        // M10 review_time: minutes attributed to tasks in, or rooted at,
+        // gtd_daily. The Oct 9 PLAN rows carry no Task Links, so they are
+        // unlinked and never match `in:`; the whole window reads zero.
         let review_time = metric(&report, "review_time");
         assert_eq!(review_time.since, Some(day(9)));
         assert_eq!(
-            review_time
-                .parameters
-                .as_ref()
-                .and_then(|p| p.review.as_deref()),
-            Some("only")
+            review_time.parameters.as_ref().map(|p| p.in_notes.clone()),
+            Some(vec!["gtd_daily".to_string()])
         );
         assert!(review_time
             .parameters
@@ -1152,7 +1146,7 @@ mod tests {
         expect_point(
             &review_time.points[1],
             day(9),
-            Some(25),
+            Some(0),
             DataQuality::Ok,
             false,
         );
@@ -1170,11 +1164,11 @@ mod tests {
             DataQuality::Ok,
             true,
         );
-        assert_eq!(review_time.summary.headline.value, Some(13));
-        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
-        assert_eq!(review_time.summary.mean, Some(13));
-        assert_eq!(review_time.summary.p25, Some(6));
-        assert_eq!(review_time.summary.p75, Some(19));
+        assert_eq!(review_time.summary.headline.value, Some(0));
+        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(0));
+        assert_eq!(review_time.summary.mean, Some(0));
+        assert_eq!(review_time.summary.p25, Some(0));
+        assert_eq!(review_time.summary.p75, Some(0));
 
         assert_eq!(report.sessions.len(), 3);
         assert_eq!(report.sessions[0].name.as_deref(), Some("PLAN"));

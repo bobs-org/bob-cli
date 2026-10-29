@@ -27,7 +27,7 @@ const COMMAND: &str = "bob themes suggest";
 pub(crate) fn build_cli() -> Command {
     Command::new(COMMAND)
         .about("Explain the suggested theme for a task or capture route")
-        .long_about("Explain a task's suggested Pomodoro theme without changing the vault.\n\nUse route:block-id for an existing task, or a bare route for a new task's\ndefault. Task fields take precedence over reading, daily review, and note\ndefaults. Hidden and unknown themes are reported; closed tasks have no suggestion.")
+        .long_about("Explain a task's suggested Pomodoro theme without changing the vault.\n\nUse route:block-id for an existing task, or a bare route for a new task's\ndefault. Task fields take precedence over reading and note\ndefaults. Hidden and unknown themes are reported; closed tasks have no suggestion.")
         .disable_help_flag(true)
         .arg(Arg::new("target").value_name("TARGET").required(true)
             .help("Capture route or route:block-id (without @ or ^)"))
