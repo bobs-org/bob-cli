@@ -348,13 +348,13 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     fs::create_dir_all(&cache).unwrap();
     write_file(
         &vault.join("work.md"),
-        "- [ ] Ship it #task ^a\n  - 🪢 **LINKS:** duplicate of [[other#^x]]\n",
+        "- [ ] Ship it #task ^a\n  - 🪢 **LINKS:** duplicate of [[other#^x]] · implemented by [[other#^x]]\n",
     );
     write_file(&vault.join("other.md"), "- [ ] Other #task ^x\n");
     let config = cache.join("config.yml");
     write_file(
         &config,
-        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n",
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - superseded by\n  complete_labels:\n    - implemented by\n    - verified by\n",
     );
     let mut json_command = relations_command(&vault, &cache);
     json_command.env("BOB_CONFIG_FILE", &config).args([
@@ -367,6 +367,7 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
     assert_eq!(value["cancel_labels"], 2);
+    assert_eq!(value["complete_labels"], 2);
     let labels = value["labels"].as_array().expect("labels");
     // The used cancel label carries the flag without `configured`.
     let used = labels
@@ -375,6 +376,12 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
         .expect("used cancel row");
     assert_eq!(used["cancels_source"], true);
     assert!(used.get("configured").is_none());
+    let used_complete = labels
+        .iter()
+        .find(|row| row["key"] == "implemented by")
+        .expect("used complete row");
+    assert_eq!(used_complete["completes_source"], true);
+    assert!(used_complete.get("configured").is_none());
     // The default list excludes the zero-use configured label.
     assert!(!labels.iter().any(|row| row["key"] == "superseded by"));
 
@@ -396,6 +403,15 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     assert_eq!(overlay["cancels_source"], true);
     assert_eq!(overlay["configured"], true);
     assert_eq!(overlay["count"], 0);
+    let complete_overlay = value["labels"]
+        .as_array()
+        .expect("labels")
+        .iter()
+        .find(|row| row["key"] == "verified by")
+        .expect("complete overlay row");
+    assert_eq!(complete_overlay["completes_source"], true);
+    assert_eq!(complete_overlay["configured"], true);
+    assert_eq!(complete_overlay["count"], 0);
 
     // The human header counts cancel labels and rows name the cue.
     let human = relations_command(&vault, &cache)
@@ -406,7 +422,9 @@ fn relations_list_marks_cancel_labels_and_overlays_zero_use_configured() {
     assert_success(&human);
     let text = stdout(&human);
     assert!(text.contains("2 cancel"), "header:\n{text}");
+    assert!(text.contains("2 complete"), "header:\n{text}");
     assert!(text.contains("⊘ cancels source"), "row cue:\n{text}");
+    assert!(text.contains("✓ completes source"), "row cue:\n{text}");
 }
 
 #[test]
@@ -419,7 +437,7 @@ fn relations_list_warns_once_for_invalid_cancel_config() {
     let config = cache.join("config.yml");
     write_file(
         &config,
-        "relations:\n  cancel_labels:\n    - duplicate of\n    - 42\n",
+        "relations:\n  cancel_labels:\n    - duplicate of\n    - 42\n  complete_labels:\n    - duplicate of\n    - verified by\n    - 42\n",
     );
     let output = relations_command(&vault, &cache)
         .env("BOB_CONFIG_FILE", &config)
@@ -430,11 +448,20 @@ fn relations_list_warns_once_for_invalid_cancel_config() {
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
     let warnings = value["warnings"].as_array().expect("warnings");
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0]
-        .as_str()
-        .expect("warning text")
-        .contains("relations.cancel_labels"));
+    assert_eq!(warnings.len(), 3, "{warnings:?}");
+    let warning_text = warnings
+        .iter()
+        .map(|warning| warning.as_str().expect("warning text"))
+        .collect::<Vec<_>>();
+    assert!(warning_text
+        .iter()
+        .any(|warning| { warning.contains("relations.cancel_labels") }));
+    assert!(warning_text
+        .iter()
+        .any(|warning| { warning.contains("relations.complete_labels") }));
+    assert!(warning_text.iter().any(|warning| {
+        warning.contains("both cancel_labels and complete_labels")
+    }));
 
     let human = relations_command(&vault, &cache)
         .env("BOB_CONFIG_FILE", &config)
@@ -443,9 +470,15 @@ fn relations_list_warns_once_for_invalid_cancel_config() {
         .expect("warn list human");
     assert_success(&human);
     let errors = stderr(&human);
-    assert_eq!(
-        errors.matches("relations.cancel_labels").count(),
-        1,
-        "warning prints once:\n{errors}"
-    );
+    for expected in [
+        "relations.cancel_labels",
+        "relations.complete_labels",
+        "both cancel_labels and complete_labels",
+    ] {
+        assert_eq!(
+            errors.matches(expected).count(),
+            1,
+            "{expected} warning prints once:\n{errors}"
+        );
+    }
 }

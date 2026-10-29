@@ -352,7 +352,7 @@ fn prepare_from_matches(
 
 /// Best-effort cancel-label policy: a broken config never fails the
 /// rename plan. Warnings surface through the report instead.
-fn load_cancel_policy() -> bob_config::RelationsConfig {
+fn load_close_policy() -> bob_config::RelationsConfig {
     match bob_config::load_relations_config(&bob_config::config_path()) {
         Ok(loaded) => loaded,
         Err(error) => bob_config::RelationsConfig {
@@ -360,7 +360,7 @@ fn load_cancel_policy() -> bob_config::RelationsConfig {
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; cancelling nothing"
+                "invalid relations config: {error}; closing nothing"
             )],
         },
     }
@@ -421,9 +421,9 @@ fn plan_rename(
     let mut total_mirrors = 0usize;
     let mut done_links = 0usize;
     let mut done_notes = 0usize;
-    let cancel_policy = load_cancel_policy();
+    let close_policy = load_close_policy();
     let mut warnings = catalog.warnings().to_vec();
-    warnings.extend(cancel_policy.warnings.iter().cloned());
+    warnings.extend(close_policy.warnings.iter().cloned());
     for relative in paths {
         let absolute = vault.join(&relative);
         let path = display_relative(&relative);
@@ -516,14 +516,24 @@ fn plan_rename(
     // Renaming into or out of a cancel label never cancels; the
     // preview warns that the config needs updating (CL6). The write
     // path reuses this planned preview, so apply warns too.
-    if cancel_policy.is_cancel_label(&old_key) {
+    if close_policy.is_cancel_label(&old_key) {
         warnings.push(format!(
             "“{old_display}” is a cancel label in config.yml — update relations.cancel_labels"
         ));
     }
-    if new_key != old_key && cancel_policy.is_cancel_label(&new_key) {
+    if new_key != old_key && close_policy.is_cancel_label(&new_key) {
         warnings.push(format!(
             "“{new_name}” is a cancel label in config.yml — update relations.cancel_labels"
+        ));
+    }
+    if close_policy.is_complete_label(&old_key) {
+        warnings.push(format!(
+            "“{old_display}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels"
+        ));
+    }
+    if new_key != old_key && close_policy.is_complete_label(&new_key) {
+        warnings.push(format!(
+            "“{new_name}” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels"
         ));
     }
     let report = RenameReport {

@@ -858,20 +858,18 @@ Every `schema_version` stays 1; JSON grows additively.
   With `relations.cancel_labels` configured the header gains
   `· N cancel`, cancel rows read `N links     ⊘ cancels source`, and
   `-a` lists zero-use configured labels with `configured: true`.
-  Planned (phase `complete-surfaces`): with `relations.complete_labels`
-  configured the header gains `· N complete`, and complete rows read
-  `✓ completes source`.
+  With `relations.complete_labels` configured the header gains
+  `· N complete`, complete rows read `✓ completes source`, and `-a`
+  lists zero-use configured labels with `configured: true`.
 
 - **JSON list:**
   `{schema_version, ok, counts:{labels, links, hidden},
   labels:[{key, name, count, hidden, inverse, spellings,
   replacement, hide_replacement, cancels_source?, completes_source?, configured?}],
-  renamed_reappeared, warnings, cancel_labels?, complete_labels?}`. `cancels_source` is true
-  on configured cancel-label rows; `configured` marks zero-use overlay
-  rows; both are omitted otherwise. `cancel_labels` counts the configured
-  labels and is omitted when none are configured. Planned
-  (phase `complete-surfaces`): `completes_source` and `complete_labels`
-  follow the same omit-when-absent rule.
+  renamed_reappeared, warnings, cancel_labels?, complete_labels?}`.
+  `cancels_source` / `completes_source` are true on configured effect
+  rows; `configured` marks zero-use overlay rows; false fields are omitted.
+  The configured counts are omitted when zero.
   `renamed_reappeared` reports an OLD label used again after its rename;
   it reports the row and never rewrites the new use.
 - **Writers** emit `{schema_version, ok, …}`. Human hide output reads:
@@ -910,7 +908,7 @@ Every `schema_version` stays 1; JSON grows additively.
   `relation_cancels[]`, `cancel_effect`, and the
   `relation_cancelled_source` warning. The `capture`, `capture-parse`,
   `capture-complete`, and `relations list` fields are implemented.
-- **Complete labels** ([§18](#18-complete-labels), planned): additive
+- **Complete labels** ([§18](#18-complete-labels)): additive
   `completes_source` / `configured` row flags, `relation_complete`,
   `relation_completes[]`, `complete_effect`, and the
   `relation_completed_source` warning. Fields are omitted when they
@@ -1536,8 +1534,7 @@ More edge cases:
 
 ### CP6 The indication
 
-*Status: implemented in capture; planned (phase `complete-surfaces`, `nav-complete-cue`,
-`mac-complete-cue`).*
+*Status: implemented in capture; planned (`nav-complete-cue`, `mac-complete-cue`).*
 
 Name the task, change the verb, use ✓, stay calm.
 
@@ -1575,7 +1572,7 @@ note stem, shown only when S is not in the active note (nav), or for
 
 ### CP7 Contracts
 
-*Status: capture fields implemented; planned (phase `complete-surfaces`).*
+*Status: capture fields implemented.*
 
 All additions are additive, every `schema_version` stays 1, and every
 new field is omitted when it does not apply, so output with no

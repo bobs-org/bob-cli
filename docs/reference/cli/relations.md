@@ -95,7 +95,7 @@ List relation labels in the vault (default)
 ```text title="bob relations list --help"
 List the relation-label vocabulary derived from every LINKS entry in the vault: open, closed, done/, daily notes, nested projects, and references. The catalog is read-only: it never writes the vault. Bare `bob relations` runs this command.
 
-By default the list shows visible labels, most-used first. Hidden labels stay out of the default list; they still label their links. Use --all to include every known label, --hidden to show only hidden labels, --query to rank exact/prefix matches before substring matches.
+By default the list shows visible labels, most-used first. Hidden labels stay out of the default list; they still label their links. Use --all to include every known label and zero-use configured closing labels, --hidden to show only hidden labels, --query to rank exact/prefix matches before substring matches. Configured cancel and complete labels are marked on their rows; the header counts each configured effect.
 
 Usage: bob relations list [OPTIONS]
 

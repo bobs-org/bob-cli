@@ -546,6 +546,206 @@ fn cancel_json(value: &CaptureCompleteResult) -> serde_json::Value {
     serde_json::to_value(value).expect("serialize cancel result")
 }
 
+fn write_complete_config(path: &Path) {
+    write_file(
+        path,
+        "relations:\n  complete_labels:\n    - implemented by\n    - verified by\n",
+    );
+}
+
+fn complete_result(
+    bob_dir: &Path,
+    config: &Path,
+    cache: &Path,
+    raw: &str,
+) -> CaptureCompleteResult {
+    let _guard = TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache.as_os_str())),
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+    ]);
+    build_result(bob_dir, raw, raw.len(), false).expect("build complete result")
+}
+
+fn complete_json(value: &CaptureCompleteResult) -> serde_json::Value {
+    serde_json::to_value(value).expect("serialize complete result")
+}
+
+#[test]
+fn complete_overlay_marks_rows_and_reports_source_consequence() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_complete_config(&config);
+
+    let raw = "Use this @cash+sell ~invest:now|implem";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    let overlay = json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["key"] == "implemented by")
+        .expect("configured complete-label overlay");
+    assert_eq!(overlay["completes_source"], true);
+    assert_eq!(overlay["configured"], true);
+    assert_eq!(overlay["replacement"], "|\"implemented by\"");
+    let complete = &json["relation_complete"];
+    assert_eq!(complete["verdict"], "completes");
+    assert_eq!(complete["source"]["path"], "cash.md");
+    assert_eq!(complete["source"]["block_id"], "sell");
+    assert_eq!(complete["source"]["text"], "Sell stocks!");
+    assert_eq!(
+        complete["message"],
+        "✓ Completes “Sell stocks!” · Todo → Done"
+    );
+    assert!(json.get("relation_cancel").is_none());
+    assert!(candidate_lines(&value.candidates, value.context)
+        .iter()
+        .any(|(_, detail)| detail.contains("✓ completes")));
+
+    let _guard = TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache_home.path().as_os_str())),
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+    ]);
+    let shell = shell_completion(temp.path(), raw, raw.len())
+        .expect("shell completion")
+        .expect("complete-label rows");
+    assert!(shell.rows.iter().any(|row| {
+        row.full.contains("implemented by")
+            && row.description.contains("completes source")
+    }));
+
+    write_file(
+        &temp.path().join(".bob/relations/test.jsonl"),
+        "{\"v\":1,\"ts\":\"2026-10-24T09:41:07Z\",\"host\":\"test\",\"kind\":\"relation_label.hide\",\"key\":\"implemented by\",\"name\":\"implemented by\",\"via\":\"test\"}\n",
+    );
+    crate::native::relation_labels::invalidate_scan(temp.path());
+    let hidden_overlay = complete_result(
+        temp.path(),
+        &config,
+        cache_home.path(),
+        "Use this @cash+sell ~invest:now|implem",
+    );
+    let hidden_json = complete_json(&hidden_overlay);
+    assert!(!hidden_json["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["key"] == "implemented by"
+            && row["configured"].as_bool() == Some(true)));
+    let typed_hidden = complete_result(
+        temp.path(),
+        &config,
+        cache_home.path(),
+        "Use this @cash+sell ~invest:now|\"implemented by\"",
+    );
+    let typed_json = complete_json(&typed_hidden);
+    assert!(typed_json["candidates"][0]["hidden"].as_bool().unwrap());
+    assert!(typed_json["candidates"][0]["completes_source"]
+        .as_bool()
+        .unwrap());
+}
+
+#[test]
+fn complete_from_direction_hints_inverses_and_disables_refused_rows() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_complete_config(&config);
+
+    let raw = "Fresh idea ~~invest:now|implements";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    let complete = &json["relation_complete"];
+    assert_eq!(json["relation"]["direction"], "from");
+    assert_eq!(complete["verdict"], "completes");
+    assert_eq!(complete["source"]["path"], "invest.md");
+    assert_eq!(complete["source"]["block_id"], "now");
+    assert_eq!(
+        complete["hint"],
+        "“implements” never completes · to finish “Fresh idea”, use ~~ with “implemented by”"
+    );
+
+    let raw = "Fresh idea ~invest:now|\"implemented by\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert_eq!(json["relation_complete"]["verdict"], "new_task");
+    let typed = &json["candidates"][0];
+    assert_eq!(typed["completes_source"], true);
+    assert!(typed["disabled_reason"]
+        .as_str()
+        .unwrap()
+        .contains("born done"));
+    assert_eq!(typed["replacement"], "");
+
+    let raw = "Use this @invest+weekly ~cash:sell|\"implemented by\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert_eq!(json["relation_complete"]["verdict"], "recurring");
+    assert!(json["candidates"].as_array().unwrap().iter().any(|row| {
+        row["completes_source"] == true
+            && row["disabled_reason"].as_str().is_some_and(|reason| {
+                reason.contains("Tasks writes the next one")
+            })
+            && row["replacement"] == ""
+    }));
+    let _guard = TestEnvGuard::set(&[
+        ("XDG_CACHE_HOME", Some(cache_home.path().as_os_str())),
+        ("BOB_CONFIG_FILE", Some(config.as_os_str())),
+    ]);
+    let shell = shell_completion(temp.path(), raw, raw.len())
+        .expect("shell completion");
+    assert!(shell.is_none_or(|completion| completion
+        .rows
+        .iter()
+        .all(|row| !row.description.contains("completes source"))));
+}
+
+#[test]
+fn complete_project_and_closed_sources_only_report_link_effects() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_complete_config(&config);
+
+    let raw = "Use this @proj+prj ~invest:now|\"implemented by\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert_eq!(json["relation_complete"]["verdict"], "completes");
+    assert_eq!(json["relation_complete"]["source"]["project_open_tasks"], 2);
+    assert_eq!(
+        json["relation_complete"]["message"],
+        "✓ Completes “Big project” · Todo → Done · its 2 open tasks stay open"
+    );
+
+    let raw = "Use this @invest+old ~cash:sell|\"implemented by\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert_eq!(json["relation_complete"]["verdict"], "already_closed");
+    assert_eq!(
+        json["relation_complete"]["message"],
+        "Already Done · link only"
+    );
+}
+
+#[test]
+fn complete_and_cancel_cues_coexist_when_both_policies_are_configured() {
+    let cache_home = tempfile::tempdir().expect("cache home");
+    let temp = cancel_fixture();
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  cancel_labels:\n    - duplicate of\n  complete_labels:\n    - implemented by\n",
+    );
+    let raw = "Use this @cash+sell ~invest:now|\"implemented by\"";
+    let value = complete_result(temp.path(), &config, cache_home.path(), raw);
+    let json = complete_json(&value);
+    assert!(json.get("relation_cancel").is_some(), "{json}");
+    assert!(json.get("relation_complete").is_some(), "{json}");
+    assert!(json["candidates"][0].get("cancels_source").is_none());
+    assert!(json["candidates"][0]["completes_source"].as_bool().unwrap());
+}
+
 #[test]
 fn cancel_overlay_marks_rows_and_reports_cancels_for_to_owner() {
     let cache_home = tempfile::tempdir().expect("cache home");

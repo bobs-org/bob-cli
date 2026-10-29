@@ -248,6 +248,10 @@ pub(super) struct RelationLabelSuggestion {
     /// without cancel labels stay byte-identical.
     #[serde(skip_serializing_if = "is_false")]
     pub(super) cancels_source: bool,
+    /// True when the row's key is a configured complete label
+    /// (`relations.complete_labels`). Omitted otherwise.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) completes_source: bool,
     /// True on zero-use overlay rows synthesized from config (never a
     /// vault use). Omitted when false.
     #[serde(skip_serializing_if = "is_false")]
@@ -267,6 +271,31 @@ pub(super) struct RelationCancel {
     pub(super) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) hint: Option<String>,
+}
+
+/// The complete consequence of the `relation_label` token under the
+/// cursor (`docs/task-relations.md` §18 CP7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationComplete {
+    pub(super) source: RelationCompleteSource,
+    /// `completes` | `already_closed` | `recurring` | `new_task`.
+    pub(super) verdict: &'static str,
+    pub(super) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) hint: Option<String>,
+}
+
+/// The source task a complete label would complete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RelationCompleteSource {
+    pub(super) path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project_open_tasks: Option<usize>,
 }
 
 /// The relation source a cancel label would cancel: vault-relative
@@ -696,6 +725,10 @@ pub(super) struct CaptureCompleteResult {
     /// only in the `relation_label` context.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) relation_cancel: Option<RelationCancel>,
+    /// The complete consequence of a configured complete-label token.
+    /// Present only when complete labels are configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relation_complete: Option<RelationComplete>,
     /// True when the `relation_label` probe sits in a `||` label.
     /// Omitted from every other context and from `|` probes, so older
     /// responses stay byte-identical.
@@ -729,6 +762,7 @@ impl CaptureCompleteResult {
             owner: None,
             relation: None,
             relation_cancel: None,
+            relation_complete: None,
             picker: None,
             hidden_count: None,
             one_off: None,

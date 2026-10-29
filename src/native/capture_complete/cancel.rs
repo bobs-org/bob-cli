@@ -29,7 +29,7 @@ pub(super) fn load_policy() -> config::RelationsConfig {
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; cancelling nothing"
+                "invalid relations config: {error}; closing nothing"
             )],
         },
     }
@@ -163,15 +163,15 @@ fn status_display(source: &ResolvedSource, previous: char) -> String {
     }
 }
 
-struct ResolvedSource {
-    path: String,
-    block_id: Option<String>,
-    text: String,
-    status_symbol: char,
-    status_name: String,
-    project_open_tasks: Option<usize>,
-    raw_line: String,
-    is_new: bool,
+pub(super) struct ResolvedSource {
+    pub(super) path: String,
+    pub(super) block_id: Option<String>,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) project_open_tasks: Option<usize>,
+    pub(super) raw_line: String,
+    pub(super) is_new: bool,
 }
 
 /// The `~` / `~~` token behind the label separator: its direction
@@ -219,7 +219,7 @@ fn unquote_note(note: &str) -> String {
 /// Resolve only the token's source: the item owner for `~`, the `~~`
 /// token's task for `~~`. One note file read, never a vault scan. An
 /// unresolvable source omits `relation_cancel` instead of guessing.
-fn resolve_source(
+pub(super) fn resolve_source(
     bob_dir: &Path,
     raw_text: &str,
     separator: usize,
@@ -264,7 +264,7 @@ fn resolve_source(
 /// Resolve the other end's display text for hints: the `~` token's
 /// target for `~`, the item owner for `~~`. Best effort; callers fall
 /// back to a generic phrase.
-fn resolve_target_text(
+pub(super) fn resolve_target_text(
     bob_dir: &Path,
     raw_text: &str,
     separator: usize,
@@ -367,7 +367,7 @@ fn is_project_source(raw_line: &str, block_id: &str) -> bool {
     block_id == "prj" && raw_line.contains("^prj")
 }
 
-fn status_name_for(bob_dir: &Path, symbol: char) -> String {
+pub(super) fn status_name_for(bob_dir: &Path, symbol: char) -> String {
     let settings = note_tasks::read_settings(bob_dir);
     settings
         .status_definitions

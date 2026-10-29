@@ -127,6 +127,7 @@ fn build_result_inner(
             owner: None,
             relation: None,
             relation_cancel: None,
+            relation_complete: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -202,6 +203,7 @@ fn build_result_inner(
             owner: None,
             relation: None,
             relation_cancel: None,
+            relation_complete: None,
             picker: None,
             hidden_count: None,
             one_off: None,
@@ -211,6 +213,7 @@ fn build_result_inner(
     let editor_item = capture_language::editor_item_at(raw_text, cursor);
     let mut hidden_count = None;
     let mut relation_cancel = None;
+    let mut relation_complete = None;
     // A `||` probe is the `relation_label` context with `one_off`: the
     // scan behind the field already classified the separator, so this
     // never re-lexes the draft.
@@ -425,6 +428,28 @@ fn build_result_inner(
                 }
                 relation_cancel = Some(plan.response);
             }
+            if !policy.complete_labels.is_empty()
+                && let Some(plan) = super::complete::plan_relation_complete(
+                    bob_dir,
+                    raw_text,
+                    field.replacement.0,
+                    editor_item.as_ref(),
+                    &field.query,
+                    &policy,
+                )
+            {
+                if let Candidates::RelationLabel(rows) = &mut candidates
+                    && let Some(reason) = plan.row_disable.as_deref()
+                {
+                    for row in rows.iter_mut() {
+                        if row.completes_source {
+                            row.disabled_reason = Some(reason.to_string());
+                            row.replacement.clear();
+                        }
+                    }
+                }
+                relation_complete = Some(plan.response);
+            }
             (candidates, warnings)
         }
         CompletionContext::WikilinkNote
@@ -532,6 +557,7 @@ fn build_result_inner(
         owner,
         relation,
         relation_cancel,
+        relation_complete,
         picker,
         hidden_count,
         one_off: one_off.then_some(true),

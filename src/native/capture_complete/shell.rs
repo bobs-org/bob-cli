@@ -564,12 +564,31 @@ pub(crate) fn shell_completion(
                     })
                     .is_some_and(|plan| plan.row_disable.is_some())
             };
+            let complete_refused = if policy.complete_labels.is_empty() {
+                false
+            } else {
+                capture_language::editor_item_at(raw_text, cursor)
+                    .and_then(|editor_item| {
+                        super::complete::plan_relation_complete(
+                            bob_dir,
+                            raw_text,
+                            field.replacement.0,
+                            Some(&editor_item),
+                            &field.query,
+                            &policy,
+                        )
+                    })
+                    .is_some_and(|plan| plan.row_disable.is_some())
+            };
             for item in items {
                 if item.disabled_reason.is_some() || item.replacement.is_empty()
                 {
                     continue;
                 }
                 if cancel_refused && item.cancels_source {
+                    continue;
+                }
+                if complete_refused && item.completes_source {
                     continue;
                 }
                 let Some(target_prefix) =
@@ -582,6 +601,9 @@ pub(crate) fn shell_completion(
                     format!("{} links", item.count.unwrap_or_default());
                 if item.cancels_source {
                     description.push_str(" · cancels source");
+                }
+                if item.completes_source {
+                    description.push_str(" · completes source");
                 }
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),

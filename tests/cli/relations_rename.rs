@@ -439,3 +439,55 @@ fn relations_rename_into_and_out_of_cancel_labels_warns_and_never_cancels() {
     git_in(&vault, ["revert", "--no-edit", "HEAD"]);
     assert_eq!(note_snapshot(&vault), before);
 }
+
+#[test]
+fn relations_rename_into_and_out_of_complete_labels_warns_without_completing() {
+    let temp = TempDir::new("bob-cli-relations-rename-complete");
+    let (vault, cache) = seed_vault(temp.path());
+    let config = cache.join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  complete_labels:\n    - old\n    - implemented by\n",
+    );
+    let rename = |args: &[&str]| {
+        relation_command(&vault, &cache)
+            .env("BOB_CONFIG_FILE", &config)
+            .args(["relations", "rename"])
+            .args(args)
+            .args(["-f", "json"])
+            .output()
+            .expect("bob relations rename")
+    };
+
+    let output = rename(&["old", "prompted by", "-d"]);
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("rename preview");
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning.as_str().unwrap().contains(
+            "“old” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels",
+        )
+    }));
+
+    let output = rename(&["old", "implemented by", "-d"]);
+    assert_success(&output);
+    let value: Value =
+        serde_json::from_str(stdout(&output).trim()).expect("rename preview");
+    let warnings = value["warnings"].as_array().expect("warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning.as_str().unwrap().contains(
+            "“implemented by” is a complete label in config.yml · a rename never completes anything — check relations.complete_labels",
+        )
+    }));
+
+    let before = note_snapshot(&vault);
+    let output = rename(&["old", "prompted by", "-o"]);
+    assert_success(&output);
+    let source = fs::read_to_string(vault.join("source.md")).unwrap();
+    assert!(source.contains("- [ ] Source #task ^source"));
+    assert!(!source.contains("[completion::"));
+    assert!(!source.contains("[x] Source #task ^source"));
+    git_in(&vault, ["revert", "--no-edit", "HEAD"]);
+    assert_eq!(note_snapshot(&vault), before);
+}

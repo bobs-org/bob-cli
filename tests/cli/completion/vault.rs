@@ -834,11 +834,11 @@ fn is_empty_dir(directory: &Path) -> bool {
 }
 
 #[test]
-fn relation_label_completion_notes_cancel_consequence() {
+fn relation_label_completion_notes_close_consequences() {
     let fixture = fixture();
     write_file(
         &fixture.vault.join("relations.md"),
-        "- [ ] Source #task ^source\n  - 🪢 **LINKS:** duplicate of [[cash#^buy-milk]] • implements [[cash#^fix-sink]]\n",
+        "- [ ] Source #task ^source\n  - 🪢 **LINKS:** duplicate of [[cash#^buy-milk]] • implemented by [[cash#^fix-sink]] • implements [[cash#^fix-sink]]\n",
     );
     write_file(
         &fixture.config,
@@ -859,6 +859,8 @@ fn relation_label_completion_notes_cancel_consequence() {
             "relations:\n",
             "  cancel_labels:\n",
             "    - duplicate of\n",
+            "  complete_labels:\n",
+            "    - implemented by\n",
         ),
     );
 
@@ -870,6 +872,11 @@ fn relation_label_completion_notes_cancel_consequence() {
         .find(|row| row[0] == "duplicate of")
         .expect("cancel label row");
     assert_eq!(cancel[1], "1 link · cancels source");
+    let complete = all
+        .iter()
+        .find(|row| row[0] == "implemented by")
+        .expect("complete label row");
+    assert_eq!(complete[1], "1 link · completes source");
     let plain = all
         .iter()
         .find(|row| row[0] == "implements")

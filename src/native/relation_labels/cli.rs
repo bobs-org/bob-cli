@@ -63,8 +63,11 @@ and references. The catalog is read-only: it never writes the vault. \
 Bare `bob relations` runs this command.\n\n\
 By default the list shows visible labels, most-used first. Hidden \
 labels stay out of the default list; they still label their links. \
-Use --all to include every known label, --hidden to show only hidden \
-labels, --query to rank exact/prefix matches before substring matches.",
+Use --all to include every known label and zero-use configured closing \
+labels, --hidden to show only hidden \
+labels, --query to rank exact/prefix matches before substring matches. \
+Configured cancel and complete labels are marked on their rows; the header \
+counts each configured effect.",
         )
         .after_help(
             "Examples:\n  \
@@ -212,6 +215,8 @@ struct ListLabel {
     #[serde(skip_serializing_if = "is_false")]
     cancels_source: bool,
     #[serde(skip_serializing_if = "is_false")]
+    completes_source: bool,
+    #[serde(skip_serializing_if = "is_false")]
     configured: bool,
 }
 
@@ -236,6 +241,8 @@ struct ListReport {
     warnings: Vec<String>,
     #[serde(skip_serializing_if = "is_zero")]
     cancel_labels: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    complete_labels: usize,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -253,13 +260,13 @@ fn list_labels(request: &ListRequest) -> Result<ListReport, ListError> {
             request.bob_dir.display()
         ))
     })?;
-    let relations_config = load_cancel_policy();
+    let relations_config = load_close_policy();
     Ok(build_report(request, &catalog, &relations_config))
 }
 
 /// Best-effort cancel-label policy: a broken config never fails the
 /// read-only list. Warnings surface through the report instead.
-fn load_cancel_policy() -> bob_config::RelationsConfig {
+fn load_close_policy() -> bob_config::RelationsConfig {
     match bob_config::load_relations_config(&bob_config::config_path()) {
         Ok(loaded) => loaded,
         Err(error) => bob_config::RelationsConfig {
@@ -267,7 +274,7 @@ fn load_cancel_policy() -> bob_config::RelationsConfig {
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; cancelling nothing"
+                "invalid relations config: {error}; closing nothing"
             )],
         },
     }
@@ -306,6 +313,7 @@ fn build_report(
                 replacement: record.replacement(),
                 hide_replacement: record.hide_replacement(),
                 cancels_source: cancels,
+                completes_source: policy.is_complete_label(&record.key),
                 configured: false,
             }
         })
@@ -325,6 +333,7 @@ fn build_report(
             hidden: catalog.hidden_count(),
         },
         cancel_labels: policy.cancel_labels.len(),
+        complete_labels: policy.complete_labels.len(),
         labels,
         renamed_reappeared: super::rename::renamed_reappeared(
             &request.bob_dir,
@@ -399,6 +408,57 @@ fn append_configured_overlay(
             replacement,
             hide_replacement,
             cancels_source: true,
+            completes_source: false,
+            configured: true,
+        });
+    }
+    let selected_keys: std::collections::BTreeSet<String> =
+        labels.iter().map(|label| label.key.clone()).collect();
+    for complete in &policy.complete_labels {
+        if selected_keys.contains(&complete.key) {
+            continue;
+        }
+        if catalog.get(&complete.key).is_some() {
+            continue;
+        }
+        let hidden = catalog.is_hidden(&complete.key);
+        if request.hidden_only && !hidden {
+            continue;
+        }
+        if !request.all && hidden {
+            continue;
+        }
+        if !query_key.is_empty()
+            && !crate::native::task_relations::label::collapse_label_text(
+                &complete.name,
+            )
+            .to_lowercase()
+            .contains(&query_key)
+        {
+            continue;
+        }
+        let replacement =
+            crate::native::task_relations::label::relation_label_quoted_form(
+                &complete.name,
+            );
+        let hide_replacement =
+            crate::native::task_relations::label::relation_label_hide_form(
+                &complete.name,
+            );
+        labels.push(ListLabel {
+            key: complete.key.clone(),
+            name: complete.name.clone(),
+            count: 0,
+            hidden,
+            inverse: crate::native::task_relations::label::inverse_phrase(
+                &complete.name,
+            )
+            .map(str::to_string),
+            spellings: Vec::new(),
+            replacement,
+            hide_replacement,
+            cancels_source: false,
+            completes_source: true,
             configured: true,
         });
     }
@@ -439,6 +499,13 @@ fn print_human(report: &ListReport) {
             report.cancel_labels,
         ));
     }
+    if report.complete_labels > 0 {
+        counts.push_str(&format!(
+            " {} {} complete",
+            styler.separator(),
+            report.complete_labels,
+        ));
+    }
     println!("{heading}  {counts}");
     if report.labels.is_empty() {
         println!("  (no relation labels)");
@@ -459,6 +526,9 @@ fn print_human(report: &ListReport) {
             };
             if label.cancels_source {
                 meta.push_str("     ⊘ cancels source");
+            }
+            if label.completes_source {
+                meta.push_str("     ✓ completes source");
             }
             if let Some(inverse) = label.inverse.as_deref() {
                 meta.push_str(&format!("     ⇄ {inverse}"));

@@ -358,13 +358,18 @@ pub(super) fn relation_label_line(
     } else {
         ""
     };
+    let completes_suffix = if item.completes_source {
+        " · ✓ completes"
+    } else {
+        ""
+    };
     let detail = if let Some(reason) = &item.disabled_reason {
-        format!("typed label · {reason}{cancels_suffix}")
+        format!("typed label · {reason}{cancels_suffix}{completes_suffix}")
     } else if item.typed {
-        format!("typed label · canonical spelling{cancels_suffix}")
+        format!("typed label · canonical spelling{cancels_suffix}{completes_suffix}")
     } else {
         format!(
-            "{} use{}{cancels_suffix}",
+            "{} use{}{cancels_suffix}{completes_suffix}",
             item.count.unwrap_or_default(),
             if item.count == Some(1) { "" } else { "s" }
         )

@@ -453,3 +453,56 @@ fn relation_label_spans_flag_configured_cancel_labels() {
         bare["spans"]
     );
 }
+
+#[test]
+fn relation_label_spans_flag_configured_complete_labels() {
+    let temp = TempDir::new("bob-cli-capture-parse-complete-spans");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "relations:\n  complete_labels:\n    - implemented by\n",
+    );
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Fix trip ~work:foo|\"implemented by\" ~work:bar|see")
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("run capture-parse complete spans");
+    assert_success(&parsed);
+    assert!(stderr(&parsed).is_empty());
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&parsed).trim()).expect("parse JSON");
+    let spans = json["spans"].as_array().expect("spans");
+    let complete = spans
+        .iter()
+        .find(|span| {
+            span["kind"] == "relation_label"
+                && json["input"].as_str().unwrap().get(
+                    span["start"].as_u64().unwrap() as usize
+                        ..span["end"].as_u64().unwrap() as usize,
+                ) == Some("implemented by")
+        })
+        .expect("complete label span");
+    assert_eq!(complete["completes_source"], true);
+    let plain = spans
+        .iter()
+        .find(|span| {
+            span["kind"] == "relation_label"
+                && json["input"].as_str().unwrap().get(
+                    span["start"].as_u64().unwrap() as usize
+                        ..span["end"].as_u64().unwrap() as usize,
+                ) == Some("see")
+        })
+        .expect("plain label span");
+    assert!(plain.get("completes_source").is_none());
+
+    let bare = parse_json("Fix trip ~work:foo|\"implemented by\"");
+    assert!(bare["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|span| { span.get("completes_source").is_none() }));
+}

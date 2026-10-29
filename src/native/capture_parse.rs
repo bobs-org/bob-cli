@@ -62,6 +62,7 @@ pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
             field: span.field,
             themes: span.themes,
             cancels_source: span.cancels_source,
+            completes_source: span.completes_source,
         })
         .collect();
     TemplateProtocolParse { route, spans }
@@ -121,7 +122,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             attach_theme_refs(&mut result, &catalog);
         }
     }
-    for warning in load_cancel_policy().warnings {
+    for warning in load_close_policy().warnings {
         eprintln!("{COMMAND_NAME}: {warning}");
     }
     print_success(&result, output_format);
@@ -403,7 +404,9 @@ an ownerless `~note:block-id` reuses `dependency_target`, and `bob capture` \
 executes recognized `~` / `~~` modifiers through the staged batch writer: it \
 appends or relabels the source task's managed 🪢 LINKS line, mints any block \
 IDs the edge needs, and stages the target's generated 🪢 LINKED FROM mirror; \
-relations never block, consume, promote, or schedule anything. The retired \
+configured cancel and complete relation labels mark their `relation_label` \
+spans with `cancels_source` and `completes_source`. Relations never block, \
+consume, promote, or schedule anything. The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
@@ -740,6 +743,10 @@ pub(crate) struct CaptureParseSpan {
     /// without cancel labels stay byte-identical.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) cancels_source: bool,
+    /// True when a `relation_label` span's label is configured to complete
+    /// its source task (`relations.complete_labels`). Omitted otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) completes_source: bool,
 }
 
 fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
@@ -869,7 +876,9 @@ impl CaptureParseResult {
             parse.spans,
             capture_links::wikilink_spans(&input),
         ));
-        stamp_cancel_spans(&mut spans, &input, &load_cancel_policy());
+        let close_policy = load_close_policy();
+        stamp_cancel_spans(&mut spans, &input, &close_policy);
+        stamp_complete_spans(&mut spans, &input, &close_policy);
         let items = parse_items(&parse.items);
         let ref_parent = ref_parent_for(
             parse.mode,
@@ -1150,7 +1159,9 @@ impl CaptureParseResult {
             &analysis,
             &row_summaries,
         );
-        stamp_cancel_spans(&mut spans, &masked, &load_cancel_policy());
+        let close_policy = load_close_policy();
+        stamp_cancel_spans(&mut spans, &masked, &close_policy);
+        stamp_complete_spans(&mut spans, &masked, &close_policy);
 
         let mut diagnostics = analysis
             .issues
@@ -1357,7 +1368,7 @@ fn relation_grammar_for(input: &str) -> Option<u8> {
 
 /// Best-effort cancel-label policy for span flags: a broken config
 /// means fewer flags, never a failed parse.
-fn load_cancel_policy() -> crate::native::config::RelationsConfig {
+fn load_close_policy() -> crate::native::config::RelationsConfig {
     match crate::native::config::load_relations_config(
         &crate::native::config::config_path(),
     ) {
@@ -1367,9 +1378,35 @@ fn load_cancel_policy() -> crate::native::config::RelationsConfig {
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: vec![format!(
-                "invalid relations config: {error}; cancelling nothing"
+                "invalid relations config: {error}; closing nothing"
             )],
         },
+    }
+}
+
+/// Mark `relation_label` spans whose label is configured to complete the
+/// source. Omitted (false) everywhere else.
+fn stamp_complete_spans(
+    spans: &mut [CaptureParseSpan],
+    input: &str,
+    policy: &crate::native::config::RelationsConfig,
+) {
+    if policy.complete_labels.is_empty() {
+        return;
+    }
+    for span in spans.iter_mut() {
+        if span.kind != crate::native::capture_language::SpanKind::RelationLabel
+        {
+            continue;
+        }
+        let Some(text) = input.get(span.start..span.end) else {
+            continue;
+        };
+        if policy.is_complete_label(
+            &crate::native::relation_labels::relation_label_key(text),
+        ) {
+            span.completes_source = true;
+        }
     }
 }
 
@@ -1410,6 +1447,7 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             field: None,
             themes: Vec::new(),
             cancels_source: false,
+            completes_source: false,
         })
         .collect()
 }
@@ -1500,6 +1538,7 @@ fn template_spans(
                     field: None,
                     themes: Vec::new(),
                     cancels_source: false,
+                    completes_source: false,
                 });
             }
             cursor = cursor.max(placeholder.range.end);
@@ -1512,6 +1551,7 @@ fn template_spans(
                 field: None,
                 themes: Vec::new(),
                 cancels_source: false,
+                completes_source: false,
             });
         }
     }
@@ -1524,6 +1564,7 @@ fn template_spans(
             field: None,
             themes: Vec::new(),
             cancels_source: false,
+            completes_source: false,
         });
     }
     result.extend(analysis.placeholders.iter().map(|placeholder| {
@@ -1534,6 +1575,7 @@ fn template_spans(
             field: Some(placeholder.field),
             themes: Vec::new(),
             cancels_source: false,
+            completes_source: false,
         }
     }));
     result.extend(rows.iter().flat_map(|row| {
@@ -1544,6 +1586,7 @@ fn template_spans(
             field: Some(field.field),
             themes: Vec::new(),
             cancels_source: false,
+            completes_source: false,
         })
     }));
     result.sort_by_key(|span| (span.start, span.end));
