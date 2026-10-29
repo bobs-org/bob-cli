@@ -75,6 +75,7 @@ capturing](add-prerequisites.md) when one task must finish before another.
 ## Related
 
 - [Task relations](../task-relations.md)
+- [See which tasks mention a task](see-task-mentions.md)
 - [Capture syntax](../reference/capture-syntax.md#tilde-link)
 - [Projects and dependencies](../concepts/projects-and-dependencies.md)
 - [Capture a task from anywhere on your Mac](capture-from-your-mac.md)

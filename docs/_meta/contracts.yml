@@ -75,7 +75,7 @@ groups:
         order: 23
         reader: guides/add-prerequisites.md
       - stem: task-relations
-        summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, and `~` / `~~` capture"
+        summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture"
         order: 24
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"

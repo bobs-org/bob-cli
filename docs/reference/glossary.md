@@ -377,7 +377,20 @@ The local calendar date a human last confirmed that an open task still needs doi
 
 *Aliases: task block link.*
 
-A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s. Entries on a task's 🪢 **LINKS:** / 🪢 **LINKED FROM:** lines are [Task Relation](#task-relation)s, never Pomodoro Task Links.
+A block link to an Obsidian task. These can be located anywhere but, when they are the only contents of a sub-bullet on a pomodoro, they are treated as logged/planned tasks for that pomodoro. Task Links on a task's Depends-On line are [Task Dependency Link](#task-dependency-link)s. LINKS entries are [Task Relation](#task-relation)s, and LINKED FROM entries are relations or [Task Mention](#task-mention)s; none is ever a Pomodoro Task Link.
+
+### Task Mention {#task-mention}
+
+*Aliases: mention, text mention.*
+
+An inert, derived back-reference from one task's own text to another. When
+task S's title, a note under it, or a Cancel / Schedule / Work / Rotten Log
+entry contains a block [Task Link](#task-link) to task T (`[[note#^id]]`, including
+embeds and struck links), Bob stores `[[S]] (💬 mentions)` on T's generated
+🪢 **LINKED FROM:** line. A mention is not a [Task Relation](#task-relation): it has no
+label and no gestures, it is never a closing label, and it never enters the
+label catalog. Nothing is written on S except a silent `^id`. A dependency
+or an authored relation on the pair wins. See `docs/task-relations.md` §19.
 
 ### Task Relation {#task-relation}
 
@@ -387,7 +400,8 @@ A block link to an Obsidian task. These can be located anywhere but, when they a
 
 A directed, optionally labelled, inert link from one task to another. It is authored on
 the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
-**LINKED FROM:** line. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
+**LINKED FROM:** line. The generated LINKED FROM line also lists [Task Mention](#task-mention)s
+(`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [Task Link](#task-link): it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.
 The status exceptions are committing a configured cancel label through capture or

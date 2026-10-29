@@ -149,11 +149,14 @@ See [task dependency links](../task-dependencies.md#14-blocks-lines).
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `relations.linked_from_lines` | Boolean | `true` | Write `🪢 LINKED FROM` mirrors ([task relations](../task-relations.md)). `false` removes every LINKED FROM line on writable tasks, mints nothing, and leaves LINKS alone. |
+| `relations.linked_from_mentions` | Boolean | `false` | Write inert `(💬 mentions)` entries on LINKED FROM for block links in a task's own text ([text mentions](../task-relations.md#19-text-mentions)). `false` removes only those entries on writable tasks, deleting a line left empty, and mints nothing for mentions. |
 | `relations.cancel_labels` | List of relation labels | `[]` | Committing a link with one of these labels also cancels the source task ([cancel labels](../task-relations.md#17-cancel-labels)). Matched by `relation_label_key` (case, spacing, and a trailing colon ignored). Empty cancels nothing. |
 | `relations.complete_labels` | List of relation labels | `[]` | Committing a link with one of these labels also completes (marks Done) the source task ([complete labels](../task-relations.md#18-complete-labels)). Matched like `cancel_labels`. Empty completes nothing. |
 
 An invalid `relations.linked_from_lines` value falls back to `true` and
-warns. See [Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
+warns. An invalid `relations.linked_from_mentions` value falls back to
+`false` and warns, in the same wording pattern. See
+[Task relations](../task-relations.md#12-kill-switch-outputs-and-warnings).
 
 `relations.cancel_labels` fails toward fewer cancels: a missing key,
 `null`, or `[]` is a valid empty policy; a non-list value warns and

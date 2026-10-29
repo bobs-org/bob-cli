@@ -6,11 +6,12 @@ Mac Capture (`~` / `~~`) and from the Obsidian Task Card (`l` /
 task filter flips Links to ↔ Linked from in place and keeps the filter
 text. The relation is authored once on the source's
 `🪢 **LINKS:**` line, and a generated `🪢 **LINKED FROM:**` line on
-the target always converges to it. Live chips render both ends
-correctly, and relations never block, promote, consume, schedule,
-stamp, or route anything. The exceptions are the commit-time
-cancel of [§17](#17-cancel-labels) and the commit-time complete of
-[§18](#18-complete-labels).
+the target always converges to it. That same LINKED FROM line also
+lists inert text mentions ([§19](#19-text-mentions)). Live chips
+render both ends correctly, and relations never block, promote,
+consume, schedule, stamp, or route anything. The exceptions are the
+commit-time cancel of [§17](#17-cancel-labels) and the commit-time
+complete of [§18](#18-complete-labels).
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_relations/` (LINKS and LINKED FROM parsers, label
@@ -31,9 +32,15 @@ vector, fix this doc first in the same change.
 - **LINKS line**: the single managed direct-child line that holds a
   task's outgoing relations: `🪢 **LINKS:**`.
 - **LINKED FROM line**: the single generated direct-child line that
-  mirrors the relations pointing at a task:
-  `🪢 **LINKED FROM:**`. Reconcile owns it; nothing reads it back as
-  input.
+  mirrors the relations pointing at a task, and the inert text
+  mentions of it: `🪢 **LINKED FROM:**`. Reconcile owns it; nothing
+  reads it back as input.
+- **Task mention** (or **mention**): an inert, derived back-reference.
+  Task S's own text contains a block link to task T. It is stored on
+  T's LINKED FROM line as `[[S]] (💬 mentions)`, which reads "S
+  mentions this". A mention is **not a relation**. It has no label
+  and no gestures, it is never a closing label, and it never enters
+  the label catalog. See [§19](#19-text-mentions).
 - **Relation label** (or **label**): optional free text phrased from
   the source's side, such as `follow-up of`. Writers trim it,
   collapse inner whitespace, strip one trailing `:`, and keep the
@@ -55,8 +62,9 @@ vector, fix this doc first in the same change.
 - **Closing label**: a cancel label or a complete label. One label
   carries at most one effect.
 - **Task Link** keeps its glossary meaning: a block link to an
-  Obsidian task. Entries on a LINKS line are block links to tasks,
-  but they are **never** Pomodoro Task Links.
+  Obsidian task. LINKS entries are task relations, and LINKED FROM
+  entries are relations or task mentions; none is ever a Pomodoro
+  Task Link.
 
 Navigation has two symmetric writers: the Links stage (writes S's
 LINKS line) and the Linked-from stage (writes other tasks' LINKS
@@ -122,6 +130,9 @@ runs to one space, strip a trailing `:`, and require 1–40 characters.
 - It may not start with `·` or `,`.
 - Case is preserved. Suggestions dedupe case-insensitively.
 - Readers accept any length that obeys the character rules.
+- **Reserved `💬` (U+1F4AC).** A label may not start with `💬` except
+  the exact stored mention spelling `💬 mentions` on LINKED FROM,
+  after the usual collapse. See [§19](#19-text-mentions).
 
 ### 3.3 Parse algorithm
 
@@ -160,7 +171,18 @@ Writers canonicalise all of these:
 - Text after the last link;
 - a label that breaks the character rules;
 - a half-typed link, a bare note link, or a heading link;
-- separators only.
+- separators only;
+- on LINKS, any `💬…` label;
+- on LINKED FROM, any `💬…` label other than exactly `💬 mentions`
+  (after collapse).
+
+A `💬…` label on LINKS is warned about and left untouched, as any
+other malformed label. Every authored writer refuses a `💬…` label
+with `💬 is reserved for text mentions`. That covers capture `|` /
+`||`, the nav Links and Linked-from stage label fields,
+`bob relations rename` / `hide` / `unhide` / `reverse`, and
+`relations.cancel_labels` / `complete_labels` (an invalid entry is
+warned about and dropped).
 
 A malformed line is left untouched and warned about
 (`malformed_links_line` / `malformed_linked_from_line`). Writers never
@@ -245,13 +267,22 @@ not-a-line for the others' lines (LK19, MC15).
 ## 6. The LINKED FROM projection
 
 ```text
-sources   = #task lines with a LINKS line in: active notes (writable)
+sources   = #task lines with a LINKS line or a mention occurrence in:
+            active notes (writable)
             ∪ the previous daily note (read-only) ∪ every .md under done/ (read-only)
 edges     = { (S, T, label) : an entry on S's LINKS resolves to #task T ∧ T ≠ S }
             (unresolved, non-task, self, and malformed are warned and omitted; never pruned from LINKS)
-mirror(T) = sort_canonical({ (S, label) : (S, T, label) ∈ edges })
+pairs(T)  = { S : S's own text holds ≥ 1 occurrence of T under M1–M6, S ≠ T }
+mirror(T) = sort_canonical( { (S, label) : (S, T, label) ∈ edges }
+                          ∪ { (S, "💬 mentions") : S ∈ pairs(T)
+                                ∧ no dependency joins (S, T)
+                                ∧ S has no relation entry for T } )
 T owns a LINKED FROM line ⇔ mirror(T) ≠ ∅ ∧ T is writable (not done/, not the previous daily note)
 ```
+
+Mention occurrences follow M1–M8 in [§19](#19-text-mentions). Storage
+is never grouped; only the chips group. The sort order is the existing
+canonical BK21 order.
 
 - **Open or closed T** gets a maintained mirror. Unlike BLOCKS, it
   never freezes.
@@ -259,11 +290,11 @@ T owns a LINKED FROM line ⇔ mirror(T) ≠ ∅ ∧ T is writable (not done/, no
   S's note has duplicate block ids, existing LINKED FROM entries
   naming S are kept and S is never newly added.
 - **The `done/` read is narrow.** Byte-prefilter every `done/**/*.md`
-  for `LINKS`, parse only those files, and never write there during
-  reconcile. The explicit rename exception below changes label spans
-  only.
-  Document it beside the exact-`done/`-target exception in
-  `docs/task-status-hooks.md`.
+  for `LINKS`, and when mentions are enabled also admit notes that
+  contain both `#task` and `#^`. Parse only those files, and never
+  write there during reconcile. The explicit rename exception below
+  changes label spans only. Document it beside the exact-`done/`-target
+  exception in `docs/task-status-hooks.md`.
 - **Rename exception (LR7).** `bob relations rename` rewrites matching
   label spans in `LINKS` and `LINKED FROM`, including `done/` and the
   previous daily note. It preserves each edge and every other byte;
@@ -283,11 +314,15 @@ failed follow-ups are repaired by reconcile.
    `task_status_hooks/relations.rs`. It runs right after
    `reconcile_blocks_lines`, over the re-parsed text, with the same
    structure.
-2. **Owners to check:** every T with mirror(T) ≠ ∅, plus every
-   writable task that already has a LINKED FROM child.
-   Byte-prefilter for `LINKED FROM` / `BACKLINKS`; never walk every
-   task's children.
-3. **Steps for each owner:** mint missing source ids, render against
+2. **Owners to check:** every T with mirror(T) ≠ ∅, including
+   mention pairs under M7, plus every writable task that already has
+   a LINKED FROM child. Byte-prefilter for `LINKED FROM` /
+   `BACKLINKS`; when mentions are enabled, also admit notes that
+   contain both `#task` and `#^`. Never walk every task's children.
+3. **Steps for each owner:** collect mention pairs per source, apply
+   M7 (relation entries first, then `(link, Some("💬 mentions"))` only
+   for identities still absent), mint missing source ids whose entry
+   will be stored (mention mints included, under LR5), render against
    the post-mint state, then call the cli-core mirror planner with
    the desired entries:
 
@@ -313,6 +348,8 @@ failed follow-ups are repaired by reconcile.
 | capture `~` / `~~` (CLI and Bob Mac Capture through bob) | S's LINKS edit, any minted ids, and T's LINKED FROM edit go into **one staged batch** via the cli-core delta planner. A skipped mirror (archived or previous-daily T, a malformed mirror, or the kill switch) is reported, never fatal. |
 | nav Links / Linked-from stages, chip ×, Ctrl+D, api `removeLink` | Same note: one transaction, one Ctrl+Z. Cross note: S commits first, then a best-effort follow-up per touched T (open editor with the relations machine-write annotation, else a preimage-checked `vault.process`). On failure the notice gains `· 🪢 LINKED FROM not updated`, and nothing rolls back. |
 | nav hand-edit mirror (cursor leaves an edited LINKS line; undo re-arms) | Diff the burst baseline's (target, label) set against the final set, then mirror the difference as follow-ups. |
+| nav mention courtesy write | When the cursor leaves an edited line and the note's mention pairs changed, write T's LINKED FROM. Same note: one transaction with any S mint. Cross-note: preimage-checked follow-up. Silent on success and failure. Diffs the whole note's pairs, not one owner's subtree. |
+| capture mention mirror | A capture whose written notes change mention pairs stages T's LINKED FROM entry and S's mint in the same all-or-nothing batch. A draft with no task block links produces byte-identical output to today. |
 | Hand edit of LINKED FROM | Never an edge change. A notice appears once per burst, and reconcile restores the line. |
 | Ctrl+Shift+M, `bob task move`, `bob task archive`, Obsidian rename | The LINKS line moves with its task, and generic link rebasing applies. Reconcile re-sorts and repairs the mirrors. |
 | Closes, cancels, reopens | None. Lifecycle events never write or remove a relation. |
@@ -332,8 +369,9 @@ Writes stamp nothing.
 | Ctrl+Shift+L / Ctrl+Shift+Alt+L | Act on the owning task, never the chip under the cursor | Same |
 | `!` / `N!`, Ctrl+Shift+Enter | Refused: `🪢 LINKS entries are relations, not Task Links · edit them with Ctrl+Shift+L` | Refused with the generated-line notice |
 | Ctrl+Enter / Alt+] / Alt+[ on a link | Acts on the linked task root-only (no strike, re-embed, tree close, or reformat), as on dependency lines | Same |
-| Hand edit | Mirrored when the cursor leaves the line | `🪢 LINKED FROM is generated from other tasks' LINKS lines · change it with Ctrl+Shift+Alt+L` once per burst |
+| Hand edit | Mirrored when the cursor leaves the line | `🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L` once per burst |
 | Ctrl+D on the Task Card row | Links to: removes every outgoing link and its mirror entries | Linked from: refused with the generated-line notice |
+| Chip × / stage remove on a mention entry | n/a | Refused: `💬 This comes from a link in ‹S›'s text · edit it there (↵ opens it)`. A mixed pair's × removes only the relation; nav then downgrades the entry to a mention. |
 
 On a dedicated Task Link bullet, Ctrl+Shift+L / Ctrl+Shift+Alt+L act on the linked task, opening its note first (LG18).
 
@@ -356,11 +394,16 @@ Chips render a live relation index (§11), never the stored mirror.
     wrap between chips. Chips never change line height.
 - **Stale and broken.** A stored LINKED FROM entry that is no longer
   live is dashed, with the tooltip `No longer links here · refreshes
-  on the next reconcile`. A live edge missing from the text is
-  appended in canonical order. A LINKS entry whose target cannot be
-  resolved is a dashed `⚠ ^id not found`.
+  on the next reconcile`. A stored mention that is no longer live
+  uses the same dashed style, with
+  `No longer mentioned here · refreshes on the next reconcile`. A
+  live edge missing from the text is appended in canonical order. A
+  LINKS entry whose target cannot be resolved is a dashed
+  `⚠ ^id not found`.
 - **Collapse.** Three or more closed chips on a row collapse to
-  `✓×N`, which expands on click.
+  `✓×N`, which expands on click. The LC9 collapse applies per group
+  once mentions are present. More than five open mentions show the
+  first five plus a `+N more` toggle.
 - **Controls** (only when nav `api.relations?.version >= 1`):
   - a trailing ＋ on LINKS (aria "Link this task to another") opens
     the Links stage;
@@ -368,8 +411,16 @@ Chips render a live relation index (§11), never the stored mirror.
     here") opens the Linked-from stage;
   - a hover × on each live LINKS chip (aria "Unlink ‹name›") removes
     the link;
-  - a hover × on each live LINKED FROM chip (aria "Remove the link
-    from ‹name›") calls `removeLink(S, T)`. The notice names S's note.
+  - a hover × on each live relation LINKED FROM chip (aria "Remove
+    the link from ‹name›") calls `removeLink(S, T)`. The notice
+    names S's note. Mention chips have **no ×**.
+- **Mentions** on LINKED FROM ([§19](#19-text-mentions)): relations
+  come first, then a hairline dotted divider, then one visual row per
+  mention (`💬 mentioned in` / `💬 embedded in` pill, chip, optional
+  quote, context card). A row that holds only mentions has no
+  divider. Mixed pairs keep the relation chip and add a trailing
+  `💬`. Embed-echo hides `embedded in` entries whose source note is
+  the transclusion host.
 - **Toggle.** `toggle-dependency-chips` covers both relation rows too.
 - **Without the plugin**, both lines still read as English.
 
@@ -391,12 +442,14 @@ The nav Linked-from stage's CURRENT rows use the same table.
 ## 11. The live relation index
 
 bob-ledger-tools keeps a raw-text relation index and publishes it as
-`api.relationIndex` v1:
+`api.relationIndex` v2:
 
 - **Startup scan.** A chunked, generation-guarded scan with a cheap
   prefilter: skip files whose metadata cache has no `#^` block links,
   then text-prefilter for `🪢`, `**LINKS`, `**LINKED FROM`, or
-  `**BACKLINKS`. The scan includes `done/`, as read-only sources.
+  `**BACKLINKS`. When mentions are enabled, notes that already passed
+  the `#^` filter are scanned for mention occurrences even without a
+  relation glyph. The scan includes `done/`, as read-only sources.
 - **Updates.** Reparse per file on `metadataCache.changed`, and handle
   vault `delete` and `rename`. Overlay the active editor's unsaved
   text, so a just-typed entry shows at the target before save.
@@ -405,36 +458,65 @@ bob-ledger-tools keeps a raw-text relation index and publishes it as
   generation, so a count and its rows never disagree. Targets resolve
   by `getFirstLinkpathDest` plus the file's cached block ids. Status
   and text come from the Tasks memo, falling back to the cached line
-  for notes the memo omits (`done/`).
-- **API.** `api.relationIndex` v1 exposes `version`, `generation`,
+  for notes the memo omits (`done/`). Mention reverse rows share that
+  generation. When `relations.linked_from_mentions` is false, no
+  mention rows are published and `scanMentions` returns `[]`.
+- **API.** `api.relationIndex` v2 exposes `version`, `generation`,
   `ready()`, `outgoing(path, blockId|line)`, `incoming(path,
   blockId)`, and `labelSuggestions(prefix?) → [{label, count}]`
-  (case-insensitive dedupe, count order). Chips subscribe through
-  `onChange`.
+  (case-insensitive dedupe, count order; never the reserved
+  `💬 mentions` spelling). `incoming()` and `outgoing()` keep
+  returning **relations only**. New `linkedFrom(path, blockId)`
+  returns typed rows `{kind: "relation", …}` and
+  `{kind: "mention", …}` as [§19](#19-text-mentions) specifies. New
+  pure `scanMentions(content, path)` returns that note's resolved
+  `(S, T)` pairs. Chips subscribe through `onChange`. v1 consumers
+  see a stored `(💬 mentions)` entry as an ordinary labelled row
+  (MN16).
 
 ## 12. Kill switch, outputs, and warnings
 
 ```yaml
 relations:
   linked_from_lines: true # write 🪢 LINKED FROM mirrors (task-relations.md)
+  linked_from_mentions: false # inert (💬 mentions) entries; see §19
 ```
 
-Rust and nav read it from `~/.config/bob/config.yml`
-(`BOB_CONFIG_FILE` / `XDG_CONFIG_HOME`). An invalid value falls back
-to `true` and warns.
+Rust, nav, and ledger-tools read both keys from
+`~/.config/bob/config.yml` (`BOB_CONFIG_FILE` / `XDG_CONFIG_HOME`).
+An invalid `linked_from_lines` value falls back to `true` and warns.
+An invalid `linked_from_mentions` value falls back to `false` and
+warns, in the same wording pattern.
 
-- With `false`, reconcile removes every LINKED FROM line on writable
-  tasks, mints nothing, and leaves LINKS alone, so the switch is
-  lossless.
-- Gestures and capture write no mirror and mint no source.
+- With `linked_from_lines: false`, reconcile removes every LINKED
+  FROM line on writable tasks, mints nothing, and leaves LINKS alone,
+  so the switch is lossless.
+- With `linked_from_mentions: false`, reconcile removes only
+  `(💬 mentions)` entries on writable tasks, deleting a line left
+  empty, and mints nothing for mentions. Plugins show no mention
+  chips, and nav and capture write none. Flipping it back rebuilds
+  byte-identical lines (MN13).
+- Gestures and capture write no mirror and mint no source when the
+  matching switch is off.
 
 **`bob task reconcile` JSON** gains `linked_from_line_updates`,
 `minted_relation_source_block_ids`, and `relation_warnings[]`
 (`{kind, path, line, message}`), where `kind` is one of
 `malformed_links_line`, `malformed_linked_from_line`,
 `unresolved_relation_link`, `relation_target_not_task`,
-`self_relation`, or `duplicate_block_id`. Human output gets a `🪢`
-group in the dependency style, and `--dry-run` previews all of it.
+`self_relation`, or `duplicate_block_id`. Additive mention fields
+(`schema_version` unchanged):
+
+- `linked_from_line_updates[]` rows gain `mentions_added` and
+  `mentions_removed`, the mention subsets of `added` and `removed`.
+- `minted_relation_source_block_ids[]` rows gain
+  `reason: "relation" | "mention"`. A source minted for both reports
+  `relation`.
+- A new top-level `mention_edges` counts listed mention entries.
+- No new warning kinds. Human output shows mention counts in the
+  existing `🪢` group, in its style, for example `+2 💬`.
+
+`--dry-run` previews all of it.
 
 **Capture JSON** (every `schema_version` stays 1; additive only):
 
@@ -473,21 +555,27 @@ group in the dependency style, and `--dry-run` previews all of it.
   action: hide|already_hidden}`), plus a `hides_existing_relation_label`
   warning object (`{code, label, count, message}`) when a one-off hides a
   visible existing label and a `relation_label_hide_failed` object
-  (`{code, message}`) when the journal append fails.
+  (`{code, message}`) when the journal append fails. Mention mirrors
+  appear in the existing `linked_from_line_updates[]` with the same
+  `mentions_added` / `mentions_removed` fields; mints appear in
+  `minted_relation_block_ids[]` with `reason: "mention"`; skips use
+  the existing `mirror_skipped[]` reasons. A draft with no task block
+  links produces byte-identical output to today.
 
 ## 13. Guarantees
 
 1. **Single source (LR11).** Delete every LINKED FROM line and run
    reconcile once: the lines come back byte-identical, and a second
-   run changes nothing.
-2. **Inertness (LR18, LX13, LG13).** Adding, removing, or relabelling
-   any relation leaves every status, lane, field, schedule, Pomodoro
-   section, and Depends-On / BLOCKS line byte-identical, apart from a
-   minted `^id`. The carve-outs are the commit-time cancel of
+   run changes nothing. Mention entries are included (MN14).
+2. **Inertness (LR18, LX13, LG13, MN17).** Adding, removing, or
+   relabelling any relation, and adding or removing any mention,
+   leaves every status, lane, field, schedule, Pomodoro section, and
+   Depends-On / BLOCKS line byte-identical, apart from a minted
+   `^id`. The carve-outs are the commit-time cancel of
    [§17](#17-cancel-labels) and the commit-time complete of
    [§18](#18-complete-labels).
-3. **Engine agreement (LW14, LK\*).** Rust and JS agree on every LK,
-   LW, and LM vector, malformed cases included.
+3. **Engine agreement (LW14, LK\*, MN22).** Rust and JS agree on
+   every LK, LW, LM, and MN vector, malformed cases included.
 4. **Live view (LC8).** Chips render from the live index, never from
    the stored mirror.
 5. **Convergence (LR3).** Canonical sorting makes two machines produce
@@ -525,8 +613,10 @@ group in the dependency style, and `--dry-run` previews all of it.
   kept; a pasted LINKED FROM line is regenerated on the next
   reconcile.
 - **Adopting old idioms.** Hand-written `Merged into [[…]]`, `See
-  [[…]]`, and `**RELATED:**` bullets are not adopted; adopting them is
-  an opt-in follow-up.
+  [[…]]`, and other block links in a task's own text now surface as
+  mentions on the target's LINKED FROM line
+  ([§19](#19-text-mentions)). They are never adopted as relations.
+  Plain `**RELATED:**` bullets remain unadopted.
 
 ## 15. Conformance vectors
 
@@ -1043,7 +1133,9 @@ Cancel-label bytes live in
 `tests/fixtures/task_cancel/vectors.json` ([§17](#17-cancel-labels)).
 Complete-label bytes live in
 `tests/fixtures/relation_complete/vectors.json`
-([§18](#18-complete-labels)).
+([§18](#18-complete-labels)). Mention occurrence bytes live in
+`tests/fixtures/task_mentions/vectors.json`
+([§19](#19-text-mentions)).
 
 ## 17. Cancel labels
 
@@ -1661,3 +1753,388 @@ first.
 | `rule` | verdict, `effect`, and refusal for an edge | every CP5 row; every CP1 never path; the CP3 table; both-effects; both-lists |
 | `key` | complete-label matching (`relation_label_key`) | case/spacing/colon; inverses `implements` / `verifies`; substring `implement` |
 | `config` | YAML → effective cancel and complete keys and warning count | missing, `null`, `[]`, scalar, mapping, non-string, illegal label, duplicate keys, a key in both lists (dropped from both), `cancel_labels` alone |
+
+## 19. Text mentions
+
+A **task mention** is an inert, derived back-reference. Task S's own
+text contains a block link to task T. The target's generated LINKED
+FROM line gains `[[S]] (💬 mentions)`, which reads "S mentions this".
+Nothing is written on S except a silent `^id`. A dependency or
+relation on the pair wins. Mentions never enter the label catalog.
+
+The user-facing walkthrough is
+[See which tasks mention a task](guides/see-task-mentions.md).
+
+### 19.1 Vocabulary
+
+- **Task mention**: the stored `(💬 mentions)` LINKED FROM entry for
+  a pair `(S, T)`. It is **not a relation**. It has no label and no
+  gestures, and it is never a closing label.
+- **Occurrence**: one counted link inside S's text. A pair has one or
+  more occurrences.
+- **Display kind** (plugins only): `embed` when every occurrence of
+  the pair is an embed; otherwise `mention`.
+- **Site** (plugins only): where an occurrence sits. One of `title`,
+  `note` (a child bullet), `cancel_log`, `schedule_log`, `work_log`,
+  or `rotten_log`.
+
+### 19.2 What counts (M1–M8)
+
+A block link in S's text becomes an occurrence only if every rule
+holds. Rust and JS both implement these rules and are pinned by the
+same vectors.
+
+- **M1 Owner.** Walk up from the link's line to the nearest list-item
+  ancestor that is a `#task` line under the vault's Tasks settings;
+  the task's own line counts. A nested `#task` owns its own subtree.
+  A link with no `#task` ancestor is not a mention. That excludes
+  note prose, headings, and Pomodoro ledger rows, because Pomodoros
+  are not `#task` lines.
+- **M2 Edge lines.** A link on, or anywhere under, a Depends-On,
+  BLOCKS, Sub-projects, LINKS, or LINKED FROM child is not a mention.
+  This applies to every parse verdict except not-a-line, so malformed
+  rows are excluded too. This rule also prevents feedback loops.
+  Cancel, Schedule, Work, and Rotten Log headers and their entries
+  **do** count.
+- **M3 Spans.** Skip fenced code, inline code, `%%…%%` comments
+  (inline and multi-line), inline Dataview field values
+  (`[key:: …]` / `(key:: …)`), and blockquoted lines. Build on the
+  shared `block_link_spans` scanner and its JS twin.
+- **M4 Target.** The link must resolve, with the relation resolver
+  (same note, basename, path, or the explicit `done/` form), to a
+  `#task` line carrying that `^id`, unique in its note. Unresolved
+  links, duplicate ids, non-task blocks (`^h-…`), heading links, note
+  links, and self-links are ignored **silently**. There is no new
+  warning kind.
+- **M5 Forms.** Plain, aliased, embedded `![[…]]`, and struck
+  `~~[[…]]~~` links all count. An occurrence is display `embed` when
+  it is an embed, or when it is an exact-struck sole link (a bullet
+  whose whole content is `~~[[…]]~~`; this is the cycler's retired
+  embed). Otherwise it is display `mention`.
+- **M6 Proxy rows.** A task whose description is exactly one embed is
+  never a source. The description is what remains after the checkbox,
+  tags, inline fields, and `^id`; for example `- [x] #task ![[n#^t]]`.
+- **M7 Precedence.**
+  - If S's Depends-On names T, or T's Depends-On names S, whatever
+    the status, the pair gets **no mention entry**. T's Depends-On or
+    BLOCKS line already names S.
+  - If S's LINKS line has an accepted entry for T, the pair's entry
+    is the **relation** entry with its label, as today.
+  - Otherwise the pair gets the **mention** entry.
+  - Dependencies never suppress relation entries.
+- **M8 Scope.** Sources come from the same note set reconcile already
+  scans for LINKS sources: active notes (writable, so they can be
+  minted), the previous daily note (read-only), and every
+  `done/**/*.md` (read-only). Targets must be writable for a stored
+  entry, exactly as for relations.
+
+### 19.3 Projection
+
+```text
+pairs(T)  = { S : S's own text holds ≥ 1 occurrence of T under M1–M6, S ≠ T }
+mirror(T) = sort_canonical( relation entries for T, as today
+                          ∪ { ([[S]], "💬 mentions") : S ∈ pairs(T)
+                                ∧ no dependency joins (S, T)
+                                ∧ S has no relation entry for T } )
+```
+
+The sort order is the existing canonical BK21 order. Storage is never
+grouped; only the chips group.
+
+### 19.4 Storage and the reserved label
+
+```markdown
+- [-] #task Add support for hidden, superseded memory strands! [cancelled:: 2026-08-30]
+  ^old-supersede
+  - OBSOLETE: See [[#^supersede]]!
+- [x] #task Launch tale to make superseding better! [completion:: 2026-09-02] ^supersede
+  - 🪢 **LINKED FROM:** [[#^old-supersede]] (💬 mentions)
+```
+
+- **Grammar unchanged.** A mention is `<link> (💬 mentions)` in the
+  existing `<link>[' (' <label> ')']` mirror slot.
+- **Reserved `💬`.** `💬` (U+1F4AC) as a label's first code point is
+  reserved:
+  - On LINKED FROM, exactly `💬 mentions` (after the usual collapse)
+    marks a mention entry. Any other `💬…` label makes the line
+    malformed.
+  - On LINKS, any `💬…` label makes the line malformed. It is warned
+    about and left untouched, per [§3.6](#36-malformed).
+  - Every authored writer refuses a `💬…` label with
+    `💬 is reserved for text mentions`. That covers capture `|` /
+    `||`, the nav Links and Linked-from stage label fields,
+    `bob relations rename` / `hide` / `unhide` / `reverse`, and
+    `relations.cancel_labels` / `complete_labels` (an invalid entry
+    is warned about and dropped).
+- **Typed in memory.** Parsers return a typed kind (relation or
+  mention). A mention's spelling never surfaces as a label: not in
+  the catalog, suggestions, inverse phrases, rename spans, or the
+  cancel/complete policy.
+- **No stored excerpts.** Quotes are live only.
+
+### 19.5 Identity, minting, lifecycle, and uncertainty
+
+- **Identity is (S, T)**, by vault path plus block id. Several
+  occurrences collapse to one entry. A → B and B → A are independent.
+- **Minting.** An active, writable, id-less source gets a silent
+  `mint_block_id(description, used)` mint. It happens in the
+  reconcile pass, capture batch, or nav courtesy write that first
+  needs it, and only when the entry would actually be stored: T is
+  writable, no dependency joins the pair, and there is no relation.
+  The existing quiet-deferral rule (LR5) applies. Sources in `done/`
+  or the previous daily note are never minted; if they have no id,
+  they are not listed. Dry runs and rendering mint nothing. When
+  either switch is off, nothing is minted for mentions.
+- **Lifecycle.** Closing, cancelling, reopening, or archiving either
+  end changes nothing. The cycler's embed ↔ strike retirement is the
+  same pair, so zero bytes change. Deleting the link removes the
+  entry on the next write path. Moves and renames rely on generic
+  link rebasing.
+- **Never prune on uncertainty.** A source is uncertain when any of
+  these holds:
+  - its note has a duplicate `^id` for S;
+  - S's LINKS or Depends-On line is malformed;
+  - T's Depends-On line is malformed (for that pair);
+  - S's note has an unclosed code fence.
+
+  Existing entries naming an uncertain source are kept byte-for-byte
+  with their label, and the source is never newly added.
+
+- **Inertness.** Every guarantee in [§2](#2-what-relations-never-do)
+  and LR18 carries over word for word. A mention never changes a
+  status, lane, `[fresh::]`, `[keeps::]`, `[unblocked::]`, schedule,
+  priority, `[id::]`, `[dependsOn::]`, the `]s` walk, the plan
+  budget, successor offers, or any Task Link logic. The only edit on
+  S is a minted `^id`.
+
+### 19.6 Kill switch and outputs
+
+```yaml
+relations:
+  linked_from_lines: true # unchanged: false removes every LINKED FROM line
+  linked_from_mentions: false # mentions; default false
+```
+
+- `false` removes only `(💬 mentions)` entries on writable tasks,
+  deleting a line left empty. It mints nothing for mentions. Plugins
+  show no mention chips, and nav and capture write none. The switch
+  is lossless: flipping it back rebuilds byte-identical lines
+  (MN13).
+- An invalid value falls back to the default and warns, in the
+  `linked_from_lines` wording pattern. Rust, nav, and ledger-tools
+  read the key from `~/.config/bob/config.yml` (`BOB_CONFIG_FILE` /
+  `XDG_CONFIG_HOME`).
+- **`bob task reconcile` JSON** (additive; `schema_version`
+  unchanged):
+  - `linked_from_line_updates[]` rows gain `mentions_added` and
+    `mentions_removed`, the mention subsets of `added` and
+    `removed`.
+  - `minted_relation_source_block_ids[]` rows gain
+    `reason: "relation" | "mention"`. A source minted for both
+    reports `relation`.
+  - A new top-level `mention_edges` counts listed mention entries.
+  - No new warning kinds. Human output shows mention counts in the
+    existing `🪢` group, in its style, for example `+2 💬`.
+- **Capture JSON** (additive; every `schema_version` stays 1):
+  - Per item, mention mirrors appear in the existing
+    `linked_from_line_updates[]`, with the same `mentions_added` /
+    `mentions_removed` fields.
+  - Mints appear in `minted_relation_block_ids[]` with
+    `reason: "mention"`.
+  - Skips appear in `mirror_skipped[]` with the existing reasons.
+  - A draft with no task block links produces byte-identical output
+    to today.
+
+### 19.7 Visual design
+
+The row must answer three questions without a click: _what is
+deliberate_, _what was said_, and _why this is here_. It must do that
+in Bob's existing chip language, with **no new colour**: [§10](#10-chips)
+says colour carries status, never direction. Text, italics, and the
+`💬` glyph carry provenance.
+
+Live Preview and Reading view, plugin present:
+
+```text
+☑ Launch tale to make superseding better!
+  🪢 linked from  followed up by (○ Fix flaky capture retries  ↗ bob)
+                  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+                  💬 mentioned in (⊘ Add support for hidden, superseded mem…)
+                  ▏ “OBSOLETE: See ⟦this task⟧!”
+                  💬 embedded in  (☑ Read sase_sites_platform!  ↗ sase_sites)
+```
+
+- **Grouping.** Relations come first, then a hairline dotted divider
+  (`1px dotted var(--background-modifier-border)`), then mentions.
+  Each mention gets its own visual row, like labelled relation rows
+  today. A row that holds only mentions has no divider.
+- **Pill.** `💬 mentioned in` or `💬 embedded in`, in the existing
+  muted small-caps `.bob-relation-pill`, plus `.is-mention` for
+  italics (the convention for reported speech). The pill is
+  focusable (`tabindex=0`, `aria-haspopup="dialog"`, aria label
+  `Why is this here? ‹S› mentions this task in its text`).
+- **Chip.** The unchanged `bob-dep-chip`: status mini-checkbox, about
+  40 characters of title, `↗ note` when cross-note, `#hide` muted,
+  and closed tasks dimmed but never struck.
+- **Quote line.** Shown only for display `mention` at a non-`title`
+  site, when the occurrence's line still has a letter or digit after
+  removing the list marker, checkbox, and every block-link token. It
+  is one muted line with a 2 px left rule. The link token becomes
+  its alias, or else **this task**, highlighted with
+  `--text-highlight-bg`. Fit about 80 characters with a middle
+  ellipsis that keeps the token visible. With several prose
+  occurrences, quote the first in document order. Sole-link and
+  title mentions get no quote, because the chip already says it all.
+- **Click.** Clicking a mention chip opens S **at the first
+  occurrence** (line and column), scrolled into view, with a brief
+  highlight of about 1.2 s and no animation under reduced motion.
+  Mod-click opens a new pane. Hovering keeps the existing Obsidian
+  page preview of S.
+- **Controls.** A mention chip has **no ×**. Removal gestures are
+  refused with the notice below.
+- **Mixed pair.** When S both relates to and mentions T, the relation
+  chip keeps its label and ×, plus a small muted trailing `💬` titled
+  `Also mentioned in its text`. The × removes only the relation; nav
+  then downgrades the entry to a mention and shows the unlink
+  notice.
+- **Density.** The existing LC9 collapse (three or more closed →
+  `✓×N`) applies per group. More than five open mentions show the
+  first five plus a `+N more` toggle.
+- **Stale.** A stored mention that is no longer live gets the
+  existing dashed style, with the tooltip
+  `No longer mentioned here · refreshes on the next reconcile`. A
+  live mention missing from the text is appended in canonical order,
+  as relations are today.
+- **Embed echo.** When a LINKED FROM row renders inside a
+  transclusion hosted in S's note, hide that row's `embedded in`
+  entries whose source note is the host note. Hide the whole row if
+  nothing else is left.
+- **Without the plugin** the line still reads as English:
+  `🪢 LINKED FROM: ^old-supersede (💬 mentions)`.
+
+The context card opens on pill hover (after the usual hover delay),
+keyboard focus, or click. It is non-modal, stays open while hovered
+(WCAG 1.4.13), and Escape dismisses it and returns focus to the pill:
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ 💬 Mentioned in another task's text · not a relation        │
+│ ⊘ Add support for hidden, superseded memory strands!       │
+│   sase_memory_webs · mentioned 2× in this task              │
+│ ▏ “…OBSOLETE: See ⟦this task⟧! The new tale covers it…”     │
+│   in a note under it                                        │
+│ ▏ “Merged into ⟦this task⟧ after review”                    │
+│   in its Cancel Log                                         │
+│ ↵ Open at the mention                         Esc to close  │
+└────────────────────────────────────────────────────────────┘
+```
+
+The card shows up to three occurrences (excerpt about ±60 characters,
+token highlighted, location underneath), then `+N more`. Each listed
+occurrence is itself clickable and opens S at that occurrence.
+
+Task Card and Linked-from stage:
+
+```text
+Linked from…   3 · 1 relation · 2 💬
+
+CURRENT
+  followed up by   ○ Fix flaky capture retries                 bob
+  💬 mentioned in  ⊘ Add support for hidden, superseded mem…   sase_memory_webs
+                   “OBSOLETE: See ⟦this task⟧!”
+```
+
+**Copy strings** (exact; every implementation uses these):
+
+| Use                   | Text                                                                                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stored label          | `💬 mentions`                                                                                                                                            |
+| Pills                 | `💬 mentioned in` · `💬 embedded in`                                                                                                                     |
+| Row tooltip           | `Tasks linking here · relations and 💬 text mentions · live`                                                                                             |
+| Stale tooltip         | `No longer mentioned here · refreshes on the next reconcile`                                                                                             |
+| Card header           | `💬 Mentioned in another task's text · not a relation`                                                                                                   |
+| Card locations        | `in its title` · `in a note under it` · `in its Cancel Log` · `in its Schedule Log` · `in its Work Log` · `in its Rotten Log` · `embedded as a sub-task` |
+| Card count            | `mentioned N× in this task` (only when N ≥ 2)                                                                                                            |
+| Card action           | `↵ Open at the mention`                                                                                                                                  |
+| Removal refusal       | `💬 This comes from a link in ‹S›'s text · edit it there (↵ opens it)`                                                                                   |
+| Mixed marker title    | `Also mentioned in its text`                                                                                                                             |
+| Unlink notice (mixed) | `Unlinked ‹S› · it still mentions this task in its text`                                                                                                 |
+| Reserved label        | `💬 is reserved for text mentions`                                                                                                                       |
+| Generated-line notice | `🪢 LINKED FROM is generated from other tasks' LINKS lines and text · change it with Ctrl+Shift+Alt+L`                                                   |
+| Task Card count       | relations only: unchanged `N · ‹first name›`; mentions only: `M 💬 · ‹first name›`; both: `N · R relation(s) · M 💬`                                     |
+
+### 19.8 Update paths
+
+| Path                                          | Trigger                                                               | Latency   | Writes                                                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| ledger-tools live index                       | any edit, including unsaved editor text                               | instant   | none; chips update on an **existing** row                                                                                           |
+| nav courtesy write                            | the cursor leaves an edited line and the note's mention pairs changed | seconds   | T's LINKED FROM (same note: one transaction with any S mint; cross-note: preimage-checked follow-up); silent on success and failure |
+| capture                                       | a capture whose written notes change mention pairs                    | at commit | T's mirror and S's mint join the staged batch                                                                                       |
+| `bob task reconcile` (Mac cron, every 15 min) | vim, agent, and sync edits; anything a courtesy write missed          | ≤ 15 min  | the authority: projects, mints, repairs, removes                                                                                    |
+
+Reconcile stays the authority. Writes happen only when the _set_ of
+pairs changes, never per keystroke.
+
+### 19.9 `relationIndex` v2
+
+`api.relationIndex.version` is 2.
+
+- `incoming()` and `outgoing()` keep returning **relations only**, so
+  no v1 consumer can offer a removal it cannot perform.
+- `linkedFrom(path, blockId)` returns typed rows:
+  - `{kind: "relation", source, label, alsoMentioned, …}`;
+  - `{kind: "mention", source, display: "mention"|"embed", count, occurrences: [{line, ch, site, excerpt}]}`
+    (dependency-joined pairs omitted).
+- Pure `scanMentions(content, path)` returns that note's resolved
+  `(S, T)` pairs with their occurrences, for nav's courtesy write.
+- `labelSuggestions` never includes the reserved spelling.
+
+### 19.10 MN vectors
+
+Extend as needed; never renumber.
+
+| #    | Situation                                                                                                 | Outcome                                                                                                       |
+| ---- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| MN1  | S's title contains `[[#^t]]`; T is a `#task`                                                              | T gains `[[#^s]] (💬 mentions)`; S gains nothing except a possible `^id`                                      |
+| MN2  | S's child `Merged into [[n#^t]]`                                                                          | same, cross-note form; JS quote `Merged into ⟦this task⟧`                                                     |
+| MN3  | link under a nested `#task` beneath S                                                                     | the nested task is the source                                                                                 |
+| MN4  | link on an edge line of S, or on T's own LINKED FROM                                                      | no mention, no feedback loop                                                                                  |
+| MN5  | link in a Pomodoro child, heading, note prose, fenced or inline code, `%%…%%`, `[k:: …]`, or a blockquote | no mention                                                                                                    |
+| MN6  | target is `^h-…`, a heading, unresolved, a duplicate id, or S itself                                      | no mention, no warning                                                                                        |
+| MN7  | `- ![[n#^t]]` under S; T closes (cycler writes `~~[[n#^t]]~~`); T reopens                                 | one entry throughout, display `embed`; zero mirror bytes change                                               |
+| MN8  | S has `🪢 LINKS: duplicate of [[T]]` and prose `duplicate of [[T]]`                                       | one `(duplicate of)` entry; JS relation row marked also-mentioned                                             |
+| MN9  | S depends on T, or T depends on S, and S mentions T                                                       | no mention entry                                                                                              |
+| MN10 | S mentions T twice                                                                                        | one entry; JS count 2                                                                                         |
+| MN11 | source active and id-less                                                                                 | minted and listed (`reason: "mention"`)                                                                       |
+| MN12 | source in `done/` or the previous daily note, id-less                                                     | not listed; no write there                                                                                    |
+| MN13 | `linked_from_mentions: false`, then `true`                                                                | only mention entries removed, then rebuilt byte-identically                                                   |
+| MN14 | delete every LINKED FROM line, reconcile twice                                                            | identical bytes; the second run changes nothing                                                               |
+| MN15 | a `💬…` label through capture, a stage, rename/hide/reverse, or the close-label config                    | refused with the reserved-label message                                                                       |
+| MN16 | a pre-feature parser reads `(💬 mentions)`                                                                | accepted as a labelled entry                                                                                  |
+| MN17 | any mention add or remove                                                                                 | every status, lane, field, Pomodoro section, Depends-On, and BLOCKS line byte-identical except a minted `^id` |
+| MN18 | a mention typed, then the cursor leaves the line                                                          | T's row exists within seconds; the live chip showed before that if a row already existed                      |
+| MN19 | click, and stage remove, on a mention chip                                                                | opens S at the occurrence / refused with the notice                                                           |
+| MN20 | T embedded under S, viewed in S's note                                                                    | the embedded T shows no `embedded in` S echo                                                                  |
+| MN21 | proxy row `- [x] #task ![[n#^t]]`                                                                         | no mention                                                                                                    |
+| MN22 | Rust and JS on every fixture vector, with Unicode before the link                                         | identical occurrence sets                                                                                     |
+| MN23 | S has an uncertain condition (duplicate id, malformed LINKS/Depends-On, unclosed fence)                   | existing entries naming S kept; S never newly added                                                           |
+| MN24 | `bob relations reverse` touches T's mirror while S mentions T                                             | T's mention entry survives                                                                                    |
+| MN25 | aliased link `[[#^t\|the old plan]]` in a child bullet                                                    | one mention; JS quote shows `⟦the old plan⟧`                                                                  |
+
+### Shared vectors
+
+`tests/fixtures/task_mentions/vectors.json` is the single source of
+truth. bob-plugins copies it byte-for-byte. Each vector carries:
+
+- its MN id and input notes (`{"path": "text"}`);
+- the expected **occurrence set** `[{source, target, count}]`, with
+  `source` and `target` as `path#^id`, or `path:line` for id-less
+  sources (both engines check this);
+- JS-only fields `display`, `site`, and `excerpt` with `⟦…⟧`
+  markers;
+- optional Rust-only `mirror` (expected LINKED FROM lines per target)
+  and `mints`.
+
+The fixture covers at least MN1–MN12, MN21–MN23, and MN25, and
+carries a `version` field. If an implementation disagrees with a
+vector, fix this section and the fixture first in the same change.

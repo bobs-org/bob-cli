@@ -381,13 +381,17 @@ human output adds a `🧱 BLOCKS lines` group.
 ## Relation lines
 
 A third pass maintains the generated `🪢 **LINKED FROM:**` mirror from
-the authored `🪢 **LINKS:**` lines, as [Task relations](task-relations.md)
-§6–§7 specifies. It collects relation edges from every active note
-plus the previous daily note and every `done/**/*.md` (read-only),
-byte-prefiltered for `LINKS`. Sources resolve through the note index;
-explicit `done/` targets resolve through the loaded archives — the
-same narrow `done/` read shape as the exact-`done/`-target exception
-above, documented here because the contract requires it. Open or
+the authored `🪢 **LINKS:**` lines and from inert text mentions, as
+[Task relations](task-relations.md) §6–§7 and §19 specify. It collects
+relation edges and mention pairs from every active note plus the
+previous daily note and every `done/**/*.md` (read-only),
+byte-prefiltered for `LINKS`. When `relations.linked_from_mentions` is
+true, the same read also admits notes that contain both `#task` and
+`#^`, beside the existing exact-`done/`-target exception above.
+Sources resolve through the note index; explicit `done/` targets
+resolve through the loaded archives — the same narrow `done/` read
+shape as that exception, documented here because the contract
+requires it. Open or
 closed writable targets gain, rewrite, canonicalise, deduplicate, or
 lose the line; targets in `done/` or the previous daily note are never
 written. Sources without a `^block-id` are minted silently in the same
@@ -401,15 +405,24 @@ RV10); reconcile stays read-only there.
 
 `relations.linked_from_lines: false` removes every LINKED FROM line on
 a writable task, mints nothing, and leaves LINKS alone.
+`relations.linked_from_mentions: false` removes only `(💬 mentions)`
+entries on writable tasks, deleting a line left empty, and mints
+nothing for mentions.
 
 JSON reports the additive `linked_from_line_updates`,
 `minted_relation_source_block_ids`, and `relation_warnings[]`
 (`{kind, path, line, message}`) arrays. Warning kinds are
 `malformed_links_line`, `malformed_linked_from_line`,
 `unresolved_relation_link`, `relation_target_not_task`,
-`self_relation`, and `duplicate_block_id`. Human output adds a `🪢`
-group in the dependency style, and `--dry-run` previews all of it. A
-second run over a reconciled vault reports no relation changes.
+`self_relation`, and `duplicate_block_id`. `linked_from_line_updates[]`
+rows gain `mentions_added` and `mentions_removed`, the mention subsets
+of `added` and `removed`. `minted_relation_source_block_ids[]` rows
+gain `reason: "relation" | "mention"`; a source minted for both
+reports `relation`. Top-level `mention_edges` counts listed mention
+entries. Human output adds a `🪢` group in the dependency style, with
+mention counts in that group (for example `+2 💬`), and `--dry-run`
+previews all of it. A second run over a reconciled vault reports no
+relation changes.
 
 ## Derived Blocked Status
 
@@ -1282,8 +1295,8 @@ JSON mode prints one object on stdout with these stable fields:
 
 `scanned_files` counts only Markdown notes included in the active vault scan;
 it does not include read-only archive notes loaded only for exact `done/...`
-Pomodoro references or for relation `LINKS` sources and explicit `done/`
-targets. `references` retains its input-count contract and counts
+Pomodoro references or for relation `LINKS` sources, mention sources, and
+explicit `done/` targets. `references` retains its input-count contract and counts
 unique raw direct Pomodoro block links before structural cleanup; consumers do
 not need to reinterpret that older field. A canceled reference removed during
 this run therefore remains part of `references`, while the post-rewrite graph
@@ -1358,8 +1371,11 @@ owner `task` description, `kind`, and `added`/`removed` canonical links;
 `minted_dependent_block_ids` lists each dependent `^block-id` minted so a
 BLOCKS entry can name it. `linked_from_line_updates` lists each LINKED FROM
 insert, rewrite, canonicalization, removal, or deduplication in the same
-shape; `minted_relation_source_block_ids` lists each source `^block-id`
-minted so a LINKED FROM entry can name it; `relation_warnings` lists
+shape, with `mentions_added` / `mentions_removed` naming the mention
+subsets of `added` / `removed`; `minted_relation_source_block_ids` lists
+each source `^block-id` minted so a LINKED FROM entry can name it, with
+`reason: "relation" | "mention"`; `mention_edges` counts listed mention
+entries; `relation_warnings` lists
 `{kind, path, line, message}` rows (`malformed_links_line`,
 `malformed_linked_from_line`, `unresolved_relation_link`,
 `relation_target_not_task`, `self_relation`, `duplicate_block_id`). The

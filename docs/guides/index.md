@@ -32,6 +32,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 
 - [Add prerequisites while capturing](add-prerequisites.md)
 - [Link related tasks](link-related-tasks.md)
+- [See which tasks mention a task](see-task-mentions.md)
 
 ## Reading
 

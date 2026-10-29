@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "id": "MN1",
+      "notes": {
+        "note.md": "- [ ] #task Source mentions [[#^t]] in title ^s\n- [ ] #task Target task ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "note.md#^s",
+          "target": "note.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        }
+      ],
+      "mirror": {
+        "note.md#^t": "🪢 **LINKED FROM:** [[#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN2",
+      "notes": {
+        "src.md": "- [ ] #task Source task ^s\n  - Merged into [[tgt#^t]]\n",
+        "tgt.md": "- [ ] #task Target task ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "src.md#^s",
+          "target": "tgt.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "Merged into ⟦this task⟧"
+        }
+      ],
+      "mirror": {
+        "tgt.md#^t": "🪢 **LINKED FROM:** [[src#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN3",
+      "notes": {
+        "nest.md": "- [ ] #task Parent ^p\n  - [ ] #task Nested source [[#^t]] ^n\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "nest.md#^n",
+          "target": "nest.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        }
+      ],
+      "mirror": {
+        "nest.md#^t": "🪢 **LINKED FROM:** [[#^n]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN4",
+      "notes": {
+        "edges.md": "- [ ] #task Source with edge links ^s\n  - ⛓️ **DEPENDS ON:** [[#^t]]\n  - 🧱 **BLOCKS:** [[#^u]]\n  - 🧩 **Sub-projects:** [[#^v]]\n  - 🪢 **LINKS:** [[#^w]] trailing prose\n  - 🪢 **LINKED FROM:** [[#^x]] (💬 mentions)\n- [ ] #task Depends target ^t\n- [ ] #task Blocks target ^u\n- [ ] #task Subproject target ^v\n- [ ] #task Malformed-links target ^w\n- [ ] #task Linked-from target ^x\n  - 🪢 **LINKED FROM:** [[#^s]] (💬 mentions)\n"
+      },
+      "occurrences": [],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN5",
+      "notes": {
+        "skip.md": "# Heading [[#^t]]\n\nProse paragraph [[#^t]]\n\n- [ ] #task Source ^s\n  - inline `[[#^t]]` code\n  - %% comment [[#^t]] %%\n  - Field [k:: [[#^t]]]\n  - (k:: [[#^t]])\n  - > blockquote [[#^t]]\n\n```\n[[#^t]]\n```\n\n## Pomodoros\n- [ ] (**0900-0930** [t:: 30m]) — WORK\n  - [[skip#^t]]\n\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN6",
+      "notes": {
+        "bad.md": "Some heading\n\n^h-block\n\n- [ ] #task Source ^s\n  - heading [[bad#Heading]]\n  - non-task [[#^h-block]]\n  - unresolved [[missing#^nope]]\n  - duplicate [[#^dup]]\n  - self [[#^s]]\n- [ ] #task Dup one ^dup\n- [ ] #task Dup two ^dup\n"
+      },
+      "occurrences": [],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN7",
+      "notes": {
+        "host.md": "- [ ] #task Host ^s\n  - ![[tgt#^t]]\n",
+        "tgt.md": "- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "host.md#^s",
+          "target": "tgt.md#^t",
+          "count": 1,
+          "display": "embed",
+          "site": "note",
+          "excerpt": null
+        }
+      ],
+      "mirror": {
+        "tgt.md#^t": "🪢 **LINKED FROM:** [[host#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN8",
+      "notes": {
+        "mix.md": "- [ ] #task Source ^s\n  - 🪢 **LINKS:** duplicate of [[#^t]]\n  - duplicate of [[#^t]]\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "mix.md#^s",
+          "target": "mix.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "duplicate of ⟦this task⟧"
+        }
+      ],
+      "also_mentioned": true,
+      "mirror": {
+        "mix.md#^t": "🪢 **LINKED FROM:** [[#^s]] (duplicate of)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN9",
+      "notes": {
+        "deps.md": "- [ ] #task Source depends ^s\n  - ⛓️ **DEPENDS ON:** [[#^t]]\n  - mentions [[#^t]]\n- [ ] #task Target depended ^t\n- [ ] #task Other source ^u\n  - mentions [[#^v]]\n- [ ] #task Reverse depended ^v\n  - ⛓️ **DEPENDS ON:** [[#^u]]\n"
+      },
+      "occurrences": [
+        {
+          "source": "deps.md#^s",
+          "target": "deps.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "mentions ⟦this task⟧"
+        },
+        {
+          "source": "deps.md#^u",
+          "target": "deps.md#^v",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "mentions ⟦this task⟧"
+        }
+      ],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN10",
+      "notes": {
+        "twice.md": "- [ ] #task Source twice ^s\n  - first [[#^t]]\n  - second [[#^t]]\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "twice.md#^s",
+          "target": "twice.md#^t",
+          "count": 2,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "first ⟦this task⟧"
+        }
+      ],
+      "mirror": {
+        "twice.md#^t": "🪢 **LINKED FROM:** [[#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN11",
+      "notes": {
+        "src.md": "- [ ] #task See this [[tgt#^t]]\n",
+        "tgt.md": "- [ ] #task Target task ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "src.md:1",
+          "target": "tgt.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        }
+      ],
+      "mints": [
+        {
+          "path": "src.md",
+          "line": 1,
+          "reason": "mention"
+        }
+      ]
+    },
+    {
+      "id": "MN12",
+      "previous_daily": "2026/20261028.md",
+      "notes": {
+        "done/old.md": "- [x] #task Archived source [[tgt#^t]]\n",
+        "2026/20261028.md": "- [ ] #task Yesterday source [[tgt#^t]]\n",
+        "tgt.md": "- [ ] #task Target task ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "done/old.md:1",
+          "target": "tgt.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        },
+        {
+          "source": "2026/20261028.md:1",
+          "target": "tgt.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        }
+      ],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN21",
+      "notes": {
+        "proxy.md": "- [x] #task ![[tgt#^t]]\n",
+        "tgt.md": "- [ ] #task Target ^t\n"
+      },
+      "occurrences": [],
+      "mirror": {},
+      "mints": []
+    },
+    {
+      "id": "MN22",
+      "notes": {
+        "uni.md": "- [ ] #task Unicode source ^s\n  - café 日本語 [[#^t]] before\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "uni.md#^s",
+          "target": "uni.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "café 日本語 ⟦this task⟧ before"
+        }
+      ],
+      "mirror": {
+        "uni.md#^t": "🪢 **LINKED FROM:** [[#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN23",
+      "notes": {
+        "uncertain.md": "- [ ] #task Dup one [[#^new]] ^s\n- [ ] #task Dup two ^s\n- [ ] #task Keep target ^keep\n  - 🪢 **LINKED FROM:** [[#^s]] (💬 mentions)\n- [ ] #task New target ^new\n"
+      },
+      "occurrences": [
+        {
+          "source": "uncertain.md:1",
+          "target": "uncertain.md#^new",
+          "count": 1,
+          "display": "mention",
+          "site": "title",
+          "excerpt": null
+        }
+      ],
+      "mirror": {
+        "uncertain.md#^keep": "🪢 **LINKED FROM:** [[#^s]] (💬 mentions)"
+      },
+      "mints": []
+    },
+    {
+      "id": "MN25",
+      "notes": {
+        "alias.md": "- [ ] #task Source ^s\n  - See [[#^t|the old plan]]\n- [ ] #task Target ^t\n"
+      },
+      "occurrences": [
+        {
+          "source": "alias.md#^s",
+          "target": "alias.md#^t",
+          "count": 1,
+          "display": "mention",
+          "site": "note",
+          "excerpt": "See ⟦the old plan⟧"
+        }
+      ],
+      "mirror": {
+        "alias.md#^t": "🪢 **LINKED FROM:** [[#^s]] (💬 mentions)"
+      },
+      "mints": []
+    }
+  ]
+}
