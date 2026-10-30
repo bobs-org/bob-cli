@@ -987,12 +987,16 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
         &day,
         "# 2026-10-30\n## Pomodoros\n- [ ] () — BUILD\n  - [[dev#^dev1]]\n- [ ] () — MEET\n",
     );
-    let output = configured_move(&temp, &vault, &["-f", "json", "dev", "ops", "-b", "dev1"])
-        .env("BOB_CONFIG_FILE", &config)
-        .env("BOB_DAY_FILE", &day)
-        .env("BOB_NOW", "2026-10-30 12:00:00")
-        .output()
-        .expect("run task move");
+    let output = configured_move(
+        &temp,
+        &vault,
+        &["-f", "json", "dev", "ops", "-b", "dev1"],
+    )
+    .env("BOB_CONFIG_FILE", &config)
+    .env("BOB_DAY_FILE", &day)
+    .env("BOB_NOW", "2026-10-30 12:00:00")
+    .output()
+    .expect("run task move");
     assert_success(&output);
     let json = parse_json(&output);
     assert_eq!(json["ok"], true, "{}", format_output(&output));
@@ -1003,7 +1007,10 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
     assert_eq!(relocated[0]["type"], "CHORE");
     let day_after = fs::read_to_string(&day).expect("read day");
     assert!(day_after.contains("— CHORE"), "{day_after}");
-    assert!(!day_after.contains("— BUILD\n  - [[dev#^dev1]]"), "{day_after}");
+    assert!(
+        !day_after.contains("— BUILD\n  - [[dev#^dev1]]"),
+        "{day_after}"
+    );
     let ops = fs::read_to_string(vault.join("areas/ops.md")).expect("read ops");
     assert!(ops.contains("^dev1"), "{ops}");
     // Explicit field keeps its type: no relocation.
@@ -1027,16 +1034,24 @@ fn move_without_field_relocates_live_link_to_new_inherited_type() {
         &day2,
         "# 2026-10-30\n## Pomodoros\n- [ ] () — FIX\n  - [[dev#^fix1]]\n",
     );
-    let output2 = configured_move(&temp2, &vault2, &["-f", "json", "dev", "ops", "-b", "fix1"])
-        .env("BOB_CONFIG_FILE", &config2)
-        .env("BOB_DAY_FILE", &day2)
-        .env("BOB_NOW", "2026-10-30 12:00:00")
-        .output()
-        .expect("run task move explicit");
+    let output2 = configured_move(
+        &temp2,
+        &vault2,
+        &["-f", "json", "dev", "ops", "-b", "fix1"],
+    )
+    .env("BOB_CONFIG_FILE", &config2)
+    .env("BOB_DAY_FILE", &day2)
+    .env("BOB_NOW", "2026-10-30 12:00:00")
+    .output()
+    .expect("run task move explicit");
     assert_success(&output2);
     let json2 = parse_json(&output2);
     assert_eq!(json2["ok"], true, "{}", format_output(&output2));
-    assert_eq!(json2["relocated"].as_array().map(Vec::len), Some(0), "{json2}");
+    assert_eq!(
+        json2["relocated"].as_array().map(Vec::len),
+        Some(0),
+        "{json2}"
+    );
     let day2_after = fs::read_to_string(&day2).expect("read day2");
     assert!(day2_after.contains("— FIX"), "{day2_after}");
 }

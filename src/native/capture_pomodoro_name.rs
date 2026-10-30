@@ -14,9 +14,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
-    capture::{
-        line_spans, list_item_body, nearest_shallower_list_item_parent,
-    },
+    capture::{line_spans, list_item_body, nearest_shallower_list_item_parent},
     capture_language,
     capture_pomodoros::{
         self, PomodoroEntry, PomodoroRef, PomodoroRefLookup, PomodoroState,
@@ -24,16 +22,15 @@ use super::{
     capture_task_toggle::child_block_end_line,
     collect_done,
     config::{self},
-    env as bob_env,
-    note_tasks,
+    env as bob_env, note_tasks,
     plan_budget::{normalize_component, split_components},
     pomodoro,
     pomodoro_homes::{DiskHomeSource, HomeResolver},
     pomodoro_themes::{self, routing, Catalog},
+    style::Styler,
     task_dependencies,
     task_theme::{clear_task_theme, parse_task_theme, set_task_theme},
     vault_links::{target_to_markdown_path, LinkResolution, VaultLinkResolver},
-    style::Styler,
 };
 
 const COMMAND_NAME: &str = "bob capture-pomodoro-name";
@@ -426,8 +423,13 @@ fn plan_assignment(
         )));
     }
 
-    let retype_writes =
-        plan_entry_retypes(&request.bob_dir, day_file, &updated, updated_entry.line, &request.name);
+    let retype_writes = plan_entry_retypes(
+        &request.bob_dir,
+        day_file,
+        &updated,
+        updated_entry.line,
+        &request.name,
+    );
     let retyped = retype_writes
         .iter()
         .map(|write| RetypedEntry {
@@ -620,10 +622,7 @@ fn plan_entry_retypes(
                 let theme = inherited_key
                     .as_ref()
                     .map(|key| {
-                        let display = catalog.display_name(
-                            key,
-                            key,
-                        );
+                        let display = catalog.display_name(key, key);
                         catalog.theme_ref(key, &display)
                     })
                     .unwrap_or_else(|| {
@@ -636,22 +635,19 @@ fn plan_entry_retypes(
         // Use the scanned line index to replace precisely, preserving
         // endings via split_line_ending.
         // Handle CRLF by working on the raw contents with inclusive split.
-        let inclusive: Vec<&str> =
-            contents.split_inclusive('\n').collect();
+        let inclusive: Vec<&str> = contents.split_inclusive('\n').collect();
         let Some(orig_inclusive) = inclusive.get(task.line_index) else {
             continue;
         };
-        let (body, ending) =
-            collect_done::split_line_ending(orig_inclusive);
+        let (body, ending) = collect_done::split_line_ending(orig_inclusive);
         if body != task_line.trim_end_matches(['\r', '\n'])
             && body != task_line.as_str()
         {
             // Fall back to first-occurrence replacement below.
         }
         let before = body.to_string();
-        let after_body = new_task_line
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
+        let after_body =
+            new_task_line.trim_end_matches(['\r', '\n']).to_string();
         if before == after_body {
             continue;
         }
@@ -672,7 +668,9 @@ fn plan_entry_retypes(
         let _ = ending;
     }
     writes.sort_by(|a, b| {
-        a.route.cmp(&b.route).then_with(|| a.block_id.cmp(&b.block_id))
+        a.route
+            .cmp(&b.route)
+            .then_with(|| a.block_id.cmp(&b.block_id))
     });
     writes.dedup_by(|b, a| a.route == b.route && a.block_id == b.block_id);
     writes

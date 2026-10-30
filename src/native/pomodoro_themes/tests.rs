@@ -640,7 +640,6 @@ fn shared_vectors_cover_suggest_and_task_field() {
             other => panic!("unknown task_field op {other}"),
         }
     }
-
 }
 
 fn assert_suggestion(

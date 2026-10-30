@@ -11,13 +11,9 @@ use clap::{Arg, ArgAction, ArgGroup, ArgMatches, Command as ClapCommand};
 use serde_json::{json, Value};
 
 use crate::native::{
-    capture::{
-        line_spans, list_item_body, nearest_shallower_list_item_parent,
-    },
+    capture::{line_spans, list_item_body, nearest_shallower_list_item_parent},
     capture_pomodoros::{self, PomodoroState},
-    capture_task_toggle::{
-        child_block_end_line, move_subtree_to_entry,
-    },
+    capture_task_toggle::{child_block_end_line, move_subtree_to_entry},
     collect_done::link_repair_markdown_files,
     config::{self},
     env as bob_env,
@@ -328,7 +324,11 @@ fn execute(report: &mut Report, request: &MoveRequest) -> i32 {
         match plan_once(&report.vault, request) {
             Ok((scan, plan)) => {
                 report.plan = Some(plan.clone());
-                match compute_move_relocation(&report.vault, &scan.snapshot, &plan) {
+                match compute_move_relocation(
+                    &report.vault,
+                    &scan.snapshot,
+                    &plan,
+                ) {
                     Ok((_, relocated)) => {
                         report.relocated = relocated;
                     }
@@ -692,10 +692,7 @@ fn compute_move_relocation(
             continue;
         };
         let field = parse_task_theme(&task_line);
-        if !matches!(
-            field,
-            crate::native::task_theme::TaskThemeState::None
-        ) {
+        if !matches!(field, crate::native::task_theme::TaskThemeState::None) {
             continue;
         }
         let before = pomodoro_themes::suggest::suggest_for_task(
@@ -712,7 +709,8 @@ fn compute_move_relocation(
             &mv.dest_path,
             &task_line,
         );
-        let before_key = before.suggestion.as_ref().map(|s| s.theme.key.clone());
+        let before_key =
+            before.suggestion.as_ref().map(|s| s.theme.key.clone());
         let after_suggestion = match after.suggestion {
             Some(suggestion) => suggestion,
             None => continue,
@@ -722,10 +720,8 @@ fn compute_move_relocation(
         if before_key.as_deref() == Some(after_key.as_str()) {
             continue;
         }
-        let block_id = mv
-            .new_block_id
-            .clone()
-            .or_else(|| mv.old_block_id.clone());
+        let block_id =
+            mv.new_block_id.clone().or_else(|| mv.old_block_id.clone());
         let Some(block_id) = block_id else {
             continue;
         };
@@ -745,9 +741,7 @@ fn compute_move_relocation(
             } else {
                 0
             };
-            if open
-                && let Some(name) = entry.name.as_deref()
-            {
+            if open && let Some(name) = entry.name.as_deref() {
                 for component in split_components(name) {
                     let key = normalize_component(&component);
                     if !key.is_empty() {
@@ -800,7 +794,8 @@ fn compute_move_relocation(
                 ));
             }
             routing::RelocateOutcome::RenameEntry { index, new_name }
-            | routing::RelocateOutcome::RenamePlaceholder { index, new_name } => {
+            | routing::RelocateOutcome::RenamePlaceholder { index, new_name } =>
+            {
                 let Some(entry) = scan.entries.get(index) else {
                     continue;
                 };
@@ -861,7 +856,8 @@ fn compute_move_relocation(
                     .clone()
                     .unwrap_or_else(|| after_name.clone());
                 // Locate link line again in current contents.
-                let Some(link) = find_live_link(&day_contents, &block_id) else {
+                let Some(link) = find_live_link(&day_contents, &block_id)
+                else {
                     continue;
                 };
                 match move_subtree_to_entry(
@@ -893,7 +889,8 @@ fn compute_move_relocation(
                     continue;
                 };
                 let from_name = source_entry.name.clone();
-                let Some(link) = find_live_link(&day_contents, &block_id) else {
+                let Some(link) = find_live_link(&day_contents, &block_id)
+                else {
                     continue;
                 };
                 match create_below_and_move(
@@ -949,7 +946,9 @@ fn find_live_link(day_contents: &str, block_id: &str) -> Option<LiveLink> {
             continue;
         }
         let end = child_block_end_line(&spans, entry_index);
-        for line_index in entry_index + 1..=end.min(spans.len().saturating_sub(1)) {
+        for line_index in
+            entry_index + 1..=end.min(spans.len().saturating_sub(1))
+        {
             if nearest_shallower_list_item_parent(&spans, line_index)
                 != Some(entry_index)
             {
@@ -971,7 +970,9 @@ fn find_live_link(day_contents: &str, block_id: &str) -> Option<LiveLink> {
                     // Allow exact match or body starting with token?
                     // Require dedicated (sole content) like find_movable.
                     if trimmed_body == token.trim()
-                        || trimmed_body == format!("[[{}#^{}]]", span.target, span.block_id).as_str()
+                        || trimmed_body
+                            == format!("[[{}#^{}]]", span.target, span.block_id)
+                                .as_str()
                     {
                         if found.is_some() {
                             return None;
@@ -1012,7 +1013,10 @@ fn find_live_link(day_contents: &str, block_id: &str) -> Option<LiveLink> {
     found
 }
 
-fn entry_child_links(day_contents: &str, entry_line: usize) -> Vec<(String, String)> {
+fn entry_child_links(
+    day_contents: &str,
+    entry_line: usize,
+) -> Vec<(String, String)> {
     let spans = line_spans(day_contents);
     if entry_line == 0 || entry_line > spans.len() {
         return Vec::new();
@@ -1059,13 +1063,10 @@ fn rename_entry(
     let entry_index = entry_line.checked_sub(1)?;
     let line = spans.get(entry_index)?.text;
     let base = capture_pomodoros::without_name_tail(line);
-    let mut updated = String::with_capacity(day_contents.len() + new_name.len() + 4);
+    let mut updated =
+        String::with_capacity(day_contents.len() + new_name.len() + 4);
     for (index, span) in spans.iter().enumerate() {
-        let start = if index == 0 {
-            0
-        } else {
-            spans[index - 1].end
-        };
+        let start = if index == 0 { 0 } else { spans[index - 1].end };
         if index == entry_index {
             // Preserve original line ending.
             let full = &day_contents[start..span.end];
@@ -1100,9 +1101,13 @@ fn create_below_and_move(
         return None;
     }
     let source_end = child_block_end_line(&spans, source_index);
-    let placeholder = capture_pomodoros::format_named_placeholder_line(new_name);
+    let placeholder =
+        capture_pomodoros::format_named_placeholder_line(new_name);
     // Insert placeholder directly below source block.
-    let insert_offset = spans.get(source_end).map(|span| span.end).unwrap_or_else(|| day_contents.len());
+    let insert_offset = spans
+        .get(source_end)
+        .map(|span| span.end)
+        .unwrap_or_else(|| day_contents.len());
     let ending = if day_contents[..insert_offset].ends_with("\r\n") {
         "\r\n"
     } else {

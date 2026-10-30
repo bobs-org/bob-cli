@@ -163,11 +163,12 @@ and unprefixed `mask-image: var(--bob-task-tag-glyph)`,
 Cursor: `default` on the Live Preview widget (as in the family) and
 `pointer` on the `a.tag` host (it is a link). Transitions (`opacity`,
 `background-color`, 120ms) are off under `prefers-reduced-motion`.
-The theme hook `--bob-task-tag-color` is unset by default. The generic
-hash ink names a tracked task, never its lane. When `data-bob-type` is
-set, CSS `::after` draws the name in `var(--font-interface)`, about
-0.8em, weight 600, letter-spacing 0.02em, on the text baseline, and
-the host grows past the 1.08em glyph square (`overflow: visible`).
+The `--bob-task-tag-color` hook is unset by default. The generic hash ink
+names a tracked task, never its lane. When `data-bob-type` is set on a
+hash mark, CSS hides the `::before` mask and draws `#TYPE` as text in
+`::after`, using the same ink for the hash and name. The host keeps only
+the capsule padding. The book and checklist variants retain their glyph
+and draw the type name beside it.
 
 ## Tooltip
 
@@ -234,7 +235,8 @@ explicit type is `#task · type FIX`.
   plus `aria-label` and `data-tooltip-position`, and never creates or
   removes nodes. When the type is shown it also sets `data-bob-type`,
   `data-bob-type-hue`, and `data-bob-type-state`; CSS `::after` draws
-  the name, so the post-processor creates no extra nodes. It is
+  `#TYPE` for hash marks and the type name after the book/checklist
+  glyphs, so the post-processor creates no extra nodes. It is
   idempotent, and attributes survive Dataview's
   `innerHTML` round trip. It covers reading view, embeds, hover
   previews, canvas cards, and Dataview task lists.

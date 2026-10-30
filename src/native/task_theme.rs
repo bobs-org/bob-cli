@@ -30,10 +30,7 @@ pub(crate) enum TaskThemeState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ThemeChange {
-    Set {
-        name: String,
-        key: String,
-    },
+    Set { name: String, key: String },
     Clear,
 }
 

@@ -884,13 +884,27 @@ fn ledger_and_resolution_refusals() {
         "## Pomodoros\n- [x] (**0800-0830**) — DONE\n",
     );
     let (output, json) = run_today_json(&empty, &["attention"]);
-    assert_eq!(output.status.code(), Some(1));
-    assert_eq!(json["error"]["code"], "no_open_pomodoro");
+    assert_success(&output);
+    assert_eq!(json["capture"]["creates_pomodoro"], true);
+    assert_eq!(json["capture"]["pomodoro_name"], "READ");
     let (created_out, created) =
         run_today_json(&empty, &["attention", "-p", "focus"]);
     assert_success(&created_out);
     assert_eq!(created["capture"]["creates_pomodoro"], true);
     assert_eq!(created["capture"]["pomodoro_name"], "FOCUS");
+
+    let no_type = TodayVault::new(
+        "bob-cli-ref-today-no-type",
+        ready_task(),
+        "## Pomodoros\n- [x] (**0800-0830**) — DONE\n",
+    );
+    write_file(
+        &no_type._temp.path().join("config.yml"),
+        "plan:\n  max_themes: 30\n  reading_type: off\n",
+    );
+    let (output, json) = run_today_json(&no_type, &["attention"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json["error"]["code"], "no_open_pomodoro");
 
     let vault = TodayVault::new(
         "bob-cli-ref-today-bad-name",

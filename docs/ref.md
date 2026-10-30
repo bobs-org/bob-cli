@@ -875,7 +875,7 @@ exit 2 for usage (including `invalid_pomodoro_name`).
 | `reading_task_unroutable` | The task's residence is not a root note |
 | `no_daily_note` | Today's daily note does not exist |
 | `no_pomodoros_section` | The daily note has no Pomodoros section |
-| `no_open_pomodoro` | There is no open entry and no selector |
+| `no_open_pomodoro` | No open entry, no selector, and the reading task has no type to place by |
 | `multiple_running` | Implicit selection or named creation with several open timed entries |
 | `invalid_pomodoro_name` | bob's Pomodoro name usage text |
 | `stale_pomodoro` | The `-P` ref no longer matches an entry |

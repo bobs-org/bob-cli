@@ -668,7 +668,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
             ledger_target,
             capture_task_toggle::PomodoroLinkTarget::Implicit
         )
-        && let Some(context) = task_theme_context.as_deref_mut()
+        && let Some(context) = task_theme_context
         && let Some(link) = note_plan.pomodoro_link.as_mut()
     {
         let applied = context.apply_existing_task(

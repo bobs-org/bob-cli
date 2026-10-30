@@ -2190,12 +2190,12 @@ fn apply_verdicts(
             EntryRole::Closing
         };
         for verdict in verdicts.iter_mut() {
-            if let Some(offer) = verdict.offer.as_mut() {
-                if !offer.placement_routed {
-                    offer.destination.entry_name = resolved.name.clone();
-                    offer.destination.entry_role = role;
-                    offer.target = resolved.target.clone();
-                }
+            if let Some(offer) = verdict.offer.as_mut()
+                && !offer.placement_routed
+            {
+                offer.destination.entry_name = resolved.name.clone();
+                offer.destination.entry_role = role;
+                offer.target = resolved.target.clone();
             }
         }
     }
