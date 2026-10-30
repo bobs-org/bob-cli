@@ -15,7 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// One subprocess invocation.
+/// One subprocess invocation. Stdio is always piped; gog and the Keep
+/// adapter never own the terminal.
 #[derive(Debug, Clone)]
 pub(crate) struct RunSpec {
     pub program: PathBuf,
@@ -23,7 +24,6 @@ pub(crate) struct RunSpec {
     pub stdin: Option<Vec<u8>>,
     pub env: Vec<(OsString, OsString)>,
     pub timeout: Duration,
-    pub inherit_stdio: bool,
 }
 
 /// Captured result of [`run`].
@@ -43,10 +43,6 @@ pub(crate) struct RunOutput {
 pub(crate) fn run(spec: &RunSpec) -> io::Result<RunOutput> {
     let mut child = spawn(spec)?;
     let deadline = Instant::now() + spec.timeout;
-    if spec.inherit_stdio {
-        return wait_inherited(&mut child, deadline, spec.timeout);
-    }
-
     let payload = spec.stdin.clone();
     let stdin_pipe = child.stdin.take();
     let stdout_pipe = child.stdout.take();
@@ -96,39 +92,6 @@ pub(crate) fn run(spec: &RunSpec) -> io::Result<RunOutput> {
     })
 }
 
-fn wait_inherited(
-    child: &mut std::process::Child,
-    deadline: Instant,
-    _timeout: Duration,
-) -> io::Result<RunOutput> {
-    let status = loop {
-        match child.try_wait()? {
-            Some(status) => break status,
-            None => {
-                if Instant::now() >= deadline {
-                    kill_tree(child);
-                    return Ok(RunOutput {
-                        status: None,
-                        stdout: String::new(),
-                        stderr: String::new(),
-                        timed_out: true,
-                        stdin_error: None,
-                    });
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-        }
-    };
-    kill_stragglers(child.id());
-    Ok(RunOutput {
-        status: status.code(),
-        stdout: String::new(),
-        stderr: String::new(),
-        timed_out: false,
-        stdin_error: None,
-    })
-}
-
 /// Kill stragglers in the child's process group after the leader exits.
 fn kill_stragglers(pid: u32) {
     #[cfg(unix)]
@@ -160,7 +123,7 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
-/// Spawn with piped or inherited stdio, retrying a transient ETXTBSY.
+/// Spawn with piped stdio, retrying a transient ETXTBSY.
 fn spawn(spec: &RunSpec) -> io::Result<std::process::Child> {
     let mut attempts = 0;
     loop {
@@ -169,17 +132,10 @@ fn spawn(spec: &RunSpec) -> io::Result<std::process::Child> {
         for (key, value) in &spec.env {
             command.env(key, value);
         }
-        if spec.inherit_stdio {
-            command
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit());
-        } else {
-            command
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-        }
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

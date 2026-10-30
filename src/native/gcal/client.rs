@@ -225,6 +225,30 @@ fn parse_client_value(
     })
 }
 
+/// Project id from a stored client file, even when the secret is absent
+/// (keyring-held files hold only `client_id`).
+pub(crate) fn peek_project(bytes: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let installed = value.get("installed").filter(|v| v.is_object());
+    let source = installed.unwrap_or(&value);
+    let client_id = source
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let project_id = source
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            value
+                .get("project_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        });
+    Some(derive_project(project_id, client_id))
+}
+
 /// `project_id` when present, else the numeric `client_id` prefix.
 pub(crate) fn derive_project(
     project_id: Option<&str>,
@@ -332,6 +356,15 @@ mod tests {
             parse(r#"{"client_id":"not-a-client","client_secret":"s"}"#)
                 .expect_err("bad suffix");
         assert!(error.message().contains(".apps.googleusercontent.com"));
+    }
+
+    #[test]
+    fn peek_project_from_id_only_file() {
+        let project = peek_project(
+            br#"{"client_id":"123456789012-abc.apps.googleusercontent.com"}"#,
+        )
+        .expect("project");
+        assert_eq!(project, "123456789012");
     }
 
     #[test]

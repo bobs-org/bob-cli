@@ -177,6 +177,12 @@ pub(crate) fn assume_tty() -> bool {
     )
 }
 
+/// Stdin is a terminal, or tests set [`ASSUME_TTY_ENV`].
+pub(crate) fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    assume_tty() || std::io::stdin().is_terminal()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

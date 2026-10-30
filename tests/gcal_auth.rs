@@ -5,10 +5,11 @@
 
 mod gcal_support;
 
-use std::fs;
+use std::{fs, io::Write};
 
 use gcal_support::{
-    json_stdout, run_gcal, stderr, stdout, FakeGog, GcalEnv, ACCOUNT,
+    json_stdout, run_gcal, run_gcal_paste, run_gcal_stdin, stderr, stdout,
+    FakeBrowser, FakeGog, GcalEnv, ACCOUNT, FAKE_REDIRECT,
 };
 use serde_json::Value;
 
@@ -41,6 +42,7 @@ fn login_existing_client_is_already_connected() {
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], true);
     assert_eq!(doc["already_connected"], true);
+    assert_eq!(doc["sign_in"], "already_connected");
     assert_eq!(doc["account"], ACCOUNT);
     assert_eq!(doc["client"], "bob-gcal");
     assert!(doc["calendars"].as_u64().unwrap() >= 1);
@@ -61,7 +63,7 @@ fn login_dash_c_stores_the_client() {
         r#"{"installed":{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"test-secret-123","project_id":"my-proj"}}"#,
     )
     .expect("write client json");
-    let output = run_gcal(
+    let output = run_gcal_paste(
         &env,
         &fake,
         &[
@@ -122,7 +124,7 @@ fn login_dash_c_stores_the_client() {
 fn login_reuses_legacy_default_client_without_prompt() {
     let env = GcalEnv::new("bob-cli-gcal-login-reuse");
     let fake = FakeGog::new(&env, "gog").scenario("other_client");
-    let output = run_gcal(&env, &fake, &["login", "-f", "json"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
     assert_success(&output, "login reuse");
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], true);
@@ -227,7 +229,7 @@ fn login_dash_c_accepts_legacy_flat_file() {
         r#"{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"flat-secret"}"#,
     )
     .expect("write flat json");
-    let output = run_gcal(
+    let output = run_gcal_paste(
         &env,
         &fake,
         &[
@@ -254,7 +256,7 @@ fn login_dash_c_replaces_existing_client() {
         r#"{"installed":{"client_id":"999-abc.apps.googleusercontent.com","client_secret":"new-secret"}}"#,
     )
     .expect("write new json");
-    let output = run_gcal(
+    let output = run_gcal_paste(
         &env,
         &fake,
         &[
@@ -333,7 +335,7 @@ fn login_prints_the_four_step_checklist_without_a_client() {
 fn login_account_flag_overrides_config() {
     let env = GcalEnv::new("bob-cli-gcal-login-account");
     let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
-    let output = run_gcal(
+    let output = run_gcal_paste(
         &env,
         &fake,
         &["login", "-a", "other@example.com", "-f", "json"],
@@ -349,45 +351,222 @@ fn login_account_flag_overrides_config() {
 }
 
 #[test]
-fn login_manual_passthrough() {
+fn login_minus_m_uses_paste_remote_flow() {
     let env = GcalEnv::new("bob-cli-gcal-login-manual");
     let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
-    let output = run_gcal(&env, &fake, &["login", "-m", "-f", "json"]);
+    let output = run_gcal_paste(&env, &fake, &["login", "-m", "-f", "json"]);
     assert_success(&output, "login -m");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["sign_in"], "paste");
     let add = fake
         .calls()
         .into_iter()
         .find(|call| call.windows(2).any(|w| w == ["auth", "add"]))
         .expect("auth add");
     assert!(
-        add.iter().any(|arg| arg == "--manual"),
-        "expected --manual: {add:?}"
+        add.iter().any(|arg| arg == "--remote"),
+        "expected --remote: {add:?}"
     );
     assert!(
-        !add.iter().any(|arg| arg == "--no-input"),
-        "interactive auth add omits --no-input: {add:?}"
+        add.iter().any(|arg| arg == "--no-input"),
+        "captured auth add keeps --no-input: {add:?}"
     );
     assert!(
-        !add.iter().any(|arg| arg == "--json"),
-        "interactive auth add omits --json: {add:?}"
+        add.iter().any(|arg| arg == "--json"),
+        "captured auth add keeps --json: {add:?}"
+    );
+    assert!(
+        !add.iter().any(|arg| arg == "--manual"),
+        "bob-owned paste must not pass --manual: {add:?}"
     );
 }
 
 #[test]
-fn login_ssh_without_manual_prints_a_hint() {
+fn login_ssh_auto_selects_paste() {
     let env = GcalEnv::new("bob-cli-gcal-login-ssh");
     let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
     let mut command = env.command();
     fake.install(&mut command);
     command.env("SSH_CONNECTION", "1.2.3.4 22 5.6.7.8 22");
+    command.env("BOB_GCAL_ASSUME_TTY", "1");
     command.args(["gcal", "login", "-f", "json"]);
-    let output = command.output().expect("run login on ssh");
+    command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().expect("spawn login on ssh");
+    let _ = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(FAKE_REDIRECT.as_bytes());
+    let output = child.wait_with_output().expect("wait login on ssh");
     assert_success(&output, "login ssh");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["sign_in"], "paste");
     let err = stderr(&output);
     assert!(
-        err.contains("SSH") && err.contains("-m"),
-        "expected SSH -m hint:\n{err}"
+        err.contains("Open the link") && err.contains("127.0.0.1"),
+        "expected paste instructions:\n{err}"
     );
+    assert!(
+        !err.contains("rerun with `bob gcal login -m`"),
+        "old SSH hint must be gone:\n{err}"
+    );
+    assert!(
+        fake.called_with(&["auth", "add", "--remote"]),
+        "SSH must use remote paste:\n{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn login_paste_junk_then_good_url_reprompts() {
+    let env = GcalEnv::new("bob-cli-gcal-login-junk");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let stdin = format!("not-a-url\n{FAKE_REDIRECT}");
+    let output =
+        run_gcal_stdin(&env, &fake, &["login", "-m", "-f", "json"], &stdin);
+    assert_success(&output, "login junk then good");
+    let err = stderr(&output);
+    assert!(
+        err.contains("isn't the address Bob needs"),
+        "expected re-prompt message:\n{err}"
+    );
+}
+
+#[test]
+fn login_paste_access_denied_then_q_is_cancelled() {
+    let env = GcalEnv::new("bob-cli-gcal-login-denied");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let stdin = "http://127.0.0.1:36015/oauth2/callback?state=fakestate&error=access_denied\nq\n";
+    let output =
+        run_gcal_stdin(&env, &fake, &["login", "-m", "-f", "json"], stdin);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "cancelled");
+}
+
+#[test]
+fn login_paste_stale_state_then_fresh_link() {
+    let env = GcalEnv::new("bob-cli-gcal-login-stale");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let stdin = format!(
+        "http://127.0.0.1:36015/oauth2/callback?state=oldstate&code=fakecode\n\
+         {FAKE_REDIRECT}"
+    );
+    let output =
+        run_gcal_stdin(&env, &fake, &["login", "-m", "-f", "json"], &stdin);
+    assert_success(&output, "login stale then fresh");
+    let err = stderr(&output);
+    assert!(
+        err.contains("older sign-in"),
+        "expected stale-link message:\n{err}"
+    );
+}
+
+#[test]
+fn login_without_manual_never_runs_interactive_auth_add() {
+    let env = GcalEnv::new("bob-cli-gcal-login-no-manual");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
+    assert_success(&output, "login auto paste");
+    for call in fake.calls() {
+        if call.windows(2).any(|w| w == ["auth", "add"]) {
+            assert!(
+                call.iter().any(|arg| arg == "--remote"),
+                "auth add must use --remote: {call:?}"
+            );
+            assert!(
+                !call.iter().any(|arg| arg == "--manual"),
+                "auth add must not use --manual: {call:?}"
+            );
+        }
+        assert!(
+            !call.iter().any(|arg| arg.contains("secret")),
+            "argv must not carry a secret: {call:?}"
+        );
+    }
+}
+
+#[test]
+fn login_browser_end_to_end() {
+    let env = GcalEnv::new("bob-cli-gcal-login-browser");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let browser = FakeBrowser::new(&env);
+    let mut command = env.command();
+    fake.install(&mut command);
+    browser.install(&mut command);
+    command.args(["gcal", "login", "-f", "json"]);
+    let output = command.output().expect("run browser login");
+    assert_success(&output, "login browser");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    assert_eq!(doc["sign_in"], "browser");
+    let page = browser.page();
+    assert!(
+        page.contains("Bob can read your Google Calendar"),
+        "expected success page:\n{page}"
+    );
+    let add = fake
+        .calls()
+        .into_iter()
+        .find(|call| {
+            call.windows(2).any(|w| w == ["auth", "add"])
+                && call.iter().any(|arg| arg == "--step")
+                && call.windows(2).any(|w| w == ["--step", "2"])
+        })
+        .expect("step 2");
+    assert!(
+        add.iter().any(|arg| arg == "--auth-url"),
+        "step 2 must pass --auth-url: {add:?}"
+    );
+    let step1 = fake
+        .calls()
+        .into_iter()
+        .find(|call| {
+            call.windows(2).any(|w| w == ["auth", "add"])
+                && call.windows(2).any(|w| w == ["--step", "1"])
+        })
+        .expect("step 1");
+    assert!(
+        step1.iter().any(|arg| arg == "--redirect-uri"),
+        "browser step 1 must pass --redirect-uri: {step1:?}"
+    );
+    assert!(
+        step1.iter().any(|arg| arg == "--force-consent"),
+        "step 1 must force consent: {step1:?}"
+    );
+}
+
+#[test]
+fn login_browser_access_denied() {
+    let env = GcalEnv::new("bob-cli-gcal-login-browser-denied");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let browser = FakeBrowser::new(&env);
+    let mut command = env.command();
+    fake.install(&mut command);
+    browser.deny(&mut command);
+    command.args(["gcal", "login", "-f", "json"]);
+    let output = command.output().expect("run denied browser login");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "consent_denied");
+    let page = browser.page();
+    assert!(
+        page.contains("Sign-in didn't finish"),
+        "expected failure page:\n{page}"
+    );
+}
+
+#[test]
+fn login_paste_without_tty_is_needs_tty() {
+    let env = GcalEnv::new("bob-cli-gcal-login-nontty");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let output = run_gcal(&env, &fake, &["login", "-m", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "needs_tty");
 }
 
 #[test]

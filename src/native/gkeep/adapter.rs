@@ -262,7 +262,6 @@ impl AdapterClient {
                 OsString::from(std::process::id().to_string()),
             )],
             timeout: self.timeout,
-            inherit_stdio: false,
         })
         .map_err(|error| {
             GkeepError::runtime(

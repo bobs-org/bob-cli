@@ -26,6 +26,13 @@ const FAKE_GOG_SRC: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/gcal_support/fake_gog.py"
 );
+const FAKE_BROWSER_SRC: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/gcal_support/fake_browser.py"
+);
+
+pub(crate) const FAKE_REDIRECT: &str =
+    "http://127.0.0.1:36015/oauth2/callback?state=fakestate&code=fakecode\n";
 
 pub(crate) const ACCOUNT: &str = "you@example.com";
 pub(crate) const HOST: &str = "test-host";
@@ -118,6 +125,11 @@ impl GcalEnv {
             .env("BOB_CONFIG_FILE", self.config())
             .env_remove("BOB_GCAL_GOG")
             .env_remove("BOB_GCAL_ASSUME_TTY")
+            .env_remove("SSH_CONNECTION")
+            .env_remove("SSH_TTY")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("BOB_GCAL_BROWSER")
             .env("HOSTNAME", HOST)
             .env("BOB_NOW", NOW)
             .env("NO_COLOR", "1")
@@ -332,6 +344,54 @@ pub(crate) fn run_gcal_stdin(
     stdin_text: &str,
 ) -> Output {
     run_gcal_stdin_inner(env, fake, args, stdin_text, true)
+}
+
+/// A fake `$BOB_GCAL_BROWSER` that GETs the loopback callback.
+pub(crate) struct FakeBrowser {
+    path: PathBuf,
+    out: PathBuf,
+}
+
+impl FakeBrowser {
+    pub(crate) fn new(env: &GcalEnv) -> Self {
+        let root = env.root().join("browser");
+        fs::create_dir_all(&root).expect("create fake browser dir");
+        let path = root.join("browser");
+        fs::copy(FAKE_BROWSER_SRC, &path).expect("copy fake browser");
+        chmod_exec(&path);
+        Self {
+            path,
+            out: root.join("page.html"),
+        }
+    }
+
+    pub(crate) fn install<'a>(
+        &self,
+        command: &'a mut Command,
+    ) -> &'a mut Command {
+        command
+            .env("BOB_GCAL_BROWSER", &self.path)
+            .env("BOB_GCAL_FAKE_BROWSER_OUT", &self.out)
+            .env("BOB_GCAL_CONSENT_SECS", "30")
+    }
+
+    pub(crate) fn deny<'a>(&self, command: &'a mut Command) -> &'a mut Command {
+        self.install(command)
+            .env("BOB_GCAL_FAKE_BROWSER_ERROR", "access_denied")
+    }
+
+    pub(crate) fn page(&self) -> String {
+        fs::read_to_string(&self.out).unwrap_or_default()
+    }
+}
+
+/// Run `bob gcal login` with the fake paste redirect on stdin.
+pub(crate) fn run_gcal_paste(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+) -> Output {
+    run_gcal_stdin(env, fake, args, FAKE_REDIRECT)
 }
 
 /// Run `bob gcal <args>` with piped stdin (login reuse / logout confirm).

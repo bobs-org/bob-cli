@@ -22,6 +22,12 @@ FLAGS_WITH_VALUE = {
     "--max",
     "--fields",
     "--format",
+    "--auth-url",
+    "--step",
+    "--redirect-uri",
+    "--timeout",
+    "--listen-addr",
+    "--redirect-host",
 }
 
 args = sys.argv[1:]
@@ -249,6 +255,22 @@ def scenario_defaults(name: str) -> dict:
         }
     elif name == "sleep":
         defaults["sleep"] = 2
+    elif name == "exchange_invalid_grant":
+        defaults["accounts"] = []
+        defaults["fail"] = {
+            "auth_finish": {
+                "stderr": "invalid_grant: Token has been expired or revoked",
+                "code": 1,
+            }
+        }
+    elif name == "exchange_invalid_client":
+        defaults["accounts"] = []
+        defaults["fail"] = {
+            "auth_finish": {
+                "stderr": "invalid_client: The OAuth client was not found.",
+                "code": 1,
+            }
+        }
     return defaults
 
 
@@ -395,16 +417,64 @@ if op == "accounts":
     raise SystemExit(0)
 
 if op == "auth_add":
+    if "--remote" not in args:
+        fail("fake gog: interactive auth add is not supported", 2)
+    step = flag_value("--step") or ""
     email = pos[2] if len(pos) > 2 else EMAIL
-    accounts = [
-        entry
-        for entry in (state.get("accounts") or [])
-        if not (entry.get("email") == email and entry.get("client") == CLIENT)
-    ]
-    accounts.append(connected_account(email))
-    state["accounts"] = accounts
-    save_state(state)
-    raise SystemExit(0)
+    if step == "1":
+        redirect = flag_value("--redirect-uri") or (
+            "http://127.0.0.1:36015/oauth2/callback"
+        )
+        from urllib.parse import quote
+
+        auth_url = (
+            "https://accounts.google.com/o/oauth2/auth"
+            "?access_type=offline"
+            "&client_id=123456789012-abc.apps.googleusercontent.com"
+            f"&redirect_uri={quote(redirect, safe='')}"
+            "&response_type=code"
+            "&state=fakestate"
+        )
+        state["manual_state"] = "fakestate"
+        save_state(state)
+        dump({"auth_url": auth_url, "state_reused": False})
+        raise SystemExit(0)
+    if step == "2":
+        finish_fail = (state.get("fail") or {}).get("auth_finish")
+        if finish_fail:
+            fail(
+                finish_fail.get("stderr") or "gog failed",
+                int(finish_fail.get("code") or 1),
+            )
+        from urllib.parse import parse_qs, urlparse
+
+        auth_url = flag_value("--auth-url") or ""
+        query = parse_qs(urlparse(auth_url).query)
+        got_state = (query.get("state") or [None])[0]
+        got_code = (query.get("code") or [None])[0]
+        if not got_state:
+            fail("missing state in redirect URL")
+        expected = state.get("manual_state")
+        if got_state != expected:
+            fail(
+                "manual auth state missing; start a new manual flow or "
+                "run remote step 1 again"
+            )
+        if not got_code:
+            fail("no code found in URL")
+        accounts = [
+            entry
+            for entry in (state.get("accounts") or [])
+            if not (
+                entry.get("email") == email and entry.get("client") == CLIENT
+            )
+        ]
+        accounts.append(connected_account(email))
+        state["accounts"] = accounts
+        save_state(state)
+        dump({"ok": True})
+        raise SystemExit(0)
+    fail("fake gog: remote auth add requires --step 1 or 2", 2)
 
 if op == "auth_remove":
     email = pos[2] if len(pos) > 2 else ""

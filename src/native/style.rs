@@ -52,6 +52,13 @@ impl Styler {
         }
     }
 
+    /// Color follows stderr, for transcripts that never write stdout.
+    pub(crate) fn detect_stderr() -> Self {
+        Self {
+            color: color_enabled(io::stderr().is_terminal()),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn plain() -> Self {
         Self { color: false }

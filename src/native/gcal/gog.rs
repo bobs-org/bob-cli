@@ -45,6 +45,13 @@ pub(crate) struct GogClient {
     pub client_secret_in_keyring: bool,
 }
 
+/// Remote `--step 1` result: the authorization URL and its `state`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthStart {
+    pub auth_url: String,
+    pub state: String,
+}
+
 /// One account from `gog auth list --json`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct GogAccount {
@@ -153,7 +160,6 @@ impl Gog {
                 .into_iter()
                 .chain(once_os("version"))
                 .collect(),
-            false,
         )?;
         if let Ok(value) =
             serde_json::from_str::<serde_json::Value>(&output.stdout)
@@ -206,7 +212,6 @@ impl Gog {
                     OsString::from("list"),
                 ])
                 .collect(),
-            false,
         )?;
         let value = parse_json(&output.stdout)?;
         let clients = value
@@ -243,7 +248,6 @@ impl Gog {
                 OsString::from("-"),
             ],
             Some(payload.to_vec()),
-            false,
         )?;
         Ok(())
     }
@@ -266,7 +270,7 @@ impl Gog {
         }
         flags.push(OsString::from("auth"));
         flags.push(OsString::from("list"));
-        let output = self.run(flags, false)?;
+        let output = self.run(flags)?;
         let value = parse_json(&output.stdout)?;
         let accounts = value
             .get("accounts")
@@ -293,7 +297,6 @@ impl Gog {
                     OsString::from("--all"),
                 ])
                 .collect(),
-            false,
         )?;
         let value = parse_json(&output.stdout)?;
         let calendars = value
@@ -334,7 +337,6 @@ impl Gog {
                     OsString::from(FIELDS),
                 ])
                 .collect(),
-            false,
         )?;
         let value = parse_json(&output.stdout)?;
         if value
@@ -376,7 +378,6 @@ impl Gog {
                     OsString::from(event_id),
                 ])
                 .collect(),
-            false,
         )?;
         let value = parse_json(&output.stdout)?;
         value.get("event").cloned().ok_or_else(|| {
@@ -387,13 +388,76 @@ impl Gog {
         })
     }
 
-    /// Interactive `gog auth add` with inherited stdio.
-    pub(crate) fn auth_add(
+    /// Remote `--step 1`: print the authorization URL. gog 0.44.0
+    /// accepts `--force-consent` and `--redirect-uri` (verified in a
+    /// throwaway `GOG_HOME`).
+    pub(crate) fn auth_begin(
         &self,
         account: &str,
-        manual: bool,
+        redirect_uri: Option<&str>,
+    ) -> Result<AuthStart, GcalError> {
+        let mut args = self.auth_add_prefix(account);
+        args.extend([
+            OsString::from("--force-consent"),
+            OsString::from("--remote"),
+            OsString::from("--step"),
+            OsString::from("1"),
+        ]);
+        if let Some(uri) = redirect_uri {
+            args.push(OsString::from("--redirect-uri"));
+            args.push(OsString::from(uri));
+        }
+        let output = self.run(args)?;
+        let value = parse_json(&output.stdout)?;
+        let auth_url = value
+            .get("auth_url")
+            .and_then(|v| v.as_str())
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                GcalError::runtime(
+                    "bad_json",
+                    "gog remote step 1 printed no auth_url".to_string(),
+                )
+            })?;
+        let state = state_from_auth_url(auth_url).ok_or_else(|| {
+            GcalError::runtime(
+                "bad_json",
+                "gog auth_url is missing state".to_string(),
+            )
+        })?;
+        Ok(AuthStart {
+            auth_url: auth_url.to_string(),
+            state,
+        })
+    }
+
+    /// Remote `--step 2`: exchange the redirect URL for a refresh token.
+    /// The single-use PKCE code is in `--auth-url`; it is useless without
+    /// gog's stored verifier, and gog redeems it immediately.
+    pub(crate) fn auth_finish(
+        &self,
+        account: &str,
+        redirect_url: &str,
     ) -> Result<(), GcalError> {
-        let mut args = vec![
+        let mut args = self.auth_add_prefix(account);
+        args.extend([
+            OsString::from("--remote"),
+            OsString::from("--step"),
+            OsString::from("2"),
+            OsString::from("--auth-url"),
+            OsString::from(redirect_url),
+        ]);
+        let _ = self.run(args)?;
+        Ok(())
+    }
+
+    fn auth_add_prefix(&self, account: &str) -> Vec<OsString> {
+        vec![
+            OsString::from("--no-input"),
+            OsString::from("--json"),
+            OsString::from("--color"),
+            OsString::from("never"),
+            OsString::from("--readonly"),
             OsString::from("--client"),
             OsString::from(CLIENT),
             OsString::from("auth"),
@@ -401,31 +465,22 @@ impl Gog {
             OsString::from(account),
             OsString::from("--services"),
             OsString::from("calendar"),
-            OsString::from("--readonly"),
-        ];
-        if manual {
-            args.push(OsString::from("--manual"));
-        }
-        let _ = self.run(args, true)?;
-        Ok(())
+        ]
     }
 
     pub(crate) fn auth_remove(&self, account: &str) -> Result<(), GcalError> {
-        let _ = self.run(
-            vec![
-                OsString::from("--no-input"),
-                OsString::from("--json"),
-                OsString::from("--color"),
-                OsString::from("never"),
-                OsString::from("--client"),
-                OsString::from(CLIENT),
-                OsString::from("--force"),
-                OsString::from("auth"),
-                OsString::from("remove"),
-                OsString::from(account),
-            ],
-            false,
-        )?;
+        let _ = self.run(vec![
+            OsString::from("--no-input"),
+            OsString::from("--json"),
+            OsString::from("--color"),
+            OsString::from("never"),
+            OsString::from("--client"),
+            OsString::from(CLIENT),
+            OsString::from("--force"),
+            OsString::from("auth"),
+            OsString::from("remove"),
+            OsString::from(account),
+        ])?;
         Ok(())
     }
 
@@ -449,16 +504,14 @@ impl Gog {
     fn run(
         &self,
         args: Vec<OsString>,
-        inherit_stdio: bool,
     ) -> Result<subprocess_runner::RunOutput, GcalError> {
-        self.run_with_stdin(args, None, inherit_stdio)
+        self.run_with_stdin(args, None)
     }
 
     fn run_with_stdin(
         &self,
         args: Vec<OsString>,
         stdin: Option<Vec<u8>>,
-        inherit_stdio: bool,
     ) -> Result<subprocess_runner::RunOutput, GcalError> {
         let output = subprocess_runner::run(&RunSpec {
             program: self.program.clone(),
@@ -466,7 +519,6 @@ impl Gog {
             stdin,
             env: Vec::new(),
             timeout: self.timeout,
-            inherit_stdio,
         })
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -500,6 +552,13 @@ impl Gog {
 
 fn once_os(value: &str) -> std::iter::Once<OsString> {
     std::iter::once(OsString::from(value))
+}
+
+pub(crate) fn state_from_auth_url(auth_url: &str) -> Option<String> {
+    let url = url::Url::parse(auth_url).ok()?;
+    url.query_pairs().find_map(|(key, value)| {
+        (key == "state" && !value.is_empty()).then(|| value.into_owned())
+    })
 }
 
 fn parse_json(stdout: &str) -> Result<serde_json::Value, GcalError> {
@@ -598,6 +657,28 @@ pub(crate) fn classify_gog_failure(stdout: &str, stderr: &str) -> GcalError {
         .with_hint(
             "download a Desktop app client JSON and run \
              `bob gcal login -c PATH`",
+        );
+    }
+    if blob.contains("manual auth state missing")
+        || blob.contains("manual auth state mismatch")
+    {
+        return GcalError::runtime(
+            "stale_link",
+            "that sign-in link is out of date".to_string(),
+        )
+        .with_hint("Bob starts a fresh sign-in link and you try once more");
+    }
+    if blob.contains("no code found in url")
+        || blob.contains("missing state in redirect url")
+    {
+        return GcalError::runtime(
+            "no_code",
+            "the redirect address is missing the authorization code"
+                .to_string(),
+        )
+        .with_hint(
+            "after you click Allow, copy the whole address of the page \
+             that starts with http://127.0.0.1:",
         );
     }
     if blob.contains("invalid_grant") {
@@ -732,6 +813,27 @@ mod tests {
             classify_gog_failure("", "Error 400: redirect_uri_mismatch");
         assert_eq!(error.kind(), "client_invalid");
         assert_eq!(error.exit_code(), 2);
+    }
+
+    #[test]
+    fn maps_remote_step_failures() {
+        let error = classify_gog_failure(
+            "",
+            "manual auth state missing; start a new manual flow",
+        );
+        assert_eq!(error.kind(), "stale_link");
+
+        let error = classify_gog_failure("", "no code found in URL");
+        assert_eq!(error.kind(), "no_code");
+    }
+
+    #[test]
+    fn state_from_auth_url_reads_query() {
+        let state = state_from_auth_url(
+            "https://accounts.google.com/o/oauth2/auth?state=abc&code=x",
+        )
+        .expect("state");
+        assert_eq!(state, "abc");
     }
 
     #[test]

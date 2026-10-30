@@ -1,18 +1,15 @@
 //! `bob gcal login`: one-time read-only Calendar consent through gog.
 
-use std::{
-    io::{self, BufRead, IsTerminal, Write},
-    path::Path,
-};
+use std::path::Path;
 
 use serde_json::json;
 
-use super::super::style::Styler;
 use super::{
-    client::{parse_client_json, ClientOrigin},
-    config::{assume_tty, GcalConfig},
+    client::{parse_client_json, peek_project, ClientOrigin},
+    config::GcalConfig,
     gog::{self, Gog, CLIENT},
-    ui, GcalError, LoginArgs,
+    login_ui::LoginUi,
+    signin, ui, GcalError, LoginArgs,
 };
 use crate::native::env as bob_env;
 
@@ -22,13 +19,22 @@ pub(crate) fn run(args: &LoginArgs) -> i32 {
         Ok(config) => config,
         Err(error) => return ui::report_error("login", &error, format),
     };
-    match login(args, &config) {
+    let json = args.format.is_json();
+    let ui_login = LoginUi::new(json);
+    match login(args, &config, &ui_login) {
         Ok(report) => {
-            print_report(&report, args.format.is_json());
+            print_report(&report, &ui_login);
             0
         }
         Err(error) => ui::report_error("login", &error, format),
     }
+}
+
+struct ResolvedClient {
+    origin: ClientOrigin,
+    project: Option<String>,
+    reused_name: Option<String>,
+    file_display: Option<String>,
 }
 
 struct LoginReport {
@@ -38,26 +44,37 @@ struct LoginReport {
     calendars: usize,
     syncing: usize,
     syncing_ids: Vec<String>,
+    sign_in: &'static str,
 }
 
 fn login(
     args: &LoginArgs,
     config: &GcalConfig,
+    ui: &LoginUi,
 ) -> Result<LoginReport, GcalError> {
     let gog = Gog::resolve(config.timeout())?;
     let _version = gog.require_version()?;
-    let client_name = ensure_client(&gog, args.credentials.as_deref())?;
+    ui.title();
+    let resolved = ensure_client(&gog, args.credentials.as_deref())?;
+    render_client_step(ui, &resolved);
     let account = resolve_account(&gog, args.account.as_deref(), config)?;
     let already = is_already_connected(&gog, &account)?;
-    if !already {
-        if !args.manual && bob_env_has("SSH_CONNECTION") {
-            eprintln!(
-                "hint: you are on SSH; rerun with `bob gcal login -m` if the \
-                 browser cannot open"
-            );
-        }
-        gog.auth_add(&account, args.manual)?;
-    }
+    let sign_in = if already {
+        ui.step_ok(2, "Sign in", &format!("already connected · {account}"));
+        "already_connected"
+    } else {
+        let (flow, reason) =
+            signin::choose_flow(args.manual, signin::FlowEnv::detect());
+        signin::run(
+            &gog,
+            ui,
+            &account,
+            flow,
+            reason,
+            resolved.project.as_deref(),
+        )?;
+        flow.as_str()
+    };
     let calendars = gog.calendars(&account)?;
     let syncing_ids: Vec<String> = calendars
         .iter()
@@ -70,20 +87,66 @@ fn login(
             }
         })
         .collect();
-    Ok(LoginReport {
+    let report = LoginReport {
         already_connected: already,
         account,
-        client: client_name,
+        client: CLIENT.to_string(),
         calendars: calendars.len(),
         syncing: syncing_ids.len(),
         syncing_ids,
-    })
+        sign_in,
+    };
+    render_check_step(ui, &report);
+    if !already {
+        ui.summary(&report.account);
+    }
+    Ok(report)
+}
+
+fn render_client_step(ui: &LoginUi, resolved: &ResolvedClient) {
+    let project = resolved
+        .project
+        .as_deref()
+        .map(|project| format!(" · project {project}"))
+        .unwrap_or_default();
+    let detail = match resolved.origin {
+        ClientOrigin::GogClient => {
+            let name = resolved.reused_name.as_deref().unwrap_or("default");
+            format!("reusing gog's \"{name}\" client{project}")
+        }
+        ClientOrigin::File | ClientOrigin::Downloads | ClientOrigin::Pasted => {
+            let file =
+                resolved.file_display.as_deref().unwrap_or("client.json");
+            format!("{file} · Desktop app{project}")
+        }
+        ClientOrigin::Stored => format!("bob-gcal{project}"),
+    };
+    ui.step_ok(1, "Google client", &detail);
+    if resolved.origin == ClientOrigin::GogClient {
+        ui.note("Bob keeps its own read-only sign-in; Gmail stays untouched.");
+    }
+}
+
+fn render_check_step(ui: &LoginUi, report: &LoginReport) {
+    let syncing = if report.syncing_ids.is_empty() {
+        "none".to_string()
+    } else {
+        report.syncing_ids.join(", ")
+    };
+    ui.step_ok(
+        3,
+        "Check",
+        &format!(
+            "{} calendars · syncing {}: {syncing}",
+            report.calendars, report.syncing
+        ),
+    );
 }
 
 fn ensure_client(
     gog: &Gog,
     credentials: Option<&Path>,
-) -> Result<String, GcalError> {
+) -> Result<ResolvedClient, GcalError> {
     let clients = gog.credentials_list()?;
     // `-c FILE` replaces any stored `bob-gcal` client.
     if let Some(path) = credentials {
@@ -102,10 +165,29 @@ fn ensure_client(
         let client = parse_client_json(&bytes, ClientOrigin::File)
             .map_err(|problem| problem.into_error(&display))?;
         gog.credentials_set_json(&client.to_gog_json())?;
-        return Ok(CLIENT.to_string());
+        let file_display = expanded
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned());
+        return Ok(ResolvedClient {
+            origin: ClientOrigin::File,
+            project: Some(client.project),
+            reused_name: None,
+            file_display,
+        });
     }
-    if clients.iter().any(|client| client.client == CLIENT) {
-        return Ok(CLIENT.to_string());
+    if let Some(stored) = clients.iter().find(|client| client.client == CLIENT)
+    {
+        let project = stored.path.as_deref().and_then(|path| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| peek_project(&bytes))
+        });
+        return Ok(ResolvedClient {
+            origin: ClientOrigin::Stored,
+            project,
+            reused_name: None,
+            file_display: None,
+        });
     }
     // Reuse another gog client without a prompt: Google's consent screen
     // is the real confirmation. Keyring-held clients cannot be copied.
@@ -137,7 +219,12 @@ fn ensure_client(
             continue;
         };
         gog.credentials_set_json(&client.to_gog_json())?;
-        return Ok(CLIENT.to_string());
+        return Ok(ResolvedClient {
+            origin: ClientOrigin::GogClient,
+            project: Some(client.project),
+            reused_name: Some(other.client.clone()),
+            file_display: None,
+        });
     }
     Err(checklist_error(&skipped_keyring))
 }
@@ -158,7 +245,7 @@ fn resolve_account(
     match emails.as_slice() {
         [email] => Ok(email.clone()),
         [] => {
-            if is_tty() {
+            if super::config::stdin_is_tty() {
                 prompt_email()
             } else {
                 Err(GcalError::setup(
@@ -172,7 +259,7 @@ fn resolve_account(
             }
         }
         _ => {
-            if is_tty() {
+            if super::config::stdin_is_tty() {
                 prompt_email()
             } else {
                 Err(GcalError::setup(
@@ -214,6 +301,7 @@ fn require_email(email: &str) -> Result<String, GcalError> {
 }
 
 fn prompt_email() -> Result<String, GcalError> {
+    use std::io::{self, BufRead, Write};
     eprint!("Google account email: ");
     let _ = io::stderr().flush();
     let mut line = String::new();
@@ -253,16 +341,8 @@ fn checklist_error(skipped_keyring: &[String]) -> GcalError {
     .with_hint(&hint)
 }
 
-fn is_tty() -> bool {
-    assume_tty() || io::stdin().is_terminal()
-}
-
-fn bob_env_has(key: &str) -> bool {
-    crate::native::env::var_os(key).is_some_and(|value| !value.is_empty())
-}
-
-fn print_report(report: &LoginReport, json: bool) {
-    if json {
+fn print_report(report: &LoginReport, ui: &LoginUi) {
+    if ui.json() {
         println!(
             "{}",
             json!({
@@ -274,47 +354,18 @@ fn print_report(report: &LoginReport, json: bool) {
                 "calendars": report.calendars,
                 "syncing": report.syncing,
                 "syncing_ids": report.syncing_ids,
+                "sign_in": report.sign_in,
             })
         );
         ui::flush_stdout();
-        return;
     }
-    let styler = Styler::detect();
-    println!(
-        "{}",
-        styler.cyan("Google Calendar · one-time setup · read-only")
-    );
-    println!();
-    println!(
-        "1/3  OAuth client   {} {} (Desktop app)",
-        styler.green("✓"),
-        report.client
-    );
-    if report.already_connected {
-        println!(
-            "2/3  Sign in        {} already connected · {}",
-            styler.green("✓"),
-            report.account
-        );
-    } else {
-        println!(
-            "2/3  Sign in        {} granted: view your calendars (read-only)",
-            styler.green("✓")
-        );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn flow_names_match_json() {
+        assert_eq!(super::signin::Flow::Browser.as_str(), "browser");
+        assert_eq!(super::signin::Flow::Paste.as_str(), "paste");
     }
-    let syncing = if report.syncing_ids.is_empty() {
-        "none".to_string()
-    } else {
-        report.syncing_ids.join(", ")
-    };
-    println!(
-        "3/3  Check          {} {} calendars (syncing {}: {syncing})",
-        styler.green("✓"),
-        report.calendars,
-        report.syncing
-    );
-    println!();
-    println!("Token stored by gog. Remove it with: bob gcal logout");
-    println!("Next: bob gcal calendars    list calendars for config");
-    ui::flush_stdout();
 }

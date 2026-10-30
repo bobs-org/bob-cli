@@ -81,6 +81,7 @@ mod ref_jobs;
 pub(crate) mod ref_library;
 pub(crate) mod ref_tasks;
 mod relation_labels;
+mod spinner;
 mod stats;
 pub(crate) mod style;
 mod subprocess_runner;
