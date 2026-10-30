@@ -248,6 +248,29 @@ fn load_relations_linked_from_enabled() -> bool {
     }
 }
 
+/// Load `relations.linked_from_mentions`, falling back to `false` and
+/// warning on stderr when the value is invalid.
+fn load_relations_linked_from_mentions_enabled() -> bool {
+    match bob_config::load_relations_config(&bob_config::config_path()) {
+        Ok(config) => {
+            if let Some(warning) = config.warnings.iter().find(|warning| {
+                warning.starts_with("relations.linked_from_mentions")
+            }) {
+                eprintln!(
+                    "{COMMAND_NAME}: warning: invalid relations config: {warning}"
+                );
+            }
+            config.linked_from_mentions
+        }
+        Err(error) => {
+            eprintln!(
+                "{COMMAND_NAME}: warning: invalid relations config: {error}; using relations.linked_from_mentions=false"
+            );
+            false
+        }
+    }
+}
+
 /// Files whose mtime is in the future or unreadable: the guarded write
 /// would refuse them without waiting, so a mint on that note must not
 /// be listed this run (BR5).
@@ -546,11 +569,13 @@ pub(super) fn sync_task_statuses(
         );
     }
     let relations_enabled = load_relations_linked_from_enabled();
+    let mentions_enabled = load_relations_linked_from_mentions_enabled();
     let relation_archives = load_relation_archives(
         &request.bob_dir,
         &settings,
         &files,
         &mut inputs,
+        mentions_enabled,
     )?;
     let relations = reconcile_relation_lines(
         &mut files,
@@ -560,6 +585,7 @@ pub(super) fn sync_task_statuses(
         previous_daily_file,
         &quiet_deferred,
         relations_enabled,
+        mentions_enabled,
     );
     for (file_index, original) in relations.original_contents {
         pre_reconcile.entry(file_index).or_insert(original);
@@ -1003,6 +1029,7 @@ pub(super) fn sync_task_statuses(
         linked_from_line_updates: relations.updates,
         minted_relation_source_block_ids: relations.mints,
         relation_warnings: relations.warnings,
+        mention_edges: relations.mention_edges,
         prj_is_blocked_tags_added,
         prj_is_blocked_tags_stripped,
         unblocked_fields_written,

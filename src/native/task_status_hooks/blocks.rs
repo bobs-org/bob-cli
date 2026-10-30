@@ -249,6 +249,7 @@ impl BlocksPass<'_> {
             path: display_path(&relative),
             line: line_index + 1,
             block_id: minted,
+            reason: None,
         });
     }
 
@@ -324,6 +325,8 @@ impl BlocksPass<'_> {
                     kind: report.kind.as_str().to_string(),
                     added: report.added,
                     removed: report.removed,
+                    mentions_added: Vec::new(),
+                    mentions_removed: Vec::new(),
                 });
                 Some((file_index, edits))
             }

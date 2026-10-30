@@ -8,8 +8,6 @@
 
 pub(crate) mod format;
 pub(crate) mod label;
-// The following reconcile phase wires this scanner into the relation pass.
-#[allow(dead_code)]
 pub(crate) mod mentions;
 pub(crate) mod parse;
 pub(crate) mod plan;

@@ -105,6 +105,13 @@ pub(super) struct BlocksLineUpdate {
     pub(super) kind: String,
     pub(super) added: Vec<String>,
     pub(super) removed: Vec<String>,
+    /// Mention subset of `added`. Omitted when empty so BLOCKS rows stay
+    /// byte-identical for older decoders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) mentions_added: Vec<String>,
+    /// Mention subset of `removed`. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) mentions_removed: Vec<String>,
 }
 
 /// One dependent `^block-id` minted so a BLOCKS entry can name it
@@ -114,6 +121,10 @@ pub(super) struct MintedDependentBlockId {
     pub(super) path: String,
     pub(super) line: usize,
     pub(super) block_id: String,
+    /// `"relation"` or `"mention"` on LINKED FROM mints. A source minted
+    /// for both reports `"relation"`. Omitted on BLOCKS mints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<String>,
 }
 
 /// One LINKED FROM projection warning (`docs/task-relations.md` §12).
@@ -300,6 +311,8 @@ pub(super) struct SyncResult {
     pub(super) linked_from_line_updates: Vec<BlocksLineUpdate>,
     pub(super) minted_relation_source_block_ids: Vec<MintedDependentBlockId>,
     pub(super) relation_warnings: Vec<RelationWarning>,
+    /// Count of listed `(💬 mentions)` entries after this pass.
+    pub(super) mention_edges: usize,
     pub(super) prj_is_blocked_tags_added: Vec<ProjectBlockedTagChange>,
     pub(super) prj_is_blocked_tags_stripped: Vec<ProjectBlockedTagChange>,
     pub(super) unblocked_fields_written: Vec<UnblockedFieldChange>,

@@ -48,18 +48,22 @@ pub(crate) struct MentionScan {
 /// Find task-owned block-link occurrences across an already parsed note set.
 /// `files` may include active notes, the previous daily note, and `done/`
 /// archives. The caller applies the existing writability and precedence rules.
-pub(crate) fn scan_mentions(
-    files: &[FileScan],
+pub(crate) fn scan_mentions<'a>(
+    files: impl IntoIterator<Item = &'a FileScan>,
     note_index: &NoteIndex,
 ) -> MentionScan {
+    let files: Vec<&FileScan> = files.into_iter().collect();
     let mut tasks_by_path: BTreeMap<PathBuf, &FileScan> = BTreeMap::new();
-    for file in files {
-        tasks_by_path.insert(file.relative_path.clone(), file);
+    for file in &files {
+        tasks_by_path.insert(file.relative_path.clone(), *file);
     }
     let mut pairs: BTreeMap<(PathBuf, usize, PathBuf, String), MentionPair> =
         BTreeMap::new();
 
     for file in files {
+        if !file.contents.contains("#^") {
+            continue;
+        }
         let lines = logical_lines(&file.contents);
         let refs: Vec<&str> = lines.to_vec();
         let fenced = fenced_lines(&refs, 0..refs.len());
@@ -436,7 +440,7 @@ fn is_blockquote_line(line: &str) -> bool {
     }
 }
 
-fn has_unclosed_fence(lines: &[&str]) -> bool {
+pub(crate) fn has_unclosed_fence(lines: &[&str]) -> bool {
     let mut open = None;
     for line in lines {
         if let Some(marker) = open {

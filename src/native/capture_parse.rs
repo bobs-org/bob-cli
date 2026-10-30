@@ -1375,6 +1375,7 @@ fn load_close_policy() -> crate::native::config::RelationsConfig {
         Ok(policy) => policy,
         Err(error) => crate::native::config::RelationsConfig {
             linked_from_lines: true,
+            linked_from_mentions: false,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: vec![format!(

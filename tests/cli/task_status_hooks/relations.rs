@@ -7,7 +7,7 @@ use super::dependency_lines::{
 use crate::support::*;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 fn apply_reconcile(vault: &Path, daily: &Path) -> Output {
@@ -67,6 +67,33 @@ fn apply_with_config(vault: &Path, daily: &Path, config: &Path) -> Output {
         .expect("apply with config");
     assert_success(&output);
     output
+}
+
+fn apply_json_with_config(vault: &Path, daily: &Path, config: &Path) -> Value {
+    let output = bob_command()
+        .args(["task", "reconcile", "--format", "json"])
+        .arg("--bob-dir")
+        .arg(vault)
+        .env("BOB_DAY_FILE", daily)
+        .env("BOB_CONFIG_FILE", config)
+        .output()
+        .expect("apply json with config");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("apply JSON")
+}
+
+fn write_mentions_config(path: &Path, enabled: bool) {
+    write_file(
+        path,
+        &format!("relations:\n  linked_from_mentions: {enabled}\n"),
+    );
+}
+
+fn mention_vectors() -> Value {
+    serde_json::from_str(include_str!(
+        "../../fixtures/task_mentions/vectors.json"
+    ))
+    .expect("mention vectors parse")
 }
 
 fn linked_from_updates(json: &Value) -> &[Value] {
@@ -973,4 +1000,495 @@ fn lr_human_output_includes_knot_group() {
     let text = stdout(&output);
     assert!(text.contains("LINKED FROM"), "{text}");
     assert!(text.contains("🪢") || text.contains("Relations:"), "{text}");
+}
+
+fn setup_mention_vector(
+    vector: &Value,
+) -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    let id = vector["id"].as_str().unwrap();
+    let temp = TempDir::new(&format!("bob-cli-mentions-{id}"));
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    for (path, contents) in vector["notes"].as_object().unwrap() {
+        write_file(&vault.join(path), contents.as_str().unwrap());
+    }
+    let daily = if vector
+        .get("previous_daily")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        let daily = vault.join("2026/20261029.md");
+        write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+        daily
+    } else {
+        write_daily(&vault)
+    };
+    write_blocked_tasks_settings(&vault);
+    (temp, vault, daily, config)
+}
+
+fn assert_fixture_mirrors(vault: &Path, vector: &Value) {
+    let Some(mirrors) = vector.get("mirror").and_then(Value::as_object) else {
+        return;
+    };
+    for (identity, expected) in mirrors {
+        let (path, _) = identity.split_once("#^").expect("target identity");
+        let after = fs::read_to_string(vault.join(path)).unwrap();
+        let expected = expected.as_str().unwrap();
+        assert!(
+            after.contains(expected),
+            "{}: missing {expected:?} in {path}: {after}",
+            vector["id"]
+        );
+    }
+}
+
+#[test]
+fn mn_fixture_reconcile_mirrors_and_mints() {
+    // MN1–MN12, MN21, MN23, MN25 through the reconcile harness.
+    for vector in mention_vectors()["vectors"].as_array().unwrap() {
+        let id = vector["id"].as_str().unwrap();
+        let (_temp, vault, daily, config) = setup_mention_vector(vector);
+        let json = apply_json_with_config(&vault, &daily, &config);
+        assert_fixture_mirrors(&vault, vector);
+        if let Some(mints) = vector.get("mints").and_then(Value::as_array) {
+            for expected in mints {
+                let path = expected["path"].as_str().unwrap();
+                let line = expected["line"].as_u64().unwrap();
+                let reason = expected["reason"].as_str().unwrap();
+                assert!(
+                    minted_ids(&json).iter().any(|row| {
+                        row["path"] == path
+                            && row["line"] == line
+                            && row["reason"] == reason
+                    }),
+                    "{id}: missing mint {expected} in {}",
+                    json["minted_relation_source_block_ids"]
+                );
+            }
+            if !mints.is_empty() {
+                assert_eq!(
+                    minted_ids(&json).len(),
+                    mints.len(),
+                    "{id}: {json}"
+                );
+            }
+        }
+        if id == "MN9" || id == "MN12" || id == "MN21" {
+            for path in vector["notes"].as_object().unwrap().keys() {
+                if path.starts_with("done/") {
+                    continue;
+                }
+                let Ok(after) = fs::read_to_string(vault.join(path)) else {
+                    continue;
+                };
+                assert!(
+                    !after.contains("(💬 mentions)"),
+                    "{id}: unexpected mention in {path}: {after}"
+                );
+            }
+        }
+        if id == "MN4" {
+            let after = fs::read_to_string(vault.join("edges.md")).unwrap();
+            for task in [
+                "Depends target ^t",
+                "Blocks target ^u",
+                "Subproject target ^v",
+                "Malformed-links target ^w",
+            ] {
+                assert!(
+                    !after
+                        .contains(&format!("{task}\n  - 🪢 **LINKED FROM:**")),
+                    "{id}: edge-line target gained a mention: {after}"
+                );
+            }
+        }
+        if id == "MN5" || id == "MN6" {
+            for path in vector["notes"].as_object().unwrap().keys() {
+                let Ok(after) = fs::read_to_string(vault.join(path)) else {
+                    continue;
+                };
+                assert!(
+                    !after.contains("(💬 mentions)"),
+                    "{id}: unexpected mention in {path}: {after}"
+                );
+            }
+        }
+        if id == "MN4" || id == "MN5" || id == "MN6" {
+            let json_second = apply_json_with_config(&vault, &daily, &config);
+            assert_relations_clean(&json_second);
+        }
+        if matches!(
+            id,
+            "MN1" | "MN2" | "MN3" | "MN7" | "MN10" | "MN22" | "MN25"
+        ) {
+            assert!(
+                json["mention_edges"].as_u64().unwrap() >= 1,
+                "{id}: mention_edges={}",
+                json["mention_edges"]
+            );
+        }
+        if matches!(
+            id,
+            "MN1" | "MN2" | "MN3" | "MN7" | "MN8" | "MN10" | "MN22" | "MN25"
+        ) {
+            let second = apply_json_with_config(&vault, &daily, &config);
+            assert_relations_clean(&second);
+        }
+        if id == "MN23" {
+            let keep = fs::read_to_string(vault.join("uncertain.md")).unwrap();
+            assert!(
+                keep.contains(
+                    "- [ ] #task Keep target ^keep\n  - 🪢 **LINKED FROM:** [[#^s]] (💬 mentions)\n"
+                ),
+                "{keep}"
+            );
+            assert!(keep.contains("- [ ] #task New target ^new\n"), "{keep}");
+            assert!(
+                !keep.contains(
+                    "- [ ] #task New target ^new\n  - 🪢 **LINKED FROM:"
+                ),
+                "uncertain source newly added: {keep}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mn1_json_reports_mention_subset_and_edges() {
+    let temp = TempDir::new("bob-cli-mentions-mn1-json");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("note.md"),
+        concat!(
+            "- [ ] #task Source mentions [[#^t]] in title ^s\n",
+            "- [ ] #task Target task ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let (dry, _) = dry_run_with_config(&vault, &daily, &config);
+    assert_eq!(dry["mention_edges"], 1);
+    let updates = linked_from_updates(&dry);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0]["kind"], "inserted");
+    assert_eq!(updates[0]["mentions_added"], serde_json::json!(["[[#^s]]"]));
+    assert!(
+        updates[0]
+            .get("mentions_removed")
+            .and_then(Value::as_array)
+            .is_none_or(|removed| removed.is_empty()),
+        "{}",
+        updates[0]
+    );
+    let applied = apply_json_with_config(&vault, &daily, &config);
+    assert_eq!(
+        applied["linked_from_line_updates"],
+        dry["linked_from_line_updates"]
+    );
+    assert_eq!(applied["mention_edges"], dry["mention_edges"]);
+}
+
+#[test]
+fn mn8_relation_wins_over_mention() {
+    let temp = TempDir::new("bob-cli-mentions-mn8");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("mix.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - 🪢 **LINKS:** duplicate of [[#^t]]\n",
+            "  - duplicate of [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let after = fs::read_to_string(vault.join("mix.md")).unwrap();
+    assert!(has_linked_from(&after, "[[#^s]] (duplicate of)"), "{after}");
+    assert!(!after.contains("(💬 mentions)"), "{after}");
+}
+
+#[test]
+fn mn9_dependency_suppresses_mention_but_not_relation() {
+    let temp = TempDir::new("bob-cli-mentions-mn9");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("deps.md"),
+        concat!(
+            "- [ ] #task Source depends ^s\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^t]]\n",
+            "  - 🪢 **LINKS:** related to [[#^t]]\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Target depended ^t\n",
+            "- [ ] #task Other source ^u\n",
+            "  - mentions [[#^v]]\n",
+            "- [ ] #task Reverse depended ^v\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^u]]\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let after = fs::read_to_string(vault.join("deps.md")).unwrap();
+    assert!(has_linked_from(&after, "[[#^s]] (related to)"), "{after}");
+    assert!(!after.contains("(💬 mentions)"), "{after}");
+    assert!(
+        !after.contains("Reverse depended ^v\n  - 🪢 **LINKED FROM:**"),
+        "{after}"
+    );
+}
+
+#[test]
+fn mn11_mints_idless_source_with_mention_reason() {
+    let temp = TempDir::new("bob-cli-mentions-mn11");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(&vault.join("src.md"), "- [ ] #task See this [[tgt#^t]]\n");
+    write_file(&vault.join("tgt.md"), "- [ ] #task Target task ^t\n");
+    write_blocked_tasks_settings(&vault);
+
+    let json = apply_json_with_config(&vault, &daily, &config);
+    assert_eq!(minted_ids(&json).len(), 1);
+    assert_eq!(minted_ids(&json)[0]["path"], "src.md");
+    assert_eq!(minted_ids(&json)[0]["line"], 1);
+    assert_eq!(minted_ids(&json)[0]["reason"], "mention");
+    let src = fs::read_to_string(vault.join("src.md")).unwrap();
+    assert!(src.contains(" ^"), "{src}");
+    assert!(!src.contains("[id::]"), "{src}");
+    assert!(!src.contains("[fresh::]"), "{src}");
+    let tgt = fs::read_to_string(vault.join("tgt.md")).unwrap();
+    assert!(tgt.contains("(💬 mentions)"), "{tgt}");
+}
+
+#[test]
+fn mn13_mentions_off_drops_only_mention_entries() {
+    let temp = TempDir::new("bob-cli-mentions-mn13");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - 🪢 **LINKS:** see [[#^r]]\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Related ^r\n",
+            "- [ ] #task Mentioned ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let on = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(has_linked_from(&on, "[[#^s]] (see)"), "{on}");
+    assert!(has_linked_from(&on, "[[#^s]] (💬 mentions)"), "{on}");
+
+    write_mentions_config(&config, false);
+    apply_with_config(&vault, &daily, &config);
+    let off = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(has_linked_from(&off, "[[#^s]] (see)"), "{off}");
+    assert!(!off.contains("(💬 mentions)"), "{off}");
+    assert!(off.contains("  - mentions [[#^t]]\n"), "{off}");
+
+    write_mentions_config(&config, true);
+    apply_with_config(&vault, &daily, &config);
+    let rebuilt = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert_eq!(rebuilt, on);
+}
+
+#[test]
+fn mn14_rebuilds_identical_bytes_after_deleting_mention_lines() {
+    let temp = TempDir::new("bob-cli-mentions-mn14");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Other ^o\n",
+            "  - also [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let snapshot = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    write_file(&vault.join("tasks.md"), &strip_linked_from_lines(&snapshot));
+    apply_with_config(&vault, &daily, &config);
+    assert_eq!(
+        fs::read_to_string(vault.join("tasks.md")).unwrap(),
+        snapshot
+    );
+    assert_relations_clean(&apply_json_with_config(&vault, &daily, &config));
+}
+
+#[test]
+fn mn17_mention_writes_are_inert() {
+    let temp = TempDir::new("bob-cli-mentions-mn17");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    let tasks = vault.join("tasks.md");
+    let before = concat!(
+        "- [ ] #task Source ^s\n",
+        "- [ ] #task Target ^t\n",
+        "- [/] #task Pending ^p\n",
+        "- [*] #task Next ^n\n",
+    );
+    write_file(&tasks, before);
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let baseline = fs::read_to_string(&tasks).unwrap();
+
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+            "- [/] #task Pending ^p\n",
+            "- [*] #task Next ^n\n",
+        ),
+    );
+    apply_with_config(&vault, &daily, &config);
+    let added = fs::read_to_string(&tasks).unwrap();
+    assert!(has_linked_from(&added, "[[#^s]] (💬 mentions)"), "{added}");
+    assert!(added.contains("- [/] #task Pending ^p\n"), "{added}");
+    assert!(added.contains("- [*] #task Next ^n\n"), "{added}");
+    assert!(!added.contains("[fresh::]"), "{added}");
+
+    write_file(
+        &tasks,
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "- [ ] #task Target ^t\n",
+            "  - 🪢 **LINKED FROM:** [[#^s]] (💬 mentions)\n",
+            "- [/] #task Pending ^p\n",
+            "- [*] #task Next ^n\n",
+        ),
+    );
+    apply_with_config(&vault, &daily, &config);
+    let removed = fs::read_to_string(&tasks).unwrap();
+    assert!(!removed.contains("LINKED FROM"), "{removed}");
+    assert_eq!(strip_linked_from_lines(&removed), baseline);
+}
+
+#[test]
+fn mention_only_owner_with_mentions_off_loses_only_mention_entries() {
+    let temp = TempDir::new("bob-cli-mentions-off-owner");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, false);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - 🪢 **LINKS:** see [[#^r]]\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+            "  - 🪢 **LINKED FROM:** [[#^s]] (💬 mentions)\n",
+            "- [ ] #task Related ^r\n",
+            "  - 🪢 **LINKED FROM:** [[#^s]] (see)\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    apply_with_config(&vault, &daily, &config);
+    let after = fs::read_to_string(vault.join("tasks.md")).unwrap();
+    assert!(!after.contains("(💬 mentions)"), "{after}");
+    assert!(has_linked_from(&after, "[[#^s]] (see)"), "{after}");
+    assert!(after.contains("  - mentions [[#^t]]\n"), "{after}");
+}
+
+#[test]
+fn mn_invalid_mentions_switch_behaves_as_false() {
+    let temp = TempDir::new("bob-cli-mentions-invalid");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  linked_from_mentions: 1\n");
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    let (json, err) = dry_run_with_config(&vault, &daily, &config);
+    assert!(
+        err.contains("invalid relations config")
+            && err.contains("using relations.linked_from_mentions=false"),
+        "{err}"
+    );
+    assert_relations_clean(&json);
+}
+
+#[test]
+fn mention_and_relation_mint_reports_relation_reason() {
+    let temp = TempDir::new("bob-cli-mentions-mint-reason");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Call back\n",
+            "  - 🪢 **LINKS:** [[#^r]]\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Related ^r\n",
+            "- [ ] #task Mentioned ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    let json = apply_json_with_config(&vault, &daily, &config);
+    assert_eq!(minted_ids(&json).len(), 1);
+    assert_eq!(minted_ids(&json)[0]["reason"], "relation");
+}
+
+#[test]
+fn mn_human_output_includes_mention_counts() {
+    let temp = TempDir::new("bob-cli-mentions-human");
+    let vault = temp.path().join("vault");
+    let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_mentions_config(&config, true);
+    write_file(
+        &vault.join("tasks.md"),
+        concat!(
+            "- [ ] #task Source ^s\n",
+            "  - mentions [[#^t]]\n",
+            "- [ ] #task Target ^t\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+    let output = bob_command()
+        .args(["task", "reconcile", "--dry-run"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("human dry-run");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("💬"), "{text}");
 }

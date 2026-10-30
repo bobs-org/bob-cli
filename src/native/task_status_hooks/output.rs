@@ -178,12 +178,22 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.blocks_line_updates.len(),
         result.minted_dependent_block_ids.len()
     );
-    println!(
-        "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings",
-        result.linked_from_line_updates.len(),
-        result.minted_relation_source_block_ids.len(),
-        result.relation_warnings.len()
-    );
+    if result.mention_edges > 0 {
+        println!(
+            "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings, {} \u{1F4AC}",
+            result.linked_from_line_updates.len(),
+            result.minted_relation_source_block_ids.len(),
+            result.relation_warnings.len(),
+            result.mention_edges
+        );
+    } else {
+        println!(
+            "Relations: {} \u{1FAA2} LINKED FROM, {} minted, {} warnings",
+            result.linked_from_line_updates.len(),
+            result.minted_relation_source_block_ids.len(),
+            result.relation_warnings.len()
+        );
+    }
     println!(
         "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} \u{1FAA2} LINKED FROM, {} relation minted, {} relation warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
         result.marked_next.len(),
@@ -292,6 +302,16 @@ pub(super) fn print_relation_line_sections(
             if !entry.removed.is_empty() {
                 detail.push_str("  -");
                 detail.push_str(&entry.removed.join(" "));
+            }
+            if !entry.mentions_added.is_empty() {
+                detail.push_str("  +");
+                detail.push_str(&entry.mentions_added.len().to_string());
+                detail.push_str(" \u{1F4AC}");
+            }
+            if !entry.mentions_removed.is_empty() {
+                detail.push_str("  -");
+                detail.push_str(&entry.mentions_removed.len().to_string());
+                detail.push_str(" \u{1F4AC}");
             }
             println!(
                 "    {}  line {}  {}  {}",

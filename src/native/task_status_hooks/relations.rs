@@ -1,9 +1,9 @@
-//! LINKED FROM projection pass (`docs/task-relations.md` §§5–7).
+//! LINKED FROM projection pass (`docs/task-relations.md` §§5–7, §19).
 //!
 //! Runs immediately after `reconcile_blocks_lines`. It never rewrites an
 //! authored LINKS line: desired membership comes from accepted relation
-//! edges, plus existing LINKED FROM entries that name uncertain sources
-//! so those are never pruned.
+//! edges, mention pairs that pass M7, plus existing LINKED FROM entries
+//! that name uncertain sources so those are never pruned.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -15,11 +15,19 @@ use super::super::task_dependencies::format::{
     canonical_link, has_final_newline, note_line_ending,
 };
 use super::super::task_dependencies::is_archive_path;
+use super::super::task_dependencies::parse::{
+    dependency_child_of, DependencyLine,
+};
+use super::super::task_relations::mentions::{
+    has_unclosed_fence, scan_mentions, MentionPair,
+};
 use super::super::task_relations::parse::{
     linked_from_children_of, links_children_of,
 };
 use super::super::task_relations::plan::plan_linked_from_line;
-use super::super::task_relations::{LinkedFromLine, LinksLine, RelationEntry};
+use super::super::task_relations::{
+    LinkedFromLine, LinksLine, RelationEntry, RelationEntryKind, MENTION_LABEL,
+};
 use super::super::vault_links::{target_to_markdown_path, NoteIndex};
 use super::*;
 
@@ -31,17 +39,20 @@ pub(super) struct RelationsOutcome {
     pub(super) updates: Vec<BlocksLineUpdate>,
     pub(super) mints: Vec<MintedDependentBlockId>,
     pub(super) warnings: Vec<RelationWarning>,
+    pub(super) mention_edges: usize,
 }
 
 /// Load `done/**/*.md` notes that carry relation sources or explicit
-/// `done/` targets, read-only. Byte-prefilter for `LINKS`, then load any
-/// remaining explicit archive targets named from active or archive LINKS
-/// lines so those identities resolve.
+/// `done/` targets, read-only. Byte-prefilter for `LINKS`, and when
+/// mentions are enabled also for notes that contain both `#task` and
+/// `#^`. Then load any remaining explicit archive targets named from
+/// active or archive LINKS lines so those identities resolve.
 pub(super) fn load_relation_archives(
     vault: &Path,
     settings: &TasksSettings,
     files: &[FileScan],
     inputs: &mut Vec<InputSnapshot>,
+    mentions_enabled: bool,
 ) -> Result<Vec<FileScan>, SyncError> {
     let done_root = vault.join("done");
     let mut archives = Vec::new();
@@ -56,7 +67,7 @@ pub(super) fn load_relation_archives(
             else {
                 continue;
             };
-            if scan.contents.contains("LINKS") {
+            if admits_relation_scan(&scan.contents, mentions_enabled) {
                 loaded.insert(scan.relative_path.clone());
                 archives.push(scan);
             }
@@ -167,6 +178,7 @@ pub(super) fn reconcile_relation_lines(
     previous_daily_file: Option<usize>,
     quiet_deferred: &BTreeSet<usize>,
     enabled: bool,
+    mentions_enabled: bool,
 ) -> RelationsOutcome {
     let mut pass = RelationsPass {
         files,
@@ -176,12 +188,14 @@ pub(super) fn reconcile_relation_lines(
         previous_daily_file,
         quiet_deferred,
         enabled,
+        mentions_enabled,
         outcome: RelationsOutcome {
             touched_files: BTreeSet::new(),
             original_contents: BTreeMap::new(),
             updates: Vec::new(),
             mints: Vec::new(),
             warnings: Vec::new(),
+            mention_edges: 0,
         },
         used: BTreeMap::new(),
     };
@@ -197,21 +211,56 @@ struct RelationsPass<'a> {
     previous_daily_file: Option<usize>,
     quiet_deferred: &'a BTreeSet<usize>,
     enabled: bool,
+    mentions_enabled: bool,
     outcome: RelationsOutcome,
     used: BTreeMap<usize, HashSet<String>>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TaskRef {
     Active { file: usize, task: usize },
     Archive { file: usize, task: usize },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MintReason {
+    Relation,
+    Mention,
+}
+
+impl MintReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Relation => "relation",
+            Self::Mention => "mention",
+        }
+    }
+}
+
+type TaskIdentity = (PathBuf, String);
+
 struct CollectedEdges {
     /// Certain (S, T, label) edges keyed by target identity.
-    by_target: BTreeMap<(PathBuf, String), Vec<EdgeSource>>,
-    uncertain: BTreeSet<(PathBuf, String)>,
-    mint_needed: BTreeSet<(usize, usize)>,
+    by_target: BTreeMap<TaskIdentity, Vec<EdgeSource>>,
+    mention_by_target: BTreeMap<TaskIdentity, Vec<MentionSource>>,
+    uncertain: BTreeSet<TaskIdentity>,
+    /// Mention-only uncertainty (unclosed fence, malformed Depends-On on S).
+    mention_uncertain: BTreeSet<TaskIdentity>,
+    malformed_depends: BTreeSet<TaskIdentity>,
+    mint_needed: BTreeMap<(usize, usize), MintReason>,
+}
+
+impl CollectedEdges {
+    fn note_mint(&mut self, file: usize, task: usize, reason: MintReason) {
+        self.mint_needed
+            .entry((file, task))
+            .and_modify(|existing| {
+                if reason == MintReason::Relation {
+                    *existing = MintReason::Relation;
+                }
+            })
+            .or_insert(reason);
+    }
 }
 
 struct EdgeSource {
@@ -220,9 +269,22 @@ struct EdgeSource {
     label: Option<String>,
 }
 
+struct MentionSource {
+    path: PathBuf,
+    loc: TaskRef,
+}
+
+#[derive(Default)]
+struct DependencyState {
+    depends_from_loc: BTreeMap<TaskRef, BTreeSet<TaskIdentity>>,
+    depends_identities: BTreeSet<(TaskIdentity, TaskIdentity)>,
+    malformed_depends: BTreeSet<TaskIdentity>,
+}
+
 impl RelationsPass<'_> {
     fn run(&mut self) {
-        let collected = self.collect_edges();
+        let mut collected = self.collect_edges();
+        self.collect_mentions(&mut collected);
         if self.enabled {
             self.mint_sources(&collected.mint_needed);
         }
@@ -264,8 +326,11 @@ impl RelationsPass<'_> {
     fn collect_edges(&mut self) -> CollectedEdges {
         let mut collected = CollectedEdges {
             by_target: BTreeMap::new(),
+            mention_by_target: BTreeMap::new(),
             uncertain: BTreeSet::new(),
-            mint_needed: BTreeSet::new(),
+            mention_uncertain: BTreeSet::new(),
+            malformed_depends: BTreeSet::new(),
+            mint_needed: BTreeMap::new(),
         };
         let active_count = self.files.len();
         for file_index in 0..active_count {
@@ -284,12 +349,12 @@ impl RelationsPass<'_> {
         archive: bool,
         collected: &mut CollectedEdges,
     ) {
-        let contents_has_links = if archive {
-            self.archives[file_index].contents.contains("LINKS")
+        let contents_ref = if archive {
+            self.archives[file_index].contents.as_str()
         } else {
-            self.files[file_index].contents.contains("LINKS")
+            self.files[file_index].contents.as_str()
         };
-        if !contents_has_links {
+        if !admits_relation_scan(contents_ref, self.mentions_enabled) {
             return;
         }
         let relative = if archive {
@@ -297,21 +362,33 @@ impl RelationsPass<'_> {
         } else {
             self.files[file_index].relative_path.clone()
         };
-        let contents = if archive {
-            self.archives[file_index].contents.clone()
-        } else {
-            self.files[file_index].contents.clone()
-        };
         let tasks = if archive {
             self.archives[file_index].tasks.clone()
         } else {
             self.files[file_index].tasks.clone()
         };
         let duplicates = duplicate_block_ids(&tasks);
+        for task in &tasks {
+            if let Some(block_id) = &task.block_id
+                && duplicates.contains(block_id)
+            {
+                collected
+                    .uncertain
+                    .insert((relative.clone(), block_id.clone()));
+            }
+        }
+        if !contents_ref.contains("LINKS") {
+            return;
+        }
+        let contents = contents_ref.to_string();
         let lines = logical_lines(&contents);
         let line_refs: Vec<&str> = lines.to_vec();
         let fenced = fenced_lines(&line_refs, 0..line_refs.len());
         for (task_index, task) in tasks.iter().enumerate() {
+            let duplicated = task
+                .block_id
+                .as_ref()
+                .is_some_and(|id| duplicates.contains(id));
             let children =
                 links_children_of(&line_refs, &fenced, task.line_index);
             if children.is_empty() {
@@ -344,10 +421,6 @@ impl RelationsPass<'_> {
                     message: "LINKS line has trailing prose, a half-typed link, or other residue; left alone".to_string(),
                 });
             }
-            let duplicated = task
-                .block_id
-                .as_ref()
-                .is_some_and(|id| duplicates.contains(id));
             if duplicated && let Some(block_id) = &task.block_id {
                 self.outcome.warnings.push(RelationWarning {
                         kind: "duplicate_block_id".to_string(),
@@ -357,9 +430,6 @@ impl RelationsPass<'_> {
                             "note has more than one ^{block_id}; source not listed this run"
                         ),
                     });
-                collected
-                    .uncertain
-                    .insert((relative.clone(), block_id.clone()));
             }
             if malformed {
                 if let Some(block_id) = &task.block_id {
@@ -419,9 +489,11 @@ impl RelationsPass<'_> {
                         && self.writable(file_index)
                         && !self.quiet_deferred.contains(&file_index);
                     if mintable {
-                        collected
-                            .mint_needed
-                            .insert((file_index, task_index_of(loc)));
+                        collected.note_mint(
+                            file_index,
+                            task_index_of(loc),
+                            MintReason::Relation,
+                        );
                     } else {
                         return;
                     }
@@ -525,19 +597,27 @@ impl RelationsPass<'_> {
         false
     }
 
-    fn mint_sources(&mut self, needed: &BTreeSet<(usize, usize)>) {
-        for (file_index, task_index) in needed {
-            if self.files[*file_index].tasks[*task_index]
-                .block_id
-                .is_some()
-            {
+    fn mint_sources(&mut self, needed: &BTreeMap<(usize, usize), MintReason>) {
+        let pending: Vec<_> = needed
+            .iter()
+            .map(|(&(file_index, task_index), &reason)| {
+                (file_index, task_index, reason)
+            })
+            .collect();
+        for (file_index, task_index, reason) in pending {
+            if self.files[file_index].tasks[task_index].block_id.is_some() {
                 continue;
             }
-            self.mint_one(*file_index, *task_index);
+            self.mint_one(file_index, task_index, reason);
         }
     }
 
-    fn mint_one(&mut self, file_index: usize, task_index: usize) {
+    fn mint_one(
+        &mut self,
+        file_index: usize,
+        task_index: usize,
+        reason: MintReason,
+    ) {
         let relative = self.files[file_index].relative_path.clone();
         let line_index = self.files[file_index].tasks[task_index].line_index;
         let description =
@@ -567,6 +647,7 @@ impl RelationsPass<'_> {
             path: display_path(&relative),
             line: line_index + 1,
             block_id: minted,
+            reason: Some(reason.as_str().to_string()),
         });
     }
 
@@ -587,7 +668,11 @@ impl RelationsPass<'_> {
     ) -> BTreeSet<(usize, usize)> {
         let mut owners = BTreeSet::new();
         if self.enabled {
-            for target in collected.by_target.keys() {
+            for target in collected
+                .by_target
+                .keys()
+                .chain(collected.mention_by_target.keys())
+            {
                 if let Some(TaskRef::Active { file, task }) =
                     self.lookup_task(&target.0, &target.1)
                     && self.writable(file)
@@ -663,6 +748,13 @@ impl RelationsPass<'_> {
         }
         let desired =
             self.desired_entries(&relative, &task, &children, collected);
+        self.outcome.mention_edges += desired
+            .iter()
+            .filter(|(_, label)| is_mention_label(label))
+            .count();
+        let current = current_linked_from_entries(&children);
+        let mentions_added = mention_link_delta(&desired, &current);
+        let mentions_removed = mention_link_delta(&current, &desired);
         match plan_linked_from_line(
             &line_refs,
             &fenced,
@@ -692,6 +784,8 @@ impl RelationsPass<'_> {
                     kind: report.kind.as_str().to_string(),
                     added: report.added,
                     removed: report.removed,
+                    mentions_added,
+                    mentions_removed,
                 });
                 Some((file_index, edits))
             }
@@ -735,6 +829,29 @@ impl RelationsPass<'_> {
                     .or_insert((link, source.label.clone()));
             }
         }
+        if self.mentions_enabled
+            && !collected.malformed_depends.contains(&identity)
+            && let Some(sources) = collected.mention_by_target.get(&identity)
+        {
+            for source in sources {
+                let Some(block_id) = self.source_block_id(source.loc) else {
+                    continue;
+                };
+                let key = (source.path.clone(), block_id);
+                if self.source_is_mention_uncertain(collected, &key)
+                    || desired.contains_key(&key)
+                {
+                    continue;
+                }
+                let link = canonical_link(
+                    &source.path,
+                    &key.1,
+                    owner_path,
+                    self.note_index,
+                );
+                desired.insert(key, (link, Some(MENTION_LABEL.to_string())));
+            }
+        }
         for child in children {
             let LinkedFromLine::Accepted { entries, .. } = &child.parsed else {
                 continue;
@@ -746,10 +863,14 @@ impl RelationsPass<'_> {
                     continue;
                 };
                 let key = (path.clone(), entry.block_id.clone());
-                if entry.kind
-                    == super::super::task_relations::RelationEntryKind::Mention
-                    || collected.uncertain.contains(&key)
-                {
+                let keep_uncertain_relation =
+                    collected.uncertain.contains(&key)
+                        && entry.kind != RelationEntryKind::Mention;
+                let keep_uncertain_mention = self.mentions_enabled
+                    && entry.kind == RelationEntryKind::Mention
+                    && (self.source_is_mention_uncertain(collected, &key)
+                        || collected.malformed_depends.contains(&identity));
+                if keep_uncertain_relation || keep_uncertain_mention {
                     let link = canonical_link(
                         &path,
                         &entry.block_id,
@@ -772,6 +893,226 @@ impl RelationsPass<'_> {
                 self.archives.get(file)?.tasks.get(task)?.block_id.clone()
             }
         }
+    }
+
+    fn source_is_mention_uncertain(
+        &self,
+        collected: &CollectedEdges,
+        key: &TaskIdentity,
+    ) -> bool {
+        collected.uncertain.contains(key)
+            || collected.mention_uncertain.contains(key)
+    }
+
+    fn mark_mention_file_uncertainty(&self, collected: &mut CollectedEdges) {
+        for file in self.files.iter().chain(self.archives.iter()) {
+            let lines = logical_lines(&file.contents);
+            let refs: Vec<&str> = lines.to_vec();
+            if !has_unclosed_fence(&refs) {
+                continue;
+            }
+            for task in &file.tasks {
+                if let Some(id) = &task.block_id {
+                    collected
+                        .mention_uncertain
+                        .insert((file.relative_path.clone(), id.clone()));
+                }
+            }
+        }
+    }
+
+    fn collect_mentions(&mut self, collected: &mut CollectedEdges) {
+        if !self.enabled || !self.mentions_enabled {
+            return;
+        }
+        self.mark_mention_file_uncertainty(collected);
+        let deps = self.collect_dependency_state();
+        collected.malformed_depends = deps.malformed_depends.clone();
+        let mention_index = self.note_index.with_additional(
+            self.archives.iter().map(|file| file.relative_path.clone()),
+        );
+        let scan = scan_mentions(
+            self.files.iter().chain(self.archives.iter()),
+            &mention_index,
+        );
+        for pair in scan.pairs {
+            self.record_mention_pair(pair, &deps, collected);
+        }
+    }
+
+    fn collect_dependency_state(&self) -> DependencyState {
+        let mut state = DependencyState::default();
+        let active_count = self.files.len();
+        for file_index in 0..active_count {
+            self.collect_file_dependencies(file_index, false, &mut state);
+        }
+        let archive_count = self.archives.len();
+        for file_index in 0..archive_count {
+            self.collect_file_dependencies(file_index, true, &mut state);
+        }
+        state
+    }
+
+    fn collect_file_dependencies(
+        &self,
+        file_index: usize,
+        archive: bool,
+        state: &mut DependencyState,
+    ) {
+        let contents_ref = if archive {
+            self.archives[file_index].contents.as_str()
+        } else {
+            self.files[file_index].contents.as_str()
+        };
+        if !contents_ref.contains("DEPENDS ON") {
+            return;
+        }
+        let relative = if archive {
+            self.archives[file_index].relative_path.clone()
+        } else {
+            self.files[file_index].relative_path.clone()
+        };
+        let contents = contents_ref.to_string();
+        let tasks = if archive {
+            self.archives[file_index].tasks.clone()
+        } else {
+            self.files[file_index].tasks.clone()
+        };
+        let lines = logical_lines(&contents);
+        let line_refs: Vec<&str> = lines.to_vec();
+        let fenced = fenced_lines(&line_refs, 0..line_refs.len());
+        for (task_index, task) in tasks.iter().enumerate() {
+            let loc = if archive {
+                TaskRef::Archive {
+                    file: file_index,
+                    task: task_index,
+                }
+            } else {
+                TaskRef::Active {
+                    file: file_index,
+                    task: task_index,
+                }
+            };
+            let Some(child) =
+                dependency_child_of(&line_refs, &fenced, task.line_index)
+            else {
+                continue;
+            };
+            match child.parsed {
+                DependencyLine::Malformed => {
+                    if let Some(id) = &task.block_id {
+                        state
+                            .malformed_depends
+                            .insert((relative.clone(), id.clone()));
+                    }
+                }
+                DependencyLine::Accepted { links, .. } => {
+                    for link in links {
+                        let Some(target_path) =
+                            self.resolve_target_path(&relative, &link.target)
+                        else {
+                            continue;
+                        };
+                        let target = (target_path, link.block_id);
+                        state
+                            .depends_from_loc
+                            .entry(loc)
+                            .or_default()
+                            .insert(target.clone());
+                        if let Some(id) = &task.block_id {
+                            state.depends_identities.insert((
+                                (relative.clone(), id.clone()),
+                                target,
+                            ));
+                        }
+                    }
+                }
+                DependencyLine::Empty | DependencyLine::NotALine => {}
+            }
+        }
+    }
+
+    fn record_mention_pair(
+        &mut self,
+        pair: MentionPair,
+        deps: &DependencyState,
+        collected: &mut CollectedEdges,
+    ) {
+        let Some(loc) = self.lookup_loc(&pair.source_path, pair.source_line)
+        else {
+            return;
+        };
+        let target = (pair.target_path.clone(), pair.target_block_id.clone());
+        if source_has_relation(collected, loc, &target)
+            || dependency_joins(loc, &pair, deps, &target)
+        {
+            return;
+        }
+        if pair.source_uncertain {
+            if let Some(id) = &pair.source_block_id {
+                collected
+                    .mention_uncertain
+                    .insert((pair.source_path.clone(), id.clone()));
+            }
+            return;
+        }
+        if deps.malformed_depends.contains(&target) {
+            return;
+        }
+        let (archive, file_index) = match loc {
+            TaskRef::Active { file, .. } => (false, file),
+            TaskRef::Archive { file, .. } => (true, file),
+        };
+        if pair.source_block_id.is_none() {
+            let mintable = !archive
+                && self.writable(file_index)
+                && !self.quiet_deferred.contains(&file_index);
+            if mintable {
+                collected.note_mint(
+                    file_index,
+                    task_index_of(loc),
+                    MintReason::Mention,
+                );
+            } else {
+                return;
+            }
+        }
+        collected.mention_by_target.entry(target).or_default().push(
+            MentionSource {
+                path: pair.source_path,
+                loc,
+            },
+        );
+    }
+
+    fn lookup_loc(&self, path: &Path, line: usize) -> Option<TaskRef> {
+        for (file_index, file) in self.files.iter().enumerate() {
+            if file.relative_path != path {
+                continue;
+            }
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if task.line_index == line {
+                    return Some(TaskRef::Active {
+                        file: file_index,
+                        task: task_index,
+                    });
+                }
+            }
+        }
+        for (file_index, file) in self.archives.iter().enumerate() {
+            if file.relative_path != path {
+                continue;
+            }
+            for (task_index, task) in file.tasks.iter().enumerate() {
+                if task.line_index == line {
+                    return Some(TaskRef::Archive {
+                        file: file_index,
+                        task: task_index,
+                    });
+                }
+            }
+        }
+        None
     }
 
     fn apply_edits(&mut self, file_index: usize, edits: Vec<BlocksEdit>) {
@@ -825,6 +1166,77 @@ impl RelationsPass<'_> {
                 .insert(file_index, self.files[file_index].contents.clone());
         }
     }
+}
+
+fn admits_relation_scan(contents: &str, mentions_enabled: bool) -> bool {
+    contents.contains("LINKS")
+        || (mentions_enabled && admits_mention_bytes(contents))
+}
+
+fn admits_mention_bytes(contents: &str) -> bool {
+    contents.contains("#task") && contents.contains("#^")
+}
+
+fn is_mention_label(label: &Option<String>) -> bool {
+    label.as_deref() == Some(MENTION_LABEL)
+}
+
+fn current_linked_from_entries(
+    children: &[super::super::task_relations::parse::LinkedFromChild],
+) -> BTreeSet<(String, Option<String>)> {
+    let mut current = BTreeSet::new();
+    for child in children {
+        let LinkedFromLine::Accepted { entries, .. } = &child.parsed else {
+            continue;
+        };
+        for entry in entries {
+            current.insert((entry.canonical_text(), entry.storage_label()));
+        }
+    }
+    current
+}
+
+fn mention_link_delta(
+    from: &BTreeSet<(String, Option<String>)>,
+    subtract: &BTreeSet<(String, Option<String>)>,
+) -> Vec<String> {
+    from.iter()
+        .filter(|entry| {
+            is_mention_label(&entry.1) && !subtract.contains(*entry)
+        })
+        .map(|(link, _)| link.clone())
+        .collect()
+}
+
+fn source_has_relation(
+    collected: &CollectedEdges,
+    loc: TaskRef,
+    target: &TaskIdentity,
+) -> bool {
+    collected
+        .by_target
+        .get(target)
+        .is_some_and(|sources| sources.iter().any(|source| source.loc == loc))
+}
+
+fn dependency_joins(
+    loc: TaskRef,
+    pair: &MentionPair,
+    deps: &DependencyState,
+    target: &TaskIdentity,
+) -> bool {
+    if deps
+        .depends_from_loc
+        .get(&loc)
+        .is_some_and(|targets| targets.contains(target))
+    {
+        return true;
+    }
+    let Some(id) = &pair.source_block_id else {
+        return false;
+    };
+    deps.depends_identities
+        .contains(&(target.clone(), (pair.source_path.clone(), id.clone())))
 }
 
 fn duplicate_block_ids(tasks: &[TaskLine]) -> BTreeSet<String> {

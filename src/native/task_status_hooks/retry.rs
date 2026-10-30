@@ -287,6 +287,7 @@ mod tests {
             linked_from_line_updates: Vec::new(),
             minted_relation_source_block_ids: Vec::new(),
             relation_warnings: Vec::new(),
+            mention_edges: 0,
             prj_is_blocked_tags_added: Vec::new(),
             prj_is_blocked_tags_stripped: Vec::new(),
             unblocked_fields_written: Vec::new(),
