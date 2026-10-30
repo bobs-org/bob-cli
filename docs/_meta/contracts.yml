@@ -10,31 +10,35 @@ groups:
         reader: guides/add-prerequisites.md
       - stem: command-catalog
         summary: "Command catalog protocol: `bob __catalog --protocol 1` handshake, fields, inclusion, and coverage"
-        order: 30
+        order: 31
       - stem: completion
         summary: "Shell completion: the runtime model, protocol 1, and what completes"
         order: 3
       - stem: getting-started
         summary: "Vault requirements, first capture/session, command effects, and troubleshooting"
         order: 8
+      - stem: gcal
+        summary: "`bob gcal` Google Calendar events as daily-note Event Tasks"
+        order: 9
+        reader: guides/connect-google-calendar.md
       - stem: gkeep
         summary: "`bob gkeep` Keep inbox drain into tasks or inline reference clips"
-        order: 9
+        order: 10
         reader: guides/drain-google-keep.md
       - stem: highlights-clip
         summary: "Web article and collection capture into Highlights intake PDFs"
-        order: 10
+        order: 11
       - stem: highlights-create
         summary: "`bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections"
-        order: 11
+        order: 12
         reader: concepts/reference-library.md
       - stem: highlights-ref-sync
         summary: "`bob ref` PDF intake and reference notes"
-        order: 12
+        order: 13
         reader: concepts/reference-library.md
       - stem: plugins
         summary: "`bob plugins` list and vault deploy"
-        order: 15
+        order: 16
         reader: guides/deploy-obsidian-plugins.md
   - title: "Tasks and projects"
     entries:
@@ -50,46 +54,46 @@ groups:
         reader: guides/run-morning-review.md
       - stem: plan
         summary: "Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples"
-        order: 14
+        order: 15
         reader: guides/keep-ready-under-cap.md
       - stem: projects
         summary: "`bob projects` `^prj` lifecycle and schedules"
-        order: 16
+        order: 17
         reader: concepts/projects-and-dependencies.md
       - stem: pomodoro-homes
         summary: "Derived Pomodoro homes, labels, chips, hues, and JSON contract"
-        order: 17
+        order: 18
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: task-types
         summary: "Task type catalog, hues, hide journal, `bob types`, and JSON"
-        order: 18
+        order: 19
         reader: concepts/today-and-the-pomodoro-ledger.md
       - stem: randomize
         summary: "`bob task reroll` bulk re-roll of due prioritized tasks"
-        order: 19
+        order: 20
       - stem: stats
         summary: "Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page"
-        order: 22
+        order: 23
       - stem: task-dependencies
         summary: "Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors"
-        order: 23
+        order: 24
         reader: guides/add-prerequisites.md
       - stem: task-relations
         summary: "Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture"
-        order: 24
+        order: 25
       - stem: task-move
         summary: "`bob task move` selection, preservation, link repair, guarded writes, and sync behavior"
-        order: 25
+        order: 26
       - stem: task-status-hooks
         summary: "`bob task reconcile` Pomodoro-driven task status"
-        order: 26
+        order: 27
         reader: concepts/tasks-and-lanes.md
       - stem: task-tag-marks
         summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
-        order: 27
+        order: 28
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"
-        order: 28
+        order: 29
         reader: concepts/today-and-the-pomodoro-ledger.md
   - title: "References"
     entries:
@@ -98,19 +102,19 @@ groups:
         order: 4
       - stem: ref
         summary: "Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback"
-        order: 20
+        order: 21
         reader: guides/save-link-to-reading-queue.md
       - stem: ref-jobs
         summary: "`bob ref jobs` background capture progress, worker, fallback, and recovery"
-        order: 21
+        order: 22
         reader: guides/recover-reference-job.md
   - title: "Vault"
     entries:
       - stem: obsidian-sync-exclusions
         summary: "Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only"
-        order: 13
+        order: 14
         historical: true
       - stem: vault-git-sync
         summary: "Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal"
-        order: 29
+        order: 30
         reader: guides/sync-vault-across-machines.md

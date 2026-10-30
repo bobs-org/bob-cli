@@ -13,6 +13,7 @@ uses more than one surface appears in each matching group.
 
 - [Add prerequisites while capturing](../guides/add-prerequisites.md)
 - [Capture a task from anywhere on your Mac](../guides/capture-from-your-mac.md)
+- [Connect Google Calendar](../guides/connect-google-calendar.md)
 - [Deploy the Obsidian plugins](../guides/deploy-obsidian-plugins.md)
 - [Drain Google Keep into tasks](../guides/drain-google-keep.md)
 - [Fix Mac Capture when bob is not resolved](../guides/fix-mac-capture-bob-resolution.md)

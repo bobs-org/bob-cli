@@ -11,6 +11,7 @@ pub(crate) mod capture;
 pub(crate) mod day_timezone;
 pub(crate) mod dependencies;
 pub(crate) mod freshness;
+pub(crate) mod gcal;
 pub(crate) mod plan;
 pub(crate) mod relations;
 pub(crate) mod stats;
@@ -20,6 +21,9 @@ pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
 pub(crate) use day_timezone::load_day_timezone;
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
+pub(crate) use gcal::{
+    load_gcal_config, GcalCalendarSettings, GcalSettings, GcalTentative,
+};
 pub(crate) use plan::{load_plan_config, parse_plan_config, PlanConfig};
 pub(crate) use relations::{load_relations_config, RelationsConfig};
 #[allow(unused_imports)]
@@ -373,6 +377,8 @@ pub(crate) struct RawConfig {
     highlights: Option<RawHighlights>,
     #[serde(default)]
     gkeep: Option<RawGkeep>,
+    #[serde(default)]
+    pub(crate) gcal: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) capture: Option<serde_yaml::Value>,
     #[serde(default)]
@@ -1659,5 +1665,20 @@ properties:
         let settings = parse_gkeep_config(text, Path::new("/config.yml"))
             .expect("gkeep loader must ignore a mistyped plan block");
         assert_eq!(settings.email.as_deref(), Some("a@b.c"));
+    }
+
+    #[test]
+    fn mistyped_gcal_block_leaves_other_loaders_working() {
+        let text = "gkeep:\n  email: a@b.c\nplan:\n  max_themes: 3\nhighlights:\n  pre_scan_hook: hook\ngcal:\n  timeout_secs: soon\n";
+        let settings = parse_gkeep_config(text, Path::new("/config.yml"))
+            .expect("gkeep loader must ignore a mistyped gcal block");
+        assert_eq!(settings.email.as_deref(), Some("a@b.c"));
+        let plan = parse_plan_config(text, Path::new("/config.yml"))
+            .expect("plan loader must ignore a mistyped gcal block");
+        assert_eq!(plan.max_themes(), 3);
+        let highlights =
+            parse_highlights_config(text, Path::new("/config.yml"))
+                .expect("highlights loader must ignore a mistyped gcal block");
+        assert_eq!(highlights.pre_scan_hook(), Some("hook"));
     }
 }

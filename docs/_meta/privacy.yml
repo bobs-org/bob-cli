@@ -17,6 +17,8 @@ patterns:
     regex: "(?:git@|https://)github\\.com[:/](?!bobs-org/)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
     allow:
       - "^(?:git@|https://)github\\.com[:/]example/"
+      # Public gog CLI used by bob gcal; not a vault repository.
+      - "^(?:git@|https://)github\\.com[:/]openclaw/gogcli$"
     placeholder: git@github.com:example/vault.git
   - id: launch-agent
     description: personal LaunchAgent labels

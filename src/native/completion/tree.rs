@@ -77,6 +77,7 @@ impl NativeCommand {
             NativeCommand::Freshness => {
                 crate::native::freshness::cli::completion_command()
             }
+            NativeCommand::Gcal => crate::native::gcal::cli::build_cli(),
             NativeCommand::Gkeep => crate::native::gkeep::cli::build_cli(),
             NativeCommand::Query => crate::native::dataview::cli::build_cli(),
             NativeCommand::Highlights => {
@@ -291,6 +292,10 @@ mod tests {
         assert!(parses(&["bob", "freshness", "list", "-f", "json"]));
         assert!(parses(&["bob", "vault-sync", "--dry-run"]));
         assert!(parses(&["bob", "gkeep", "pull", "--dry-run"]));
+        assert!(parses(&["bob", "gcal", "doctor", "-f", "json"]));
+        assert!(parses(&["bob", "gcal", "login", "-m"]));
+        assert!(parses(&["bob", "gcal", "calendars"]));
+        assert!(parses(&["bob", "gcal", "logout", "-y"]));
         assert!(parses(&["bob", "task", "archive", "-t", "10"]));
         assert!(parses(&["bob", "pomodoro", "notify", "-vv", "5", "10"]));
         assert!(parses(&["bob", "pomodoro", "-s"]));

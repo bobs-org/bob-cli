@@ -483,6 +483,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["capture-tasks", "--help"], "bob capture-tasks"),
         (&["completion", "--help"], "bob completion"),
         (&["gkeep", "--help"], "bob gkeep"),
+        (&["gcal", "--help"], "bob gcal"),
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob ref"),
         (
@@ -645,6 +646,14 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["gkeep", "list", "--help"], "bob gkeep list --help"),
         (&["gkeep", "login", "--help"], "bob gkeep login --help"),
         (&["gkeep", "pull", "--help"], "bob gkeep pull --help"),
+        (&["gcal", "--help"], "bob gcal --help"),
+        (
+            &["gcal", "calendars", "--help"],
+            "bob gcal calendars --help",
+        ),
+        (&["gcal", "doctor", "--help"], "bob gcal doctor --help"),
+        (&["gcal", "login", "--help"], "bob gcal login --help"),
+        (&["gcal", "logout", "--help"], "bob gcal logout --help"),
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob ref --help"),
         (
@@ -1068,6 +1077,7 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         "query",
         "ref",
         "vault-sync",
+        "gcal",
         "gkeep",
         "completion",
         "plugins",

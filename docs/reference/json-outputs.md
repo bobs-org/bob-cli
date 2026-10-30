@@ -245,6 +245,10 @@ checkout: they expose no `--format json` or `--json` flag.
 | `bob ref migrate-zorg` | `-f json` | Zorg-record migration plan | `schema_version: 1` (`REF_SCHEMA_VERSION`) | [Reference library](../ref.md) |
 | `bob ref jobs list` | `-f json` | Queued background jobs plus a `summary` | `schema_version: 1` | [Ref jobs](../ref-jobs.md) |
 | `bob ref jobs run` | Human only | Clips pending jobs through the shared ingest | No JSON flag | [Ref jobs](../ref-jobs.md) |
+| `bob gcal calendars` | `-f json` (default is `table`) | Calendars with id, name, access role, colour, sync flag, and mapped root | `schema_version: 1` | [Bob Gcal](../gcal.md) |
+| `bob gcal doctor` | `-f json` | gog, client, account, token, calendars, default root, today, journal, and writer checks (`id`, `status`, `summary`, `fix`) | `schema_version: 1` | [Bob Gcal](../gcal.md) |
+| `bob gcal login` | `-f json` | One-time setup report: `already_connected`, `account`, `client`, calendar counts | `schema_version: 1` | [Bob Gcal](../gcal.md) |
+| `bob gcal logout` | `-f json` | Removed grant: `account`, `client`, `revoke_url` | `schema_version: 1` | [Bob Gcal](../gcal.md) |
 | `bob gkeep` and `bob gkeep list` | `-f json` (default is `table`) | Keep inbox notes with counts and error hints | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep doctor` | `-f json` | Adapter and credential diagnosis | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
 | `bob gkeep migrate-markers` | `-f json` | Marker-removal plan | `schema_version: 1` | [Bob Gkeep](../gkeep.md) |
@@ -264,7 +268,7 @@ commands.
 | --- | --- | --- |
 | CSV | `bob stats overview -f csv`, `bob stats show -f csv` | Same report rows as JSON, comma-separated |
 | TSV | `bob ref migrate-tasks -f tsv` | Migration plan rows for spreadsheets |
-| Table | `bob plugins -f table`, `bob gkeep -f table` | Human tables; the default for those two families |
+| Table | `bob plugins -f table`, `bob gkeep -f table`, `bob gcal calendars -f table` | Human tables; the default for those families |
 | Markdown | `bob query -f markdown`, `bob ref find -f markdown`, `bob ref list -f markdown`, `bob ref show -f markdown` | Rendered notes output |
 | Paths | `bob query` default (`-f paths`) | Newline-separated vault paths |
 

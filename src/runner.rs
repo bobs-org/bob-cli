@@ -679,6 +679,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "gcal",
+        about: "Project Google Calendar events onto today's daily note",
+        section: Section::Integrations,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Gcal,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "gkeep",
         about: "Drain the Google Keep inbox into Obsidian tasks",
         section: Section::Integrations,
@@ -2083,6 +2092,7 @@ mod tests {
             NativeCommand::CaptureTemplatesShow,
             NativeCommand::Completion,
             NativeCommand::Freshness,
+            NativeCommand::Gcal,
             NativeCommand::Gkeep,
             NativeCommand::Query,
             NativeCommand::Highlights,

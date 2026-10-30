@@ -39,6 +39,7 @@ queued intake; full scans also synchronize annotations. The
 | [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates and recurrence rules |
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14 |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
+| [gcal.md](gcal.md) | `bob gcal` Google Calendar events as daily-note Event Tasks |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
 | [highlights-clip.md](highlights-clip.md) | Web article and collection capture into Highlights intake PDFs |
 | [highlights-create.md](highlights-create.md) | `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections |

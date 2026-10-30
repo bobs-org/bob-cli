@@ -189,6 +189,18 @@ const TABLE: &[Entry] = &[
         arg: "html",
         kind: Kind::Files(Some("*.html")),
     },
+    // `bob gcal login -a` is a Google account email.
+    Entry {
+        path: &[],
+        arg: "account",
+        kind: Kind::FreeText,
+    },
+    // `bob gcal login -c` stores a Desktop-app OAuth client JSON.
+    Entry {
+        path: &[],
+        arg: "credentials",
+        kind: Kind::Files(Some("*.json")),
+    },
     Entry {
         path: &[],
         arg: "pdf",

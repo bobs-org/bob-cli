@@ -6,14 +6,9 @@
 //! `BOB_CLIPBOARD_CMD`. Every request carries `"protocol": 1`, and the
 //! master token travels on stdin only, never in argv.
 
-use std::{
-    ffi::OsString,
-    io::Read,
-    path::PathBuf,
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use std::time::Instant;
+use std::{ffi::OsString, path::PathBuf, time::Duration};
 
 use super::{
     config::GkeepConfig,
@@ -25,7 +20,10 @@ use super::{
     },
     ui::Spinner,
 };
-use crate::native::gkeep::GkeepError;
+use crate::native::{
+    gkeep::GkeepError,
+    subprocess_runner::{self, RunSpec},
+};
 
 /// The Keep credentials an adapter request carries (never in argv).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,60 +253,39 @@ impl AdapterClient {
         let payload =
             serde_json::to_string(request).expect("adapter request serializes");
         let _spinner = spinner_label.map(Spinner::start);
-        let mut child = spawn_adapter(&self.program, &self.args)?;
-        let deadline = Instant::now() + self.timeout;
-        let stdin_pipe = child.stdin.take();
-        let stdout_pipe = child.stdout.take();
-        let stderr_pipe = child.stderr.take();
-        let stdin_writer = thread::spawn(move || {
-            let mut stdin = stdin_pipe?;
-            {
-                use std::io::Write;
-                if let Err(error) = stdin.write_all(payload.as_bytes()) {
-                    return Some(error);
-                }
-            }
-            None
-        });
-        let stdout_reader = thread::spawn(move || drain_pipe(stdout_pipe));
-        let stderr_reader = thread::spawn(move || drain_pipe(stderr_pipe));
-        let status = loop {
-            match child.try_wait().map_err(|error| {
-                GkeepError::runtime(
-                    "adapter",
-                    format!("wait for the Keep adapter: {error}"),
-                )
-            })? {
-                Some(status) => break status,
-                None => {
-                    if Instant::now() >= deadline {
-                        kill_adapter_tree(&mut child);
-                        let _ = stdin_writer.join();
-                        let _ = stdout_reader.join();
-                        let _ = stderr_reader.join();
-                        return Err(GkeepError::runtime(
-                            "timeout",
-                            format!(
-                                "the Keep adapter timed out after {}s",
-                                self.timeout.as_secs()
-                            ),
-                        )
-                        .with_hint(
-                            "check your network connection, or raise \
-                             gkeep.timeout_secs",
-                        ));
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-        };
-        // The leader exited: kill any straggler holding the pipes
-        // before joining the readers. Normally the group is empty.
-        kill_stragglers(child.id());
-        let stdin_error = stdin_writer.join().unwrap_or(None);
-        let stdout_text = stdout_reader.join().unwrap_or_default();
-        let stderr_text = stderr_reader.join().unwrap_or_default();
-        match status.code() {
+        let output = subprocess_runner::run(&RunSpec {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            stdin: Some(payload.into_bytes()),
+            env: vec![(
+                OsString::from("BOB_GKEEP_PARENT_PID"),
+                OsString::from(std::process::id().to_string()),
+            )],
+            timeout: self.timeout,
+            inherit_stdio: false,
+        })
+        .map_err(|error| {
+            GkeepError::runtime(
+                "adapter",
+                format!("start the Keep adapter: {error}"),
+            )
+        })?;
+        if output.timed_out {
+            return Err(GkeepError::runtime(
+                "timeout",
+                format!(
+                    "the Keep adapter timed out after {}s",
+                    self.timeout.as_secs()
+                ),
+            )
+            .with_hint(
+                "check your network connection, or raise \
+                 gkeep.timeout_secs",
+            ));
+        }
+        let stdout_text = output.stdout;
+        let stderr_text = output.stderr;
+        match output.status {
             Some(0) => {
                 // The child exited cleanly without reading: ignore the
                 // stdin EPIPE and evaluate stdout normally (garbage gives
@@ -319,7 +296,7 @@ impl AdapterClient {
                 // with no stdout and no stderr: otherwise the exit status
                 // and stderr report the real crash (an EPIPE merely means
                 // the child exited before reading).
-                if let Some(error) = stdin_error
+                if let Some(error) = output.stdin_error
                     && stdout_text.trim().is_empty()
                     && stderr_text.trim().is_empty()
                 {
@@ -334,7 +311,7 @@ impl AdapterClient {
                 ));
             }
             None => {
-                if let Some(error) = stdin_error
+                if let Some(error) = output.stdin_error
                     && stdout_text.trim().is_empty()
                     && stderr_text.trim().is_empty()
                 {
@@ -360,88 +337,6 @@ impl AdapterClient {
     }
 }
 
-/// Kill stragglers in the adapter's process group after the leader exits.
-///
-/// The group leader is already reaped, so a failed `kill` (ESRCH) is
-/// ignored. This never falls back to `child.kill()` on the reaped child.
-fn kill_stragglers(pid: u32) {
-    #[cfg(unix)]
-    {
-        let target = format!("-{pid}");
-        let _ = Command::new("kill").args(["-KILL", "--", &target]).output();
-    }
-}
-
-/// Kill the whole adapter process tree on timeout.
-///
-/// `uv run --script` starts Python as a child process; `child.kill()`
-/// kills only `uv`, and the orphaned Python keeps the stdout/stderr
-/// pipes open, so the reader joins block forever. The child runs in its
-/// own process group (see `spawn_adapter`), so killing the negative pid
-/// kills the group. Falls back to `child.kill()`, then waits.
-fn kill_adapter_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let pid = child.id();
-        let target = format!("-{pid}");
-        let killed = Command::new("kill")
-            .args(["-KILL", "--", &target])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !killed {
-            let _ = child.kill();
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-}
-
-/// Spawn the adapter program with `args` and piped stdio.
-///
-/// A just-written executable can report a transient `ETXTBSY` ("Text
-/// file busy", errno 26 on Linux and macOS) when executed under
-/// concurrent load; that one error retries a few times before giving
-/// up, so script-based adapters stay reliable under `cargo test`.
-fn spawn_adapter(
-    program: &std::path::Path,
-    args: &[OsString],
-) -> Result<std::process::Child, GkeepError> {
-    let mut attempts = 0;
-    loop {
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("BOB_GKEEP_PARENT_PID", std::process::id().to_string());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        match command.spawn() {
-            Ok(child) => return Ok(child),
-            Err(error)
-                if error.raw_os_error() == Some(26) && attempts < 100 =>
-            {
-                attempts += 1;
-                thread::sleep(Duration::from_millis(20));
-            }
-            Err(error) => {
-                return Err(GkeepError::runtime(
-                    "adapter",
-                    format!("start the Keep adapter: {error}"),
-                ));
-            }
-        }
-    }
-}
-
 /// Materialize the embedded adapter script and return its cache path.
 fn materialized_adapter_script() -> Result<PathBuf, GkeepError> {
     let dir = crate::runner::materialize_scripts().map_err(|error| {
@@ -462,15 +357,6 @@ fn resolve_uv_lookup(name: &str) -> Option<PathBuf> {
     } else {
         crate::native::env::find_on_path(name)
     }
-}
-
-/// Drain a child stdio pipe to a string; errors yield what arrived.
-fn drain_pipe<R: Read>(pipe: Option<R>) -> String {
-    let mut text = String::new();
-    if let Some(mut pipe) = pipe {
-        let _ = pipe.read_to_string(&mut text);
-    }
-    text
 }
 
 /// A non-zero exit or unparseable stdout is an adapter crash, reported

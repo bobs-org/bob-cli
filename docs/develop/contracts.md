@@ -14,6 +14,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Capture](../capture.md) — Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery)
 - [Shell completion](../completion.md) — Shell completion: the runtime model, protocol 1, and what completes
 - [Getting started](../getting-started.md) — Vault requirements, first capture/session, command effects, and troubleshooting
+- [Bob Gcal](../gcal.md) — `bob gcal` Google Calendar events as daily-note Event Tasks
 - [Bob Gkeep](../gkeep.md) — `bob gkeep` Keep inbox drain into tasks or inline reference clips
 - [Web article capture (`bob ref create <URL> [<URL>…]`)](../highlights-clip.md) — Web article and collection capture into Highlights intake PDFs
 - [`bob ref create` — vault notes, Markdown, PDF, and URL targets](../highlights-create.md) — `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections

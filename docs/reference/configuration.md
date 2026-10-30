@@ -237,6 +237,23 @@ See [URL routing](../ref.md#url-routing),
 The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 [Google Keep contract](../gkeep.md#configuration).
 
+### `gcal`
+
+| Key | Type and rules | Default | Effect |
+| --- | --- | --- | --- |
+| `gcal.account` | String containing `@` | Optional when gog holds exactly one account | Account identity; `bob gcal login -a` can override it for that invocation. |
+| `gcal.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to sync; `doctor` compares it to vault-sync's hostname slug. |
+| `gcal.root` | Bare note name | `meet` | Default `[root::]` for Event Tasks. |
+| `gcal.calendars` | Sequence of ids or `{id, root?}` maps | `[primary]` | Calendars to sync; `primary` matches the account's primary calendar. |
+| `gcal.colors` | Mapping of colour names to roots | `{}` | Stored for a later phase; wrong types are still a setup error. |
+| `gcal.tentative` | `context` or `task` | `context` | How Maybe RSVPs are classified (used by a later phase). |
+| `gcal.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
+
+A missing `gcal:` block uses those defaults. Unknown keys are ignored. A
+wrong-typed value is a setup error (exit 2) that names the key and never
+breaks other config loaders. `BOB_GCAL_GOG` replaces `gog` on `PATH`. See the
+[Google Calendar contract](../gcal.md#configuration).
+
 ### `stats`
 
 | Key | Type and allowed values | Default | Effect |
@@ -325,6 +342,8 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_REF_READING_PROBE` | Unset | Internal override: `reading` or `away` forces the Highlights reading-activity probe. |
 | `BOB_REF_READING_WINDOW_SECONDS` | `30` | Internal override for how recently HID input must be for an `editor_active` hold. |
 | `BOB_GKEEP_ADAPTER` | `uv` runs Bob's pinned Keep adapter | Replaces the whole Keep adapter invocation. |
+| `BOB_GCAL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login reuse and logout confirm. |
+| `BOB_GCAL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gcal`; tests point this at a fake. Must be gog ≥ v0.44.0. |
 
 See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.md),
 [web article capture](../highlights-clip.md#hosts-and-browsers), and the

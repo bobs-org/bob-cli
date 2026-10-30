@@ -304,6 +304,13 @@ fn required_keyword_lookups() {
             );
         }
     }
+    for query in ["calendar", "gcal"] {
+        let ids = by_keyword(query);
+        assert!(
+            ids.contains("gcal-doctor"),
+            "{query} should find gcal-doctor: {ids:?}"
+        );
+    }
     let pdf = by_keyword("pdf");
     assert!(
         pdf.contains("ref-create"),
@@ -383,8 +390,8 @@ fn document_shape() {
             .collect::<Vec<_>>(),
         vec!["daily", "tasks", "vault", "integrations", "setup"]
     );
-    assert_eq!(catalog.entries.len(), 57);
-    assert_eq!(ENTRIES.len(), 57);
+    assert_eq!(catalog.entries.len(), 58);
+    assert_eq!(ENTRIES.len(), 58);
     assert!(catalog.entries.iter().any(|entry| entry.id == "plan"));
     assert!(catalog
         .entries

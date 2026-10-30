@@ -57,6 +57,7 @@ mod event_task;
 #[allow(dead_code)]
 pub(crate) mod file_coordination;
 mod freshness;
+mod gcal;
 mod gkeep;
 mod highlights_ref;
 mod markdown;
@@ -82,6 +83,7 @@ pub(crate) mod ref_tasks;
 mod relation_labels;
 mod stats;
 pub(crate) mod style;
+mod subprocess_runner;
 // Shared cancel-label policy and pure effect engine.
 // Later epic phases connect these primitives to explicit relation gestures.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -127,6 +129,7 @@ pub(crate) enum NativeCommand {
     CaptureTemplatesShow,
     Completion,
     Freshness,
+    Gcal,
     Gkeep,
     Query,
     Highlights,
@@ -203,6 +206,7 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         }
         NativeCommand::Completion => completion::run(args),
         NativeCommand::Freshness => freshness::cli::run(args),
+        NativeCommand::Gcal => gcal::run(args),
         NativeCommand::Gkeep => gkeep::run(args),
         NativeCommand::Query => dataview::run(args),
         NativeCommand::Highlights => highlights_ref::run(args),

@@ -881,6 +881,17 @@ pub(crate) const ENTRIES: &[Row] = &[
     Row {
         network: true,
         ..reads(
+            "gcal-doctor",
+            &["gcal", "doctor"],
+            "Calendar setup check",
+            &["calendar", "google", "gcal", "doctor", "setup", "gog"],
+            Presentation::Report,
+            60,
+        )
+    },
+    Row {
+        network: true,
+        ..reads(
             "gkeep-list",
             &["gkeep", "list"],
             "Keep inbox",
@@ -957,6 +968,19 @@ pub(crate) const EXCLUDED: &[Excluded] = &[
     Excluded {
         path: &["pomodoro", "tmux"],
         reason: "Prints a tmux status line",
+    },
+    Excluded {
+        path: &["gcal", "calendars"],
+        reason:
+            "Interactive calendar listing for config; run it from a terminal",
+    },
+    Excluded {
+        path: &["gcal", "login"],
+        reason: "Needs an interactive terminal and handles credentials",
+    },
+    Excluded {
+        path: &["gcal", "logout"],
+        reason: "Needs confirmation and handles credentials",
     },
     Excluded {
         path: &["gkeep", "login"],
