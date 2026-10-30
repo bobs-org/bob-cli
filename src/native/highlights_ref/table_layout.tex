@@ -1,0 +1,30 @@
+% bob ref create: table-layout records (see docs/highlights-create.md).
+\usepackage{needspace}
+\definecolor{BobRecordLabelInk}{HTML}{4B5563}
+\newenvironment{BobTableRecords}{%
+  \par\medskip
+}{%
+  \par\medskip
+}
+\newcommand{\BobRecordStart}{%
+  \par\vspace{4pt}\needspace{3\baselineskip}%
+}
+\newcommand{\BobRecordLabel}{%
+  \sffamily\bfseries\color{BobRecordLabelInk}%
+}
+\newenvironment{BobRecordValue}{%
+  \list{}{%
+    \leftmargin=1.5em
+    \topsep=0pt
+    \partopsep=0pt
+    \itemsep=0pt
+    \parsep=0pt
+  }%
+  \item\relax
+}{%
+  \endlist
+}
+\newcommand{\BobTableCaption}{%
+  \refstepcounter{table}%
+  \textbf{\tablename~\thetable:}%
+}

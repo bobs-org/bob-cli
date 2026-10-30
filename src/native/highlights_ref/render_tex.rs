@@ -19,7 +19,8 @@ pub(super) struct TexPackage {
 ///
 /// File names were verified with `tlmgr search --file`.
 pub(super) const RENDER_TEX_PACKAGES: &[TexPackage] = &[
-    // Bob's own headers (`PANDOC_HEADER_INCLUDES` and `return_links.tex`).
+    // Bob's own headers (`PANDOC_HEADER_INCLUDES`, `return_links.tex`,
+    // `table_layout.tex`).
     TexPackage {
         file: "fvextra.sty",
         tlmgr: "fvextra",
@@ -282,6 +283,7 @@ mod tests {
     use super::super::diagrams::HEADER_INCLUDES as DIAGRAMS_HEADER_INCLUDES;
     use super::super::note_snapshot::profile::NOTE_HEADER;
     use super::super::return_links::HEADER_INCLUDES;
+    use super::super::table_layout::HEADER_INCLUDES as TABLE_LAYOUT_HEADER_INCLUDES;
     use super::*;
 
     /// Every `\usepackage[…]{a,b}` in bob's headers must be declared above.
@@ -296,6 +298,7 @@ mod tests {
             HEADER_INCLUDES,
             DIAGRAMS_HEADER_INCLUDES,
             NOTE_HEADER,
+            TABLE_LAYOUT_HEADER_INCLUDES,
         ] {
             names.extend(tex_packages_in(header));
         }
