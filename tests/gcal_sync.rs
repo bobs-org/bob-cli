@@ -464,7 +464,7 @@ fn sync_json_reports_rows_and_pomodoro() {
     assert_eq!(dentist["source"], "@body");
     assert!(
         !stdout(&output).contains("Main St Dental\"],")
-            && stdout(&output).contains("attendees") == false,
+            && !stdout(&output).contains("attendees"),
         "no descriptions or attendees leak"
     );
 }

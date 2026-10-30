@@ -23,6 +23,8 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Calendars](#calendars)
 - [List](#list)
 - [Sync](#sync)
+- [Reconciling Google-side changes](#reconciling-google-side-changes)
+- [Where it runs](#where-it-runs)
 - [Event inclusion](#event-inclusion)
 - [Root selection](#root-selection)
 - [Exit status](#exit-status)
@@ -321,6 +323,24 @@ render of its event:
   `2 past meetings still open: Thu Dentist, Tue Weekly 1:1 · close or
   cancel them in their notes`.
 
+## Where it runs
+
+The Mac is the single writer: Templater creates daily notes there, the
+browser login and Keychain token are local, and vault-sync's remote-wins
+conflict policy would quarantine live ledger edits if another host wrote
+today's note. Set `gcal.writer` to the Mac's host label; other hosts may
+still run `list`, `calendars`, `doctor`, and `sync -d` after their own login.
+
+Two triggers run sync on the writer, and every run is idempotent:
+
+- A Mac LaunchAgent, installed beside the vault-sync agent, runs
+  `bob gcal sync -q` at load and every 5 minutes, so invitations accepted
+  later in the day still land; see
+  [background triggers](vault-git-sync.md#background-triggers).
+- Bob Ledger Tools runs `bob gcal sync -q -f json` once when today's daily
+  note is created in Obsidian
+  ([Calendar Events](reference/plugins/bob-ledger-tools.md#calendar-events)).
+
 ## Event inclusion
 
 The first matching rule decides how an event appears:
@@ -416,6 +436,7 @@ bucket from Gmail. Tests use `you@example.com` and never a live cookie.
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
-- Google-side edits to synced rows are left alone, never applied.
+- Google-side changes apply only to spans you have not edited; your edits
+  are kept and reported once.
 - Google forbids Calendar scopes on the device-code flow; use `-m` over SSH.
 - Consent screens left in Testing expire in 7 days; publish them.

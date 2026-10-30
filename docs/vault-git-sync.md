@@ -238,6 +238,13 @@ launchd starts that command through `/bin/sh -c`, which `exec`s
 Apple-signed `/bin/sh` instead of the ad-hoc `bob` binary that `cargo install` replaces.
 `launchctl print` shows `program = /bin/sh`.
 
+A second LaunchAgent runs `bob gcal sync -q` at load and every 5 minutes
+through the same `/bin/sh -c` `exec` wrapper, with the same `HOME` and `PATH`
+(which must include gog's directory). Its label, plist, and log files follow
+the vault-sync agent's names with `bob-gcal-sync` in place of
+`bob-vault-sync`, so the same `launchctl` commands manage it. The vault-sync
+agent commits its writes ([gcal.md](gcal.md#where-it-runs)).
+
 Bob Mac Capture also runs `bob vault-sync -q` when the Refs panel opens (throttled to one pull per 5 s) and before a ⌘R refresh, so references pushed from athena or apollo show up without waiting for the 15 s LaunchAgent.
 
 ## Mac scheduled maintenance
@@ -459,6 +466,33 @@ git -C ~/bob check-attr merge -- .bob/relations/apollo.jsonl
 The journal contract lives in
 [task-relations.md](task-relations.md#16-label-vocabulary).
 
+## Google Calendar journal
+
+`.bob/gcal/<host>.jsonl` is the per-host `bob gcal sync` journal: which
+Events rows and MEET links Bob wrote, which rows you removed, and which
+series roots it learned. It never carries titles, descriptions, attendees,
+or tokens. Each host appends to its own file, readers union every `*.jsonl`
+in the directory, and bob is the only writer. The vault root `.gitignore`
+also carries:
+
+```gitignore
+!/.bob/gcal/*.jsonl
+```
+
+The vault root `.gitattributes` unions concurrent journal appends:
+
+```gitattributes
+.bob/gcal/*.jsonl merge=union
+```
+
+```bash
+git -C ~/bob check-ignore -v .bob/gcal/apollo.jsonl
+git -C ~/bob check-attr merge -- .bob/gcal/apollo.jsonl
+```
+
+`bob gcal doctor` checks both rules. The journal contract lives in
+[gcal.md](gcal.md#sync).
+
 ## Authored content coverage
 
 The vault allowlist ignores everything by default (`*`) and re-includes only
@@ -520,6 +554,8 @@ The vault root `.gitattributes` also unions concurrent journal appends:
 ```gitattributes
 .bob/stats/**/*.jsonl merge=union
 .bob/themes/*.jsonl merge=union
+.bob/relations/*.jsonl merge=union
+.bob/gcal/*.jsonl merge=union
 ```
 
 Check the attribute with:

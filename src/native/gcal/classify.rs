@@ -72,7 +72,7 @@ impl DayWindow {
     ) -> DateTime<FixedOffset> {
         match &event.start {
             EventDateTime::Timed(start) if *start < self.from => self.from,
-            EventDateTime::Timed(start) => start.clone(),
+            EventDateTime::Timed(start) => *start,
             EventDateTime::AllDay(date) => {
                 local_midnight(*date, self.timezone).unwrap_or(self.from)
             }

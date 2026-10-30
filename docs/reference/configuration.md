@@ -247,8 +247,8 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 | `gcal.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to sync; `doctor` compares it to vault-sync's hostname slug. |
 | `gcal.root` | Bare note name | `meet` | Default `[root::]` for Event Tasks. |
 | `gcal.calendars` | Sequence of ids or `{id, root?}` maps | `[primary]` | Calendars to sync; `primary` matches the account's primary calendar. |
-| `gcal.colors` | Mapping of colour names to roots | `{}` | Stored for a later phase; wrong types are still a setup error. |
-| `gcal.tentative` | `context` or `task` | `context` | How Maybe RSVPs are classified (used by a later phase). |
+| `gcal.colors` | Mapping of Google event colour names or ids (`lavender`/`1` through `tomato`/`11`) to roots | `{}` | Event-colour root source, checked after an `@route` token and before the calendar's root. Unknown colour keys are a setup error. |
+| `gcal.tentative` | `context` or `task` | `context` | Whether a busy Maybe event becomes a context row or an Event Task. |
 | `gcal.timeout_secs` | Integer greater than 0 | `60` | gog request timeout in seconds. |
 
 A missing `gcal:` block uses those defaults. Unknown keys are ignored. A
