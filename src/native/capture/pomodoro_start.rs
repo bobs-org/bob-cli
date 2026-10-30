@@ -66,6 +66,7 @@ pub(super) fn plan_pomodoro_start(
     pomodoro_name_is_literal: bool,
     spec: &PomodoroStartSpec,
     now: chrono::NaiveDateTime,
+    typed: Option<&crate::native::capture_task_toggle::TypedImplicit<'_>>,
 ) -> Result<
     (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
     CaptureError,
@@ -241,6 +242,21 @@ pub(super) fn plan_pomodoro_start(
             }
         }
     }
+    if let Some(resolved) = typed {
+        return plan_typed_pomodoro_start(
+            original_day,
+            block_link,
+            &lines,
+            &section,
+            &scan,
+            &time_range,
+            start,
+            end,
+            duration_minutes,
+            spec.offset_units,
+            resolved,
+        );
+    }
     if let Some(entry) = capture_pomodoros::next_future_pomodoro(&scan) {
         let index = entry.line.checked_sub(1).ok_or_else(|| {
             CaptureError::io("Pomodoro capture invariant failed: placeholder entry has no line")
@@ -319,6 +335,101 @@ pub(super) fn plan_pomodoro_start(
         },
         PomodoroBlockBefore::Created,
     ))
+}
+
+/// D7 typed variant of the unnamed branch of [`plan_pomodoro_start`]: start
+/// the first untimed open entry `place(T)` would choose, else create a
+/// started `— T` entry. The timed-entry guard above already ran, so every
+/// open entry here is untimed; a queued task still starts its own queue
+/// through the caller's queue arm.
+#[allow(clippy::too_many_arguments)]
+fn plan_typed_pomodoro_start(
+    original_day: &str,
+    block_link: &str,
+    lines: &[LineSpan<'_>],
+    section: &std::ops::Range<usize>,
+    scan: &capture_pomodoros::PomodoroScan,
+    time_range: &str,
+    start: String,
+    end: String,
+    duration_minutes: u64,
+    offset_units: u64,
+    typed: &crate::native::capture_task_toggle::TypedImplicit<'_>,
+) -> Result<
+    (String, Placement, PomodoroStartSummary, PomodoroBlockBefore),
+    CaptureError,
+> {
+    use crate::native::capture_task_toggle::{
+        select_typed_implicit_entry, TypedImplicitOutcome,
+    };
+    let outcome = select_typed_implicit_entry(scan, typed)
+        .map_err(typed_implicit_error)?;
+    match outcome {
+        TypedImplicitOutcome::Entry(index) => {
+            let (started_day, moved_index) =
+                start_existing_pomodoro_entry(original_day, index, time_range)?;
+            let (updated_day, placement) = append_pomodoro_child_link(
+                &started_day,
+                moved_index,
+                section,
+                block_link,
+            )?;
+            let resolved_name = capture_pomodoros::scan(&started_day)
+                .entries
+                .iter()
+                .find(|candidate| candidate.line == moved_index + 1)
+                .and_then(|candidate| candidate.name.clone());
+            Ok((
+                updated_day,
+                placement,
+                PomodoroStartSummary {
+                    start,
+                    end,
+                    duration_minutes,
+                    offset_units,
+                    pomodoro_name: resolved_name,
+                    pomodoro_line: moved_index + 1,
+                    created_pomodoro: false,
+                    time_range: time_range.to_string(),
+                    tasks: None,
+                    drop: Vec::new(),
+                    dropped: Vec::new(),
+                    r#override: None,
+                },
+                PomodoroBlockBefore::At(index),
+            ))
+        }
+        TypedImplicitOutcome::Create { name } => {
+            let (updated_day, placement, created_line) =
+                create_started_pomodoro_entry(
+                    original_day,
+                    lines,
+                    section,
+                    Some(&name),
+                    time_range,
+                    block_link,
+                )?;
+            Ok((
+                updated_day,
+                placement,
+                PomodoroStartSummary {
+                    start,
+                    end,
+                    duration_minutes,
+                    offset_units,
+                    pomodoro_name: Some(name),
+                    pomodoro_line: created_line + 1,
+                    created_pomodoro: true,
+                    time_range: time_range.to_string(),
+                    tasks: None,
+                    drop: Vec::new(),
+                    dropped: Vec::new(),
+                    r#override: None,
+                },
+                PomodoroBlockBefore::Created,
+            ))
+        }
+    }
 }
 
 pub(super) fn replace_placeholder_range(
@@ -2045,6 +2156,11 @@ fn named_relocation_error(
         capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
         }
+        capture_task_toggle::LinkRelocationError::StrictTypeCap {
+            name,
+            count,
+            cap,
+        } => CaptureError::strict_type_cap(&name, count, cap),
         capture_task_toggle::LinkRelocationError::NoMovableLink
         | capture_task_toggle::LinkRelocationError::MultipleMovableLinks
         | capture_task_toggle::LinkRelocationError::StalePomodoro

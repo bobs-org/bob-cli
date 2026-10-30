@@ -37,6 +37,40 @@ pub(super) struct AppliedTaskTheme {
     pub(super) summary: CaptureTaskThemeChange,
 }
 
+/// Owned D7 typed-placement inputs for one bare link-creating capture:
+/// the task's effective type (D3, from the staged line) plus the budget
+/// context `routing::place` needs.
+pub(super) struct PlacementType {
+    pub(super) suggestion: ThemeSuggestion,
+    pub(super) exempt: Vec<String>,
+    pub(super) cap: u32,
+    pub(super) strict: bool,
+}
+
+impl PlacementType {
+    /// Borrowed inputs for the pure `capture_task_toggle` planners.
+    pub(super) fn as_typed(
+        &self,
+    ) -> crate::native::capture_task_toggle::TypedImplicit<'_> {
+        crate::native::capture_task_toggle::TypedImplicit {
+            type_key: &self.suggestion.theme.key,
+            type_name: &self.suggestion.theme.name,
+            exempt: &self.exempt,
+            cap: self.cap,
+            strict: self.strict,
+        }
+    }
+
+    /// Additive `type` record for link-destination JSON.
+    pub(super) fn placed_type(&self) -> super::batch::PlacedType {
+        super::batch::PlacedType {
+            theme: self.suggestion.theme.clone(),
+            source: self.suggestion.source,
+            label: self.suggestion.label.clone(),
+        }
+    }
+}
+
 impl CaptureTaskThemeContext {
     pub(super) fn new(
         root: &Path,
@@ -303,6 +337,50 @@ impl CaptureTaskThemeContext {
             }
         }
         self.cfg.is_some()
+    }
+
+    /// Resolve one staged task line's effective type (D3) for bare-form
+    /// typed placement, with the catalog vocab, exempt list, and plan
+    /// caps `routing::place` needs. Returns `None` when no effective type
+    /// applies (no default configured, closed task, unreadable catalog),
+    /// in which case the caller keeps the legacy implicit selection.
+    /// Pushes the same suggestion warnings as the named-capture path.
+    pub(super) fn placement_for_task(
+        &mut self,
+        planner: &mut CaptureBatchPlanner,
+        residence_route: &str,
+        task_line: &str,
+        warnings: &mut Vec<CaptureWarning>,
+    ) -> Option<PlacementType> {
+        self.refresh_residence_snapshot(planner);
+        if !self.load_config(warnings) || !self.load_catalog(warnings) {
+            return None;
+        }
+        let cfg = self.cfg.as_ref().expect("loaded plan config");
+        let catalog = self.catalog.as_ref().expect("loaded theme catalog");
+        let residence_path = relative_target(Some(residence_route));
+        let residence = Path::new(&residence_path);
+        let suggested = pomodoro_themes::suggest::suggest_for_task(
+            &mut self.resolver,
+            catalog,
+            cfg,
+            residence,
+            task_line,
+        );
+        for warning in suggested.warnings {
+            let identity = (warning.code.clone(), warning.path.clone());
+            if self.warned_suggestions.insert(identity) {
+                warnings.push(CaptureWarning::Suggestion(warning));
+            }
+        }
+        let suggestion = suggested.suggestion?;
+        let sources = catalog.theme_sources();
+        Some(PlacementType {
+            suggestion,
+            exempt: sources.exempt.into_iter().collect(),
+            cap: cfg.max_themes(),
+            strict: cfg.strict(),
+        })
     }
 
     fn load_catalog(&mut self, warnings: &mut Vec<CaptureWarning>) -> bool {

@@ -659,6 +659,43 @@ The explicitly named capture choice is the writer boundary in this
 phase. Close, roll, typed `^^`, move, rollover, reconcile, ordinary
 successor placement, and ref-today remain never-writers.
 
+### Bare captures place by type
+
+Every bare link-creating capture form routes to the Pomodoro the task's
+effective type picks instead of today's implicit current/next entry. Bob
+resolves the type from the staged task line (an authored `[type::]`
+field, the reading rule, the note default, then `plan.default_type`),
+then runs the shared placement: the running exact entry, else the first
+open exact entry in ledger order, else the first open entry whose name
+contains the type, else a created `— T` placeholder at the named-creation
+insertion point. Creation reuses the named-creation insertion, so a batch
+sees earlier staged creations and two captures that both need the same
+type share one placeholder. A queued task keeps its queue — Ensure Next
+is the one exception and relocates its link to the placed entry, which is
+a no-op when already there. With no effective type (no default
+configured) the legacy implicit selection is used unchanged, and
+multiple open timed entries without a running exact match still fail the
+same way. A creation that adds a type past `plan.max_themes` under
+`plan.strict` is refused before any write with code `strict_cap`, naming
+the type, the count and cap, and the `#NAME` escape; otherwise creation
+appends the existing budget warnings.
+
+Forms: a new task (`<text> @route:id`) and project-note ` :<id>` bullets
+(each links by its own type), whole-item `@route:id` / `^route:id`, Ensure
+Next (`@route+id`), the `@route+id!` link direction, and unnamed `=`
+starts with no queue (the first untimed open entry the type places, else
+a started `— T` entry; a queued task still starts its queue, and a pure
+`=` with no task keeps the legacy rule). Bare placement never edits the
+task's type fields.
+
+The destination reports the placement additively. `PomodoroLinkEndpoint`
+gains a `type` object `{theme, source, label}` when Bob placed by type
+(legacy and named destinations omit it; `role` values are unchanged),
+and the human destination row appends ` · <label>`
+(`→ new Pomodoro CHORE · default type`,
+`→ under BUILD (running) · from dev`). Dry-run previews carry the same
+data, so the Mac shows it without placement logic of its own.
+
 ### Preservation
 
 Task move, archive, Highlights reading-status checkbox edits, ref

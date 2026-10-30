@@ -1483,6 +1483,19 @@ pub(super) fn print_plan_budget(result: &CaptureResult) {
     }
 }
 
+/// Additive D7 suffix for a destination Bob placed by type: the cascade
+/// label from the `type` object (` · from dev`, ` · default type`).
+/// Legacy and named destinations render unchanged.
+pub(super) fn format_placed_type_suffix(
+    destination: &PomodoroLinkEndpoint,
+) -> String {
+    destination
+        .placed_type
+        .as_ref()
+        .map(|placed| format!(" · {}", placed.label))
+        .unwrap_or_default()
+}
+
 /// Destination arrow for `<text> @route:id[#NAME]` Pomodoro-task
 /// captures: where the new Task Link landed.
 pub(super) fn format_pomodoro_task_destination(
@@ -1493,14 +1506,15 @@ pub(super) fn format_pomodoro_task_destination(
         .as_deref()
         .map(str::to_string)
         .unwrap_or_else(|| format_pomodoro_endpoint(destination));
+    let suffix = format_placed_type_suffix(destination);
     match destination.role {
-        Some("created") => format!("→ new Pomodoro {target}"),
+        Some("created") => format!("→ new Pomodoro {target}{suffix}"),
         Some("current") => match destination.time_range.as_deref() {
-            Some(range) => format!("→ into running {target} ({range})"),
-            None => format!("→ into running {target}"),
+            Some(range) => format!("→ into running {target} ({range}){suffix}"),
+            None => format!("→ into running {target}{suffix}"),
         },
-        Some("named") => format!("→ under {target} (named)"),
-        _ => format!("→ under {target} (next up)"),
+        Some("named") => format!("→ under {target} (named){suffix}"),
+        _ => format!("→ under {target} (next up){suffix}"),
     }
 }
 
@@ -3283,7 +3297,14 @@ pub(super) fn print_human_task_toggle_success(
             .pomodoro_name
             .as_deref()
             .filter(|_| result.toggle_direction == Some("link"))
-            .map(|name| format!(" · under {}", styler.cyan(name)))
+            .map(|name| {
+                let suffix = result
+                    .pomodoro_link_destination
+                    .as_ref()
+                    .map(format_placed_type_suffix)
+                    .unwrap_or_default();
+                format!(" · under {}{}", styler.cyan(name), styler.dim(&suffix))
+            })
             .unwrap_or_default();
         println!("  {}{under}", styler.cyan(day_file));
     }
@@ -3345,11 +3366,17 @@ pub(super) fn print_human_ensure_next_ledger(
                 .as_ref()
                 .map(format_pomodoro_endpoint)
                 .unwrap_or_else(|| "current/next".to_string());
+            let suffix = result
+                .pomodoro_link_destination
+                .as_ref()
+                .map(format_placed_type_suffix)
+                .unwrap_or_default();
             println!(
-                "  {} moved Task Link {} → {}",
+                "  {} moved Task Link {} → {}{}",
                 styler.green("↗"),
                 styler.cyan(&source),
                 styler.cyan(&destination),
+                styler.dim(&suffix),
             );
             if result.creates_pomodoro == Some(true) {
                 println!(
@@ -3522,6 +3549,11 @@ pub(crate) fn format_human_pomodoro_link_details(
             ));
         }
     } else {
+        let placed_suffix = result
+            .pomodoro_link_destination
+            .as_ref()
+            .map(format_placed_type_suffix)
+            .unwrap_or_default();
         match result.pomodoro_link_action {
             Some("moved") => {
                 let source = result
@@ -3542,7 +3574,8 @@ pub(crate) fn format_human_pomodoro_link_details(
                 out.push_str(&format!(
                     "  {}\n",
                     styler.dim(&format!(
-                        "Moved Task Link {source} → {destination}{created}"
+                        "Moved Task Link {source} → \
+                        {destination}{placed_suffix}{created}"
                     ))
                 ));
             }
@@ -3554,7 +3587,9 @@ pub(crate) fn format_human_pomodoro_link_details(
                     .unwrap_or_else(|| "current/next".to_string());
                 out.push_str(&format!(
                     "  {}\n",
-                    styler.dim(&format!("Linked under {destination}"))
+                    styler.dim(&format!(
+                        "Linked under {destination}{placed_suffix}"
+                    ))
                 ));
                 if result.creates_pomodoro == Some(true) {
                     out.push_str(&format!(
@@ -4137,6 +4172,24 @@ impl CaptureError {
         }
     }
 
+    /// D7 typed-placement strict refusal: creating the placed `— T` entry
+    /// would grow today's plan past `plan.max_themes` under `plan.strict`.
+    /// Names the type, the refused count and cap, and the `#NAME` escape,
+    /// under the `strict_cap` code. Writes nothing.
+    pub(super) fn strict_type_cap(name: &str, count: usize, cap: u32) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: format!(
+                "plan.strict: {name} would be type {count} of {cap}; name \
+                the Pomodoro explicitly with #{name} or raise plan.max_themes"
+            ),
+            code: Some("strict_cap".to_string()),
+            extra: None,
+            human_unblocked: Vec::new(),
+            typed: None,
+        }
+    }
+
     pub(super) fn pull_in_choice_required(
         extra: serde_json::Map<String, serde_json::Value>,
         human_unblocked: Vec<TaskCompleteUnblockedJson>,
@@ -4285,6 +4338,7 @@ mod tests {
             name: Some("BOB".to_string()),
             time_range: None,
             role: Some("created"),
+            placed_type: None,
         };
         let refs = BTreeMap::from([(
             "bob".to_string(),

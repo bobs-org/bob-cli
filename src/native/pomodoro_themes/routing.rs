@@ -297,7 +297,15 @@ pub(crate) fn place(input: &PlaceInput<'_>) -> PlaceOutcome {
     }
 }
 
-fn is_exact(name: Option<&str>, key: &str, exempt: &[String]) -> bool {
+/// Whether D7 `place` step 1 would take this entry: it is open, running,
+/// and an exact (modulo exempt keys other than the type) match for the
+/// type. Lets bare-capture callers keep the multiple-open-timed guard for
+/// every other case.
+pub(crate) fn is_exact(
+    name: Option<&str>,
+    key: &str,
+    exempt: &[String],
+) -> bool {
     let Some(name) = name else {
         return false;
     };

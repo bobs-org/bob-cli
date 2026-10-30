@@ -14,6 +14,7 @@ pub(super) fn plan_task_toggle_capture(
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
@@ -47,13 +48,14 @@ pub(super) fn plan_task_toggle_capture(
             warnings,
             &settings,
             ctx,
+            task_theme_context,
         );
     }
 
     // Link-presence toggle: the ledger decides the direction. A matching
     // link under any open Pomodoro unlinks (ledger only, lane kept);
-    // otherwise the task links under the implicit current/next open
-    // Pomodoro (Ready/Blocked rise to Next, Next/In Progress keep theirs).
+    // otherwise the task links under its typed placement (Ready/Blocked
+    // rise to Next, Next/In Progress keep theirs).
     match previous_status_symbol {
         ' ' | '?' | '*' | '/' => {}
         _ => {
@@ -272,8 +274,8 @@ pub(super) fn plan_task_toggle_capture(
     // No `[dependsOn::` text warning here: the link guard above is
     // authoritative for this instant. A Blocked target never reaches
     // this path (consumed instead), and a linked target has no open
-    // reason left for reconcile to re-block on.
-    let _ = warnings;
+    // reason left for reconcile to re-block on. Typed-placement
+    // suggestion warnings still report below.
 
     planner.stage(target, task_plan.content)?;
 
@@ -281,18 +283,34 @@ pub(super) fn plan_task_toggle_capture(
     // daily note, insertion must build on the just-staged task edit.
     let day_contents = planner.read_existing(&day_file)?;
 
+    // A bare `!` toggle places by the task's effective type (D7); a named
+    // toggle keeps the deliberate destination and never types.
+    let placement_type = if pomodoro_name.is_none() {
+        task_theme_context
+            .placement_for_task(planner, route, &task_line, warnings)
+    } else {
+        None
+    };
+    let placed_type = placement_type.as_ref().map(|placement| {
+        let typed = placement.as_typed();
+        (typed, placement.placed_type())
+    });
+    let typed = placed_type.as_ref().map(|(typed, _)| typed);
+
     let pomodoro_link_placement;
     let resolved_pomodoro_name;
-    let mut creates_pomodoro = false;
+    let creates_pomodoro: bool;
     let mut pomodoro_already_linked = false;
     let removed_pomodoro_links;
     let pomodoro_selector_unused = false;
+    let mut pomodoro_link_destination = None;
 
     match capture_task_toggle::plan_link_insertion(
         &day_contents,
         &block_link,
         pomodoro_name,
         pomodoro_name_is_literal,
+        typed,
     )
     .map_err(link_plan_error)?
     {
@@ -302,6 +320,25 @@ pub(super) fn plan_task_toggle_capture(
             resolved_pomodoro_name = plan.pomodoro_name;
             pomodoro_already_linked = plan.already_linked;
             removed_pomodoro_links = plan.removed_links;
+            creates_pomodoro = plan.creates_pomodoro;
+            // A bare toggle reports where the type placed the link; a
+            // named toggle keeps its deliberate endpoint unwrapped.
+            pomodoro_link_destination =
+                plan.destination.as_ref().and_then(|destination| {
+                    placed_type.as_ref().map(|(_, placed)| {
+                        PomodoroLinkEndpoint {
+                            line: destination.line,
+                            name: destination.name.clone(),
+                            time_range: destination.time_range.clone(),
+                            role: Some(destination_role(
+                                plan.creates_pomodoro,
+                                None,
+                                destination.time_range.as_deref(),
+                            )),
+                            placed_type: Some(placed.clone()),
+                        }
+                    })
+                });
             if plan.has_changes {
                 planner.stage(&day_file, plan.content)?;
             }
@@ -327,6 +364,7 @@ pub(super) fn plan_task_toggle_capture(
                         &block_link,
                         Some(selector),
                         pomodoro_name_is_literal,
+                        None,
                     )
                     .map_err(link_plan_error)?
                     {
@@ -377,7 +415,7 @@ pub(super) fn plan_task_toggle_capture(
                 status_changed: Some(status_changed),
                 pomodoro_link_action: None,
                 pomodoro_link_source: None,
-                pomodoro_link_destination: None,
+                pomodoro_link_destination,
                 dropped_dependencies,
                 task_block_ref,
                 blocks_updates,

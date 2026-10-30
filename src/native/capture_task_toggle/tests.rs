@@ -150,7 +150,7 @@ fn returns_none_for_non_task_or_out_of_range_lines() {
 fn implicit_insertion_targets_single_open_timed_entry() {
     let contents = "## Pomodoros\n- [ ] (0900-0930) — CURRENT\n";
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^goog-exit]]", None, false)
+        plan_link_insertion(contents, "[[cash#^goog-exit]]", None, false, None)
             .expect("plan"),
     );
     assert!(!plan.already_linked);
@@ -166,7 +166,7 @@ fn implicit_insertion_targets_single_open_timed_entry() {
 fn implicit_insertion_falls_back_to_first_open_entry_without_timed() {
     let contents = "## Pomodoros\n- [ ] () — PLANNED\n- [ ] () — LATER\n";
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", None, false)
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
             .expect("plan"),
     );
     assert_eq!(
@@ -179,7 +179,8 @@ fn implicit_insertion_falls_back_to_first_open_entry_without_timed() {
 fn errors_when_no_eligible_open_entry() {
     let contents = "## Pomodoros\n- [x] (0900-0930) — DONE\n";
     let error =
-        plan_link_insertion(contents, "[[cash#^id]]", None, false).unwrap_err();
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
+            .unwrap_err();
     assert_eq!(error, LinkPlanError::NoEligibleOpenEntry);
 }
 
@@ -191,14 +192,16 @@ fn errors_on_multiple_open_timed_entries() {
         "- [ ] (0935-1005) — TWO\n",
     );
     let error =
-        plan_link_insertion(contents, "[[cash#^id]]", None, false).unwrap_err();
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
+            .unwrap_err();
     assert_eq!(error, LinkPlanError::MultipleOpenTimedEntries);
 }
 
 #[test]
 fn errors_when_no_pomodoros_section() {
-    let error = plan_link_insertion("# Day\n", "[[cash#^id]]", None, false)
-        .unwrap_err();
+    let error =
+        plan_link_insertion("# Day\n", "[[cash#^id]]", None, false, None)
+            .unwrap_err();
     assert_eq!(error, LinkPlanError::NoPomodorosSection);
 }
 
@@ -206,8 +209,14 @@ fn errors_when_no_pomodoros_section() {
 fn named_selection_targets_existing_open_entry() {
     let contents = "## Pomodoros\n- [ ] () — MEMORY\n- [ ] () — FOCUS\n";
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", Some("memory"), false)
-            .expect("plan"),
+        plan_link_insertion(
+            contents,
+            "[[cash#^id]]",
+            Some("memory"),
+            false,
+            None,
+        )
+        .expect("plan"),
     );
     assert_eq!(plan.pomodoro_name.as_deref(), Some("MEMORY"));
     assert!(plan
@@ -218,9 +227,14 @@ fn named_selection_targets_existing_open_entry() {
 #[test]
 fn named_selection_reports_creation_needed() {
     let contents = "## Pomodoros\n- [ ] () — FOCUS\n";
-    let outcome =
-        plan_link_insertion(contents, "[[cash#^id]]", Some("memory"), false)
-            .expect("plan");
+    let outcome = plan_link_insertion(
+        contents,
+        "[[cash#^id]]",
+        Some("memory"),
+        false,
+        None,
+    )
+    .expect("plan");
     assert_eq!(
         outcome,
         LinkInsertionOutcome::NeedsPomodoroCreation {
@@ -232,9 +246,14 @@ fn named_selection_reports_creation_needed() {
 #[test]
 fn invalid_pomodoro_name_is_rejected() {
     let contents = "## Pomodoros\n- [ ] () — FOCUS\n";
-    let error =
-        plan_link_insertion(contents, "[[cash#^id]]", Some("bad_id"), false)
-            .unwrap_err();
+    let error = plan_link_insertion(
+        contents,
+        "[[cash#^id]]",
+        Some("bad_id"),
+        false,
+        None,
+    )
+    .unwrap_err();
     assert_eq!(error, LinkPlanError::InvalidPomodoroName);
 }
 
@@ -243,7 +262,7 @@ fn idempotent_insertion_skips_when_already_linked() {
     let contents =
         "## Pomodoros\n- [ ] (0900-0930) — CURRENT\n\t- [[cash#^id]]\n";
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", None, false)
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
             .expect("plan"),
     );
     assert!(plan.already_linked);
@@ -259,7 +278,7 @@ fn insertion_ignores_struck_history_and_adds_a_live_link() {
         "\t- ~~[[cash#^id]]~~\n",
     );
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", None, false)
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
             .expect("plan"),
     );
     assert!(!plan.already_linked);
@@ -277,7 +296,7 @@ fn insertion_removes_duplicate_from_later_open_entry() {
         "\t- [[cash#^id]]\n",
     );
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", None, false)
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
             .expect("plan"),
     );
     assert!(!plan.already_linked);
@@ -378,7 +397,7 @@ fn removal_reports_no_changes_when_nothing_matches() {
 fn link_operations_preserve_crlf() {
     let contents = "## Pomodoros\r\n- [ ] (0900-0930) — CURRENT\r\n";
     let plan = planned(
-        plan_link_insertion(contents, "[[cash#^id]]", None, false)
+        plan_link_insertion(contents, "[[cash#^id]]", None, false, None)
             .expect("plan"),
     );
     assert_eq!(
@@ -392,7 +411,8 @@ fn link_operations_preserve_crlf() {
 }
 
 fn relocated(contents: &str, block_link: &str) -> LinkRelocationPlan {
-    plan_link_relocation(contents, block_link, None, false).expect("relocate")
+    plan_link_relocation(contents, block_link, None, false, None)
+        .expect("relocate")
 }
 
 fn relocated_named(
@@ -400,7 +420,7 @@ fn relocated_named(
     block_link: &str,
     name: &str,
 ) -> LinkRelocationPlan {
-    plan_link_relocation(contents, block_link, Some(name), false)
+    plan_link_relocation(contents, block_link, Some(name), false, None)
         .expect("relocate")
 }
 
@@ -558,8 +578,9 @@ fn relocation_ignores_completed_history_and_mixed_text_lookalikes() {
         "  - context\n",
         "    - [[cash#^id]]\n",
     );
-    let error = plan_link_relocation(contents, "[[cash#^id]]", None, false)
-        .unwrap_err();
+    let error =
+        plan_link_relocation(contents, "[[cash#^id]]", None, false, None)
+            .unwrap_err();
     assert_eq!(error, LinkRelocationError::NoMovableLink);
 }
 
@@ -567,7 +588,7 @@ fn relocation_ignores_completed_history_and_mixed_text_lookalikes() {
 fn relocation_errors_when_the_link_is_missing() {
     let contents = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
     assert_eq!(
-        plan_link_relocation(contents, "[[cash#^id]]", None, false)
+        plan_link_relocation(contents, "[[cash#^id]]", None, false, None)
             .unwrap_err(),
         LinkRelocationError::NoMovableLink
     );
@@ -583,7 +604,7 @@ fn relocation_errors_on_duplicate_movable_links() {
         "  - [[cash#^id]]\n",
     );
     assert_eq!(
-        plan_link_relocation(contents, "[[cash#^id]]", None, false)
+        plan_link_relocation(contents, "[[cash#^id]]", None, false, None)
             .unwrap_err(),
         LinkRelocationError::MultipleMovableLinks
     );
@@ -610,7 +631,7 @@ fn relocation_is_a_noop_when_the_link_is_already_current() {
 #[test]
 fn relocation_reuses_implicit_selection_errors() {
     assert_eq!(
-        plan_link_relocation("# Day\n", "[[cash#^id]]", None, false)
+        plan_link_relocation("# Day\n", "[[cash#^id]]", None, false, None)
             .unwrap_err(),
         LinkRelocationError::NoPomodorosSection
     );
@@ -619,7 +640,8 @@ fn relocation_reuses_implicit_selection_errors() {
             "## Pomodoros\n- [x] (**0900-0930**) — DONE\n",
             "[[cash#^id]]",
             None,
-            false
+            false,
+            None
         )
         .unwrap_err(),
         LinkRelocationError::NoMovableLink
@@ -629,7 +651,7 @@ fn relocation_reuses_implicit_selection_errors() {
             "## Pomodoros\n- [ ] (**0900-0930**) — A\n- [ ] (**0930-1000**) — B\n  - [[cash#^id]]\n",
             "[[cash#^id]]",
             None,
-            false
+            false, None
         )
         .unwrap_err(),
         LinkRelocationError::MultipleOpenTimedEntries
@@ -803,8 +825,14 @@ fn named_relocation_rejects_creation_with_multiple_timed_entries() {
         "- [ ] (**0900-0930**) — TWO\n",
     );
     assert_eq!(
-        plan_link_relocation(contents, "[[cash#^id]]", Some("three"), false)
-            .unwrap_err(),
+        plan_link_relocation(
+            contents,
+            "[[cash#^id]]",
+            Some("three"),
+            false,
+            None
+        )
+        .unwrap_err(),
         LinkRelocationError::MultipleOpenTimedEntries
     );
 }
@@ -817,8 +845,14 @@ fn named_relocation_rejects_an_invalid_name() {
         "  - [[cash#^id]]\n",
     );
     assert_eq!(
-        plan_link_relocation(contents, "[[cash#^id]]", Some("bad_id"), false)
-            .unwrap_err(),
+        plan_link_relocation(
+            contents,
+            "[[cash#^id]]",
+            Some("bad_id"),
+            false,
+            None
+        )
+        .unwrap_err(),
         LinkRelocationError::InvalidPomodoroName
     );
 }
@@ -877,6 +911,7 @@ fn ledger_exact_name_creates_when_only_a_prefix_matches() {
         contents,
         "[[sase#^ref-x]]",
         PomodoroLinkTarget::ExactName("read"),
+        None,
     )
     .expect("plan");
     assert_eq!(plan.action, PomodoroLinkLedgerAction::Linked);
@@ -898,6 +933,7 @@ fn ledger_exact_name_reuses_a_whole_slug_open_entry() {
         contents,
         "[[sase#^ref-x]]",
         PomodoroLinkTarget::ExactName("reading"),
+        None,
     )
     .expect("plan");
     assert_eq!(plan.action, PomodoroLinkLedgerAction::Linked);
@@ -924,6 +960,7 @@ fn ledger_entry_moves_q_to_the_named_ref() {
         contents,
         "[[sase#^ref-x]]",
         PomodoroLinkTarget::Entry(&reading.pomodoro_ref),
+        None,
     )
     .expect("plan");
     assert_eq!(plan.action, PomodoroLinkLedgerAction::Moved);
@@ -955,6 +992,7 @@ fn ledger_entry_move_tracks_duplicate_unnamed_destination_after_source() {
         contents,
         "[[sase#^ref-x]]",
         PomodoroLinkTarget::Entry(&target.pomodoro_ref),
+        None,
     )
     .expect("plan");
     assert_eq!(plan.destination.line, 2);
@@ -983,6 +1021,7 @@ fn ledger_entry_move_tracks_duplicate_unnamed_destination_after_multiline_source
         contents,
         "[[sase#^ref-x]]",
         PomodoroLinkTarget::Entry(&target.pomodoro_ref),
+        None,
     )
     .expect("plan");
     assert_eq!(plan.destination.line, 4);
@@ -1002,10 +1041,152 @@ fn ledger_entry_stale_ref_is_stale_pomodoro() {
             contents,
             "[[sase#^ref-x]]",
             PomodoroLinkTarget::Entry(&stale),
+            None
         )
         .unwrap_err(),
         LinkRelocationError::StalePomodoro
     );
+}
+
+fn typed(key: &'static str, name: &'static str) -> TypedImplicit<'static> {
+    // A leaked box keeps the exempt slice alive for the assertion's
+    // lifetime without threading locals through every case.
+    let exempt: &'static [String] = Box::leak(Box::new(Vec::new()));
+    TypedImplicit {
+        type_key: key,
+        type_name: name,
+        exempt,
+        cap: 30,
+        strict: false,
+    }
+}
+
+fn strict_typed(
+    key: &'static str,
+    name: &'static str,
+    cap: u32,
+) -> TypedImplicit<'static> {
+    let exempt: &'static [String] = Box::leak(Box::new(Vec::new()));
+    TypedImplicit {
+        type_key: key,
+        type_name: name,
+        exempt,
+        cap,
+        strict: true,
+    }
+}
+
+#[test]
+fn typed_selection_prefers_the_running_exact_entry() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "- [ ] (**0930-1000**) — MEET\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let build = typed("build", "BUILD");
+    assert_eq!(
+        select_typed_implicit_entry(&scan, &build),
+        Ok(TypedImplicitOutcome::Entry(1))
+    );
+}
+
+#[test]
+fn typed_selection_creates_a_placeholder_past_the_ledger() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "- [ ] () — MEET\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let chore = typed("chore", "CHORE");
+    assert_eq!(
+        select_typed_implicit_entry(&scan, &chore),
+        Ok(TypedImplicitOutcome::Create {
+            name: "CHORE".to_string(),
+        })
+    );
+}
+
+#[test]
+fn typed_selection_keeps_timed_ambiguity_without_an_exact_match() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "- [ ] (**0930-1000**) — MEET\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let chore = typed("chore", "CHORE");
+    assert_eq!(
+        select_typed_implicit_entry(&scan, &chore),
+        Err(TypedImplicitError::MultipleOpenTimedEntries)
+    );
+}
+
+#[test]
+fn typed_selection_refuses_a_strict_creation_past_cap() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "- [ ] () — MEET\n",
+        "- [ ] () — READ\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let chore = strict_typed("chore", "CHORE", 3);
+    assert_eq!(
+        select_typed_implicit_entry(&scan, &chore),
+        Err(TypedImplicitError::StrictTypeCap {
+            name: "CHORE".to_string(),
+            count: 4,
+            cap: 3,
+        })
+    );
+}
+
+#[test]
+fn typed_insertion_creates_one_shared_placeholder() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "- [ ] () — MEET\n",
+    );
+    let chore = typed("chore", "CHORE");
+    let first = planned(
+        plan_link_insertion(contents, "[[a#^one]]", None, false, Some(&chore))
+            .expect("plan first"),
+    );
+    assert!(first.creates_pomodoro);
+    assert_eq!(first.pomodoro_name.as_deref(), Some("CHORE"));
+    let second = planned(
+        plan_link_insertion(
+            &first.content,
+            "[[a#^two]]",
+            None,
+            false,
+            Some(&chore),
+        )
+        .expect("plan second"),
+    );
+    assert!(!second.creates_pomodoro);
+    assert_eq!(second.content.matches("— CHORE").count(), 1);
+    assert!(second.content.contains("\t- [[a#^one]]\n\t- [[a#^two]]\n"));
+}
+
+#[test]
+fn typed_relocation_moves_the_queue_to_the_placed_entry() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — BUILD\n",
+        "  - [[a#^one]]\n",
+        "- [ ] () — MEET\n",
+    );
+    let chore = typed("chore", "CHORE");
+    let plan =
+        plan_link_relocation(contents, "[[a#^one]]", None, false, Some(&chore))
+            .expect("relocate");
+    assert!(plan.creates_pomodoro);
+    assert_eq!(plan.destination.name.as_deref(), Some("CHORE"));
+    assert!(plan.content.contains("- [ ] () — CHORE\n  - [[a#^one]]\n"));
 }
 
 #[test]
@@ -1026,6 +1207,7 @@ fn ledger_entry_completed_ref_is_pomodoro_closed() {
             contents,
             "[[sase#^ref-x]]",
             PomodoroLinkTarget::Entry(&done.pomodoro_ref),
+            None
         )
         .unwrap_err(),
         LinkRelocationError::PomodoroClosed

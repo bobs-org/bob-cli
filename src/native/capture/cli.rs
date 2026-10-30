@@ -119,7 +119,10 @@ choice; whole-slug matches beat earlier prefix matches, and a typed '#' with \
 an empty name is incomplete. If no open name matches, capture creates a \
 canonical named future entry as '- [ ] () — NAME' and puts the task link \
 beneath it. The daily note comes from \
-BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. Unnamed capture prefers the single open \
+BOB_DAY_FILE or <bob-dir>/YYYY/YYYYMMDD.md. A bare capture places the link by \
+the new task's type (running exact entry, else first open exact entry, else \
+first open entry containing the type, else a created `— T` placeholder); with \
+no effective type it prefers the single open \
 timed entry in its Pomodoros section and otherwise uses the first open entry. \
 Named creation inserts after the current Pomodoro's complete block, else after \
 the last completed Pomodoro's complete block, else before the first Pomodoro. \
@@ -149,7 +152,7 @@ become Next (a valid future schedule is retired with a pull-forward log \
 entry); Next and In Progress tasks keep their status. With '#<pomodoro>' \
 the link moves to that named entry (creating it when needed); without a \
 name an already-queued task stays in its Pomodoro and '=<X>' starts that \
-entry and moves it to the front of the queue, otherwise the implicit current/next entry is used. The \
+entry and moves it to the front of the queue, otherwise the task's type places the started entry (the first untimed open entry it picks, or a created started `— T` entry). The \
 '^' spelling ('bob capture '^sase:deep-fix='') executes identically and \
 exists so typing '^' completes In Progress and Next tasks. JSON \
 reports a distinct 'pomodoro_link' kind with the status transition, the \
@@ -241,10 +244,13 @@ warning: …` stderr line per fired warning, and names where each new Task \
 Link landed (`→ into running GOALS (0945-1015)`, `→ under GOALS (next \
 up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`; JSON reports the \
 same destination with a `role` of `current`, `next_up`, `named`, or \
-`created`). With `plan.strict: true` in the Bob config, a batch that \
+`created`, plus a `type` object when Bob placed the link by the task's \
+type). With `plan.strict: true` in the Bob config, a batch that \
 creates a new named Pomodoro past the type cap is refused atomically \
-(exit 1, JSON `code: plan_theme_cap_exceeded`); session starts are never \
-refused. An invalid plan config skips the budget with one plain warning. \
+(exit 1, JSON `code: plan_theme_cap_exceeded`), and a bare-form creation \
+past the cap is refused before any write (JSON `code: strict_cap`); \
+pure `=` starts and named starts are never refused. An invalid plan \
+config skips the budget with one plain warning. \
 See `docs/capture.md` (`Plan budget and strict mode`) and `docs/plan.md`.\n\n\
 Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
@@ -415,8 +421,8 @@ to the end of the task. '@<route>+<block-id>#' with an empty selector is \
 incomplete and needs a task section; run \
 'bob capture-task-sections -r <route> -i <block-id>' to list them. A marker-only \
 '@<route>+<block-id>' item with no body text ensures that task is Next and \
-relocates its existing open-Pomodoro Task Link to today's implicit current/next \
-Pomodoro without creating a missing link or toggling Next back to Ready. The \
+relocates its existing open-Pomodoro Task Link to the Pomodoro the task's type places \
+without creating a missing link or toggling Next back to Ready. The \
 same marker-only form with a Pomodoro selector, '@<route>+<block-id>#<pomodoro>', \
 ensures Next and moves that existing Task Link subtree to the named open \
 Pomodoro, or creates that named future Pomodoro and moves the subtree there. \

@@ -749,6 +749,7 @@ pub(super) fn plan_capture_item(
             today,
             warnings,
             dependency_ctx,
+            task_theme_context,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let task_theme = if link_guard.is_none()
@@ -926,6 +927,7 @@ pub(super) fn plan_capture_item(
             today,
             warnings,
             dependency_ctx,
+            Some(task_theme_context),
         )?;
         // This capture-only boundary keeps `bob ref today` on the shared
         // link planner's explicit never-deliberate path.
@@ -1431,6 +1433,8 @@ pub(super) fn plan_capture_item(
                     start.as_ref(),
                     &capture_block,
                     now,
+                    task_theme_context,
+                    warnings,
                 )?
             } else {
                 let mut promoted = Vec::new();

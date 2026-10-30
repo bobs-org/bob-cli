@@ -199,13 +199,18 @@ pub(super) fn plan_project_note_item(
         .iter()
         .filter(|task| task.link && !project_blocked)
         .collect();
+    let note_route: &str = basename.strip_suffix(".md").unwrap_or(&basename);
+    // Stage the new note before linking so per-task type resolution (D3)
+    // sees the staged residence, including the just-rendered task lines.
+    planner.stage(&new_target, rendered.contents.clone())?;
     let (
         day_file,
         pomodoro_link_placement,
         canonical_pomodoro_name,
         creates_pomodoro,
+        first_link_destination,
     ) = if linked.is_empty() {
-        (None, None, None, None)
+        (None, None, None, None, None)
     } else {
         let day_file = pomodoro::day_file_for(&request.bob_dir);
         if !planner.currently_exists(&day_file)? {
@@ -221,31 +226,38 @@ pub(super) fn plan_project_note_item(
         }
         let original_day = planner.read_existing(&day_file)?;
         let scan = capture_pomodoros::scan(&original_day);
-        let (canonical_pomodoro_name, creates_pomodoro) = match pomodoro_name
-            .as_deref()
-        {
-            Some(selector) => {
-                // A literal's canonical name is final; a plain selector
-                // reuses a completed entry's spelling.
-                let canonical_fallback = if pomodoro_name_is_literal {
-                    capture_pomodoros::canonicalize_exact_name(selector)
-                } else {
-                    capture_pomodoros::canonicalize_pomodoro_name(selector)
-                }
-                .ok_or_else(|| {
-                    CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
-                })?;
-                match capture_pomodoros::select_capture_name(
-                    &scan,
-                    selector,
-                    pomodoro_name_is_literal,
-                ) {
-                    capture_pomodoros::NamedSelection::Found(entry) => (
-                        Some(entry.name.clone().unwrap_or(canonical_fallback)),
-                        false,
-                    ),
-                    capture_pomodoros::NamedSelection::CompletedOnly(entry) => {
-                        (
+        let (canonical_pomodoro_name, mut creates_pomodoro) =
+            match pomodoro_name.as_deref() {
+                Some(selector) => {
+                    // A literal's canonical name is final; a plain selector
+                    // reuses a completed entry's spelling.
+                    let canonical_fallback = if pomodoro_name_is_literal {
+                        capture_pomodoros::canonicalize_exact_name(selector)
+                    } else {
+                        capture_pomodoros::canonicalize_pomodoro_name(selector)
+                    }
+                    .ok_or_else(|| {
+                        CaptureError::usage(
+                            capture_pomodoros::POMODORO_NAME_USAGE,
+                        )
+                    })?;
+                    match capture_pomodoros::select_capture_name(
+                        &scan,
+                        selector,
+                        pomodoro_name_is_literal,
+                    ) {
+                        capture_pomodoros::NamedSelection::Found(entry) => (
+                            Some(
+                                entry
+                                    .name
+                                    .clone()
+                                    .unwrap_or(canonical_fallback),
+                            ),
+                            false,
+                        ),
+                        capture_pomodoros::NamedSelection::CompletedOnly(
+                            entry,
+                        ) => (
                             Some(
                                 entry
                                     .name
@@ -253,17 +265,17 @@ pub(super) fn plan_project_note_item(
                                     .unwrap_or(canonical_fallback),
                             ),
                             true,
-                        )
-                    }
-                    capture_pomodoros::NamedSelection::Missing { .. } => {
-                        (Some(canonical_fallback), true)
+                        ),
+                        capture_pomodoros::NamedSelection::Missing {
+                            ..
+                        } => (Some(canonical_fallback), true),
                     }
                 }
-            }
-            None => (None, false),
-        };
+                None => (None, false),
+            };
         let mut day = original_day;
         let mut first_placement = None;
+        let mut first_destination = None;
         for task in &linked {
             let block_link =
                 format!("[[{stem}#^{block_id}]]", block_id = task.block_id);
@@ -272,31 +284,53 @@ pub(super) fn plan_project_note_item(
                     "Pomodoro ledger already contains {block_link}"
                 )));
             }
+            // With no `#pomodoro` selector each `:` task places by its own
+            // effective type (D7); a named selector keeps the deliberate
+            // destination for every task.
+            let placement_type = if pomodoro_name.is_none() {
+                task_theme_context.placement_for_task(
+                    planner,
+                    note_route,
+                    &task.task_line,
+                    warnings,
+                )
+            } else {
+                None
+            };
+            let typed_pair = placement_type.as_ref().map(|placement| {
+                (placement.as_typed(), placement.placed_type())
+            });
+            let (typed, placed) = match typed_pair.as_ref() {
+                Some((typed, placed)) => (Some(typed), Some(placed.clone())),
+                None => (None, None),
+            };
             let insertion = insert_pomodoro_block_link(
                 &day,
                 &block_link,
                 pomodoro_name.as_deref(),
                 pomodoro_name_is_literal,
+                typed,
             )?;
             if first_placement.is_none() {
                 first_placement = Some(insertion.placement);
+                first_destination = placed.map(|placed| {
+                    let mut destination = insertion.destination.clone();
+                    destination.placed_type = Some(placed);
+                    destination
+                });
             }
+            creates_pomodoro = creates_pomodoro || insertion.creates_pomodoro;
             day = insertion.updated;
         }
-        planner.stage(&new_target, rendered.contents.clone())?;
         planner.stage(&day_file, day)?;
         (
             Some(day_file.display().to_string()),
             first_placement,
             canonical_pomodoro_name,
             Some(creates_pomodoro),
+            first_destination,
         )
     };
-    if linked.is_empty() {
-        // A project note with no ` :` task never reads the daily note: the
-        // `^prj` task is never linked.
-        planner.stage(&new_target, rendered.contents.clone())?;
-    }
 
     let mut task_links = linked
         .iter()
@@ -315,7 +349,6 @@ pub(super) fn plan_project_note_item(
         && let Some(destination) = canonical_pomodoro_name.as_deref()
         && let Some(selector) = pomodoro_name.as_deref()
     {
-        let note_route = basename.strip_suffix(".md").unwrap_or(&basename);
         for task in &linked {
             if let Some(applied) = task_theme_context.apply_new_task(
                 planner,
@@ -387,7 +420,7 @@ pub(super) fn plan_project_note_item(
             status_changed: None,
             pomodoro_link_action: None,
             pomodoro_link_source: None,
-            pomodoro_link_destination: None,
+            pomodoro_link_destination: first_link_destination,
             project_note: Some(ProjectNoteSummary {
                 basename: rendered.basename.clone(),
                 parent_route: route.clone(),

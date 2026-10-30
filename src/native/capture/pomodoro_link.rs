@@ -13,6 +13,8 @@ pub(super) fn plan_capture_with_pomodoro_link(
     start: Option<&PomodoroStartSpec>,
     capture_block: &str,
     now: chrono::NaiveDateTime,
+    task_theme_context: &mut CaptureTaskThemeContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let target_existed = planner.currently_exists(target)?;
     let original_target = planner.current_contents(target)?.unwrap_or_default();
@@ -47,6 +49,21 @@ pub(super) fn plan_capture_with_pomodoro_link(
         )));
     }
     let day_file_label = day_file.display().to_string();
+    // A bare new-task capture places by the new task's effective type
+    // (D3, from the staged task line); a named one keeps its deliberate
+    // destination and never types.
+    let placement_type = if pomodoro_name.is_none() {
+        let task_line = capture_block.lines().next().unwrap_or(capture_block);
+        task_theme_context
+            .placement_for_task(planner, route, task_line, warnings)
+    } else {
+        None
+    };
+    let placed_type = placement_type.as_ref().map(|placement| {
+        let typed = placement.as_typed();
+        (typed, placement.placed_type())
+    });
+    let typed = placed_type.as_ref().map(|(typed, _)| typed);
     if let Some(spec) = start {
         let (updated_day, pomodoro_link_placement, summary, start_before) =
             plan_pomodoro_start(
@@ -56,6 +73,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
                 pomodoro_name_is_literal,
                 spec,
                 now,
+                typed,
             )?;
         planner.stage(target, updated_target)?;
         planner.stage(&day_file, updated_day)?;
@@ -67,15 +85,21 @@ pub(super) fn plan_capture_with_pomodoro_link(
         )
         .into_iter()
         .collect();
-        let destination = destination_json(
-            &capture_task_toggle::PomodoroEndpoint {
-                line: summary.pomodoro_line,
-                name: summary.pomodoro_name.clone(),
-                time_range: Some(summary.time_range.clone()),
-            },
-            summary.created_pomodoro,
-            pomodoro_name,
-        );
+        let destination = {
+            let mut destination = destination_json(
+                &capture_task_toggle::PomodoroEndpoint {
+                    line: summary.pomodoro_line,
+                    name: summary.pomodoro_name.clone(),
+                    time_range: Some(summary.time_range.clone()),
+                },
+                summary.created_pomodoro,
+                pomodoro_name,
+            );
+            if let Some((_, placed)) = placed_type.as_ref() {
+                destination.placed_type = Some(placed.clone());
+            }
+            destination
+        };
         return Ok(CaptureWritePlan {
             placement,
             pomodoro: Some(PlannedPomodoroEdit {
@@ -102,6 +126,7 @@ pub(super) fn plan_capture_with_pomodoro_link(
         &block_link,
         pomodoro_name,
         pomodoro_name_is_literal,
+        typed,
     )?;
     planner.stage(target, updated_target)?;
     planner.stage(&day_file, insertion.updated)?;
@@ -119,7 +144,10 @@ pub(super) fn plan_capture_with_pomodoro_link(
             insertion.destination.line.saturating_sub(1),
         )
     }];
-    let destination = insertion.destination;
+    let mut destination = insertion.destination;
+    if let Some((_, placed)) = placed_type.as_ref() {
+        destination.placed_type = Some(placed.clone());
+    }
     let placement = insertion.placement;
     let destination_name = destination.name.clone();
     let creates_pomodoro = insertion.creates_pomodoro;
@@ -154,6 +182,7 @@ pub(super) fn endpoint_json(
         name: endpoint.name.clone(),
         time_range: endpoint.time_range.clone(),
         role: None,
+        placed_type: None,
     }
 }
 
@@ -174,6 +203,7 @@ pub(super) fn destination_json(
             selector,
             endpoint.time_range.as_deref(),
         )),
+        placed_type: None,
     }
 }
 
@@ -235,6 +265,7 @@ pub(super) fn plan_pomodoro_link_capture(
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
+    mut task_theme_context: Option<&mut CaptureTaskThemeContext>,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
@@ -423,9 +454,9 @@ pub(super) fn plan_pomodoro_link_capture(
         }
     };
     let status_changed = previous_status_symbol != updated_task.status_symbol;
-    // No `[dependsOn::` text warning: the link guard above is
-    // authoritative (see `plan_task_toggle_capture`).
-    let _ = warnings;
+    // No `[dependsOn::` text warning here: the link guard above is
+    // authoritative (see `plan_task_toggle_capture`). Typed-placement
+    // suggestion warnings still report below.
     if task_plan.content != current_contents {
         planner.stage(target, task_plan.content.clone())?;
     }
@@ -452,6 +483,28 @@ pub(super) fn plan_pomodoro_link_capture(
         ledger_target,
         capture_task_toggle::PomodoroLinkTarget::LiteralName(_)
     );
+    // A bare link places by the task's effective type (D7); a named link
+    // keeps its deliberate destination and never types. `bob ref today`
+    // passes no theme context and keeps the legacy implicit selection.
+    let is_bare = matches!(
+        ledger_target,
+        capture_task_toggle::PomodoroLinkTarget::Implicit
+    );
+    let placement_type = if is_bare {
+        match task_theme_context.as_mut() {
+            Some(context) => {
+                context.placement_for_task(planner, route, &task_line, warnings)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let placed_type = placement_type.as_ref().map(|placement| {
+        let typed = placement.as_typed();
+        (typed, placement.placed_type())
+    });
+    let typed = placed_type.as_ref().map(|(typed, _)| typed);
     if let Some(spec) = start {
         let (mut plan, guard) = plan_pomodoro_link_with_start(
             planner,
@@ -475,6 +528,8 @@ pub(super) fn plan_pomodoro_link_capture(
             status_changed,
             task_plan.removed_scheduled,
             task_plan.schedule_log,
+            typed,
+            placed_type.as_ref().map(|(_, placed)| placed.clone()),
         )
         .map(|plan| (plan, None))?;
         if let Some(details) = plan.pomodoro_link.as_mut() {
@@ -489,6 +544,7 @@ pub(super) fn plan_pomodoro_link_capture(
         &day_contents,
         &block_link,
         ledger_target,
+        typed,
     )
     .map_err(|error| {
         relocation_plan_error(error, &block_link, route, block_id)
@@ -551,11 +607,17 @@ pub(super) fn plan_pomodoro_link_capture(
                     .source
                     .as_ref()
                     .map(endpoint_json),
-                pomodoro_link_destination: Some(destination_json(
-                    &relocation.destination,
-                    relocation.creates_pomodoro,
-                    pomodoro_name,
-                )),
+                pomodoro_link_destination: Some({
+                    let mut destination = destination_json(
+                        &relocation.destination,
+                        relocation.creates_pomodoro,
+                        pomodoro_name,
+                    );
+                    if let Some((_, placed)) = placed_type.as_ref() {
+                        destination.placed_type = Some(placed.clone());
+                    }
+                    destination
+                }),
                 removed_scheduled: task_plan.removed_scheduled,
                 schedule_log: task_plan.schedule_log,
                 status_changed,
@@ -584,6 +646,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
     today: NaiveDate,
     warnings: &mut Vec<CaptureWarning>,
     ctx: &mut DependencyContext,
+    task_theme_context: Option<&mut CaptureTaskThemeContext>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let (note_plan, link_guard) = plan_pomodoro_link_capture(
         planner,
@@ -597,6 +660,7 @@ pub(super) fn plan_existing_task_pomodoro_link_item(
         today,
         warnings,
         ctx,
+        task_theme_context,
     )?;
     planned_item_from_pomodoro_link_plan(
         note_plan, link_guard, route, target, dry_run, today,
@@ -731,6 +795,8 @@ pub(super) fn plan_pomodoro_link_with_start(
     status_changed: bool,
     removed_scheduled: Option<String>,
     schedule_log: Option<capture_schedule_log::ScheduleLog>,
+    typed: Option<&capture_task_toggle::TypedImplicit<'_>>,
+    placed: Option<super::batch::PlacedType>,
 ) -> Result<CaptureWritePlan, CaptureError> {
     let (start_text, end_text, duration_minutes, time_range) =
         compute_pomodoro_start_range(now, spec)?;
@@ -818,6 +884,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 pomodoro_name_is_literal,
                 spec,
                 now,
+                typed,
             )?;
         planner.stage(day_file, updated_day)?;
         let pomodoro_refs = PomodoroBlockRef::started_and_linked(
@@ -848,18 +915,22 @@ pub(super) fn plan_pomodoro_link_with_start(
                 creates_pomodoro: summary.created_pomodoro,
                 pomodoro_link_action: "linked",
                 pomodoro_link_source: None,
-                pomodoro_link_destination: Some(destination_json(
-                    &capture_task_toggle::PomodoroEndpoint {
-                        line: summary.pomodoro_line,
-                        name: summary.pomodoro_name.clone(),
-                        time_range: Some(format!(
-                            "{}-{}",
-                            summary.start, summary.end
-                        )),
-                    },
-                    summary.created_pomodoro,
-                    pomodoro_name,
-                )),
+                pomodoro_link_destination: Some({
+                    let mut destination = destination_json(
+                        &capture_task_toggle::PomodoroEndpoint {
+                            line: summary.pomodoro_line,
+                            name: summary.pomodoro_name.clone(),
+                            time_range: Some(format!(
+                                "{}-{}",
+                                summary.start, summary.end
+                            )),
+                        },
+                        summary.created_pomodoro,
+                        pomodoro_name,
+                    );
+                    destination.placed_type = placed;
+                    destination
+                }),
                 removed_scheduled,
                 schedule_log,
                 status_changed,
@@ -960,6 +1031,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                                 name: source_endpoint.name.clone(),
                                 time_range: source_endpoint.time_range.clone(),
                                 role: None,
+                                placed_type: None,
                             }),
                             pomodoro_link_destination: Some(dest_json),
                             removed_scheduled,
@@ -1090,6 +1162,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             name: source_endpoint.name.clone(),
                             time_range: source_endpoint.time_range.clone(),
                             role: None,
+                            placed_type: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -1231,6 +1304,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                             name: source_endpoint.name.clone(),
                             time_range: source_endpoint.time_range.clone(),
                             role: None,
+                            placed_type: None,
                         }),
                         pomodoro_link_destination: Some(dest_json),
                         removed_scheduled,
@@ -1333,6 +1407,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                 name: source_endpoint.name.clone(),
                 time_range: source_endpoint.time_range.clone(),
                 role: None,
+                placed_type: None,
             }),
             pomodoro_link_destination: Some(dest_json),
             removed_scheduled,
@@ -1354,25 +1429,22 @@ pub(super) fn relocation_plan_error(
     block_id: &str,
 ) -> CaptureError {
     match error {
-        capture_task_toggle::LinkRelocationError::NoPomodorosSection
-        | capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry
-        | capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries
-        | capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
-            link_plan_error(match error {
-                capture_task_toggle::LinkRelocationError::NoPomodorosSection => {
-                    capture_task_toggle::LinkPlanError::NoPomodorosSection
-                }
-                capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry => {
-                    capture_task_toggle::LinkPlanError::NoEligibleOpenEntry
-                }
-                capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
-                    capture_task_toggle::LinkPlanError::MultipleOpenTimedEntries
-                }
-                capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
-                    capture_task_toggle::LinkPlanError::InvalidPomodoroName
-                }
-                _ => capture_task_toggle::LinkPlanError::NoEligibleOpenEntry,
-            })
+        capture_task_toggle::LinkRelocationError::NoPomodorosSection => {
+            link_plan_error(capture_task_toggle::LinkPlanError::NoPomodorosSection)
+        }
+        capture_task_toggle::LinkRelocationError::NoEligibleOpenEntry => {
+            link_plan_error(capture_task_toggle::LinkPlanError::NoEligibleOpenEntry)
+        }
+        capture_task_toggle::LinkRelocationError::MultipleOpenTimedEntries => {
+            link_plan_error(
+                capture_task_toggle::LinkPlanError::MultipleOpenTimedEntries,
+            )
+        }
+        capture_task_toggle::LinkRelocationError::InvalidPomodoroName => {
+            link_plan_error(capture_task_toggle::LinkPlanError::InvalidPomodoroName)
+        }
+        capture_task_toggle::LinkRelocationError::StrictTypeCap { name, count, cap } => {
+            CaptureError::strict_type_cap(&name, count, cap)
         }
         capture_task_toggle::LinkRelocationError::NoMovableLink => CaptureError::io(format!(
             "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id}! to run the explicit toggle and add one"
@@ -1428,6 +1500,34 @@ pub(super) fn link_plan_error(
         capture_task_toggle::LinkPlanError::InvalidPomodoroName => {
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
                 .with_typed(CaptureFailureKind::InvalidPomodoroName)
+        }
+        capture_task_toggle::LinkPlanError::StrictTypeCap {
+            name,
+            count,
+            cap,
+        } => CaptureError::strict_type_cap(&name, count, cap),
+    }
+}
+
+/// Map a D7 typed-placement failure to the capture error contract:
+/// the passing ledger errors stay byte-identical and a strict-cap refusal
+/// carries the `strict_cap` code with the teaching message.
+pub(super) fn typed_implicit_error(
+    error: capture_task_toggle::TypedImplicitError,
+) -> CaptureError {
+    use capture_task_toggle::TypedImplicitError as Typed;
+    match error {
+        Typed::NoPomodorosSection => {
+            CaptureError::io("Bob daily note has no Pomodoros section")
+        }
+        Typed::NoEligibleOpenEntry => {
+            CaptureError::io("Bob daily note has no eligible open Pomodoro")
+        }
+        Typed::MultipleOpenTimedEntries => {
+            CaptureError::io("Bob daily note has multiple open timed Pomodoros")
+        }
+        Typed::StrictTypeCap { name, count, cap } => {
+            CaptureError::strict_type_cap(&name, count, cap)
         }
     }
 }

@@ -7,7 +7,9 @@ use crate::native::{
 use super::{
     links::{
         find_movable_task_links, insert_link_into_entry,
-        select_implicit_open_entry, LinkPlacement,
+        select_implicit_open_entry, select_typed_implicit_entry,
+        typed_implicit_plan_error, LinkPlacement, TypedImplicit,
+        TypedImplicitOutcome,
     },
     relocation::{
         destination_endpoint_after_move, endpoint_from_entry,
@@ -70,11 +72,14 @@ pub(crate) struct PomodoroLinkLedgerPlan {
 /// when _Q_ is already the destination nothing changes. With no name and an
 /// existing _Q_, respect the queue: the destination is _Q_ and nothing
 /// moves. With no name and no _Q_, insert under the implicit current/next
-/// Pomodoro.
+/// Pomodoro -- or, with `typed` (a bare link whose task resolved an
+/// effective type), under the D7 typed destination, creating a `— T`
+/// placeholder when needed.
 pub(crate) fn plan_pomodoro_link_ledger(
     day_contents: &str,
     block_link: &str,
     target: PomodoroLinkTarget<'_>,
+    typed: Option<&TypedImplicit<'_>>,
 ) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
     let scan = capture_pomodoros::scan(day_contents);
     let lines = line_spans(day_contents);
@@ -202,14 +207,83 @@ pub(crate) fn plan_pomodoro_link_ledger(
                     creates_pomodoro: false,
                 });
             }
+            match typed {
+                Some(resolved) => plan_typed_implicit_ledger(
+                    day_contents,
+                    &lines,
+                    &scan,
+                    block_link,
+                    resolved,
+                ),
+                None => {
+                    let destination_entry =
+                        select_implicit_open_entry(&scan)
+                            .map_err(relocation_from_link_plan_error)?;
+                    let dest_index = destination_entry.line - 1;
+                    let destination = endpoint_from_entry(destination_entry);
+                    let (content, already_linked, placement) =
+                        insert_link_into_entry(
+                            day_contents,
+                            &lines,
+                            dest_index,
+                            block_link,
+                        );
+                    if already_linked {
+                        return Ok(PomodoroLinkLedgerPlan {
+                            content,
+                            has_changes: false,
+                            action: PomodoroLinkLedgerAction::AlreadyCurrent,
+                            placement: None,
+                            source: None,
+                            destination,
+                            creates_pomodoro: false,
+                        });
+                    }
+                    Ok(PomodoroLinkLedgerPlan {
+                        content,
+                        has_changes: true,
+                        action: PomodoroLinkLedgerAction::Linked,
+                        placement,
+                        source: None,
+                        destination,
+                        creates_pomodoro: false,
+                    })
+                }
+            }
+        }
+    }
+}
 
-            let destination_entry = select_implicit_open_entry(&scan)
-                .map_err(relocation_from_link_plan_error)?;
-            let dest_index = destination_entry.line - 1;
-            let destination = endpoint_from_entry(destination_entry);
+/// D7 typed destination for a bare link with no queue: the placed entry,
+/// or a freshly created `— T` placeholder holding the new link. Creation
+/// reuses the named-creation insertion so a batch shares one placeholder.
+fn plan_typed_implicit_ledger(
+    day_contents: &str,
+    lines: &[crate::native::capture::LineSpan<'_>],
+    scan: &capture_pomodoros::PomodoroScan,
+    block_link: &str,
+    typed: &TypedImplicit<'_>,
+) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
+    let map_error = |error| match typed_implicit_plan_error(error) {
+        super::links::LinkPlanError::StrictTypeCap { name, count, cap } => {
+            LinkRelocationError::StrictTypeCap { name, count, cap }
+        }
+        other => relocation_from_link_plan_error(other),
+    };
+    match select_typed_implicit_entry(scan, typed).map_err(map_error)? {
+        TypedImplicitOutcome::Entry(dest_index) => {
+            let destination = scan
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.state == capture_pomodoros::PomodoroState::Open
+                        && entry.line - 1 == dest_index
+                })
+                .map(endpoint_from_entry)
+                .ok_or(LinkRelocationError::NoEligibleOpenEntry)?;
             let (content, already_linked, placement) = insert_link_into_entry(
                 day_contents,
-                &lines,
+                lines,
                 dest_index,
                 block_link,
             );
@@ -234,6 +308,13 @@ pub(crate) fn plan_pomodoro_link_ledger(
                 creates_pomodoro: false,
             })
         }
+        TypedImplicitOutcome::Create { name } => plan_created_named_entry(
+            day_contents,
+            block_link,
+            None,
+            &name,
+            true,
+        ),
     }
 }
 

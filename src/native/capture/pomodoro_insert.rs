@@ -7,6 +7,10 @@ pub(super) enum PomodoroSelection<'a> {
     /// Current Pomodoro, else the first future one. Used by `@<route>:<id>`
     /// ledger links, which must attach to a Pomodoro that is still open.
     CurrentOrFuture,
+    /// A D7 typed-placement entry, resolved by the caller through
+    /// `select_typed_implicit_entry`. Skips the multiple-open-timed guard
+    /// the shared path keeps for the legacy selection.
+    TypedEntry { index: usize },
     /// Current Pomodoro, else the last completed one, else the first future
     /// one. Used by the bare `#` Pomodoro-note marker.
     CurrentOrLastCompleted,
@@ -20,7 +24,9 @@ pub(super) enum PomodoroSelection<'a> {
 impl PomodoroSelection<'_> {
     pub(super) fn no_entry_message(self) -> &'static str {
         match self {
-            Self::CurrentOrFuture | Self::NamedOrCreate { .. } => {
+            Self::CurrentOrFuture
+            | Self::NamedOrCreate { .. }
+            | Self::TypedEntry { .. } => {
                 "Bob daily note has no eligible open Pomodoro"
             }
             Self::CurrentOrLastCompleted => {
@@ -46,7 +52,15 @@ pub(super) fn insert_pomodoro_block_link(
     block_link: &str,
     pomodoro_name: Option<&str>,
     is_literal: bool,
+    typed: Option<&crate::native::capture_task_toggle::TypedImplicit<'_>>,
 ) -> Result<PomodoroBlockLinkInsertion, CaptureError> {
+    if pomodoro_name.is_none()
+        && let Some(resolved) = typed
+    {
+        return insert_typed_pomodoro_block_link(
+            contents, block_link, resolved,
+        );
+    }
     let creates = match pomodoro_name {
         Some(name) => {
             let lines = line_spans(contents);
@@ -85,6 +99,107 @@ pub(super) fn insert_pomodoro_block_link(
                     pomodoro_name,
                     base.time_range.as_deref(),
                 )),
+                placed_type: None,
+            }
+        })
+        .ok_or_else(|| {
+            CaptureError::io(
+                "Pomodoro capture invariant failed: selected Pomodoro disappeared",
+            )
+        })?;
+    Ok(PomodoroBlockLinkInsertion {
+        updated,
+        placement,
+        destination,
+        creates_pomodoro: creates,
+    })
+}
+
+/// D7 typed variant of [`insert_pomodoro_block_link`]: resolve the task's
+/// effective type against the ledger with `routing::place`, inserting into
+/// the placed entry or creating a `— T` placeholder at the named-creation
+/// insertion point.
+fn insert_typed_pomodoro_block_link(
+    contents: &str,
+    block_link: &str,
+    typed: &crate::native::capture_task_toggle::TypedImplicit<'_>,
+) -> Result<PomodoroBlockLinkInsertion, CaptureError> {
+    use crate::native::capture_task_toggle::{
+        select_typed_implicit_entry, TypedImplicitOutcome,
+    };
+    let scan = capture_pomodoros::scan(contents);
+    let outcome = select_typed_implicit_entry(&scan, typed)
+        .map_err(typed_implicit_error)?;
+    let (updated, placement, selected, creates) = match outcome {
+        TypedImplicitOutcome::Entry(index) => {
+            let (updated, placement, selected, _) =
+                insert_pomodoro_child_block(
+                    contents,
+                    &format!("- {block_link}"),
+                    PomodoroSelection::TypedEntry { index },
+                )?;
+            (updated, placement, selected, false)
+        }
+        TypedImplicitOutcome::Create { name } => {
+            let lines = line_spans(contents);
+            let line_text =
+                lines.iter().map(|line| line.text).collect::<Vec<_>>();
+            let section = pomodoro::pomodoros_section_range(&line_text)
+                .ok_or_else(|| {
+                    CaptureError::io("Bob daily note has no Pomodoros section")
+                })?;
+            let mut open = Vec::new();
+            let mut timed = Vec::new();
+            let mut completed = Vec::new();
+            for index in section.clone() {
+                let line = lines[index].text;
+                if is_indented_line(line) {
+                    continue;
+                }
+                if let Some(task) = pomodoro::open_ledger_task(line) {
+                    open.push((index, task));
+                    if pomodoro::task_time_range(task).is_some() {
+                        timed.push((index, task));
+                    }
+                } else if let Some(task) = pomodoro::completed_ledger_task(line)
+                {
+                    completed.push((index, task));
+                }
+            }
+            // A literal type name is final: key equality canonicalizes the
+            // `— T` spelling without slug or prefix matching.
+            let (updated, placement, selected, _) =
+                insert_named_pomodoro_child_block(
+                    contents,
+                    &format!("- {block_link}"),
+                    &name,
+                    true,
+                    &lines,
+                    &section,
+                    &timed,
+                    &completed,
+                    &open,
+                )?;
+            (updated, placement, selected, true)
+        }
+    };
+    let scan = capture_pomodoros::scan(&updated);
+    let destination = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == selected + 1)
+        .map(|entry| {
+            let base = capture_task_toggle::endpoint_from_entry(entry);
+            PomodoroLinkEndpoint {
+                line: base.line,
+                name: base.name.clone(),
+                time_range: base.time_range.clone(),
+                role: Some(destination_role(
+                    creates,
+                    None,
+                    base.time_range.as_deref(),
+                )),
+                placed_type: None,
             }
         })
         .ok_or_else(|| {
@@ -165,8 +280,11 @@ pub(super) fn insert_pomodoro_child_block(
             }
         }
         PomodoroSelection::CurrentOrFuture
-        | PomodoroSelection::CurrentOrLastCompleted => {
-            if timed.len() > 1 {
+        | PomodoroSelection::CurrentOrLastCompleted
+        | PomodoroSelection::TypedEntry { .. } => {
+            if timed.len() > 1
+                && !matches!(selection, PomodoroSelection::TypedEntry { .. })
+            {
                 return Err(CaptureError::io(
                     "Bob daily note has multiple open timed Pomodoros",
                 ));
@@ -177,6 +295,9 @@ pub(super) fn insert_pomodoro_child_block(
                 }
                 PomodoroSelection::CurrentOrLastCompleted => {
                     timed.first().or(completed.last()).or(open.first())
+                }
+                PomodoroSelection::TypedEntry { index } => {
+                    open.iter().find(|(entry_index, _)| *entry_index == index)
                 }
                 PomodoroSelection::NamedOrCreate { .. } => {
                     unreachable!("named handled")

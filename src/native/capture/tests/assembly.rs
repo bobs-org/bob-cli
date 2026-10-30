@@ -345,9 +345,14 @@ fn pomodoro_link_prefers_the_single_timed_open_entry() {
         "## Later\n",
         "- [ ] Outside (1000-1030)\n",
     );
-    let insertion =
-        insert_pomodoro_block_link(contents, "[[dev#^foobar]]", None, false)
-            .expect("select timed Pomodoro");
+    let insertion = insert_pomodoro_block_link(
+        contents,
+        "[[dev#^foobar]]",
+        None,
+        false,
+        None,
+    )
+    .expect("select timed Pomodoro");
     let updated = insertion.updated;
     let placement = insertion.placement;
     assert_eq!(placement, Placement::Inserted);
@@ -375,9 +380,14 @@ fn pomodoro_link_falls_back_to_first_open_and_ignores_nested_tasks() {
         "- [ ] First open\n",
         "- [ ] Second open\n",
     );
-    let insertion =
-        insert_pomodoro_block_link(contents, "[[dev#^fallback]]", None, false)
-            .expect("select first open Pomodoro");
+    let insertion = insert_pomodoro_block_link(
+        contents,
+        "[[dev#^fallback]]",
+        None,
+        false,
+        None,
+    )
+    .expect("select first open Pomodoro");
     let updated = insertion.updated;
     let placement = insertion.placement;
     assert_eq!(placement, Placement::Inserted);
@@ -739,9 +749,14 @@ fn pomodoro_link_rejects_missing_section_target_and_timed_ambiguity() {
             "multiple open timed",
         ),
     ] {
-        let error =
-            insert_pomodoro_block_link(contents, "[[dev#^id]]", None, false)
-                .expect_err("invalid ledger should fail");
+        let error = insert_pomodoro_block_link(
+            contents,
+            "[[dev#^id]]",
+            None,
+            false,
+            None,
+        )
+        .expect_err("invalid ledger should fail");
         assert!(error.message.contains(expected), "{error:?}");
     }
 }
@@ -755,7 +770,7 @@ fn pomodoro_link_preserves_crlf_and_reuses_nearby_child_indentation() {
         "- [ ] Next\r\n",
     );
     let insertion =
-        insert_pomodoro_block_link(contents, "[[dev#^id]]", None, false)
+        insert_pomodoro_block_link(contents, "[[dev#^id]]", None, false, None)
             .expect("insert CRLF link");
     let updated = insertion.updated;
     let placement = insertion.placement;
@@ -782,10 +797,15 @@ fn pomodoro_section_scan_ignores_fenced_lookalikes() {
         "## Pomodoros\n",
         "- [ ] Real\n",
     );
-    let updated =
-        insert_pomodoro_block_link(contents, "[[dev#^real]]", None, false)
-            .expect("find real section")
-            .updated;
+    let updated = insert_pomodoro_block_link(
+        contents,
+        "[[dev#^real]]",
+        None,
+        false,
+        None,
+    )
+    .expect("find real section")
+    .updated;
     assert!(updated.ends_with("- [ ] Real\n  - [[dev#^real]]\n"));
     assert!(!updated.contains("Example\n  - [[dev#^real]]"));
 }

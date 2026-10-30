@@ -4,7 +4,8 @@ use crate::native::{
         LineSpan,
     },
     capture_pomodoros::{self, NamedSelection, PomodoroEntry, PomodoroState},
-    markdown, pomodoro,
+    markdown, plan_budget, pomodoro,
+    pomodoro_themes::routing,
 };
 
 use super::text::{
@@ -15,12 +16,73 @@ use super::text::{
 /// Why [`plan_link_insertion`] could not select a destination Pomodoro at
 /// all -- distinct from [`LinkInsertionOutcome::NeedsPomodoroCreation`],
 /// which is a normal (non-error) outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LinkPlanError {
     NoPomodorosSection,
     NoEligibleOpenEntry,
     MultipleOpenTimedEntries,
     InvalidPomodoroName,
+    /// A D7 typed placement would create a type past `plan.max_themes`
+    /// under `plan.strict`. `count` is the refused post-image type count.
+    StrictTypeCap {
+        name: String,
+        count: usize,
+        cap: u32,
+    },
+}
+
+/// Resolved effective type plus the D7 budget context for a bare
+/// link-creating capture. Callers resolve the task's effective type (D3,
+/// from the staged line) through the theme catalog; `None` (no effective
+/// type, e.g. no default configured) keeps the legacy implicit
+/// current/next selection.
+#[derive(Debug, Clone)]
+pub(crate) struct TypedImplicit<'a> {
+    pub(crate) type_key: &'a str,
+    pub(crate) type_name: &'a str,
+    pub(crate) exempt: &'a [String],
+    pub(crate) cap: u32,
+    pub(crate) strict: bool,
+}
+
+/// Where D7 typed selection landed: an existing open entry (0-based line
+/// index) or a `— T` placeholder the caller creates at the named-creation
+/// insertion point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TypedImplicitOutcome {
+    Entry(usize),
+    Create { name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TypedImplicitError {
+    NoPomodorosSection,
+    NoEligibleOpenEntry,
+    MultipleOpenTimedEntries,
+    StrictTypeCap {
+        name: String,
+        count: usize,
+        cap: u32,
+    },
+}
+
+pub(crate) fn typed_implicit_plan_error(
+    error: TypedImplicitError,
+) -> LinkPlanError {
+    match error {
+        TypedImplicitError::NoPomodorosSection => {
+            LinkPlanError::NoPomodorosSection
+        }
+        TypedImplicitError::NoEligibleOpenEntry => {
+            LinkPlanError::NoEligibleOpenEntry
+        }
+        TypedImplicitError::MultipleOpenTimedEntries => {
+            LinkPlanError::MultipleOpenTimedEntries
+        }
+        TypedImplicitError::StrictTypeCap { name, count, cap } => {
+            LinkPlanError::StrictTypeCap { name, count, cap }
+        }
+    }
 }
 
 /// Either a resolved insertion plan, or a signal that no existing entry
@@ -52,6 +114,114 @@ pub(crate) struct LinkInsertionPlan {
     pub(crate) pomodoro_name: Option<String>,
     /// Duplicates removed from later still-open Pomodoros.
     pub(crate) removed_links: usize,
+    /// True only when typed placement created the `— T` destination entry.
+    pub(crate) creates_pomodoro: bool,
+    /// Post-image destination entry for the selected link, so bare-form
+    /// callers can report the typed `type` object without re-scanning.
+    pub(crate) destination: Option<LinkInsertionDestination>,
+}
+
+/// Post-image destination entry for one inserted Task Link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkInsertionDestination {
+    /// 1-based post-image line of the destination entry.
+    pub(crate) line: usize,
+    pub(crate) name: Option<String>,
+    pub(crate) time_range: Option<String>,
+}
+
+/// D7 placement for a bare link-creating capture: run `routing::place`
+/// for the task's effective type instead of the legacy implicit
+/// current/next entry.
+///
+/// Timed ambiguity is unchanged: with more than one open timed entry and
+/// no running exact match for the type, this still reports
+/// `MultipleOpenTimedEntries` instead of guessing.
+pub(crate) fn select_typed_implicit_entry(
+    scan: &capture_pomodoros::PomodoroScan,
+    typed: &TypedImplicit<'_>,
+) -> Result<TypedImplicitOutcome, TypedImplicitError> {
+    if !scan.has_section {
+        return Err(TypedImplicitError::NoPomodorosSection);
+    }
+    let entries: Vec<routing::PlaceEntry<'_>> = scan
+        .entries
+        .iter()
+        .map(|entry| {
+            let open = entry.state == PomodoroState::Open;
+            routing::PlaceEntry {
+                name: entry.name.as_deref(),
+                open,
+                running: open && entry.time_range.is_some(),
+            }
+        })
+        .collect();
+    let timed_open = entries
+        .iter()
+        .filter(|entry| entry.open && entry.running)
+        .count();
+    if timed_open > 1
+        && !entries.iter().any(|entry| {
+            entry.open
+                && entry.running
+                && routing::is_exact(entry.name, typed.type_key, typed.exempt)
+        })
+    {
+        return Err(TypedImplicitError::MultipleOpenTimedEntries);
+    }
+    let mut ledger_keys = Vec::new();
+    for entry in scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Open)
+    {
+        for component in
+            plan_budget::split_components(entry.name.as_deref().unwrap_or(""))
+        {
+            let key = plan_budget::normalize_component(&component);
+            if !key.is_empty() {
+                ledger_keys.push(key);
+            }
+        }
+    }
+    let exempt: std::collections::BTreeSet<&str> =
+        typed.exempt.iter().map(String::as_str).collect();
+    let themes_before = ledger_keys
+        .iter()
+        .filter(|key| !exempt.contains(key.as_str()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    match routing::place(&routing::PlaceInput {
+        type_key: Some(typed.type_key),
+        type_name: Some(typed.type_name),
+        entries: &entries,
+        exempt: typed.exempt,
+        ledger_keys: &ledger_keys,
+        themes_before,
+        cap: typed.cap,
+        strict: typed.strict,
+        already_queued: false,
+    }) {
+        routing::PlaceOutcome::Entry(index) => scan
+            .entries
+            .get(index)
+            .map(|entry| TypedImplicitOutcome::Entry(entry.line - 1))
+            .ok_or(TypedImplicitError::NoEligibleOpenEntry),
+        routing::PlaceOutcome::Create { name } => {
+            Ok(TypedImplicitOutcome::Create { name })
+        }
+        routing::PlaceOutcome::Refused { .. } => {
+            Err(TypedImplicitError::StrictTypeCap {
+                name: typed.type_name.to_string(),
+                count: themes_before + 1,
+                cap: typed.cap,
+            })
+        }
+        routing::PlaceOutcome::AlreadyQueued
+        | routing::PlaceOutcome::NoType => {
+            Err(TypedImplicitError::NoEligibleOpenEntry)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,10 +233,12 @@ pub(crate) enum LinkPlacement {
 /// Select a destination Pomodoro entry and insert `block_link` as one of
 /// its children.
 ///
-/// Selection: with no `pomodoro_name`, the single open timed entry, else
-/// the first open entry (matching `@route:block-id`'s implicit rule). With
-/// `pomodoro_name`, an existing open name match; a completed-only or
-/// missing match instead reports
+/// Selection: with no `pomodoro_name` and no `typed`, the single open timed
+/// entry, else the first open entry (matching `@route:block-id`'s implicit
+/// rule). With `typed` (a bare link-creating capture whose task resolved
+/// an effective type), D7 typed placement picks the entry or creates a
+/// `— T` placeholder. With `pomodoro_name`, an existing open name match; a
+/// completed-only or missing match instead reports
 /// [`LinkInsertionOutcome::NeedsPomodoroCreation`].
 ///
 /// Insertion is idempotent (a matching link already under the selected
@@ -77,6 +249,7 @@ pub(crate) fn plan_link_insertion(
     block_link: &str,
     pomodoro_name: Option<&str>,
     is_literal: bool,
+    typed: Option<&TypedImplicit<'_>>,
 ) -> Result<LinkInsertionOutcome, LinkPlanError> {
     let scan = capture_pomodoros::scan(day_contents);
 
@@ -118,10 +291,19 @@ pub(crate) fn plan_link_insertion(
                 }
             }
         }
-        None => {
-            let entry = select_implicit_open_entry(&scan)?;
-            (entry.line - 1, entry.name.clone())
-        }
+        None => match typed {
+            Some(resolved) => {
+                return plan_typed_link_insertion(
+                    day_contents,
+                    block_link,
+                    resolved,
+                );
+            }
+            None => {
+                let entry = select_implicit_open_entry(&scan)?;
+                (entry.line - 1, entry.name.clone())
+            }
+        },
     };
 
     let lines = line_spans(day_contents);
@@ -133,8 +315,116 @@ pub(crate) fn plan_link_insertion(
             block_link,
         );
 
-    let updated_lines = line_spans(&content_after_insert);
-    let updated_scan = capture_pomodoros::scan(&content_after_insert);
+    Ok(LinkInsertionOutcome::Planned(finish_link_insertion(
+        &content_after_insert,
+        block_link,
+        entry_line_index,
+        resolved_name,
+        already_linked,
+        placement,
+        false,
+    )))
+}
+
+/// Insert `block_link` under the D7 typed destination: the placed entry,
+/// or a freshly created `— T` placeholder at the named-creation insertion
+/// point. A batch sees earlier staged creations, so two captures that both
+/// need the same type share one placeholder.
+fn plan_typed_link_insertion(
+    day_contents: &str,
+    block_link: &str,
+    typed: &TypedImplicit<'_>,
+) -> Result<LinkInsertionOutcome, LinkPlanError> {
+    let scan = capture_pomodoros::scan(day_contents);
+    match select_typed_implicit_entry(&scan, typed)
+        .map_err(typed_implicit_plan_error)?
+    {
+        TypedImplicitOutcome::Entry(entry_line_index) => {
+            let lines = line_spans(day_contents);
+            let (content_after_insert, already_linked, placement) =
+                insert_link_into_entry(
+                    day_contents,
+                    &lines,
+                    entry_line_index,
+                    block_link,
+                );
+            let resolved_name = scan
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry.state == PomodoroState::Open
+                        && entry.line - 1 == entry_line_index
+                })
+                .and_then(|entry| entry.name.clone());
+            Ok(LinkInsertionOutcome::Planned(finish_link_insertion(
+                &content_after_insert,
+                block_link,
+                entry_line_index,
+                resolved_name,
+                already_linked,
+                placement,
+                false,
+            )))
+        }
+        TypedImplicitOutcome::Create { name } => {
+            let (with_placeholder, created_line, canonical) =
+                super::relocation::insert_named_placeholder(
+                    day_contents,
+                    &name,
+                    true,
+                )
+                .map_err(|error| match error {
+                    super::relocation::LinkRelocationError::NoPomodorosSection => {
+                        LinkPlanError::NoPomodorosSection
+                    }
+                    super::relocation::LinkRelocationError::NoEligibleOpenEntry => {
+                        LinkPlanError::NoEligibleOpenEntry
+                    }
+                    super::relocation::LinkRelocationError::MultipleOpenTimedEntries => {
+                        LinkPlanError::MultipleOpenTimedEntries
+                    }
+                    super::relocation::LinkRelocationError::InvalidPomodoroName => {
+                        LinkPlanError::InvalidPomodoroName
+                    }
+                    _ => LinkPlanError::NoEligibleOpenEntry,
+                })?;
+            let created_lines = line_spans(&with_placeholder);
+            let (content_after_insert, already_linked, placement) =
+                insert_link_into_entry(
+                    &with_placeholder,
+                    &created_lines,
+                    created_line,
+                    block_link,
+                );
+            debug_assert!(!already_linked);
+            Ok(LinkInsertionOutcome::Planned(finish_link_insertion(
+                &content_after_insert,
+                block_link,
+                created_line,
+                Some(canonical),
+                already_linked,
+                placement,
+                true,
+            )))
+        }
+    }
+}
+
+/// Shared post-insert tail: re-scan the post-image, anchor on the selected
+/// entry, and remove matching duplicates from every later still-open
+/// Pomodoro.
+#[allow(clippy::too_many_arguments)]
+fn finish_link_insertion(
+    content_after_insert: &str,
+    block_link: &str,
+    entry_line_index: usize,
+    resolved_name: Option<String>,
+    already_linked: bool,
+    placement: Option<LinkPlacement>,
+    creates_pomodoro: bool,
+) -> LinkInsertionPlan {
+    let updated_lines = line_spans(content_after_insert);
+    let updated_scan = capture_pomodoros::scan(content_after_insert);
     let selected_line = updated_scan
         .entries
         .iter()
@@ -157,16 +447,30 @@ pub(crate) fn plan_link_insertion(
         })
         .collect::<Vec<_>>();
     let (final_content, removed_links) =
-        remove_matching_links(&content_after_insert, block_link, &ranges);
+        remove_matching_links(content_after_insert, block_link, &ranges);
+    let destination = updated_scan
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.state == PomodoroState::Open
+                && entry.line - 1 == selected_line
+        })
+        .map(|entry| LinkInsertionDestination {
+            line: entry.line,
+            name: entry.name.clone(),
+            time_range: entry.time_range.clone(),
+        });
 
-    Ok(LinkInsertionOutcome::Planned(LinkInsertionPlan {
+    LinkInsertionPlan {
         has_changes: !already_linked || removed_links > 0,
         content: final_content,
         placement,
         already_linked,
         pomodoro_name: resolved_name,
         removed_links,
-    }))
+        creates_pomodoro,
+        destination,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

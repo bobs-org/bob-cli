@@ -20,6 +20,7 @@ pub(super) fn plan_ensure_next_capture(
     warnings: &mut Vec<CaptureWarning>,
     settings: &note_tasks::NoteTaskSettings,
     ctx: &mut DependencyContext,
+    task_theme_context: &mut CaptureTaskThemeContext,
 ) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     match previous_status_symbol {
         ' ' | '?' | '/' | '*' => {}
@@ -172,9 +173,9 @@ pub(super) fn plan_ensure_next_capture(
         }
     };
     let status_changed = previous_status_symbol != updated_task.status_symbol;
-    // No `[dependsOn::` text warning: the link guard above is
-    // authoritative (see `plan_task_toggle_capture`).
-    let _ = warnings;
+    // No `[dependsOn::` text warning here: the link guard above is
+    // authoritative (see `plan_task_toggle_capture`). Typed-placement
+    // suggestion warnings still report below.
 
     if task_plan.content != contents {
         planner.stage(target, task_plan.content.clone())?;
@@ -189,11 +190,25 @@ pub(super) fn plan_ensure_next_capture(
     }
     let block_link = format!("[[{route}#^{block_id}]]");
     let day_contents = planner.read_existing(&day_file)?;
+    // A bare Ensure Next relocates to the task's typed placement (D7);
+    // a named one keeps its deliberate destination and never types.
+    let placement_type = if pomodoro_name.is_none() {
+        task_theme_context
+            .placement_for_task(planner, route, &task_line, warnings)
+    } else {
+        None
+    };
+    let placed_type = placement_type.as_ref().map(|placement| {
+        let typed = placement.as_typed();
+        (typed, placement.placed_type())
+    });
+    let typed = placed_type.as_ref().map(|(typed, _)| typed);
     let relocation = capture_task_toggle::plan_link_relocation(
         &day_contents,
         &block_link,
         pomodoro_name,
         pomodoro_name_is_literal,
+        typed,
     )
     .map_err(|error| {
         relocation_plan_error(error, &block_link, route, block_id)
@@ -267,11 +282,17 @@ pub(super) fn plan_ensure_next_capture(
                 status_changed: Some(status_changed),
                 pomodoro_link_action: Some(pomodoro_link_action),
                 pomodoro_link_source: Some(endpoint_json(&relocation.source)),
-                pomodoro_link_destination: Some(destination_json(
-                    &relocation.destination,
-                    relocation.creates_pomodoro,
-                    selector,
-                )),
+                pomodoro_link_destination: Some({
+                    let mut destination = destination_json(
+                        &relocation.destination,
+                        relocation.creates_pomodoro,
+                        selector,
+                    );
+                    if let Some((_, placed)) = placed_type.as_ref() {
+                        destination.placed_type = Some(placed.clone());
+                    }
+                    destination
+                }),
                 dropped_dependencies,
                 task_block_ref,
                 blocks_updates,

@@ -652,6 +652,20 @@ pub(super) struct PomodoroLinkEndpoint {
     /// (a new entry). Sources leave this unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) role: Option<&'static str>,
+    /// The task's effective type when Bob placed the link by type (D7):
+    /// the theme ref, the cascade source, and the human label. Set only
+    /// on destinations Bob placed by type; legacy and named destinations
+    /// leave this unset.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
+    pub(super) placed_type: Option<PlacedType>,
+}
+
+/// Additive D7 typed-placement record on a link destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PlacedType {
+    pub(super) theme: super::super::pomodoro_themes::ThemeRef,
+    pub(super) source: super::super::pomodoro_themes::suggest::SuggestionSource,
+    pub(super) label: String,
 }
 
 /// Resolve a link-destination role for the plan-budget contract: a

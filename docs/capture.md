@@ -86,9 +86,9 @@ anything is written, and any failure rolls the whole batch back.
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
-| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; a future schedule (`s:<N>`, N ≥ 1) starts Blocked (`[?]`) and unlinked |
+| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; a future schedule (`s:<N>`, N ≥ 1) starts Blocked (`[?]`) and unlinked; the bare link lands in the Pomodoro the new task's type places |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
-| `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
+| `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes); the bare start lands in the Pomodoro the new task's type places, creating a started `— T` entry when none fits |
 | `@route:block-id#pomodoro=<X>` / `@route:block-id=name` | Same under the named Pomodoro, starting that session (`@sase:deep-fix=bugs` links under `BUGS` and starts it, exactly like `@sase:deep-fix#bugs=`); under the shared suffix rule a link takes every spelling a lone start takes except drop lists (`=bugs@3`, `=3#bugs`, `=#bugs`) |
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
@@ -133,11 +133,11 @@ anything is written, and any failure rolls the whole batch back.
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
 | `@route^block-id+` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched |
 | `@route^block-id+#pomodoro` | Same; ` :<id>` Task Links go under the named open Pomodoro, creating that named future Pomodoro when missing |
-| `- <task> :<task-id>` (project-note bullet) | Name the task, make it Next (`[*]`, or `[?]` when scheduled), and link `[[<stem>#^<task-id>]]` into the current/next Pomodoro, or the `#pomodoro` one |
+| `- <task> :<task-id>` (project-note bullet) | Name the task, make it Next (`[*]`, or `[?]` when scheduled), and link `[[<stem>#^<task-id>]]` into the Pomodoro the task's type places, or the `#pomodoro` one |
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
-| `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro; a task Blocked only by its own prerequisites drops them first |
+| `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to the Pomodoro the task's type places; a task Blocked only by its own prerequisites drops them first |
 | `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there; a task Blocked only by its own prerequisites drops them first |
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
@@ -1215,12 +1215,19 @@ then prefix over open entries, else the canonical named future Pomodoro is
 created, and _Q_'s complete subtree moves there (or a new link is inserted
 when there is no _Q_). Without a name, an already-queued task respects the
 queue: the destination is _Q_ and nothing moves. Without a name and no _Q_,
-the implicit current/next Pomodoro is used, exactly like a new-task capture.
+the task's effective type places the link: the running exact entry, else
+the first open exact entry, else the first open entry whose name contains
+the type, else a created `— T` placeholder, exactly like a new-task
+capture. A type that would grow the plan past `plan.max_themes` under
+`plan.strict` refuses with code `strict_cap` before any write.
 `=<X>` uses the same `se<X>` math, clock, and guards: any open timed Pomodoro
 fails with "finish the current Pomodoro first"; `#name=<X>` needs an untimed
 open placeholder or creates a started entry; no-name with _Q_ starts _Q_
-(it must be an untimed open placeholder); no-name without _Q_ uses the
-first open untimed placeholder or creates an unnamed started entry. Every
+(it must be an untimed open placeholder); no-name without _Q_ starts the
+first untimed open entry the task's type places, or creates a started
+`— T` entry instead of an unnamed one (a queued task still starts its
+queue; a pure `=` with no task keeps the legacy next-placeholder rule).
+Every
 started entry moves, with its child block, to the current slot: right after
 the last completed Pomodoro's complete block, otherwise before the first
 other open Pomodoro.
@@ -2863,14 +2870,24 @@ text unchanged.
 With `plan.strict: true`, the whole batch is refused, atomically, when
 a non-start item creates a new named Pomodoro entry past the theme cap
 (`<text> @r:id#NAME`, `@r^id+#NAME` project notes, `@r+id#NAME`
-toggles, and any other non-start creation path). Session starts and overrides
-(`=`, `=<X>#NAME`, `#NAME=`, and link starts) are never refused. A named start
+toggles, and any other non-start creation path). A bare link-creating
+capture whose task type would add a type past the cap is refused before
+any write with code `strict_cap`, including a bare link-start
+(`@r:id=<X>`) that would create a started `— T` entry; pure `=` starts
+and named starts and overrides (`=<X>#NAME`, `#NAME=`, and named link
+starts) are never refused. A named start
 that creates a theme still reports `plan_budget` and the cap warning. The
 refusal is an
 I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
 
 ```json
 {"ok": false, "error": "refusing capture: today's plan would grow to 4/3 themes (adds BOB); …", "code": "plan_theme_cap_exceeded"}
+```
+
+The bare-form strict refusal instead teaches the escape:
+
+```json
+{"ok": false, "error": "capture item 1 starting on line 1: plan.strict: CHORE would be type 4 of 3; name the Pomodoro explicitly with #CHORE or raise plan.max_themes", "code": "strict_cap"}
 ```
 
 `code` appears on this refusal and on `pull_in_choice_required`
@@ -2880,11 +2897,16 @@ I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
 Every `pomodoro_link_destination` carries a `role` naming how the entry
 was chosen: `current` (the running timed entry), `next_up` (implicitly
 chosen and not running), `named` (an existing entry matched by `#NAME`),
-or `created` (a new entry). New `<text> @route:id[#NAME]`
-Pomodoro-task captures report `pomodoro_link_destination`,
-`pomodoro_name`, and `creates_pomodoro` too, and human output names the
-landing spot: `→ into running GOALS (0945-1015)`, `→ under GOALS (next
-up)`, `→ under GOALS (named)`, or `→ new Pomodoro BOB`. In the
+or `created` (a new entry). Destinations Bob placed by type add a `type`
+object `{theme, source, label}` with the task's effective type, the
+cascade source, and the human label (`from dev`, `default type`); legacy
+and named destinations omit it, and the `role` values are unchanged. New
+`<text> @route:id[#NAME]` Pomodoro-task captures report
+`pomodoro_link_destination`, `pomodoro_name`, and `creates_pomodoro`
+too, and human output names the landing spot: `→ into running GOALS
+(0945-1015)`, `→ under GOALS (next up)`, `→ under GOALS (named)`, or
+`→ new Pomodoro BOB`, each with ` · <label>` appended when Bob placed
+by type. In the
 `pomodoro_name` completion context, `creates_pomodoro` rows preview the
 result with `plan_themes_after` and `plan_themes_cap`, omitted when the
 daily note or the plan config is unavailable. In the `pomodoro_start_name`
@@ -4288,7 +4310,8 @@ Pomodoro, in source order — creating the future placeholder
 
 A named `#admin` also retypes each linked ` :` task to agree with that
 Pomodoro, the same rule as `#NAME` on a new or existing-task capture. Without
-`#admin`, the links go to today's implicit current/next Pomodoro, the same
+`#admin`, each linked ` :` task places by its own effective type — a created
+`— T` placeholder when the ledger holds no entry for it — the same
 selection rule `@route:id` uses.
 
 This mirrors the Obsidian Bob Navigation Hotkeys command **Create project
@@ -4530,15 +4553,17 @@ Link presence for `@route+block-id!` is:
 
 | Linked under an open Pomodoro today? | Status | Result |
 | --- | --- | --- |
-| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro — unless the §13.5 link guard consumes it; §13.5.1 first drops its own open prerequisites when every safety gate passes |
-| no | Next `[*]` / In Progress `[/]` | Link inserted under the implicit current/next open Pomodoro; status unchanged |
+| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the Pomodoro the task's type places — unless the §13.5 link guard consumes it; §13.5.1 first drops its own open prerequisites when every safety gate passes |
+| no | Next `[*]` / In Progress `[/]` | Link inserted under the Pomodoro the task's type places; status unchanged |
 | yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
 | — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
 
 When an unlinked task links with `!`, Bob inserts the task
-link under the implicit current/next open Pomodoro unless that entry already
+link under the Pomodoro the task's type places unless that entry already
 has the same link. In that idempotent case no duplicate is written and JSON
-reports `pomodoro_already_linked: true`. Matching duplicate links under later
+reports `pomodoro_already_linked: true`. The destination carries the
+additive `type` object and the day-file row appends ` · <label>`, the same
+contract as whole-item links. Matching duplicate links under later
 still-open Pomodoros are removed. Completed Pomodoros are not cleaned up.
 When a linked task unlinks, every matching link under every open Pomodoro is
 removed and the route note is left untouched. Neither unsuffixed marker-only
@@ -4588,10 +4613,15 @@ idempotent relocation, and use `@route+block-id!` only when you intentionally
 want to toggle the link itself — add a missing link, or remove every
 open-Pomodoro link with the lane unchanged.
 
-The plain form's destination is today's implicit current/next open Pomodoro:
-the single open timed entry when present, otherwise the first open entry in
-document order. The named form's destination is the matching open named
-Pomodoro, or a newly created named future Pomodoro when no open name matches.
+The plain form's destination is the Pomodoro the task's effective type
+places: the running exact entry, else the first open exact entry, else the
+first open entry whose name contains the type, else a created `— T`
+placeholder at the named-creation insertion point. With no effective type
+(no default configured) the legacy implicit current/next open Pomodoro is
+used unchanged: the single open timed entry when present, otherwise the
+first open entry in document order. The named form's destination is the
+matching open named Pomodoro, or a newly created named future Pomodoro
+when no open name matches.
 A missing Pomodoros section, no eligible open implicit entry, multiple open
 timed entries for implicit selection or named creation, or an invalid
 Pomodoro name is an atomic error. Existing named selection skips the
