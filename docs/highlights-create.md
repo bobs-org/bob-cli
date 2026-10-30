@@ -484,9 +484,12 @@ On macOS 26, PDFKit recognizes tables visually and takes over drags inside
 them: a drag returns a private whole-cell selection with no geometry, or
 nothing at all, and Highlights then saves invisible annotations with zero
 `/QuadPoints`. No restyled grid escapes this detection, so tables whose
-cells hold prose print as single-column row records instead: a bold lead-in
-(or labeled fields) with one field per former column, in ordinary body-size
-text that selects and annotates normally.
+cells hold prose print as single-column row records instead: each former row
+becomes a record; a bold lead-in runs into its first field when column 1
+holds short keys; each other former column becomes one labeled field; short
+fields (three words or fewer) share a line; records are separated by a small
+gap, and fields within a record have none, in ordinary body-size text that
+selects and annotates normally.
 
 A table prints as records when it is **prose**: some body-row cell in column
 2 or later holds at least `highlights.table_prose_words` whitespace-separated
@@ -514,7 +517,7 @@ A Div with both classes is ignored, with a warning.
 cell with a row or column span, more than one head row, an intermediate body
 head, a foot row, more than one table body, row header columns, a nested
 table, or a header cell containing a link, note, image, or identifier. A
-table with no body rows is left untouched.
+table with no body rows always stays a grid.
 
 On success bob prints a `tables:` line beside `links:` when the document has
 at least one table (`tables: 3 records · 2 grids`, singular `1 record` /

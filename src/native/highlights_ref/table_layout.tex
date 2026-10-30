@@ -2,13 +2,14 @@
 \usepackage{needspace}
 \definecolor{BobRecordLabelInk}{HTML}{4B5563}
 \newenvironment{BobTableRecords}{%
-  \par\medskip
+  \par\medskip\setlength{\parskip}{0pt}%
 }{%
   \par\medskip
 }
 \newcommand{\BobRecordStart}{%
-  \par\vspace{2pt}\needspace{3\baselineskip}%
+  \par\vspace{6pt}\needspace{3\baselineskip}%
 }
+\newcommand{\BobFieldSep}{\quad}
 \newcommand{\BobRecordLabel}{%
   \sffamily\bfseries\color{BobRecordLabelInk}%
 }

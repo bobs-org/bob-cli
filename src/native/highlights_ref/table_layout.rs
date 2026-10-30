@@ -907,6 +907,143 @@ mod tests {
     }
 
     #[test]
+    fn run_in_lead_shares_para_with_first_labeled_field() {
+        let source = format!(
+            "| Key | Count | Notes |\n\
+             |---|---|---|\n\
+             | R1 | 9,237 | {TWELVE} |\n"
+        );
+        let Some(run) = run_filter("run-in-lead", &source, "latex", &[]) else {
+            return;
+        };
+        assert!(run.output.contains("BobTableRecords"), "{}", run.output);
+        assert!(
+            run.output.contains("\\textbf{R1}\\BobFieldSep{}"),
+            "bold lead runs into its first field: {}",
+            run.output
+        );
+        assert!(
+            run.output.contains("Count:"),
+            "first field label survives: {}",
+            run.output
+        );
+        find_in_order(&run.output, &["\\textbf{R1}", "Count:", "9,237"]);
+    }
+
+    #[test]
+    fn pack_adjacent_shorts_share_para_while_prose_starts_new() {
+        let source = format!(
+            "| Key | Count | Share | Notes |\n\
+             |---|---|---|---|\n\
+             | R1 | 9,237 | 84.6% | {TWELVE} |\n"
+        );
+        let Some(run) = run_filter("pack-shorts", &source, "latex", &[]) else {
+            return;
+        };
+        assert!(run.output.contains("BobTableRecords"), "{}", run.output);
+        assert!(
+            run.output.contains("9,237\\BobFieldSep{}"),
+            "adjacent shorts share one Para: {}",
+            run.output
+        );
+        assert!(
+            count(&run.output, "\\BobFieldSep{}") >= 2,
+            "lead plus two shorts share the run-in line: {}",
+            run.output
+        );
+        assert!(
+            run.output.contains("\n\n{\\BobRecordLabel Notes:}"),
+            "prose field starts a new Para: {}",
+            run.output
+        );
+        find_in_order(
+            &run.output,
+            &["R1", "Count:", "9,237", "Share:", "84.6", "Notes:"],
+        );
+    }
+
+    #[test]
+    fn four_word_field_does_not_pack() {
+        let source =
+            "| K | A | B | C |\n\
+             |---|---|---|---|\n\
+             | R1 | one two three | one two three four | one two three four five six seven eight nine ten eleven twelve |\n";
+        let Some(run) = run_filter("pack-four-word", source, "latex", &[])
+        else {
+            return;
+        };
+        assert!(run.output.contains("BobTableRecords"), "{}", run.output);
+        assert!(
+            run.output.contains("\\textbf{R1}\\BobFieldSep{}"),
+            "short A joins the lead line: {}",
+            run.output
+        );
+        assert!(
+            run.output.contains("\n\n{\\BobRecordLabel B:}"),
+            "4-word B starts its own Para: {}",
+            run.output
+        );
+        assert!(
+            !run.output.contains("one two three\\BobFieldSep{}"),
+            "3-word A must not pack with 4-word B: {}",
+            run.output
+        );
+    }
+
+    #[test]
+    fn multiblock_first_field_keeps_lead_alone() {
+        let source = format!(
+            "<table>\n\
+             <thead><tr><th>Key</th><th>A</th><th>B</th></tr></thead>\n\
+             <tbody><tr><td>R1</td>\
+             <td><ul><li>alpha</li><li>beta gamma delta epsilon zeta eta theta iota kappa lambda mu</li></ul></td>\
+             <td>{TWELVE}</td></tr></tbody>\n\
+             </table>\n"
+        );
+        let Some(run) =
+            run_filter_from("multiblock-lead", &source, "html", "latex", &[])
+        else {
+            return;
+        };
+        assert!(run.output.contains("BobTableRecords"), "{}", run.output);
+        assert!(
+            run.output.contains("\\textbf{R1}\n\n"),
+            "lead stays its own Para before a multi-block field: {}",
+            run.output
+        );
+        assert!(
+            !run.output.contains("\\textbf{R1}\\BobFieldSep{}"),
+            "multi-block must not join the lead line: {}",
+            run.output
+        );
+        assert!(
+            run.output.contains("BobRecordValue"),
+            "multi-block value stays indented: {}",
+            run.output
+        );
+    }
+
+    #[test]
+    fn records_tex_uses_zero_parskip_six_pt_gap_and_field_sep() {
+        assert!(
+            HEADER_INCLUDES.contains("\\setlength{\\parskip}{0pt}"),
+            "records clear paragraph spacing: {}",
+            HEADER_INCLUDES
+        );
+        assert!(
+            HEADER_INCLUDES
+                .contains("\\par\\vspace{6pt}\\needspace{3\\baselineskip}"),
+            "records use the 6pt gap: {}",
+            HEADER_INCLUDES
+        );
+        assert!(
+            HEADER_INCLUDES.contains("\\newcommand{\\BobFieldSep}"),
+            "packed fields need a separator: {}",
+            HEADER_INCLUDES
+        );
+    }
+
+    #[test]
     fn robustness_malformed_prose_words_falls_back() {
         let extra = [(PROSE_WORDS_METADATA_KEY, "nope")];
         let Some(run) =

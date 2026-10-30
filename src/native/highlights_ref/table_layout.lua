@@ -9,6 +9,7 @@
 
 local DEFAULT_PROSE_WORDS = 12
 local DEFAULT_LINE_CHARS = 84
+local PACK_WORDS = 3
 local CLASS_RECORDS = "bob-records"
 local CLASS_GRID = "bob-grid"
 local CLASS_WRAPPER = "bob-table-records"
@@ -386,6 +387,14 @@ local function label_close()
   return pandoc.RawInline("latex", "}")
 end
 
+local function field_sep()
+  return pandoc.RawInline("latex", "\\BobFieldSep{}")
+end
+
+local function is_short_blocks(blocks)
+  return word_count(blocks) <= PACK_WORDS
+end
+
 local function labeled_inlines(label, value)
   local inl = pandoc.List({})
   inl:insert(label_open())
@@ -486,21 +495,84 @@ local function to_records(tbl)
   for _, row in ipairs(rows) do
     local cells = row.cells or {}
     out:insert(pandoc.RawBlock("latex", "\\BobRecordStart"))
-    if lead then
-      local first = cells[1]
-      if first ~= nil and not is_empty_blocks(cell_blocks(first)) then
-        local inl = single_inlines(cell_blocks(first))
-        if inl == nil then
-          inl = pandoc.utils.blocks_to_inlines(cell_blocks(first))
+    if two_col_lead then
+      if lead then
+        local first = cells[1]
+        if first ~= nil and not is_empty_blocks(cell_blocks(first)) then
+          local inl = single_inlines(cell_blocks(first))
+          if inl == nil then
+            inl = pandoc.utils.blocks_to_inlines(cell_blocks(first))
+          end
+          out:insert(pandoc.Para({ pandoc.Strong(inl) }))
         end
-        out:insert(pandoc.Para({ pandoc.Strong(inl) }))
       end
-    end
-    local start = lead and 2 or 1
-    for i = start, ncol do
-      local unlabeled = two_col_lead and i == 2
-      local label = unlabeled and nil or header_label_inlines(heads[i])
-      emit_field(out, label, cells[i], unlabeled)
+      local start = 2
+      for i = start, ncol do
+        local unlabeled = i == 2
+        local label = nil
+        emit_field(out, label, cells[i], unlabeled)
+      end
+    else
+      local pending = nil
+      local pending_has_field = false
+      if lead then
+        local first = cells[1]
+        if first ~= nil and not is_empty_blocks(cell_blocks(first)) then
+          local inl = single_inlines(cell_blocks(first))
+          if inl == nil then
+            inl = pandoc.utils.blocks_to_inlines(cell_blocks(first))
+          end
+          pending = pandoc.List({ pandoc.Strong(inl) })
+          pending_has_field = false
+        end
+      end
+      local function flush_pending()
+        if pending ~= nil then
+          out:insert(pandoc.Para(pending))
+          pending = nil
+          pending_has_field = false
+        end
+      end
+      local start = lead and 2 or 1
+      for i = start, ncol do
+        local label = header_label_inlines(heads[i])
+        local blocks = cell_blocks(cells[i])
+        local empty = is_empty_blocks(blocks)
+        local single = single_inlines(blocks)
+        local is_single_or_empty = empty or single ~= nil
+        if label ~= nil and is_single_or_empty then
+          local short = is_short_blocks(blocks)
+          local value = empty and emdash_inlines() or single
+          local field_inlines = labeled_inlines(label, value)
+          if short then
+            if pending ~= nil then
+              pending:insert(field_sep())
+              for _, el in ipairs(field_inlines) do
+                pending:insert(el)
+              end
+              pending_has_field = true
+            else
+              pending = field_inlines
+              pending_has_field = true
+            end
+          else
+            if pending ~= nil and not pending_has_field then
+              pending:insert(field_sep())
+              for _, el in ipairs(field_inlines) do
+                pending:insert(el)
+              end
+              flush_pending()
+            else
+              flush_pending()
+              out:insert(pandoc.Para(field_inlines))
+            end
+          end
+        else
+          flush_pending()
+          emit_field(out, label, cells[i], false)
+        end
+      end
+      flush_pending()
     end
   end
 
