@@ -1,7 +1,7 @@
 //! Read-only `bob gcal list`: fetch a complete local-day snapshot, classify
 //! every event, choose valid roots, then render a table or JSON envelope.
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use serde_json::{json, Value};
 
 use super::{
@@ -9,11 +9,12 @@ use super::{
     config::GcalConfig,
     journal,
     model::MyAnswer,
+    plan::journaled_title,
     snapshot::{self, SnapshotEvent},
     ui, GcalError, ListArgs,
 };
 use crate::native::{
-    env as bob_env,
+    env as bob_env, event_task,
     style::{self, Styler},
 };
 
@@ -76,6 +77,8 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
         .unwrap_or_default();
     let has_note = note.is_some();
     let day_string = day.to_string();
+    // Missed meetings stay open and surface here; nothing auto-cancels.
+    let past_open = past_open_meetings(&vault, day);
     if args.format.is_json() {
         print_json(
             day,
@@ -87,6 +90,7 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             &day_string,
             has_note.then_some(note_lines.as_slice()),
             last_sync_json(&newest),
+            &past_open,
         )
     } else {
         print_table(
@@ -100,8 +104,48 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
             has_note.then_some(note_lines.as_slice()),
             &last_sync_human(&newest),
             &journal_warnings,
+            &past_open,
         )
     }
+}
+
+/// Open Event Tasks still sitting in the previous 7 daily notes, newest
+/// first, as (day, title). Missed meetings are surfaced, never
+/// auto-cancelled.
+fn past_open_meetings(
+    vault: &std::path::Path,
+    today: NaiveDate,
+) -> Vec<(NaiveDate, String)> {
+    let mut open = Vec::new();
+    for back in 1..=7 {
+        let day = today - Duration::days(back);
+        let Ok(contents) = std::fs::read_to_string(
+            vault.join(snapshot::daily_relative_path(day)),
+        ) else {
+            continue;
+        };
+        let lines: Vec<&str> = contents.lines().collect();
+        let Some(section) = event_task::events_section_range(&lines) else {
+            continue;
+        };
+        for line in lines.get(section).unwrap_or(&[]) {
+            if event_task::parse_event_span(line).is_none() {
+                continue;
+            }
+            let status = line
+                .trim_start()
+                .strip_prefix("- [")
+                .and_then(|rest| rest.chars().next());
+            if !matches!(status, Some(' ') | Some('*')) {
+                continue;
+            }
+            let title = journaled_title(line);
+            if !title.is_empty() {
+                open.push((day, title));
+            }
+        }
+    }
+    open
 }
 
 /// What sync did, or would do, with one event: `task · MEET`, `task`,
@@ -305,6 +349,7 @@ fn print_json(
     day_string: &str,
     note: Option<&[&str]>,
     last_sync: Value,
+    past_open: &[(NaiveDate, String)],
 ) -> Result<(), GcalError> {
     let rows: Vec<Value> = events
         .iter()
@@ -326,6 +371,10 @@ fn print_json(
             })
         })
         .collect();
+    let past: Vec<Value> = past_open
+        .iter()
+        .map(|(day, title)| json!({"day": day.to_string(), "title": title}))
+        .collect();
     write_stdout(&json!({
         "schema_version": 1,
         "day": day.to_string(),
@@ -338,6 +387,7 @@ fn print_json(
             "awaiting_reply": counts.awaiting_reply,
         },
         "last_sync": last_sync,
+        "past_open": past,
     }))
 }
 
@@ -356,6 +406,7 @@ fn print_table(
     note: Option<&[&str]>,
     sync_state: &str,
     journal_warnings: &[String],
+    past_open: &[(NaiveDate, String)],
 ) -> Result<(), GcalError> {
     let styler = Styler::detect();
     let calendar_names = calendars
@@ -435,6 +486,22 @@ fn print_table(
         "{} tasks · {} context · {} awaiting your reply\n",
         counts.tasks, counts.context, counts.awaiting_reply
     ));
+    if !past_open.is_empty() {
+        let items: Vec<String> = past_open
+            .iter()
+            .map(|(day, title)| format!("{} {title}", day.format("%a")))
+            .collect();
+        let noun = if past_open.len() == 1 {
+            "past meeting still open"
+        } else {
+            "past meetings still open"
+        };
+        output.push_str(&format!(
+            "{} {noun}: {} · close or cancel them in their notes\n",
+            past_open.len(),
+            items.join(", ")
+        ));
+    }
     for warning in journal_warnings {
         ui::warn(warning);
     }

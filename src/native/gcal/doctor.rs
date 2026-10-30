@@ -251,6 +251,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(default_root_check(&bob_dir, config.root()));
     checks.push(today_check(&bob_dir));
     checks.push(journal_check(&bob_dir));
+    checks.push(journal_malformed_check(&bob_dir));
     checks.push(writer_check(config.writer(), &host));
     checks.push(last_sync_check());
     finish(args, &host, checks)
@@ -401,6 +402,34 @@ fn journal_check(bob_dir: &Path) -> Check {
     }
 }
 
+/// Malformed journal lines never fail a run: they are skipped with a
+/// bounded warning. Doctor still surfaces the count so a growing pile
+/// of unreadable lines gets noticed.
+fn journal_malformed_check(bob_dir: &Path) -> Check {
+    match journal::malformed_count(bob_dir) {
+        0 => Check {
+            id: "journal_malformed",
+            status: CheckStatus::Ok,
+            summary: "no malformed gcal journal lines".to_string(),
+            fix: None,
+        },
+        count => Check {
+            id: "journal_malformed",
+            status: CheckStatus::Warn,
+            summary: format!(
+                "{count} malformed gcal journal line{} skipped",
+                if count == 1 { "" } else { "s" }
+            ),
+            fix: Some(
+                "malformed lines are skipped safely; re-sync to confirm \
+                 the journal still folds, then inspect \
+                 .bob/gcal/<host>.jsonl"
+                    .to_string(),
+            ),
+        },
+    }
+}
+
 fn last_sync_check() -> Check {
     let Some(status) = journal::read_status() else {
         return skipped("last_sync", "never synced");
@@ -411,6 +440,32 @@ fn last_sync_check() -> Check {
             status: CheckStatus::Warn,
             summary: format!("last run waited for {}", status.day),
             fix: Some("open the daily note in Obsidian, then sync".to_string()),
+        };
+    }
+    if status.outcome == "error" {
+        return Check {
+            id: "last_sync",
+            status: CheckStatus::Fail,
+            summary: format!(
+                "last sync for {} failed: {}",
+                status.day,
+                status.error.as_deref().unwrap_or("unknown error")
+            ),
+            fix: Some("run `bob gcal sync` and read the error".to_string()),
+        };
+    }
+    if let Some(error) =
+        status.error.as_deref().filter(|error| !error.is_empty())
+    {
+        return Check {
+            id: "last_sync",
+            status: CheckStatus::Warn,
+            summary: format!(
+                "synced {} on {} · last error: {error}",
+                journal::ago(&status.ts),
+                status.host,
+            ),
+            fix: Some("run `bob gcal sync` and read the error".to_string()),
         };
     }
     Check {

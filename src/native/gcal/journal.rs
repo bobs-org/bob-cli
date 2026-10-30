@@ -1,12 +1,14 @@
 //! The per-host `bob gcal sync` journal: `.bob/gcal/<host>.jsonl`.
 //!
-//! Records are `gcal.row`, `gcal.link`, and `gcal.gone`, union-merged
-//! and folded into state keyed by (occurrence key, day). One host-local
-//! status file under `$XDG_STATE_HOME/bob/gcal/` feeds `list` and
-//! `doctor`; it is never written to the vault.
+//! Records are `gcal.row`, `gcal.link`, `gcal.gone`, `gcal.series_root`,
+//! and `gcal.flag`, union-merged and folded into state keyed by
+//! (occurrence key, day). Series roots fold into a series-keyed map of
+//! learned `[root::]` values; flags remember once-reported lifecycle
+//! notices. One host-local status file under `$XDG_STATE_HOME/bob/gcal/`
+//! feeds `list` and `doctor`; it is never written to the vault.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -31,6 +33,9 @@ pub(crate) struct OccurrenceState {
     pub row: Option<RowRecord>,
     pub link: bool,
     pub gone: bool,
+    /// Once-reported lifecycle notices (`kept_edit`, `worked_kept`,
+    /// `now_maybe`, `awaiting_reply`, …).
+    pub flags: HashSet<String>,
 }
 
 /// One `gcal.row` record: what Bob wrote for one occurrence and day.
@@ -41,9 +46,21 @@ pub(crate) struct RowRecord {
     pub spans: BTreeMap<String, String>,
     pub root: Option<String>,
     pub source: Option<String>,
+    pub series_id: Option<String>,
+    pub url: Option<String>,
     pub ts: DateTime<FixedOffset>,
     pub host: String,
     pub path: String,
+}
+
+/// One learned series root: a vault edit on one occurrence teaches the
+/// series. Last writer wins, so a later edit (including a change back)
+/// re-teaches the series.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LearnedRoot {
+    pub root: String,
+    pub day: String,
+    pub block_id: String,
 }
 
 /// A new `gcal.row` to append.
@@ -60,6 +77,9 @@ pub(crate) struct NewRow {
     pub spans: BTreeMap<String, String>,
     pub root: Option<String>,
     pub source: Option<String>,
+    /// The `📅` identity URL, when the event has one: the match key for
+    /// block-less context rows.
+    pub url: Option<String>,
 }
 
 /// A new `gcal.link` or `gcal.gone` to append.
@@ -143,6 +163,7 @@ enum Update {
     Row(RowRecord),
     Link,
     Gone,
+    Flag(String),
 }
 
 impl Update {
@@ -151,6 +172,9 @@ impl Update {
             Self::Row(row) => state.row = Some(row),
             Self::Link => state.link = true,
             Self::Gone => state.gone = true,
+            Self::Flag(reason) => {
+                state.flags.insert(reason);
+            }
         }
     }
 }
@@ -192,6 +216,14 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
                 .and_then(|root| root.get("source"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
+            series_id: object
+                .get("series_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            url: object
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             ts: event.ts,
             host: event.host.clone(),
             path: object
@@ -202,9 +234,205 @@ fn parse_record(event: &StoredEvent) -> Option<(String, String, Update)> {
         }),
         "gcal.link" => Update::Link,
         "gcal.gone" => Update::Gone,
+        "gcal.flag" => Update::Flag(
+            object
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        ),
         _ => return None,
     };
     Some((key, day, update))
+}
+
+/// Fold every `gcal.series_root` record into a series-keyed map of
+/// learned roots, keyed by (calendar id, series id). Last writer wins,
+/// so a later vault edit (including a change back) re-teaches the
+/// series. Malformed lines are skipped without counting: callers that
+/// need the count use [`malformed_count`].
+pub(crate) fn load_series_roots(
+    vault: &Path,
+) -> std::io::Result<BTreeMap<(String, String), LearnedRoot>> {
+    let (stored, _) = pref_journal::read_raw(vault, NAMESPACE)?;
+    let mut ordered = stored.iter().collect::<Vec<_>>();
+    pref_journal::sort_by_writer_order(&mut ordered, |event| {
+        (
+            event.ts,
+            event.host.as_str(),
+            event.path.as_str(),
+            event.line,
+        )
+    });
+    let mut roots = BTreeMap::new();
+    for event in ordered {
+        if event.kind.as_str() != "gcal.series_root" {
+            continue;
+        }
+        let Some(object) = event.value.as_object() else {
+            continue;
+        };
+        let key = object.get("key").and_then(Value::as_object);
+        let (Some(calendar_id), Some(series)) = (
+            key.and_then(|key| key.get("calendar_id"))
+                .and_then(Value::as_str),
+            key.and_then(|key| key.get("series"))
+                .and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let Some(root) = object
+            .get("root")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let learned_from =
+            object.get("learned_from").and_then(Value::as_object);
+        roots.insert(
+            (calendar_id.to_string(), series.to_string()),
+            LearnedRoot {
+                root,
+                day: learned_from
+                    .and_then(|from| from.get("day"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                block_id: learned_from
+                    .and_then(|from| from.get("block_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            },
+        );
+    }
+    Ok(roots)
+}
+
+/// Append one `gcal.series_root` record: a vault edit on one occurrence
+/// of a recurring event teaches the series.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_series_root(
+    vault: &Path,
+    host: &str,
+    calendar_id: &str,
+    series: &str,
+    root: &str,
+    day: &str,
+    block_id: &str,
+) -> std::io::Result<String> {
+    let line = serde_json::to_string(&json!({
+        "v": 1,
+        "ts": pref_journal::event_timestamp()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        "host": host,
+        "kind": "gcal.series_root",
+        "key": {"calendar_id": calendar_id, "series": series},
+        "root": root,
+        "learned_from": {"day": day, "block_id": block_id},
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+        + "\n";
+    pref_journal::append_line(vault, NAMESPACE, host, &line)?;
+    Ok(line)
+}
+
+/// Count malformed `gcal.*` journal lines for `doctor`: unparseable
+/// lines plus well-formed lines whose kind is a known gcal kind but
+/// whose body does not parse, plus unknown `gcal.*` kinds. This walks
+/// the files directly because [`pref_journal::read_raw`] drops
+/// unparseable lines before folding.
+pub(crate) fn malformed_count(vault: &Path) -> usize {
+    let directory = vault.join(NAMESPACE.dir);
+    let mut paths = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().is_some_and(|ext| ext == "jsonl")
+                    && path.is_file()
+            })
+            .collect::<Vec<_>>(),
+        Err(_) => return 0,
+    };
+    paths.sort();
+    let mut count = 0usize;
+    for path in paths {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        for line in bytes.split(|byte| *byte == b'\n') {
+            if line.is_empty()
+                || line.iter().all(|byte| byte.is_ascii_whitespace())
+            {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(line) else {
+                count += 1;
+                continue;
+            };
+            let Ok(value) = serde_json::from_str::<Value>(text.trim()) else {
+                count += 1;
+                continue;
+            };
+            // Mirror `pref_journal`'s envelope: `v: 1` and a valid `ts`.
+            let envelope_ok = value.as_object().is_some_and(|object| {
+                object.get("v").and_then(Value::as_u64) == Some(1)
+                    && object.get("ts").and_then(Value::as_str).is_some_and(
+                        |ts| DateTime::parse_from_rfc3339(ts).is_ok(),
+                    )
+            });
+            if !envelope_ok {
+                count += 1;
+                continue;
+            }
+            let kind = value
+                .as_object()
+                .and_then(|object| object.get("kind"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !kind.starts_with("gcal.") {
+                continue;
+            }
+            let event = StoredEvent {
+                ts: pref_journal::event_timestamp(),
+                host: String::new(),
+                path: String::new(),
+                line: 0,
+                kind: kind.to_string(),
+                value,
+            };
+            if parse_record(&event).is_none()
+                && parse_series_root(&event).is_none()
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Parse one `gcal.series_root` record without folding it.
+fn parse_series_root(
+    event: &StoredEvent,
+) -> Option<((String, String), LearnedRoot)> {
+    if event.kind.as_str() != "gcal.series_root" {
+        return None;
+    }
+    let object = event.value.as_object()?;
+    let key = object.get("key")?.as_object()?;
+    let calendar_id = key.get("calendar_id")?.as_str()?;
+    let series = key.get("series")?.as_str()?;
+    let root = object.get("root")?.as_str()?;
+    Some((
+        (calendar_id.to_string(), series.to_string()),
+        LearnedRoot {
+            root: root.to_string(),
+            day: String::new(),
+            block_id: String::new(),
+        },
+    ))
 }
 
 /// Append one `gcal.row` record with a single `O_APPEND` write.
@@ -225,6 +453,7 @@ pub(crate) fn append_row(
         "day": row.day,
         "path": row.path,
         "block_id": row.block_id,
+        "url": row.url,
         "row": row.row_kind,
         "spans": row.spans,
         "root": {"value": row.root, "source": row.source},
@@ -391,6 +620,7 @@ mod tests {
                 day: "2026-10-30".to_string(),
                 path: "2026/20261030.md".to_string(),
                 block_id: "interview".to_string(),
+                url: None,
                 row_kind: "task".to_string(),
                 spans: BTreeMap::from([(
                     "title".to_string(),

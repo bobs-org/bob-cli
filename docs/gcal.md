@@ -155,7 +155,9 @@ asks for confirmation on a TTY and exits 2 on a pipe.
 
 `bob gcal doctor` walks gog, client, account and scope, a live calendars call
 (the token refresh), configured calendars, default-root validity and its type
-suggestion, today's daily note, journal git rules, and the writer host.
+suggestion, today's daily note, journal git rules, malformed journal lines,
+the writer host, and the last sync (including its error, when the last run
+failed).
 
 A failing check prints `✗ <check>  <problem>` plus `  fix: <one command or
 step>`. Exit 1 when any check fails; exit 0 when every check is `ok` or
@@ -222,11 +224,14 @@ even when their rows are hidden. The header carries the last sync: `synced
 3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
 else `never synced`.
 
-JSON has `schema_version`, `day`, `calendars`, `events`, `counts`, and
-`last_sync` fields. Each event reports `time`, `title`, `answer`, `inclusion`,
-`reason`, `vault`, and `root.value`, `root.source`, and `root.warnings`.
-Descriptions and attendee details are omitted. A root may be null when no
-candidate is valid; warnings explain each rejected candidate and its fix.
+JSON has `schema_version`, `day`, `calendars`, `events`, `counts`,
+`last_sync`, and `past_open` fields. Each event reports `time`, `title`,
+`answer`, `inclusion`, `reason`, `vault`, and `root.value`, `root.source`,
+and `root.warnings`. Descriptions and attendee details are omitted. A root
+may be null when no candidate is valid; warnings explain each rejected
+candidate and its fix. `past_open` lists the open Event Tasks still sitting
+in the previous 7 daily notes (`day`, `title`); the table renders the same
+as a footer.
 
 ## Sync
 
@@ -268,18 +273,53 @@ plan and writes nothing. `-q` prints nothing on success, no-op, or waiting.
 
 | Part | Owner | Sync behavior |
 | --- | --- | --- |
-| Checkbox | You | Never changed |
-| Time span, title, badges | Google | Left alone once written |
-| `[root::]` | Precedence | Written once; your edits win and are never rewritten |
+| Checkbox | You | Never changed, except cancelling an untouched task (see below) |
+| Time span, title, badges | Google | Updated in place only while untouched; your edits win and are reported once |
+| `[root::]` | Precedence | Written once; your edits win, are never rewritten, and teach the series |
 | `[type::]`, block ID | Bob, once | Never rewritten |
 | Child bullets (meeting notes) | You | Never touched |
-| MEET Task Link | Bob, once | Never re-added or moved |
+| MEET Task Link | Bob, once | Never re-added or moved; removed only by a cancel |
 | The whole row | You | Deleted or moved away: tombstoned, never re-added |
 
 "Untouched" means not done, not In Progress, never linked under a closed
-Pomodoro, and with no 🍅 history. MEET placeholders are created only in the
+Pomodoro, and with no 🍅 history. A worked task is never cancelled; it is
+left alone and reported once. MEET placeholders are created only in the
 same write that adds their first link, so sync never leaves a second open
 MEET.
+
+## Reconciling Google-side changes
+
+Each sync compares every journaled row that is still present against a fresh
+render of its event:
+
+- A span (time, title, badges) whose current text still matches what Bob
+  last wrote is replaced in place. A span that differs from both is your
+  edit: it is kept and reported once as a `kept_edit` warning. A time
+  change re-slots the row together with its child block to keep time
+  order. The checkbox, `[root::]`, `[type::]`, and block ID are never
+  rewritten.
+- A Maybe context row whose RSVP went Yes upgrades in place to an Event
+  Task (with a MEET link when the meeting has not ended yet). A Yes task
+  row whose RSVP went Maybe stays a task and is reported once.
+- A journaled occurrence that leaves the snapshot is looked up with
+  `gog calendar event`. A 404/410, a `status: cancelled`, a start on
+  another day, or a declined RSVP cancels an untouched task (checkbox to
+  `[-]`, `[cancelled:: today]`, a created `❌ **CANCEL LOG**` first
+  child, MEET link dropped) or removes an untouched context row. A worked
+  task is left alone and reported once. A failed lookup makes the snapshot
+  incomplete: nothing is written. Cancel reasons read `Declined in Google
+  Calendar`, `Deleted in Google Calendar`, or `Moved to Fri 2026-10-31 in
+  Google Calendar`. A cancel that empties an untimed MEET entry removes
+  the entry.
+- One `[root::]` edit on an occurrence of a recurring event teaches the
+  series: new rows in that series use the learned root (still validated),
+  reported as `learned from your 2026-10-29 edit`. A later edit, including
+  a change back, re-teaches the series. Series splits are a cancel plus
+  an insert, never a fuzzy match.
+- Missed meetings are never auto-cancelled. `list` ends with the open
+  Event Tasks still sitting in the previous 7 daily notes, for example
+  `2 past meetings still open: Thu Dentist, Tue Weekly 1:1 · close or
+  cancel them in their notes`.
 
 ## Event inclusion
 
@@ -302,18 +342,20 @@ Timed multi-day events appear as context on each date they overlap.
 ## Root selection
 
 For Event Tasks, Bob tries these candidates in order and writes the first valid
-one: a title-ending `@route` or description line containing only `@route`,
-`gcal.colors` by event colour, the calendar's `root`, then `gcal.root` (default
-`meet`). A root must resolve relative to the daily note, be an area at any depth
-or a root project, and must not be `@unfiled`.
+one: the series memory of your earlier `[root::]` edit on another occurrence
+of the same recurring event, a title-ending `@route` or description line
+containing only `@route`, `gcal.colors` by event colour, the calendar's
+`root`, then `gcal.root` (default `meet`). A root must resolve relative to
+the daily note, be an area at any depth or a root project, and must not be
+`@unfiled`.
 
 Invalid candidates fall through to the next source with a warning that includes
 the R11 reason and fix. If a title route resolves, Bob removes the final token
 from the displayed title. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
-invalid default. Root sources are reported as `@body`, `colour tomato`,
-`calendar Health`, or `default`. The VAULT column reports the same roots
-beside the note.
+invalid default. Root sources are reported as `learned from your 2026-10-29
+edit`, `@body`, `colour tomato`, `calendar Health`, or `default`. The VAULT
+column reports the same roots beside the note.
 
 ## Exit status
 
@@ -351,7 +393,9 @@ including the `last_sync` check.
 no provider description or attendee list, and carries the `vault` state.
 
 `sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`, and
-`warnings`.
+`warnings`. Row actions add `updated`, `cancelled`, `removed` (context),
+`upgraded`, and `learned` to the sync-phase `added`, `adopted`, and `removed`
+(task) actions; lifecycle notices also arrive as `warnings`.
 
 ## Security
 

@@ -14,8 +14,10 @@ use serde_json::{json, Value};
 use super::{
     classify::{self, Inclusion},
     config::GcalConfig,
-    journal,
-    model::EventDateTime,
+    gog::Gog,
+    journal::{self, OccurrenceState},
+    lifecycle::{AbsentVerdict, LifecycleItem},
+    model::{EventDateTime, GcalEvent},
     plan::{self, PlannedOccurrence},
     render,
     snapshot::{self},
@@ -36,8 +38,39 @@ pub(crate) fn run(args: &SyncArgs) -> i32 {
             print_report(&report, args);
             0
         }
-        Err(error) => ui::report_error("sync", &error, format),
+        Err(error) => {
+            record_last_error(args, &error);
+            ui::report_error("sync", &error, format)
+        }
     }
+}
+
+/// Remember a failed run in host-local status so `doctor` can show the
+/// last error. Best effort: a broken config must not hide the error.
+fn record_last_error(args: &SyncArgs, error: &GcalError) {
+    let today = bob_env::current_datetime().date();
+    let Ok(day) = classify::resolve_day(&args.day, today) else {
+        return;
+    };
+    record_status(
+        &journal::host_label(),
+        day,
+        "error",
+        &SyncReport {
+            day,
+            path: String::new(),
+            status: "error",
+            rows: Vec::new(),
+            entry_line: None,
+            entry_created: false,
+            links_added: 0,
+            warnings: Vec::new(),
+            quiet: true,
+            json: false,
+            diff: None,
+        },
+        Some(format!("{}: {}", error.kind(), error.message())),
+    );
 }
 
 struct ReportRow {
@@ -131,6 +164,11 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         }
         occurrences.push(occurrence);
     }
+    // Lifecycle verdicts for journaled occurrences with no included
+    // snapshot row. A failed lookup makes the snapshot incomplete, so
+    // nothing is written.
+    let lifecycle =
+        resolve_absent(&snapshot, &occurrences, &journal_state, &day)?;
 
     let plan = plan::plan_sync(&plan::SyncPlanInput {
         contents: &contents,
@@ -138,6 +176,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
         occurrences: occurrences.clone(),
         journal: &journal_state,
         day_string: day.to_string(),
+        today: now.date(),
+        lifecycle: lifecycle.clone(),
+        series_roots: &snapshot.series_roots,
     });
 
     if args.dry_run {
@@ -226,6 +267,9 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
                     occurrences: occurrences.clone(),
                     journal: &journal_state,
                     day_string: day.to_string(),
+                    today: now.date(),
+                    lifecycle: lifecycle.clone(),
+                    series_roots: &snapshot.series_roots,
                 });
                 if !plan.changed {
                     let report = SyncReport {
@@ -256,6 +300,10 @@ fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
 
     // Append the journal only after the note write succeeds.
     append_journal(&vault, &host, &plan, &display_path, day)?;
+
+    for kept in &plan.kept {
+        warnings.push(format!("{}: {}", kept.title, kept.detail));
+    }
 
     let report = SyncReport {
         day,
@@ -454,6 +502,136 @@ fn needs_meet_type(
     render::needs_meet_type(vault, daily_rel, &probe)
 }
 
+/// Verdicts for journaled occurrences with no included snapshot row:
+/// declined, deleted, or moved events cancel or remove untouched rows;
+/// anything else is left alone and reported once. A journaled row the
+/// user already deleted tombstones without a lookup. A failed lookup
+/// makes the whole snapshot incomplete, so nothing is written.
+fn resolve_absent(
+    snapshot: &snapshot::DaySnapshot,
+    occurrences: &[PlannedOccurrence],
+    journal: &BTreeMap<(String, String), OccurrenceState>,
+    day: &NaiveDate,
+) -> Result<Vec<LifecycleItem>, GcalError> {
+    use std::collections::HashSet;
+    let day_string = day.to_string();
+    let present: HashSet<(String, String)> = occurrences
+        .iter()
+        .map(|occurrence| {
+            (occurrence.calendar_id.clone(), occurrence.event_id.clone())
+        })
+        .collect();
+    let mut missing: Vec<(String, String)> = journal
+        .iter()
+        .filter(|((_, entry_day), state)| {
+            entry_day == &day_string && !state.gone
+        })
+        .filter_map(|((key, _), _)| {
+            key.split_once('\u{1f}').map(|(calendar, event)| {
+                (calendar.to_string(), event.to_string())
+            })
+        })
+        .filter(|key| !present.contains(key))
+        .collect();
+    missing.sort();
+    missing.dedup();
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut transport: Option<Gog> = None;
+    let mut out = Vec::new();
+    for (calendar_id, event_id) in missing {
+        let verdict = match snapshot.events.iter().find(|listed| {
+            listed.event.key.calendar_id == calendar_id
+                && listed.event.key.event_id == event_id
+        }) {
+            Some(listed) => match &listed.inclusion {
+                Inclusion::Omitted(reason) if reason == "declined" => {
+                    AbsentVerdict::Declined
+                }
+                Inclusion::Omitted(reason) if reason == "cancelled" => {
+                    AbsentVerdict::Deleted
+                }
+                Inclusion::Omitted(reason) if reason == "reply in Calendar" => {
+                    AbsentVerdict::LeftAlone(
+                        "awaiting your reply in Google Calendar".to_string(),
+                    )
+                }
+                Inclusion::Omitted(reason) => {
+                    AbsentVerdict::LeftAlone(reason.clone())
+                }
+                _ => continue,
+            },
+            None => {
+                if transport.is_none() {
+                    let config = GcalConfig::resolve()?;
+                    transport = Some(Gog::resolve(config.timeout())?);
+                }
+                let gog = transport.as_ref().expect("gog resolved");
+                lookup_verdict(gog, snapshot, &calendar_id, &event_id, day)?
+            }
+        };
+        out.push(LifecycleItem {
+            calendar_id,
+            event_id,
+            verdict,
+        });
+    }
+    Ok(out)
+}
+
+/// Look up one journaled occurrence that fell out of the day snapshot:
+/// deleted (404/410, or `status: cancelled`), moved to another day,
+/// or declined. A failed lookup is an incomplete snapshot: the caller
+/// writes nothing.
+fn lookup_verdict(
+    gog: &Gog,
+    snapshot: &snapshot::DaySnapshot,
+    calendar_id: &str,
+    event_id: &str,
+    day: &NaiveDate,
+) -> Result<AbsentVerdict, GcalError> {
+    let raw = match gog.event(calendar_id, event_id) {
+        Err(error) if error.kind() == "not_found" => {
+            return Ok(AbsentVerdict::Deleted);
+        }
+        Err(error) => {
+            return Err(GcalError::runtime(
+                "incomplete_snapshot",
+                format!(
+                    "look up {calendar_id}/{event_id}: {}",
+                    error.message()
+                ),
+            ));
+        }
+        Ok(raw) => raw,
+    };
+    let event = GcalEvent::from_google(calendar_id, raw).map_err(|error| {
+        GcalError::runtime(
+            "incomplete_snapshot",
+            format!("parse {calendar_id}/{event_id}: {}", error.message()),
+        )
+    })?;
+    if event.status == "cancelled" {
+        return Ok(AbsentVerdict::Deleted);
+    }
+    let starts = match &event.start {
+        EventDateTime::Timed(start) => snapshot.window.local(start).date(),
+        EventDateTime::AllDay(date) => *date,
+    };
+    if starts != *day {
+        return Ok(AbsentVerdict::Moved(
+            starts.format("%a %Y-%m-%d").to_string(),
+        ));
+    }
+    if event.my_answer == super::model::MyAnswer::No {
+        return Ok(AbsentVerdict::Declined);
+    }
+    Ok(AbsentVerdict::LeftAlone(
+        "still listed on this day".to_string(),
+    ))
+}
+
 /// Whether the timed event already ended at sync time, in vault-local
 /// wall time.
 fn has_ended(
@@ -518,6 +696,60 @@ fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
             source: None,
         });
     }
+    for updated in &plan.rows_updated {
+        rows.push(ReportRow {
+            action: "updated",
+            kind: if updated.row_kind == "task" {
+                "task"
+            } else {
+                "context"
+            },
+            time: updated.time_label.clone(),
+            title: updated.title.clone(),
+            root: updated.root.clone(),
+            source: updated.source.clone(),
+        });
+    }
+    for cancelled in &plan.rows_cancelled {
+        rows.push(ReportRow {
+            action: "cancelled",
+            kind: "task",
+            time: cancelled.time_label.clone(),
+            title: format!("{} ({})", cancelled.title, cancelled.reason),
+            root: None,
+            source: None,
+        });
+    }
+    for removed in &plan.rows_removed {
+        rows.push(ReportRow {
+            action: "removed",
+            kind: "context",
+            time: String::new(),
+            title: removed.reason.clone(),
+            root: None,
+            source: None,
+        });
+    }
+    for upgraded in &plan.rows_upgraded {
+        rows.push(ReportRow {
+            action: "upgraded",
+            kind: "task",
+            time: upgraded.time_label.clone(),
+            title: upgraded.title.clone(),
+            root: upgraded.root.clone(),
+            source: upgraded.source.clone(),
+        });
+    }
+    for learned in &plan.learned {
+        rows.push(ReportRow {
+            action: "learned",
+            kind: "series",
+            time: String::new(),
+            title: learned.title.clone(),
+            root: Some(learned.root.clone()),
+            source: Some(format!("learned from your {} edit", learned.day)),
+        });
+    }
     rows
 }
 
@@ -532,6 +764,7 @@ fn append_row_record(
     ical_uid: Option<&str>,
     series_id: Option<&str>,
     block_id: &str,
+    url: Option<&str>,
     row_kind: &str,
     spans: &BTreeMap<String, String>,
     root: Option<&str>,
@@ -548,10 +781,43 @@ fn append_row_record(
             day: day.to_string(),
             path: display_path.to_string(),
             block_id: block_id.to_string(),
+            url: url.map(str::to_string),
             row_kind: row_kind.to_string(),
             spans: spans.clone(),
             root: root.map(str::to_string),
             source: source.map(str::to_string),
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        GcalError::runtime(
+            "journal",
+            format!("append the gcal journal: {error}"),
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_mark_record(
+    vault: &std::path::Path,
+    host: &str,
+    kind: &str,
+    calendar_id: &str,
+    event_id: &str,
+    day: &str,
+    block_id: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), GcalError> {
+    journal::append_mark(
+        vault,
+        host,
+        kind,
+        &journal::NewMark {
+            calendar_id: calendar_id.to_string(),
+            event_id: event_id.to_string(),
+            day: day.to_string(),
+            block_id: block_id.map(str::to_string),
+            reason: reason.map(str::to_string),
         },
     )
     .map(|_| ())
@@ -582,6 +848,7 @@ fn append_journal(
             added.ical_uid.as_deref(),
             added.series_id.as_deref(),
             &added.block_id,
+            added.url.as_deref(),
             &added.row_kind,
             &added.spans,
             added.root.as_deref(),
@@ -599,10 +866,47 @@ fn append_journal(
             adopted.ical_uid.as_deref(),
             adopted.series_id.as_deref(),
             &adopted.block_id,
+            adopted.url.as_deref(),
             &adopted.row_kind,
             &adopted.spans,
             adopted.root.as_deref(),
             adopted.source.as_deref(),
+        )?;
+    }
+    for updated in &plan.rows_updated {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &updated.calendar_id,
+            &updated.event_id,
+            updated.ical_uid.as_deref(),
+            updated.series_id.as_deref(),
+            &updated.block_id,
+            updated.url.as_deref(),
+            &updated.row_kind,
+            &updated.spans,
+            updated.root.as_deref(),
+            updated.source.as_deref(),
+        )?;
+    }
+    for upgraded in &plan.rows_upgraded {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &upgraded.calendar_id,
+            &upgraded.event_id,
+            upgraded.ical_uid.as_deref(),
+            upgraded.series_id.as_deref(),
+            &upgraded.block_id,
+            upgraded.url.as_deref(),
+            &upgraded.row_kind,
+            &upgraded.spans,
+            upgraded.root.as_deref(),
+            upgraded.source.as_deref(),
         )?;
     }
     for adopted in &plan.rows_adopted {
@@ -627,18 +931,39 @@ fn append_journal(
             })?;
         }
     }
-    for gone in &plan.rows_gone {
-        journal::append_mark(
+    for gone in plan.rows_gone.iter().chain(plan.rows_removed.iter()) {
+        append_mark_record(
             vault,
             host,
             "gcal.gone",
-            &journal::NewMark {
-                calendar_id: gone.calendar_id.clone(),
-                event_id: gone.event_id.clone(),
-                day: day_string.clone(),
-                block_id: Some(gone.block_id.clone()),
-                reason: Some("line_removed".to_string()),
-            },
+            &gone.calendar_id,
+            &gone.event_id,
+            &day_string,
+            Some(gone.block_id.as_str()).filter(|id| !id.is_empty()),
+            Some(gone.reason.as_str()),
+        )?;
+    }
+    for kept in &plan.kept {
+        append_mark_record(
+            vault,
+            host,
+            "gcal.flag",
+            &kept.calendar_id,
+            &kept.event_id,
+            &day_string,
+            None,
+            Some(kept.flag.as_str()),
+        )?;
+    }
+    for learned in &plan.learned {
+        journal::append_series_root(
+            vault,
+            host,
+            &learned.calendar_id,
+            &learned.series,
+            &learned.root,
+            &learned.day,
+            &learned.block_id,
         )
         .map_err(|error| {
             GcalError::runtime(
@@ -780,6 +1105,9 @@ fn print_human(report: &SyncReport) {
         let sigil = match row.action {
             "added" => "+",
             "adopted" => "=",
+            "updated" => "~",
+            "upgraded" => "^",
+            "learned" => "*",
             _ => "-",
         };
         let time = human_time(&row.time);
@@ -794,7 +1122,8 @@ fn print_human(report: &SyncReport) {
             .map(|source| format!("  via {source}"))
             .unwrap_or_default();
         let detail = match row.action {
-            "removed" => "removed by you".to_string(),
+            "removed" if row.kind == "task" => "removed by you".to_string(),
+            "removed" => format!("removed ({})", row.title),
             _ => format!("{time}  {}{root}{source}", row.title),
         };
         println!("  {sigil} {:<7} {detail}", row.kind);
@@ -808,21 +1137,40 @@ fn print_human(report: &SyncReport) {
             report.links_added,
         );
     }
-    let tasks = report
-        .rows
-        .iter()
-        .filter(|row| row.action == "added" && row.kind == "task")
-        .count();
-    let context = report
-        .rows
-        .iter()
-        .filter(|row| row.action == "added" && row.kind == "context")
-        .count();
+    let count = |action: &str, kind: &str| {
+        report
+            .rows
+            .iter()
+            .filter(|row| row.action == action && row.kind == kind)
+            .count()
+    };
+    let tasks = count("added", "task");
+    let context = count("added", "context");
     let summary = if report.status == "unchanged" {
         "✓ Events unchanged · Pomodoros unchanged".to_string()
     } else {
+        let mut parts = vec![
+            format!("+{tasks} tasks"),
+            format!("+{context} context"),
+            format!(
+                "~{} updated",
+                count("updated", "task") + count("updated", "context")
+            ),
+            format!("-{} cancelled", count("cancelled", "task")),
+            format!("^{} upgraded", count("upgraded", "task")),
+        ];
+        parts.retain(|part| {
+            !part.starts_with("+0")
+                && !part.starts_with("~0")
+                && !part.starts_with("-0")
+                && !part.starts_with("^0")
+        });
+        if parts.is_empty() {
+            parts.push("+0 tasks".to_string());
+        }
         format!(
-            "✓ Events +{tasks} tasks, +{context} context · Pomodoros +{} entry, +{} links",
+            "✓ Events {} · Pomodoros +{} entry, +{} links",
+            parts.join(", "),
             usize::from(report.entry_created),
             report.links_added,
         )

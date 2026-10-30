@@ -109,6 +109,65 @@ are permanent, including mistakes.
 after one month of live releases; or the package size limit forces embedded assets into
 a separate crate.
 
+## Bob Gcal Is Read-Only And Proposes Once {#bob-gcal-is-read-only-and-proposes-once}
+
+**Status:** Accepted
+
+Google Calendar stays read-only; Bob writes each row and link once, updates only untouched Google spans, tombstones deletions, and cancels only untouched tasks.
+
+**Applies to.** bob-cli and the vault.
+
+**Claim.** The Google Calendar grant is read-only, and Bob writes each row
+and link once: Google-owned spans (time, title, badges) update in place
+only while the row is untouched; the vault owns the checkbox, `[root::]`,
+children, and the row itself; deleted rows are tombstoned and never
+re-added; only untouched tasks are cancelled (declined, deleted, or moved
+events); an incomplete snapshot (a failed page or lookup) writes nothing;
+and the Mac is the single writer.
+
+**Why.** Two-way sync would fight Bryan's edits to titles, roots, and
+rows, and iCal URLs or Obsidian calendar plugins would duplicate the
+daily-note residence (see
+[Calendar Events Are Daily-Note Event Tasks](#calendar-events-are-daily-note-event-tasks)). Rejected:
+two-way sync (edit conflicts with no UI to resolve them); iCal URLs
+(no RSVP or root precedence); and Obsidian calendar plugins (they render
+outside `## Events` and the MEET ledger).
+
+**Cost.** Google-side edits to touched rows are reported, not applied
+(`kept_edit`, once per row); missed meetings stay open and surface in
+`list` instead of auto-cancelling.
+
+**Reopens when.** Bob needs to RSVP to or create events in Google.
+
+Evidence: `plan:202610/bob_gcal_daily_events.md`,
+`docs/gcal.md` § Reconciling Google-side changes, and
+`tests/gcal_lifecycle.rs`.
+
+## Calendar Events Are Daily-Note Event Tasks {#calendar-events-are-daily-note-event-tasks}
+
+**Status:** Accepted
+
+Synced calendar events live in their daily note's Events section with root attribution and one appended MEET.
+
+**Applies to.** bob-cli, bob-plugins, and the vault.
+
+**Claim.** Synced events live in their daily note's `## Events` section, a
+recorded residence exception beside `^gtd` (see
+[Event Task](../reference/glossary.md#event-task)). Attribution comes from `[root::]`, and Task Links
+go under one appended MEET placeholder.
+
+**Why.** Daily residence keeps meetings out of the review walk, freshness,
+Ready caps, and sticky Next (R9). Rejected: durable series tasks in
+`meet.md` (they would clog review); a read-only fence around the section
+(Bryan must be able to edit rows); and one placeholder per meeting (a plain
+close still carries on `x`, and duplicate open names are refused).
+
+**Cost.** A residence exception beside `^gtd`; meetings count against the
+plan budget; MEET is not exempt.
+
+**Reopens when.** Event Tasks need review or lanes, or same-type Pomodoro
+duplicates land.
+
 ## Capture Links A Dependency-Blocked Task By Dropping Its Prerequisites {#capture-link-drops-blocking-deps}
 
 **Status:** Accepted

@@ -1154,6 +1154,12 @@ log, unless the task already keeps one: then it gets
 `*YYYY-MM-DD* — 🤷 no reason given`, the same "a kept history has no gaps"
 rule the Schedule Log uses.
 
+`bob gcal sync` is an opt-in writer: when a synced event is declined,
+deleted, or moved in Google Calendar, it cancels the untouched Event Task
+with `Declined in Google Calendar`, `Deleted in Google Calendar`, or
+`Moved to Fri 2026-10-31 in Google Calendar`, creating the log when the
+task has none.
+
 Past the last decay level, `Ctrl+Enter` on the `scheduled` row cancels with
 the reason `🍂 decayed past <level> after <n> roll(s)` — just
 `🍂 decayed past <level>` when the streak is 0; see

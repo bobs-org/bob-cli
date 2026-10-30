@@ -10,6 +10,7 @@ mod config;
 mod doctor;
 mod gog;
 mod journal;
+pub(crate) mod lifecycle;
 mod list;
 mod login;
 mod logout;

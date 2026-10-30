@@ -5,7 +5,7 @@
 //! requests only `attendees(self,responseStatus)`. Any failure means the
 //! snapshot is incomplete: callers must write nothing and exit 1.
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
 use serde_json::json;
@@ -15,6 +15,7 @@ use super::{
     classify::{self, DayWindow, Inclusion},
     config::GcalConfig,
     gog::Gog,
+    journal,
     model::{EventDateTime, GcalEvent},
     root::{self, EventRoot},
     GcalError,
@@ -39,6 +40,9 @@ pub(crate) struct DaySnapshot {
     pub vault: PathBuf,
     pub daily_rel: PathBuf,
     pub events: Vec<SnapshotEvent>,
+    /// Vault-learned series roots, for root source 1 and to keep the
+    /// planner from re-learning what the journal already teaches.
+    pub series_roots: BTreeMap<(String, String), journal::LearnedRoot>,
 }
 
 /// Fetch, classify, and root every event for `day`. A failed calendar
@@ -55,6 +59,10 @@ pub(crate) fn fetch_day(
     let _ = gog.require_version()?;
     let account = resolve_account(&gog, config)?;
     let calendars = gog.calendars(&account)?;
+    // Series roots are vault-local memory of your edits. An unreadable
+    // journal degrades to no learned roots here; sync still fails loudly
+    // on its own strict journal read.
+    let series_roots = journal::load_series_roots(&vault).unwrap_or_default();
 
     let mut events = Vec::new();
     for configured in config.calendars() {
@@ -73,12 +81,17 @@ pub(crate) fn fetch_day(
             let event = GcalEvent::from_google(&configured.id, raw_event)?;
             let inclusion = classify::classify(&event, &window, config);
             let root = if inclusion == Inclusion::Task {
+                let learned = event.series_id.as_ref().and_then(|series| {
+                    series_roots
+                        .get(&(event.key.calendar_id.clone(), series.clone()))
+                });
                 Some(root::choose_event_root(
                     &vault,
                     &daily_rel,
                     &event,
                     &calendar_name,
                     config,
+                    learned,
                 ))
             } else {
                 None
@@ -108,6 +121,7 @@ pub(crate) fn fetch_day(
         vault,
         daily_rel,
         events,
+        series_roots,
     })
 }
 

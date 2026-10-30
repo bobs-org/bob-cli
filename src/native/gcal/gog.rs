@@ -351,8 +351,7 @@ impl Gog {
         })
     }
 
-    /// Look up one event for later reconciliation.
-    #[allow(dead_code)]
+    /// Look up one event for lifecycle reconciliation.
     pub(crate) fn event(
         &self,
         calendar_id: &str,
@@ -577,6 +576,18 @@ pub(crate) fn classify_gog_failure(stdout: &str, stderr: &str) -> GcalError {
             "gog could not reach Google".to_string(),
         )
         .with_hint("check your network connection");
+    }
+    if blob.contains("notfound")
+        || blob.contains("not found")
+        || blob.contains("\"code\":404")
+        || blob.contains("\"code\": 404")
+        || (blob.contains("410")
+            && (blob.contains("gone") || blob.contains("deleted")))
+    {
+        return GcalError::runtime(
+            "not_found",
+            "Google has no such event (deleted or moved away)".to_string(),
+        );
     }
     let detail = stderr
         .lines()

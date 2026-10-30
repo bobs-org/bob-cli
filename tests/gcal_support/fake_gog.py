@@ -327,7 +327,22 @@ if op == "events":
     raise SystemExit(0)
 
 if op == "event":
-    dump({"event": {"id": pos[2] if len(pos) > 2 else "event"}})
+    event_id = pos[3] if len(pos) > 3 else (pos[2] if len(pos) > 2 else "event")
+    event_dir = os.environ.get("BOB_GCAL_FAKE_EVENT_DIR")
+    if event_dir:
+        candidate = Path(event_dir) / f"{event_id}.json"
+        if candidate.exists():
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+            failure = payload.get("_fail")
+            if failure is not None:
+                fail(
+                    failure.get("stderr") or "gog failed",
+                    int(failure.get("code") or 1),
+                )
+            dump(payload)
+            raise SystemExit(0)
+        fail(f"Not Found: no such event {event_id}", 1)
+    dump({"event": {"id": event_id}})
     raise SystemExit(0)
 
 fail(f"fake gog: unknown command {pos}", 2)

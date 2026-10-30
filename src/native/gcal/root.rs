@@ -44,9 +44,31 @@ pub(crate) fn choose_event_root(
     event: &GcalEvent,
     calendar_name: &str,
     config: &GcalConfig,
+    learned: Option<&super::journal::LearnedRoot>,
 ) -> EventRoot {
     let mut warnings = Vec::new();
     let mut title = event.title.clone();
+
+    // Source 1: your earlier `[root::]` edit on another occurrence of the
+    // same recurring event taught the series.
+    if let Some(learned) = learned
+        && !learned.root.trim().is_empty()
+    {
+        let label = if learned.day.is_empty() {
+            "learned from your edit".to_string()
+        } else {
+            format!("learned from your {} edit", learned.day)
+        };
+        match validate_root_candidate(vault, daily_rel, &learned.root) {
+            Ok(target) => {
+                return chosen(target, label, warnings, title);
+            }
+            Err(rejection) => warnings.push(rejection_message(
+                &format!("series memory ({})", learned.root),
+                &rejection,
+            )),
+        }
+    }
 
     if let Some(route) = event
         .title_route_hint
@@ -372,6 +394,7 @@ mod tests {
             &event,
             "Personal",
             &config(Some("health"), Some("job"), "meet"),
+            None,
         );
         assert_eq!(root.value.as_deref(), Some("body"));
         assert_eq!(root.source.as_deref(), Some("@body"));
@@ -389,6 +412,7 @@ mod tests {
             &event,
             "Personal",
             &config(Some("health"), Some("job"), "meet"),
+            None,
         );
         assert_eq!(root.value.as_deref(), Some("job"));
         assert_eq!(root.source.as_deref(), Some("colour tomato"));
@@ -406,6 +430,7 @@ mod tests {
             &meeting_event,
             "Personal",
             &config(Some("health"), Some("missing"), "meet"),
+            None,
         );
         assert_eq!(calendar.value.as_deref(), Some("health"));
         assert_eq!(calendar.source.as_deref(), Some("calendar Personal"));
@@ -418,6 +443,7 @@ mod tests {
             &event("Dinner", None, None),
             "Personal",
             &config(None, None, "missing"),
+            None,
         );
         assert_eq!(invalid_default.value, None);
         assert!(invalid_default.warnings[0].contains("default rejected"));

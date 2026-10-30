@@ -191,6 +191,7 @@ pub(crate) struct FakeGog {
     log: PathBuf,
     state: PathBuf,
     events: PathBuf,
+    event_dir: PathBuf,
     scenario: String,
 }
 
@@ -201,13 +202,24 @@ impl FakeGog {
         let path = root.join("gog");
         fs::copy(FAKE_GOG_SRC, &path).expect("copy fake gog");
         chmod_exec(&path);
+        let event_dir = root.join("event-lookup");
+        fs::create_dir_all(&event_dir).expect("create event lookup dir");
         Self {
             path,
             log: root.join("calls.jsonl"),
             state: root.join("state.json"),
             events: root.join("events.json"),
+            event_dir,
             scenario: "ok".to_string(),
         }
+    }
+
+    /// Answer one `calendar event <calendar> <id>` lookup with this raw
+    /// response body (a `{"event": {...}}` envelope, or
+    /// `{"_fail": {"stderr": ..., "code": ...}}`).
+    pub(crate) fn event_lookup(&self, event_id: &str, body: &str) {
+        fs::write(self.event_dir.join(format!("{event_id}.json")), body)
+            .expect("write fake event lookup");
     }
 
     pub(crate) fn scenario(mut self, name: &str) -> Self {
@@ -228,6 +240,7 @@ impl FakeGog {
             .env("BOB_GCAL_FAKE_LOG", &self.log)
             .env("BOB_GCAL_FAKE_STATE", &self.state)
             .env("BOB_GCAL_FAKE_EVENTS", &self.events)
+            .env("BOB_GCAL_FAKE_EVENT_DIR", &self.event_dir)
             .env("BOB_GCAL_FAKE_SCENARIO", &self.scenario)
     }
 

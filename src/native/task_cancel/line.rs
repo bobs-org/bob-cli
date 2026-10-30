@@ -92,6 +92,53 @@ pub(crate) fn edit_source(
     }
 }
 
+/// Cancel exactly like [`edit_source`], but create a managed
+/// `❌ **CANCEL LOG**` first child (with this cancel's dated entry) when
+/// the task does not already keep one. Existing callers stay on
+/// [`edit_source`], whose `NotPresent` outcome is unchanged; only
+/// opt-in writers such as `bob gcal sync` use this creator.
+pub(crate) fn edit_source_create_log(
+    content: &str,
+    task_line_index: usize,
+    date: NaiveDate,
+    reasons: &[String],
+) -> SourceEdit {
+    let edited = edit_source(content, task_line_index, date, reasons);
+    if edited.log != CancelLogOutcome::NotPresent {
+        return edited;
+    }
+    let reason = reasons.join(" · ");
+    if reason.is_empty() {
+        return edited;
+    }
+    let mut segments = edited
+        .content
+        .split_inclusive('\n')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if segments.get(task_line_index).is_none() {
+        return edited;
+    }
+    let logical = logical_lines(&edited.content);
+    let task_indent = logical
+        .get(task_line_index)
+        .map(|line| leading_whitespace(line).to_string())
+        .unwrap_or_default();
+    let header_indent = format!("{task_indent}  ");
+    let entry_indent = format!("{header_indent}  ");
+    let header = format!("{header_indent}- ❌ **CANCEL LOG**");
+    let entry = format!("{entry_indent}- *{date}* — {reason}");
+    let newline = predominant_line_ending(&edited.content);
+    // Insert the entry first so the header lands directly after the
+    // task line with the entry beneath it.
+    insert_line_after(&mut segments, task_line_index, &entry, newline);
+    insert_line_after(&mut segments, task_line_index, &header, newline);
+    SourceEdit {
+        content: segments.concat(),
+        log: CancelLogOutcome::Prepended,
+    }
+}
+
 pub(crate) fn upsert_cancelled_date(line: &str, date: NaiveDate) -> String {
     let date = date.format("%Y-%m-%d").to_string();
     if let Some(start) = line.find("[cancelled::")

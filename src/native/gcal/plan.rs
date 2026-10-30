@@ -12,6 +12,8 @@ use std::{
     ops::Range,
 };
 
+use chrono::NaiveDate;
+
 use crate::native::{
     capture::line_spans,
     capture_pomodoros::{self, PomodoroState},
@@ -25,6 +27,11 @@ use crate::native::{
 
 use super::{
     journal::{occurrence_key, OccurrenceState},
+    lifecycle::{
+        cancel_task_row, line_root, remove_childless_untimed_meet,
+        remove_meet_link, row_untouched, split_row_spans, status_char,
+        AbsentVerdict, KeptNotice, LearnedSeries, LifecycleItem,
+    },
     render::{render_context_row, render_task_row, ContextRowInput},
 };
 
@@ -64,6 +71,15 @@ pub(crate) struct SyncPlanInput<'a> {
     pub occurrences: Vec<PlannedOccurrence>,
     pub journal: &'a BTreeMap<(String, String), OccurrenceState>,
     pub day_string: String,
+    /// Cancel reasons and similar lifecycle notices land under this date.
+    pub today: NaiveDate,
+    /// Journaled occurrences with no included snapshot row, each already
+    /// resolved to a verdict (declined, deleted, moved, left alone).
+    pub lifecycle: Vec<LifecycleItem>,
+    /// Vault-learned series roots: the planner learns only what the
+    /// journal does not already teach.
+    pub series_roots:
+        &'a BTreeMap<(String, String), super::journal::LearnedRoot>,
 }
 
 /// One row the plan inserts, for the journal and the report.
@@ -74,6 +90,7 @@ pub(crate) struct PlannedRow {
     pub ical_uid: Option<String>,
     pub series_id: Option<String>,
     pub block_id: String,
+    pub url: Option<String>,
     pub row_kind: String,
     pub spans: BTreeMap<String, String>,
     pub root: Option<String>,
@@ -90,6 +107,7 @@ pub(crate) struct AdoptedRow {
     pub ical_uid: Option<String>,
     pub series_id: Option<String>,
     pub block_id: String,
+    pub url: Option<String>,
     pub row_kind: String,
     pub spans: BTreeMap<String, String>,
     pub root: Option<String>,
@@ -105,6 +123,17 @@ pub(crate) struct GoneRow {
     pub calendar_id: String,
     pub event_id: String,
     pub block_id: String,
+    /// Why the row stays gone: `line_removed` for vault edits, or the
+    /// Google-side cancel reason for lifecycle removals.
+    pub reason: String,
+}
+
+/// One cancelled Event Task, for the report.
+#[derive(Debug, Clone)]
+pub(crate) struct CancelledRow {
+    pub time_label: String,
+    pub title: String,
+    pub reason: String,
 }
 
 /// One MEET link the plan appends.
@@ -124,6 +153,22 @@ pub(crate) struct SyncPlan {
     pub rows_adopted: Vec<AdoptedRow>,
     pub rows_gone: Vec<GoneRow>,
     pub links_added: Vec<PlannedLink>,
+    /// Google-owned spans replaced in place on still-included rows.
+    pub rows_updated: Vec<PlannedRow>,
+    /// Untouched tasks cancelled for declined, deleted, or moved events.
+    pub rows_cancelled: Vec<CancelledRow>,
+    /// Untouched context rows removed for declined or deleted events.
+    pub rows_removed: Vec<GoneRow>,
+    /// Context rows upgraded in place to Event Tasks (Maybe went Yes).
+    pub rows_upgraded: Vec<PlannedRow>,
+    /// Lifecycle notices reported once (kept edits, worked tasks, …).
+    pub kept: Vec<KeptNotice>,
+    /// Vault edits that teach a recurring series its root.
+    pub learned: Vec<LearnedSeries>,
+    /// Upgrade rows that earn a MEET link, as (calendar, event, block).
+    pub extra_link_wants: Vec<(String, String, String)>,
+    /// Untimed MEET entries left childless by cancels, removed.
+    pub entries_removed: usize,
     pub pomodoro_entry_line: Option<usize>,
     pub pomodoro_created: bool,
 }
@@ -151,25 +196,76 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         };
         match journaled {
             Some(journaled) => {
-                if find_row_line(
+                let line_index = find_row_line(
                     &working.lines,
                     working.events_range(),
                     &journaled.block_id,
                     occurrence.url(),
                     occurrence.task,
                     text_match.as_deref(),
-                )
-                .is_some()
-                {
-                    // Journaled and still present: nothing to do here.
-                    // (Span updates arrive with gcal-lifecycle.)
+                );
+                let Some(line_index) = line_index else {
+                    plan.rows_gone.push(GoneRow {
+                        calendar_id: occurrence.calendar_id.clone(),
+                        event_id: occurrence.event_id.clone(),
+                        block_id: journaled.block_id.clone(),
+                        reason: "line_removed".to_string(),
+                    });
                     continue;
+                };
+                let journaled_kind_is_task = journaled.row_kind == "task";
+                if journaled_kind_is_task == occurrence.task {
+                    // Learn before span updates: a time change re-slots
+                    // the row, invalidating `line_index`.
+                    learn_series_root(
+                        &working,
+                        input,
+                        &input.day_string,
+                        &mut plan,
+                        occurrence,
+                        journaled,
+                        line_index,
+                    );
+                    apply_span_updates(
+                        input,
+                        &mut working,
+                        &mut plan,
+                        occurrence,
+                        journaled,
+                        line_index,
+                    );
+                } else if occurrence.task {
+                    // A Maybe context row went Yes: upgrade it in place.
+                    upgrade_context_row(
+                        input,
+                        &mut working,
+                        &mut plan,
+                        &mut used,
+                        occurrence,
+                        journaled,
+                        line_index,
+                    );
+                } else {
+                    // A Yes task row went Maybe: leave it and report once.
+                    let key = occurrence_key(
+                        &occurrence.calendar_id,
+                        &occurrence.event_id,
+                    );
+                    let flagged = input
+                        .journal
+                        .get(&(key, input.day_string.clone()))
+                        .is_some_and(|state| state.flags.contains("now_maybe"));
+                    if !flagged {
+                        plan.kept.push(KeptNotice {
+                            calendar_id: occurrence.calendar_id.clone(),
+                            event_id: occurrence.event_id.clone(),
+                            title: occurrence.title.clone(),
+                            detail: "now Maybe; leaving your task row alone"
+                                .to_string(),
+                            flag: "now_maybe".to_string(),
+                        });
+                    }
                 }
-                plan.rows_gone.push(GoneRow {
-                    calendar_id: occurrence.calendar_id.clone(),
-                    event_id: occurrence.event_id.clone(),
-                    block_id: journaled.block_id.clone(),
-                });
             }
             None => {
                 if let Some(line_index) = find_row_line(
@@ -194,6 +290,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                         ical_uid: occurrence.ical_uid.clone(),
                         series_id: occurrence.series_id.clone(),
                         block_id,
+                        url: occurrence.html_link.clone(),
                         row_kind: row_kind(occurrence.task),
                         spans: occurrence.spans.clone(),
                         root: occurrence.root.clone(),
@@ -229,6 +326,7 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
                     ical_uid: occurrence.ical_uid.clone(),
                     series_id: occurrence.series_id.clone(),
                     block_id,
+                    url: occurrence.html_link.clone(),
                     row_kind: row_kind(occurrence.task),
                     spans: occurrence.spans.clone(),
                     root: occurrence.root.clone(),
@@ -240,6 +338,10 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
         }
     }
 
+    if !input.lifecycle.is_empty() {
+        apply_lifecycle(input, &mut working, &mut plan);
+    }
+
     if input.is_today {
         plan_meet_links(input, &mut working, &mut plan);
     }
@@ -247,21 +349,552 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
     plan.contents = working.finish();
     // A no-op plan writes nothing and appends nothing: identical
     // contents and no records. A tombstone-only run leaves the note
-    // alone but still records `gcal.gone`, so it is not a no-op.
+    // alone but still records `gcal.gone`, so it is not a no-op; kept
+    // notices and series learning likewise append journal records.
     let records_empty = plan.rows_added.is_empty()
         && plan.rows_adopted.is_empty()
         && plan.rows_gone.is_empty()
-        && plan.links_added.is_empty();
+        && plan.rows_removed.is_empty()
+        && plan.links_added.is_empty()
+        && plan.rows_updated.is_empty()
+        && plan.rows_cancelled.is_empty()
+        && plan.rows_upgraded.is_empty()
+        && plan.kept.is_empty()
+        && plan.learned.is_empty();
     plan.changed = plan.contents != input.contents || !records_empty;
     if !plan.changed {
         plan.rows_added.clear();
         plan.rows_adopted.clear();
         plan.rows_gone.clear();
+        plan.rows_removed.clear();
         plan.links_added.clear();
+        plan.rows_updated.clear();
+        plan.rows_cancelled.clear();
+        plan.rows_upgraded.clear();
+        plan.kept.clear();
+        plan.learned.clear();
+        plan.extra_link_wants.clear();
+        plan.entries_removed = 0;
         plan.pomodoro_entry_line = None;
         plan.pomodoro_created = false;
     }
     plan
+}
+
+/// Three-way update of one still-included row: re-render the time,
+/// title, and badge spans and replace each span whose current text
+/// still matches the journal hash. A span that differs from both the
+/// journal and the fresh render is Bryan's edit: it is kept and
+/// reported once. The checkbox, `[root::]`, `[type::]`, and block ID
+/// are never rewritten.
+#[allow(clippy::too_many_arguments)]
+fn apply_span_updates(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+) {
+    let current_line =
+        working.lines.get(line_index).cloned().unwrap_or_default();
+    let Some(mut spans) = split_row_spans(&current_line) else {
+        return;
+    };
+    if spans.task != occurrence.task {
+        return;
+    }
+    let current = spans.hashes();
+    let fresh_badges = super::render::badge_text(
+        occurrence.html_link.as_deref(),
+        occurrence.join_link.as_deref(),
+        occurrence.location.as_deref(),
+    );
+    let fresh = [
+        ("time", occurrence.time_label.clone()),
+        ("title", occurrence.title.clone()),
+        ("badges", fresh_badges),
+    ];
+    let mut edited: Vec<&str> = Vec::new();
+    let mut replaced_time = false;
+    let mut hashes_changed = false;
+    let mut updated = journaled.spans.clone();
+    for (name, fresh_text) in fresh {
+        let fresh_hash = super::journal::span_hash(&fresh_text);
+        let current_hash = current.get(name).cloned().unwrap_or_default();
+        let recorded = journaled.spans.get(name);
+        if current_hash == fresh_hash {
+            if recorded != Some(&fresh_hash) {
+                updated.insert(name.to_string(), fresh_hash);
+                hashes_changed = true;
+            }
+        } else if recorded.is_some_and(|hash| *hash == current_hash) {
+            if recorded != Some(&fresh_hash) {
+                match name {
+                    "time" => {
+                        spans.time = fresh_text;
+                        replaced_time = true;
+                    }
+                    "title" => spans.title = fresh_text,
+                    _ => spans.badges = fresh_text,
+                }
+                updated.insert(name.to_string(), fresh_hash);
+                hashes_changed = true;
+            }
+        } else {
+            edited.push(name);
+        }
+    }
+    // Context qualifiers (`maybe`, `free`, `day N of M`) track the fresh
+    // inclusion while the row is otherwise clean.
+    if !occurrence.task
+        && spans.qualifier != occurrence.qualifier
+        && edited.is_empty()
+    {
+        spans.qualifier.clone_from(&occurrence.qualifier);
+    }
+    if !edited.is_empty() {
+        let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+        let flagged = input
+            .journal
+            .get(&(key, input.day_string.clone()))
+            .is_some_and(|state| state.flags.contains("kept_edit"));
+        if !flagged {
+            plan.kept.push(KeptNotice {
+                calendar_id: occurrence.calendar_id.clone(),
+                event_id: occurrence.event_id.clone(),
+                title: occurrence.title.clone(),
+                detail: format!("kept your edit to {}", edited.join(" and ")),
+                flag: "kept_edit".to_string(),
+            });
+        }
+        return;
+    }
+    if !hashes_changed
+        && (occurrence.task || spans.qualifier == occurrence.qualifier)
+    {
+        return;
+    }
+    working.lines[line_index] = spans.rebuild();
+    if replaced_time {
+        reslot_block(
+            working,
+            line_index,
+            occurrence.all_day,
+            occurrence.start_min,
+        );
+    }
+    plan.rows_updated.push(PlannedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        ical_uid: occurrence.ical_uid.clone(),
+        series_id: occurrence.series_id.clone(),
+        block_id: journaled.block_id.clone(),
+        url: occurrence.html_link.clone(),
+        row_kind: journaled.row_kind.clone(),
+        spans: updated,
+        root: journaled.root.clone(),
+        source: journaled.source.clone(),
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+    });
+}
+
+/// Re-slot one row together with its child block at its time-ordered
+/// slot after a time change. Never reorders existing lines.
+fn reslot_block(
+    working: &mut WorkingNote,
+    line_index: usize,
+    all_day: bool,
+    start_min: i32,
+) {
+    if line_index >= working.lines.len() {
+        return;
+    }
+    let text = working.as_string();
+    let spans = line_spans(&text);
+    let end = child_block_end_line(&spans, line_index)
+        .min(working.lines.len().saturating_sub(1));
+    if end < line_index {
+        return;
+    }
+    let block: Vec<String> = working.lines.drain(line_index..=end).collect();
+    let slot = insert_slot(working, all_day, start_min);
+    working.insert_block(slot, &block);
+}
+
+/// Learn a series root from a vault edit: when a journaled task's
+/// `[root::]` differs from the root Bob recorded and the event recurs,
+/// new rows in that series use the learned root (still validated).
+/// A later edit, including a change back, re-teaches the series.
+#[allow(clippy::too_many_arguments)]
+fn learn_series_root(
+    working: &WorkingNote,
+    input: &SyncPlanInput<'_>,
+    day_string: &str,
+    plan: &mut SyncPlan,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+) {
+    if journaled.row_kind != "task" {
+        return;
+    }
+    let Some(series) = occurrence
+        .series_id
+        .as_deref()
+        .filter(|series| !series.is_empty())
+    else {
+        return;
+    };
+    let current_line =
+        working.lines.get(line_index).cloned().unwrap_or_default();
+    let current_root = line_root(&current_line).unwrap_or_default();
+    if current_root.is_empty()
+        || journaled.root.as_deref() == Some(current_root.as_str())
+    {
+        return;
+    }
+    // The journal already teaches this root: nothing new to learn.
+    if input
+        .series_roots
+        .get(&(occurrence.calendar_id.clone(), series.to_string()))
+        .is_some_and(|learned| learned.root == current_root)
+    {
+        return;
+    }
+    if plan.learned.iter().any(|learned| {
+        learned.calendar_id == occurrence.calendar_id
+            && learned.series == series
+    }) {
+        return;
+    }
+    plan.learned.push(LearnedSeries {
+        calendar_id: occurrence.calendar_id.clone(),
+        series: series.to_string(),
+        root: current_root,
+        title: occurrence.title.clone(),
+        day: day_string.to_string(),
+        block_id: journaled.block_id.clone(),
+    });
+}
+
+/// Upgrade one untouched Maybe context row in place to an Event Task
+/// row. An edited row is kept and reported once instead.
+#[allow(clippy::too_many_arguments)]
+fn upgrade_context_row(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+    used: &mut HashSet<String>,
+    occurrence: &PlannedOccurrence,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+) {
+    let current_line =
+        working.lines.get(line_index).cloned().unwrap_or_default();
+    let untouched = split_row_spans(&current_line)
+        .is_some_and(|spans| !spans.task && spans.hashes() == journaled.spans);
+    if !untouched {
+        let key = occurrence_key(&occurrence.calendar_id, &occurrence.event_id);
+        let flagged = input
+            .journal
+            .get(&(key, input.day_string.clone()))
+            .is_some_and(|state| state.flags.contains("kept_edit"));
+        if !flagged {
+            plan.kept.push(KeptNotice {
+                calendar_id: occurrence.calendar_id.clone(),
+                event_id: occurrence.event_id.clone(),
+                title: occurrence.title.clone(),
+                detail: "kept your edit while Maybe went Yes".to_string(),
+                flag: "kept_edit".to_string(),
+            });
+        }
+        return;
+    }
+    let block_id = crate::native::capture_block_ids::mint_block_id(
+        &occurrence.id_hint,
+        &used.iter().map(String::as_str).collect(),
+    );
+    used.insert(block_id.clone());
+    working.lines[line_index] = render_occurrence(occurrence, &block_id);
+    plan.rows_upgraded.push(PlannedRow {
+        calendar_id: occurrence.calendar_id.clone(),
+        event_id: occurrence.event_id.clone(),
+        ical_uid: occurrence.ical_uid.clone(),
+        series_id: occurrence.series_id.clone(),
+        block_id: block_id.clone(),
+        url: occurrence.html_link.clone(),
+        row_kind: "task".to_string(),
+        spans: occurrence.spans.clone(),
+        root: occurrence.root.clone(),
+        source: occurrence.source.clone(),
+        time_label: occurrence.time_label.clone(),
+        title: occurrence.title.clone(),
+    });
+    if occurrence.link_eligible {
+        plan.extra_link_wants.push((
+            occurrence.calendar_id.clone(),
+            occurrence.event_id.clone(),
+            block_id,
+        ));
+    }
+}
+
+/// Reconcile journaled occurrences that have no included snapshot row:
+/// cancel untouched tasks for declined, deleted, or moved events (with
+/// a created CANCEL LOG), remove untouched context rows, and report
+/// everything else once. A worked task is never cancelled.
+fn apply_lifecycle(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+) {
+    let mut links_removed = false;
+    for item in &input.lifecycle {
+        let key = occurrence_key(&item.calendar_id, &item.event_id);
+        let state = input.journal.get(&(key, input.day_string.clone()));
+        let Some(journaled) = state.and_then(|state| state.row.as_ref()) else {
+            continue;
+        };
+        let is_task = journaled.row_kind == "task";
+        let line_index = find_row_line(
+            &working.lines,
+            working.events_range(),
+            &journaled.block_id,
+            journaled.url.as_deref(),
+            is_task,
+            None,
+        );
+        let Some(line_index) = line_index else {
+            // Already gone from the note: tombstone it so the event
+            // never comes back, recording why it stays gone.
+            plan.rows_gone.push(GoneRow {
+                calendar_id: item.calendar_id.clone(),
+                event_id: item.event_id.clone(),
+                block_id: journaled.block_id.clone(),
+                reason: item
+                    .verdict
+                    .cancel_reason()
+                    .unwrap_or_else(|| "line_removed".to_string()),
+            });
+            continue;
+        };
+        let current_line =
+            working.lines.get(line_index).cloned().unwrap_or_default();
+        match &item.verdict {
+            AbsentVerdict::Deleted
+            | AbsentVerdict::Declined
+            | AbsentVerdict::Moved(_) => {
+                let reason =
+                    item.verdict.cancel_reason().unwrap_or_else(|| {
+                        "Deleted in Google Calendar".to_string()
+                    });
+                if is_task {
+                    cancel_lifecycle_task(
+                        input,
+                        working,
+                        plan,
+                        &item.calendar_id,
+                        &item.event_id,
+                        journaled,
+                        line_index,
+                        &current_line,
+                        &reason,
+                        &mut links_removed,
+                    );
+                } else {
+                    remove_lifecycle_context(
+                        input,
+                        working,
+                        plan,
+                        &item.calendar_id,
+                        &item.event_id,
+                        journaled,
+                        line_index,
+                        &current_line,
+                        &reason,
+                    );
+                }
+            }
+            AbsentVerdict::LeftAlone(detail) => {
+                let flagged =
+                    state.is_some_and(|state| state.flags.contains(detail));
+                if !flagged {
+                    plan.kept.push(KeptNotice {
+                        calendar_id: item.calendar_id.clone(),
+                        event_id: item.event_id.clone(),
+                        title: journaled_title(&current_line),
+                        detail: detail.clone(),
+                        flag: detail.clone(),
+                    });
+                }
+            }
+        }
+    }
+    if links_removed {
+        let (contents, removed) =
+            remove_childless_untimed_meet(&working.as_string());
+        if removed > 0 {
+            working.replace(&contents);
+            plan.entries_removed = removed;
+        }
+    }
+}
+
+/// Cancel one untouched lifecycle task in place: mark it cancelled
+/// with today's date, create the CANCEL LOG when the task has none,
+/// and drop its MEET link. A worked task is left alone and reported
+/// once instead.
+#[allow(clippy::too_many_arguments)]
+fn cancel_lifecycle_task(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+    calendar_id: &str,
+    event_id: &str,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+    current_line: &str,
+    reason: &str,
+    links_removed: &mut bool,
+) {
+    if status_char(current_line) == Some('-') {
+        return;
+    }
+    if !row_untouched(&working.as_string(), line_index, &journaled.block_id) {
+        let key = occurrence_key(calendar_id, event_id);
+        let flagged = input
+            .journal
+            .get(&(key, input.day_string.clone()))
+            .is_some_and(|state| state.flags.contains("worked_kept"));
+        if !flagged {
+            plan.kept.push(KeptNotice {
+                calendar_id: calendar_id.to_string(),
+                event_id: event_id.to_string(),
+                title: journaled_title(current_line),
+                detail: format!("left your worked task alone ({reason})"),
+                flag: "worked_kept".to_string(),
+            });
+        }
+        return;
+    }
+    let Some(cancelled) =
+        cancel_task_row(&working.as_string(), line_index, input.today, reason)
+    else {
+        return;
+    };
+    working.replace(&cancelled);
+    let (contents, removed) =
+        remove_meet_link(&working.as_string(), &journaled.block_id);
+    if removed {
+        working.replace(&contents);
+        *links_removed = true;
+    }
+    let spans = split_row_spans(
+        working
+            .lines
+            .get(line_index)
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
+    plan.rows_cancelled.push(CancelledRow {
+        time_label: spans
+            .as_ref()
+            .map(|spans| spans.time.clone())
+            .unwrap_or_default(),
+        title: journaled_title(current_line),
+        reason: reason.to_string(),
+    });
+}
+
+/// Remove one untouched lifecycle context row for a declined, deleted,
+/// or moved event. A row with child bullets (Bryan's notes) or with
+/// edited spans is kept and reported once instead.
+#[allow(clippy::too_many_arguments)]
+fn remove_lifecycle_context(
+    input: &SyncPlanInput<'_>,
+    working: &mut WorkingNote,
+    plan: &mut SyncPlan,
+    calendar_id: &str,
+    event_id: &str,
+    journaled: &super::journal::RowRecord,
+    line_index: usize,
+    current_line: &str,
+    reason: &str,
+) {
+    let spans = split_row_spans(current_line);
+    let untouched = spans
+        .as_ref()
+        .is_some_and(|spans| spans.hashes() == journaled.spans);
+    if !untouched {
+        push_kept_once(
+            input,
+            plan,
+            calendar_id,
+            event_id,
+            journaled_title(current_line),
+            format!("kept your edited context row ({reason})"),
+            "kept_edit",
+        );
+        return;
+    }
+    let text = working.as_string();
+    let line_spans = line_spans(&text);
+    if child_block_end_line(&line_spans, line_index) != line_index {
+        push_kept_once(
+            input,
+            plan,
+            calendar_id,
+            event_id,
+            journaled_title(current_line),
+            "kept a context row with your notes".to_string(),
+            "kept_edit",
+        );
+        return;
+    }
+    working.lines.remove(line_index);
+    plan.rows_removed.push(GoneRow {
+        calendar_id: calendar_id.to_string(),
+        event_id: event_id.to_string(),
+        block_id: journaled.block_id.clone(),
+        reason: reason.to_string(),
+    });
+}
+
+/// Report one lifecycle notice once per (occurrence, day).
+fn push_kept_once(
+    input: &SyncPlanInput<'_>,
+    plan: &mut SyncPlan,
+    calendar_id: &str,
+    event_id: &str,
+    title: String,
+    detail: String,
+    flag: &str,
+) {
+    let key = occurrence_key(calendar_id, event_id);
+    let flagged = input
+        .journal
+        .get(&(key, input.day_string.clone()))
+        .is_some_and(|state| state.flags.contains(flag));
+    if !flagged {
+        plan.kept.push(KeptNotice {
+            calendar_id: calendar_id.to_string(),
+            event_id: event_id.to_string(),
+            title,
+            detail,
+            flag: flag.to_string(),
+        });
+    }
+}
+
+/// A row's display title: the span title, or the raw line when the row
+/// no longer parses.
+pub(crate) fn journaled_title(line: &str) -> String {
+    split_row_spans(line)
+        .map(|spans| spans.title.clone())
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| line.trim().to_string())
 }
 
 impl PlannedOccurrence {
@@ -376,6 +1009,23 @@ impl WorkingNote {
                 let start =
                     self.events_range().expect("Events section exists").start;
                 self.lines.insert(start, text.to_string());
+            }
+        }
+    }
+
+    fn insert_block(&mut self, slot: Option<usize>, block: &[String]) {
+        match slot {
+            Some(after) => {
+                for (offset, line) in block.iter().enumerate() {
+                    self.lines.insert(after + 1 + offset, line.clone());
+                }
+            }
+            None => {
+                let start =
+                    self.events_range().expect("Events section exists").start;
+                for (offset, line) in block.iter().enumerate() {
+                    self.lines.insert(start + offset, line.clone());
+                }
             }
         }
     }
@@ -577,6 +1227,32 @@ fn plan_meet_links(
             occurrence.event_id.clone(),
             block_id,
         ));
+    }
+    // Upgraded Maybe rows earn their link the same way, once.
+    for (calendar_id, event_id, block_id) in plan.extra_link_wants.clone() {
+        let key = occurrence_key(&calendar_id, &event_id);
+        if let Some(state) = input.journal.get(&(key, input.day_string.clone()))
+            && (state.link || state.gone)
+        {
+            continue;
+        }
+        if wanted.iter().any(|(_, _, id)| *id == block_id) {
+            continue;
+        }
+        let refs = working.line_refs();
+        if find_row_line(
+            &working.lines,
+            event_task::events_section_range(&refs),
+            &block_id,
+            None,
+            true,
+            None,
+        )
+        .is_none()
+        {
+            continue;
+        }
+        wanted.push((calendar_id, event_id, block_id));
     }
     if wanted.is_empty() {
         return;

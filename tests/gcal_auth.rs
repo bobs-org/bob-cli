@@ -305,6 +305,7 @@ fn doctor_json_healthy_setup() {
             "default_root",
             "today",
             "journal",
+            "journal_malformed",
             "writer",
             "last_sync",
         ]
