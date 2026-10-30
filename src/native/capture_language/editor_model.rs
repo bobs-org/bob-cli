@@ -71,6 +71,8 @@ pub(crate) enum SpanKind {
     WikilinkHeading,
     WikilinkBlockId,
     WikilinkAlias,
+    WikilinkTaskDelimiter,
+    WikilinkTaskQuery,
 }
 
 impl SpanKind {
@@ -138,6 +140,8 @@ impl SpanKind {
             Self::WikilinkHeading => "wikilink_heading",
             Self::WikilinkBlockId => "wikilink_block_id",
             Self::WikilinkAlias => "wikilink_alias",
+            Self::WikilinkTaskDelimiter => "wikilink_task_delimiter",
+            Self::WikilinkTaskQuery => "wikilink_task_query",
         }
     }
 }

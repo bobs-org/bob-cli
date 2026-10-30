@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::{
     capture_dependency_tasks, capture_language,
-    capture_language::{EditorMode, Need},
+    capture_language::{EditorMode, Need, Span, SpanKind},
     capture_links, capture_tasks, env as bob_env, pomodoro, task_dependencies,
     task_status_hooks,
 };
@@ -55,7 +55,15 @@ pub(crate) struct WikilinkTaskCandidate {
     pub(crate) link_target: String,
 }
 
-const FORBIDDEN: &[u8] = &[b'(', b')', b'[', b']', b'`', b'\n', b'\r'];
+const QUERY_STOP: &[u8] = b"()[]`\n\r";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WikilinkTaskToken {
+    opener: usize,
+    query_end: usize,
+    run_end: usize,
+    closer: Option<usize>,
+}
 
 /// Locate the `((query` field at `cursor`, if any. `current_note_path`
 /// is the draft item's destination (vault-relative, with `.md`) and is
@@ -68,18 +76,10 @@ pub(crate) fn completion_field_at(
     if cursor > raw.len() || !raw.is_char_boundary(cursor) {
         return None;
     }
-    if capture_language::cursor_in_close_log_text(raw, cursor) {
-        return None;
-    }
-    if let Some(item) = capture_language::editor_item_at(raw, cursor)
-        && is_whole_item_action(&item)
-    {
-        return None;
-    }
-    let line = capture_language::split_physical_lines(raw)
+    wikilink_task_tokens(raw)
         .into_iter()
-        .find(|line| cursor >= line.start && cursor <= line.end)?;
-    field_on_line(raw, line.start, line.end, cursor)
+        .filter_map(|token| field_at_token(raw, token, cursor))
+        .last()
 }
 
 fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
@@ -102,29 +102,60 @@ fn is_whole_item_action(item: &capture_language::EditorItemParse) -> bool {
         )
 }
 
-fn field_on_line(
-    raw: &str,
-    line_start: usize,
-    line_end: usize,
-    cursor: usize,
-) -> Option<WikilinkTaskField> {
-    let bytes = raw.as_bytes();
-    let mut index = line_start;
-    let mut found = None;
-    while index + 1 < line_end {
-        if bytes[index] == b'(' && bytes[index + 1] == b'(' {
-            if is_valid_opener(raw, line_start, index, line_end)
-                && let Some(field) =
-                    field_from_opener(raw, index, line_end, cursor)
-            {
-                found = Some(field);
+/// Parse-visible trigger spans for the same tokens that completion uses.
+pub(crate) fn wikilink_task_spans(raw: &str) -> Vec<Span> {
+    wikilink_task_tokens(raw)
+        .into_iter()
+        .flat_map(|token| {
+            let mut spans = vec![Span {
+                start: token.opener,
+                end: token.opener + 2,
+                kind: SpanKind::WikilinkTaskDelimiter,
+            }];
+            if token.query_end > token.opener + 2 {
+                spans.push(Span {
+                    start: token.opener + 2,
+                    end: token.query_end,
+                    kind: SpanKind::WikilinkTaskQuery,
+                });
             }
-            index += 1;
-        } else {
-            index += 1;
+            if let Some(closer) = token.closer {
+                spans.push(Span {
+                    start: closer,
+                    end: closer + 2,
+                    kind: SpanKind::WikilinkTaskDelimiter,
+                });
+            }
+            spans
+        })
+        .collect()
+}
+
+fn wikilink_task_tokens(raw: &str) -> Vec<WikilinkTaskToken> {
+    let bytes = raw.as_bytes();
+    let mut tokens = Vec::new();
+    for line in capture_language::split_physical_lines(raw) {
+        let mut index = line.start;
+        while index + 1 < line.end {
+            if bytes[index] == b'(' && bytes[index + 1] == b'(' {
+                if is_valid_opener(raw, line.start, index, line.end)
+                    && let Some(token) = token_from_opener(raw, index, line.end)
+                    && !capture_language::cursor_in_close_log_text(
+                        raw,
+                        index + 2,
+                    )
+                    && !capture_language::editor_item_at(raw, index + 2)
+                        .is_some_and(|item| is_whole_item_action(&item))
+                {
+                    tokens.push(token);
+                }
+                index += 1;
+            } else {
+                index += 1;
+            }
         }
     }
-    found
+    tokens
 }
 
 fn is_valid_opener(
@@ -146,71 +177,77 @@ fn is_valid_opener(
     !capture_links::is_protected_markup_range(raw, opener, opener + 2)
 }
 
-fn field_from_opener(
+fn token_from_opener(
     raw: &str,
     opener: usize,
     line_end: usize,
-    cursor: usize,
-) -> Option<WikilinkTaskField> {
-    if cursor < opener {
-        return None;
-    }
+) -> Option<WikilinkTaskToken> {
     let inner_start = opener + 2;
     let bytes = raw.as_bytes();
     let mut index = inner_start;
-    let mut closer = None;
     while index < line_end {
         let byte = bytes[index];
         if byte == b')' {
             if index + 1 < line_end && bytes[index + 1] == b')' {
-                closer = Some(index);
-                break;
+                return Some(WikilinkTaskToken {
+                    opener,
+                    query_end: index,
+                    run_end: index,
+                    closer: Some(index),
+                });
             }
-            return None;
+            break;
         }
-        if FORBIDDEN.contains(&byte) {
-            return None;
+        if QUERY_STOP.contains(&byte) {
+            break;
         }
         index += 1;
     }
-    if let Some(closer_start) = closer {
-        let closer_end = closer_start + 2;
-        if cursor > closer_end {
-            return None;
-        }
-        let query_end = cursor.clamp(inner_start, closer_start);
-        let query = if cursor <= inner_start {
-            String::new()
-        } else {
-            raw.get(inner_start..query_end)?.to_string()
-        };
-        if query.bytes().any(|byte| FORBIDDEN.contains(&byte)) {
-            return None;
-        }
-        return Some(WikilinkTaskField {
-            query,
-            replacement: (opener, closer_end),
-        });
-    }
-    let query = if cursor <= inner_start {
-        String::new()
-    } else {
-        raw.get(inner_start..cursor)?.to_string()
-    };
-    if query.bytes().any(|byte| FORBIDDEN.contains(&byte)) {
-        return None;
-    }
-    let replacement_end = non_whitespace_run_end(raw, cursor, line_end);
-    Some(WikilinkTaskField {
-        query,
-        replacement: (opener, replacement_end),
+    Some(WikilinkTaskToken {
+        opener,
+        query_end: index,
+        run_end: index,
+        closer: None,
     })
 }
 
-fn non_whitespace_run_end(raw: &str, cursor: usize, line_end: usize) -> usize {
+fn field_at_token(
+    raw: &str,
+    token: WikilinkTaskToken,
+    cursor: usize,
+) -> Option<WikilinkTaskField> {
+    if cursor < token.opener {
+        return None;
+    }
+    let inner_start = token.opener + 2;
+    if let Some(closer) = token.closer {
+        let closer_end = closer + 2;
+        if cursor > closer_end {
+            return None;
+        }
+        let query_end = cursor.clamp(inner_start, closer);
+        return Some(WikilinkTaskField {
+            query: raw.get(inner_start..query_end)?.to_string(),
+            replacement: (token.opener, closer_end),
+        });
+    }
+    if cursor > token.run_end {
+        return None;
+    }
+    let query_end = cursor.max(inner_start);
+    Some(WikilinkTaskField {
+        query: raw.get(inner_start..query_end)?.to_string(),
+        replacement: (
+            token.opener,
+            non_whitespace_run_end(raw, cursor, token.run_end),
+        ),
+    })
+}
+
+fn non_whitespace_run_end(raw: &str, cursor: usize, run_end: usize) -> usize {
     let bytes = raw.as_bytes();
-    let mut end = cursor.min(line_end);
-    while end < line_end && !bytes[end].is_ascii_whitespace() {
+    let mut end = cursor.min(run_end);
+    while end < run_end && !bytes[end].is_ascii_whitespace() {
         end += 1;
     }
     end
@@ -415,6 +452,33 @@ mod tests {
     }
 
     #[test]
+    fn unclosed_token_stops_before_punctuation_and_preserves_suffix() {
+        let raw = "Follow up ((foo and [existing](url)";
+        let found = field_at(raw, 15).expect("field before link suffix");
+        assert_eq!(found.query, "foo");
+        assert_eq!(found.replacement, (10, 15));
+        let spliced = format!("{}[[target#^id]]{}", &raw[..10], &raw[15..]);
+        assert!(spliced.ends_with(" and [existing](url)"));
+
+        for raw in ["Follow up ((foo) bar", "Follow up ((foo`code`)"] {
+            let found = field_at(raw, 15).expect("field before punctuation");
+            assert_eq!(found.query, "foo");
+            assert_eq!(found.replacement, (10, 15));
+        }
+    }
+
+    #[test]
+    fn closed_token_covers_caret_through_end_of_closer() {
+        let raw = "((foo))";
+        for cursor in [0, 2, 4, 5, 6, 7] {
+            let found =
+                field_at(raw, cursor).expect("field through closer end");
+            assert_eq!(found.replacement, (0, 7));
+        }
+        assert!(field_at(raw, 8).is_none());
+    }
+
+    #[test]
     fn inside_wikilink_is_protected() {
         assert!(field_at("See [[note ((x", 14).is_none());
     }
@@ -458,5 +522,56 @@ mod tests {
     fn work_log_child_is_not_a_field() {
         let raw = "x\n- Follow up ((s";
         assert!(field_at(raw, raw.len()).is_none());
+    }
+
+    #[test]
+    fn task_spans_cover_exactly_the_completion_fields() {
+        // Mirrors the trigger/non-trigger corpus in
+        // tests/cli/capture/complete_wikilink_task.rs, plus punctuation
+        // boundaries. The @ selector case is omitted because it contains a
+        // capture marker inside the query and capture spans intentionally win.
+        let drafts = [
+            "((",
+            "Follow up ((s",
+            "Follow up ((foo)) more",
+            "Follow up ((foobar baz",
+            "Follow up ((s\r\nnext",
+            "Café ((s",
+            "First item\n\nFollow up ((s",
+            "Do work @sase:id ((s",
+            "Follow up ((foo and [existing](url)",
+            "Follow up ((foo) bar",
+            "Follow up ((foo`code`)",
+            "f((x",
+            "(((foo",
+            "See [[note ((x",
+            "Follow up ((fo(o",
+            "=",
+            "x",
+            "+5",
+            "--",
+            "!",
+            ":",
+            "/",
+            "^sase:id",
+            "x\n- Follow up ((s",
+        ];
+        for raw in drafts {
+            let spans = wikilink_task_spans(raw);
+            for cursor in raw
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(raw.len()))
+            {
+                let in_spans = spans
+                    .iter()
+                    .any(|span| cursor >= span.start && cursor <= span.end);
+                assert_eq!(
+                    field_at(raw, cursor).is_some(),
+                    in_spans,
+                    "span/field mismatch for {raw:?} at byte {cursor}: {spans:?}"
+                );
+            }
+        }
     }
 }

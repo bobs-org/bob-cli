@@ -544,6 +544,78 @@ fn capture_parse_json_reports_wikilink_semantic_spans() {
 }
 
 #[test]
+fn capture_parse_json_reports_task_wikilink_spans_without_stealing_capture_spans(
+) {
+    let parse = |draft: &str| {
+        let output = bob_command()
+            .arg("capture-parse")
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .output()
+            .expect("run bob capture-parse");
+        assert_success(&output);
+        serde_json::from_str::<serde_json::Value>(stdout(&output).trim())
+            .expect("capture-parse JSON")
+    };
+
+    let empty_query = parse("foo bar baz ((");
+    assert_eq!(
+        empty_query["spans"],
+        serde_json::json!([
+            { "start": 12, "end": 14, "kind": "wikilink_task_delimiter" }
+        ])
+    );
+
+    let closed = parse("Follow up ((foo))");
+    assert_eq!(
+        closed["spans"],
+        serde_json::json!([
+            { "start": 10, "end": 12, "kind": "wikilink_task_delimiter" },
+            { "start": 12, "end": 15, "kind": "wikilink_task_query" },
+            { "start": 15, "end": 17, "kind": "wikilink_task_delimiter" },
+        ])
+    );
+
+    let route = parse("((foo @x");
+    assert!(route["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "route" && span["start"] == 6 && span["end"] == 8
+    }));
+    assert!(route["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "wikilink_task_query"
+            && span["start"] == 2
+            && span["end"] == 6
+    }));
+    let spans = route["spans"].as_array().unwrap();
+    assert!(spans.windows(2).all(|pair| pair[0]["end"].as_u64().unwrap()
+        <= pair[1]["start"].as_u64().unwrap()));
+
+    for draft in [
+        "f((x",
+        "(((x",
+        "See ` ((x`",
+        "See [[note ((x]]",
+        "x ((foo",
+        "=3 ((foo",
+        "x\n- Follow up ((s",
+        "@@template:\nTask {0}\n\n((x\n",
+    ] {
+        let parsed = parse(draft);
+        assert!(
+            parsed["spans"].as_array().unwrap().iter().all(|span| {
+                !span["kind"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("wikilink_task_")
+            }),
+            "unexpected task wikilink span in {draft:?}: {}",
+            parsed["spans"]
+        );
+    }
+}
+
+#[test]
 fn capture_parse_reports_diagnostics_without_failing() {
     let output = bob_command()
         .arg("capture-parse")

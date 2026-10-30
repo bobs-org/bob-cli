@@ -508,6 +508,11 @@ fn triggers_ranges_and_non_triggers() {
     let at_start = complete_json(&vault, opener, closed);
     assert_eq!(at_start["query"], "");
     assert_eq!(at_start["replacement"], json["replacement"]);
+    let after_closer = complete_json(&vault, opener + 7, closed);
+    assert_eq!(after_closer["query"], "foo");
+    assert_eq!(after_closer["replacement"], json["replacement"]);
+    let beyond_closer = complete_json(&vault, opener + 8, closed);
+    assert_ne!(beyond_closer["context"], "wikilink_task");
 
     let mid = "Follow up ((foobar baz";
     let mid_opener = mid.find("((").expect("opener");
@@ -552,6 +557,21 @@ fn triggers_ranges_and_non_triggers() {
     let after_link = "Do work @sase:id ((s";
     let json = complete_json(&vault, after_link.len(), after_link);
     assert_eq!(json["context"], "wikilink_task");
+
+    let punctuation_suffix = "Follow up ((foo and [existing](url)";
+    let json = complete_json(&vault, 15, punctuation_suffix);
+    assert_eq!(json["context"], "wikilink_task");
+    assert_eq!(json["query"], "foo");
+    assert_eq!(
+        json["replacement"],
+        serde_json::json!({"start": 10, "end": 15})
+    );
+    for draft in ["Follow up ((foo) bar", "Follow up ((foo`code`)"] {
+        let json = complete_json(&vault, 15, draft);
+        assert_eq!(json["context"], "wikilink_task", "{draft:?}: {json}");
+        assert_eq!(json["query"], "foo");
+        assert_eq!(json["replacement"]["end"], 15);
+    }
 
     for (raw, cursor) in [
         ("f((x", 4usize),
@@ -664,6 +684,7 @@ fn spliced_identified_link_stays_valid_capture() {
         ("Follow up ((s".to_string(), 13),
         ("Follow up ((foo)) more".to_string(), 10),
         ("Follow up ((foobar baz".to_string(), 15),
+        ("Follow up ((foo and [existing](url)".to_string(), 15),
         ("Follow up ((s\r\nnext".to_string(), 13),
         ("Café ((s".to_string(), "Café ((s".len()),
         (
@@ -699,6 +720,19 @@ fn spliced_identified_link_stays_valid_capture() {
             "{draft:?} {replacement}"
         );
         let spliced = splice(&draft, &json, replacement);
+        if draft.contains("[existing](url)") {
+            let end =
+                json["replacement"]["end"].as_u64().expect("end") as usize;
+            assert!(
+                spliced.ends_with(&draft[end..]),
+                "suffix bytes were lost: {draft:?} -> {spliced:?}"
+            );
+            let captured = dry_run_json(&vault, &spliced);
+            assert_eq!(
+                captured["ok"], true,
+                "dry-run refused suffix-preserving splice {spliced:?}: {captured}"
+            );
+        }
         let before_codes = diagnostic_codes(&parse_json(&draft));
         let after = parse_json(&spliced);
         let after_codes = diagnostic_codes(&after);

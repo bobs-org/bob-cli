@@ -6058,7 +6058,8 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
-`wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
+`wikilink_heading`, `wikilink_block_id`, `wikilink_alias`,
+`wikilink_task_delimiter`, or `wikilink_task_query`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, the dangling `,` or `!` in `x1,` or `x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
 `@@` when the route is still empty too. For example, `x1,3!2` gives
@@ -6788,6 +6789,15 @@ draft-only trigger: captured bytes are always a plain Obsidian block link.
 That link sits in the captured task's own text, so under the
 [text mention](task-relations.md#19-text-mentions) rules capture also
 stages an inert `(💬 mentions)` entry on the target's LINKED FROM line.
+
+`capture-parse` marks each recognized token with `wikilink_task_delimiter`
+spans for `((` and, when closed, `))`, plus a `wikilink_task_query` span for
+the query run when non-empty. Clients request completion when the caret is
+inside one of these spans. Task-wikilink spans fill only bytes no other span
+covers, so capture syntax and ordinary wikilinks keep their own spans. An
+unclosed query ends at the first `(`, `)`, `[`, `]`, backtick, or physical
+line end; punctuation and text after that boundary stay outside the
+replacement.
 The note index is
 read-only, skips hidden directories plus `.git`, `.obsidian`, `_generated`, and
 `_templates`, never follows directory symlinks, and returns bounded warnings for

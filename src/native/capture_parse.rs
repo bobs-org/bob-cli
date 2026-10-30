@@ -21,7 +21,7 @@ use super::{
         PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
         RelationEntry, ResolvedTypeName, Severity, Span,
     },
-    capture_links,
+    capture_links, capture_task_wikilinks,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
     style::Styler,
     url_routing::UrlRoutingPolicy,
@@ -938,6 +938,10 @@ impl CaptureParseResult {
             parse.spans,
             capture_links::wikilink_spans(&input),
         ));
+        fill_span_gaps(
+            &mut spans,
+            capture_task_wikilinks::wikilink_task_spans(&input),
+        );
         let close_policy = load_close_policy();
         stamp_cancel_spans(&mut spans, &input, &close_policy);
         stamp_complete_spans(&mut spans, &input, &close_policy);
@@ -1220,6 +1224,10 @@ impl CaptureParseResult {
             &wikilinks,
             &analysis,
             &row_summaries,
+        );
+        fill_span_gaps(
+            &mut spans,
+            capture_task_wikilinks::wikilink_task_spans(&masked),
         );
         let close_policy = load_close_policy();
         stamp_cancel_spans(&mut spans, &masked, &close_policy);
@@ -1513,6 +1521,58 @@ fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
             completes_source: false,
         })
         .collect()
+}
+
+/// Add task-wikilink spans only where the already-resolved capture and
+/// Obsidian-wikilink spans leave bytes uncovered. Unlike `merge_spans`, this
+/// preserves the unoccupied parts of a long query around capture markers.
+fn fill_span_gaps(spans: &mut Vec<CaptureParseSpan>, candidates: Vec<Span>) {
+    let mut additions = Vec::new();
+    for candidate in candidates {
+        if candidate.start >= candidate.end {
+            continue;
+        }
+        let mut covered = spans
+            .iter()
+            .filter(|span| {
+                span.start < candidate.end && span.end > candidate.start
+            })
+            .map(|span| (span.start, span.end))
+            .collect::<Vec<_>>();
+        covered.sort_unstable();
+
+        let mut cursor = candidate.start;
+        for (start, end) in covered {
+            if start > cursor {
+                additions.push(CaptureParseSpan {
+                    start: cursor,
+                    end: start.min(candidate.end),
+                    kind: candidate.kind,
+                    field: None,
+                    themes: Vec::new(),
+                    cancels_source: false,
+                    completes_source: false,
+                });
+            }
+            cursor = cursor.max(end);
+            if cursor >= candidate.end {
+                break;
+            }
+        }
+        if cursor < candidate.end {
+            additions.push(CaptureParseSpan {
+                start: cursor,
+                end: candidate.end,
+                kind: candidate.kind,
+                field: None,
+                themes: Vec::new(),
+                cancels_source: false,
+                completes_source: false,
+            });
+        }
+        spans.append(&mut additions);
+    }
+    spans.sort_by_key(|span| (span.start, span.end));
 }
 
 fn template_issue_diagnostic(
