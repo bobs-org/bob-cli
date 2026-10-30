@@ -363,9 +363,11 @@ any [Day Strip](#day-strip) fact. Not `dash.md` or the `bob stats` terminal outp
 
 aka offer, pull-in offer
 
-A task that a managed Done gesture recovered and may link under the Pomodoro destination
-is a successor offer. Offers are grouped as direct hand-offs, residents of a recovered
-project, or project-finished pull-ins. They are not linked until explicitly picked; a
+A [Task Successor](#task-successor) that a gesture may link under its Pomodoro destination is a
+successor offer. A managed Done gesture offers the tasks it recovered, grouped as
+direct hand-offs, residents of a recovered project, or project-finished pull-ins.
+Promoting a task that is linked in today's Pomodoros offers the new project note's
+open tasks in that link's place. Offers are not linked until explicitly picked; a
 pick links the task, raises it to Next, and stamps it fresh. See
 [Unblocked Tasks Are Offered, Never Auto-Linked](../develop/decisions.md#unblocked-tasks-are-offered).
 
@@ -436,6 +438,26 @@ The status exceptions are committing a configured cancel label through capture o
 the Links stage, which cancels the source task at commit time, and committing a
 configured complete label through capture or the Links stage, which marks the source
 task Done at commit time.
+
+### Task Successor {#task-successor}
+
+*Aliases: successor.*
+
+# Task Successor
+
+*Requested · project*
+
+aka successor
+
+A task positioned to take its predecessor's place in today's Pomodoro plan when the
+predecessor leaves it. The successors of a managed Done gesture are the tasks it
+unblocks: direct dependents, open residents of a project whose `^prj` it recovered,
+and project-finished pull-ins. Promoting a task to a [Project Note](#project-note) makes the new
+note's open tasks its successors, because the [Project Task](#project-task) never inherits the
+predecessor's [Task Link](#task-link). Successors are computed when the gesture runs and are
+never stored. None is linked automatically: each becomes a [Successor Offer](#successor-offer), and
+only a picked one is linked under its Pomodoro destination, raised to Next, and
+stamped fresh.
 
 ### Task Type {#task-type}
 

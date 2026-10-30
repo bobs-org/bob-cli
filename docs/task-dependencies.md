@@ -975,6 +975,11 @@ offers.
 The same complete gestures produce project offers and project-finished
 pull-in offers (§12.10).
 
+Promotion is not a Done gesture, but nav's Create project note from task offers
+the new project's open tasks with the same picker, KEYS, and PICK rule. Only
+the trigger, the anchor, and consumption differ — see
+[Promotion successors](projects.md#promotion-successors).
+
 It **never** prompts, offers, or links on any of the following:
 
 - cancel (the nav Ctrl+Shift+P cancel, Alt+[ into Cancelled);

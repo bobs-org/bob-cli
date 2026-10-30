@@ -332,8 +332,8 @@ task); Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten
 (keep log); Schedule Log; Stats Dash (dash\_stats); Successor Offer; Task Dependency
 Link (task dep link, dep link); Task Freshness (freshness); Task Link (task block link);
 Task Mention (mention, text mention); Task Relation (relation, LINKS line, LINKED FROM
-line); Task Type (type, theme, pomodoro theme, pomodoro-theme); Top-Level Project (top
-project); Work Log
+line); Task Successor (successor); Task Type (type, theme, pomodoro theme,
+pomodoro-theme); Top-Level Project (top project); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

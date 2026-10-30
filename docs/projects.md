@@ -309,7 +309,52 @@ the machine-owned Sub-projects child is skipped on reverse conversion. A blocked
 source (`[?]`) is accepted and seeds a Ready project unless a carried open
 prerequisite or a future inline date still blocks it. If the new project is
 blocked, its open residents are tagged `#prj_is_blocked` and their live links
-are removed from today's open Pomodoros. `bob capture` can create
+are removed from today's open Pomodoros.
+
+### Promotion successors
+
+Promoting a task that is planned in today's Pomodoros always removes the source
+task, never leaves a live Task Link on the new `^prj`, and offers the new
+project's open tasks through the Successor Offer picker. See
+[Successor offers](task-dependencies.md#12-successor-offers) for the shared
+picker, KEYS, and PICK rule.
+
+- **`^prj` never inherits a plan.** Every dedicated live link to the source,
+  in today's or a later daily note's open Pomodoros, is consumed. History
+  (struck links, links under closed entries, and prose) is rewritten
+  one-to-one to `<project>#^prj`.
+- **Successors are the new project's open tasks.** When the source had a live
+  link today, those tasks are offered in the anchor's place. The picker title
+  is `Promoted to project · pull in successors`; nothing is preselected and
+  `Esc` means none. Only picked tasks are linked, raised to Next, given a
+  block ID, and stamped fresh. The promotion still completes when nothing is
+  picked.
+- **Plan, choose, then reference.** The picker opens after the project note is
+  created and seeded, but before anything links to it. Until the first ledger
+  reference write, any failure trashes the created note and reports
+  `…; nothing was promoted`.
+- **No stale buffers.** The new note is created closed and opened only at the
+  end with the cursor on `^prj`. Project-note writes go to disk and locate
+  rows by identity, never by line number or editor text.
+
+Offer rows enumerate the seeded project's open `#task` lines in document
+order at any depth, except `^prj` and the template placeholder. Closed tasks
+are excluded; `[?]` and future-scheduled rows are muted; `#hide` rows fold
+into a hidden count; a child already live-linked today folds into an
+already-planned count and its link is repointed. The anchor is the first
+planned link in today's ledger order; picks take over its bullet and follow
+as sibling bullets in row order. A Blocked project offers nothing: planned
+links are consumed with no picker.
+
+The notice keeps the existing `Created project …` first line. When the source
+had planned links a second line reports the outcome, for example
+`Next in BUILD: …`, `2 Next in BUILD: …`, `Removed the BUILD link · 2 project
+tasks not pulled in`, `Removed the BUILD link · project is Blocked`, or
+`Removed the BUILD link · no project tasks to pull in`, with
+`· 1 not pulled in`, `· 1 more Pomodoro link removed`, and
+`· couldn't link 1 (project note changed)` suffixes as applicable.
+
+`bob capture` can create
 the same kind of project note directly, with no Obsidian window open: see
 [Project notes](capture.md#project-notes). Task bullets in that capture can
 name their IDs with a trailing ` ^<id>`, or name them and link them into the
