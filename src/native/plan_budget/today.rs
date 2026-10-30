@@ -192,6 +192,10 @@ fn unresolved(link: &TodayLink, reason: &str) -> PlanLint {
         code: LINT_TODAY_UNRESOLVED.to_string(),
         message: format!("[[{}#^{}]] {reason}", link.target, link.block_id,),
         line: Some(link.ledger_line),
+        link: None,
+        entry: None,
+        task_type: None,
+        entry_types: None,
     }
 }
 

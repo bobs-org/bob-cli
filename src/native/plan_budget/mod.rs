@@ -39,6 +39,7 @@ pub(crate) const LINT_THEMES_CONFIG_INVALID: &str =
     super::pomodoro_themes::THEMES_CONFIG_INVALID;
 pub(crate) const LINT_DEFAULT_TYPE_NOT_CONFIGURED: &str =
     "default_type_not_configured";
+pub(crate) const LINT_TYPE_MISMATCH: &str = "type_mismatch";
 
 /// Display name used when an unnamed open entry holds counted links.
 pub(crate) const UNNAMED_THEME: &str = "(unnamed)";
@@ -107,11 +108,31 @@ pub(crate) struct PlanEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanLinkRef {
+    pub(crate) route: String,
+    pub(crate) block_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanEntryRef {
+    pub(crate) line: usize,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PlanLint {
     pub(crate) code: String,
     pub(crate) message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) link: Option<PlanLinkRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry: Option<PlanEntryRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) task_type: Option<ThemeRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) entry_types: Option<Vec<ThemeRef>>,
 }
 
 /// The pure ledger half of a plan report: everything derived from the
@@ -183,6 +204,10 @@ pub(crate) fn assemble_report(
                 cap = lanes.next.cap
             ),
             line: None,
+            link: None,
+            entry: None,
+            task_type: None,
+            entry_types: None,
         });
     }
     if lanes.pending.over {
@@ -194,6 +219,10 @@ pub(crate) fn assemble_report(
                 cap = lanes.pending.cap
             ),
             line: None,
+            link: None,
+            entry: None,
+            task_type: None,
+            entry_types: None,
         });
     }
     let status = ledger.status;
@@ -244,6 +273,10 @@ pub(crate) fn with_configured_theme_lints(
             code: LINT_THEMES_CONFIG_INVALID.to_string(),
             message: warning.to_string(),
             line: None,
+            link: None,
+            entry: None,
+            task_type: None,
+            entry_types: None,
         });
     }
     if let Some(name) = config.default_type()
@@ -259,6 +292,10 @@ pub(crate) fn with_configured_theme_lints(
                 code: LINT_DEFAULT_TYPE_NOT_CONFIGURED.to_string(),
                 message: format!("default type: {detail}"),
                 line: None,
+                link: None,
+                entry: None,
+                task_type: None,
+                entry_types: None,
             });
         }
     }
@@ -283,10 +320,92 @@ pub(crate) fn with_configured_theme_lints(
                     component, &similar,
                 ),
                 line: Some(entry.line),
+                link: None,
+                entry: None,
+                task_type: None,
+                entry_types: None,
             });
         }
     }
     report.warnings.extend(lints);
+    report
+}
+
+/// Read-only agreement lint (D5): one `type_mismatch` lint per live link
+/// whose task type disagrees with its entry. Drift from hand edits,
+/// frontmatter or config edits, or sync merges is flagged and never
+/// silently repaired. Reuses one [`pomodoro_homes::HomeResolver`] per
+/// run to keep the extra resolver cost inside `bob plan`'s budget.
+pub(crate) fn with_type_mismatch_lints(
+    mut report: PlanReport,
+    bob_dir: &Path,
+    today_result: &TodayResult,
+    catalog: &ThemeCatalog,
+    config: &PlanConfig,
+) -> PlanReport {
+    if today_result.tasks.is_empty() {
+        return report;
+    }
+    let sources = super::config::themes::load_theme_sources();
+    let settings = super::note_tasks::read_settings(bob_dir);
+    let mut resolver = pomodoro_homes::HomeResolver::new(
+        pomodoro_homes::DiskHomeSource::new(bob_dir),
+    );
+    for task in &today_result.tasks {
+        let contents = match std::fs::read_to_string(bob_dir.join(&task.path)) {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        let Some(line) = contents.lines().nth(task.line.saturating_sub(1))
+        else {
+            continue;
+        };
+        let scan = super::note_tasks::scan(&contents, &settings);
+        if !matches!(
+            scan.by_block_id(&task.block_id),
+            super::note_tasks::BlockIdLookup::Found(_)
+        ) {
+            continue;
+        }
+        let suggestion = super::pomodoro_themes::suggest::suggest_for_task(
+            &mut resolver,
+            catalog,
+            config,
+            Path::new(&task.path),
+            line,
+        );
+        let Some(suggestion) = suggestion.suggestion else {
+            continue;
+        };
+        if super::pomodoro_themes::routing::agrees(
+            Some(suggestion.theme.key.as_str()),
+            Some(task.entry_name.as_str()),
+            &sources,
+        ) {
+            continue;
+        }
+        let route = task.path.strip_suffix(".md").unwrap_or(&task.path);
+        report.warnings.push(PlanLint {
+            code: LINT_TYPE_MISMATCH.to_string(),
+            message: format!(
+                "{} task under {} · {route}#^{} · Ctrl+Shift+M to move or Ctrl+Shift+P t to retype",
+                suggestion.theme.name, task.entry_name, task.block_id,
+            ),
+            line: Some(task.ledger_line),
+            link: Some(PlanLinkRef {
+                route: route.to_string(),
+                block_id: task.block_id.clone(),
+            }),
+            entry: Some(PlanEntryRef {
+                line: task.entry_line,
+                name: task.entry_name.clone(),
+            }),
+            task_type: Some(suggestion.theme.clone()),
+            entry_types: Some(
+                catalog.theme_refs_for_name(&task.entry_name),
+            ),
+        });
+    }
     report
 }
 
@@ -405,6 +524,10 @@ pub(crate) fn compute_for_daily(
                     time totals"
                     .to_string(),
                 line: Some(index + 1),
+                link: None,
+                entry: None,
+                task_type: None,
+                entry_types: None,
             });
         }
     }
@@ -487,6 +610,10 @@ pub(crate) fn compute_for_daily(
                         entry.line
                     ),
                     line: Some(entry.line),
+                    link: None,
+                    entry: None,
+                    task_type: None,
+                    entry_types: None,
                 });
             } else {
                 seen_themes.insert(key.clone(), entry.line);
@@ -499,6 +626,10 @@ pub(crate) fn compute_for_daily(
                         "{component} is an inventory label, not a theme"
                     ),
                     line: Some(entry.line),
+                    link: None,
+                    entry: None,
+                    task_type: None,
+                    entry_types: None,
                 });
             }
         }
@@ -552,6 +683,10 @@ pub(crate) fn compute_for_daily(
                 cap = themes.cap
             ),
             line: None,
+            link: None,
+            entry: None,
+            task_type: None,
+            entry_types: None,
         });
     }
     if links.over {
@@ -563,6 +698,10 @@ pub(crate) fn compute_for_daily(
                 cap = links.cap
             ),
             line: None,
+            link: None,
+            entry: None,
+            task_type: None,
+            entry_types: None,
         });
     }
 

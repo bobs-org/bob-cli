@@ -108,6 +108,7 @@ one applies:
 | `theme_not_configured` | an open entry uses a theme outside the `themes:` vocabulary; once per key, at the first open-entry line |
 | `themes_config_invalid` | the `types:` block (or legacy `themes:` alias) is invalid, or both keys are present; the catalog degrades to no configured types |
 | `default_type_not_configured` | `plan.default_type` is outside a configured `types:` vocabulary; it still applies to task suggestions |
+| `type_mismatch` | a live Task Link sits under a Pomodoro without its task's type (hand edits, frontmatter or config edits, sync merges); read-only, one per link at its ledger line, never repaired |
 
 ## Today
 

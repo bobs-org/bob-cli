@@ -60,6 +60,11 @@ bob plan -f json -b /path/to/synthetic-vault
 {"ok":true,"schema_version":2,"date":"2026-10-20","daily_file":"2026/20261020.md","status":"ok","caps":{"max_themes":…,"max_links":…,"max_next":…,"max_pending":…,"max_ready":…,"strict":false},"today":{"count":0},"today_tasks":[],"themes":{"count":0,"cap":…,"over":false},"links":{"count":0,"cap":…,"over":false},"next":{"count":0,"cap":…,"over":false},"pending":{"count":0,"cap":…,"over":false},"theme_names":[],"entries":[],"warnings":[]}
 ```
 
+`type_mismatch` warnings in `bob plan` carry additive `link` (`route`,
+`block_id`), `entry` (`line`, `name`), `task_type`, and `entry_types`
+beside the usual `code`, `message`, and ledger `line`. See
+[Plan](../plan.md#lints).
+
 ## Capture and protocol helpers
 
 `bob capture` writes the vault. Most `capture-*` helpers are read-only

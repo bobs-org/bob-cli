@@ -26,6 +26,7 @@ pub(crate) mod migrate;
 pub(crate) mod preselect;
 mod rank;
 pub(crate) mod rename;
+pub(crate) mod routing;
 mod scan;
 mod similar;
 pub(crate) mod split;

@@ -762,6 +762,68 @@ Dataview query filters on page `type` today (verified 2026-10-29). Raw
 Dataview `task.type` / `task.theme` is not an effective-type API; point
 readers at `bob types suggest`.
 
+## Routing: agreement, retype, placement, relocation
+
+Pure planners in `src/native/pomodoro_themes/routing.rs`, next to
+`preselect.rs`. No capture behavior changes yet; later phases wire these
+into capture, moves, links, ref-today, successors, and the Task Card.
+The `agree`, `retype`, `place`, and `relocate` vector sections are the
+Ledger Tools JS mirror's contract.
+
+- **Type components.** A component of a Pomodoro name is a type component
+  iff its key is in the configured `types:` vocabulary; without a
+  vocabulary, every component except inventory labels is one. Unnamed
+  entries and `(unnamed)` have none. An entry with no type components is
+  a **container**: it holds any task without typing it. Ad-hoc names stay
+  fully supported as names, with the warning `SNACK isn't one of your
+  types; tasks here keep their own types`.
+- **Agreement.** Every live Task Link sits under a Pomodoro whose name
+  includes its task's type, or under a container. `agrees(task_type,
+  entry)` is true when the entry is a container, the task has no
+  effective type, or the task type's key equals any component key of the
+  entry (labels included, so a SNACK-typed task under `— SNACK`
+  agrees). Drift that no gesture caused (hand edits, frontmatter or
+  config edits, sync merges) is flagged and never silently repaired: a
+  `type_mismatch` lint in `bob plan` plus a ledger mark in Obsidian.
+  Closed Pomodoros are history. Type-only edits never stamp freshness,
+  change lanes, consume dependency guards, or advance the review walk.
+- **Retype.** A link landing in Pomodoro D retypes its task: a container
+  D means no change (`keeps BUILD`); the task's type already among D's
+  components means consistent; Obsidian Alt+Enter merges (`Merge`, D's
+  name gains ` + TYPE`, no field change); otherwise retype to one type
+  component X of D — the authored selector's match (by slug or prefix),
+  else the Obsidian Tab-cycled choice, else the first non-exempt type
+  component, else the first type component. When X equals the inherited
+  key the field is cleared, otherwise `[type:: X]` is set,
+  catalog-spelled. There is no suggestion-shown guard and no
+  single-non-exempt-component guard, so PLAN is a legal result. Capture
+  `#NAME` and `=name` always take the Enter path.
+- **Placement.** Bob picks the Pomodoro for type T: an already-queued
+  task keeps its queue (Ensure Next `@route+id` is the one exception,
+  handled by `capture-placement`); otherwise the first running exact
+  entry, else the first open exact entry in ledger order (exact means
+  the components, after removing exempt keys other than T, are exactly
+  `{T}`), else the first open entry containing T, else a new `— T`
+  placeholder at the existing named-creation insertion point. Unlike
+  menus, placement may create entries for unknown or unconfigured names
+  (with the `theme_not_configured` warning). With `plan.strict: true`,
+  a creation that adds a type past `plan.max_themes` is refused before
+  any write. With no effective type, today's implicit current/next
+  selection is unchanged.
+- **Relocation.** When a task's type becomes X: no live link, or the
+  link's entry already agreeing with X, means ledger unchanged (a
+  backlog task never gains a link). A running sole-link entry replaces
+  its type components with X (labels kept, X in the first type
+  component's position: `— FIX` becomes `— BUILD`, `— BOB + FIX` becomes
+  `— BOB + BUILD`); a running shared entry gains ` + X` (the timespan
+  never changes). Otherwise the first planned entry `place(X)` would
+  choose (skipping running entries) takes the move; else a sole-link
+  planned entry renames in place; else a `— X` placeholder is created
+  directly below the source entry. Strict cap refusal applies to the
+  creation case only. Among duplicates, ledger order decides.
+- **Lint.** `BUILD task under FIX · sase#^fix-x · Ctrl+Shift+M to move
+  or Ctrl+Shift+P t to retype`.
+
 ## JSON contract
 
 Additive; `schema_version` stays 1.
@@ -889,13 +951,14 @@ and writes nothing to the journal.
 
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` and `configured` inputs), `fold`,
-`rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`, and
-`write_rule`. CLI tests consume the menu and literal sections, including
-capture dry-run round trips; Rust tests consume all three new sections,
+`rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`,
+`write_rule`, `preselect`, `agree`, `retype`, `place`, and `relocate`.
+CLI tests consume the menu and literal sections, including
+capture dry-run round trips; Rust tests consume the routing sections,
 including mini-vault suggest cases with expected JSON and warnings.
 bob-plugins copies the file byte-for-byte and runs the same hue, fold, and
-ranking vectors in JavaScript; the suggest vectors are reserved for the
-later JavaScript mirror.
+ranking vectors in JavaScript; the suggest and routing vectors are reserved
+for the later JavaScript mirror.
 
 ## Related
 

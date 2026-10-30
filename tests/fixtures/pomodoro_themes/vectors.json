@@ -2569,5 +2569,1126 @@
         "code": "already_queued"
       }
     }
+  ],
+  "agree": [
+    {
+      "name": "container-unnamed",
+      "task": "build",
+      "entry": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "container-label-only",
+      "task": "build",
+      "entry": "LATER",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "no-effective-type",
+      "task": null,
+      "entry": "FIX",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "label-component-agrees",
+      "task": "snack",
+      "entry": "BUILD + SNACK",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "exact-agrees",
+      "task": "build",
+      "entry": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "composite-agrees",
+      "task": "fix",
+      "entry": "BUILD + FIX",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "mismatch",
+      "task": "build",
+      "entry": "FIX",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": false
+    },
+    {
+      "name": "exempt-component-mismatch",
+      "task": "build",
+      "entry": "PLAN",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": false
+    },
+    {
+      "name": "no-vocabulary-label",
+      "task": "build",
+      "entry": "BOB + BUILD",
+      "vocab": [],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": true
+    },
+    {
+      "name": "no-vocabulary-mismatch",
+      "task": "build",
+      "entry": "BOB + FIX",
+      "vocab": [],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": false
+    }
+  ],
+  "retype": [
+    {
+      "name": "container-keeps",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "build",
+      "destination": "LATER",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "container"
+      }
+    },
+    {
+      "name": "consistent-exact",
+      "field": "none",
+      "effective": "fix",
+      "effective_name": "FIX",
+      "inherited": "build",
+      "destination": "BUILD + FIX",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "consistent"
+      }
+    },
+    {
+      "name": "consistent-label",
+      "field": "none",
+      "effective": "snack",
+      "effective_name": "SNACK",
+      "inherited": "build",
+      "destination": "BUILD + SNACK",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "consistent"
+      }
+    },
+    {
+      "name": "keep-type-merges",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "write",
+      "destination": "FIX",
+      "selector": null,
+      "keep_type": true,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "merge",
+        "name": "FIX + BUILD"
+      }
+    },
+    {
+      "name": "selector-picks-component",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": "fix",
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "set",
+        "name": "FIX",
+        "key": "fix"
+      }
+    },
+    {
+      "name": "clear-on-inherited",
+      "field": "set",
+      "field_value": "FIX",
+      "effective": "fix",
+      "effective_name": "FIX",
+      "inherited": "build",
+      "destination": "BUILD",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "clear"
+      }
+    },
+    {
+      "name": "first-non-exempt-wins",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "set",
+        "name": "BUILD",
+        "key": "build"
+      }
+    },
+    {
+      "name": "exempt-plan-is-legal",
+      "field": "none",
+      "effective": "build",
+      "effective_name": "BUILD",
+      "inherited": "build",
+      "destination": "PLAN",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "set",
+        "name": "PLAN",
+        "key": "plan"
+      }
+    },
+    {
+      "name": "tab-pick-wins",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": null,
+      "keep_type": false,
+      "tab_pick": "fix",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "set",
+        "name": "FIX",
+        "key": "fix"
+      }
+    },
+    {
+      "name": "prefix-selector",
+      "field": "none",
+      "effective": "write",
+      "effective_name": "WRITE",
+      "inherited": "chore",
+      "destination": "BUILD + FIX",
+      "selector": "fi",
+      "keep_type": false,
+      "tab_pick": null,
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "expected": {
+        "kind": "set",
+        "name": "FIX",
+        "key": "fix"
+      }
+    }
+  ],
+  "place": [
+    {
+      "name": "running-exact-wins",
+      "type": "build",
+      "type_name": "BUILD",
+      "entries": [
+        {
+          "name": "PLAN + BUILD",
+          "open": true,
+          "running": true
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "BUILD"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "name": "first-open-exact",
+      "type": "build",
+      "type_name": "BUILD",
+      "entries": [
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "BUILD"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "entry",
+        "index": 0
+      }
+    },
+    {
+      "name": "containing-fallback",
+      "type": "build",
+      "type_name": "BUILD",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        },
+        {
+          "name": "BUILD + FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "BUILD",
+        "FIX"
+      ],
+      "themes_before": 2,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "entry",
+        "index": 1
+      }
+    },
+    {
+      "name": "create-placeholder",
+      "type": "chore",
+      "type_name": "CHORE",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "create",
+        "name": "CHORE"
+      }
+    },
+    {
+      "name": "unknown-type-creates",
+      "type": "snack",
+      "type_name": "SNACK",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "create",
+        "name": "SNACK"
+      }
+    },
+    {
+      "name": "strict-refuses-new-type",
+      "type": "chore",
+      "type_name": "CHORE",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "BUILD",
+        "FIX",
+        "WRITE"
+      ],
+      "themes_before": 3,
+      "cap": 3,
+      "strict": true,
+      "already_queued": false,
+      "expected": {
+        "kind": "refused",
+        "code": "strict_cap"
+      }
+    },
+    {
+      "name": "strict-allows-exempt",
+      "type": "plan",
+      "type_name": "PLAN",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "BUILD",
+        "FIX",
+        "WRITE"
+      ],
+      "themes_before": 3,
+      "cap": 3,
+      "strict": true,
+      "already_queued": false,
+      "expected": {
+        "kind": "create",
+        "name": "PLAN"
+      }
+    },
+    {
+      "name": "already-queued-keeps-queue",
+      "type": "build",
+      "type_name": "BUILD",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": true,
+      "expected": {
+        "kind": "already_queued"
+      }
+    },
+    {
+      "name": "no-type-falls-back",
+      "type": null,
+      "type_name": null,
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false
+        }
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "already_queued": false,
+      "expected": {
+        "kind": "no_type"
+      }
+    }
+  ],
+  "relocate": [
+    {
+      "name": "no-live-link",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 1
+        }
+      ],
+      "live_link": null,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "unchanged"
+      }
+    },
+    {
+      "name": "already-agrees",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 1
+        }
+      ],
+      "live_link": 0,
+      "type": "fix",
+      "type_name": "FIX",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "unchanged"
+      }
+    },
+    {
+      "name": "running-sole-renames",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": true,
+          "links": 1
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "rename_entry",
+        "index": 0,
+        "new_name": "BUILD"
+      }
+    },
+    {
+      "name": "running-sole-keeps-labels",
+      "entries": [
+        {
+          "name": "BOB + FIX",
+          "open": true,
+          "running": true,
+          "links": 1
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "BOB",
+        "FIX"
+      ],
+      "themes_before": 2,
+      "cap": 5,
+      "strict": false,
+      "expected": {
+        "kind": "rename_entry",
+        "index": 0,
+        "new_name": "BOB + BUILD"
+      }
+    },
+    {
+      "name": "running-shared-appends",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": true,
+          "links": 2
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "append_component",
+        "index": 0,
+        "new_name": "FIX + BUILD"
+      }
+    },
+    {
+      "name": "planned-moves-to-exact",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 2
+        },
+        {
+          "name": "BUILD",
+          "open": true,
+          "running": false,
+          "links": 0
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX",
+        "BUILD"
+      ],
+      "themes_before": 2,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "move_to",
+        "from": 0,
+        "to": 1
+      }
+    },
+    {
+      "name": "sole-placeholder-renames",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 1
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "rename_placeholder",
+        "index": 0,
+        "new_name": "BUILD"
+      }
+    },
+    {
+      "name": "creates-below-source",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 2
+        }
+      ],
+      "live_link": 0,
+      "type": "build",
+      "type_name": "BUILD",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "FIX"
+      ],
+      "themes_before": 1,
+      "cap": 3,
+      "strict": false,
+      "expected": {
+        "kind": "create_below",
+        "from": 0,
+        "name": "BUILD"
+      }
+    },
+    {
+      "name": "strict-refuses-create",
+      "entries": [
+        {
+          "name": "FIX",
+          "open": true,
+          "running": false,
+          "links": 2
+        }
+      ],
+      "live_link": 0,
+      "type": "chore",
+      "type_name": "CHORE",
+      "vocab": [
+        "BUILD",
+        "CHORE",
+        "FIX",
+        "MEET",
+        "PLAN",
+        "READ",
+        "WRITE"
+      ],
+      "exempt": [
+        "PLAN"
+      ],
+      "inventory": [
+        "LATER"
+      ],
+      "ledger_keys": [
+        "BUILD",
+        "FIX",
+        "WRITE"
+      ],
+      "themes_before": 3,
+      "cap": 3,
+      "strict": true,
+      "expected": {
+        "kind": "refused",
+        "code": "strict_cap"
+      }
+    }
   ]
 }
