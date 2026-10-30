@@ -101,6 +101,8 @@ fn invalid_markers_carry_the_shared_teaching_copy() {
     for (raw, needle) in [
         ("Fix it t:fix.", "is not a task type"),
         ("Fix it t:bob+decks", "names two types"),
+        ("Fix it t:\"BUILD + FIX\"", "names two types"),
+        ("Fix it t:“BUILD + FIX”", "names two types"),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.body, "Fix it", "{raw:?}");
@@ -153,6 +155,7 @@ fn non_task_subjects_are_refused_with_the_shared_copy() {
     for (raw, needle) in [
         ("@notes#Ideas text t:fix", "writes a plain bullet"),
         ("@sase+fix-x t:fix", "changes an existing task's status"),
+        ("@sase:close-1=x t:fix", "closes a Pomodoro"),
         ("x t:fix", "closes a Pomodoro"),
         ("=3 t:fix", "starts a Pomodoro"),
         ("+5 t:fix", "adjusts a Pomodoro duration"),
@@ -183,6 +186,15 @@ fn non_task_subjects_are_refused_with_the_shared_copy() {
             "{raw:?}"
         );
     }
+}
+
+#[test]
+fn global_existing_task_inheritance_rechecks_the_marker_subject() {
+    let raw = "@@sase+parent\n\nA child t:fix";
+    let parse = editor(raw);
+    assert_eq!(parse.mode, EditorMode::SubBullet);
+    assert_eq!(codes(&parse), vec!["type_marker_not_applicable"]);
+    assert_eq!(parse.diagnostics[0].message, execute(raw).unwrap_err());
 }
 
 #[test]

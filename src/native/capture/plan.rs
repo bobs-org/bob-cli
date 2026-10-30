@@ -660,6 +660,12 @@ pub(super) fn plan_capture_item(
             target: target.clone(),
             section: None,
         };
+        if let Some(message) = capture_language::not_applicable_error(&parsed) {
+            return Err(CaptureError::usage_code(
+                message,
+                "type_marker_not_applicable",
+            ));
+        }
         // A forced sub-bullet parent owns the item's modifiers like an
         // explicit marker does; a picker-ref target cannot.
         if !parsed.dependencies.is_empty()
@@ -1160,25 +1166,12 @@ pub(super) fn plan_capture_item(
                 | CaptureKind::Pomodoro { .. }
         );
         if is_new_task_kind && !parsed.body.trim().is_empty() {
-            let route = parsed.route.as_deref().unwrap_or("");
-            // For Pomodoro tasks, the selector (e.g. `#FIX`) is D for the
-            // agreement check. The marker wins over the named retype.
-            let (pomodoro_destination, pomodoro_selector) = match &parsed.kind {
-                CaptureKind::Pomodoro {
-                    pomodoro_name: Some(selector),
-                    ..
-                } => (Some(selector.as_str()), Some(selector.as_str())),
-                _ => (None, None),
-            };
             let applied = task_theme_context.apply_type_marker(
                 planner,
                 &target,
-                route,
                 &capture_line,
                 &marker.name,
                 marker.literal,
-                pomodoro_destination,
-                pomodoro_selector,
                 warnings,
             )?;
             capture_line = applied.task_line;
@@ -1516,6 +1509,25 @@ pub(super) fn plan_capture_item(
             &parsed.kind,
         )?,
     };
+    if let (
+        Some(marker),
+        CaptureKind::Pomodoro {
+            pomodoro_name: Some(_),
+            pomodoro_name_is_literal,
+            ..
+        },
+        Some(pomodoro),
+    ) = (
+        parsed.type_marker.as_ref(),
+        &parsed.kind,
+        note_plan.pomodoro.as_ref(),
+    ) {
+        task_theme_context.validate_type_marker_agreement(
+            &marker.name,
+            *pomodoro_name_is_literal,
+            pomodoro.details.pomodoro_name.as_deref(),
+        )?;
+    }
     let mut pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
     // Dependency effects report through `task_blocks` with the new
     // `dependency` / `dependency_target` roles, and through the

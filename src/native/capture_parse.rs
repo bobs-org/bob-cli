@@ -2576,12 +2576,27 @@ mod tests {
         assert_eq!(themes[0]["key"], "nope");
         assert_eq!(themes[0]["name"], "NOPE");
         assert_eq!(themes[0]["known"], false);
-        // A literal containing `+` never splits into components; the
-        // invalid name is not canonicalizable, so the decoded text stands.
-        let themes = task_type_themes("Fix it t:\"a+b\"", &catalog);
-        assert_eq!(themes.as_array().unwrap().len(), 1);
-        assert_eq!(themes[0]["name"], "a+b");
-        assert_eq!(themes[0]["known"], false);
+        // Quoted composites are invalid markers and never fabricate a ref.
+        for raw in ["Fix it t:\"a+b\"", "Fix it t:“a+b”"] {
+            let mut result = CaptureParseResult::new(
+                raw.to_string(),
+                &EditorParseOptions::routing_off(),
+            );
+            attach_theme_refs(&mut result, &catalog);
+            let marker = result
+                .spans
+                .iter()
+                .find(|span| span.kind == capture_language::SpanKind::TaskType)
+                .expect("invalid task_type span");
+            assert!(marker.themes.is_empty(), "{raw:?}: {marker:?}");
+            assert!(
+                result.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code == "invalid_type_marker"
+                }),
+                "{raw:?}: {:?}",
+                result.diagnostics
+            );
+        }
     }
 
     #[test]

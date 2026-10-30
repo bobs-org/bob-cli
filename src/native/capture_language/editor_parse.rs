@@ -348,6 +348,7 @@ pub(crate) fn parse_for_editor_with(
                 continue;
             }
             inherit_editor_global_destination(item, global);
+            validate_inherited_type_marker(item, draft.items.get(item.index));
         }
     }
 
@@ -1411,7 +1412,7 @@ pub(super) fn parse_editor_item_with<'a>(
     let occurrences =
         super::type_marker::collect_item_with_clip_control(item, true);
     if occurrences.is_empty() {
-        return parse_editor_item_inner(item, options, &[]);
+        return parse_editor_item_inner(item, options);
     }
     // Type markers are transparent to every existing claim: run the whole
     // established parse on the offset-preserving masked view (marker bytes
@@ -1419,9 +1420,12 @@ pub(super) fn parse_editor_item_with<'a>(
     // re-slice borrowed declarations back to the original text and attach
     // the marker's own spans, needs, and diagnostics.
     let masked_source = super::type_marker::masked_source(item, &occurrences);
-    let masked_item = super::type_marker::masked_item(item, &masked_source);
-    let skips = marker_only_child_lines(item, &occurrences);
-    let inner = parse_editor_item_inner(&masked_item, options, &skips);
+    let skips = super::type_marker::marker_only_child_lines(item, &occurrences);
+    let mut masked_item = super::type_marker::masked_item(item, &masked_source);
+    masked_item
+        .lines
+        .retain(|line| !skips.contains(&(line.raw.start, line.raw.end)));
+    let inner = parse_editor_item_inner(&masked_item, options);
     let declarations =
         remap_type_marker_declarations(inner.declarations, item.source);
     let mut outcome = EditorItemOutcome {
@@ -1430,48 +1434,6 @@ pub(super) fn parse_editor_item_with<'a>(
     };
     attach_type_marker_metadata(&mut outcome.item, &occurrences);
     outcome
-}
-
-/// Raw line ranges (original offsets) holding only a type marker: a
-/// marker-only continuation line types its item and contributes no semantic
-/// child body, mirroring dependency-only children.
-fn marker_only_child_lines(
-    item: &CaptureItem<'_>,
-    occurrences: &[super::type_marker::TypeMarkerOccurrence],
-) -> Vec<(usize, usize)> {
-    let mut skips = Vec::new();
-    for line in item.lines.iter().skip(1) {
-        let raw = line.raw;
-        let AuthoredLineClass::Item(authored) = classify_authored_line(raw)
-        else {
-            continue;
-        };
-        let text = authored.body;
-        let leading = text.len() - text.trim_start().len();
-        let trailing = text.len() - text.trim_end().len();
-        if leading + trailing >= text.len() {
-            continue;
-        }
-        let trimmed = (
-            authored.body_start + leading,
-            authored.body_start + text.len() - trailing,
-        );
-        let mut line_markers = occurrences.iter().filter(|occurrence| {
-            occurrence.is_marker()
-                && occurrence.span().start >= raw.start
-                && occurrence.span().end <= raw.end
-        });
-        let single = line_markers.next();
-        if line_markers.next().is_none()
-            && single.is_some_and(|occurrence| {
-                occurrence.span().start == trimmed.0
-                    && occurrence.span().end == trimmed.1
-            })
-        {
-            skips.push((raw.start, raw.end));
-        }
-    }
-    skips
 }
 
 /// Re-slice borrowed global declarations back to the original draft text.
@@ -1540,6 +1502,7 @@ fn attach_type_marker_metadata(
             // with missing text, so the marker needs a task instead of
             // refusing a capture that does not exist yet.
             let needs_task_instead = parsed.body.trim().is_empty()
+                && parsed.pomodoro_close.is_none()
                 && matches!(
                     parsed.mode,
                     EditorMode::Task
@@ -1559,9 +1522,10 @@ fn attach_type_marker_metadata(
                 if !parsed.needs.contains(&Need::Task) {
                     parsed.needs.push(Need::Task);
                 }
-            } else if let Some(subject) =
-                type_marker_subject_for_editor(parsed.mode)
-            {
+            } else if let Some(subject) = type_marker_subject_for_editor(
+                parsed.mode,
+                parsed.pomodoro_close.is_some(),
+            ) {
                 parsed.diagnostics.push(Diagnostic {
                     severity: Severity::Error,
                     code: "type_marker_not_applicable",
@@ -1598,7 +1562,13 @@ fn attach_type_marker_metadata(
 /// keep their own needs and get only the marker span.
 fn type_marker_subject_for_editor(
     mode: EditorMode,
+    has_close_gesture: bool,
 ) -> Option<super::type_marker::TypeMarkerSubject> {
+    if has_close_gesture
+        && matches!(mode, EditorMode::PomodoroTask | EditorMode::PomodoroLink)
+    {
+        return Some(super::type_marker::TypeMarkerSubject::Close);
+    }
     match mode {
         EditorMode::Task | EditorMode::PomodoroTask => None,
         EditorMode::Bullet => {
@@ -1641,10 +1611,54 @@ fn type_marker_subject_for_editor(
     }
 }
 
+/// Global `@@route+id` inheritance can turn a locally parsed new task into
+/// an existing-task sub-bullet. Recheck the final editor subject so it agrees
+/// with execution after the destination is known.
+fn validate_inherited_type_marker(
+    parsed: &mut EditorItemParse,
+    source_item: Option<&CaptureItem<'_>>,
+) {
+    if parsed
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "type_marker_not_applicable")
+    {
+        return;
+    }
+    let Some(source_item) = source_item else {
+        return;
+    };
+    let occurrences =
+        super::type_marker::collect_item_with_clip_control(source_item, true);
+    let markers = occurrences
+        .iter()
+        .filter(|occurrence| occurrence.is_marker())
+        .collect::<Vec<_>>();
+    let [super::type_marker::TypeMarkerOccurrence::Complete(marker)] =
+        markers.as_slice()
+    else {
+        return;
+    };
+    let Some(subject) = type_marker_subject_for_editor(
+        parsed.mode,
+        parsed.pomodoro_close.is_some(),
+    ) else {
+        return;
+    };
+    parsed.diagnostics.push(Diagnostic {
+        severity: Severity::Error,
+        code: "type_marker_not_applicable",
+        message: super::type_marker::type_marker_not_applicable_error(
+            &marker.name,
+            subject,
+        ),
+        range: Some((marker.span.start, marker.span.end)),
+    });
+}
+
 fn parse_editor_item_inner<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
-    marker_only_children: &[(usize, usize)],
 ) -> EditorItemOutcome<'a> {
     if let Some(task_goto) = parse_editor_task_goto_item(item) {
         return task_goto;
@@ -1761,14 +1775,6 @@ fn parse_editor_item_inner<'a>(
     for line in item.lines.iter().skip(1) {
         let line_number = line.line_number;
         let raw = line.raw;
-        // A continuation line holding only a type marker types its item
-        // and contributes no semantic child body.
-        if marker_only_children
-            .iter()
-            .any(|skip| skip.0 == raw.start && skip.1 == raw.end)
-        {
-            continue;
-        }
         let authored = match classify_authored_line(raw) {
             AuthoredLineClass::EmptyOrPlaceholder => continue,
             AuthoredLineClass::Invalid => {

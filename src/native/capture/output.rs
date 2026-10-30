@@ -3710,10 +3710,20 @@ fn format_task_theme_row(
             .unwrap_or_else(|| theme.name.clone());
             // Short source label: `this task`, `from <stem>`,
             // `default type`, or `reading task`.
-            let label = change
-                .inherited
+            let field_is_selected_type = change
+                .previous
                 .as_ref()
-                .map(|suggestion| match suggestion.source {
+                .zip(change.theme.as_ref())
+                .is_some_and(|(previous, selected)| {
+                    previous.key == selected.key
+                });
+            let label = if field_is_selected_type {
+                "this task".to_string()
+            } else {
+                change
+                    .inherited
+                    .as_ref()
+                    .map(|suggestion| match suggestion.source {
                     super::super::pomodoro_themes::suggest::SuggestionSource::Task => {
                         "this task".to_string()
                     }
@@ -3726,8 +3736,9 @@ fn format_task_theme_row(
                     super::super::pomodoro_themes::suggest::SuggestionSource::Default => {
                         "default type".to_string()
                     }
-                })
-                .unwrap_or_else(|| "no default here".to_string());
+                    })
+                    .unwrap_or_else(|| "no default here".to_string())
+            };
             format!("{name} · {label}")
         }
         _ => return None,

@@ -31,6 +31,34 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) local_destination_marker: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CaptureItemParseError {
+    pub(super) code: Option<&'static str>,
+    pub(super) message: String,
+}
+
+impl CaptureItemParseError {
+    fn generic(message: String) -> Self {
+        Self {
+            code: None,
+            message,
+        }
+    }
+
+    fn coded(code: &'static str, message: String) -> Self {
+        Self {
+            code: Some(code),
+            message,
+        }
+    }
+}
+
+impl From<String> for CaptureItemParseError {
+    fn from(message: String) -> Self {
+        Self::generic(message)
+    }
+}
+
 /// Refuse dependency modifiers on Pomodoro operator items (close, start,
 /// adjustment, shift) before any other item parser: they have no
 /// unambiguous single task owner, so the whole batch rolls back instead of
@@ -354,13 +382,18 @@ pub(super) fn parse_capture_item<'a>(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
-) -> Result<ParsedCaptureItemOutcome<'a>, String> {
+) -> Result<ParsedCaptureItemOutcome<'a>, CaptureItemParseError> {
     let occurrences = super::type_marker::collect_item_with_clip_control(
         item,
         options.parse_clip_markers,
     );
     let masked_source = super::type_marker::masked_source(item, &occurrences);
-    let masked_item = super::type_marker::masked_item(item, &masked_source);
+    let mut masked_item = super::type_marker::masked_item(item, &masked_source);
+    let marker_only =
+        super::type_marker::marker_only_child_lines(item, &occurrences);
+    masked_item
+        .lines
+        .retain(|line| !marker_only.contains(&(line.raw.start, line.raw.end)));
 
     if let Some(parent) = masked_item.lines.first()
         && normalize_task_text(parent.raw.text).is_empty()
@@ -386,7 +419,7 @@ pub(super) fn parse_capture_item<'a>(
             // Keep the established parser's diagnostics for malformed
             // underlying forms. Marker-only items are handled above so they
             // never collapse to the generic missing-text copy.
-            return Err(error);
+            return Err(CaptureItemParseError::generic(error));
         }
     };
 
@@ -395,7 +428,10 @@ pub(super) fn parse_capture_item<'a>(
         .filter(|occurrence| occurrence.is_marker())
         .collect::<Vec<_>>();
     if markers.len() > 1 {
-        return Err(duplicate_marker_error("type marker (t:<type>)"));
+        return Err(CaptureItemParseError::coded(
+            "duplicate_capture_marker",
+            duplicate_marker_error("type marker (t:<type>)"),
+        ));
     }
     let Some(occurrence) = markers.first() else {
         let declarations =
@@ -416,10 +452,16 @@ pub(super) fn parse_capture_item<'a>(
             marker.clone()
         }
         super::type_marker::TypeMarkerOccurrence::Incomplete { .. } => {
-            return Err(super::type_marker::needs_task_error(None));
+            return Err(CaptureItemParseError::coded(
+                "type_marker_needs_task",
+                super::type_marker::needs_task_error(None),
+            ));
         }
         super::type_marker::TypeMarkerOccurrence::Invalid { raw, .. } => {
-            return Err(super::type_marker::invalid_marker_error(raw));
+            return Err(CaptureItemParseError::coded(
+                "invalid_type_marker",
+                super::type_marker::invalid_marker_error(raw),
+            ));
         }
         super::type_marker::TypeMarkerOccurrence::Escaped { .. } => {
             unreachable!("escaped occurrences are excluded above")
@@ -428,12 +470,18 @@ pub(super) fn parse_capture_item<'a>(
     if outcome.parsed.body.trim().is_empty()
         && super::type_marker::is_new_task(&outcome.parsed)
     {
-        return Err(super::type_marker::needs_task_error(Some(&marker.name)));
+        return Err(CaptureItemParseError::coded(
+            "type_marker_needs_task",
+            super::type_marker::needs_task_error(Some(&marker.name)),
+        ));
     }
     if !super::type_marker::is_new_task(&outcome.parsed) {
-        return Err(type_marker_not_applicable_error(
-            &marker.name,
-            &outcome.parsed.kind,
+        return Err(CaptureItemParseError::coded(
+            "type_marker_not_applicable",
+            type_marker_not_applicable_error(
+                &marker.name,
+                &outcome.parsed.kind,
+            ),
         ));
     }
     outcome.parsed.type_marker = Some(marker);
@@ -474,25 +522,37 @@ fn remap_type_marker_declarations<'a>(
 
 fn type_marker_only_error(
     occurrences: &[super::type_marker::TypeMarkerOccurrence],
-) -> String {
+) -> CaptureItemParseError {
     let markers = occurrences
         .iter()
         .filter(|occurrence| occurrence.is_marker())
         .collect::<Vec<_>>();
     if markers.len() > 1 {
-        return duplicate_marker_error("type marker (t:<type>)");
+        return CaptureItemParseError::coded(
+            "duplicate_capture_marker",
+            duplicate_marker_error("type marker (t:<type>)"),
+        );
     }
     match markers.first().copied() {
         Some(super::type_marker::TypeMarkerOccurrence::Complete(marker)) => {
-            super::type_marker::needs_task_error(Some(&marker.name))
+            CaptureItemParseError::coded(
+                "type_marker_needs_task",
+                super::type_marker::needs_task_error(Some(&marker.name)),
+            )
         }
         Some(super::type_marker::TypeMarkerOccurrence::Incomplete {
             ..
-        }) => super::type_marker::needs_task_error(None),
+        }) => CaptureItemParseError::coded(
+            "type_marker_needs_task",
+            super::type_marker::needs_task_error(None),
+        ),
         Some(super::type_marker::TypeMarkerOccurrence::Invalid {
             raw, ..
-        }) => super::type_marker::invalid_marker_error(raw),
-        _ => missing_text_error(),
+        }) => CaptureItemParseError::coded(
+            "invalid_type_marker",
+            super::type_marker::invalid_marker_error(raw),
+        ),
+        _ => CaptureItemParseError::generic(missing_text_error()),
     }
 }
 

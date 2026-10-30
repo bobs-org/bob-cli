@@ -245,6 +245,14 @@ fn parse_candidate(
                 },
                 raw_end,
             )
+        } else if lex.decoded.contains('+') {
+            (
+                TypeMarkerOccurrence::Invalid {
+                    span: start..raw_end,
+                    raw: line[start..raw_end].to_string(),
+                },
+                raw_end,
+            )
         } else if marker_end != raw_end {
             (
                 TypeMarkerOccurrence::Invalid {
@@ -562,6 +570,45 @@ pub(crate) fn masked_item<'a>(
     }
 }
 
+/// Find continuation rows whose only authored content is one type marker.
+/// They remain in the original item for ranges and ownership, but parsers
+/// omit them from semantic child lists and whole-item claim counts.
+pub(crate) fn marker_only_child_lines(
+    item: &CaptureItem<'_>,
+    occurrences: &[TypeMarkerOccurrence],
+) -> Vec<(usize, usize)> {
+    let mut skips = Vec::new();
+    for line in item.lines.iter().skip(1) {
+        let raw = line.raw;
+        let (body_start, body) =
+            super::draft::strip_bullet_marker_at(raw.text, 0)
+                .or_else(|| super::draft::strip_bullet_marker_at(raw.text, 2))
+                .map(|(start, body)| (raw.start + start, body))
+                .unwrap_or((raw.start, raw.text));
+        let leading = body.len() - body.trim_start().len();
+        let trailing = body.len() - body.trim_end().len();
+        if leading + trailing >= body.len() {
+            continue;
+        }
+        let span = (body_start + leading, body_start + body.len() - trailing);
+        let mut markers = occurrences.iter().filter(|occurrence| {
+            occurrence.is_marker()
+                && occurrence.span().start >= raw.start
+                && occurrence.span().end <= raw.end
+        });
+        let single = markers.next();
+        if markers.next().is_none()
+            && single.is_some_and(|occurrence| {
+                occurrence.span().start == span.0
+                    && occurrence.span().end == span.1
+            })
+        {
+            skips.push((raw.start, raw.end));
+        }
+    }
+    skips
+}
+
 struct ItemLineView;
 
 impl ItemLineView {
@@ -683,16 +730,19 @@ impl TypeMarkerSubject {
     pub(crate) fn for_kind(kind: &super::model::CaptureKind) -> Self {
         use super::model::CaptureKind;
         match kind {
-            CaptureKind::Task
-            | CaptureKind::TaskWithBlockId { .. }
-            | CaptureKind::Pomodoro { .. } => Self::NewTask,
+            CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
+                Self::NewTask
+            }
+            CaptureKind::Pomodoro { close: Some(_), .. } => Self::Close,
+            CaptureKind::Pomodoro { close: None, .. } => Self::NewTask,
             CaptureKind::Bullet { .. } => Self::Bullet,
             CaptureKind::SubBullet { .. } => Self::SubBullet,
             CaptureKind::ProjectNote { .. } => Self::ProjectNote,
             CaptureKind::Ref(_) => Self::Reference,
             CaptureKind::PomodoroNote => Self::PomodoroNote,
             CaptureKind::TaskComplete { .. } => Self::TaskComplete,
-            CaptureKind::PomodoroLink { .. } => Self::ExistingLink,
+            CaptureKind::PomodoroLink { close: Some(_), .. } => Self::Close,
+            CaptureKind::PomodoroLink { close: None, .. } => Self::ExistingLink,
             CaptureKind::TaskToggle { .. } => Self::TaskToggle,
             CaptureKind::PomodoroClose { .. } => Self::Close,
             CaptureKind::PomodoroStart { .. } => Self::Start,
@@ -761,14 +811,27 @@ pub(crate) fn type_marker_not_applicable_error(
     format!("`{marker}` types a task, but this capture {action}; {remedy}")
 }
 
-/// Needed by the temporary planner guard to keep metadata live across the
-/// language phase boundary.
 /// Classify whether a marker's parsed item is a new task subject.
 pub(crate) fn is_new_task(parsed: &ParsedCaptureText) -> bool {
     matches!(
         parsed.kind,
         super::model::CaptureKind::Task
             | super::model::CaptureKind::TaskWithBlockId { .. }
-            | super::model::CaptureKind::Pomodoro { .. }
+            | super::model::CaptureKind::Pomodoro { close: None, .. }
     ) && !parsed.body.trim().is_empty()
+}
+
+/// Return the shared teaching error when a type marker no longer has a new
+/// task as its final subject. Global and forced destinations can change an
+/// initially ordinary task into a child after the item parser runs.
+pub(crate) fn not_applicable_error(
+    parsed: &ParsedCaptureText,
+) -> Option<String> {
+    let marker = parsed.type_marker.as_ref()?;
+    (!is_new_task(parsed)).then(|| {
+        type_marker_not_applicable_error(
+            &marker.name,
+            TypeMarkerSubject::for_kind(&parsed.kind),
+        )
+    })
 }

@@ -671,7 +671,8 @@ pub(crate) fn parse_capture_text_with_clip_control(
         .map(|item| {
             parse_capture_item(item, forced_route, forced_section, &options)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.message)?;
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
         declarations.extend(outcome.declarations.iter().copied());
@@ -706,7 +707,8 @@ pub(crate) fn parse_capture_text_with_clip_control(
                 forced_route,
                 forced_section,
                 &global_options,
-            )?;
+            )
+            .map_err(|error| error.message)?;
         } else if outcome.parsed.route.is_none() {
             outcome.parsed.route = Some(global.route.clone());
         }
@@ -717,6 +719,11 @@ pub(crate) fn parse_capture_text_with_clip_control(
         let inheritable = outcome.parsed.route.is_none()
             && matches!(outcome.parsed.kind, CaptureKind::Task);
         inherit_global_destination(&mut outcome.parsed, global);
+        if let Some(error) =
+            super::type_marker::not_applicable_error(&outcome.parsed)
+        {
+            return Err(error);
+        }
         finish_item_dependency_target(&mut outcome.parsed, inheritable)?;
     } else {
         finish_item_dependency_target(&mut outcome.parsed, false)?;
@@ -745,6 +752,15 @@ impl TemplateCodedError {
         Self {
             code: Some(code),
             message,
+        }
+    }
+}
+
+impl From<CaptureItemParseError> for TemplateCodedError {
+    fn from(error: CaptureItemParseError) -> Self {
+        Self {
+            code: error.code,
+            message: error.message,
         }
     }
 }
@@ -805,7 +821,7 @@ pub(crate) fn parse_capture_draft_with_clip_control_coded(
                 forced_section,
                 options,
             )
-            .map_err(TemplateCodedError::generic);
+            .map_err(TemplateCodedError::from);
         };
         return parse_template_expansion(
             expansion,
@@ -827,7 +843,7 @@ pub(crate) fn parse_capture_draft_with_clip_control_coded(
         );
     }
     parse_ordinary_draft(raw_text, forced_route, forced_section, options)
-        .map_err(TemplateCodedError::generic)
+        .map_err(TemplateCodedError::from)
 }
 
 fn parse_ordinary_draft(
@@ -835,7 +851,7 @@ fn parse_ordinary_draft(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
-) -> Result<ParsedCaptureDraft, String> {
+) -> Result<ParsedCaptureDraft, CaptureItemParseError> {
     let draft = split_capture_draft_with_clip_control(
         raw_text,
         options.parse_clip_markers,
@@ -846,7 +862,8 @@ fn parse_ordinary_draft(
             missing_capture_item_error()
         } else {
             missing_text_error()
-        });
+        }
+        .into());
     }
     let options = options.with_global(!draft.declarations.is_empty());
 
@@ -855,12 +872,14 @@ fn parse_ordinary_draft(
         .iter()
         .map(|item| {
             parse_capture_item(item, forced_route, forced_section, &options)
-                .map_err(|message| {
-                    format!(
-                        "capture item {} starting on line {}: {message}",
+                .map_err(|error| CaptureItemParseError {
+                    code: error.code,
+                    message: format!(
+                        "capture item {} starting on line {}: {}",
                         item.index + 1,
-                        item.line_start
-                    )
+                        item.line_start,
+                        error.message
+                    ),
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -890,12 +909,16 @@ fn parse_ordinary_draft(
                         forced_section,
                         &global_options,
                     )
-                    .map_err(|message| {
-                        format!(
-                            "capture item {} starting on line {}: {message}",
-                            item.index + 1,
-                            item.line_start
-                        )
+                    .map_err(|error| {
+                        CaptureItemParseError {
+                            code: error.code,
+                            message: format!(
+                                "capture item {} starting on line {}: {}",
+                                item.index + 1,
+                                item.line_start,
+                                error.message
+                            ),
+                        }
                     })?;
                     *outcome = re;
                 } else if outcome.parsed.route.is_none() {
@@ -914,6 +937,18 @@ fn parse_ordinary_draft(
             let inheritable = outcome.parsed.route.is_none()
                 && matches!(outcome.parsed.kind, CaptureKind::Task);
             inherit_global_destination(&mut outcome.parsed, global);
+            if let Some(error) =
+                super::type_marker::not_applicable_error(&outcome.parsed)
+            {
+                return Err(CaptureItemParseError {
+                    code: Some("type_marker_not_applicable"),
+                    message: format!(
+                        "capture item {} starting on line {}: {error}",
+                        outcome.index + 1,
+                        outcome.line_start
+                    ),
+                });
+            }
             finish_item_dependency_target(&mut outcome.parsed, inheritable)
                 .map_err(|message| {
                     format!(
@@ -1045,12 +1080,9 @@ fn parse_single_template_instance(
         forced_section,
         instance_options,
     )
-    .map_err(|message| {
-        TemplateCodedError::generic(template_row_error(
-            instance.row,
-            instance.line,
-            message,
-        ))
+    .map_err(|error| TemplateCodedError {
+        code: error.code,
+        message: template_row_error(instance.row, instance.line, error.message),
     })?;
 
     if outcome.parsed.clip.is_some() {

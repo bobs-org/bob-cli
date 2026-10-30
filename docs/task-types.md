@@ -645,7 +645,9 @@ never write this field. A batch re-evaluates suggestions against its
 staged note snapshot, and the task field is committed with that
 capture's task and ledger edits.
 
-Capture JSON omits `task_theme` unless the field changes. When present
+Capture JSON omits `task_theme` on an unchanged write unless the capture
+has an explicit `t:` marker. A marker always reports the result, including
+`kept`. When present
 it is `{action, theme, previous, inherited}`: `action` is `set`,
 `cleared`, or `kept` (a marker always reports, even when nothing is
 written), `theme` is the selected `ThemeRef` (null on clear),
@@ -802,9 +804,10 @@ entry the shared D7 planner will create on a write. An explicit `-p` or
 type field.
 
 The capture command and `bob ref today` consume the shared `preselect`
-vectors. `task_theme: {action: "set" | "cleared", theme, previous,
-inherited}` remains the additive capture-write result, omitted on no
-change.
+vectors. `task_theme: {action, theme, previous, inherited}` remains the
+additive capture-write result: ordinary writes omit it when the field does
+not change, while a typed capture always reports `set`, `cleared`, or
+`kept`.
 
 ### Dataview caveat
 

@@ -141,13 +141,10 @@ impl CaptureTaskThemeContext {
     pub(super) fn apply_type_marker(
         &mut self,
         planner: &mut CaptureBatchPlanner,
-        _target: &Path,
-        route: &str,
+        target: &Path,
         task_line: &str,
         marker_name: &str,
         marker_literal: bool,
-        pomodoro_destination: Option<&str>,
-        pomodoro_selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<AppliedTaskTheme, CaptureError> {
         self.refresh_residence_snapshot(planner);
@@ -210,39 +207,9 @@ impl CaptureTaskThemeContext {
                     ),
             }));
         }
-        // Named-Pomodoro agreement: D is container → accept X; X is a
-        // component of D → accept X as explicit pick; otherwise refuse
-        // with type_marker_conflict before commit.
-        if let Some(destination) = pomodoro_destination {
-            let sources = catalog.theme_sources();
-            let components =
-                routing::type_components(Some(destination), &sources);
-            let is_container = components.iter().all(|item| !item.is_type);
-            if !is_container {
-                let x_norm = normalize_component(&x_key);
-                let matches_component = components
-                    .iter()
-                    .filter(|item| item.is_type)
-                    .any(|item| item.key == x_norm);
-                if !matches_component {
-                    // Extract display name for D (first component or raw).
-                    let d_display = split_components(destination)
-                        .first()
-                        .and_then(|component| canonical_theme_name(component))
-                        .unwrap_or_else(|| destination.trim().to_string());
-                    return Err(CaptureError::usage_code(
-                        format!(
-                            "`t:{marker_name}` disagrees with Pomodoro {d_display}: drop `#{d_display}` to link under {x_name}, or drop `t:{marker_name}` to type the task {d_display}"
-                        ),
-                        "type_marker_conflict",
-                    ));
-                }
-            }
-        }
         // Compute I from the staged line in its destination, skipping its
         // own type field (the line has no field yet for a new task).
-        let residence_path = relative_target(Some(route));
-        let residence = Path::new(&residence_path);
+        let residence = target.strip_prefix(&self.root).unwrap_or(target);
         let suggested = suggest::suggest_for_task(
             &mut self.resolver,
             catalog,
@@ -302,13 +269,68 @@ impl CaptureTaskThemeContext {
             previous,
             inherited,
         };
-        // Suppress unused warning for pomodoro_selector (reserved for
-        // future explicit-pick tracking; agreement uses destination).
-        let _ = pomodoro_selector;
         Ok(AppliedTaskTheme {
             task_line: edited_line,
             summary,
         })
+    }
+
+    /// Check a marker against the destination selected by the normal ledger
+    /// resolver. Call after selection has been staged so prefix selectors are
+    /// compared with the complete resolved name.
+    pub(super) fn validate_type_marker_agreement(
+        &self,
+        marker_name: &str,
+        marker_literal: bool,
+        destination: Option<&str>,
+    ) -> Result<(), CaptureError> {
+        let fallback_sources = config::load_theme_sources();
+        let sources = self
+            .catalog
+            .as_ref()
+            .map(Catalog::theme_sources)
+            .unwrap_or(fallback_sources);
+        let configured = sources
+            .themes
+            .as_ref()
+            .map(|themes| themes.entries.as_slice());
+        let resolved = resolve_exact_type_name(
+            configured,
+            &|key| {
+                self.catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.get(key))
+                    .map(|record| record.name.clone())
+            },
+            marker_name,
+            marker_literal,
+        );
+        let x_key = resolved
+            .as_ref()
+            .map(|found| found.key.clone())
+            .unwrap_or_else(|| {
+                normalize_component(&unmatched_type_display(marker_name))
+            });
+        let x_name = resolved
+            .map(|found| found.name)
+            .unwrap_or_else(|| unmatched_type_display(marker_name));
+        let components = routing::type_components(destination, &sources);
+        let is_container = components.is_empty()
+            || components.iter().all(|component| !component.is_type);
+        if is_container
+            || components
+                .iter()
+                .any(|component| component.is_type && component.key == x_key)
+        {
+            return Ok(());
+        }
+        let destination_name = destination.unwrap_or("(unnamed)").trim();
+        Err(CaptureError::usage_code(
+            format!(
+                "`t:{marker_name}` disagrees with Pomodoro {destination_name}: drop `#{destination_name}` to link under {x_name}, or drop `t:{marker_name}` to type the task {destination_name}"
+            ),
+            "type_marker_conflict",
+        ))
     }
 
     pub(super) fn apply_existing_task(
