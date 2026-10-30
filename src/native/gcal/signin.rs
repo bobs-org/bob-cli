@@ -329,7 +329,7 @@ fn paste_flow(
                     .with_hint("rerun `bob gcal login` for a fresh link"));
                 }
                 auto_retries += 1;
-                ui.note(
+                ui.note_interactive(
                     "that sign-in link is out of date; starting a fresh one",
                 );
             }
@@ -360,11 +360,11 @@ fn paste_prompt_loop(
             RedirectParse::Quit => return Err(cancelled()),
             RedirectParse::Empty => {}
             RedirectParse::Denied => {
-                ui.note("Google denied access.");
+                ui.note_interactive("Google denied access.");
                 return retry_or_quit(ui, cancelled_or_denied(true));
             }
             RedirectParse::Error(message) => {
-                ui.note(&message);
+                ui.note_interactive(&message);
                 if message.contains("older sign-in") {
                     // reprint happens by leaving the current link above
                 }
@@ -407,14 +407,18 @@ fn cancelled_or_denied(_from_denied: bool) -> GcalError {
 }
 
 fn print_paste_instructions(ui: &LoginUi, account: &str) {
-    ui.note(&format!("1. Open the link, choose {account}, and allow"));
-    ui.note("   \"See and download any calendar you can access\".");
-    ui.note("2. \"Google hasn't verified this app\"? It's your own client:");
-    ui.note("   Advanced → Go to … (unsafe).");
-    ui.note(
+    ui.note_interactive(&format!(
+        "1. Open the link, choose {account}, and allow"
+    ));
+    ui.note_interactive("   \"See and download any calendar you can access\".");
+    ui.note_interactive(
+        "2. \"Google hasn't verified this app\"? It's your own client:",
+    );
+    ui.note_interactive("   Advanced → Go to … (unsafe).");
+    ui.note_interactive(
         "3. You land on a 127.0.0.1 page that can't load. That's expected:",
     );
-    ui.note("   copy that page's whole address.");
+    ui.note_interactive("   copy that page's whole address.");
 }
 
 fn print_paste_help(ui: &LoginUi, project: Option<&str>) {
@@ -424,22 +428,28 @@ fn print_paste_help(ui: &LoginUi, project: Option<&str>) {
         ),
         None => "https://console.cloud.google.com/auth/audience".to_string(),
     };
-    ui.note(
+    ui.note_interactive(
         "\"Access blocked: … has not completed the Google verification \
          process\":",
     );
-    ui.note("  the consent screen is in Testing. Publish it, or add yourself");
-    ui.note(&format!("  as a test user, on {audience}"));
-    ui.note(
+    ui.note_interactive(
+        "  the consent screen is in Testing. Publish it, or add yourself",
+    );
+    ui.note_interactive(&format!("  as a test user, on {audience}"));
+    ui.note_interactive(
         "\"Google hasn't verified this app\": expected for a personal client.",
     );
-    ui.note("  Use Advanced → Go to … (unsafe).");
-    ui.note(
+    ui.note_interactive("  Use Advanced → Go to … (unsafe).");
+    ui.note_interactive(
         "\"Error 400: redirect_uri_mismatch\": the client isn't a Desktop app.",
     );
-    ui.note("  Rerun with `bob gcal login -c` and a Desktop app JSON.");
-    ui.note("\"This site can't be reached\" after Allow: expected. Copy that");
-    ui.note("  page's address.");
+    ui.note_interactive(
+        "  Rerun with `bob gcal login -c` and a Desktop app JSON.",
+    );
+    ui.note_interactive(
+        "\"This site can't be reached\" after Allow: expected. Copy that",
+    );
+    ui.note_interactive("  page's address.");
 }
 
 fn browser_flow(
@@ -473,8 +483,10 @@ fn browser_flow(
             "Sign in",
             &format!("{account} · opening your browser…"),
         );
-        ui.note("Allow \"See and download any calendar you can access\".");
-        ui.note("Browser didn't open? Use this link:");
+        ui.note_interactive(
+            "Allow \"See and download any calendar you can access\".",
+        );
+        ui.note_interactive("Browser didn't open? Use this link:");
         ui.link(&auth_url);
         let opener = spawn_opener(&auth_url);
         let wait = ui.wait("waiting for Google · Ctrl-C to cancel");
@@ -494,7 +506,7 @@ fn browser_flow(
             }
             Err(error) if is_auto_retry(&error) && auto_retries < 1 => {
                 auto_retries += 1;
-                ui.note(
+                ui.note_interactive(
                     "that sign-in link is out of date; starting a fresh one",
                 );
             }
@@ -699,7 +711,7 @@ fn browser_denied(ui: &LoginUi) -> Result<(), GcalError> {
     if !login_ui::is_tty() {
         return Err(consent_denied());
     }
-    ui.note("Google denied access.");
+    ui.note_interactive("Google denied access.");
     match ui.prompt("Press Enter to try again, or q to stop › ")? {
         None => Err(cancelled()),
         Some(line) => {

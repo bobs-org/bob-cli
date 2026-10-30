@@ -73,11 +73,26 @@ impl LoginUi {
 
     /// A continuation line, indented to the content column.
     pub(crate) fn note(&self, text: &str) {
+        if self.json {
+            return;
+        }
+        self.note_line(text);
+    }
+
+    /// A line needed to complete an interactive ceremony; shown in JSON mode.
+    pub(crate) fn note_interactive(&self, text: &str) {
+        self.note_line(text);
+    }
+
+    fn note_line(&self, text: &str) {
         eprintln!("{:content$}{text}", "", content = CONTENT_COL);
     }
 
     /// A dim continuation line.
     pub(crate) fn dim_note(&self, text: &str) {
+        if self.json {
+            return;
+        }
         eprintln!(
             "{:content$}{}",
             "",
@@ -150,6 +165,39 @@ impl LoginUi {
         eprintln!(
             "  Undo  bob gcal logout      removes only Bob's Calendar grant"
         );
+    }
+
+    pub(crate) fn writer_note(&self, writer: &str) {
+        if self.json {
+            return;
+        }
+        eprintln!(
+            "  Note  sync runs on {writer} (gcal.writer); run `bob gcal login` there too."
+        );
+    }
+
+    pub(crate) fn account_tip(&self, account: &str) {
+        if self.json {
+            return;
+        }
+        eprintln!();
+        eprintln!("  Tip   add this to ~/.config/bob/config.yml:");
+        eprintln!("        gcal:");
+        eprintln!("          account: {account}");
+    }
+
+    pub(crate) fn testing_tip(&self) {
+        if self.json {
+            return;
+        }
+        eprintln!(
+            "  Tip   if sign-in expires again after about 7 days, publish the consent screen at"
+        );
+        eprintln!("        https://console.cloud.google.com/auth/audience");
+    }
+
+    pub(crate) fn is_tty(&self) -> bool {
+        is_tty()
     }
 }
 

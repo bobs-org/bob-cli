@@ -220,11 +220,69 @@ def scenario_defaults(name: str) -> dict:
             "calendars": {
                 "stderr": (
                     "accessNotConfigured: Google Calendar API has not "
-                    "been used in project"
+                    "been used in project 123456789012"
                 ),
                 "code": 1,
             }
         }
+    elif name == "api_disabled_once":
+        pass
+    elif name == "stale_grant":
+        pass
+    elif name == "two_default_accounts":
+        defaults["accounts"] = [
+            connected_account(),
+            {
+                "email": "work@example.com",
+                "client": "default",
+                "services": ["gmail"],
+                "scopes": [],
+            },
+            {
+                "email": "other@example.com",
+                "client": "default",
+                "services": ["gmail"],
+                "scopes": [],
+            },
+        ]
+    elif name == "picker_accounts":
+        defaults["accounts"] = [
+            {
+                "email": EMAIL,
+                "client": "default",
+                "services": ["gmail"],
+                "scopes": [],
+            },
+            {
+                "email": "work@example.com",
+                "client": "default",
+                "services": ["gmail"],
+                "scopes": [],
+            },
+        ]
+    elif name == "two_bob_accounts":
+        defaults["accounts"] = [
+            connected_account(),
+            {
+                "email": "work@example.com",
+                "client": CLIENT,
+                "services": ["gmail"],
+                "scopes": [],
+            },
+        ]
+    elif name == "stored_project":
+        Path(bob_path).write_text(
+            json.dumps(
+                {
+                    "installed": {
+                        "client_id": "123456789012-abc.apps.googleusercontent.com",
+                        "client_secret": "fake-secret",
+                        "project_id": "doctor-project",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
     elif name == "invalid_grant":
         defaults["fail"] = {
             "calendars": {
@@ -341,6 +399,19 @@ op = op_name()
 fail_spec = (state.get("fail") or {}).get(op)
 if fail_spec:
     fail(fail_spec.get("stderr") or "gog failed", int(fail_spec.get("code") or 1))
+
+if scenario == "api_disabled_once" and op == "calendars":
+    if not state.get("api_disabled_once_seen"):
+        state["api_disabled_once_seen"] = True
+        save_state(state)
+        fail(
+            "accessNotConfigured: Google Calendar API has not been used in project 123456789012",
+            1,
+        )
+
+if scenario == "stale_grant" and op == "calendars":
+    if not state.get("grant_repaired"):
+        fail("invalid_grant: Token has been expired or revoked", 1)
 
 if op == "version":
     dump(
@@ -471,6 +542,8 @@ if op == "auth_add":
         ]
         accounts.append(connected_account(email))
         state["accounts"] = accounts
+        if scenario == "stale_grant":
+            state["grant_repaired"] = True
         save_state(state)
         dump({"ok": True})
         raise SystemExit(0)

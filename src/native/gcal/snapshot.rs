@@ -11,7 +11,7 @@ use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
 use serde_json::json;
 
 use super::{
-    calendars::resolve_account,
+    account::resolve_command,
     classify::{self, DayWindow, Inclusion},
     config::GcalConfig,
     gog::Gog,
@@ -57,7 +57,7 @@ pub(crate) fn fetch_day(
     let daily_rel = daily_relative_path(day);
     let gog = Gog::resolve(config.timeout())?;
     let _ = gog.require_version()?;
-    let account = resolve_account(&gog, config)?;
+    let account = resolve_command(&gog, config)?;
     let calendars = gog.calendars(&account)?;
     // Series roots are vault-local memory of your edits. An unreadable
     // journal degrades to no learned roots here; sync still fails loudly

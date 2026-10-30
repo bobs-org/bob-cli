@@ -9,6 +9,8 @@ use super::super::{
     pomodoro_themes, style::Styler, vault_sync,
 };
 use super::{
+    account,
+    client::peek_project,
     config::GcalConfig,
     gog::{Gog, CLIENT},
     journal,
@@ -101,85 +103,80 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     };
 
-    let mut account = config.account().map(str::to_string);
+    let mut selected_account = None;
     match &gog {
         Some(gog) => {
             match gog.credentials_list() {
-                Ok(clients) if clients.iter().any(|c| c.client == CLIENT) => {
-                    checks.push(Check {
-                        id: "client",
-                        status: CheckStatus::Ok,
-                        summary: CLIENT.to_string(),
-                        fix: None,
-                    });
-                }
-                Ok(_) => {
-                    checks.push(Check {
-                        id: "client",
-                        status: CheckStatus::Fail,
-                        summary: "no bob-gcal OAuth client is stored"
-                            .to_string(),
-                        fix: Some(
-                            "run `bob gcal login -c PATH` with a Desktop-app \
-                             client JSON"
+                Ok(clients) => {
+                    if let Some(client) =
+                        clients.iter().find(|c| c.client == CLIENT)
+                    {
+                        let project = client.path.as_deref().and_then(|path| {
+                            std::fs::read(path)
+                                .ok()
+                                .and_then(|bytes| peek_project(&bytes))
+                        });
+                        checks.push(Check {
+                            id: "client",
+                            status: CheckStatus::Ok,
+                            summary: project.map_or_else(
+                                || CLIENT.to_string(),
+                                |project| {
+                                    format!("{CLIENT} · project {project}")
+                                },
+                            ),
+                            fix: None,
+                        });
+                    } else {
+                        checks.push(Check {
+                            id: "client",
+                            status: CheckStatus::Fail,
+                            summary: "no bob-gcal OAuth client is stored"
                                 .to_string(),
-                        ),
-                    });
+                            fix: Some("run `bob gcal login`".to_string()),
+                        });
+                    }
                 }
                 Err(error) => checks.push(fail_from(&error, "client")),
             }
 
-            if account.is_none()
-                && let Ok(accounts) = gog.accounts(None)
-            {
-                let emails: Vec<_> = accounts
-                    .iter()
-                    .map(|entry| entry.email.clone())
-                    .filter(|email| !email.is_empty())
-                    .collect();
-                if emails.len() == 1 {
-                    account = emails.into_iter().next();
-                }
-            }
-
-            match account.as_deref() {
-                Some(email) => match gog.accounts(Some(CLIENT)) {
-                    Ok(entries) => {
-                        let connected = entries.iter().any(|entry| {
-                            entry.email == email
-                                && entry.has_calendar_readonly()
-                        });
-                        if connected {
-                            checks.push(Check {
-                                id: "account",
-                                status: CheckStatus::Ok,
-                                summary: format!(
-                                    "{email} · read-only Calendar access"
-                                ),
-                                fix: None,
+            match account::resolve_command(gog, &config) {
+                Ok(email) => {
+                    selected_account = Some(email.clone());
+                    match gog.accounts(Some(CLIENT)) {
+                        Ok(entries) => {
+                            let connected = entries.iter().any(|entry| {
+                                entry.email.eq_ignore_ascii_case(&email)
+                                    && entry.has_calendar_readonly()
                             });
-                        } else {
-                            checks.push(Check {
-                                id: "account",
-                                status: CheckStatus::Fail,
-                                summary: format!(
-                                    "{email} · no bob-gcal Calendar grant"
-                                ),
-                                fix: Some("run `bob gcal login`".to_string()),
-                            });
+                            if connected {
+                                checks.push(Check {
+                                    id: "account",
+                                    status: CheckStatus::Ok,
+                                    summary: format!(
+                                        "{email} · read-only Calendar access"
+                                    ),
+                                    fix: None,
+                                });
+                            } else {
+                                checks.push(Check {
+                                    id: "account",
+                                    status: CheckStatus::Fail,
+                                    summary: format!(
+                                        "{email} · no bob-gcal Calendar grant"
+                                    ),
+                                    fix: Some(
+                                        "run `bob gcal login`".to_string(),
+                                    ),
+                                });
+                            }
                         }
+                        Err(error) => checks.push(fail_from(&error, "account")),
                     }
-                    Err(error) => checks.push(fail_from(&error, "account")),
-                },
-                None => checks.push(Check {
-                    id: "account",
-                    status: CheckStatus::Fail,
-                    summary: "no Google account is configured".to_string(),
-                    fix: Some(
-                        "set gcal.account or pass `bob gcal login -a EMAIL`"
-                            .to_string(),
-                    ),
-                }),
+                }
+                Err(error) => {
+                    checks.push(fail_from(&error, "account"));
+                }
             }
         }
         None => {
@@ -189,7 +186,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     }
 
-    let calendars = match (gog.as_ref(), account.as_deref()) {
+    let calendars = match (gog.as_ref(), selected_account.as_deref()) {
         (Some(gog), Some(email)) => match gog.calendars(email) {
             Ok(calendars) => {
                 checks.push(Check {
@@ -201,7 +198,14 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
                 Some(calendars)
             }
             Err(error) => {
-                checks.push(fail_from(&error, "token"));
+                let mut check = fail_from(&error, "token");
+                if error.kind() == "invalid_grant" {
+                    check.fix = Some(
+                        "run `bob gcal login` (it signs in again automatically)"
+                            .to_string(),
+                    );
+                }
+                checks.push(check);
                 checks.push(skipped("calendars", "token did not refresh"));
                 None
             }

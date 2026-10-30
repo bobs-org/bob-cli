@@ -3,6 +3,7 @@
 //! The read-only `list` command previews the event snapshot and its roots;
 //! `sync` writes the rows above today's Pomodoros, idempotently.
 
+mod account;
 mod calendars;
 mod classify;
 pub(crate) mod cli;

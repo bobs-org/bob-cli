@@ -43,6 +43,9 @@ fn login_existing_client_is_already_connected() {
     assert_eq!(doc["ok"], true);
     assert_eq!(doc["already_connected"], true);
     assert_eq!(doc["sign_in"], "already_connected");
+    assert_eq!(doc["client_source"], "stored");
+    assert_eq!(doc["client_project"], Value::Null);
+    assert_eq!(doc["reconnected"], false);
     assert_eq!(doc["account"], ACCOUNT);
     assert_eq!(doc["client"], "bob-gcal");
     assert!(doc["calendars"].as_u64().unwrap() >= 1);
@@ -303,7 +306,7 @@ fn login_keyring_failure_is_classified() {
 }
 
 #[test]
-fn login_prints_the_four_step_checklist_without_a_client() {
+fn login_prints_the_guided_checklist_without_a_client() {
     let env = GcalEnv::new("bob-cli-gcal-login-checklist");
     let fake = FakeGog::new(&env, "gog").scenario("no_client");
     let output = run_gcal(&env, &fake, &["login"]);
@@ -314,11 +317,11 @@ fn login_prints_the_four_step_checklist_without_a_client() {
         "expected no_client message:\n{err}"
     );
     assert!(
-        err.contains("Enable the Calendar API"),
+        err.contains("Turn on the Calendar API"),
         "expected checklist step 1:\n{err}"
     );
     assert!(
-        err.contains("In production"),
+        err.contains("External") && err.contains("publish it"),
         "expected checklist step 2:\n{err}"
     );
     assert!(
@@ -326,8 +329,156 @@ fn login_prints_the_four_step_checklist_without_a_client() {
         "expected checklist step 3:\n{err}"
     );
     assert!(
-        err.contains("bob gcal login -c"),
-        "expected checklist step 4:\n{err}"
+        err.contains("bob gcal login")
+            && err.contains("console.cloud.google.com/auth/clients/create"),
+        "expected guided setup links:\n{err}"
+    );
+}
+
+#[test]
+fn login_self_heals_a_stale_saved_grant() {
+    let env = GcalEnv::new("bob-cli-gcal-login-self-heal");
+    let fake = FakeGog::new(&env, "gog").scenario("stale_grant");
+    let output = run_gcal_paste(&env, &fake, &["login", "-f", "json"]);
+    assert_success(&output, "login self-heal");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["reconnected"], true);
+    assert_eq!(doc["sign_in"], "paste");
+    assert_eq!(doc["already_connected"], false);
+    assert!(
+        fake.calls().iter().any(|call| {
+            call.windows(2).any(|window| window == ["--step", "2"])
+        }),
+        "self-heal must perform remote step 2: {:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn login_retries_calendar_api_activation_on_a_tty() {
+    let env = GcalEnv::new("bob-cli-gcal-login-api-retry");
+    let fake = FakeGog::new(&env, "gog").scenario("api_disabled_once");
+    let output = run_gcal_stdin(&env, &fake, &["login", "-f", "json"], "\n");
+    assert_success(&output, "login API retry");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], true);
+    assert!(stderr(&output).contains("Press Enter to check again"));
+    assert!(stderr(&output).contains("project=123456789012"));
+    let calendar_calls = fake
+        .calls()
+        .iter()
+        .filter(|call| {
+            call.windows(2)
+                .any(|window| window == ["calendar", "calendars"])
+        })
+        .count();
+    assert_eq!(calendar_calls, 2, "expected a retry: {:?}", fake.calls());
+}
+
+#[test]
+fn login_api_disabled_without_tty_returns_project_url() {
+    let env = GcalEnv::new("bob-cli-gcal-login-api-nontty");
+    let fake = FakeGog::new(&env, "gog").scenario("api_disabled");
+    let output = run_gcal(&env, &fake, &["login", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "api_disabled");
+    assert!(doc["error"]["hint"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("project=123456789012"));
+}
+
+#[test]
+fn login_guides_pasted_client_json_and_adds_json_fields() {
+    let env = GcalEnv::new("bob-cli-gcal-login-pasted-client");
+    let fake = FakeGog::new(&env, "gog").scenario("no_client");
+    let raw = r#"{"installed":{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"pasted-secret","project_id":"my-project"}}"#;
+    let output = run_gcal_stdin(
+        &env,
+        &fake,
+        &["login", "-f", "json"],
+        &format!("{raw}\n{FAKE_REDIRECT}"),
+    );
+    assert_success(&output, "guided pasted JSON");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["client_source"], "pasted");
+    assert_eq!(doc["client_project"], "my-project");
+    assert_eq!(doc["reconnected"], false);
+    assert!(!stderr(&output).contains("pasted-secret"));
+}
+
+#[test]
+fn login_discovers_a_downloaded_client() {
+    let env = GcalEnv::new("bob-cli-gcal-login-downloads");
+    let downloads = env.root().join("home").join("Downloads");
+    fs::create_dir_all(&downloads).expect("create Downloads");
+    fs::write(
+        downloads.join("client_secret_download.json"),
+        r#"{"installed":{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"download-secret","project_id":"download-project"}}"#,
+    )
+    .expect("write downloaded client");
+    let fake = FakeGog::new(&env, "gog").scenario("no_client");
+    let output = run_gcal_stdin(
+        &env,
+        &fake,
+        &["login", "-f", "json"],
+        &format!("\n{FAKE_REDIRECT}"),
+    );
+    assert_success(&output, "downloaded client");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["client_source"], "downloads");
+    assert_eq!(doc["client_project"], "download-project");
+}
+
+#[test]
+fn login_account_picker_accepts_a_number() {
+    let env = GcalEnv::new("bob-cli-gcal-login-account-picker");
+    env.write_config("gcal:\n  writer: test-host\n");
+    let fake = FakeGog::new(&env, "gog").scenario("picker_accounts");
+    let output = run_gcal_stdin(
+        &env,
+        &fake,
+        &["login", "-f", "json"],
+        &format!("2\n{FAKE_REDIRECT}"),
+    );
+    assert_success(&output, "account picker");
+    let doc = json_stdout(&output);
+    assert_eq!(doc["account"], "work@example.com");
+}
+
+#[test]
+fn login_suggests_config_when_bob_accounts_remain_ambiguous() {
+    let env = GcalEnv::new("bob-cli-gcal-login-account-tip");
+    env.write_config("gcal:\n  writer: test-host\n");
+    let fake = FakeGog::new(&env, "gog").scenario("two_bob_accounts");
+    let output =
+        run_gcal_stdin(&env, &fake, &["login"], &format!("2\n{FAKE_REDIRECT}"));
+    assert_success(&output, "account tip");
+    assert!(fake.called_with(&["auth", "add", "work@example.com"]));
+    let err = stderr(&output);
+    assert!(
+        err.contains("add this to ~/.config/bob/config.yml"),
+        "{err}"
+    );
+    assert!(err.contains("account: work@example.com"), "{err}");
+}
+
+#[test]
+fn login_human_transcript_stays_on_stderr_and_mentions_remote_writer() {
+    let env = GcalEnv::new("bob-cli-gcal-login-human-transcript");
+    env.write_config("gcal:\n  account: you@example.com\n  writer: the-mac\n");
+    let fake = FakeGog::new(&env, "gog").scenario("needs_auth");
+    let output = run_gcal_paste(&env, &fake, &["login"]);
+    assert_success(&output, "human login");
+    assert!(stdout(&output).is_empty(), "human mode wrote stdout");
+    let err = stderr(&output);
+    assert!(err.contains("Google Calendar · read-only"), "{err}");
+    assert!(err.contains("sync runs on the-mac"), "{err}");
+    assert!(err.contains("Connected. Bob can read"), "{err}");
+    assert!(
+        err.contains("Next  bob gcal sync -d     preview today's Events\n        bob gcal calendars   choose which calendars to sync\n  Undo  bob gcal logout      removes only Bob's Calendar grant"),
+        "expected the stable summary block:\n{err}"
     );
 }
 
@@ -726,6 +877,20 @@ fn doctor_reports_no_client() {
         .find(|check| check["id"] == "client")
         .expect("client check");
     assert_eq!(client["status"], "fail");
+    assert_eq!(client["fix"], "run `bob gcal login`");
+}
+
+#[test]
+fn doctor_shows_the_stored_client_project() {
+    let env = GcalEnv::new("bob-cli-gcal-doctor-client-project");
+    let fake = FakeGog::new(&env, "gog").scenario("stored_project");
+    let output = run_gcal(&env, &fake, &["doctor", "-f", "json"]);
+    let doc = json_stdout(&output);
+    assert_eq!(check(&doc, "client")["status"], "ok");
+    assert!(check(&doc, "client")["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("project doctor-project"));
 }
 
 #[test]
@@ -763,12 +928,7 @@ fn doctor_maps_invalid_grant() {
     assert_eq!(output.status.code(), Some(1));
     let doc = json_stdout(&output);
     let blob = format!("{}", check(&doc, "token"));
-    assert!(
-        blob.contains("7 days")
-            || blob.contains("invalid_grant")
-            || blob.contains("publish"),
-        "{blob}"
-    );
+    assert!(blob.contains("signs in again automatically"), "{blob}");
 }
 
 #[test]
@@ -849,6 +1009,20 @@ fn calendars_table_and_json() {
     assert_eq!(primary["synced"], true);
     assert_eq!(primary["root"], "meet");
     assert_eq!(primary["name"], "Personal");
+}
+
+#[test]
+fn calendars_prefers_the_sole_bob_account_over_multiple_gog_accounts() {
+    let env = GcalEnv::new("bob-cli-gcal-calendars-bob-account");
+    env.write_config("gcal:\n  writer: test-host\n");
+    let fake = FakeGog::new(&env, "gog").scenario("two_default_accounts");
+    let output = run_gcal(&env, &fake, &["calendars", "-f", "json"]);
+    assert_success(&output, "calendars account resolution");
+    assert!(
+        fake.called_with(&["--account", ACCOUNT]),
+        "expected the sole bob-gcal account despite multiple default accounts: {:?}",
+        fake.calls()
+    );
 }
 
 #[test]
