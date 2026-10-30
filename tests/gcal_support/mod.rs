@@ -9,11 +9,16 @@
 
 use std::{
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
@@ -31,10 +36,8 @@ const FAKE_BROWSER_SRC: &str = concat!(
     "/tests/gcal_support/fake_browser.py"
 );
 
-pub(crate) const FAKE_REDIRECT: &str =
-    "http://127.0.0.1:36015/oauth2/callback?state=fakestate&code=fakecode\n";
-
 pub(crate) const ACCOUNT: &str = "you@example.com";
+pub(crate) const FAKE_AUTH_CODE: &str = "fake/code+1";
 pub(crate) const HOST: &str = "test-host";
 pub(crate) const NOW: &str = "2026-10-30 12:00:00";
 
@@ -380,18 +383,102 @@ impl FakeBrowser {
             .env("BOB_GCAL_FAKE_BROWSER_ERROR", "access_denied")
     }
 
+    /// Deny the first browser visit, then succeed on the next.
+    pub(crate) fn deny_once<'a>(
+        &self,
+        command: &'a mut Command,
+    ) -> &'a mut Command {
+        self.install(command).env(
+            "BOB_GCAL_FAKE_BROWSER_DENY_ONCE",
+            self.out.with_extension("deny"),
+        )
+    }
+
     pub(crate) fn page(&self) -> String {
         fs::read_to_string(&self.out).unwrap_or_default()
     }
 }
 
-/// Run `bob gcal login` with the fake paste redirect on stdin.
+/// Run `bob gcal login` and paste a callback built from the printed auth URL.
 pub(crate) fn run_gcal_paste(
     env: &GcalEnv,
     fake: &FakeGog,
     args: &[&str],
 ) -> Output {
-    run_gcal_stdin(env, fake, args, FAKE_REDIRECT)
+    run_gcal_paste_script(env, fake, args, "{callback}\n")
+}
+
+/// Run `bob gcal login` with a stdin script. `{callback}`, `{callback_encoded}`,
+/// and `{denied}` are filled from the latest printed Google auth URL.
+pub(crate) fn run_gcal_paste_script(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    script: &str,
+) -> Output {
+    run_gcal_paste_script_with(env, fake, args, script, |_| {})
+}
+
+/// Like [`run_gcal_paste_script`], with extra command configuration.
+pub(crate) fn run_gcal_paste_script_with(
+    env: &GcalEnv,
+    fake: &FakeGog,
+    args: &[&str],
+    script: &str,
+    configure: impl FnOnce(&mut Command),
+) -> Output {
+    let mut command = env.command();
+    fake.install(&mut command);
+    command.arg("gcal");
+    for arg in args {
+        command.arg(arg);
+    }
+    command.env("BOB_GCAL_ASSUME_TTY", "1");
+    configure(&mut command);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn bob gcal");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let watch = AuthWatch::spawn(stderr);
+
+    let mut last_auth: Option<String> = None;
+    for raw_line in script.split_inclusive('\n') {
+        let has_placeholder = raw_line.contains("{callback}")
+            || raw_line.contains("{callback_encoded}")
+            || raw_line.contains("{denied}");
+        let line = if has_placeholder {
+            let auth_url = watch.wait_auth_url(last_auth.as_deref());
+            last_auth = Some(auth_url.clone());
+            fill_callback_placeholders(raw_line, &auth_url)
+        } else {
+            raw_line.to_string()
+        };
+        if let Err(error) = stdin.write_all(line.as_bytes()) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "write stdin"
+            );
+            break;
+        }
+        let _ = stdin.flush();
+    }
+    drop(stdin);
+
+    let mut stdout = Vec::new();
+    if let Some(mut handle) = child.stdout.take() {
+        handle.read_to_end(&mut stdout).expect("read stdout");
+    }
+    let status = child.wait().expect("wait for bob gcal");
+    let stderr = watch.finish();
+    Output {
+        status,
+        stdout,
+        stderr,
+    }
 }
 
 /// Run `bob gcal <args>` with piped stdin (login reuse / logout confirm).
@@ -425,4 +512,248 @@ fn run_gcal_stdin_inner(
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "write stdin");
     }
     child.wait_with_output().expect("wait for bob gcal")
+}
+
+const AUTH_WAIT: Duration = Duration::from_secs(30);
+
+struct AuthInner {
+    url: Option<String>,
+    stderr: Vec<u8>,
+    done: bool,
+}
+
+struct AuthWatch {
+    inner: Arc<Mutex<AuthInner>>,
+    cv: Arc<Condvar>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl AuthWatch {
+    fn spawn(stderr: std::process::ChildStderr) -> Self {
+        let inner = Arc::new(Mutex::new(AuthInner {
+            url: None,
+            stderr: Vec::new(),
+            done: false,
+        }));
+        let cv = Arc::new(Condvar::new());
+        let thread_inner = Arc::clone(&inner);
+        let thread_cv = Arc::clone(&cv);
+        let thread = thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                let mut guard = thread_inner.lock().expect("auth watch");
+                guard.stderr.extend_from_slice(line.as_bytes());
+                guard.stderr.push(b'\n');
+                if let Some(url) = google_auth_url_in(&line) {
+                    guard.url = Some(url);
+                }
+                thread_cv.notify_all();
+            }
+            let mut guard = thread_inner.lock().expect("auth watch");
+            guard.done = true;
+            thread_cv.notify_all();
+        });
+        Self {
+            inner,
+            cv,
+            thread: Some(thread),
+        }
+    }
+
+    fn wait_auth_url(&self, previous: Option<&str>) -> String {
+        let deadline = Instant::now() + AUTH_WAIT;
+        let mut guard = self.inner.lock().expect("auth watch");
+        loop {
+            if let Some(url) = guard.url.clone()
+                && previous.is_none_or(|prev| prev != url)
+            {
+                return url;
+            }
+            if guard.done {
+                let stderr =
+                    String::from_utf8_lossy(&guard.stderr).into_owned();
+                panic!("process exited before a Google auth URL appeared; stderr:\n{stderr}");
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                let stderr =
+                    String::from_utf8_lossy(&guard.stderr).into_owned();
+                panic!("timed out waiting for a Google auth URL; stderr:\n{stderr}");
+            }
+            let (next, timeout) = self
+                .cv
+                .wait_timeout(guard, remaining)
+                .expect("auth watch wait");
+            guard = next;
+            if timeout.timed_out() && Instant::now() >= deadline {
+                let stderr =
+                    String::from_utf8_lossy(&guard.stderr).into_owned();
+                panic!("timed out waiting for a Google auth URL; stderr:\n{stderr}");
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+        self.inner.lock().expect("auth watch").stderr.clone()
+    }
+}
+
+fn google_auth_url_in(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    trimmed
+        .starts_with("https://accounts.google.com/o/oauth2/auth")
+        .then(|| trimmed.to_string())
+}
+
+fn fill_callback_placeholders(line: &str, auth_url: &str) -> String {
+    let redirect = query_param(auth_url, "redirect_uri")
+        .unwrap_or_else(|| panic!("auth URL missing redirect_uri: {auth_url}"));
+    let state = query_param(auth_url, "state")
+        .unwrap_or_else(|| panic!("auth URL missing state: {auth_url}"));
+    let callback = format!(
+        "{redirect}?state={}&code={}",
+        percent_encode(&state),
+        percent_encode(FAKE_AUTH_CODE)
+    );
+    let denied = format!(
+        "{redirect}?state={}&error=access_denied",
+        percent_encode(&state)
+    );
+    line.replace("{callback}", &callback)
+        .replace("{callback_encoded}", &callback)
+        .replace("{denied}", &denied)
+}
+
+fn query_param(url: &str, key: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    for pair in query.split('&') {
+        let (name, value) = pair.split_once('=')?;
+        if name == key {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+fn percent_encode(input: &str) -> String {
+    let mut out = String::new();
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~' => {
+                out.push(byte as char);
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let raw = input.as_bytes();
+    let mut bytes = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%'
+            && i + 2 < raw.len()
+            && let Ok(value) = u8::from_str_radix(
+                std::str::from_utf8(&raw[i + 1..i + 3]).unwrap_or(""),
+                16,
+            )
+        {
+            bytes.push(value);
+            i += 3;
+            continue;
+        }
+        bytes.push(raw[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// GET the loopback callback printed in `auth_url` with an encoded code.
+pub(crate) fn hit_oauth_callback(auth_url: &str) {
+    let redirect = query_param(auth_url, "redirect_uri")
+        .unwrap_or_else(|| panic!("auth URL missing redirect_uri: {auth_url}"));
+    let state = query_param(auth_url, "state")
+        .unwrap_or_else(|| panic!("auth URL missing state: {auth_url}"));
+    let rest = redirect
+        .strip_prefix("http://")
+        .unwrap_or_else(|| panic!("redirect is not http: {redirect}"));
+    let (host_port, path) = rest
+        .split_once('/')
+        .map(|(host, path)| (host, format!("/{path}")))
+        .unwrap_or((rest, "/".to_string()));
+    let (host, port) = host_port
+        .rsplit_once(':')
+        .and_then(|(host, port)| {
+            port.parse::<u16>().ok().map(|port| (host, port))
+        })
+        .unwrap_or_else(|| panic!("redirect missing port: {redirect}"));
+    let query = format!(
+        "state={}&code={}",
+        percent_encode(&state),
+        percent_encode(FAKE_AUTH_CODE)
+    );
+    let request = format!(
+        "GET {path}?{query} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match TcpStream::connect((host, port)) {
+            Ok(mut stream) => {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                stream
+                    .write_all(request.as_bytes())
+                    .expect("write callback");
+                let mut buf = Vec::new();
+                let _ = stream.read_to_end(&mut buf);
+                return;
+            }
+            Err(error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    panic!(
+        "could not reach loopback callback {redirect}: {}",
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no connection".to_string())
+    );
+}
+
+/// Live stderr watcher that extracts the printed Google auth URL.
+pub(crate) struct PrintedAuth {
+    pub url: String,
+    watch: AuthWatch,
+}
+
+impl PrintedAuth {
+    /// Remaining stderr after the child exits.
+    pub(crate) fn finish(self) -> Vec<u8> {
+        self.watch.finish()
+    }
+}
+
+/// Wait until stderr contains a Google auth URL.
+pub(crate) fn wait_printed_auth_url(
+    stderr: std::process::ChildStderr,
+) -> PrintedAuth {
+    let watch = AuthWatch::spawn(stderr);
+    let url = watch.wait_auth_url(None);
+    PrintedAuth { url, watch }
 }

@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
 
 CLIENT = "bob-gcal"
 SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
@@ -70,6 +71,18 @@ def flag_value(name: str) -> str | None:
         if index + 1 < len(args):
             return args[index + 1]
     return None
+
+
+def unique_account_emails(entries: list[dict]) -> list[str]:
+    emails: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        email = str(entry.get("email") or "").strip()
+        key = email.lower()
+        if email and key not in seen:
+            seen.add(key)
+            emails.append(email)
+    return emails
 
 
 def load_state() -> dict:
@@ -270,6 +283,16 @@ def scenario_defaults(name: str) -> dict:
                 "scopes": [],
             },
         ]
+    elif name == "dup_case_accounts":
+        defaults["accounts"] = [
+            connected_account(),
+            {
+                "email": "YOU@example.com",
+                "client": CLIENT,
+                "services": ["calendar"],
+                "scopes": [SCOPE],
+            },
+        ]
     elif name == "stored_project":
         Path(bob_path).write_text(
             json.dumps(
@@ -396,6 +419,16 @@ def op_name() -> str:
 
 
 op = op_name()
+
+
+def require_account_flag() -> str | None:
+    account = flag_value("--account")
+    emails = unique_account_emails(list(state.get("accounts") or []))
+    if not account and len(emails) > 1:
+        fail("fake gog: missing --account while multiple accounts exist")
+    return account
+
+
 fail_spec = (state.get("fail") or {}).get(op)
 if fail_spec:
     fail(fail_spec.get("stderr") or "gog failed", int(fail_spec.get("code") or 1))
@@ -492,23 +525,41 @@ if op == "auth_add":
         fail("fake gog: interactive auth add is not supported", 2)
     step = flag_value("--step") or ""
     email = pos[2] if len(pos) > 2 else EMAIL
+    force_consent = "--force-consent" in args
     if step == "1":
-        redirect = flag_value("--redirect-uri") or (
-            "http://127.0.0.1:36015/oauth2/callback"
+        redirect = flag_value("--redirect-uri")
+        if not redirect:
+            fail("fake gog: remote step 1 requires --redirect-uri")
+        cached = state.get("manual_auth") or {}
+        reused = bool(
+            cached
+            and cached.get("client") == CLIENT
+            and cached.get("force_consent") is force_consent
+            and cached.get("redirect_uri") == redirect
+            and cached.get("state")
         )
-        from urllib.parse import quote
-
+        if reused:
+            token = cached["state"]
+        else:
+            seq = int(state.get("auth_seq") or 0) + 1
+            state["auth_seq"] = seq
+            token = f"st/ate+{seq}"
+            state["manual_auth"] = {
+                "client": CLIENT,
+                "force_consent": force_consent,
+                "state": token,
+                "redirect_uri": redirect,
+            }
         auth_url = (
             "https://accounts.google.com/o/oauth2/auth"
             "?access_type=offline"
             "&client_id=123456789012-abc.apps.googleusercontent.com"
             f"&redirect_uri={quote(redirect, safe='')}"
             "&response_type=code"
-            "&state=fakestate"
+            f"&state={quote(token, safe='')}"
         )
-        state["manual_state"] = "fakestate"
         save_state(state)
-        dump({"auth_url": auth_url, "state_reused": False})
+        dump({"auth_url": auth_url, "state_reused": reused})
         raise SystemExit(0)
     if step == "2":
         finish_fail = (state.get("fail") or {}).get("auth_finish")
@@ -517,16 +568,28 @@ if op == "auth_add":
                 finish_fail.get("stderr") or "gog failed",
                 int(finish_fail.get("code") or 1),
             )
-        from urllib.parse import parse_qs, urlparse
-
         auth_url = flag_value("--auth-url") or ""
-        query = parse_qs(urlparse(auth_url).query)
+        parsed = urlparse(auth_url)
+        query = parse_qs(parsed.query)
         got_state = (query.get("state") or [None])[0]
         got_code = (query.get("code") or [None])[0]
+        got_redirect = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        flag_redirect = flag_value("--redirect-uri")
+        cached = state.get("manual_auth") or {}
+        if not cached.get("state"):
+            fail(
+                "manual auth state missing; start a new manual flow or "
+                "run remote step 1 again"
+            )
+        if cached.get("force_consent") is not force_consent:
+            fail("manual auth state mismatch")
+        if cached.get("redirect_uri") != got_redirect:
+            fail("manual auth state mismatch")
+        if flag_redirect and flag_redirect != cached.get("redirect_uri"):
+            fail("manual auth state mismatch")
         if not got_state:
             fail("missing state in redirect URL")
-        expected = state.get("manual_state")
-        if got_state != expected:
+        if got_state != cached.get("state"):
             fail(
                 "manual auth state missing; start a new manual flow or "
                 "run remote step 1 again"
@@ -542,6 +605,7 @@ if op == "auth_add":
         ]
         accounts.append(connected_account(email))
         state["accounts"] = accounts
+        state["manual_auth"] = None
         if scenario == "stale_grant":
             state["grant_repaired"] = True
         save_state(state)
@@ -571,6 +635,7 @@ if op == "calendars":
     raise SystemExit(0)
 
 if op == "events":
+    require_account_flag()
     fixture = os.environ.get("BOB_GCAL_FAKE_EVENTS")
     if fixture and Path(fixture).exists():
         sys.stdout.write(Path(fixture).read_text(encoding="utf-8"))
@@ -581,6 +646,7 @@ if op == "events":
     raise SystemExit(0)
 
 if op == "event":
+    require_account_flag()
     event_id = pos[3] if len(pos) > 3 else (pos[2] if len(pos) > 2 else "event")
     event_dir = os.environ.get("BOB_GCAL_FAKE_EVENT_DIR")
     if event_dir:

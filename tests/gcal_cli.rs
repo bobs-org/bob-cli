@@ -52,7 +52,7 @@ fn top_help_pins_the_command_surface() {
         ("calendars", "calendars with id"),
         ("doctor", "Check the Calendar setup"),
         ("list", "List a local day of events"),
-        ("login", "read-only Google Calendar consent"),
+        ("login", "Connect Google Calendar (read-only)"),
         ("logout", "Remove Bob's Calendar grant"),
         ("sync", "Events rows and MEET links"),
     ] {
@@ -78,6 +78,7 @@ fn top_help_pins_the_command_surface() {
     }
     for example in [
         "bob gcal login",
+        "bob gcal login -a EMAIL",
         "bob gcal login -c PATH",
         "bob gcal login -m",
         "bob gcal -D tomorrow",
@@ -171,6 +172,22 @@ fn login_help_lists_short_aliases_in_order() {
             "-h, --help",
             "-m, --manual",
         ],
+    );
+    assert!(
+        help.contains("Connect Google Calendar (read-only) in one guided step"),
+        "expected login about:\n{help}"
+    );
+    assert!(
+        help.contains("replaces Bob's stored client"),
+        "expected -c replacement help:\n{help}"
+    );
+    assert!(
+        help.contains("automatic over SSH"),
+        "expected -m SSH help:\n{help}"
+    );
+    assert!(
+        help.contains("idempotent") || help.contains("already connected"),
+        "expected idempotent rerun help:\n{help}"
     );
     assert_no_long_only_option_lines("bob gcal login --help", &help);
 }

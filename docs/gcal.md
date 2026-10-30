@@ -56,9 +56,12 @@ and never include tokens:
 `--no-input --json --color never --readonly --client bob-gcal --account <email>`
 
 The isolated `--client bob-gcal` token bucket means removing or re-consenting
-Bob's Calendar grant never touches other gog tokens (Gmail included). Login's
-Login runs gog's remote two-step sign-in with captured input and output. Bob
-owns the browser/paste interaction, so gog never takes over the terminal.
+Bob's Calendar grant never touches other gog tokens (Gmail included). Login
+runs gog's remote two-step sign-in with captured `--no-input --json` input and
+output. Client JSON goes to gog on stdin. Step 2 passes the single-use,
+PKCE-bound redirect URL as `--auth-url`; the code is useless without gog's
+stored verifier, and gog redeems it immediately. Bob owns the browser and
+paste interaction, so gog never takes over the terminal.
 
 `id: primary` in config matches a calendar whose `primary` flag is true or
 whose id is the literal `primary`.
@@ -98,7 +101,19 @@ gcal:
 - A missing or null `gcal:` block means defaults. Unknown keys are ignored.
 - A wrong-typed value is a setup error (exit 2) that names the key, for
   example `gcal.timeout_secs`, and never breaks other config loaders.
-- `account` must contain `@` when set.
+- `account` must contain `@` when set. Commands resolve it in this order:
+
+  | Source | When it wins |
+  | --- | --- |
+  | `bob gcal login -a EMAIL` | Explicit override (login only) |
+  | `gcal.account` | Configured |
+  | Sole `bob-gcal` account | The isolated bucket holds exactly one unique email |
+  | Sole gog account | No Bob grant, and `gog auth list` holds exactly one unique email |
+  | TTY picker | Login on a terminal when more than one email remains |
+  | `account_ambiguous` | Other commands when more than one email remains |
+
+  Unique emails are compared case-insensitively. A sole Gmail grant in gog's
+  default bucket does not hide a `bob-gcal` Calendar account.
 - `calendars` accepts a list of ids or a list of `{id, root?}` maps.
 - `timeout_secs` must be an integer greater than 0. Default 60.
 - `colors` maps Google event colour names or ids (`lavender`/`1` through
@@ -115,45 +130,118 @@ See [configuration](reference/configuration.md#gcal).
 ## Login
 
 `bob gcal login` owns a three-step, read-only Calendar sign-in. Progress and
-prompts go to stderr; with `-f json`, stdout contains only the report.
+prompts go to stderr; with `-f json`, stdout contains only the report and
+stderr shows only the interactive pieces (instructions, the link, and
+prompts). Human mode leaves stdout empty. A healthy rerun is idempotent: it
+still prints steps 1–3, `already connected`, the summary, and Next/Undo.
 
-1. **Google client.** `-c FILE` explicitly loads and validates a Desktop-app
-   client, replacing Bob's saved client. Otherwise Bob uses its saved client,
-   copies a readable gog client whose secret is not keyring-only, then checks
-   the newest valid `~/Downloads/client_secret*.json`. On a TTY, if none is
-   available, Bob explains how to create one in Cloud Console and accepts a
-   downloaded path or pasted JSON. Client secrets are sent to gog over stdin.
+1. **Google client.** `-c FILE` loads and validates a Desktop-app client,
+   replacing Bob's saved client. Otherwise Bob uses its saved client, copies a
+   readable gog client whose secret is not keyring-only, then checks the newest
+   valid `~/Downloads/client_secret*.json`. On a TTY, if none is available, Bob
+   explains how to create one in Cloud Console and accepts a downloaded path or
+   pasted JSON. A Downloads confirm accepts `Y`/`yes`/empty, rejects `n`/`no`,
+   treats `q`/`quit`/EOF as cancelled, and re-prompts on anything else. Client
+   secrets are sent to gog over stdin.
 2. **Sign in.** `-a` overrides `gcal.account`; when neither selects an
-   account, Bob uses the sole available account or asks on a TTY. A saved
-   valid grant is reused. Otherwise Bob selects browser sign-in when a desktop
-   browser is available, and the paste flow over SSH or a headless session.
-   `-m` always selects paste; `BOB_GCAL_BROWSER` selects browser sign-in.
-   Google grants only `calendar.readonly`. On SSH, copy the full address from
-   the expected `127.0.0.1` page and paste it into Bob.
-3. **Check.** Bob lists calendars and the configured sync set. If the Calendar
-   API is off, a TTY can turn it on and retry in place. A valid saved grant
-   reports `already connected`; an expired or revoked grant triggers sign-in
+   account, Bob uses the sole `bob-gcal` account, else the sole gog account, or
+   asks on a TTY. A saved valid grant is reused. Otherwise Bob selects browser
+   sign-in when `BOB_GCAL_BROWSER` is set, or when a desktop session is
+   available (`DISPLAY` or `WAYLAND_DISPLAY` on Linux; always on macOS). SSH
+   (`SSH_CONNECTION` or `SSH_TTY`) and headless sessions use the paste flow.
+   `-m` always selects paste. Google grants only `calendar.readonly`. On paste,
+   copy the full address from the expected `127.0.0.1:<port>` page and paste
+   it into Bob. Both remote steps pass `--force-consent` and the bound
+   `--redirect-uri`.
+3. **Check.** Bob lists calendars and the configured sync set. `id: primary`
+   and the primary calendar's real id both count as present. If the Calendar
+   API is off, a TTY can turn it on and retry in place; without a TTY, or after
+   `q`, the grant is kept and the hint says to enable the printed project URL
+   then rerun `bob gcal login`. An expired or revoked grant triggers sign-in
    again.
 
-Human output:
+SSH paste (reusing gog's Gmail client):
 
 ```text
+$ bob gcal login -a you@example.com
 Google Calendar · read-only · one-time setup
 
-1/3  Google client  ✓ bob-gcal · project 123456789012
-2/3  Sign in        ✓ already connected · you@example.com
-3/3  Check          ✓ 8 calendars (syncing 1: primary)
+1/3  Google client  ✓ reusing gog's "default" client · project 123456789012
+                    Bob keeps its own read-only sign-in; Gmail stays untouched.
+2/3  Sign in        you@example.com · you're on SSH, so sign in from any browser:
+
+https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=…&login_hint=you%40example.com&…
+
+                    1. Open the link, choose you@example.com, and allow
+                       "See and download any calendar you can access".
+                    2. "Google hasn't verified this app"? It's your own client:
+                       Advanced → Go to … (unsafe).
+                    3. You land on a 127.0.0.1 page that can't load. That's expected:
+                       copy that page's whole address.
+
+                    Paste the address (? for help) › http://127.0.0.1:36015/oauth2/callback?state=…&code=…
+                    ✓ signed in · read-only Calendar access granted
+3/3  Check          ✓ 8 calendars · syncing 1: primary
 
 ✓ Connected. Bob can read, never change, you@example.com's calendars.
 
-Next: bob gcal sync -d    preview today's Events
-      bob gcal calendars  choose calendars to sync
-Undo: bob gcal logout     remove only Bob's Calendar grant
+  Next  bob gcal sync -d     preview today's Events
+        bob gcal calendars   choose which calendars to sync
+  Undo  bob gcal logout      removes only Bob's Calendar grant
+  Note  sync runs on the-mac (gcal.writer); run `bob gcal login` there too.
+```
+
+Fresh desktop, nothing set up yet:
+
+```text
+$ bob gcal login
+Google Calendar · read-only · one-time setup
+
+1/3  Google client  Bob needs an OAuth client from your own Google Cloud project.
+                    One time, about 3 minutes, in your browser:
+
+                    a. Turn on the Calendar API
+https://console.cloud.google.com/apis/library/calendar-json.googleapis.com
+
+                    b. Audience: External, then Publish app (In production;
+                       unverified is fine for personal use)
+https://console.cloud.google.com/auth/audience
+
+                    c. Clients → Create client → Desktop app → Download JSON
+https://console.cloud.google.com/auth/clients/create
+
+                    Press Enter once the JSON is downloaded (Bob checks ~/Downloads), or paste its path ›
+2/3  Sign in        you@example.com · opening your browser…
+                    Allow "See and download any calendar you can access".
+                    Browser didn't open? Use this link:
+
+https://accounts.google.com/o/oauth2/auth?…
+
+                    ✓ signed in · read-only Calendar access granted
+3/3  Check          ✓ 3 calendars · syncing 1: primary
+```
+
+Healthy rerun:
+
+```text
+1/3  Google client  ✓ bob-gcal · project 123456789012
+2/3  Sign in        ✓ already connected · you@example.com
+3/3  Check          ✓ 8 calendars · syncing 1: primary
+
+✓ Connected. Bob can read, never change, you@example.com's calendars.
+
+  Next  bob gcal sync -d     preview today's Events
+        bob gcal calendars   choose which calendars to sync
+  Undo  bob gcal logout      removes only Bob's Calendar grant
 ```
 
 `invalid_grant` can mean the grant expired or was revoked; Bob signs in again.
 If this happens after about seven days, publish the OAuth consent screen in
-Google Cloud Console (Testing grants expire after seven days).
+Google Cloud Console (Testing grants expire after seven days). `consent_denied`
+means Google refused access; rerun and allow it. `stale_link` means the pasted
+or exchanged link is out of date; rerun for a fresh one. `cancelled` is a
+deliberate stop (including paste `access_denied` then `q`). `needs_tty` means
+the paste or setup prompt ran without a terminal.
 
 ## Logout
 
@@ -430,8 +518,12 @@ no provider description or attendee list, and carries the `vault` state.
 
 ## Security
 
-Tokens never appear in argv or logs. The `bob-gcal` client is a separate
-bucket from Gmail. Tests use `you@example.com` and never a live cookie.
+Tokens never appear in argv, logs, or JSON. Client JSON is piped to
+`gog auth credentials set -` on stdin. The only credential-like value in argv
+is the single-use, PKCE-bound authorization code inside step 2's `--auth-url`;
+it cannot be replayed without gog's stored verifier, and gog redeems it
+immediately. The `bob-gcal` client is a separate bucket from Gmail. Tests use
+`you@example.com` and never a live cookie.
 
 ## Environment
 
@@ -440,15 +532,17 @@ bucket from Gmail. Tests use `you@example.com` and never a live cookie.
 | `BOB_DIR` | Vault root; defaults to `~/bob`. |
 | `BOB_CONFIG_FILE` | Config file holding the `gcal:` section. |
 | `BOB_GCAL_GOG` | Executable replacing `gog` on `PATH`. Tests point this at a fake. |
-| `BOB_GCAL_ASSUME_TTY` | `1` or `true` treats stdin as a TTY for login reuse and logout confirm (test hook). |
+| `BOB_GCAL_ASSUME_TTY` | `1` or `true` treats stdin as a TTY for login setup, paste prompts, denial retries, API-disabled retries, and logout confirm (test hook). |
 | `BOB_NOW` | Local datetime override for today and relative list-day selection. |
-| `SSH_CONNECTION`, `SSH_TTY` | Select the paste-URL sign-in flow when no explicit browser override is set. |
-| `BOB_GCAL_BROWSER` | Browser executable; selects browser sign-in when non-empty. |
+| `SSH_CONNECTION`, `SSH_TTY` | Select the paste-URL sign-in flow when `BOB_GCAL_BROWSER` is unset. |
+| `DISPLAY`, `WAYLAND_DISPLAY` | Non-empty values count as a Linux desktop session and select browser sign-in. macOS always counts as a desktop session. |
+| `BOB_GCAL_BROWSER` | Browser executable; when non-empty, selects browser sign-in even over SSH. |
 
 ## Known limits
 
 - One writer: `gcal.writer` pins the single host allowed to sync.
 - Google-side changes apply only to spans you have not edited; your edits
   are kept and reported once.
-- Google forbids Calendar scopes on the device-code flow; use `-m` over SSH.
+- Google forbids Calendar scopes on the device-code flow; over SSH, login
+  switches to the paste flow automatically.
 - Consent screens left in Testing expire in 7 days; publish them.

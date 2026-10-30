@@ -111,7 +111,7 @@ fn choose_account(
     }
 }
 
-fn unique_emails(accounts: &[GogAccount]) -> Vec<String> {
+pub(crate) fn unique_emails(accounts: &[GogAccount]) -> Vec<String> {
     let mut emails = Vec::new();
     for account in accounts {
         let email = account.email.trim();

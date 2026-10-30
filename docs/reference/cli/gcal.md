@@ -17,7 +17,7 @@ Commands:
   calendars  List Google calendars with id, access role, colour, and mapped root
   doctor     Check the Calendar setup: gog, client, account, token, calendars, default root, today, journal, and writer
   list       List a local day of events and show how Bob would classify them
-  login      One-time read-only Google Calendar consent through gog
+  login      Connect Google Calendar (read-only) in one guided step
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
   sync       Write one day's Events rows and MEET links
   help       Print this message or the help of the given subcommand(s)
@@ -49,9 +49,10 @@ Examples:
   bob gcal                    Show today's events and what sync would do
   bob gcal -D tomorrow        List tomorrow in Bob's timezone
   bob gcal -a -f json         Include omitted events as JSON
-  bob gcal login              One-time read-only Calendar consent
-  bob gcal login -c PATH      Use this Desktop-app client JSON
-  bob gcal login -m           Paste the redirect URL instead of opening a browser
+  bob gcal login              Connect Google Calendar in one guided step
+  bob gcal login -a EMAIL     Sign in as this account
+  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON
+  bob gcal login -m           Paste the redirect address (automatic over SSH)
   bob gcal calendars          List calendars with ids for config
   bob gcal doctor             Diagnose gog, the client, and the vault
   bob gcal sync               Write today's Events and MEET links

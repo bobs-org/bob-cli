@@ -77,6 +77,64 @@ fn bare_gcal_lists_today_and_json_keeps_only_public_normalized_fields() {
     assert!(events_call
         .iter()
         .any(|arg| arg == "2026-10-31T00:00:00-04:00"));
+    assert!(
+        events_call
+            .windows(2)
+            .any(|pair| pair == ["--account", "you@example.com"]),
+        "list must pass the resolved account: {events_call:?}"
+    );
+}
+
+#[test]
+fn list_uses_the_sole_bob_account_among_multiple_gog_accounts() {
+    let env = GcalEnv::new("bob-cli-gcal-list-bob-account");
+    env.prepare_healthy_vault();
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  writer: test-host\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog").scenario("two_default_accounts");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let mut command = env.command();
+    fake.install(&mut command).args(["gcal", "-f", "json"]);
+    let output = command.output().expect("run list bob account");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let events_call = fake
+        .calls()
+        .into_iter()
+        .find(|call| call.windows(2).any(|pair| pair == ["calendar", "events"]))
+        .expect("events call");
+    assert!(
+        events_call
+            .windows(2)
+            .any(|pair| pair == ["--account", "you@example.com"]),
+        "sole bob-gcal account must win: {events_call:?}"
+    );
+}
+
+#[test]
+fn list_uses_the_configured_account_among_multiple_bob_grants() {
+    let env = GcalEnv::new("bob-cli-gcal-list-configured-account");
+    env.prepare_healthy_vault();
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  account: work@example.com\n  writer: test-host\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog").scenario("two_bob_accounts");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    let mut command = env.command();
+    fake.install(&mut command).args(["gcal", "-f", "json"]);
+    let output = command.output().expect("run list configured account");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let events_call = fake
+        .calls()
+        .into_iter()
+        .find(|call| call.windows(2).any(|pair| pair == ["calendar", "events"]))
+        .expect("events call");
+    assert!(
+        events_call
+            .windows(2)
+            .any(|pair| pair == ["--account", "work@example.com"]),
+        "configured account must win: {events_call:?}"
+    );
 }
 
 #[test]

@@ -31,8 +31,9 @@ gcal:
   timeout_secs: 60
 ```
 
-`account` is optional when gog already holds exactly one Google account.
-A missing `gcal:` block uses those defaults.
+`account` is optional when the isolated `bob-gcal` bucket holds exactly one
+Google account, or when gog as a whole holds exactly one. A missing `gcal:`
+block uses those defaults.
 
 ## 1. Let Bob find or create a Desktop-app client
 
@@ -70,17 +71,74 @@ bob gcal login
 bob gcal doctor -b /path/to/vault
 ```
 
-Bob signs in through gog's remote flow and requests only read-only Calendar
-access (`calendar.readonly`). It opens your browser on a desktop session and
-uses the paste-URL flow over SSH or on a headless host. On SSH, open the link
-in any browser, allow access, then copy the full address from the expected
-`127.0.0.1` page and paste it into Bob. Use `-m` to choose that flow manually,
-or `BOB_GCAL_BROWSER` to select a browser executable.
+Bob signs in through gog's remote two-step flow and requests only read-only
+Calendar access (`calendar.readonly`). It opens your browser on a desktop
+session (`DISPLAY` or `WAYLAND_DISPLAY` on Linux; always on macOS) and uses
+the paste-URL flow over SSH or on a headless host. On SSH, open the link in
+any browser, allow access, then copy the full address from the expected
+`127.0.0.1:<port>` page and paste it into Bob. Use `-m` to choose that flow
+manually, or `BOB_GCAL_BROWSER` to select a browser executable.
 
-A valid grant is idempotent: login reports `already connected` and checks
-calendars. If a saved grant expired or was revoked, Bob guides you through
-sign-in again. If the Calendar API is disabled, Bob gives you the project
-specific Cloud Console link and lets you retry after enabling it.
+Over SSH, reusing gog's Gmail client looks like this:
+
+```text
+$ bob gcal login -a you@example.com
+Google Calendar · read-only · one-time setup
+
+1/3  Google client  ✓ reusing gog's "default" client · project 123456789012
+                    Bob keeps its own read-only sign-in; Gmail stays untouched.
+2/3  Sign in        you@example.com · you're on SSH, so sign in from any browser:
+
+https://accounts.google.com/o/oauth2/auth?…
+
+                    1. Open the link, choose you@example.com, and allow
+                       "See and download any calendar you can access".
+                    2. "Google hasn't verified this app"? It's your own client:
+                       Advanced → Go to … (unsafe).
+                    3. You land on a 127.0.0.1 page that can't load. That's expected:
+                       copy that page's whole address.
+
+                    Paste the address (? for help) ›
+                    ✓ signed in · read-only Calendar access granted
+3/3  Check          ✓ 8 calendars · syncing 1: primary
+
+✓ Connected. Bob can read, never change, you@example.com's calendars.
+
+  Next  bob gcal sync -d     preview today's Events
+        bob gcal calendars   choose which calendars to sync
+  Undo  bob gcal logout      removes only Bob's Calendar grant
+```
+
+On a fresh desktop with no client stored yet, step 1 prints the Cloud Console
+checklist, then the browser opens:
+
+```text
+$ bob gcal login
+Google Calendar · read-only · one-time setup
+
+1/3  Google client  Bob needs an OAuth client from your own Google Cloud project.
+                    One time, about 3 minutes, in your browser:
+                    …
+2/3  Sign in        you@example.com · opening your browser…
+                    Allow "See and download any calendar you can access".
+                    Browser didn't open? Use this link:
+
+https://accounts.google.com/o/oauth2/auth?…
+```
+
+A valid grant is idempotent: login still prints all three steps, reports
+`already connected`, and rechecks calendars:
+
+```text
+1/3  Google client  ✓ bob-gcal · project 123456789012
+2/3  Sign in        ✓ already connected · you@example.com
+3/3  Check          ✓ 8 calendars · syncing 1: primary
+```
+
+If a saved grant expired or was revoked, Bob guides you through sign-in again.
+If the Calendar API is disabled, Bob gives you the project-specific Cloud
+Console link and lets you retry after enabling it. Without a TTY, that error
+keeps the grant and tells you to enable the API, then rerun `bob gcal login`.
 
 Confirm every doctor check is `ok` or an explained skip. A `no_client`
 setup error means no usable OAuth client was found; run login in a terminal
@@ -131,9 +189,19 @@ Without `-y`, logout asks for confirmation on a TTY.
 | `no_client`, exit 2 | Run login in a terminal and follow its API, consent screen, and Desktop-app client checklist. |
 | Client JSON rejected | Use a Google OAuth client of type Desktop app; service-account, web, and gcloud credential files do not work. |
 | gog client secret is in keyring | Download a Desktop-app JSON and pass its path to `bob gcal login -c PATH`. |
-| `accessNotConfigured` | Enable the Calendar API at the Console link doctor/login print. |
+| `needs_tty` | Run `bob gcal login` in a terminal (paste and client setup cannot run on a pipe). |
+| `cancelled` | Deliberate stop (`q`, Ctrl-D, or paste `access_denied` then `q`). Rerun `bob gcal login`. |
+| `consent_denied` | Google refused access. Rerun `bob gcal login` and allow Calendar access. |
+| `stale_link` | The pasted address or exchanged code is out of date. Rerun `bob gcal login` for a fresh link. |
+| `accessNotConfigured` / `api_disabled` | Enable the Calendar API at the Console link login prints. Sign-in is kept; rerun `bob gcal login`. |
 | `invalid_grant` / 7-day hint | Publish the consent screen, then `bob gcal login`. |
 | `insufficient_scope` | `bob gcal login` to grant `calendar.readonly`. |
+| `account_ambiguous` | Set `gcal.account` to the `bob-gcal` address Bob should use. |
+| `wrong_account` | Choose the requested account on Google's picker, or pass `-a`. |
+| Access blocked: app not verified | Publish the consent screen, or add yourself as a test user, on the Audience page. |
+| `Error 400: redirect_uri_mismatch` | The client is not a Desktop app. Rerun `bob gcal login -c` with Desktop-app JSON. |
+| "This site can't be reached" after Allow | Expected on paste. Copy that `127.0.0.1` page's whole address. |
+| Browser didn't open | Use the printed link, or set `BOB_GCAL_BROWSER`. |
 | Doctor `default root` fails | Create `meet.md` as `type: area`, or set `gcal.root` to an existing area. |
 | Doctor `journal` fails | Add `!/.bob/gcal/*.jsonl` to `.gitignore` and `.bob/gcal/*.jsonl merge=union` to `.gitattributes`. |
 | Doctor `writer` fails | Run setup on the pinned host, or set `gcal.writer` to this host's vault-sync slug. |

@@ -40,6 +40,8 @@ pub(crate) struct DaySnapshot {
     pub vault: PathBuf,
     pub daily_rel: PathBuf,
     pub events: Vec<SnapshotEvent>,
+    /// Stable gog account for this snapshot and later absent-event lookups.
+    pub account: String,
     /// Vault-learned series roots, for root source 1 and to keep the
     /// planner from re-learning what the journal already teaches.
     pub series_roots: BTreeMap<(String, String), journal::LearnedRoot>,
@@ -76,6 +78,7 @@ pub(crate) fn fetch_day(
             &configured.id,
             &window.from_rfc3339(),
             &window.to_rfc3339(),
+            &account,
         )?;
         for raw_event in raw_events {
             let event = GcalEvent::from_google(&configured.id, raw_event)?;
@@ -121,6 +124,7 @@ pub(crate) fn fetch_day(
         vault,
         daily_rel,
         events,
+        account,
         series_roots,
     })
 }

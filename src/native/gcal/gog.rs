@@ -317,10 +317,11 @@ impl Gog {
         calendar_id: &str,
         from: &str,
         to: &str,
+        account: &str,
     ) -> Result<Vec<serde_json::Value>, GcalError> {
         const FIELDS: &str = "items(id,iCalUID,recurringEventId,originalStartTime,status,summary,description,location,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri)),start,end,transparency,eventType,colorId,attendees(self,responseStatus),organizer(self)),nextPageToken";
         let output = self.run(
-            self.common_flags(None)
+            self.common_flags(Some(account))
                 .into_iter()
                 .chain([
                     OsString::from("calendar"),
@@ -367,9 +368,10 @@ impl Gog {
         &self,
         calendar_id: &str,
         event_id: &str,
+        account: &str,
     ) -> Result<serde_json::Value, GcalError> {
         let output = self.run(
-            self.common_flags(None)
+            self.common_flags(Some(account))
                 .into_iter()
                 .chain([
                     OsString::from("calendar"),
@@ -390,23 +392,21 @@ impl Gog {
 
     /// Remote `--step 1`: print the authorization URL. gog 0.44.0
     /// accepts `--force-consent` and `--redirect-uri` (verified in a
-    /// throwaway `GOG_HOME`).
+    /// throwaway `GOG_HOME`). Begin and finish share
+    /// [`Self::auth_add_prefix`] so force-consent always agrees.
     pub(crate) fn auth_begin(
         &self,
         account: &str,
-        redirect_uri: Option<&str>,
+        redirect_uri: &str,
     ) -> Result<AuthStart, GcalError> {
         let mut args = self.auth_add_prefix(account);
         args.extend([
-            OsString::from("--force-consent"),
             OsString::from("--remote"),
             OsString::from("--step"),
             OsString::from("1"),
+            OsString::from("--redirect-uri"),
+            OsString::from(redirect_uri),
         ]);
-        if let Some(uri) = redirect_uri {
-            args.push(OsString::from("--redirect-uri"));
-            args.push(OsString::from(uri));
-        }
         let output = self.run(args)?;
         let value = parse_json(&output.stdout)?;
         let auth_url = value
@@ -438,6 +438,7 @@ impl Gog {
         &self,
         account: &str,
         redirect_url: &str,
+        redirect_uri: &str,
     ) -> Result<(), GcalError> {
         let mut args = self.auth_add_prefix(account);
         args.extend([
@@ -446,6 +447,8 @@ impl Gog {
             OsString::from("2"),
             OsString::from("--auth-url"),
             OsString::from(redirect_url),
+            OsString::from("--redirect-uri"),
+            OsString::from(redirect_uri),
         ]);
         let _ = self.run(args)?;
         Ok(())
@@ -465,6 +468,7 @@ impl Gog {
             OsString::from(account),
             OsString::from("--services"),
             OsString::from("calendar"),
+            OsString::from("--force-consent"),
         ]
     }
 

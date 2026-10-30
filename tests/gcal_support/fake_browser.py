@@ -23,10 +23,24 @@ def main() -> int:
         sys.stderr.write("fake browser: auth URL missing redirect_uri or state\n")
         return 2
     error = os.environ.get("BOB_GCAL_FAKE_BROWSER_ERROR")
+    deny_once = os.environ.get("BOB_GCAL_FAKE_BROWSER_DENY_ONCE")
+    if deny_once:
+        marker = Path(deny_once)
+        if not marker.exists():
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("1", encoding="utf-8")
+            error = "access_denied"
+    code = os.environ.get("BOB_GCAL_FAKE_BROWSER_CODE", "fake/code+1")
     if error:
-        callback = f"{redirect}?state={urllib.parse.quote(state)}&error={urllib.parse.quote(error)}"
+        callback = (
+            f"{redirect}?state={urllib.parse.quote(state, safe='')}"
+            f"&error={urllib.parse.quote(error, safe='')}"
+        )
     else:
-        callback = f"{redirect}?state={urllib.parse.quote(state)}&code=fakecode"
+        callback = (
+            f"{redirect}?state={urllib.parse.quote(state, safe='')}"
+            f"&code={urllib.parse.quote(code, safe='')}"
+        )
     out = os.environ.get("BOB_GCAL_FAKE_BROWSER_OUT")
     try:
         with urllib.request.urlopen(callback, timeout=30) as resp:

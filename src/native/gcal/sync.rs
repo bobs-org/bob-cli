@@ -591,7 +591,7 @@ fn lookup_verdict(
     event_id: &str,
     day: &NaiveDate,
 ) -> Result<AbsentVerdict, GcalError> {
-    let raw = match gog.event(calendar_id, event_id) {
+    let raw = match gog.event(calendar_id, event_id, &snapshot.account) {
         Err(error) if error.kind() == "not_found" => {
             return Ok(AbsentVerdict::Deleted);
         }

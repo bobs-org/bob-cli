@@ -304,8 +304,12 @@ fn paste_flow(
         return Err(needs_tty());
     }
     let mut auto_retries = 0;
+    let mut previous_redirect = None;
     loop {
-        let start = gog.auth_begin(account, None)?;
+        let (_listener, redirect_uri) =
+            bind_redirect(previous_redirect.as_deref())?;
+        previous_redirect = Some(redirect_uri.clone());
+        let start = gog.auth_begin(account, &redirect_uri)?;
         let auth_url = inject_login_hint(&start.auth_url, account)?;
         ui.step_open(
             2,
@@ -314,7 +318,15 @@ fn paste_flow(
         );
         ui.link(&auth_url);
         print_paste_instructions(ui, account);
-        match paste_prompt_loop(gog, ui, account, &start.state, project)? {
+        match paste_prompt_loop(
+            gog,
+            ui,
+            account,
+            &start.state,
+            &redirect_uri,
+            &auth_url,
+            project,
+        )? {
             PasteOutcome::SignedIn => {
                 ui.note("✓ signed in · read-only Calendar access granted");
                 return Ok(());
@@ -348,6 +360,8 @@ fn paste_prompt_loop(
     ui: &LoginUi,
     account: &str,
     expected_state: &str,
+    redirect_uri: &str,
+    auth_url: &str,
     project: Option<&str>,
 ) -> Result<PasteOutcome, GcalError> {
     loop {
@@ -366,11 +380,12 @@ fn paste_prompt_loop(
             RedirectParse::Error(message) => {
                 ui.note_interactive(&message);
                 if message.contains("older sign-in") {
-                    // reprint happens by leaving the current link above
+                    ui.link(auth_url);
                 }
             }
             RedirectParse::Url(redirect) => {
-                match finish_and_confirm(gog, account, &redirect) {
+                match finish_and_confirm(gog, account, &redirect, redirect_uri)
+                {
                     Ok(()) => return Ok(PasteOutcome::SignedIn),
                     Err(error) if is_auto_retry(&error) => {
                         return Ok(PasteOutcome::RetryAuto);
@@ -459,24 +474,12 @@ fn browser_flow(
     _project: Option<&str>,
 ) -> Result<(), GcalError> {
     let mut auto_retries = 0;
+    let mut previous_redirect = None;
     loop {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
-            GcalError::runtime(
-                "gog",
-                format!("bind a loopback listener: {error}"),
-            )
-        })?;
-        let port = listener
-            .local_addr()
-            .map_err(|error| {
-                GcalError::runtime(
-                    "gog",
-                    format!("read the loopback port: {error}"),
-                )
-            })?
-            .port();
-        let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
-        let start = gog.auth_begin(account, Some(&redirect_uri))?;
+        let (listener, redirect_uri) =
+            bind_redirect(previous_redirect.as_deref())?;
+        previous_redirect = Some(redirect_uri.clone());
+        let start = gog.auth_begin(account, &redirect_uri)?;
         let auth_url = inject_login_hint(&start.auth_url, account)?;
         ui.step_open(
             2,
@@ -488,7 +491,13 @@ fn browser_flow(
         );
         ui.note_interactive("Browser didn't open? Use this link:");
         ui.link(&auth_url);
-        let opener = spawn_opener(&auth_url);
+        let opener = match spawn_opener(&auth_url) {
+            Ok(child) => Some(child),
+            Err(_) => {
+                ui.dim_note("couldn't open a browser; use the link above");
+                None
+            }
+        };
         let wait = ui.wait("waiting for Google · Ctrl-C to cancel");
         let result = wait_for_callback(
             gog,
@@ -496,14 +505,20 @@ fn browser_flow(
             account,
             &listener,
             &start.state,
+            &redirect_uri,
             opener,
         );
         drop(wait);
         match result {
-            Ok(()) => {
+            Ok(BrowserWait::SignedIn) => {
                 ui.note("✓ signed in · read-only Calendar access granted");
                 return Ok(());
             }
+            Ok(BrowserWait::Denied) => match browser_denied(ui) {
+                Ok(PasteOutcome::RetryFresh) => continue,
+                Ok(_) => unreachable!("browser denial only retries or errors"),
+                Err(error) => return Err(error),
+            },
             Err(error) if is_auto_retry(&error) && auto_retries < 1 => {
                 auto_retries += 1;
                 ui.note_interactive(
@@ -515,14 +530,66 @@ fn browser_flow(
     }
 }
 
+/// Bind a loopback redirect and keep the listener so the port stays
+/// reserved. A retry must differ from `previous` so gog cannot reuse
+/// the same manual-auth state when the allocator returns the same port.
+fn bind_redirect(
+    previous: Option<&str>,
+) -> Result<(TcpListener, String), GcalError> {
+    let mut held = Vec::new();
+    let mut last_error = None;
+    for _ in 0..32 {
+        match TcpListener::bind("127.0.0.1:0") {
+            Ok(listener) => {
+                let port = match listener.local_addr() {
+                    Ok(addr) => addr.port(),
+                    Err(error) => {
+                        last_error = Some(error);
+                        continue;
+                    }
+                };
+                let uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
+                if previous.is_some_and(|prev| prev == uri) {
+                    held.push(listener);
+                    continue;
+                }
+                drop(held);
+                return Ok((listener, uri));
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(GcalError::runtime(
+        "gog",
+        format!(
+            "bind a loopback listener: {}",
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "no free loopback port".to_string())
+        ),
+    ))
+}
+
+struct OpenerGuard(Option<Child>);
+
+impl Drop for OpenerGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.wait();
+        }
+    }
+}
+
 fn wait_for_callback(
     gog: &Gog,
     ui: &LoginUi,
     account: &str,
     listener: &TcpListener,
     expected_state: &str,
-    mut opener: Option<Child>,
-) -> Result<(), GcalError> {
+    redirect_uri: &str,
+    opener: Option<Child>,
+) -> Result<BrowserWait, GcalError> {
+    let mut opener = OpenerGuard(opener);
     listener.set_nonblocking(true).map_err(|error| {
         GcalError::runtime(
             "gog",
@@ -541,10 +608,10 @@ fn wait_for_callback(
                 "run `bob gcal login -m` to paste the address instead",
             ));
         }
-        if let Some(child) = opener.as_mut()
+        if let Some(child) = opener.0.as_mut()
             && let Ok(Some(status)) = child.try_wait()
         {
-            opener = None;
+            opener.0 = None;
             if !status.success() && !opener_failed_noted {
                 ui.dim_note("couldn't open a browser; use the link above");
                 opener_failed_noted = true;
@@ -554,16 +621,14 @@ fn wait_for_callback(
             Ok((mut stream, _)) => {
                 match handle_connection(
                     gog,
-                    ui,
                     account,
                     &mut stream,
                     expected_state,
+                    redirect_uri,
                 )? {
                     ConnResult::Continue => {}
-                    ConnResult::SignedIn => return Ok(()),
-                    ConnResult::Denied => {
-                        return browser_denied(ui);
-                    }
+                    ConnResult::SignedIn => return Ok(BrowserWait::SignedIn),
+                    ConnResult::Denied => return Ok(BrowserWait::Denied),
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -585,6 +650,11 @@ fn wait_for_callback(
     }
 }
 
+enum BrowserWait {
+    SignedIn,
+    Denied,
+}
+
 enum ConnResult {
     Continue,
     SignedIn,
@@ -593,10 +663,10 @@ enum ConnResult {
 
 fn handle_connection(
     gog: &Gog,
-    _ui: &LoginUi,
     account: &str,
     stream: &mut TcpStream,
     expected_state: &str,
+    redirect_uri: &str,
 ) -> Result<ConnResult, GcalError> {
     let headers = match read_headers(stream) {
         Ok(bytes) => bytes,
@@ -620,7 +690,7 @@ fn handle_connection(
         );
         return Ok(ConnResult::Continue);
     }
-    let parsed = Url::parse(&format!("http://127.0.0.1{target}")).ok();
+    let parsed = Url::parse(&callback_from_request(redirect_uri, &target)).ok();
     let Some(url) = parsed else {
         let _ = write_http(
             stream,
@@ -668,7 +738,7 @@ fn handle_connection(
         let _ = write_http(stream, 200, "OK", &page(false, account, reason));
         return Ok(ConnResult::Denied);
     }
-    let Some(code) = code.filter(|c| !c.is_empty()) else {
+    if code.as_deref().is_none_or(str::is_empty) {
         let _ = write_http(
             stream,
             400,
@@ -676,12 +746,9 @@ fn handle_connection(
             &page(false, account, "this sign-in link is out of date"),
         );
         return Ok(ConnResult::Continue);
-    };
-    let redirect = format!(
-        "http://127.0.0.1{CALLBACK_PATH}?state={}&code={}",
-        expected_state, code
-    );
-    match finish_and_confirm(gog, account, &redirect) {
+    }
+    let redirect = callback_from_request(redirect_uri, &target);
+    match finish_and_confirm(gog, account, &redirect, redirect_uri) {
         Ok(()) => {
             let _ = write_http(stream, 200, "OK", &page(true, account, ""));
             Ok(ConnResult::SignedIn)
@@ -707,30 +774,15 @@ fn handle_connection(
     }
 }
 
-fn browser_denied(ui: &LoginUi) -> Result<(), GcalError> {
+fn browser_denied(ui: &LoginUi) -> Result<PasteOutcome, GcalError> {
     if !login_ui::is_tty() {
         return Err(consent_denied());
     }
     ui.note_interactive("Google denied access.");
-    match ui.prompt("Press Enter to try again, or q to stop › ")? {
-        None => Err(cancelled()),
-        Some(line) => {
-            let trimmed = line.trim();
-            if trimmed.eq_ignore_ascii_case("q")
-                || trimmed.eq_ignore_ascii_case("quit")
-            {
-                Err(consent_denied())
-            } else {
-                Err(GcalError::runtime(
-                    "stale_link",
-                    "retrying sign-in".to_string(),
-                ))
-            }
-        }
-    }
+    retry_or_quit(ui, consent_denied())
 }
 
-fn spawn_opener(url: &str) -> Option<Child> {
+fn spawn_opener(url: &str) -> io::Result<Child> {
     let program: PathBuf = if let Some(override_cmd) =
         bob_env::var_os("BOB_GCAL_BROWSER").filter(|value| !value.is_empty())
     {
@@ -746,7 +798,6 @@ fn spawn_opener(url: &str) -> Option<Child> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .ok()
 }
 
 fn consent_window() -> Duration {
@@ -826,12 +877,27 @@ fn write_http(
     Ok(())
 }
 
+/// Build the callback gog redeems against the known loopback origin.
+/// Prefer the request's original query bytes so percent-encoded
+/// code/state values survive; never take the origin from Host.
+pub(crate) fn callback_from_request(
+    redirect_uri: &str,
+    target: &str,
+) -> String {
+    if let Some((_, query)) = target.split_once('?') {
+        format!("{redirect_uri}?{query}")
+    } else {
+        redirect_uri.to_string()
+    }
+}
+
 fn finish_and_confirm(
     gog: &Gog,
     account: &str,
     redirect: &str,
+    redirect_uri: &str,
 ) -> Result<(), GcalError> {
-    gog.auth_finish(account, redirect)?;
+    gog.auth_finish(account, redirect, redirect_uri)?;
     confirm_account(gog, account)
 }
 
@@ -967,6 +1033,14 @@ mod tests {
         assert!(
             matches!(stale, RedirectParse::Error(msg) if msg.contains("older sign-in"))
         );
+        let encoded = parse_redirect(
+            "http://127.0.0.1:36015/oauth2/callback?state=st%2Fate%2B1&code=fake%2Fcode%2B1",
+            "st/ate+1",
+        );
+        assert!(
+            matches!(encoded, RedirectParse::Url(_)),
+            "percent-encoded state/code must match the live state"
+        );
     }
 
     #[test]
@@ -989,6 +1063,24 @@ mod tests {
                 .map(|(_, v)| v.as_str()),
             Some("abc")
         );
+    }
+
+    #[test]
+    fn callback_from_request_keeps_port_and_query_bytes() {
+        let origin = "http://127.0.0.1:36015/oauth2/callback";
+        assert_eq!(
+            callback_from_request(
+                origin,
+                "/oauth2/callback?state=st%2Fate%2B1&code=fake%2Fcode%2B1",
+            ),
+            "http://127.0.0.1:36015/oauth2/callback?state=st%2Fate%2B1&code=fake%2Fcode%2B1"
+        );
+        assert_eq!(callback_from_request(origin, "/oauth2/callback"), origin);
+        assert!(!callback_from_request(
+            origin,
+            "/oauth2/callback?state=s&code=c",
+        )
+        .starts_with("http://127.0.0.1/oauth2/callback?"));
     }
 
     #[test]

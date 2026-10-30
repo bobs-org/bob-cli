@@ -286,6 +286,17 @@ fn deleted_event_lookup_cancels_and_reports_once() {
         note.contains("*2026-10-30* — Deleted in Google Calendar"),
         "{note}"
     );
+    assert!(
+        fake.calls().iter().any(|call| {
+            call.windows(2).any(|pair| pair == ["calendar", "event"])
+                && call.iter().any(|arg| arg == "dentist")
+                && call
+                    .windows(2)
+                    .any(|pair| pair == ["--account", "you@example.com"])
+        }),
+        "absent-event lookup must pass the snapshot account: {:?}",
+        fake.calls()
+    );
 
     let again = sync_output(&env, &fake, &[]);
     assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
@@ -331,6 +342,38 @@ fn moved_event_names_the_new_day() {
     assert!(
         note.contains("Moved to Sat 2026-10-31 in Google Calendar"),
         "{note}"
+    );
+}
+
+#[test]
+fn deleted_event_lookup_uses_the_sole_bob_account() {
+    let env = GcalEnv::new("bob-cli-gcal-lifecycle-bob-account");
+    prepare(&env);
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  writer: test-host\n",
+    );
+    let fake = FakeGog::new(&env, "fake-gog").scenario("two_default_accounts");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+    assert_eq!(sync_output(&env, &fake, &[]).status.code(), Some(0));
+
+    let mut events = base_events();
+    events.retain(|event| event["id"] != "dentist");
+    fake.events_json(&events_envelope(events));
+    fake.event_lookup(
+        "dentist",
+        r#"{"_fail": {"stderr": "Not Found: no such event", "code": 1}}"#,
+    );
+    let output = sync_output(&env, &fake, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        fake.calls().iter().any(|call| {
+            call.windows(2).any(|pair| pair == ["calendar", "event"])
+                && call
+                    .windows(2)
+                    .any(|pair| pair == ["--account", "you@example.com"])
+        }),
+        "lookup must keep the sole bob-gcal account: {:?}",
+        fake.calls()
     );
 }
 

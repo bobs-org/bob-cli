@@ -244,7 +244,7 @@ The adapter can be replaced with `BOB_GKEEP_ADAPTER`. See the
 
 | Key | Type and rules | Default | Effect |
 | --- | --- | --- | --- |
-| `gcal.account` | String containing `@` | Optional when gog holds exactly one account | Account identity; `bob gcal login -a` can override it for that invocation. |
+| `gcal.account` | String containing `@` | Optional when the isolated `bob-gcal` bucket holds exactly one unique email, else when gog as a whole holds exactly one | Account identity; `bob gcal login -a` can override it for that invocation. Commands prefer the Bob bucket before gog's default accounts. |
 | `gcal.writer` | Hostname slug | Unset (this host may write) | The one host label allowed to sync; `doctor` compares it to vault-sync's hostname slug. |
 | `gcal.root` | Bare note name | `meet` | Default `[root::]` for Event Tasks. |
 | `gcal.calendars` | Sequence of ids or `{id, root?}` maps | `[primary]` | Calendars to sync; `primary` matches the account's primary calendar. |

@@ -84,16 +84,17 @@ fn login(
         match gog.calendars(&account) {
             Ok(calendars) => {
                 already_connected = true;
+                render_signin_already(ui, &account);
                 let report = build_report(
                     &account,
                     &resolved,
                     sign_in,
                     already_connected,
                     reconnected,
-                    calendars,
+                    &calendars,
                     config,
                 );
-                render_check_step(ui, &report, config);
+                render_check_step(ui, &report, &calendars, config);
                 return finish_login(
                     report,
                     ui,
@@ -114,6 +115,7 @@ fn login(
             }
             Err(error) if error.kind() == "api_disabled" => {
                 already_connected = true;
+                render_signin_already(ui, &account);
                 first_check_error = Some(error);
             }
             Err(error) => return Err(error),
@@ -147,10 +149,10 @@ fn login(
         sign_in,
         already_connected,
         reconnected,
-        calendars,
+        &calendars,
         config,
     );
-    render_check_step(ui, &report, config);
+    render_check_step(ui, &report, &calendars, config);
     finish_login(report, ui, config, &gog, reconnected, testing_tip)
 }
 
@@ -162,20 +164,22 @@ fn finish_login(
     reconnected: bool,
     testing_tip: bool,
 ) -> Result<LoginReport, GcalError> {
-    if !report.already_connected {
-        ui.summary(&report.account);
-        let host = vault_sync::hostname_slug();
-        if let Some(writer) = config.writer().filter(|writer| *writer != host) {
-            ui.writer_note(writer);
-        }
-        if account::would_be_ambiguous(gog, config) {
-            ui.account_tip(&report.account);
-        }
-        if reconnected && testing_tip {
-            ui.testing_tip();
-        }
+    ui.summary(&report.account);
+    let host = vault_sync::hostname_slug();
+    if let Some(writer) = config.writer().filter(|writer| *writer != host) {
+        ui.writer_note(writer);
+    }
+    if account::would_be_ambiguous(gog, config) {
+        ui.account_tip(&report.account);
+    }
+    if reconnected && testing_tip {
+        ui.testing_tip();
     }
     Ok(report)
+}
+
+fn render_signin_already(ui: &LoginUi, account: &str) {
+    ui.step_ok(2, "Sign in", &format!("already connected · {account}"));
 }
 
 fn build_report(
@@ -184,7 +188,7 @@ fn build_report(
     sign_in: &'static str,
     already_connected: bool,
     reconnected: bool,
-    calendars: Vec<GogCalendar>,
+    calendars: &[GogCalendar],
     config: &GcalConfig,
 ) -> LoginReport {
     let syncing_ids: Vec<String> = calendars
@@ -236,7 +240,12 @@ fn render_client_step(ui: &LoginUi, resolved: &ResolvedClient) {
     }
 }
 
-fn render_check_step(ui: &LoginUi, report: &LoginReport, config: &GcalConfig) {
+fn render_check_step(
+    ui: &LoginUi,
+    report: &LoginReport,
+    calendars: &[GogCalendar],
+    config: &GcalConfig,
+) {
     let syncing = if report.syncing_ids.is_empty() {
         "none".to_string()
     } else {
@@ -254,10 +263,9 @@ fn render_check_step(ui: &LoginUi, report: &LoginReport, config: &GcalConfig) {
         .calendars()
         .iter()
         .filter(|configured| {
-            !report.syncing_ids.iter().any(|id| {
-                id == &configured.id
-                    || (configured.id == "primary" && id == "primary")
-            })
+            !calendars
+                .iter()
+                .any(|calendar| calendar.matches_configured_id(&configured.id))
         })
         .map(|configured| configured.id.as_str())
         .collect();
@@ -295,17 +303,17 @@ fn check_calendars(
                 ui.note_interactive("Turn it on, then come back:");
                 ui.link(&url);
                 if !ui.is_tty() {
-                    return Err(error.with_hint(&format!("enable it at {url}")));
+                    return Err(error.with_hint(&api_kept_hint(&url)));
                 }
                 match ui
                     .prompt("Press Enter to check again, or q to stop › ")?
                 {
-                    None => return Err(api_retry_cancelled(error)),
+                    None => return Err(api_retry_cancelled(&url)),
                     Some(answer)
                         if answer.trim().eq_ignore_ascii_case("q")
                             || answer.trim().eq_ignore_ascii_case("quit") =>
                     {
-                        return Err(api_retry_cancelled(error));
+                        return Err(api_retry_cancelled(&url));
                     }
                     Some(_) => {}
                 }
@@ -315,9 +323,19 @@ fn check_calendars(
     }
 }
 
-fn api_retry_cancelled(error: GcalError) -> GcalError {
-    GcalError::runtime("api_disabled", error.message().to_string())
-        .with_hint(error.hint().unwrap_or("enable the Calendar API and retry"))
+fn api_retry_cancelled(url: &str) -> GcalError {
+    GcalError::runtime(
+        "api_disabled",
+        "the Google Calendar API is not enabled for this Cloud project"
+            .to_string(),
+    )
+    .with_hint(&api_kept_hint(url))
+}
+
+fn api_kept_hint(url: &str) -> String {
+    format!(
+        "your sign-in is kept; enable the Calendar API at {url}, then rerun `bob gcal login`"
+    )
 }
 
 fn api_disabled_url(error: &GcalError, project: Option<&str>) -> String {
@@ -456,6 +474,11 @@ fn guided_client(
         "Google client",
         "Bob needs an OAuth client from your own Google Cloud project.",
     );
+    for name in skipped_keyring {
+        ui.note_interactive(&format!(
+            "gog's \"{name}\" client keeps its secret in the system keyring, so Bob can't copy it."
+        ));
+    }
     let mut checklist_shown = false;
     loop {
         if let Some((path, client)) = newest_download_client() {
@@ -467,38 +490,46 @@ fn guided_client(
                 "Use ~/Downloads/{name} (Desktop app · project {})? [Y/n]",
                 client.project
             );
-            match ui.prompt(&question)? {
-                None => return Err(setup_cancelled()),
-                Some(answer)
-                    if !matches!(
-                        answer.trim().to_ascii_lowercase().as_str(),
-                        "n" | "no"
-                    ) =>
-                {
-                    let client = parse_client_json(
-                        &fs::read(&path).map_err(|error| {
-                            GcalError::setup(
-                                "client_invalid",
-                                format!(
-                                    "{}: cannot read client JSON: {error}",
-                                    path.display()
-                                ),
-                            )
-                        })?,
-                        ClientOrigin::Downloads,
-                    )
-                    .map_err(|problem| {
-                        problem.into_error(&path.display().to_string())
-                    })?;
-                    store_client(gog, &client)?;
-                    return Ok(ResolvedClient {
-                        origin: ClientOrigin::Downloads,
-                        project: Some(client.project),
-                        reused_name: None,
-                        file_display: Some(name),
-                    });
+            let mut store_download = false;
+            loop {
+                match ui.prompt(&question)? {
+                    None => return Err(setup_cancelled()),
+                    Some(answer) => match parse_confirm_default_yes(&answer) {
+                        Confirm::Yes => {
+                            store_download = true;
+                            break;
+                        }
+                        Confirm::No => break,
+                        Confirm::Quit => return Err(setup_cancelled()),
+                        Confirm::Unknown => {
+                            ui.note_interactive("Please answer Y, n, or q.");
+                        }
+                    },
                 }
-                Some(_) => {}
+            }
+            if store_download {
+                let client = parse_client_json(
+                    &fs::read(&path).map_err(|error| {
+                        GcalError::setup(
+                            "client_invalid",
+                            format!(
+                                "{}: cannot read client JSON: {error}",
+                                path.display()
+                            ),
+                        )
+                    })?,
+                    ClientOrigin::Downloads,
+                )
+                .map_err(|problem| {
+                    problem.into_error(&path.display().to_string())
+                })?;
+                store_client(gog, &client)?;
+                return Ok(ResolvedClient {
+                    origin: ClientOrigin::Downloads,
+                    project: Some(client.project),
+                    reused_name: None,
+                    file_display: Some(name),
+                });
             }
         }
 
@@ -629,6 +660,27 @@ fn store_client(gog: &Gog, client: &OAuthClient) -> Result<(), GcalError> {
     gog.credentials_set_json(&client.to_gog_json())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Confirm {
+    Yes,
+    No,
+    Quit,
+    Unknown,
+}
+
+fn parse_confirm_default_yes(answer: &str) -> Confirm {
+    let trimmed = answer.trim();
+    if trimmed.is_empty() {
+        return Confirm::Yes;
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
+        "y" | "yes" => Confirm::Yes,
+        "n" | "no" => Confirm::No,
+        "q" | "quit" => Confirm::Quit,
+        _ => Confirm::Unknown,
+    }
+}
+
 fn setup_cancelled() -> GcalError {
     GcalError::setup("cancelled", "Google client setup cancelled".to_string())
         .with_hint("a stored client stays stored; rerun `bob gcal login`")
@@ -691,6 +743,18 @@ mod tests {
     fn flow_names_match_json() {
         assert_eq!(signin::Flow::Browser.as_str(), "browser");
         assert_eq!(signin::Flow::Paste.as_str(), "paste");
+    }
+
+    #[test]
+    fn downloads_confirm_treats_q_as_cancel_and_junk_as_unknown() {
+        assert_eq!(parse_confirm_default_yes(""), Confirm::Yes);
+        assert_eq!(parse_confirm_default_yes("Y"), Confirm::Yes);
+        assert_eq!(parse_confirm_default_yes("yes"), Confirm::Yes);
+        assert_eq!(parse_confirm_default_yes("n"), Confirm::No);
+        assert_eq!(parse_confirm_default_yes("No"), Confirm::No);
+        assert_eq!(parse_confirm_default_yes("q"), Confirm::Quit);
+        assert_eq!(parse_confirm_default_yes("quit"), Confirm::Quit);
+        assert_eq!(parse_confirm_default_yes("maybe"), Confirm::Unknown);
     }
 
     #[test]

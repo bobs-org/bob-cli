@@ -36,7 +36,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Use this Desktop-app client JSON\n  bob gcal login -m           Paste the redirect URL instead of opening a browser\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              Connect Google Calendar in one guided step\n  bob gcal login -a EMAIL     Sign in as this account\n  bob gcal login -c PATH      Replace Bob's stored Desktop-app client JSON\n  bob gcal login -m           Paste the redirect address (automatic over SSH)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -115,15 +115,18 @@ fn doctor_after_help() -> &'static str {
 
 fn login_command() -> ClapCommand {
     ClapCommand::new("login")
-        .about("One-time read-only Google Calendar consent through gog")
+        .about("Connect Google Calendar (read-only) in one guided step")
         .long_about(
-            "One-time read-only Google Calendar consent through gog.\n\n\
+            "Connect Google Calendar (read-only) in one guided step.\n\n\
              Uses an isolated `--client bob-gcal` token bucket so removing \
              or re-consenting Bob's grant never touches other gog tokens. \
              Bob reuses a readable gog client or checks ~/Downloads before \
              guiding you through client setup. Sign-in opens a browser when \
-             available and uses a paste-URL flow over SSH. `-c FILE` and \
-             `-m` override those choices.",
+             a desktop session is available and uses the paste-URL flow \
+             automatically over SSH. Rerunning a healthy login is \
+             idempotent: it reports already connected and rechecks \
+             calendars. `-c FILE` replaces Bob's stored client. `-m` \
+             forces paste sign-in.",
         )
         .disable_help_flag(true)
         .arg(account_arg())
@@ -179,7 +182,7 @@ fn credentials_arg() -> Arg {
         .short('c')
         .value_name("FILE")
         .value_parser(OsStringValueParser::new())
-        .help("Desktop-app OAuth client JSON to store as bob-gcal")
+        .help("Desktop-app client JSON to store (replaces Bob's stored client)")
 }
 
 fn force_arg() -> Arg {
@@ -241,7 +244,7 @@ fn manual_arg() -> Arg {
         .long("manual")
         .short('m')
         .action(ArgAction::SetTrue)
-        .help("Browserless sign-in: paste the redirect URL")
+        .help("Sign in by pasting the redirect address (automatic over SSH)")
 }
 
 fn dry_run_arg() -> Arg {

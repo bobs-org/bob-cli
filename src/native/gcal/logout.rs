@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::super::style::Styler;
 use super::{
+    account,
     config::{assume_tty, GcalConfig},
     gog::{Gog, CLIENT, REVOKE_URL},
     ui, GcalError, LogoutArgs,
@@ -48,9 +49,9 @@ fn resolve_account(
     if let Some(email) = config.account() {
         return Ok(email.to_string());
     }
-    let accounts = gog.accounts(Some(CLIENT))?;
-    match accounts.as_slice() {
-        [account] => Ok(account.email.clone()),
+    let emails = account::unique_emails(&gog.accounts(Some(CLIENT))?);
+    match emails.as_slice() {
+        [email] => Ok(email.clone()),
         [] => Err(GcalError::setup(
             "not_logged_in",
             "no bob-gcal Calendar grant is stored".to_string(),
