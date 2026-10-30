@@ -805,10 +805,17 @@ readers at `bob types suggest`.
 Pure planners in `src/native/pomodoro_themes/routing.rs`, next to
 `preselect.rs`. Named capture `#NAME` / `=name` forms call `retype`.
 `place` now serves bare capture, existing-task links, ref-today, and
-successor offers; `relocate` and Task Card integration remain later work.
-The `agree`,
+successor offers; note moves relocate the link when inherited types
+change, and Pomodoro naming and renames retype linked tasks (D6 Enter).
+Task Card integration remains later work. The `agree`,
 `retype`, `place`, and `relocate` vector sections are the Ledger Tools
 JS mirror's contract.
+
+| Gesture | Changes | Bob restores agreement by |
+| --- | --- | --- |
+| Task Card Type stage, Use default, Ctrl+D on Type | the type | relocating the live link (D8) |
+| Task move to another note | the inherited type, if no field | relocating the live link (D8) |
+| Naming or renaming an entry that holds links | the entry's types | retyping its tasks, count previewed (D6) |
 
 - **Type components.** A component of a Pomodoro name is a type component
   iff its key is in the configured `types:` vocabulary; without a

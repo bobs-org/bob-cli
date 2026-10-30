@@ -14,13 +14,25 @@ use serde::Serialize;
 use serde_json::json;
 
 use super::{
+    capture::{
+        line_spans, list_item_body, nearest_shallower_list_item_parent,
+    },
     capture_language,
     capture_pomodoros::{
         self, PomodoroEntry, PomodoroRef, PomodoroRefLookup, PomodoroState,
     },
-    collect_done, env as bob_env,
+    capture_task_toggle::child_block_end_line,
+    collect_done,
+    config::{self},
+    env as bob_env,
+    note_tasks,
     plan_budget::{normalize_component, split_components},
-    pomodoro, pomodoro_themes,
+    pomodoro,
+    pomodoro_homes::{DiskHomeSource, HomeResolver},
+    pomodoro_themes::{self, routing, Catalog},
+    task_dependencies,
+    task_theme::{clear_task_theme, parse_task_theme, set_task_theme},
+    vault_links::{target_to_markdown_path, LinkResolution, VaultLinkResolver},
     style::Styler,
 };
 
@@ -242,6 +254,16 @@ struct CapturePomodoroNameResult {
     pomodoro: PomodoroEntry,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     warnings: Vec<NameWarning>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    retyped: Vec<RetypedEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RetypedEntry {
+    route: String,
+    block_id: String,
+    action: String,
+    theme: pomodoro_themes::ThemeRef,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -257,6 +279,19 @@ struct AssignmentPlan {
     target: PathBuf,
     updated: String,
     result: CapturePomodoroNameResult,
+    retype_writes: Vec<RetypeWrite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetypeWrite {
+    path: PathBuf,
+    relative: String,
+    route: String,
+    block_id: String,
+    before: String,
+    after: String,
+    action: String,
+    theme: pomodoro_themes::ThemeRef,
 }
 
 fn assign_capture_pomodoro_name(
@@ -280,8 +315,28 @@ fn assign_capture_pomodoro_name_at(
                 ))
             },
         )?;
+        for write in &plan.retype_writes {
+            if let Err(error) = write_retype_file(write) {
+                return Err(CapturePomodoroNameError::io(format!(
+                    "retype task {}: {error}",
+                    write.block_id
+                )));
+            }
+        }
     }
     Ok(plan.result)
+}
+
+fn write_retype_file(write: &RetypeWrite) -> std::io::Result<()> {
+    let contents = fs::read_to_string(&write.path)?;
+    if !contents.contains(&write.before) {
+        return Ok(());
+    }
+    let updated = contents.replacen(&write.before, &write.after, 1);
+    if updated == contents {
+        return Ok(());
+    }
+    collect_done::atomic_write(&write.path, &updated)
 }
 
 fn plan_assignment(
@@ -371,6 +426,18 @@ fn plan_assignment(
         )));
     }
 
+    let retype_writes =
+        plan_entry_retypes(&request.bob_dir, day_file, &updated, updated_entry.line, &request.name);
+    let retyped = retype_writes
+        .iter()
+        .map(|write| RetypedEntry {
+            route: write.route.clone(),
+            block_id: write.block_id.clone(),
+            action: write.action.clone(),
+            theme: write.theme.clone(),
+        })
+        .collect::<Vec<_>>();
+
     Ok(AssignmentPlan {
         target: day_file.to_path_buf(),
         updated,
@@ -386,7 +453,9 @@ fn plan_assignment(
             pomodoro_ref: updated_entry.pomodoro_ref.to_string(),
             pomodoro: updated_entry.clone(),
             warnings: name_warnings(&request.bob_dir, day_file, &request.name),
+            retyped,
         },
+        retype_writes,
     })
 }
 
@@ -420,6 +489,235 @@ fn name_warnings(
         });
     }
     warnings
+}
+
+fn plan_entry_retypes(
+    bob_dir: &Path,
+    day_file: &Path,
+    day_contents: &str,
+    entry_line: usize,
+    new_name: &str,
+) -> Vec<RetypeWrite> {
+    let links = entry_child_task_links(day_contents, entry_line);
+    if links.is_empty() {
+        return Vec::new();
+    }
+    let today = super::capture_pomodoros_agenda::agenda_date(day_file);
+    let Ok(catalog) = Catalog::load(bob_dir, today, false) else {
+        return Vec::new();
+    };
+    let Ok(cfg) = config::load_plan_config(&config::config_path()) else {
+        return Vec::new();
+    };
+    let mut resolver = HomeResolver::new(DiskHomeSource::new(bob_dir));
+    let link_resolver = VaultLinkResolver::new(bob_dir);
+    let day_relative = day_file
+        .strip_prefix(bob_dir)
+        .unwrap_or(day_file)
+        .to_path_buf();
+    let sources = catalog.theme_sources();
+    let mut writes = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (target, block_id) in links {
+        if !seen.insert((target.clone(), block_id.clone())) {
+            continue;
+        }
+        let relative = match link_resolver.resolve(&day_relative, &target) {
+            LinkResolution::Found(path) => path,
+            LinkResolution::Ambiguous | LinkResolution::Missing => {
+                // Fall back to direct path for exact vault-relative targets.
+                match target_to_markdown_path(&target) {
+                    Some(path) => path,
+                    None => continue,
+                }
+            }
+        };
+        let abs = bob_dir.join(&relative);
+        if !abs.is_file() {
+            // Direct fallback missed a basename link; skip.
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&abs) else {
+            continue;
+        };
+        let settings = note_tasks::read_settings(bob_dir);
+        let scan = note_tasks::scan(&contents, &settings);
+        let task = match scan.by_block_id(&block_id) {
+            note_tasks::BlockIdLookup::Found(task) => task,
+            _ => continue,
+        };
+        let Some(task_line) =
+            contents.lines().nth(task.line_index).map(str::to_string)
+        else {
+            continue;
+        };
+        let field = parse_task_theme(&task_line);
+        if matches!(
+            field,
+            crate::native::task_theme::TaskThemeState::Repair { .. }
+        ) {
+            continue;
+        }
+        if matches!(
+            field,
+            crate::native::task_theme::TaskThemeState::Set { .. }
+        ) {
+            // Explicit field keeps its type; no relocation on rename.
+            // Still need to check agreement: if explicit type already in
+            // new name, nothing to do; otherwise D6 would retype an
+            // explicit field, which the spec requires for renames.
+        }
+        let suggested = pomodoro_themes::suggest::suggest_for_task(
+            &mut resolver,
+            &catalog,
+            &cfg,
+            &relative,
+            &task_line,
+        );
+        let Some(suggestion) = suggested.suggestion else {
+            continue;
+        };
+        let effective_key = suggestion.theme.key.clone();
+        let effective_name = suggestion.theme.name.clone();
+        let inherited_key = suggestion
+            .inherited
+            .as_ref()
+            .and_then(|opt| opt.as_ref().map(|inner| inner.theme.key.clone()));
+        // Typeless tasks agree everywhere; nothing to do.
+        // suggest returns None when no effective type, handled above.
+        let outcome = routing::retype(
+            &routing::RetypeInput {
+                field: &field,
+                effective_key: Some(effective_key.as_str()),
+                effective_name: Some(effective_name.as_str()),
+                inherited_key: inherited_key.as_deref(),
+                destination: new_name,
+                selector: None,
+                keep_type: false,
+                tab_pick: None,
+            },
+            &sources,
+        );
+        let (action, new_task_line, theme) = match outcome {
+            routing::RetypeOutcome::Container
+            | routing::RetypeOutcome::Consistent
+            | routing::RetypeOutcome::Merge { .. } => continue,
+            routing::RetypeOutcome::Set { name, key } => {
+                let display = catalog.display_name(&key, &name);
+                let theme = catalog.theme_ref(&key, &display);
+                let updated = set_task_theme(&task_line, &display);
+                if updated == task_line {
+                    continue;
+                }
+                ("set".to_string(), updated, theme)
+            }
+            routing::RetypeOutcome::Clear => {
+                let cleared = clear_task_theme(&task_line);
+                if cleared == task_line {
+                    continue;
+                }
+                // After clear, effective is the inherited type.
+                let theme = inherited_key
+                    .as_ref()
+                    .map(|key| {
+                        let display = catalog.display_name(
+                            key,
+                            key,
+                        );
+                        catalog.theme_ref(key, &display)
+                    })
+                    .unwrap_or_else(|| {
+                        catalog.theme_ref(&effective_key, &effective_name)
+                    });
+                ("cleared".to_string(), cleared, theme)
+            }
+        };
+        // Exact line replacement: find the task line in file contents.
+        // Use the scanned line index to replace precisely, preserving
+        // endings via split_line_ending.
+        // Handle CRLF by working on the raw contents with inclusive split.
+        let inclusive: Vec<&str> =
+            contents.split_inclusive('\n').collect();
+        let Some(orig_inclusive) = inclusive.get(task.line_index) else {
+            continue;
+        };
+        let (body, ending) =
+            collect_done::split_line_ending(orig_inclusive);
+        if body != task_line.trim_end_matches(['\r', '\n'])
+            && body != task_line.as_str()
+        {
+            // Fall back to first-occurrence replacement below.
+        }
+        let before = body.to_string();
+        let after_body = new_task_line
+            .trim_end_matches(['\r', '\n'])
+            .to_string();
+        if before == after_body {
+            continue;
+        }
+        let route = relative
+            .with_extension("")
+            .to_string_lossy()
+            .replace('\\', "/");
+        writes.push(RetypeWrite {
+            path: abs,
+            relative: relative.to_string_lossy().to_string(),
+            route,
+            block_id: block_id.clone(),
+            before,
+            after: after_body,
+            action,
+            theme,
+        });
+        let _ = ending;
+    }
+    writes.sort_by(|a, b| {
+        a.route.cmp(&b.route).then_with(|| a.block_id.cmp(&b.block_id))
+    });
+    writes.dedup_by(|b, a| a.route == b.route && a.block_id == b.block_id);
+    writes
+}
+
+fn entry_child_task_links(
+    day_contents: &str,
+    entry_line: usize,
+) -> Vec<(String, String)> {
+    let spans = line_spans(day_contents);
+    if entry_line == 0 || entry_line > spans.len() {
+        return Vec::new();
+    }
+    let entry_index = entry_line - 1;
+    if entry_index >= spans.len() {
+        return Vec::new();
+    }
+    let end = child_block_end_line(&spans, entry_index);
+    let mut links = Vec::new();
+    for line_index in entry_index + 1..=end.min(spans.len().saturating_sub(1)) {
+        if nearest_shallower_list_item_parent(&spans, line_index)
+            != Some(entry_index)
+        {
+            continue;
+        }
+        let text = spans[line_index].text;
+        let Some(body) = list_item_body(text).map(str::trim) else {
+            continue;
+        };
+        // Dedicated Task Link: body is exactly one [[target#^block]].
+        if !(body.starts_with("[[") && body.ends_with("]]")) {
+            continue;
+        }
+        let inside = &body[2..body.len().saturating_sub(2)];
+        let Some((target, block_id)) =
+            task_dependencies::parse_block_link_inside(inside)
+        else {
+            continue;
+        };
+        if target.is_empty() {
+            continue;
+        }
+        links.push((target, block_id));
+    }
+    links
 }
 
 fn assign_name_to_line(
@@ -497,6 +795,31 @@ fn human_success(
         result.line,
         styler.dim(&result.pomodoro_ref)
     ));
+    if !result.retyped.is_empty() {
+        let count = result.retyped.len();
+        let noun = if count == 1 { "task" } else { "tasks" };
+        // D10 preview copy: `3 tasks become BUILD`. Use the first
+        // retyped type for the single-type case; mixed types list each.
+        let mut types = result
+            .retyped
+            .iter()
+            .map(|entry| entry.theme.name.clone())
+            .collect::<Vec<_>>();
+        types.sort();
+        types.dedup();
+        let summary = if types.len() == 1 {
+            format!("{count} {noun} become {}", types[0])
+        } else {
+            format!("{count} {noun} retyped")
+        };
+        output.push_str(&format!("    {summary}\n"));
+        for entry in &result.retyped {
+            output.push_str(&format!(
+                "      {} ^{} ({})\n",
+                entry.route, entry.block_id, entry.action
+            ));
+        }
+    }
     for warning in &result.warnings {
         output.push_str(&format!(
             "  {} {}\n",
@@ -957,6 +1280,7 @@ mod tests {
                 child_count: 0,
             },
             warnings: Vec::new(),
+            retyped: Vec::new(),
         };
 
         let value: serde_json::Value =

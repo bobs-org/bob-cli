@@ -7,6 +7,18 @@ routing reuses this engine inside the capture batch: an `--inbox-route`
 answer moves the candidate exactly as a move would (see
 [capture.md](capture.md#routing-inbox-tasks-out)).
 
+Moving a task without an explicit `[type::]` field to a note whose chain
+yields a different inherited type relocates its live Task Link via the
+shared relocation rule (D8): a backlog task never gains a link, an already
+agreeing link stays, a running sole-link entry renames in place, a running
+shared entry gains ` + TYPE`, otherwise the link moves to the entry
+`place(TYPE)` would choose, renames a sole-link placeholder, or creates a
+`— TYPE` placeholder directly below the source. A task with an explicit
+field keeps its type, so no relocation happens. Frontmatter `parent:`,
+`task_type:`, and config edits are not gestures; the `type_mismatch` lint
+covers them. With `plan.strict: true`, a creation past the cap refuses the
+whole edit.
+
 ## Command
 
 ```text
@@ -121,7 +133,7 @@ reconcile hint when needed. Set `NO_COLOR` to disable color.
 stderr. Schema version 1 contains:
 
 - `ok`, `dry_run`, `moves[]`, `renamed_block_ids[]`, `repaired_files[]`,
-  `needs_reconcile`, and `warnings[]`.
+  `needs_reconcile`, `warnings[]`, and `relocated[]` (omitted when empty).
 - `git.mode` (`sync`, `offline`, `not_a_worktree`, or `dry_run`) and nullable
   `git.pre_sync`, `git.commit`, and `git.post_sync` stage records. Stages not
   run are `null`.
@@ -133,7 +145,11 @@ stderr. Schema version 1 contains:
 `moves[]` records source and destination paths, source line, title, nullable old
 and new block ids, and nullable old and new dependency ids. Rename records
 include destination path and old/new block ids. Repaired-file records include
-`path`, `link_count`, and `dependency_token_count`. The Git commit record
+`path`, `link_count`, and `dependency_token_count`. `relocated[]` records
+each moved link as `{route, block_id, from, to, type}` where `from` is the
+source entry name (null when unnamed), `to` the destination entry name, and
+`type` the new inherited type name; human output appends
+`· link moved to TYPE` to each relocated move. The Git commit record
 contains `sha`, `subject`, and the exact `paths`; pre-sync contains `ok`,
 `files_committed`, and `error`; post-sync contains `ok`, `pushed`, `conflicts`,
 and `error`.

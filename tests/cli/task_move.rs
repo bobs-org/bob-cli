@@ -961,3 +961,82 @@ fn co_move_then_reconcile_keeps_canonical_identities() {
         "{source}"
     );
 }
+
+#[test]
+fn move_without_field_relocates_live_link_to_new_inherited_type() {
+    // gesture-retype: moving a field-less task to a note with a different
+    // inherited type relocates its live link via D8; an explicit field
+    // keeps its type and leaves the ledger alone.
+    let temp = TempDir::new("bob-task-move-retype");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+    );
+    write_file(
+        &vault.join("areas/dev.md"),
+        "---\ntype: [[area]]\ntask_type: BUILD\n---\n# Dev\n## Tasks\n- [ ] #task Dev task ^dev1\n",
+    );
+    write_file(
+        &vault.join("areas/ops.md"),
+        "---\ntype: [[area]]\ntask_type: CHORE\n---\n# Ops\n## Tasks\n",
+    );
+    let day = vault.join("2026/20261030.md");
+    write_file(
+        &day,
+        "# 2026-10-30\n## Pomodoros\n- [ ] () — BUILD\n  - [[dev#^dev1]]\n- [ ] () — MEET\n",
+    );
+    let output = configured_move(&temp, &vault, &["-f", "json", "dev", "ops", "-b", "dev1"])
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_DAY_FILE", &day)
+        .env("BOB_NOW", "2026-10-30 12:00:00")
+        .output()
+        .expect("run task move");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ok"], true, "{}", format_output(&output));
+    let relocated = json["relocated"].as_array().expect("relocated array");
+    assert_eq!(relocated.len(), 1, "{json}");
+    assert_eq!(relocated[0]["block_id"], "dev1");
+    assert_eq!(relocated[0]["to"], "CHORE");
+    assert_eq!(relocated[0]["type"], "CHORE");
+    let day_after = fs::read_to_string(&day).expect("read day");
+    assert!(day_after.contains("— CHORE"), "{day_after}");
+    assert!(!day_after.contains("— BUILD\n  - [[dev#^dev1]]"), "{day_after}");
+    let ops = fs::read_to_string(vault.join("areas/ops.md")).expect("read ops");
+    assert!(ops.contains("^dev1"), "{ops}");
+    // Explicit field keeps its type: no relocation.
+    let temp2 = TempDir::new("bob-task-move-field-keeps");
+    let vault2 = temp2.path().join("vault");
+    let config2 = temp2.path().join("config.yml");
+    write_file(
+        &config2,
+        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+    );
+    write_file(
+        &vault2.join("areas/dev.md"),
+        "---\ntype: [[area]]\ntask_type: BUILD\n---\n# Dev\n## Tasks\n- [ ] #task Fixed task [type:: FIX] ^fix1\n",
+    );
+    write_file(
+        &vault2.join("areas/ops.md"),
+        "---\ntype: [[area]]\ntask_type: CHORE\n---\n# Ops\n## Tasks\n",
+    );
+    let day2 = vault2.join("2026/20261030.md");
+    write_file(
+        &day2,
+        "# 2026-10-30\n## Pomodoros\n- [ ] () — FIX\n  - [[dev#^fix1]]\n",
+    );
+    let output2 = configured_move(&temp2, &vault2, &["-f", "json", "dev", "ops", "-b", "fix1"])
+        .env("BOB_CONFIG_FILE", &config2)
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_NOW", "2026-10-30 12:00:00")
+        .output()
+        .expect("run task move explicit");
+    assert_success(&output2);
+    let json2 = parse_json(&output2);
+    assert_eq!(json2["ok"], true, "{}", format_output(&output2));
+    assert_eq!(json2["relocated"].as_array().map(Vec::len), Some(0), "{json2}");
+    let day2_after = fs::read_to_string(&day2).expect("read day2");
+    assert!(day2_after.contains("— FIX"), "{day2_after}");
+}

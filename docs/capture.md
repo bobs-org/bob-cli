@@ -7167,14 +7167,24 @@ written contents and refuses to report success unless the entry now parses with
 the expected name and slug. `--dry-run` returns the same success shape without
 writing.
 
+Naming an entry that holds Task Links applies the shared retype rule (D6
+Enter) to each linked task whose type the new name does not include: a
+container or label result retypes nothing, otherwise the task gains
+`[type:: X]` or clears to its inherited type, catalog-spelled. A label or
+container result keeps the task's type. Ctrl+X merges only add types, so
+they never retype.
+
 JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `day_file`, `relative_day_file`, the canonical `name`, the `slug` to
 type, the updated one-based `line`, the updated `ref`, a `pomodoro` object
 with the same picker metadata as `capture-pomodoros` after the assignment,
-and `warnings` when a `themes:` vocabulary is configured and the name is
-outside it (`theme_not_configured`, omitted when empty). Human output
-prints those warnings after the success lines. `--dry-run` returns the same
-success shape without writing.
+`warnings` when a `themes:` vocabulary is configured and the name is
+outside it (`theme_not_configured`, omitted when empty), and `retyped[]`
+(omitted when empty) with each retyped task as
+`{route, block_id, action, theme}` where `action` is `set` or `cleared` and
+`theme` the new effective type. Human output prints `N tasks become TYPE`
+plus per-task rows after the success lines, then any warnings.
+`--dry-run` returns the same success shape without writing.
 JSON failure is `{"ok": false, "error": "..."}` and is write-free, as are
 stale, ambiguous, completed, already-named, missing-note, missing-section, and
 unreadable-note errors.

@@ -1251,3 +1251,98 @@ fn capture_pomodoro_name_warns_when_name_is_unconfigured() {
         serde_json::from_str(stdout(&build).trim()).expect("json");
     assert!(build_json.get("warnings").is_none(), "{build_json}");
 }
+
+#[test]
+fn naming_unnamed_entry_retypes_its_tasks_to_keep_agreement() {
+    // gesture-retype: naming an open entry that holds Task Links applies
+    // D6 Enter to each linked task; consistent tasks stay untouched.
+    let temp = TempDir::new("bob-cli-pomodoro-name-retype");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20261030.md");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &vault.join("areas/dev.md"),
+        "---\ntype: [[area]]\ntask_type: BUILD\n---\n# Dev\n## Tasks\n- [ ] #task Dev task ^dev1\n",
+    );
+    write_file(
+        &day_file,
+        "# 2026-10-30\n## Pomodoros\n- [ ] ()\n  - [[dev#^dev1]]\n- [ ] () — MEET\n",
+    );
+    write_file(
+        &config,
+        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  MEET: blue\n  CHORE: yellow\n",
+    );
+    let unnamed_ref = capture_pomodoro_ref("- [ ] ()", 3);
+    // Naming to FIX retypes the BUILD task to FIX.
+    let output = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg(&unnamed_ref)
+        .arg("-n")
+        .arg("FIX")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("name to FIX");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["ok"], true, "{}", format_output(&output));
+    assert_eq!(json["name"], "FIX");
+    let retyped = json["retyped"].as_array().expect("retyped array");
+    assert_eq!(retyped.len(), 1, "{json}");
+    assert_eq!(retyped[0]["block_id"], "dev1");
+    assert_eq!(retyped[0]["action"], "set");
+    assert_eq!(retyped[0]["theme"]["name"], "FIX");
+    let task_after =
+        fs::read_to_string(vault.join("areas/dev.md")).expect("read task");
+    assert!(task_after.contains("[type:: FIX]"), "{task_after}");
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(day_after.contains("— FIX"), "{day_after}");
+    // Naming a second unnamed entry to BUILD is consistent: no retype.
+    let temp2 = TempDir::new("bob-cli-pomodoro-name-consistent");
+    let vault2 = temp2.path().join("vault");
+    let day2 = vault2.join("2026/20261030.md");
+    let config2 = temp2.path().join("config.yml");
+    write_file(
+        &vault2.join("areas/dev.md"),
+        "---\ntype: [[area]]\ntask_type: BUILD\n---\n# Dev\n## Tasks\n- [ ] #task Dev task ^dev1\n",
+    );
+    write_file(
+        &day2,
+        "# 2026-10-30\n## Pomodoros\n- [ ] ()\n  - [[dev#^dev1]]\n",
+    );
+    write_file(
+        &config2,
+        "plan:\n  max_themes: 30\n  default_type: CHORE\ntypes:\n  BUILD: yellow\n  FIX: blue\n  CHORE: yellow\n",
+    );
+    let ref2 = capture_pomodoro_ref("- [ ] ()", 3);
+    let output2 = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("-b")
+        .arg(&vault2)
+        .arg("-p")
+        .arg(&ref2)
+        .arg("-n")
+        .arg("BUILD")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day2)
+        .env("BOB_CONFIG_FILE", &config2)
+        .env("XDG_CACHE_HOME", temp2.path().join("cache"))
+        .output()
+        .expect("name to BUILD");
+    assert_success(&output2);
+    let json2: serde_json::Value =
+        serde_json::from_str(stdout(&output2).trim()).expect("json2");
+    assert_eq!(json2["ok"], true, "{}", format_output(&output2));
+    assert!(json2.get("retyped").is_none(), "{json2}");
+    let task2_after =
+        fs::read_to_string(vault2.join("areas/dev.md")).expect("read task2");
+    assert!(!task2_after.contains("[type::"), "{task2_after}");
+}
