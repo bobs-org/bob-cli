@@ -37,11 +37,11 @@ Starting or closing a session and completing its task are therefore distinct out
 
 Today never changes the checkbox, never writes a tag, and never means "tasks stored in the daily note." Residence in the daily note is not enough: an unlinked task that happens to live there is not Today, and a linked area task is Today even though it lives elsewhere. Tasks link into Today from any note type except quarantined copies, and the ledger is the only membership list.
 
-Exempt PLAN entries can still contribute Today tasks. The plan budget ignores exempt components when counting themes, but Today counts dedicated links under every open entry, including exempt ones. Theme and link budgets and Today use different counting rules on the same ledger: the budget guards how much is planned, while Today names which tasks were chosen.
+Exempt PLAN entries can still contribute Today tasks. The plan budget ignores exempt components when counting types, but Today counts dedicated links under every open entry, including exempt ones. Type and link budgets and Today use different counting rules on the same ledger: the budget guards how much is planned, while Today names which tasks were chosen.
 
 ## Reading the ledger
 
-`bob plan` is read-only. It reports themes, distinct Task Links, Today, and lane counts from the ledger as written; it never promotes, releases, or cleans up links. Reconcile and capture gestures perform the writes, and a second `bob plan` run shows their result. Exact caps, entry syntax, markers, and resolution rules belong in the contract; the model here is only that the ledger is input, the plan is a view, and writers act separately.
+`bob plan` is read-only. It reports types, distinct Task Links, Today, and lane counts from the ledger as written; it never promotes, releases, or cleans up links. Reconcile and capture gestures perform the writes, and a second `bob plan` run shows their result. Exact caps, entry syntax, markers, and resolution rules belong in the contract; the model here is only that the ledger is input, the plan is a view, and writers act separately.
 
 ## Related
 

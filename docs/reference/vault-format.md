@@ -355,8 +355,8 @@ its local block link under a Pomodoro.
 
 Contract: [Event Task](glossary.md#event-task).
 
-A `+` separates themes within a name: `WORK + ADMIN` has two themes. The
-theme catalog comes from canonical daily notes, with hide and color
+A `+` separates types within a name: `WORK + ADMIN` has two types. The
+type catalog comes from canonical daily notes, with hide and color
 preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
 the ledger and its history remain intact.
 

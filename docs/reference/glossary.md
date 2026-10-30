@@ -94,7 +94,7 @@ canonical daily notes, above the badges, in Live Preview and Reading
 view, or wherever a `bob-day-stats` fence embeds it. Its contents: five
 LABEL-value facts, each numeric one over a quiet `typical` line (the median of
 the seven days before, with a ▲/▼/= mark once the day is finished), then a
-[Root Parent](#root-parent) lane and a [Pomodoro Theme](#pomodoro-theme) lane, each a legend over a
+[Root Parent](#root-parent) lane and a [Task Type](#task-type) lane, each a legend over a
 full-width bar, shown together or one at a time by the bars switch on
 the top lane row beside `so far · HH:MM`; the last bar separates it from the badges. bob
 owns every value, and it never writes the note. `## Pomodoros` no longer
@@ -217,26 +217,6 @@ into ROTTEN where the footer splits them; see [Review Walk Is Tiered With Daily 
 
 A Pomodoro is a column-0 checkbox item under `## Pomodoros` in an Obsidian daily file, representing one work session. Its body is either a timespan such as `(**0920-0950** [t:: 30m])` or an empty `()` placeholder; an optional ` — NAME` suffix (em dash plus ALL-CAPS name) makes it a named Pomodoro. Past Pomodoros are closed with timespans, current Pomodoros are open with timespans, and planned Pomodoros are open placeholders. Child bullets log the session's work, usually with a task link. On a sub-bullet, `N<ctrl+shift+m>` moves it and the next N siblings into another open Pomodoro, or into a new named one below.
 
-### Pomodoro Theme {#pomodoro-theme}
-
-*Aliases: theme.*
-
-One `+`-separated component of a [Pomodoro](#pomodoro)'s ` — NAME` suffix, keyed by the plan
-budget's component normalization and displayed in the most recently authored spelling.
-Pomodoro names are written in ALL CAPS: `— BOB + DECKS` is one name with two themes.
-`plan.max_themes` counts distinct non-exempt components across today's open entries;
-components in `plan.exempt` (default `[PLAN]`) do not count. The Stats `theme`
-dimension splits a named session into the same components. The catalog is derived
-from canonical daily notes plus `.bob/themes/<host>.jsonl`; `bob themes` lists,
-hides/unhides from Recent suggestions, pins/unpins colors, and renames components
-through one previewed Bob transaction. Hiding removes a theme from history
-suggestions only. Hue priority is configured `themes:` color, then journal pin,
-then exempt mute, then the unconfigured mute, then matching top-level area, then
-stable hash. Configured themes live under `themes:` in config.yml and scope Recent
-suggestions. Each theme wears a tint or rounded swatch, never an area's ● dot. Not a
-Pomodoro home, an Obsidian appearance theme, or `(unnamed)`. See
-`docs/pomodoro-themes.md`.
-
 ### Project Note {#project-note}
 
 *Aliases: prj note.*
@@ -311,7 +291,7 @@ Root parents are derived from the current note tree and never stored as a
 separate status. `rollup:` no longer exists. The [Day Strip](#day-strip)'s root-parent
 bar and the default [Stats Dash](#stats-dash) view group by it; Stats JSON calls the
 dimension `root_parent`. It is not the nearest home (`project`), a top-level
-area, or a [Pomodoro Theme](#pomodoro-theme); see `docs/pomodoro-homes.md`.
+area, or a [Task Type](#task-type); see `docs/pomodoro-homes.md`.
 
 ### Rotten Log {#rotten-log}
 
@@ -341,7 +321,7 @@ When the `<ctrl+shift+p>` Obsidian keymap is used to add the `scheduled` or `pri
 single `bob-stats` fence renders `bob stats` JSON: tiles, the focus
 chart, day pinning, and family panels. "Where the time went" groups by
 [Root Parent](#root-parent) by default, with sub-projects one click away, or by
-[Pomodoro Theme](#pomodoro-theme). Opened from the dashboard STATS chip, Open Stats, or
+[Task Type](#task-type). Opened from the dashboard STATS chip, Open Stats, or
 any [Day Strip](#day-strip) fact. Not `dash.md` or the `bob stats` terminal output.
 
 ### Successor Offer {#successor-offer}
@@ -425,6 +405,33 @@ The status exceptions are committing a configured cancel label through capture o
 the Links stage, which cancels the source task at commit time, and committing a
 configured complete label through capture or the Links stage, which marks the source
 task Done at commit time.
+
+### Task Type {#task-type}
+
+*Aliases: type, theme, pomodoro theme, pomodoro-theme.*
+
+A task's type is its kind of work: one ALL-CAPS name. Bob computes an open task's
+effective type in this order: its explicit `[type:: NAME]` (or legacy `[theme:: NAME]`)
+field; `plan.reading_type` for a reading task; the nearest area/project `task_type:`
+default (or legacy `theme:`); then `plan.default_type`. A task field stores only an
+exception to inheritance: choosing the inherited type clears it. Closed tasks keep
+their fields as history.
+
+A Pomodoro name can contain several `+`-separated components. With a configured
+vocabulary, matching components are types and the others are labels; without one, each
+component is a type unless it is an inventory label. A task's effective type and its
+live Pomodoro Task Link agree: retyping updates the task field and moves or renames its
+link as needed, while naming a linked entry retypes its open linked tasks. Disagreement
+is shown as drift; it is not silently repaired. PLAN is an ordinary type, while
+`plan.exempt` only controls budget counting and mute color.
+
+`bob types` manages the catalog and preferences; `bob themes` remains a CLI alias.
+Configured `types:` colors take precedence, followed by journal pins, exempt and
+unconfigured mute colors, the top-level area's color, and a stable name hash. Hiding a
+type removes it from Recent suggestions only. See `docs/task-types.md`.
+
+This is not a SASE bead `task_type`, a note's frontmatter `type:`, a Pomodoro home, or
+an Obsidian appearance theme.
 
 ### Top-Level Project {#top-level-project}
 

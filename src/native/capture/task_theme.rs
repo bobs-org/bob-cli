@@ -260,7 +260,6 @@ impl CaptureTaskThemeContext {
                 )?;
                 ("cleared", None, task_line)
             }
-            ThemeChange::None => unreachable!("returned above"),
         };
         let summary = CaptureTaskThemeChange {
             action,

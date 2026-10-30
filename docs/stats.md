@@ -134,7 +134,7 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   its first matching component so parts add up to the total. `in:` /
   `exclude_in:` match a linked task's residence chain with the same
   path, basename, and parent-ancestry rules as task `in:`. Minutes mode
-  keeps those tasks' even shares and re-splits theme parts only when a filter
+  keeps those tasks' even shares and re-splits type parts only when a filter
   removes a task share; count mode keeps the session when any task matches and
   picks the lead home among kept tasks. Whole unlinked sessions never
   match `in:` and are never removed by `exclude_in`. A leftover `review:`
@@ -284,7 +284,7 @@ stays the file that holds the checkbox. `root_parent` is the
 additive working-time grouping by root parent; every metric that carries
 `area` and `project` parts also carries it, in grouped and prior points too,
 with no `other` collapse.
-The `theme` dimension splits a named session on the same `+` components as
+The `theme` dimension splits a named session by task type, on the same `+` components as
 the plan budget; catalog identity and hues are in
 [task-types.md](task-types.md). Minutes-mode days also carry
 `apportioned`, the share of each part that came
@@ -293,9 +293,9 @@ recalculate a display string, summary, percentage, or delta — the report
 carries them all.
 
 The JSON report includes `theme_hues` beside `homes`, keyed by normalized
-theme key, for the theme dimensions present in the report. Values use the
+type key, for the type dimensions present in the report. Values use the
 shared `ThemeRef` fields (`key`, `name`, `hue`, `hue_source`). Human output
-adds a colored `■` before known theme parts and a muted `□` for exempt themes;
+adds a colored `■` before known type parts and a muted `□` for exempt types;
 `NO_COLOR` keeps the existing text unchanged.
 
 - `ok`: a real observed value (including a real zero, e.g. an empty
@@ -461,7 +461,7 @@ report includes at least one pomodoro metric. The catalog and `sessions`
 are omitted when empty. `sessions` lists every closed Pomodoro in the
 display window (today included) in chronological order. Each element is
 `{date, path, line, time_range, minutes, minutes_display, quality, name,
-homes}`: facts, not metric values, so themes and filters do not change
+homes}`: facts, not metric values, so types and filters do not change
 them. `homes` is the shared R9 object; its keys are in the catalog. On
 the 2026-10-18 live vault, `bob stats -f json -r all` is 1,945,299 bytes
 (1.90 MiB) with 1,093 session facts. Ratio points
@@ -601,7 +601,7 @@ dimension in a stable order: pomodoro `area`, `root parent`, `project`,
 root-parent, and project cells use catalog labels; under color they prefix a
 `●` in the area's xterm hue, and buckets render dim. The project line shows
 the top five homes plus
-`other`, with buckets always shown outside those five. The theme line shows
+`other`, with buckets always shown outside those five. The type line shows
 the top five plus `other`. When apportioned
 minutes are non-zero, a dim `split` line reports the share of project
 minutes that came from sessions with several homes. Buckets render dim:
@@ -645,7 +645,7 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |
 | M10 | review_time | U | 0 | 0 | 0·prov | `in: [gtd_daily]`; unlinked PLAN rows never match |
 | M11 | sessions | U | 2 | 0 | 1·prov | Count mode counts rows once; parts still attribute PLAN |
-| M12 | sase_time (custom pomodoro) | U | 3 | 0 | 10·prov | Custom theme metric through the same path |
+| M12 | sase_time (custom pomodoro) | U | 3 | 0 | 10·prov | Custom type metric through the same path |
 | M13 | ref_done (custom tasks) | U | 1 | 0 | 0·prov | `task_kind: ref` spelling with the `ref` part |
 | M14 | habit_count (custom checklist) | U | 0 | 1 | 0·prov | Count measure returns chores met |
 | M15 | energy (custom field) | 3 frontmatter | 5 inline | M absent | M·prov | `either` source precedence and fallback |
@@ -688,7 +688,7 @@ untouched. The clock is Saturday 2026-10-18 noon and the window is
 Expected values are derived by hand from the file contents and asserted in
 `src/native/stats/homes.rs`. Home labels follow
 [pomodoro-homes.md](pomodoro-homes.md): counted minutes C are the
-theme-selected shares, then R5 splits C so every dimension sums to the
+type-selected shares, then R5 splits C so every dimension sums to the
 metric total.
 
 | # | Metric | What it proves |
@@ -699,7 +699,7 @@ metric total.
 | H4 | apportioned | sase 10 and job 4 from multi-home sessions; gtd area 10 from HACK |
 | H5 | sessions | 8 closed rows; lead homes put 1 on sase, 1 on sase_blog, and 2 on @unlinked; their root-parent parts group 2 on sase and 2 on @unlinked |
 | H6 | done | 7 completions; 2 on sase, 1 @unfiled; job area tasks use `job · area tasks` |
-| H7 | sase_time | themes:[SASE] counted C is 10m, then split onto sase/dev |
+| H7 | sase_time | types:[SASE] counted C is 10m, then split onto sase/dev |
 | H8 | health | 2 unlinked sessions / 35m, 1 unfiled link, hue collision gtd+body orange |
 | H9 | sase_in | `in: [sase]` is 80m (blog 50 + HACK sase share 10 + PLAN+SASE 20); unlinked sessions never match |
 | H10 | sase_blog_in | `in: [sase_blog]` is 50m on sase_blog — blog time measures on its own |
@@ -716,7 +716,7 @@ Oct 15 `^gtd` row (rooted at `gtd_daily`) and `bob`. Session names never
 choose a home, so it splits into 25m gtd_daily and 25m bob.
 Oct 15: unlinked PLAN 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
 sase_blog, HACK 30m split bob/sase/dev, JOB 7m split 4/3,
-MISC 15m on an article (@unfiled), PLAN+SASE 20m all on sase (theme remainder
+MISC 15m on an article (@unfiled), PLAN+SASE 20m all on sase (type remainder
 gives SASE 10m), unnamed 10m on gtd_daily via `[[#^gtd]]`. Oct 17 is an empty
 Pomodoros section (real zero). Oct 18 (today) BLOG 15m is in `sessions` and
 provisional on metrics. Repeated `compute` calls return byte-identical
@@ -997,7 +997,7 @@ labels and values use Obsidian text colors.
 The context panel follows the focused metric family:
 
 - Pomodoro metrics open on **Where the time went**, grouped by root parent by
-  default, with **Themes** one click away. The root bar reuses the area-bar component
+  default, with **Types** one click away. The root bar reuses the area-bar component
   and is fed root rows in the same order as the Day strip's root-parent bar (area hue-slot
   order, then label, with buckets last in gray), with those same distinct root
   colours; root rows and their sub-project leaves match them and area headers keep
@@ -1019,17 +1019,17 @@ The context panel follows the focused metric family:
   row. The footer reads
   `▒ split from sessions with several root parents · grouped by today's note tree · from Task Links`.
   Opening the dash with a day pinned (`openStatsForDay({ panel: "homes" })`) selects
-  the Root parents view, even right after a Themes visit. `openStatsForDay({ panel:
-  "themes" })` selects the Themes view. Reports without
+  the Root parents view, even right after a Types visit. `openStatsForDay({ panel:
+  "themes" })` selects the Types view. Reports without
   `parts_summary.root_parent` fall back to the old `Areas & projects` leaf grouping
   with an `Update bob to group by root parent.` hint; a stale
   `homesView === "areas"` maps to `roots`.
-- **Themes** remains one click away and shows the supplied theme breakdown. Theme
+- **Types** remains one click away and shows the supplied type breakdown. Type
   bars and names come from the report's `theme_hues`. The list shows the top 8
   rows by value plus a quiet `N more` / `Show fewer` toggle (focus key
   `panel-theme-more`, state `themeRowsExpanded`). Reports that still carry an
   `other` bucket (older bob) render the supplied list as before, without the
-  cap. Reports without `root_parent` parts default to Themes and show an
+  cap. Reports without `root_parent` parts default to Types and show an
   update-bob hint. Reports without the additive `sessions` list omit session
   drill-down controls.
 - Root rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
@@ -1071,7 +1071,7 @@ start, and limits. No definition or metric value is reconstructed by the rendere
 Two Day-strip-style working-time bars sit in a `.bob-stats-lanes` group between
 `.bob-stats-header` (whose last line is the window label) and `.bob-stats-tiles`.
 They have no card, border, or background. The roots lane comes first and the
-themes lane second; both always show when their data exists, with no lane
+types lane second; both always show when their data exists, with no lane
 switch. Each lane is one legend row over one **6 px** fully rounded bar.
 A 2 px gap of page background separates segments, never track colour.
 Neighbouring **gray** segments, and neighbouring **unattributed** segments,
@@ -1086,7 +1086,7 @@ window: `summarize_parts` skips the provisional today, and so do the tiles.
 A pinned day or bucket never changes the bars; the "Where the time went"
 panel keeps following the pin. Roots use `parts_summary.root_parent`. A
 report without it but with `parts_summary.area` (older bob) falls back to
-areas, and the copy then says `Time by area`. Themes use
+areas, and the copy then says `Time by area`. Types use
 `parts_summary.theme`. Bob owns every value: labels, `display`, `share`, the
 total, and hues all come from the report. The plugin only orders, colours,
 and lays out. It never sums daily parts and never formats minutes itself.
@@ -1094,12 +1094,12 @@ and lays out. It never sums daily parts and never formats minutes itself.
 **Roots** come from `statsPanelHomeRows(worked, report, dimension, null)`
 (positive values only), ordered by `statsPanelHomeAreaRows` (area hue-slot
 order, then label, with buckets last) and coloured by `statsPanelDistinctHues`,
-so the top bar and the panel's root bar always agree. **Themes** follow the
-Day strip theme-lane rule. Identity comes from `statsThemeRef` (report
-`theme_hues`, else the plugin's `pomodoroThemeHueFor`). Coloured themes are
-ordered by minutes descending, then label. Gray themes (exempt,
+so the top bar and the panel's root bar always agree. **types** follow the
+Day strip type-lane rule. Identity comes from `statsThemeRef` (report
+`theme_hues`, else the plugin's `pomodoroThemeHueFor`). Coloured types are
+ordered by minutes descending, then label. Gray types (exempt,
 unconfigured) follow, by minutes. Then comes `other` (older bob only), and
-`(unnamed)` is last. Among coloured themes that share a hue, the largest
+`(unnamed)` is last. Among coloured types that share a hue, the largest
 keeps the exact hue, the second gets 65% and later ones 42%. The exact keys
 `other` and `(unnamed)` are always gray, even when `theme_hues` carries an
 entry for them.
@@ -1108,7 +1108,7 @@ Every segment has `tone` = `hue` | `gray` | `none`. `none` is time bob
 cannot attribute in that dimension (`@unlinked`, `@unfiled`, and
 `(unnamed)`): a fine diagonal hatch in `--text-faint` over a faint base,
 and a hollow legend mark. `gray` is the existing muted fill:
-exempt PLAN, unconfigured themes, and `other`.
+exempt PLAN, unconfigured types, and `other`.
 
 The legend uses `bob-day-strip-legend` markup and the Day strip fitter.
 Items appear in bar order, the lowest-ranked items drop first, one `+N`
@@ -1117,7 +1117,7 @@ names more items. Legend items never shrink or ellipsize. Roots legend
 labels use the Day strip `legendLabel` rule: the bare catalog label,
 and the full label for case-insensitive collisions. Tooltips and accessible text use full
 labels. Item and segment titles read `<label> · <display> · <share>`.
-Unconfigured themes append ` · not in your themes`. Each legend item shows
+Unconfigured types append ` · not in your types`. Each legend item shows
 bob's `display` (window time). The right end of the first shown lane row
 holds `<summary.total.display> worked` in faint tabular text that never
 wraps. Its title is `Worked <range.label>`. When `range.includes_today`,
@@ -1148,9 +1148,9 @@ final values are set at once. First paint, same-window revalidation,
 
 No `worked` metric, or not minutes, or `summary.total` is null: render no
 lanes and no element. Total 0: show the roots lane as an empty track
-(`--background-modifier-border`) with `no Pomodoros`, omit the themes lane,
+(`--background-modifier-border`) with `no Pomodoros`, omit the types lane,
 and read `0m worked`. No positive root or area parts: omit the roots lane.
-No positive theme parts: omit the themes lane. Neither: render no lanes.
+No positive type parts: omit the types lane. Neither: render no lanes.
 Skeleton (first paint only): two invisible legend lines plus two empty 6 px
 tracks, so the tiles do not jump when the report lands. An error card means
 no lanes.
@@ -1159,7 +1159,7 @@ The group has `role="group"` and
 `aria-label="Where the time went, <range.label>"`. Each legend
 `aria-label` reads
 `Time by root parent, <range.label>: bob 28h 36m (23%), … Show details below.`
-It lists every segment; the themes lane says `Time by theme` and the area
+It lists every segment; the types lane says `Time by type` and the area
 fallback says `Time by area`. `:focus-visible` gets a 2 px
 `--interactive-accent` outline. Under `forced-colors`, segments are
 `CanvasText`, gray and hatch are `GrayText`, and gaps stay.
@@ -1220,21 +1220,21 @@ segment per root, `flex-grow` set to minutes and 2 px gaps of note
 background between segments, never track colour. Each segment's `title`
 reads `<label> <display>`; the track (`--background-modifier-border`)
 shows only when the bar is empty or in the skeleton. Below it, the
-themes legend sits over the themes bar. The themes legend has no meta, so it gets the full width
-when both lanes show; in themes-only view the themes row takes the top-row
+types legend sits over the types bar. The types legend has no meta, so it gets the full width
+when both lanes show; in types-only view the types row takes the top-row
 position with the meta and the switch. There are no history marks, and no separate Stats
 link: every fact is itself the link to Stats, and each bar is a second
 mouse-only target for its legend's action. A metric hidden by
 `stats.hide` is omitted from the strip, not faked.
 
 A quiet switch at the right of the top lane cycles both bars → root
-parents only → themes only. It speaks the strip's own marks: a `●` dot for
-root parents and a `■` rounded square for themes, filled when shown and
+parents only → types only. It speaks the strip's own marks: a `●` dot for
+root parents and a `■` rounded square for types, filled when shown and
 hollow when hidden. It never moves between presses, and its tooltip names
 the current view and the next one. The view is read from memory, never from
 disk, during a paint; every switch repaints from the cache without spawning
 `bob`. The switch paints only when both lanes are available; on a
-zero-Pomodoro day or a day with no theme parts it is absent, and the shown
+zero-Pomodoro day or a day with no type parts it is absent, and the shown
 lane always matches the choice whenever the switch is visible. The skeleton
 paints the lanes of the current view plus an invisible inert placeholder;
 stale matches ready and the switch works. The group `aria-label` names only
@@ -1267,29 +1267,29 @@ keep full labels: each legend item's `title` reads `<label> <display>`, and
 bar segment titles, the `+N` title, and the legend and group `aria-label`
 sentences do too.
 
-The theme lane splits the same `worked` minutes by task type. One
+The type lane splits the same `worked` minutes by task type. One
 segment per positive key in D's `parts.theme`, displayed with
 `parts_display.theme[key]`. Labels come from `report.theme_hues[normalize(key)].name`
 when present, else the part key; `(unnamed)` and `other` keep their keys.
-Coloured themes sort by minutes descending then label; gray segments
-follow, with `(unnamed)` last. Colour is identity from Bob's theme hues
+Coloured types sort by minutes descending then label; gray segments
+follow, with `(unnamed)` last. Colour is identity from Bob's type hues
 (`theme_hues`, else the plugin's `pomodoroThemeHueFor` fallback): a palette
 hue, or gray for exempt, `(unnamed)`, and `other`. Among coloured
 segments that share a hue, the largest keeps the exact hue, the second
 is `color-mix(in srgb, <hue> 65%, var(--background-primary))`, and every
 later one is `42%`. Gray is never shaded. `bob types color` pins remove
-a recurring collision. Each theme legend item is a rounded-square swatch
+a recurring collision. Each type legend item is a rounded-square swatch
 (the legend-dot footprint), the ALL-CAPS name, and the value. The fitter
 is the same as the roots legend, independently. Titles read
-`<label> <display>`; the themes legend's `aria-label`/`title` start with
-`Time by theme`. When `report.sessions` lists a session dated D whose
+`<label> <display>`; the types legend's `aria-label`/`title` start with
+`Time by type`. When `report.sessions` lists a session dated D whose
 name splits into two or more components, the title appends `Pomodoros
-with several themes are split evenly between them.` The group
-`aria-label` appends ` Time by theme: <label> <display>, ….`.
+with several types are split evenly between them.` The group
+`aria-label` appends ` Time by type: <label> <display>, ….`.
 
 Bob owns every value: labels, values, part displays, definitions, and
 the typical-day `display`, `words`, and `detail` all come from the
-report. The strip derives its colours from the report's area hues, theme
+report. The strip derives its colours from the report's area hues, type
 hues, plus status inks for boolean marks. The typical line has no hue.
 The strip writes its own fixed copy only (`so far`, `typical`,
 `refresh failed`, `no Pomodoros`, `Day stats unavailable — …`, `Retry`)
@@ -1306,9 +1306,9 @@ one. The roots legend and bar are omitted if `worked` is absent, is not
 measured in minutes, or has no nonempty `parts.root_parent` (or fallback
 `parts.area`) anywhere in its daily series.
 Otherwise a zero worked day with `quality: ok` shows an empty roots track and
-`no Pomodoros`; the theme lane is absent. The theme lane is omitted whenever
+`no Pomodoros`; the type lane is absent. The type lane is omitted whenever
 `worked` is absent, is not in minutes, no daily point has a nonempty
-`parts.theme`, or D has no positive theme part. With no bar or status text, the
+`parts.theme`, or D has no positive type part. With no bar or status text, the
 roots row holds the meta alone.
 A future daily note shows nothing: no element height, no spawn. The first
 load paints a skeleton in the loaded geometry, including both empty bar
@@ -1337,8 +1337,8 @@ automatic strip can both appear in the same daily note.
 Interaction: clicking a fact opens Stats with D pinned and that metric
 focused; clicking the roots legend or the roots bar opens Stats with
 `worked` focused, D pinned, and "Where the time went" on the Root
-parents view revealed; clicking the themes legend or the themes bar
-opens the same pin on the Themes view (`openStatsForDay({ panel:
+parents view revealed; clicking the types legend or the types bar
+opens the same pin on the types view (`openStatsForDay({ panel:
 "themes" })`). The switch is a `span[role=button]` and never opens Stats;
 click, Enter, and Space advance the cycle once, and focus survives the
 repaint. A plain click reuses an open Stats tab; Ctrl/Cmd-click and

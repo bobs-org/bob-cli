@@ -1007,7 +1007,7 @@ without changing any file. Warnings go to stderr. A no-op prints a single
 and grouping diagnostics are all unchanged.
 
 When a plan budget is available, both changed and no-op reports print one
-meter line, for example `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`.
+meter line, for example `plan 3/3 types · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`.
 It follows the sync stats line on changed runs and the `already in sync`
 summary on no-op runs. Over-cap meters are red.
 When the report carries plan warnings, the line appends the count and points
@@ -1395,8 +1395,8 @@ carry `"plan_budget": null`.
 field for one contract cycle.
 
 `plan_budget` holds the shared plan report described in
-[`plan.md`](plan.md): date, daily file, caps, status, themes/links
-meters, Today count and rows, NEXT/PENDING lane meters, theme names,
+[`plan.md`](plan.md): date, daily file, caps, status, types/links
+meters, Today count and rows, NEXT/PENDING lane meters, type names,
 entries, and warnings. It is computed read-only from
 the original daily note, before this run's ledger cleanup, so a live sync
 can leave the final ledger with different counts. It is `null` when there

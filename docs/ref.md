@@ -839,7 +839,7 @@ promotes prerequisites, as in capture.
 
 The envelope also includes `theme_suggestion` for the reading task. One
 `pomodoros` row can carry `suggested: true` and its
-`suggestion_label`. If no open bucket matches, a known theme that can be
+`suggestion_label`. If no open bucket matches, a known type that can be
 created gets `theme_suggestion.create: true`; the client can offer a new
 Pomodoro. Otherwise `theme_suggestion.fallback` reports
 `unknown_theme`, `creation_blocked`, or `strict_cap`. If the task already

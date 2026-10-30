@@ -424,7 +424,7 @@ writes.
   status hues and blue would claim a state or the Ready lane;
   orange means attention and repair; pink and orchid turn muddy on
   the Blocked tint and read as a near-miss beside violet pills;
-  the theme tag accent makes the mark read as one more tag pill
+  the task-type tag accent makes the mark read as one more tag pill
   beside `#prj`.
 - **Replacing `a.tag` with a new span in rendered views**: this loses
   native tag search, copy text, and robustness to re-renders.

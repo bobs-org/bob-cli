@@ -999,7 +999,7 @@ and writes nothing to the journal.
 `tests/fixtures/pomodoro_themes/vectors.json` is the single source. Sections:
 `components`, `hue` (including the `areas` and `configured` inputs), `fold`,
 `rank`, `similar`, `menu`, `literal`, `suggest`, `task_field`,
-`write_rule`, `preselect`, `agree`, `retype`, `place`, and `relocate`.
+`preselect`, `agree`, `retype`, `place`, and `relocate`.
 CLI tests consume the menu and literal sections, including
 capture dry-run round trips; Rust tests consume the routing sections,
 including mini-vault suggest cases with expected JSON and warnings.

@@ -15,8 +15,7 @@ use crate::native::{
     plan_budget::{normalize_component, split_components},
     pomodoro_homes::{fallback_hue, HomeResolver, Hue, IndexedHomeSource},
     task_theme::{
-        clear_task_theme, parse_task_theme, plan_theme_change, set_task_theme,
-        TaskThemeState, ThemeChange,
+        clear_task_theme, parse_task_theme, set_task_theme, TaskThemeState,
     },
     vault_links::NoteIndex,
 };
@@ -408,7 +407,6 @@ fn shared_vectors_cover_components_hue_fold_rank_and_similar() {
 struct ThemeCoreVectors {
     suggest: SuggestVectors,
     task_field: Vec<TaskFieldCase>,
-    write_rule: Vec<WriteRuleCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -490,31 +488,14 @@ struct TaskFieldCase {
     repair: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct WriteRuleCase {
-    id: String,
-    field: String,
-    #[serde(default)]
-    field_key: Option<String>,
-    suggestion: Option<String>,
-    inherited: Option<String>,
-    destination: String,
-    exempt: Vec<String>,
-    deliberate: bool,
-    expected: String,
-    #[serde(default)]
-    name: Option<String>,
-}
-
 #[test]
-fn shared_vectors_cover_suggest_task_field_and_write_rule() {
+fn shared_vectors_cover_suggest_and_task_field() {
     let vectors: ThemeCoreVectors = serde_json::from_str(include_str!(
         "../../../tests/fixtures/pomodoro_themes/vectors.json"
     ))
     .expect("theme core vectors parse");
     assert!(!vectors.suggest.cases.is_empty());
     assert!(!vectors.task_field.is_empty());
-    assert!(!vectors.write_rule.is_empty());
 
     let note_index =
         NoteIndex::from_paths(vectors.suggest.notes.keys().cloned());
@@ -660,42 +641,6 @@ fn shared_vectors_cover_suggest_task_field_and_write_rule() {
         }
     }
 
-    for case in &vectors.write_rule {
-        let field = match case.field.as_str() {
-            "none" => TaskThemeState::None,
-            "set" => TaskThemeState::Set {
-                value: case
-                    .field_key
-                    .clone()
-                    .unwrap_or_default()
-                    .to_ascii_uppercase(),
-                key: case.field_key.clone().unwrap_or_default(),
-            },
-            "repair" => TaskThemeState::Repair {
-                kind: crate::native::task_theme::RepairKind::Invalid,
-            },
-            other => panic!("unknown field {other}"),
-        };
-        let exempt: BTreeSet<String> = case.exempt.iter().cloned().collect();
-        let change = plan_theme_change(
-            &field,
-            case.suggestion.as_deref(),
-            case.inherited.as_deref(),
-            &case.destination,
-            &exempt,
-            case.deliberate,
-        );
-        match (case.expected.as_str(), change) {
-            ("none", ThemeChange::None) => {}
-            ("clear", ThemeChange::Clear) => {}
-            ("set", ThemeChange::Set { name, .. }) => {
-                assert_eq!(name, case.name.as_deref().unwrap(), "{}", case.id);
-            }
-            (expected, got) => {
-                panic!("{}: expected {expected}, got {got:?}", case.id)
-            }
-        }
-    }
 }
 
 fn assert_suggestion(

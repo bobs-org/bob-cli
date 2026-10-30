@@ -192,7 +192,7 @@ bob freshness list --limit 10
 bob ready
 ```
 
-`bob plan` reports today's themes and Task Links plus Next/Pending pressure.
+`bob plan` reports today's types and Task Links plus Next/Pending pressure.
 `bob freshness` shows the due review queue in PRE → NEW → PROJECTS → PENDING →
 NEXT → RECURRING → TICKLER → ROTTEN → POST order. These are review groups,
 separate from task statuses. A visible recurring occurrence joins RECURRING

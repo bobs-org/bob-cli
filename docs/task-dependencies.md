@@ -1571,7 +1571,7 @@ Capture / Ctrl+Shift+Enter as the way to link later:
   surfaced Ship the outcome!  proj.md ^prj · project has no open tasks
   still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
   still blocked  Ship the outcome!  proj.md ^prj · project has no open tasks · waits on 1 more
-plan 3/3 themes · 10/10 links
+plan 3/3 types · 10/10 links
 ```
 
 - **Destinations:**

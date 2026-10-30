@@ -19,4 +19,4 @@ Root parents are derived from the current note tree and never stored as a
 separate status. `rollup:` no longer exists. The [[day-strip]]'s root-parent
 bar and the default [[stats-dash]] view group by it; Stats JSON calls the
 dimension `root_parent`. It is not the nearest home (`project`), a top-level
-area, or a [[pomodoro-theme]]; see `docs/pomodoro-homes.md`.
+area, or a [[task-type]]; see `docs/pomodoro-homes.md`.

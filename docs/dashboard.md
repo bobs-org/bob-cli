@@ -39,8 +39,8 @@ yellow → magenta. Orange first appears at cap 5 (`4/5`). A NEXT section at `15
 magenta even when a larger whole lane makes it over the whole-lane cap; that condition
 remains informational and does not make the section over.
 
-TODAY uses `budget.links` for its count and limit. Themes over their cap still override
-TODAY to red; themes exactly at cap leave the link-based color intact. A missing ledger or
+TODAY uses `budget.links` for its count and limit. Types over their cap still override
+TODAY to red; types exactly at cap leave the link-based color intact. A missing ledger or
 invalid count remains unavailable (`–`). Orange (80% up to the cap) and magenta
 (exactly at the cap) are presentation states, not lints or `over` conditions. Magenta
 marks a lane that is exactly full, and no other Bob chip uses that hue.

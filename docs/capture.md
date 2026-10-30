@@ -2850,14 +2850,14 @@ omitted when the ledger is unchanged:
   "added_theme_refs": [{"key": "bob", "name": "BOB", "hue": "magenta",
     "hue_source": "hash"}],
   "warnings": [{"code": "plan_theme_cap_exceeded",
-    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^ or defer with $<N>"}]}
+    "message": "today's plan now has 4/3 types (adds BOB); queue it with ^ or defer with $<N>"}]}
 ```
 
 Warnings fire only for `plan_theme_cap_exceeded` and
 `plan_link_cap_exceeded`, and only while the batch grows that meter past
 its cap (`after > cap` and `after > before`). A capture that leaves an
 over-cap plan alone stays quiet. Human output prints one meter line
-after the result (`plan 4/3 themes · 8/10 links  (+1 theme: BOB)`) and
+after the result (`plan 4/3 types · 8/10 links  (+1 type: BOB)`) and
 one `bob capture: warning: …` stderr line per fired warning; the
 warnings never join the item `warnings` array. An invalid plan config
 skips the budget and pushes one plain string into `warnings` instead.
@@ -2868,7 +2868,7 @@ when stdout is a color terminal; `NO_COLOR` keeps the existing destination
 text unchanged.
 
 With `plan.strict: true`, the whole batch is refused, atomically, when
-a non-start item creates a new named Pomodoro entry past the theme cap
+a non-start item creates a new named Pomodoro entry past the type cap
 (`<text> @r:id#NAME`, `@r^id+#NAME` project notes, `@r+id#NAME`
 toggles, and any other non-start creation path). A bare link-creating
 capture whose task type would add a type past the cap is refused before
@@ -2876,12 +2876,12 @@ any write with code `strict_cap`, including a bare link-start
 (`@r:id=<X>`) that would create a started `— T` entry; pure `=` starts
 and named starts and overrides (`=<X>#NAME`, `#NAME=`, and named link
 starts) are never refused. A named start
-that creates a theme still reports `plan_budget` and the cap warning. The
+that creates a type still reports `plan_budget` and the cap warning. The
 refusal is an
 I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
 
 ```json
-{"ok": false, "error": "refusing capture: today's plan would grow to 4/3 themes (adds BOB); …", "code": "plan_theme_cap_exceeded"}
+{"ok": false, "error": "refusing capture: today's plan would grow to 4/3 types (adds BOB); …", "code": "plan_theme_cap_exceeded"}
 ```
 
 The bare-form strict refusal instead teaches the escape:
@@ -5244,7 +5244,7 @@ for `dry_run`. Human output names a deleted session on the structured
 `−` consumption lines
 ([Blocking existing tasks with '*'](#blocking-existing-tasks-with)).
 
-#### Task-theme changes
+#### Task-type changes
 
 When an explicitly named Pomodoro capture changes a task's `[type::]`
 field, that item gains this additive `task_theme` object. It is omitted when
@@ -5256,10 +5256,10 @@ transaction as the task and Pomodoro changes.
 ```json
 "task_theme": {
   "action": "set",
-  "theme": {"key": "fix", "name": "FIX", "hue": "blue", "hue_source": "config"},
+  "type": {"key": "fix", "name": "FIX", "hue": "blue", "hue_source": "config"},
   "previous": null,
   "inherited": {
-    "theme": {"key": "write", "name": "WRITE", "hue": "magenta", "hue_source": "config"},
+    "type": {"key": "write", "name": "WRITE", "hue": "magenta", "hue_source": "config"},
     "source": "note",
     "label": "from sase"
   }
@@ -6388,7 +6388,7 @@ rows. Today rows keep their existing order: planned placeholders (with
 sessions, most recent first. Utility rows are the unnamed “Name it” entries
 (`requires_name: true`) followed by the running session. They are never
 filtered out, so `=#zzz` still offers creation before those utilities.
-Recent rows exclude hidden themes and components of any Today row before
+Recent rows exclude hidden types and components of any Today row before
 query filtering. Empty queries show at most 5 Recent rows; other queries show
 at most 12. New, Recent, and again rows carry `plan_themes_after` and
 `plan_themes_cap`. Recent and again replacements preserve the displayed name:
@@ -6421,7 +6421,7 @@ entries as Today rows and unnamed entries as utilities. Matching Today rows
 keep their prefix-then-substring order. Entries with the same normalized name key collapse
 to the first row with `match_count` reporting the number of matching entries.
 Nameable rows use an empty `replacement`; clients prompt for a name rather
-than inserting it. A theme completed today is Recent in this link context
+than inserting it. A type completed today is Recent in this link context
 and an “again” row in the start context.
 
 In `pomodoro_name` only, capture completion is task-aware: body-bearing
@@ -6431,7 +6431,7 @@ suggestion. The response adds top-level `theme_suggestion` (null when there
 is none), and one candidate at most adds `suggested: true` plus
 `suggestion_label`. A known suggestion with no matching open entry adds a
 suggested create row at the top for an empty query when creation is allowed;
-its Recent duplicate is removed. Hidden themes remain eligible for this
+its Recent duplicate is removed. Hidden types remain eligible for this
 suggested row. With a nonempty query, PT7 ordering stays unchanged and a
 matching row is marked in place. The top-level suggestion adds
 `fallback: "unknown_theme" | "creation_blocked" | "strict_cap"` when no
@@ -6448,7 +6448,7 @@ An exact Recent match serves as the create row. A hidden exact name remains
 typable and is marked `hidden: true` on the create row. A new create row can
 also carry up to two `similar_to` names as a quiet near-duplicate heads-up;
 this never changes order or Return. Completion and acceptance never write
-theme preferences. Shell descriptions include `recent · Oct 21 · 3 days`.
+type preferences. Shell descriptions include `recent · Oct 21 · 3 days`.
 
 Pomodoro block-ID
 completion covers `@route:prefix` and parent-task completion covers
@@ -7178,11 +7178,11 @@ JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `day_file`, `relative_day_file`, the canonical `name`, the `slug` to
 type, the updated one-based `line`, the updated `ref`, a `pomodoro` object
 with the same picker metadata as `capture-pomodoros` after the assignment,
-`warnings` when a `themes:` vocabulary is configured and the name is
+`warnings` when a `types:` vocabulary is configured and the name is
 outside it (`theme_not_configured`, omitted when empty), and `retyped[]`
 (omitted when empty) with each retyped task as
-`{route, block_id, action, theme}` where `action` is `set` or `cleared` and
-`theme` the new effective type. Human output prints `N tasks become TYPE`
+`{route, block_id, action, type}` where `action` is `set` or `cleared` and
+`type` the new effective type. Human output prints `N tasks become TYPE`
 plus per-task rows after the success lines, then any warnings.
 `--dry-run` returns the same success shape without writing.
 JSON failure is `{"ok": false, "error": "..."}` and is write-free, as are

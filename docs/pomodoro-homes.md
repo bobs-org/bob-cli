@@ -30,8 +30,9 @@ walk at X instead of the linked note ([R11](#r11-task-root-fields)).
 
 An empty target resolves to the current daily note. A daily note walks
 like any other note: without an area, project, or root field, a task in one
-is `@unfiled`. The same residence chain feeds task theme
-suggestions: the first valid area/project `theme:` default on the chain is
+is `@unfiled`. The same residence chain feeds task type
+suggestions: the first valid area/project `task_type:` default (or legacy
+`theme:` default) on the chain is
 the note source ([PT13](task-types.md#pt13-task-type-suggestions)). The top-level area is the outermost area on the chain.
 A subarea is the nearest area below that top-level area. A home without an area uses
 `@unfiled` for its area dimension.
@@ -125,7 +126,7 @@ its residence or its `[root:: X]` field, exactly as R1 resolves it. A `PLAN`
 session linking `[[#^gtd]]` attributes to `gtd_daily` when that row carries
 `[root:: gtd_daily]`. A `PLAN` session linking `[[sase_blog#^s0-spike]]`
 attributes to `sase_blog`. An unlinked closed `PLAN` session is `@unlinked`.
-"How much PLAN" remains the Stats theme dimension, which already reads
+"How much PLAN" remains the Stats type dimension, which already reads
 `PLAN` time, while the homes read the linked tasks' notes.
 
 ## R5 — Splitting and lead home
@@ -323,7 +324,7 @@ the trailing metadata run, the same position `set_task_theme` uses. A field
 authored anywhere on the line is still recognized. Root is a
 description-region field: it is never part of the Obsidian Tasks suffix,
 freshness stamps land after it, and it is not a run-extending freshness key.
-Task move and archive, freshness stamping, keeps, and unblock, theme
+Task move and archive, freshness stamping, keeps, and unblock, type
 set/clear, reconcile, complete, and cancel, and ref rename's link rewrite
 keep the authored bytes identical.
 

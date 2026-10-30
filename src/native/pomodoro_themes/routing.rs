@@ -5,8 +5,7 @@
 //! successor, and Task Card gestures. Every function is pure over plain
 //! data so the Ledger Tools JS mirror can consume the same vectors.
 //! Capture named `#NAME` / `=name` forms call `retype`; `place` and
-//! `relocate` wait for later phases. `plan_theme_change` remains for the
-//! `write_rule` vectors until `closeout`.
+//! `relocate` wait for later phases.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

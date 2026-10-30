@@ -6,10 +6,8 @@
 //! Kept independent of suggestion types so later capture writers can call
 //! these helpers without a module cycle.
 
-use std::collections::BTreeSet;
-
 use super::{
-    plan_budget::{normalize_component, split_components},
+    plan_budget::normalize_component,
     ref_tasks::strip_blockquote_prefix,
     task_fields::{
         all_inline_fields, canonical_theme_name, inline_fields, InlineField,
@@ -32,8 +30,6 @@ pub(crate) enum TaskThemeState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ThemeChange {
-    #[allow(dead_code)] // write_rule vectors until closeout
-    None,
     Set {
         name: String,
         key: String,
@@ -89,63 +85,6 @@ pub(crate) fn clear_task_theme(line: &str) -> String {
     let mut output = remove_theme_fields(body);
     output.push_str(ending);
     output
-}
-
-#[allow(dead_code)] // write_rule vectors until closeout
-pub(crate) fn plan_theme_change(
-    field: &TaskThemeState,
-    shown_suggestion_key: Option<&str>,
-    inherited_key: Option<&str>,
-    destination_name: &str,
-    exempt_keys: &BTreeSet<String>,
-    deliberate: bool,
-) -> ThemeChange {
-    if !deliberate {
-        return ThemeChange::None;
-    }
-    let Some(chosen) =
-        single_non_exempt_component(destination_name, exempt_keys)
-    else {
-        return ThemeChange::None;
-    };
-    if shown_suggestion_key.is_none() {
-        return ThemeChange::None;
-    }
-    let chosen_key = component_key(&chosen);
-    if inherited_key == Some(chosen_key.as_str()) {
-        return match field {
-            TaskThemeState::None => ThemeChange::None,
-            _ => ThemeChange::Clear,
-        };
-    }
-    if let TaskThemeState::Set { key, .. } = field
-        && key == &chosen_key
-    {
-        return ThemeChange::None;
-    }
-    ThemeChange::Set {
-        name: chosen,
-        key: chosen_key,
-    }
-}
-
-#[allow(dead_code)] // write_rule vectors until closeout
-fn single_non_exempt_component(
-    destination_name: &str,
-    exempt_keys: &BTreeSet<String>,
-) -> Option<String> {
-    let trimmed = destination_name.trim();
-    if trimmed.is_empty() || trimmed == "(unnamed)" {
-        return None;
-    }
-    let non_exempt: Vec<String> = split_components(trimmed)
-        .into_iter()
-        .filter(|component| !exempt_keys.contains(&component_key(component)))
-        .collect();
-    let [component] = non_exempt.as_slice() else {
-        return None;
-    };
-    canonical_theme_name(component)
 }
 
 fn component_key(value: &str) -> String {

@@ -105,7 +105,7 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
 - **Paths.** Directory options (`--bob-dir`, `--repo`, `--backup-dir`,
   `--lib-dir`, `--ref-dir`, `--xlib-dir`, `query --vault`) answer
   `!dirs`. File options (`--query-file`, `--tasks-file`, ref
-  markdown inputs, PDF arguments, clip `--html`, themes split `--map`)
+  markdown inputs, PDF arguments, clip `--html`, types split `--map`)
   answer `!files` with a glob where one applies. A slot the builder annotates with a clap
   `ValueHint` (for example `completion install -t`, `completion zsh -o`)
   answers the same way with no table entry; a path-specific table entry
@@ -146,9 +146,9 @@ See also the [command catalog protocol](command-catalog.md) (`bob __catalog`).
     git.
   - `task reroll --level`: configured priority labels in config order;
     the description is the roll window (for example `2–7 days`).
-  - `themes hide NAME…`, `themes unhide NAME…`, `themes color NAME`,
-    `themes rename OLD`, and `themes split OLD`: remembered theme names,
-    including hidden ones, grouped `themes`. The rename destination `NEW`
+  - `types hide NAME…`, `types unhide NAME…`, `types color NAME`,
+    `types rename OLD`, and `types split OLD` (`themes` is the legacy alias):
+    remembered type names, including hidden ones, grouped `types`. The rename destination `NEW`
     and color `HUE` remain free text.
   - `relations hide LABEL…`, `relations unhide LABEL…`, and
     `relations rename OLD NEW`: catalog labels, including hidden ones,
@@ -436,12 +436,12 @@ another thin client of that service (see `docs/capture.md`
   separately opens the parent-task picker, while shell completion offers
   only identified `@route+block-id` values in the `parent tasks` group.
 - **Named starts and links complete Pomodoro names.** `=name`, `=#name`,
-  and link-name suffixes use today's entries plus the theme catalog. Recent
-  rows exclude hidden themes and components already represented by Today;
+  and link-name suffixes use today's entries plus the type catalog. Recent
+  rows exclude hidden types and components already represented by Today;
   at most 5 appear for an empty query and 12 for a nonempty query. They are
   grouped `Recent` with last-use and day-count descriptions. Acceptance
   preserves the name with an exact quoted literal when needed, and never
-  changes theme preferences. See [Menu composition](task-types.md#pt7-menu-composition).
+  changes type preferences. See [Menu composition](task-types.md#pt7-menu-composition).
 - **Whole-item `!` completes open tasks.** A leading `!` token opens the
   Complete picker over every open task in the vault, and shell completion
   offers only identified, enabled `!note:block-id` values (ID-less and
