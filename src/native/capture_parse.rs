@@ -14,11 +14,12 @@ use serde_json::json;
 use super::{
     capture_flag_guard,
     capture_language::{
-        self, AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
+        self, resolve_exact_type_name, scan_line, unmatched_type_display,
+        AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
         EditorGlobalDestination, EditorItemParse, EditorMode,
         EditorParseOptions, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
         PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId, RelationDirection,
-        RelationEntry, Severity, Span,
+        RelationEntry, ResolvedTypeName, Severity, Span,
     },
     capture_links,
     pomodoro_themes::{ThemeLookup as ThemeCatalog, ThemeRef},
@@ -428,7 +429,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- 'x'\n  bob capture-parse -f json -- 'x1,3!2'\n  bob capture-parse -f json -- 'x1~2'\n  bob capture-parse -f json -- 'x0!2'\n  printf 'x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf 'x\\n- 1\\n' | bob capture-parse -f json\n  printf 'x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=bugs'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- 'x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf 'x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- 'Fix trip ~work:foo'\n  bob capture-parse -f json -- 'Fix trip ~~work:foo|see'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, relation_target, relation_label, dependency_target, task_complete, task_type",
         )
         .disable_help_flag(true)
         .arg(format_arg())
@@ -754,7 +755,25 @@ fn is_theme_name_span(span: &CaptureParseSpan) -> bool {
         span.kind,
         capture_language::SpanKind::PomodoroName
             | capture_language::SpanKind::TaskTogglePomodoroName
+            | capture_language::SpanKind::TaskType
     )
+}
+
+/// Decode one `task_type` span's marker token with the shared lexer: the
+/// returned marker carries the decoded name for identity plus the authored
+/// byte ranges for highlighting, or `None` for incomplete/invalid tokens.
+fn task_type_marker(
+    raw: &str,
+    span_start: usize,
+) -> Option<capture_language::TypeMarker> {
+    scan_line(raw, span_start)
+        .into_iter()
+        .find_map(|occurrence| match occurrence {
+            capture_language::TypeMarkerOccurrence::Complete(marker) => {
+                Some(marker)
+            }
+            _ => None,
+        })
 }
 
 fn theme_component_keys(
@@ -768,6 +787,15 @@ fn theme_component_keys(
         let Some(raw) = result.input.get(span.start..span.end) else {
             continue;
         };
+        if span.kind == capture_language::SpanKind::TaskType {
+            let Some(marker) = task_type_marker(raw, span.start) else {
+                continue;
+            };
+            let key = super::plan_budget::normalize_component(&marker.name);
+            keys.insert(key.clone());
+            keys.insert(key.replace('-', " "));
+            continue;
+        }
         let (name, _) = theme_name_content(raw, span.start);
         keys.extend(name.split('+').filter_map(|part| {
             let component = part.trim();
@@ -778,6 +806,23 @@ fn theme_component_keys(
     keys
 }
 
+fn resolve_task_type(
+    catalog: &ThemeCatalog,
+    name: &str,
+    literal: bool,
+) -> ResolvedTypeName {
+    resolve_exact_type_name(
+        catalog.configured_type_entries(),
+        &|key| catalog.catalog_type_spelling(key),
+        name,
+        literal,
+    )
+    .unwrap_or_else(|| ResolvedTypeName {
+        key: super::plan_budget::normalize_component(name),
+        name: unmatched_type_display(name),
+    })
+}
+
 fn attach_theme_refs(result: &mut CaptureParseResult, catalog: &ThemeCatalog) {
     for span in &mut result.spans {
         if !is_theme_name_span(span) {
@@ -786,6 +831,22 @@ fn attach_theme_refs(result: &mut CaptureParseResult, catalog: &ThemeCatalog) {
         let Some(raw) = result.input.get(span.start..span.end) else {
             continue;
         };
+        // A task-type span covers the whole marker token but carries one
+        // ThemeRef over only the source name content. Names never split on
+        // `+`: a task has exactly one type.
+        if span.kind == capture_language::SpanKind::TaskType {
+            let Some(marker) = task_type_marker(raw, span.start) else {
+                continue;
+            };
+            let resolved =
+                resolve_task_type(catalog, &marker.name, marker.literal);
+            let mut reference =
+                catalog.theme_ref(&resolved.key, &resolved.name);
+            reference.start = Some(marker.name_span.start);
+            reference.end = Some(marker.name_span.end);
+            span.themes = vec![reference];
+            continue;
+        }
         let (name, base) = theme_name_content(raw, span.start);
         let mut refs = Vec::new();
         let mut offset = 0;
@@ -2439,6 +2500,104 @@ mod tests {
 
     fn json(input: &str) -> serde_json::Value {
         serde_json::from_str(&success_json(&parse(input))).expect("json")
+    }
+
+    fn task_type_catalog() -> (tempfile::TempDir, ThemeCatalog) {
+        let vault = tempfile::tempdir().expect("scratch vault");
+        std::fs::create_dir_all(vault.path().join("2026")).unwrap();
+        std::fs::write(
+            vault.path().join("2026/20261023.md"),
+            "## Pomodoros\n- [x] (0800-0830 30m) — FIX\n- [x] (0900-0930 30m) — DEEP WORK\n",
+        )
+        .unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let keys = std::collections::BTreeSet::from([
+            "fix".to_string(),
+            "deep work".to_string(),
+        ]);
+        let catalog =
+            ThemeCatalog::load_for_theme_keys(vault.path(), today, &keys)
+                .expect("theme catalog");
+        (vault, catalog)
+    }
+
+    fn task_type_themes(
+        input: &str,
+        catalog: &ThemeCatalog,
+    ) -> serde_json::Value {
+        let options = EditorParseOptions::routing_off();
+        let mut result = CaptureParseResult::new(input.to_string(), &options);
+        attach_theme_refs(&mut result, catalog);
+        let value = serde_json::to_value(&result).unwrap();
+        value["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "task_type")
+            .expect("task_type span")["themes"]
+            .clone()
+    }
+
+    #[test]
+    fn task_type_spans_carry_one_ref_over_the_name_content() {
+        let (_vault, catalog) = task_type_catalog();
+        // A catalog slug match resolves through the hyphen fallback.
+        let themes = task_type_themes("Fix it t:deep-work", &catalog);
+        assert_eq!(themes.as_array().unwrap().len(), 1);
+        assert_eq!(themes[0]["key"], "deep work");
+        assert_eq!(themes[0]["name"], "DEEP WORK");
+        assert!(themes[0].get("known").is_none());
+        assert_eq!(
+            &"Fix it t:deep-work"[themes[0]["start"].as_u64().unwrap() as usize
+                ..themes[0]["end"].as_u64().unwrap() as usize],
+            "deep-work"
+        );
+        // A literal resolves by key equality with quotes excluded.
+        let themes = task_type_themes("Fix it t:\"DEEP WORK\"", &catalog);
+        assert_eq!(themes[0]["key"], "deep work");
+        assert_eq!(
+            &"Fix it t:\"DEEP WORK\""[themes[0]["start"].as_u64().unwrap()
+                as usize
+                ..themes[0]["end"].as_u64().unwrap() as usize],
+            "DEEP WORK"
+        );
+        // Curly quotes keep char-boundary name ranges.
+        let themes = task_type_themes("Fix it t:“FIX”", &catalog);
+        assert_eq!(themes[0]["key"], "fix");
+        assert_eq!(
+            &"Fix it t:“FIX”"[themes[0]["start"].as_u64().unwrap() as usize
+                ..themes[0]["end"].as_u64().unwrap() as usize],
+            "FIX"
+        );
+        // An unknown name carries no fabricated resolution.
+        let themes = task_type_themes("Fix it t:nope", &catalog);
+        assert_eq!(themes.as_array().unwrap().len(), 1);
+        assert_eq!(themes[0]["key"], "nope");
+        assert_eq!(themes[0]["name"], "NOPE");
+        assert_eq!(themes[0]["known"], false);
+        // A literal containing `+` never splits into components; the
+        // invalid name is not canonicalizable, so the decoded text stands.
+        let themes = task_type_themes("Fix it t:\"a+b\"", &catalog);
+        assert_eq!(themes.as_array().unwrap().len(), 1);
+        assert_eq!(themes[0]["name"], "a+b");
+        assert_eq!(themes[0]["known"], false);
+    }
+
+    #[test]
+    fn incomplete_type_markers_attach_no_theme_ref() {
+        let (_vault, catalog) = task_type_catalog();
+        let options = EditorParseOptions::routing_off();
+        let mut result =
+            CaptureParseResult::new("Fix it t:".to_string(), &options);
+        attach_theme_refs(&mut result, &catalog);
+        let value = serde_json::to_value(&result).unwrap();
+        let span = value["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "task_type")
+            .expect("task_type span");
+        assert!(span.get("themes").is_none());
     }
 
     #[test]

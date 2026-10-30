@@ -996,6 +996,26 @@ pub(crate) fn completion_field_at(
             })
             .map(|(line_index, line)| (item, line_index, line.raw))
     })?;
+    // Type markers are transparent to field detection: run every claim
+    // below on the offset-preserving masked view, so a neighboring marker
+    // never changes a route completion's replacement range. Masking keeps
+    // byte lengths, so cursor checks and returned ranges still index the
+    // original draft.
+    let masked_source;
+    let masked_item;
+    let (item, line) = {
+        let occurrences =
+            super::type_marker::collect_item_with_clip_control(item, true);
+        if occurrences.is_empty() {
+            (item, line)
+        } else {
+            masked_source =
+                super::type_marker::masked_source(item, &occurrences);
+            masked_item = super::type_marker::masked_item(item, &masked_source);
+            let masked_line = masked_item.lines[line_index].raw;
+            (&masked_item, masked_line)
+        }
+    };
     // The name part of a `=<X>#name` named Pomodoro start completes
     // start-aware session rows, whether the token is valid, a near miss,
     // or the `=<X>#` incomplete state. This runs before the session-item

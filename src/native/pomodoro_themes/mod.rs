@@ -725,6 +725,23 @@ impl ThemeLookup {
             end: None,
         }
     }
+
+    /// Configured `types:` vocabulary entries for exact task-type name
+    /// resolution, which prefers configured spellings over catalog ones.
+    pub(crate) fn configured_type_entries(
+        &self,
+    ) -> Option<&[config::ConfiguredTheme]> {
+        self.themes.as_ref().map(|themes| themes.entries.as_slice())
+    }
+
+    /// Catalog spelling for an exact task-type match: the vault only keeps
+    /// keys here, so the canonical uppercase rendering stands in for the
+    /// record name the full catalog would carry.
+    pub(crate) fn catalog_type_spelling(&self, key: &str) -> Option<String> {
+        self.known_keys
+            .contains(key)
+            .then(|| key.to_ascii_uppercase())
+    }
 }
 
 fn load_records(

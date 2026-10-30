@@ -497,61 +497,10 @@ fn type_marker_only_error(
 }
 
 fn type_marker_not_applicable_error(name: &str, kind: &CaptureKind) -> String {
-    let marker = format!("t:{name}");
-    let (action, remedy) = match kind {
-        CaptureKind::Bullet { .. } => (
-            "writes a plain bullet",
-            "drop the section marker to capture a task",
-        ),
-        CaptureKind::SubBullet { .. } => (
-            "adds a child bullet",
-            "capture `@<route>+<block-id> t:<type>` alone to retype that task",
-        ),
-        CaptureKind::ProjectNote { .. } => (
-            "creates a project note",
-            "set `task_type:` in the new note",
-        ),
-        CaptureKind::Ref(_) => (
-            "queues a reference typed by `plan.reading_type`",
-            "add `-R` to keep it as a task",
-        ),
-        CaptureKind::PomodoroNote => (
-            "adds a Pomodoro note",
-            "add task text to capture a task",
-        ),
-        CaptureKind::TaskComplete { .. } => (
-            "completes an existing task",
-            "remove the completion gesture to capture a task",
-        ),
-        CaptureKind::PomodoroLink { .. } => (
-            "targets an existing task, and retyping it with `t:` is not supported yet",
-            "capture the task text instead",
-        ),
-        CaptureKind::TaskToggle { .. } => (
-            "changes an existing task's status",
-            "remove the status gesture to capture a task",
-        ),
-        CaptureKind::PomodoroClose { .. } => (
-            "closes a Pomodoro",
-            "remove the close gesture to capture a task",
-        ),
-        CaptureKind::PomodoroStart { .. } => (
-            "starts a Pomodoro",
-            "remove the start gesture to capture a task",
-        ),
-        CaptureKind::PomodoroAdjust { .. } => (
-            "adjusts a Pomodoro duration",
-            "remove the adjustment gesture to capture a task",
-        ),
-        CaptureKind::PomodoroShift { .. } => (
-            "shifts a Pomodoro session",
-            "remove the shift gesture to capture a task",
-        ),
-        CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } | CaptureKind::Pomodoro { .. } => {
-            return super::type_marker::needs_task_error(Some(name));
-        }
-    };
-    format!("`{marker}` types a task, but this capture {action}; {remedy}")
+    super::type_marker::type_marker_not_applicable_error(
+        name,
+        super::type_marker::TypeMarkerSubject::for_kind(kind),
+    )
 }
 
 fn parse_capture_item_masked<'a>(

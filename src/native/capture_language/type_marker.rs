@@ -16,6 +16,10 @@ use super::{
     draft::split_physical_lines, editor_parse::tokenize_line_with_spans,
     relations::scan_line_relations,
 };
+use crate::native::{
+    config::themes::ConfiguredTheme, plan_budget::normalize_component,
+    task_fields::canonical_theme_name,
+};
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,12 +254,19 @@ fn parse_candidate(
                 raw_end,
             )
         } else {
+            // Name content excludes the quotes with their real byte
+            // lengths, so curly quotes keep char-boundary ranges.
+            let (open_len, close_len) = if rest.starts_with('"') {
+                (1, 1)
+            } else {
+                ("“".len(), "”".len())
+            };
             (
                 TypeMarkerOccurrence::Complete(TypeMarker {
                     name: lex.decoded,
                     literal: true,
                     span: start..marker_end,
-                    name_span: content_start + 1..marker_end - 1,
+                    name_span: content_start + open_len..marker_end - close_len,
                 }),
                 marker_end,
             )
@@ -598,6 +609,156 @@ pub(crate) fn needs_task_error(name: Option<&str>) -> String {
         ),
         None => "`t:` is incomplete: type a task type after `t:` (for example `t:fix`)".to_string(),
     }
+}
+
+/// An exact task-type name match, shared by editor lookup and the
+/// capture writer. The configured vocabulary wins ties; a literal matches
+/// by normalized-key equality, while a slug also tries the key with spaces
+/// in place of `-` (`deep-work` finds `DEEP WORK`). Prefixes never match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedTypeName {
+    pub(crate) key: String,
+    pub(crate) name: String,
+}
+
+pub(crate) fn resolve_exact_type_name(
+    configured: Option<&[ConfiguredTheme]>,
+    catalog_name: &dyn Fn(&str) -> Option<String>,
+    name: &str,
+    literal: bool,
+) -> Option<ResolvedTypeName> {
+    let key = normalize_component(name);
+    let hyphen_key = key.replace('-', " ");
+    let mut candidates = vec![key];
+    if !literal && hyphen_key != candidates[0] {
+        candidates.push(hyphen_key);
+    }
+    for candidate in candidates {
+        if let Some(entry) = configured
+            .unwrap_or_default()
+            .iter()
+            .find(|entry| entry.key == candidate)
+        {
+            return Some(ResolvedTypeName {
+                key: entry.key.clone(),
+                name: entry.name.clone(),
+            });
+        }
+        if let Some(spelling) = catalog_name(&candidate) {
+            return Some(ResolvedTypeName {
+                key: candidate,
+                name: spelling,
+            });
+        }
+    }
+    None
+}
+
+/// Display spelling for a decoded marker name with no exact match: the
+/// canonicalized name when valid, else the decoded text itself.
+pub(crate) fn unmatched_type_display(name: &str) -> String {
+    canonical_theme_name(name).unwrap_or_else(|| name.to_string())
+}
+
+/// Which subject a type marker found, shared by execution and the editor so
+/// both refuse non-task forms with the same teaching copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TypeMarkerSubject {
+    NewTask,
+    Bullet,
+    SubBullet,
+    ProjectNote,
+    Reference,
+    PomodoroNote,
+    TaskComplete,
+    ExistingLink,
+    TaskToggle,
+    Close,
+    Start,
+    Adjust,
+    Shift,
+}
+
+impl TypeMarkerSubject {
+    pub(crate) fn for_kind(kind: &super::model::CaptureKind) -> Self {
+        use super::model::CaptureKind;
+        match kind {
+            CaptureKind::Task
+            | CaptureKind::TaskWithBlockId { .. }
+            | CaptureKind::Pomodoro { .. } => Self::NewTask,
+            CaptureKind::Bullet { .. } => Self::Bullet,
+            CaptureKind::SubBullet { .. } => Self::SubBullet,
+            CaptureKind::ProjectNote { .. } => Self::ProjectNote,
+            CaptureKind::Ref(_) => Self::Reference,
+            CaptureKind::PomodoroNote => Self::PomodoroNote,
+            CaptureKind::TaskComplete { .. } => Self::TaskComplete,
+            CaptureKind::PomodoroLink { .. } => Self::ExistingLink,
+            CaptureKind::TaskToggle { .. } => Self::TaskToggle,
+            CaptureKind::PomodoroClose { .. } => Self::Close,
+            CaptureKind::PomodoroStart { .. } => Self::Start,
+            CaptureKind::PomodoroAdjust { .. } => Self::Adjust,
+            CaptureKind::PomodoroShift { .. } => Self::Shift,
+        }
+    }
+}
+
+pub(crate) fn type_marker_not_applicable_error(
+    name: &str,
+    subject: TypeMarkerSubject,
+) -> String {
+    let marker = format!("t:{name}");
+    let (action, remedy) = match subject {
+        TypeMarkerSubject::NewTask => return needs_task_error(Some(name)),
+        TypeMarkerSubject::Bullet => (
+            "writes a plain bullet",
+            "drop the section marker to capture a task",
+        ),
+        TypeMarkerSubject::SubBullet => (
+            "adds a child bullet",
+            "capture `@<route>+<block-id> t:<type>` alone to retype that task",
+        ),
+        TypeMarkerSubject::ProjectNote => (
+            "creates a project note",
+            "set `task_type:` in the new note",
+        ),
+        TypeMarkerSubject::Reference => (
+            "queues a reference typed by `plan.reading_type`",
+            "add `-R` to keep it as a task",
+        ),
+        TypeMarkerSubject::PomodoroNote => (
+            "adds a Pomodoro note",
+            "add task text to capture a task",
+        ),
+        TypeMarkerSubject::TaskComplete => (
+            "completes an existing task",
+            "remove the completion gesture to capture a task",
+        ),
+        TypeMarkerSubject::ExistingLink => (
+            "targets an existing task, and retyping it with `t:` is not supported yet",
+            "capture the task text instead",
+        ),
+        TypeMarkerSubject::TaskToggle => (
+            "changes an existing task's status",
+            "remove the status gesture to capture a task",
+        ),
+        TypeMarkerSubject::Close => (
+            "closes a Pomodoro",
+            "remove the close gesture to capture a task",
+        ),
+        TypeMarkerSubject::Start => (
+            "starts a Pomodoro",
+            "remove the start gesture to capture a task",
+        ),
+        TypeMarkerSubject::Adjust => (
+            "adjusts a Pomodoro duration",
+            "remove the adjustment gesture to capture a task",
+        ),
+        TypeMarkerSubject::Shift => (
+            "shifts a Pomodoro session",
+            "remove the shift gesture to capture a task",
+        ),
+    };
+    format!("`{marker}` types a task, but this capture {action}; {remedy}")
 }
 
 /// Needed by the temporary planner guard to keep metadata live across the

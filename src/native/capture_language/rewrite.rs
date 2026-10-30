@@ -476,8 +476,17 @@ fn candidate_selects_plain_marker(
             if start < line_base || end > line_end {
                 return false;
             }
-            let raw_line = RawLine {
+            // Type markers are transparent to the toggle: mask them so a
+            // neighboring `t:` never blocks an otherwise plain marker.
+            // Masking preserves byte lengths, so every span still indexes
+            // the original draft.
+            let masked = super::type_marker::masked_line(&RawLine {
                 text: line_text,
+                start: line_base,
+                end: line_end,
+            });
+            let raw_line = RawLine {
+                text: &masked,
                 start: line_base,
                 end: line_end,
             };

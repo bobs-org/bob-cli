@@ -13,6 +13,8 @@ pub(crate) enum SpanKind {
     PomodoroRoute,
     PomodoroBlockId,
     PomodoroName,
+    /// A whole `t:<type>` marker token, sigil and quotes included.
+    TaskType,
     PomodoroStart,
     PomodoroStartDrop,
     PomodoroClose,
@@ -81,6 +83,7 @@ impl SpanKind {
             Self::PomodoroRoute => "pomodoro_route",
             Self::PomodoroBlockId => "pomodoro_block_id",
             Self::PomodoroName => "pomodoro_name",
+            Self::TaskType => "task_type",
             Self::PomodoroStart => "pomodoro_start",
             Self::PomodoroStartDrop => "pomodoro_start_drop",
             Self::PomodoroClose => "pomodoro_close",
@@ -236,6 +239,8 @@ pub(crate) enum Need {
     BlockId,
     PomodoroId,
     PomodoroName,
+    /// A `t:` marker is still open: name the task type to finish it.
+    TaskType,
     Task,
     TaskSection,
     ActiveTask,
@@ -272,6 +277,7 @@ impl Need {
             Self::BlockId => "block_id",
             Self::PomodoroId => "pomodoro_id",
             Self::PomodoroName => "pomodoro_name",
+            Self::TaskType => "task_type",
             Self::Task => "task",
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",

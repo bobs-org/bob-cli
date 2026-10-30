@@ -103,3 +103,4 @@ mod retired_close;
 mod rewrite;
 mod template;
 mod type_marker;
+mod type_marker_editor;

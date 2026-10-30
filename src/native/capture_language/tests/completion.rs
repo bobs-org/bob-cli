@@ -1004,3 +1004,51 @@ fn parent_task_plus_preserves_operator_and_protected_text_boundaries() {
         );
     }
 }
+
+#[test]
+fn route_completion_beside_a_type_marker_keeps_original_ranges() {
+    // A trailing marker never changes the neighboring route field.
+    assert_eq!(field("Fix it @sa t:fix", 10), field("Fix it @sa", 10));
+    let completion = field("Fix it @sa t:fix", 10).expect("route field");
+    assert_eq!(completion.context, CompletionContext::Route);
+    assert_eq!(completion.replacement, (8, 10));
+
+    // A leading marker shifts nothing behind it: ranges stay absolute.
+    let completion = field("t:fix Fix it @sa", 16).expect("route field");
+    assert_eq!(completion.context, CompletionContext::Route);
+    assert_eq!(completion.query, "sa");
+    assert_eq!(completion.replacement, (14, 16));
+
+    // A marker on a child line leaves the child's route field alone.
+    let raw = "Fix it\n- check t:fix @sa";
+    let base = "Fix it\n- check @sa";
+    let shifted = field(base, base.len()).map(|mut found| {
+        // The inserted `t:fix ` moves every later byte by its length.
+        found.replacement.0 += "t:fix ".len();
+        found.replacement.1 += "t:fix ".len();
+        found
+    });
+    assert_eq!(field(raw, raw.len()), shifted);
+    let completion = field(raw, raw.len()).expect("route field");
+    assert_eq!(completion.context, CompletionContext::Route);
+    assert_eq!(completion.replacement, (22, 24));
+}
+
+#[test]
+fn query_and_caret_completion_survive_a_neighboring_marker() {
+    // Every whole-item query still claims through the masked view.
+    assert_eq!(field(":query t:fix", 3), field(":query", 3));
+    assert_eq!(field("/fix t:fix", 2), field("/fix", 2));
+    assert_eq!(field("!fix t:fix", 2), field("!fix", 2));
+    assert_eq!(field("+fix t:fix", 2), field("+fix", 2));
+    // Caret completion on an existing-task link is unchanged.
+    assert_eq!(field("^sase:abc t:fix", 6), field("^sase:abc", 6));
+}
+
+#[test]
+fn a_cursor_on_a_type_marker_requests_no_completion() {
+    // The task_type context belongs to the later completion phase.
+    assert_eq!(field("Fix it t:fix", 9), None);
+    assert_eq!(field("Fix it t:", 9), None);
+    assert_eq!(field("t:fix Fix it", 2), None);
+}
