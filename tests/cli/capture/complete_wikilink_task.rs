@@ -903,3 +903,65 @@ fn shell_completion_returns_nothing() {
         format_output(&output)
     );
 }
+
+#[test]
+fn wikilink_task_coexists_with_trailing_template_markers() {
+    let temp = TempDir::new("bob-cli-wikilink-task-template-coexist");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_fixture(&vault);
+
+    // Trailing `@@@` on the same line: the `((` token must keep its parse
+    // spans and completion contract, and the rewrite must leave byte ranges
+    // intact.
+    let draft = "Follow up ((s @@@";
+    let parsed = parse_json(draft);
+    let spans = parsed["spans"].as_array().expect("spans array");
+    assert!(
+        spans
+            .iter()
+            .any(|span| span["kind"] == "wikilink_task_delimiter"),
+        "trailing @@@ hid (( spans: {parsed}"
+    );
+    let json = complete_json(&vault, 13, draft);
+    assert_eq!(json["context"], "wikilink_task", "{draft:?}: {json}");
+    assert_eq!(json["replacement"]["start"], 10);
+    assert_eq!(json["replacement"]["end"], 13);
+    let identified = first_identified(&json);
+    let replacement = identified["replacement"].as_str().expect("link");
+    let spliced = splice(draft, &json, replacement);
+    assert!(
+        spliced.contains("@@@"),
+        "splice lost trailing template marker: {spliced:?}"
+    );
+    let rewrite_output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("13")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run capture-rewrite");
+    assert_success(&rewrite_output);
+    let rewrite: serde_json::Value =
+        serde_json::from_str(stdout(&rewrite_output).trim())
+            .expect("rewrite JSON");
+    assert_eq!(rewrite["input"], draft);
+
+    // `@@template:` rows mask `((` tokens: inside a template row there are no
+    // `wikilink_task_*` spans, so the completion gate stays empty. This is the
+    // coexistence contract: template rows never leak `((` fields.
+    let template_draft = "@@template:\nTask {0}\n\nFollow up ((s";
+    let template_parsed = parse_json(template_draft);
+    let template_spans = template_parsed["spans"]
+        .as_array()
+        .expect("template spans array");
+    assert!(
+        !template_spans
+            .iter()
+            .any(|span| span["kind"] == "wikilink_task_delimiter"),
+        "template row leaked (( spans: {template_parsed}"
+    );
+}
