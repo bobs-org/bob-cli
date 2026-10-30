@@ -20,7 +20,7 @@ Install Bob Mac Capture and open Settings. Default chords:
   Control-Shift-Command-R (development)
 - Capture alias: `Command-\` (on by default; Settings › Hotkey)
 - Bob Refs: Control-Shift-Command-O
-- Refs alias: `Command-/` (on by default; Settings › References)
+- Refs alias: `Command-]` (on by default; Settings › References)
 - Highlights-frontmost open: Command-O (configurable)
 
 Settings › Hotkey shows the live capture chord as **Active binding**.
@@ -30,7 +30,7 @@ Settings › Hotkey shows the live capture chord as **Active binding**.
 Open Settings › Diagnostics. A failed capture registration reports
 `Hotkey conflict` with the Carbon status. A failed Refs binding reports
 `Refs hotkey conflict: …`. A failed Command-\ alias reports
-`Capture alias hotkey conflict: …`. A failed Command-/ alias reports
+`Capture alias hotkey conflict: …`. A failed Command-] alias reports
 `Refs alias hotkey conflict: …`. The same event is in Recent Activity
 (`HH:mm:ss  message`). Confirm that status string before changing a
 binding.
@@ -51,14 +51,14 @@ need that development binding.
 Refs chords re-register as soon as you toggle **Open Bob Refs with
 Control-Shift-Command-O** or the Highlights-frontmost open key. The
 Capture alias toggle **Also open Capture with Command-\\** re-registers
-immediately. **Also open Bob Refs with Command-/** re-registers
+immediately. **Also open Bob Refs with Command-]** re-registers
 immediately. Each action registers independently.
 
 ## 3. Confirm the live chord
 
 Settings › Hotkey **Active binding** shows the live capture chord.
 Press it and confirm the capture panel opens. For Refs, press
-Control-Shift-Command-O and `Command-/` and confirm Bob Refs opens.
+Control-Shift-Command-O and `Command-]` and confirm Bob Refs opens.
 Diagnostics shows no `Hotkey conflict`, `Refs hotkey conflict`,
 or alias conflict.
 
@@ -69,7 +69,7 @@ that exact chord. Check Shortcuts, other menu-bar apps, and the
 Highlights-frontmost open key (Command-O or Control-O) separately from
 the global Refs toggle. Apps such as 1Password, whose autofill shortcut
 defaults to `Command-\`, commonly claim the Capture alias. In-app
-shortcuts such as editors' Toggle comment never block the Command-/
+shortcuts such as browsers' Forward and editors' Indent never block the Command-]
 alias; they just stop receiving it while the alias is on. Only another
 global hotkey owner blocks it. Launch-at-login
 approval is a different permission; use
