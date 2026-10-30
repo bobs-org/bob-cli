@@ -345,12 +345,15 @@ See the [capture command reference](cli/capture.md) and
 | `BOB_REF_READING_PROBE` | Unset | Internal override: `reading` or `away` forces the Highlights reading-activity probe. |
 | `BOB_REF_READING_WINDOW_SECONDS` | `30` | Internal override for how recently HID input must be for an `editor_active` hold. |
 | `BOB_GKEEP_ADAPTER` | `uv` runs Bob's pinned Keep adapter | Replaces the whole Keep adapter invocation. |
-| `BOB_GCAL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login reuse and logout confirm. |
+| `BOB_GCAL_ASSUME_TTY` | Unset (real TTY detection) | Test hook: `1` or `true` treats stdin as a TTY for login prompts and logout confirm. |
+| `BOB_GCAL_BROWSER` | `open` on macOS, `xdg-open` elsewhere | Non-empty value selects browser sign-in and names the browser opener executable. |
+| `BOB_GCAL_CONSENT_SECS` | 600 seconds | Positive integer override for the interactive Google consent window. |
 | `BOB_GCAL_GOG` | `gog` resolved through `PATH` | Executable used by `bob gcal`; tests point this at a fake. Must be gog ≥ v0.44.0. |
 
 See [reference jobs](../ref-jobs.md), [reference intake](../highlights-ref-sync.md),
 [web article capture](../highlights-clip.md#hosts-and-browsers), and the
-[Keep adapter contract](../gkeep.md#configuration).
+[Keep adapter contract](../gkeep.md#configuration), and the
+[Google Calendar contract](../gcal.md#environment).
 
 ### Plugins and shell completion
 

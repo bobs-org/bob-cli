@@ -36,7 +36,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Store a Desktop-app client JSON first\n  bob gcal login -m           Browserless sign-in (paste the redirect URL)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Use this Desktop-app client JSON\n  bob gcal login -m           Paste the redirect URL instead of opening a browser\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -120,9 +120,10 @@ fn login_command() -> ClapCommand {
             "One-time read-only Google Calendar consent through gog.\n\n\
              Uses an isolated `--client bob-gcal` token bucket so removing \
              or re-consenting Bob's grant never touches other gog tokens. \
-             `-c FILE` stores a Desktop-app OAuth client first. `-m` runs \
-             the browserless paste-URL flow, which is the right choice \
-             over SSH.",
+             Bob reuses a readable gog client or checks ~/Downloads before \
+             guiding you through client setup. Sign-in opens a browser when \
+             available and uses a paste-URL flow over SSH. `-c FILE` and \
+             `-m` override those choices.",
         )
         .disable_help_flag(true)
         .arg(account_arg())
@@ -134,7 +135,7 @@ fn login_command() -> ClapCommand {
 }
 
 fn login_after_help() -> &'static str {
-    "Examples:\n  bob gcal login\n  bob gcal login -a you@example.com\n  bob gcal login -c ~/Downloads/client_secret.json\n  bob gcal login -m\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Examples:\n  bob gcal login\n  bob gcal login -a you@example.com\n  bob gcal login -c ~/Downloads/client_secret.json\n  bob gcal login -m\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)"
 }
 
 fn logout_command() -> ClapCommand {

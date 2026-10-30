@@ -50,8 +50,8 @@ Examples:
   bob gcal -D tomorrow        List tomorrow in Bob's timezone
   bob gcal -a -f json         Include omitted events as JSON
   bob gcal login              One-time read-only Calendar consent
-  bob gcal login -c PATH      Store a Desktop-app client JSON first
-  bob gcal login -m           Browserless sign-in (paste the redirect URL)
+  bob gcal login -c PATH      Use this Desktop-app client JSON
+  bob gcal login -m           Paste the redirect URL instead of opening a browser
   bob gcal calendars          List calendars with ids for config
   bob gcal doctor             Diagnose gog, the client, and the vault
   bob gcal sync               Write today's Events and MEET links
@@ -62,4 +62,5 @@ Environment:
   BOB_DIR            Bob vault root; defaults to ~/bob
   BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml
   BOB_GCAL_GOG       gog executable replacing `gog` on PATH
+  BOB_GCAL_BROWSER   Browser executable; selects browser sign-in (otherwise automatic)
 ```

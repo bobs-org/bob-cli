@@ -57,8 +57,8 @@ and never include tokens:
 
 The isolated `--client bob-gcal` token bucket means removing or re-consenting
 Bob's Calendar grant never touches other gog tokens (Gmail included). Login's
-interactive `gog auth add` omits `--no-input --json` and inherits stdio so the
-browser (or `-m` paste-URL) flow can run.
+Login runs gog's remote two-step sign-in with captured input and output. Bob
+owns the browser/paste interaction, so gog never takes over the terminal.
 
 `id: primary` in config matches a calendar whose `primary` flag is true or
 whose id is the literal `primary`.
@@ -69,12 +69,13 @@ whose id is the literal `primary`.
    `PATH`.
 2. Add a `gcal:` block (see [Configuration](#configuration)). A missing block
    uses defaults.
-3. Enable the Calendar API and download a Desktop-app OAuth client. The
-   [connect Google Calendar](guides/connect-google-calendar.md) guide walks the
-   Cloud Console checklist, including publishing the consent screen.
-4. `bob gcal login -c PATH` (or `bob gcal login` to reuse a stored gog client).
-5. `bob gcal doctor` until every check is `ok` or an explained skip.
-6. `bob gcal calendars` to copy ids into `gcal.calendars`.
+3. Run `bob gcal login`. It reuses a stored Bob client or a readable gog
+   client, checks `~/Downloads` for a Desktop-app client, and guides you
+   through Google Cloud setup if needed. You can provide a client directly
+   with `-c PATH`. The [connect Google Calendar](guides/connect-google-calendar.md)
+   guide explains each Cloud Console screen.
+4. `bob gcal doctor` until every check is `ok` or an explained skip.
+5. `bob gcal calendars` to copy ids into `gcal.calendars`.
 
 ## Configuration
 
@@ -113,38 +114,46 @@ See [configuration](reference/configuration.md#gcal).
 
 ## Login
 
-`bob gcal login` is one-time read-only Calendar consent.
+`bob gcal login` owns a three-step, read-only Calendar sign-in. Progress and
+prompts go to stderr; with `-f json`, stdout contains only the report.
 
-1. **Client.** Use a stored `bob-gcal` client when one exists. Otherwise
-   `-c FILE` runs `gog auth credentials set FILE --client bob-gcal`.
-   Otherwise, on a TTY, offer to reuse another stored gog client
-   (`Reuse gog client 'default' for Calendar? [Y/n]`). Otherwise print a
-   four-step checklist and exit 2.
-2. **Account.** `-a`, else `gcal.account`, else the sole gog account (listed
-   without `--client` so other clients count), else a TTY prompt, else exit 2.
-3. **Sign in.** `gog auth add <email> --client bob-gcal --services calendar --readonly`
-   with inherited stdio, adding `--manual` under `-m`. When `SSH_CONNECTION` is
-   set without `-m`, print a one-line hint to use `-m`, then continue. Login is
-   idempotent: a valid grant reports `already connected` and skips sign-in.
-4. **Check.** List calendars and the configured sync set. An
-   `accessNotConfigured` error prints the Console link that enables the API:
-   `https://console.cloud.google.com/apis/library/calendar-json.googleapis.com`.
+1. **Google client.** `-c FILE` explicitly loads and validates a Desktop-app
+   client, replacing Bob's saved client. Otherwise Bob uses its saved client,
+   copies a readable gog client whose secret is not keyring-only, then checks
+   the newest valid `~/Downloads/client_secret*.json`. On a TTY, if none is
+   available, Bob explains how to create one in Cloud Console and accepts a
+   downloaded path or pasted JSON. Client secrets are sent to gog over stdin.
+2. **Sign in.** `-a` overrides `gcal.account`; when neither selects an
+   account, Bob uses the sole available account or asks on a TTY. A saved
+   valid grant is reused. Otherwise Bob selects browser sign-in when a desktop
+   browser is available, and the paste flow over SSH or a headless session.
+   `-m` always selects paste; `BOB_GCAL_BROWSER` selects browser sign-in.
+   Google grants only `calendar.readonly`. On SSH, copy the full address from
+   the expected `127.0.0.1` page and paste it into Bob.
+3. **Check.** Bob lists calendars and the configured sync set. If the Calendar
+   API is off, a TTY can turn it on and retry in place. A valid saved grant
+   reports `already connected`; an expired or revoked grant triggers sign-in
+   again.
 
 Human output:
 
 ```text
-Google Calendar · one-time setup · read-only
+Google Calendar · read-only · one-time setup
 
-1/3  OAuth client   ✓ bob-gcal (Desktop app)
+1/3  Google client  ✓ bob-gcal · project 123456789012
 2/3  Sign in        ✓ already connected · you@example.com
 3/3  Check          ✓ 8 calendars (syncing 1: primary)
 
-Token stored by gog. Remove it with: bob gcal logout
-Next: bob gcal calendars    list calendars for config
+✓ Connected. Bob can read, never change, you@example.com's calendars.
+
+Next: bob gcal sync -d    preview today's Events
+      bob gcal calendars  choose calendars to sync
+Undo: bob gcal logout     remove only Bob's Calendar grant
 ```
 
-`invalid_grant` explains the 7-day expiry for consent screens left in Testing:
-publish the consent screen, then run `bob gcal login`.
+`invalid_grant` can mean the grant expired or was revoked; Bob signs in again.
+If this happens after about seven days, publish the OAuth consent screen in
+Google Cloud Console (Testing grants expire after seven days).
 
 ## Logout
 
@@ -398,7 +407,9 @@ Every JSON document carries `schema_version: 1`. JSON never includes tokens,
 descriptions, or attendees.
 
 `login -f json`: `ok`, `already_connected`, `account`, `client`, `calendars`,
-`syncing`, `syncing_ids`.
+`syncing`, `syncing_ids`, `sign_in` (`already_connected`, `browser`, or
+`paste`), `client_source` (`stored`, `file`, `gog_client`, `downloads`, or
+`pasted`), `client_project` (string or null), and `reconnected` (boolean).
 
 `logout -f json`: `ok`, `account`, `client`, `revoke_url`.
 
@@ -431,7 +442,8 @@ bucket from Gmail. Tests use `you@example.com` and never a live cookie.
 | `BOB_GCAL_GOG` | Executable replacing `gog` on `PATH`. Tests point this at a fake. |
 | `BOB_GCAL_ASSUME_TTY` | `1` or `true` treats stdin as a TTY for login reuse and logout confirm (test hook). |
 | `BOB_NOW` | Local datetime override for today and relative list-day selection. |
-| `SSH_CONNECTION` | Login prints a `-m` hint when this is set without `-m`. |
+| `SSH_CONNECTION`, `SSH_TTY` | Select the paste-URL sign-in flow when no explicit browser override is set. |
+| `BOB_GCAL_BROWSER` | Browser executable; selects browser sign-in when non-empty. |
 
 ## Known limits
 

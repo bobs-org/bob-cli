@@ -13,8 +13,8 @@ under an isolated `--client bob-gcal` token bucket, so removing Bob's grant
 never touches Gmail. Tests and this page use `you@example.com`; do not paste
 a live client secret into a log or ticket.
 
-`list` and `sync` arrive in a later release. This page gets you to
-`bob gcal doctor` all-clear and a calendar id list for config.
+This page gets you through sign-in, doctor, calendar selection, and a first
+sync.
 
 ## Before you start
 
@@ -34,7 +34,17 @@ gcal:
 `account` is optional when gog already holds exactly one Google account.
 A missing `gcal:` block uses those defaults.
 
-## 1. Create a Desktop-app client
+## 1. Let Bob find or create a Desktop-app client
+
+Start with:
+
+```bash
+bob gcal login
+```
+
+Bob first checks for a saved `bob-gcal` client and a reusable gog client. It
+also checks `~/Downloads` for the newest valid `client_secret*.json`. If it
+does not find a client, follow the prompts to set one up:
 
 In Google Cloud Console:
 
@@ -45,29 +55,37 @@ In Google Cloud Console:
    tokens expire in 7 days (`invalid_grant`); publish, then run
    `bob gcal login` again.
 3. Create an OAuth client of type **Desktop app** and download the JSON.
-4. Run `bob gcal login -c PATH` with that file.
+4. Press Enter at Bob's prompt to search Downloads again, or paste the file
+   path. You can also start with `bob gcal login -c PATH` to select a file
+   directly.
 
-If gog already stores another client, `bob gcal login` on a TTY offers
-`Reuse gog client 'default' for Calendar? [Y/n]` instead of `-c`.
+Bob copies a reusable gog client automatically when its secret is available
+in a file. If gog keeps the secret in the system keyring, Bob explains that
+and asks for a downloaded client instead.
 
 ## 2. Sign in
 
 ```bash
-bob gcal login -c ~/Downloads/client_secret.json
+bob gcal login
 bob gcal doctor -b /path/to/vault
 ```
 
-`login` opens a browser for read-only Calendar consent
-(`calendar.readonly`). Over SSH, the browser cannot open: rerun with
-`bob gcal login -m` and paste the redirect URL. When `SSH_CONNECTION` is
-set without `-m`, login prints that hint and continues.
+Bob signs in through gog's remote flow and requests only read-only Calendar
+access (`calendar.readonly`). It opens your browser on a desktop session and
+uses the paste-URL flow over SSH or on a headless host. On SSH, open the link
+in any browser, allow access, then copy the full address from the expected
+`127.0.0.1` page and paste it into Bob. Use `-m` to choose that flow manually,
+or `BOB_GCAL_BROWSER` to select a browser executable.
 
-A valid grant is idempotent: login reports `already connected` and only
-re-lists calendars.
+A valid grant is idempotent: login reports `already connected` and checks
+calendars. If a saved grant expired or was revoked, Bob guides you through
+sign-in again. If the Calendar API is disabled, Bob gives you the project
+specific Cloud Console link and lets you retry after enabling it.
 
-Confirm every doctor check is `ok` or an explained skip. Exit 2 with the
-four-step checklist means no `bob-gcal` client is stored. Exit 1 on doctor
-is a failed check; the `fix:` line names the next command.
+Confirm every doctor check is `ok` or an explained skip. A `no_client`
+setup error means no usable OAuth client was found; run login in a terminal
+and follow its checklist. Exit 1 on doctor is a failed check; the `fix:` line
+names the next command.
 
 ## 3. Copy calendar ids into config
 
@@ -110,7 +128,9 @@ Without `-y`, logout asks for confirmation on a TTY.
 | --- | --- |
 | `gog not found` | Install gog ≥ v0.44.0 and put it on `PATH`, or set `BOB_GCAL_GOG`. |
 | `gog … is older than v0.44.0` | Upgrade gog. |
-| Four-step checklist, exit 2 | Enable the API, publish the consent screen, download a Desktop-app client, `bob gcal login -c PATH`. |
+| `no_client`, exit 2 | Run login in a terminal and follow its API, consent screen, and Desktop-app client checklist. |
+| Client JSON rejected | Use a Google OAuth client of type Desktop app; service-account, web, and gcloud credential files do not work. |
+| gog client secret is in keyring | Download a Desktop-app JSON and pass its path to `bob gcal login -c PATH`. |
 | `accessNotConfigured` | Enable the Calendar API at the Console link doctor/login print. |
 | `invalid_grant` / 7-day hint | Publish the consent screen, then `bob gcal login`. |
 | `insufficient_scope` | `bob gcal login` to grant `calendar.readonly`. |
