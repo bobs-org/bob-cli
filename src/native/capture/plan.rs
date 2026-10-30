@@ -578,6 +578,68 @@ fn plan_ref_item(
     Ok((planned, staged))
 }
 
+/// After an existing-task gesture, check a named selector against the
+/// resolved destination, restore ledger agreement, and refresh the
+/// preview from the D8 identity. The field is already staged.
+#[allow(clippy::too_many_arguments)]
+fn apply_existing_marker_after_gesture(
+    task_theme_context: &mut CaptureTaskThemeContext,
+    planner: &mut CaptureBatchPlanner,
+    planned: &mut PlannedCaptureItem,
+    block_id: &str,
+    applied: ExistingTypeMarkerApplication,
+    original_line: String,
+    named_selector: Option<&str>,
+    marker_name: &str,
+    marker_literal: bool,
+    skip_relocation: bool,
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<(), CaptureError> {
+    planned.result.task_theme = Some(applied.summary);
+    planned.result.previous_task_line = Some(original_line);
+    if named_selector.is_some() {
+        let resolved = planned
+            .result
+            .pomodoro_link_destination
+            .as_ref()
+            .and_then(|destination| destination.name.as_deref())
+            .or(planned.result.pomodoro_name.as_deref());
+        task_theme_context.validate_type_marker_agreement(
+            marker_name,
+            marker_literal,
+            resolved,
+        )?;
+    }
+    if skip_relocation {
+        return Ok(());
+    }
+    let Some(relocation) = task_theme_context.relocate_for_retype(
+        planner,
+        block_id,
+        &applied.type_key,
+        &applied.type_name,
+        &mut planned.pomodoro_refs,
+        warnings,
+    )?
+    else {
+        return Ok(());
+    };
+    planned.result.pomodoro_name = Some(relocation.json.to.clone());
+    if relocation.dest_created {
+        planned.result.creates_pomodoro = Some(true);
+    }
+    if let Some(destination) = planned.result.pomodoro_link_destination.as_mut()
+    {
+        destination.name = Some(relocation.json.to.clone());
+        destination.line = relocation.dest_after.saturating_add(1);
+        if relocation.dest_created {
+            destination.role = Some("created");
+        }
+    }
+    planned.result.type_relocation = Some(relocation.json);
+    Ok(())
+}
+
 pub(super) fn plan_capture_item(
     request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
@@ -627,8 +689,6 @@ pub(super) fn plan_capture_item(
                 &block_id,
                 &marker.name,
                 marker.literal,
-                None,
-                None,
                 warnings,
             )?;
             let mut planned = plan_dependency_only_item(
@@ -639,16 +699,19 @@ pub(super) fn plan_capture_item(
                 warnings,
                 dependency_ctx,
             )?;
-            let relocation = task_theme_context.relocate_for_retype(
+            apply_existing_marker_after_gesture(
+                task_theme_context,
                 planner,
+                &mut planned,
                 &block_id,
-                &applied.type_key,
-                &applied.type_name,
+                applied,
+                original_line,
+                None,
+                &marker.name,
+                marker.literal,
+                false,
                 warnings,
             )?;
-            planned.result.task_theme = Some(applied.summary);
-            planned.result.type_relocation = relocation;
-            planned.result.previous_task_line = Some(original_line);
             return Ok(planned);
         }
         return plan_dependency_only_item(
@@ -828,8 +891,6 @@ pub(super) fn plan_capture_item(
                 block_id,
                 &marker.name,
                 marker.literal,
-                pomodoro_name.as_deref(),
-                pomodoro_name.as_deref(),
                 warnings,
             )?;
             Some((original, applied))
@@ -851,27 +912,7 @@ pub(super) fn plan_capture_item(
             task_theme_context,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
-        // Marker relocation restores agreement unless Ensure Next already
-        // moved the link to its typed placement.
-        let mut marker_relocation = None;
-        let mut marker_theme = None;
-        let mut marker_previous = None;
-        if let Some((original, applied)) = marker_retype {
-            let needs_relocation = !(*intent == TaskToggleIntent::EnsureNext
-                && link_guard.is_none());
-            if needs_relocation {
-                marker_relocation = task_theme_context.relocate_for_retype(
-                    planner,
-                    block_id,
-                    &applied.type_key,
-                    &applied.type_name,
-                    warnings,
-                )?;
-            }
-            marker_theme = Some(applied.summary);
-            marker_previous = Some(original);
-        }
-        let has_marker = marker_theme.is_some();
+        let has_marker = marker_retype.is_some();
         let d6_theme = if has_marker {
             None
         } else if link_guard.is_none()
@@ -912,20 +953,19 @@ pub(super) fn plan_capture_item(
             )
         })?;
         let link_consumed = link_guard.is_some();
+        // Ensure Next already placed a bare link by type; a named
+        // selector still needs agreement + D8 when the dest disagrees.
+        let skip_relocation = *intent == TaskToggleIntent::EnsureNext
+            && link_guard.is_none()
+            && pomodoro_name.is_none();
         // An explicit `t:` retype reports its own theme and ledger move;
         // the original line (before the marker) is the previous task line.
-        let (task_theme, type_relocation, previous_task_line) = if has_marker {
-            (
-                marker_theme,
-                marker_relocation,
-                marker_previous
-                    .map(Some)
-                    .unwrap_or_else(|| Some(toggle.previous_task_line.clone())),
-            )
+        let (task_theme, previous_task_line) = if has_marker {
+            (None, Some(toggle.previous_task_line.clone()))
         } else {
-            (d6_theme, None, Some(toggle.previous_task_line.clone()))
+            (d6_theme, Some(toggle.previous_task_line.clone()))
         };
-        return Ok(PlannedCaptureItem {
+        let mut planned = PlannedCaptureItem {
             result: CaptureItemResult {
                 ok: true,
                 dry_run: request.dry_run,
@@ -937,7 +977,7 @@ pub(super) fn plan_capture_item(
                 text: String::new(),
                 task_line: toggle.task_line.clone(),
                 task_theme,
-                type_relocation,
+                type_relocation: None,
                 kind: capture_kind_label(&parsed.kind),
                 created,
                 scheduled: None,
@@ -1012,7 +1052,28 @@ pub(super) fn plan_capture_item(
                 .clone()
                 .into_iter()
                 .collect(),
-        });
+        };
+        if let Some((original, applied)) = marker_retype {
+            let marker = parsed.type_marker.as_ref().ok_or_else(|| {
+                CaptureError::io(
+                    "task toggle capture invariant failed: type marker missing after retype",
+                )
+            })?;
+            apply_existing_marker_after_gesture(
+                task_theme_context,
+                planner,
+                &mut planned,
+                block_id,
+                applied,
+                original,
+                pomodoro_name.as_deref(),
+                &marker.name,
+                marker.literal,
+                skip_relocation,
+                warnings,
+            )?;
+        }
+        return Ok(planned);
     }
     if let CaptureKind::PomodoroLink {
         block_id,
@@ -1067,8 +1128,6 @@ pub(super) fn plan_capture_item(
                 block_id,
                 &marker.name,
                 marker.literal,
-                pomodoro_name.as_deref(),
-                pomodoro_name.as_deref(),
                 warnings,
             )?;
             Some((original, applied))
@@ -1092,16 +1151,24 @@ pub(super) fn plan_capture_item(
             marker_retype.is_some(),
         )?;
         if let Some((original, applied)) = marker_retype {
-            let relocation = task_theme_context.relocate_for_retype(
+            let marker = parsed.type_marker.as_ref().ok_or_else(|| {
+                CaptureError::io(
+                    "pomodoro link capture invariant failed: type marker missing after retype",
+                )
+            })?;
+            apply_existing_marker_after_gesture(
+                task_theme_context,
                 planner,
+                &mut planned,
                 block_id,
-                &applied.type_key,
-                &applied.type_name,
+                applied,
+                original,
+                pomodoro_name.as_deref(),
+                &marker.name,
+                marker.literal,
+                false,
                 warnings,
             )?;
-            planned.result.task_theme = Some(applied.summary);
-            planned.result.type_relocation = relocation;
-            planned.result.previous_task_line = Some(original);
             return Ok(planned);
         }
         // This capture-only boundary keeps `bob ref today` on the shared
@@ -1683,7 +1750,6 @@ pub(super) fn plan_capture_item(
         Some(marker),
         CaptureKind::Pomodoro {
             pomodoro_name: Some(_),
-            pomodoro_name_is_literal,
             ..
         },
         Some(pomodoro),
@@ -1694,7 +1760,7 @@ pub(super) fn plan_capture_item(
     ) {
         task_theme_context.validate_type_marker_agreement(
             &marker.name,
-            *pomodoro_name_is_literal,
+            marker.literal,
             pomodoro.details.pomodoro_name.as_deref(),
         )?;
     }

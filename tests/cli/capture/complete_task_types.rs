@@ -268,3 +268,34 @@ fn route_completion_wins_at_its_token_and_unconfigured_menu_uses_history() {
     assert_eq!(history["candidates"][0]["origin"], "history");
     assert_eq!(history["candidates"][0]["name"], "BUILD");
 }
+
+#[test]
+fn type_marker_inside_task_wikilink_owns_the_caret() {
+    let temp = TempDir::new("bob-cli-complete-task-types-wikilink");
+    let (vault, config) = fixture(temp.path(), true);
+    let draft = "Follow up ((foo t:";
+    let at_type = complete(temp.path(), &vault, &config, draft, draft.len());
+    assert_eq!(at_type["context"], "task_type", "{at_type}");
+    assert_eq!(at_type["query"], "", "{at_type}");
+    let start = draft.rfind("t:").expect("type marker");
+    assert_eq!(
+        at_type["replacement"],
+        serde_json::json!({"start": start, "end": draft.len()}),
+        "{at_type}"
+    );
+
+    let opener = draft.find("((").expect("wikilink opener");
+    let at_opener = complete(temp.path(), &vault, &config, draft, opener);
+    assert_eq!(at_opener["context"], "wikilink_task", "{at_opener}");
+    assert_eq!(at_opener["query"], "", "{at_opener}");
+    assert_eq!(
+        at_opener["replacement"],
+        serde_json::json!({"start": opener, "end": opener + 5}),
+        "{at_opener}"
+    );
+
+    let inside_query =
+        complete(temp.path(), &vault, &config, draft, opener + 4);
+    assert_eq!(inside_query["context"], "wikilink_task", "{inside_query}");
+    assert_eq!(inside_query["query"], "fo", "{inside_query}");
+}

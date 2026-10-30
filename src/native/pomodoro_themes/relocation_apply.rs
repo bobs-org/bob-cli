@@ -20,11 +20,34 @@ use crate::native::plan_budget::{normalize_component, split_components};
 use crate::native::pomodoro_themes::routing;
 
 /// One ledger relocation applied to the daily note.
+///
+/// Line fields are 0-based headline indices. `source_before` / `dest_before`
+/// index the input contents; `dest_after` indexes the updated contents.
+/// Capture uses them to compose explicit Pomodoro block refs. `bob task move`
+/// ignores them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TypeRelocation {
     pub(crate) outcome: &'static str,
     pub(crate) from: Option<String>,
     pub(crate) to: String,
+    pub(crate) source_before: usize,
+    pub(crate) dest_before: Option<usize>,
+    pub(crate) dest_after: usize,
+    pub(crate) dest_created: bool,
+}
+
+fn dest_headline_after_removing_source(
+    dest_headline: usize,
+    source_line: usize,
+    source_end: usize,
+) -> usize {
+    if source_line < dest_headline {
+        dest_headline.saturating_sub(
+            source_end.saturating_sub(source_line).saturating_add(1),
+        )
+    } else {
+        dest_headline
+    }
 }
 
 /// Strict-cap refusal from the shared applier.
@@ -119,6 +142,7 @@ pub(crate) fn apply_to_day_contents(
                 return Ok(None);
             };
             let from = entry.name.clone();
+            let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
                 Some(updated) => Ok(Some((
                     updated,
@@ -126,6 +150,10 @@ pub(crate) fn apply_to_day_contents(
                         outcome: "rename_entry",
                         from,
                         to: new_name,
+                        source_before: line,
+                        dest_before: Some(line),
+                        dest_after: line,
+                        dest_created: false,
                     },
                 ))),
                 None => Ok(None),
@@ -136,6 +164,7 @@ pub(crate) fn apply_to_day_contents(
                 return Ok(None);
             };
             let from = entry.name.clone();
+            let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
                 Some(updated) => Ok(Some((
                     updated,
@@ -143,6 +172,10 @@ pub(crate) fn apply_to_day_contents(
                         outcome: "rename_placeholder",
                         from,
                         to: new_name,
+                        source_before: line,
+                        dest_before: Some(line),
+                        dest_after: line,
+                        dest_created: false,
                     },
                 ))),
                 None => Ok(None),
@@ -153,6 +186,7 @@ pub(crate) fn apply_to_day_contents(
                 return Ok(None);
             };
             let from = entry.name.clone();
+            let line = entry.line.saturating_sub(1);
             match rename_entry(day_contents, entry.line, &new_name) {
                 Some(updated) => Ok(Some((
                     updated,
@@ -160,6 +194,10 @@ pub(crate) fn apply_to_day_contents(
                         outcome: "append_component",
                         from,
                         to: new_name,
+                        source_before: line,
+                        dest_before: Some(line),
+                        dest_after: line,
+                        dest_created: false,
                     },
                 ))),
                 None => Ok(None),
@@ -180,11 +218,17 @@ pub(crate) fn apply_to_day_contents(
             let Some(link) = find_live_link(day_contents, block_id) else {
                 return Ok(None);
             };
+            let dest_before = dest_entry.line.saturating_sub(1);
+            let dest_after = dest_headline_after_removing_source(
+                dest_before,
+                link.line_index,
+                link.subtree_end,
+            );
             match move_subtree_to_entry(
                 day_contents,
                 link.line_index,
                 link.subtree_end,
-                dest_entry.line - 1,
+                dest_before,
             ) {
                 Ok((updated, _)) => Ok(Some((
                     updated,
@@ -192,6 +236,10 @@ pub(crate) fn apply_to_day_contents(
                         outcome: "move_to",
                         from: from_name,
                         to: to_name,
+                        source_before: source_entry.line.saturating_sub(1),
+                        dest_before: Some(dest_before),
+                        dest_after,
+                        dest_created: false,
                     },
                 ))),
                 Err(_) => Ok(None),
@@ -205,6 +253,15 @@ pub(crate) fn apply_to_day_contents(
             let Some(link) = find_live_link(day_contents, block_id) else {
                 return Ok(None);
             };
+            let spans = line_spans(day_contents);
+            let source_index = source_entry.line.saturating_sub(1);
+            let source_end = child_block_end_line(&spans, source_index);
+            let dest_after_insert = source_end + 1;
+            let dest_after = dest_headline_after_removing_source(
+                dest_after_insert,
+                link.line_index,
+                link.subtree_end,
+            );
             match create_below_and_move(
                 day_contents,
                 source_entry.line,
@@ -218,6 +275,10 @@ pub(crate) fn apply_to_day_contents(
                         outcome: "create_below",
                         from: from_name,
                         to: name,
+                        source_before: source_index,
+                        dest_before: None,
+                        dest_after,
+                        dest_created: true,
                     },
                 ))),
                 None => Ok(None),
@@ -483,6 +544,10 @@ mod tests {
         assert_eq!(info.outcome, "rename_entry");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "FIX");
+        assert_eq!(info.source_before, 1);
+        assert_eq!(info.dest_before, Some(1));
+        assert_eq!(info.dest_after, 1);
+        assert!(!info.dest_created);
         assert!(updated.contains("— FIX"));
         assert!(updated.contains("[[sase#^fix-x]]"));
     }
@@ -504,6 +569,9 @@ mod tests {
         assert_eq!(info.outcome, "append_component");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "BUILD + FIX");
+        assert_eq!(info.source_before, 1);
+        assert_eq!(info.dest_after, 1);
+        assert!(!info.dest_created);
         assert!(updated.contains("— BUILD + FIX"));
     }
 
@@ -523,6 +591,10 @@ mod tests {
         .expect("changed");
         assert_eq!(info.outcome, "move_to");
         assert_eq!(info.to, "FIX");
+        assert_eq!(info.source_before, 1);
+        assert_eq!(info.dest_before, Some(3));
+        assert_eq!(info.dest_after, 2);
+        assert!(!info.dest_created);
         assert!(updated.contains("[[sase#^fix-x]]"));
     }
 
@@ -543,6 +615,9 @@ mod tests {
         assert_eq!(info.outcome, "rename_placeholder");
         assert_eq!(info.from.as_deref(), Some("BUILD"));
         assert_eq!(info.to, "FIX");
+        assert_eq!(info.source_before, 1);
+        assert_eq!(info.dest_after, 1);
+        assert!(!info.dest_created);
         assert!(updated.contains("— FIX"));
     }
 
@@ -562,6 +637,10 @@ mod tests {
         .expect("changed");
         assert_eq!(info.outcome, "create_below");
         assert_eq!(info.to, "FIX");
+        assert_eq!(info.source_before, 1);
+        assert_eq!(info.dest_before, None);
+        assert_eq!(info.dest_after, 3);
+        assert!(info.dest_created);
         assert!(updated.contains("[[sase#^fix-x]]"));
     }
 

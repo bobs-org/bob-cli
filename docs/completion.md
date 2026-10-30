@@ -215,8 +215,9 @@ zsh<TAB>Print the zsh completion adapter<TAB>commands<TAB>space
 
 Existing rows were measured 2026-10-02 on `apollo` (debug build) against
 the real vault (`BOB_DIR=~/bob`), 20 samples after one warmup. The
-task-type row was measured 2026-10-30 with the same setup. `__complete`
-never writes, so measuring on the real vault is safe.
+task-type row was remeasured 2026-10-30 with the same setup after the
+completion catalog's warm path. `__complete` never writes, so measuring
+on the real vault is safe.
 
 | Slot | p50 | p95 |
 | ---- | --- | --- |
@@ -225,9 +226,10 @@ never writes, so measuring on the real vault is safe.
 | `capture --route dev --task <TAB>` (vault) | 13.5 ms | 16.3 ms |
 | `capture fix it @dev:<TAB>` (capture text) | 14.5 ms | 17.4 ms |
 | `capture-pomodoro-name --pomodoro-ref <TAB>` (vault) | 11.5 ms | 15.9 ms |
-| `capture Fix the parser t:<TAB>` (task type) | 81.7 ms | 107.4 ms |
+| `capture Fix the parser t:<TAB>` (task type) | 36.3 ms | 41.3 ms |
 
-Structural p95 is under 20 ms. Existing vault slots are under 75 ms; the new task-type slot is 107.4 ms at p95, within the 150 ms deadline but over the vault target, so its latency needs follow-up.
+Structural p95 is under 20 ms. Vault slots, including task type, are under
+the 75 ms target (150 ms deadline).
 
 ## Installing
 

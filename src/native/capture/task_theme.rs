@@ -46,6 +46,14 @@ pub(super) struct ExistingTypeMarkerApplication {
     pub(super) type_name: String,
 }
 
+/// D8 relocation plus the identity the capture tracker needs to report
+/// truthful before/after Pomodoro blocks.
+pub(super) struct AppliedRelocation {
+    pub(super) json: super::output::TypeRelocationJson,
+    pub(super) dest_after: usize,
+    pub(super) dest_created: bool,
+}
+
 /// Owned D7 typed-placement inputs for one bare link-creating capture:
 /// the task's effective type (D3, from the staged line) plus the budget
 /// context `routing::place` needs.
@@ -366,10 +374,11 @@ impl CaptureTaskThemeContext {
     }
 
     /// Explicit `t:` retype of an existing task. Reads the staged target
-    /// line, resolves X, enforces the named-Pomodoro agreement, applies
-    /// the §1.7 field table, and stages the edit before the gesture runs.
-    /// Closed targets are refused without a write. Always reports, so the
-    /// caller can relocate the live link and emit `task_theme` + relocation.
+    /// line, resolves X, applies the §1.7 field table, and stages the
+    /// edit before the gesture runs. Named-Pomodoro agreement is checked
+    /// later against the resolved destination. Closed targets are refused
+    /// without a write. Always reports, so the caller can relocate the
+    /// live link and emit `task_theme` + relocation.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_type_marker_to_existing(
         &mut self,
@@ -379,8 +388,6 @@ impl CaptureTaskThemeContext {
         block_id: &str,
         marker_name: &str,
         marker_literal: bool,
-        pomodoro_destination: Option<&str>,
-        pomodoro_selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<ExistingTypeMarkerApplication, CaptureError> {
         self.refresh_residence_snapshot(planner);
@@ -475,31 +482,6 @@ impl CaptureTaskThemeContext {
                     ),
             }));
         }
-        if let Some(destination) = pomodoro_destination {
-            let sources = catalog.theme_sources();
-            let components =
-                routing::type_components(Some(destination), &sources);
-            let is_container = components.iter().all(|item| !item.is_type);
-            if !is_container {
-                let x_norm = normalize_component(&x_key);
-                let matches_component = components
-                    .iter()
-                    .filter(|item| item.is_type)
-                    .any(|item| item.key == x_norm);
-                if !matches_component {
-                    let d_display = split_components(destination)
-                        .first()
-                        .and_then(|component| canonical_theme_name(component))
-                        .unwrap_or_else(|| destination.trim().to_string());
-                    return Err(CaptureError::usage_code(
-                        format!(
-                            "`t:{marker_name}` disagrees with Pomodoro {d_display}: drop `#{d_display}` to link under {x_name}, or drop `t:{marker_name}` to type the task {d_display}"
-                        ),
-                        "type_marker_conflict",
-                    ));
-                }
-            }
-        }
         let residence_path = relative_target(Some(route));
         let residence = Path::new(&residence_path);
         let suggested = suggest::suggest_for_task(
@@ -560,7 +542,6 @@ impl CaptureTaskThemeContext {
                 edited_line.clone()
             })?;
         }
-        let _ = pomodoro_selector;
         Ok(ExistingTypeMarkerApplication {
             summary,
             type_key: x_key,
@@ -797,17 +778,19 @@ impl CaptureTaskThemeContext {
 
     /// Shared D8 relocation for an explicit `t:` retype: after the gesture,
     /// restore ledger agreement for `block_id` becoming `type_key`/`type_name`.
-    /// Stages the day-note edit and returns the JSON relocation, or `None`
-    /// when the ledger already agrees. A strict-cap refusal fails with
-    /// `strict_cap` before any write.
+    /// Stages the day-note edit, pins explicit Pomodoro block refs for the
+    /// renamed or created headlines, and rebases existing gesture refs.
+    /// Returns `None` when the ledger already agrees. A strict-cap refusal
+    /// fails with `strict_cap` before any write.
     pub(super) fn relocate_for_retype(
         &mut self,
         planner: &mut CaptureBatchPlanner,
         block_id: &str,
         type_key: &str,
         type_name: &str,
+        pomodoro_refs: &mut Vec<PomodoroBlockRef>,
         warnings: &mut Vec<CaptureWarning>,
-    ) -> Result<Option<super::output::TypeRelocationJson>, CaptureError> {
+    ) -> Result<Option<AppliedRelocation>, CaptureError> {
         self.refresh_residence_snapshot(planner);
         if !self.load_config(warnings) || !self.load_catalog(warnings) {
             return Ok(None);
@@ -831,11 +814,18 @@ impl CaptureTaskThemeContext {
         ) {
             Ok(None) => Ok(None),
             Ok(Some((updated, info))) => {
+                let refs = std::mem::take(pomodoro_refs);
+                *pomodoro_refs =
+                    compose_type_relocation_refs(refs, &info, &day_contents, &updated);
                 planner.stage(&day_file, updated)?;
-                Ok(Some(super::output::TypeRelocationJson {
-                    outcome: info.outcome,
-                    from: info.from,
-                    to: info.to,
+                Ok(Some(AppliedRelocation {
+                    json: super::output::TypeRelocationJson {
+                        outcome: info.outcome,
+                        from: info.from,
+                        to: info.to,
+                    },
+                    dest_after: info.dest_after,
+                    dest_created: info.dest_created,
                 }))
             }
             Err(refusal) => Err(CaptureError::strict_type_cap(
@@ -869,6 +859,100 @@ impl CaptureTaskThemeContext {
         }
         self.catalog.is_some()
     }
+}
+
+/// Rebase the gesture's Pomodoro refs through a D8 rewrite and pin the
+/// destination identity so the batch tracker never guesses from name
+/// equality. `pre` is the post-gesture day text (relocation input);
+/// `post` is the relocated day text. `before` indices on existing refs
+/// stay in item-pre coordinates; only `after` is rewritten here.
+fn compose_type_relocation_refs(
+    refs: Vec<PomodoroBlockRef>,
+    info: &crate::native::pomodoro_themes::relocation_apply::TypeRelocation,
+    pre: &str,
+    post: &str,
+) -> Vec<PomodoroBlockRef> {
+    let pre_lines: Vec<&str> = pre.lines().collect();
+    let post_lines: Vec<&str> = post.lines().collect();
+    let (old_to_new, _) = line_maps(&pre_lines, &post_lines);
+    let rename_in_place =
+        !info.dest_created && info.dest_before == Some(info.source_before);
+    let dest_before = info.dest_before;
+    let pin_dest = |item: PomodoroBlockRef| -> PomodoroBlockRef {
+        let before = match item.before {
+            PomodoroBlockBefore::Resolve if info.dest_created => {
+                PomodoroBlockBefore::Created
+            }
+            PomodoroBlockBefore::Resolve => PomodoroBlockBefore::At(
+                dest_before.unwrap_or(info.source_before),
+            ),
+            other => other,
+        };
+        PomodoroBlockRef {
+            before,
+            after: Some(info.dest_after),
+            ..item
+        }
+    };
+    let mut composed = Vec::with_capacity(refs.len().saturating_add(2));
+    for item in refs {
+        match item.after {
+            Some(after) if dest_before == Some(after) => {
+                composed.push(pin_dest(item));
+            }
+            Some(after) if after == info.source_before && rename_in_place => {
+                composed.push(pin_dest(item));
+            }
+            Some(after) => composed.push(PomodoroBlockRef {
+                after: Some(old_to_new.get(&after).copied().unwrap_or(after)),
+                ..item
+            }),
+            None if rename_in_place
+                && item.role == PomodoroBlockRole::Unlinked
+                && matches!(
+                    item.before,
+                    PomodoroBlockBefore::At(before)
+                        if before == info.source_before
+                ) =>
+            {
+                composed.push(PomodoroBlockRef {
+                    after: Some(info.dest_after),
+                    ..item
+                });
+            }
+            None => composed.push(item),
+        }
+    }
+    match info.outcome {
+        "rename_entry" | "append_component" | "rename_placeholder" => {
+            composed.push(PomodoroBlockRef::at(
+                PomodoroBlockRole::Changed,
+                info.source_before,
+                info.dest_after,
+            ));
+        }
+        "move_to" => {
+            if let Some(dest) = info.dest_before {
+                composed.push(PomodoroBlockRef::at(
+                    PomodoroBlockRole::Linked,
+                    dest,
+                    info.dest_after,
+                ));
+            }
+            composed
+                .push(PomodoroBlockRef::unlinked_before(info.source_before));
+        }
+        "create_below" => {
+            composed.push(PomodoroBlockRef::created(
+                PomodoroBlockRole::Linked,
+                info.dest_after,
+            ));
+            composed
+                .push(PomodoroBlockRef::unlinked_before(info.source_before));
+        }
+        _ => {}
+    }
+    composed
 }
 
 struct CaptureHomeSource {

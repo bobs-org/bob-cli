@@ -81,12 +81,15 @@ pub(crate) fn shell_completion(
     {
         return Ok(None);
     }
-    if capture_task_wikilinks::completion_field_at(
-        raw_text,
-        cursor,
-        &current_note_path,
-    )
-    .is_some()
+    let type_owns_cursor =
+        capture_language::task_type_completion_at(raw_text, cursor).is_some();
+    if !type_owns_cursor
+        && capture_task_wikilinks::completion_field_at(
+            raw_text,
+            cursor,
+            &current_note_path,
+        )
+        .is_some()
     {
         return Ok(None);
     }

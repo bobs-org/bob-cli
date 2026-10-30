@@ -139,11 +139,18 @@ fn build_result_inner(
         });
     }
 
-    if let Some(field) = capture_task_wikilinks::completion_field_at(
-        raw_text,
-        cursor,
-        &current_note_path,
-    ) {
+    // A valid edge `t:` owns the caret even when it sits inside a
+    // `((query` Task Wikilink; `((` itself still completes at its own
+    // positions.
+    let type_owns_cursor =
+        capture_language::task_type_completion_at(raw_text, cursor).is_some();
+    if !type_owns_cursor
+        && let Some(field) = capture_task_wikilinks::completion_field_at(
+            raw_text,
+            cursor,
+            &current_note_path,
+        )
+    {
         let (rows, warnings) = capture_task_wikilinks::candidates(
             bob_dir,
             &field,

@@ -2,7 +2,9 @@
 
 use crate::support::*;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 const NOW: &str = "2026-10-28 09:15:00";
 
@@ -471,5 +473,173 @@ fn already_queued_link_retype_relocates_the_ledger() {
         stdout(&human).contains("ledger"),
         "{}",
         format_output(&human)
+    );
+    assert_eq!(relocation["outcome"], "move_to", "{json}");
+    assert_eq!(relocation["to"], "FIX", "{json}");
+    assert_eq!(json["pomodoro_name"], "FIX", "{json}");
+    let blocks = json["pomodoro_blocks"].as_array().expect("blocks");
+    assert!(
+        blocks.iter().any(|block| {
+            block["name"] == "FIX"
+                && block["lines"].as_array().is_some_and(|lines| {
+                    lines.iter().any(|line| line["change"] != "unchanged")
+                })
+        }),
+        "move_to preview must show a real dest diff: {json}"
+    );
+}
+
+fn snapshot_files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeMap::new();
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path).expect("read snapshot directory") {
+            let path = entry.expect("snapshot entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.insert(
+                    path.clone(),
+                    fs::read(path).expect("snapshot file"),
+                );
+            }
+        }
+    }
+    files
+}
+
+fn capture_error_json(
+    vault: &Path,
+    day_file: &Path,
+    config: &Path,
+    args: &[&str],
+) -> (std::process::Output, Value) {
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--no-clip")
+        .arg("-f")
+        .arg("json")
+        .args(args)
+        .env("BOB_DIR", vault)
+        .env("BOB_DAY_FILE", day_file)
+        .env("BOB_CONFIG_FILE", config)
+        .env("BOB_NOW", NOW);
+    let output = command.output().expect("run refused capture");
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let json =
+        serde_json::from_str(stdout(&output).trim()).unwrap_or_else(|error| {
+            panic!(
+                "parse capture error JSON: {error}\n{}",
+                format_output(&output)
+            )
+        });
+    (output, json)
+}
+
+#[test]
+fn named_destination_prefixes_are_checked_after_resolution() {
+    let (temp, vault, day_file, config) = fixture(
+        "bob-type-existing-prefix-conflict",
+        &project(Some("WRITE"), "- [ ] #task Fix parser ^fix-p\n"),
+        "## Pomodoros\n- [ ] () — BUILD\n- [ ] () — FIX\n",
+    );
+    let before = snapshot_files(temp.path());
+    let (_, json) = capture_error_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:fix-p#bui t:fix"],
+    );
+    assert_eq!(json["code"], "type_marker_conflict", "{json}");
+    assert!(
+        json["error"].as_str().unwrap().contains("Pomodoro BUILD"),
+        "{json}"
+    );
+    assert!(
+        json["error"].as_str().unwrap().contains("task BUILD"),
+        "{json}"
+    );
+    assert_eq!(snapshot_files(temp.path()), before);
+}
+
+#[test]
+fn rename_placeholder_preview_rewrites_the_headline() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-type-existing-rename-preview",
+        &project(Some("WRITE"), "- [ ] #task Fix parser ^fix-r\n"),
+        "## Pomodoros\n- [ ] () — BUILD\n  - [[sase#^fix-r]]\n",
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:fix-r", "t:fix"],
+        true,
+    );
+    assert_eq!(
+        json["type_relocation"]["outcome"], "rename_placeholder",
+        "{json}"
+    );
+    assert_eq!(json["type_relocation"]["to"], "FIX", "{json}");
+    assert_eq!(json["pomodoro_name"], "FIX", "{json}");
+    let block = json["pomodoro_blocks"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .find(|block| block["name"] == "FIX")
+        .expect("FIX block");
+    assert_eq!(block["created"], false, "{json}");
+    let headline = &block["lines"][0];
+    assert_eq!(headline["change"], "changed", "{json}");
+    assert!(
+        headline["text"].as_str().unwrap().contains("— FIX"),
+        "{json}"
+    );
+    assert!(
+        headline["before"]
+            .as_str()
+            .unwrap_or("")
+            .contains("— BUILD"),
+        "{json}"
+    );
+}
+
+#[test]
+fn create_below_preview_reports_a_created_destination() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-type-existing-create-preview",
+        &project(Some("WRITE"), "- [ ] #task Fix parser ^fix-c\n"),
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — BUILD\n",
+            "  - [[sase#^fix-c]]\n",
+            "  - [[sase#^other-x]]\n",
+        ),
+    );
+    let (_, json) = capture_json(
+        &vault,
+        &day_file,
+        &config,
+        &["^sase:fix-c", "t:fix"],
+        true,
+    );
+    assert_eq!(json["type_relocation"]["outcome"], "create_below", "{json}");
+    assert_eq!(json["type_relocation"]["to"], "FIX", "{json}");
+    assert_eq!(json["creates_pomodoro"], true, "{json}");
+    assert_eq!(json["pomodoro_name"], "FIX", "{json}");
+    let dest = json["pomodoro_blocks"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .find(|block| block["name"] == "FIX")
+        .expect("FIX block");
+    assert_eq!(dest["created"], true, "{json}");
+    assert_eq!(json["pomodoro_link_destination"]["name"], "FIX", "{json}");
+    assert_eq!(
+        json["pomodoro_link_destination"]["role"], "created",
+        "{json}"
     );
 }
