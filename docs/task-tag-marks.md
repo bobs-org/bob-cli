@@ -117,11 +117,12 @@ ink for the type's hue slot. Defined on `.theme-light` and
 --bob-type-ink-<slot>: color-mix(in srgb, var(--bob-hue-<slot>) 55%, var(--text-normal));
 ```
 
-`--bob-task-tag-color` still wins when set. A node test computes WCAG
-contrast for 8 slots × {plain, Blocked tint, In Progress tint, Next
-tint} × {light, dark}; every cell is ≥ 4.5:1. Exempt and `auto`-muted
-hues use muted ink; unconfigured names use `--text-muted` with a
-dotted underline; repair uses `#?` in warning-orange.
+`--bob-task-tag-color` still wins when set. Exempt and `auto`-muted hues use
+the fixed `--bob-type-ink-muted` token, one hex per theme, defined on
+`.theme-light` / `.theme-dark` beside the slot inks; `--bob-task-tag-color`
+still wins. A node test holds it to ≥ 4.5:1 on the same lane matrix.
+Unconfigured names use `--text-muted` with a dotted underline; repair uses
+`#?` in warning-orange.
 
 ## Anatomy and tones
 
@@ -511,11 +512,12 @@ checkbox state still never tint the hash.
 | TI6 | `- [ ] #task Buy [type:: SNACK]` unconfigured | `#SNACK` in muted ink, dotted underline |
 | TI7 | `- [ ] #task Fix [type:: ???]` | `#?` repair mark; raw field visible |
 | TI8 | inherited toggle off / on | hash only / `#BUILD` in quieter ink |
+| TI9 | `- [*] #task Spike [type:: PLAN]` (exempt, no hue) | `#PLAN` in the muted ink, readable on the Next tint |
 | LM1 | Task Link to a BUILD task under `— FIX` | `#BUILD` prefix, dashed orange underline |
 | LM2 | Task Link to a BUILD task under `— BUILD + FIX` | quiet `#BUILD` prefix, no underline |
 | LM3 | Task Link to an inherited-only task, or stale cache | no prefix |
 
-Contrast: 8 hue slots × {plain, Blocked, In Progress, Next} × {light, dark} all ≥ 4.5:1.
+Contrast: 8 hue slots plus the muted ink × {plain, Blocked, In Progress, Next} × {light, dark} all ≥ 4.5:1.
 
 Rendered views (fake DOM in tests):
 
