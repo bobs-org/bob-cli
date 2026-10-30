@@ -5942,6 +5942,12 @@ fn render_temp_pdf_from(
         .arg("--metadata")
         .arg(format!(
             "{}={}",
+            super::table_layout::LINE_CHARS_METADATA_KEY,
+            super::table_layout::MARKDOWN_LINE_CHARS
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
             super::table_layout::REPORT_METADATA_KEY,
             filters.table_layout_report.display()
         ))

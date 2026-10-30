@@ -5,7 +5,7 @@
 //! ([`HEADER_INCLUDES`]) draw the record environment. This module holds both
 //! embedded assets, the JSON report the filter writes for bob, and the
 //! `tables:` summary and warning formatting. The pass is not wired into
-//! `bob ref create` yet.
+//! `bob ref create` render chains.
 
 use std::{fs, path::Path};
 
@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::native::style::Styler;
 
-/// First pandoc `--lua-filter` once the pandoc-wiring phase lands.
+/// First pandoc `--lua-filter` on both reference PDF render chains.
 pub(crate) const FILTER: &str = include_str!("table_layout.lua");
 
 /// TeX macros for record environments, labels, and captions.
@@ -28,6 +28,15 @@ pub(crate) const TABLES_DEFAULT_METADATA_KEY: &str = "bob-tables-default";
 
 /// Word threshold for the auto prose rule.
 pub(crate) const PROSE_WORDS_METADATA_KEY: &str = "bob-table-prose-words";
+
+/// Character budget used to size grid-table columns for a render route.
+pub(crate) const LINE_CHARS_METADATA_KEY: &str = "bob-table-line-chars";
+
+/// Conservative line budget for Markdown PDFs (6.8in text measure).
+pub(crate) const MARKDOWN_LINE_CHARS: u32 = 84;
+
+/// Conservative line budget for note snapshots (6.3in text measure).
+pub(crate) const SNAPSHOT_LINE_CHARS: u32 = 78;
 
 /// Pandoc metadata key carrying the JSON report path for the filter.
 pub(crate) const REPORT_METADATA_KEY: &str = "bob-table-layout-report";
@@ -443,6 +452,65 @@ mod tests {
         assert_eq!(run.report.tables, 1);
         assert_eq!(run.report.records, 0);
         assert_eq!(run.report.grids, 1);
+    }
+
+    #[test]
+    fn grid_widths_fit_naturally_and_tables_get_row_air() {
+        let Some(run) =
+            run_filter("grid-natural-widths", numeric_table(), "native", &[])
+        else {
+            return;
+        };
+        assert!(
+            run.output.contains("ColWidthDefault"),
+            "a fitting data grid should use natural widths: {}",
+            run.output
+        );
+        assert!(
+            run.output
+                .contains(r"\\begingroup\\renewcommand{\\arraystretch}{1.2}")
+                && run.output.contains(r"\\endgroup"),
+            "grid body rows should render with increased row air: {}",
+            run.output
+        );
+        assert_eq!(run.report.grids, 1);
+    }
+
+    #[test]
+    fn overflowing_grid_widths_follow_content_proportions() {
+        let source = "| A | B | C |\n|---|---|---|\n| x | this middle column contains a substantially longer description | 3 |\n";
+        let extra = [(LINE_CHARS_METADATA_KEY, "30")];
+        let Some(run) =
+            run_filter("grid-proportional-widths", source, "native", &extra)
+        else {
+            return;
+        };
+        assert!(
+            run.output.contains("ColWidth 0.904")
+                && run.output.contains("ColWidth 4.761"),
+            "overflowing grids should give most width to the longer column: {}",
+            run.output
+        );
+    }
+
+    #[test]
+    fn deliberate_author_widths_are_preserved() {
+        let source = "<table><colgroup><col style=\"width: 25%\"><col style=\"width: 75%\"></colgroup><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>x</td><td>y</td></tr></tbody></table>";
+        let Some(run) = run_filter_from(
+            "grid-deliberate-widths",
+            source,
+            "html",
+            "native",
+            &[],
+        ) else {
+            return;
+        };
+        assert!(
+            run.output.contains("ColWidth 0.25")
+                && run.output.contains("ColWidth 0.75"),
+            "deliberate 25/75 author widths should be preserved: {}",
+            run.output
+        );
     }
 
     #[test]

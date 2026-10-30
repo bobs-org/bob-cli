@@ -267,6 +267,12 @@ pub(crate) fn render_note_pdf(
         .arg("--metadata")
         .arg(format!(
             "{}={}",
+            super::super::table_layout::LINE_CHARS_METADATA_KEY,
+            super::super::table_layout::SNAPSHOT_LINE_CHARS
+        ))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
             super::super::table_layout::REPORT_METADATA_KEY,
             table_layout_report.display()
         ))

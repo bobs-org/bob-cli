@@ -491,7 +491,8 @@ text that selects and annotates normally.
 A table prints as records when it is **prose**: some body-row cell in column
 2 or later holds at least `highlights.table_prose_words` whitespace-separated
 words (default 12). Header and caption words do not count. All other tables
-keep a grid, with content-aware column widths and row air.
+keep a grid, with content-aware column widths and row air only; grids have no
+hairline rules between body rows.
 
 Three levels reverse the choice, highest wins:
 

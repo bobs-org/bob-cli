@@ -102,8 +102,7 @@ pub(crate) mod source_store;
 mod sources;
 mod stamp;
 mod sync;
-// Prose-table records pass. Wired into both pandoc chains by the
-// pandoc-wiring phase; this phase only embeds and tests the filter.
+// Shared prose-table records and improved-grid pass for pandoc PDF renders.
 #[allow(dead_code)]
 pub(crate) mod table_layout;
 mod target;

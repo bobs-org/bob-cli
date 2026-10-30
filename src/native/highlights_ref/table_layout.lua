@@ -1,14 +1,14 @@
 -- bob ref create: table-layout pass (see docs/highlights-create.md).
 --
--- First `--lua-filter` on both pandoc → XeLaTeX chains once wired. Prose
--- tables become single-column row records; other tables stay grids.
--- Classification, override precedence, the complex-table guard, and the
--- JSON report follow the shared contract. Grid improvement is a named
--- no-op (`improve_grid`) filled in by a later phase. Never fails a
--- render: each table rewrite is pcall'd. Writes one JSON report to the
--- path in `-M bob-table-layout-report=<path>`.
+-- First `--lua-filter` on both pandoc → XeLaTeX chains. Prose tables become
+-- single-column row records; remaining grids get content-aware widths and row air.
+-- Classification, override precedence, the complex-table guard, grid sizing,
+-- row air, and the JSON report follow the shared contract. Never fails a
+-- render: each table rewrite is pcall'd. Writes one JSON report to the path
+-- in `-M bob-table-layout-report=<path>`.
 
 local DEFAULT_PROSE_WORDS = 12
+local DEFAULT_LINE_CHARS = 84
 local CLASS_RECORDS = "bob-records"
 local CLASS_GRID = "bob-grid"
 local CLASS_WRAPPER = "bob-table-records"
@@ -22,11 +22,6 @@ local REASON_ROW_HEAD = "row header columns"
 local REASON_NESTED = "nested table"
 local REASON_HEADER =
   "header contains a link, note, image, or identifier"
-
--- data-grid fills this in. Returns the table unchanged for now.
-local function improve_grid(tbl, _ctx)
-  return tbl
-end
 
 local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -188,6 +183,108 @@ local function any_cell(tbl, pred)
     if rows({ rows = body.body }) then return true end
   end
   return false
+end
+
+local function char_len(s)
+  if utf8 ~= nil and utf8.len ~= nil then
+    local n = utf8.len(s)
+    if n ~= nil then return n end
+  end
+  return #s
+end
+
+local function has_spans(tbl)
+  return any_cell(tbl, function(cell)
+    return cell_span(cell, "row_span") > 1
+      or cell_span(cell, "col_span") > 1
+  end)
+end
+
+local function deliberate_widths(tbl)
+  local widths = {}
+  if tbl.colspecs == nil or #tbl.colspecs < 2 then return false end
+  for _, colspec in ipairs(tbl.colspecs) do
+    local width = colspec[2]
+    if type(width) ~= "number" or width <= 0 then return false end
+    widths[#widths + 1] = width
+  end
+  table.sort(widths)
+  return widths[#widths] > widths[1] * 1.1
+end
+
+local function cell_widths(tbl)
+  local n = tbl.colspecs and #tbl.colspecs or 0
+  local mins, maxs = {}, {}
+  for i = 1, n do mins[i], maxs[i] = 1, 1 end
+  local function scan_row(row)
+    for i, cell in ipairs(row.cells or {}) do
+      if i <= n and cell_span(cell, "col_span") == 1 then
+        local value = pandoc.utils.stringify(cell_blocks(cell))
+        maxs[i] = math.max(maxs[i], char_len(value))
+        for word in value:gmatch("%S+") do
+          mins[i] = math.max(mins[i], math.min(char_len(word), 24))
+        end
+      end
+    end
+  end
+  if tbl.head ~= nil then
+    for _, row in ipairs(tbl.head.rows or {}) do scan_row(row) end
+  end
+  if tbl.bodies ~= nil then
+    for _, body in ipairs(tbl.bodies) do
+      for _, row in ipairs(body.head or {}) do scan_row(row) end
+      for _, row in ipairs(body.body or {}) do scan_row(row) end
+    end
+  end
+  if tbl.foot ~= nil then
+    for _, row in ipairs(tbl.foot.rows or {}) do scan_row(row) end
+  end
+  return n, mins, maxs
+end
+
+local function improve_grid(tbl, ctx)
+  -- Pandoc's width-based span representation cannot be adjusted safely when
+  -- cells span columns; row air still applies to those tables.
+  if not has_spans(tbl) and not deliberate_widths(tbl) then
+    local n, mins, maxs = cell_widths(tbl)
+    if n > 0 then
+      local sum_min, sum_max = 0, 0
+      for i = 1, n do
+        sum_min = sum_min + mins[i]
+        sum_max = sum_max + maxs[i]
+      end
+      local line_chars = ctx and ctx.line_chars or DEFAULT_LINE_CHARS
+      local gutter = 3 * n
+      if sum_max + gutter <= line_chars then
+        for i = 1, n do
+          tbl.colspecs[i] = { tbl.colspecs[i][1], pandoc.ColWidthDefault }
+        end
+      else
+        local available = math.max(line_chars - gutter, sum_min)
+        local slack = available - sum_min
+        local spread = sum_max - sum_min
+        local widths, total = {}, 0
+        for i = 1, n do
+          local extra = spread > 0
+              and slack * (maxs[i] - mins[i]) / spread
+            or slack / n
+          widths[i] = mins[i] + extra
+          total = total + widths[i]
+        end
+        for i = 1, n do
+          tbl.colspecs[i] = {
+            tbl.colspecs[i][1],
+            widths[i] / total,
+          }
+        end
+      end
+    end
+  end
+  return pandoc.List({
+    pandoc.RawBlock("latex", "\\begingroup\\renewcommand{\\arraystretch}{1.2}"),
+    tbl,
+    pandoc.RawBlock("latex", "\\endgroup"),
+  })
 end
 
 local function complex_reason_of(tbl)
@@ -427,6 +524,20 @@ function Pandoc(doc)
     warnings[#warnings + 1] = msg
   end
 
+  local function safe_improve_grid(tbl, ctx, idx)
+    local ok, result = pcall(improve_grid, tbl, ctx)
+    if ok and result ~= nil then return result end
+    local err = ok and "empty result" or tostring(result)
+    add_warning(
+      string.format(
+        "table %d grid improvement failed (%s); leaving as a grid",
+        idx,
+        err
+      )
+    )
+    return tbl
+  end
+
   local report_path = meta_text(doc.meta, "bob-table-layout-report")
 
   local function write_report(obj)
@@ -468,6 +579,11 @@ function Pandoc(doc)
         .. tostring(DEFAULT_PROSE_WORDS)
         .. ")"
     )
+  end
+  local line_raw = meta_text(doc.meta, "bob-table-line-chars")
+  local line_chars = tonumber(line_raw) or DEFAULT_LINE_CHARS
+  if line_chars < 1 or line_chars ~= math.floor(line_chars) then
+    line_chars = DEFAULT_LINE_CHARS
   end
 
   local effective = doc_layout or default_layout or "auto"
@@ -511,7 +627,10 @@ function Pandoc(doc)
     tables_n = tables_n + 1
     if #rows == 0 then
       grids_n = grids_n + 1
-      return improve_grid(tbl, { requested = requested })
+      return safe_improve_grid(tbl, {
+        requested = requested,
+        line_chars = line_chars,
+      }, idx)
     end
     local reason = complex_reason_of(tbl)
     local want_records
@@ -542,7 +661,10 @@ function Pandoc(doc)
         )
       )
       grids_n = grids_n + 1
-      return improve_grid(tbl, { requested = requested })
+      return safe_improve_grid(tbl, {
+        requested = requested,
+        line_chars = line_chars,
+      }, idx)
     end
     grids_n = grids_n + 1
     if want_records and reason ~= nil then
@@ -553,7 +675,11 @@ function Pandoc(doc)
         requested = reported,
       }
     end
-    return improve_grid(tbl, { requested = requested, reason = reason })
+    return safe_improve_grid(tbl, {
+      requested = requested,
+      reason = reason,
+      line_chars = line_chars,
+    }, idx)
   end
 
   doc = doc:walk(filter)
