@@ -4,12 +4,9 @@
 //! These are the shared contract behind capture, move, link, ref-today,
 //! successor, and Task Card gestures. Every function is pure over plain
 //! data so the Ledger Tools JS mirror can consume the same vectors.
-//! `plan_theme_change` stays in place until `capture-retype` replaces its
-//! caller.
-//!
-//! No live caller consumes the planners yet; later phases wire them into
-//! capture, moves, and links. The shared vectors are the contract until
-//! then.
+//! Capture named `#NAME` / `=name` forms call `retype`; `place` and
+//! `relocate` wait for later phases. `plan_theme_change` remains for the
+//! `write_rule` vectors until `closeout`.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

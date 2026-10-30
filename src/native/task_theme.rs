@@ -32,8 +32,12 @@ pub(crate) enum TaskThemeState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ThemeChange {
+    #[allow(dead_code)] // write_rule vectors until closeout
     None,
-    Set { name: String, key: String },
+    Set {
+        name: String,
+        key: String,
+    },
     Clear,
 }
 
@@ -87,6 +91,7 @@ pub(crate) fn clear_task_theme(line: &str) -> String {
     output
 }
 
+#[allow(dead_code)] // write_rule vectors until closeout
 pub(crate) fn plan_theme_change(
     field: &TaskThemeState,
     shown_suggestion_key: Option<&str>,
@@ -124,6 +129,7 @@ pub(crate) fn plan_theme_change(
     }
 }
 
+#[allow(dead_code)] // write_rule vectors until closeout
 fn single_non_exempt_component(
     destination_name: &str,
     exempt_keys: &BTreeSet<String>,

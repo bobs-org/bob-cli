@@ -591,7 +591,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     );
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
-        "- [*] #task Finish packet ^goog-exit\n"
+        "- [*] #task Finish packet [type:: CODING] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),
@@ -679,7 +679,7 @@ fn capture_task_toggle_named_ensure_next_moves_creates_and_noops() {
     assert_eq!(json["removed_pomodoro_links"], 0);
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
-        "- [*] #task Finish packet [fresh:: 2026-07-10] ^goog-exit\n"
+        "- [*] #task Finish packet [type:: DEEP] [fresh:: 2026-07-10] ^goog-exit\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("day"),

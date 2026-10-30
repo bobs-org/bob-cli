@@ -3609,16 +3609,16 @@ fn format_task_theme_row(
             )
             .unwrap_or_else(|| theme.name.clone());
             if result.dry_run {
-                format!("would set task type → {name} · {inherited}")
+                format!("would set type → {name} · {inherited}")
             } else {
-                format!("task type → {name} · {inherited}")
+                format!("→ {name} · {inherited}")
             }
         }
         "cleared" => {
             if result.dry_run {
-                format!("would clear task type · {inherited}")
+                format!("would clear type · {inherited}")
             } else {
-                format!("task type cleared · {inherited}")
+                format!("cleared · {inherited}")
             }
         }
         _ => return None,

@@ -766,7 +766,7 @@ fn capture_named_pomodoro_updates_both_notes_and_skips_current() {
             "# Dev\n",
             "## Tasks\n",
             "- [ ] #task Existing\n",
-            "- [*] #task Some foobar task. [created::2026-07-10] ^foobar\n",
+            "- [*] #task Some foobar task. [type:: BUGS] [created::2026-07-10] ^foobar\n",
         )
     );
     assert_eq!(
@@ -864,10 +864,13 @@ fn capture_named_pomodoro_dry_run_and_failures_leave_notes_untouched() {
         assert_eq!(json["block_link"], "[[dev#^new-id]]", "{name}");
         assert_eq!(
             fs::read_to_string(&target).expect("untouched target"),
-            concat!(
-                "## Tasks\n",
-                "- [ ] #task Existing\n",
-                "- [*] #task Do work [created::2026-07-10] ^new-id\n",
+            format!(
+                concat!(
+                    "## Tasks\n",
+                    "- [ ] #task Existing\n",
+                    "- [*] #task Do work [type:: {created_name}] [created::2026-07-10] ^new-id\n",
+                ),
+                created_name = created_name
             ),
             "{name}"
         );

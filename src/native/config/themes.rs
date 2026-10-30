@@ -370,9 +370,9 @@ mod tests {
         let error = parse_themes_config("themes:\n  7: blue\n", &path())
             .expect_err("number key fails");
         assert!(
-            error.message().contains(
-                "quote type names YAML reads as numbers or booleans"
-            ),
+            error
+                .message()
+                .contains("quote type names YAML reads as numbers or booleans"),
             "unexpected: {}",
             error.message()
         );

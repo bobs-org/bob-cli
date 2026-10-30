@@ -62,6 +62,8 @@ pub(super) fn plan_project_note_item(
     roll_seed: u64,
     item_index: usize,
     planner: &mut CaptureBatchPlanner,
+    task_theme_context: &mut CaptureTaskThemeContext,
+    warnings: &mut Vec<CaptureWarning>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let CaptureKind::ProjectNote {
         block_id,
@@ -296,7 +298,7 @@ pub(super) fn plan_project_note_item(
         planner.stage(&new_target, rendered.contents.clone())?;
     }
 
-    let task_links = linked
+    let mut task_links = linked
         .iter()
         .map(|task| ProjectTaskLinkJson {
             block_id: task.block_id.clone(),
@@ -308,10 +310,38 @@ pub(super) fn plan_project_note_item(
             task_line: task.task_line.clone(),
         })
         .collect::<Vec<_>>();
+    let mut task_theme = None;
+    if project_link_guard.is_none()
+        && let Some(destination) = canonical_pomodoro_name.as_deref()
+        && let Some(selector) = pomodoro_name.as_deref()
+    {
+        let note_route = basename.strip_suffix(".md").unwrap_or(&basename);
+        for task in &linked {
+            if let Some(applied) = task_theme_context.apply_new_task(
+                planner,
+                &new_target,
+                note_route,
+                &task.block_id,
+                Some(destination),
+                Some(selector),
+                warnings,
+            )? {
+                if let Some(link) = task_links
+                    .iter_mut()
+                    .find(|link| link.block_id == task.block_id)
+                {
+                    link.task_line = applied.task_line.clone();
+                }
+                if task_theme.is_none() {
+                    task_theme = Some(applied.summary);
+                }
+            }
+        }
+    }
 
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
-            task_theme: None,
+            task_theme,
             ok: true,
             dry_run: request.dry_run,
             routed: true,

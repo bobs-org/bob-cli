@@ -156,7 +156,7 @@ fn new_named_task_reports_and_writes_the_resolved_theme_exception() {
         .expect("dry-run capture human output");
     assert_success(&human);
     assert!(
-        stdout(&human).contains("  type  would set task type →"),
+        stdout(&human).contains("  type  would set type →"),
         "{}",
         format_output(&human)
     );
@@ -307,7 +307,7 @@ fn ensure_next_named_relocation_sets_a_theme_after_freshness_edits() {
 }
 
 #[test]
-fn absent_suggestion_and_guarded_links_do_not_write_a_task_theme() {
+fn named_capture_writes_a_type_without_a_shown_suggestion() {
     let (_temp, vault, day_file, config) = fixture(
         "bob-capture-task-theme-no-suggestion",
         &project(None, "- [ ] #task Work ^work\n"),
@@ -315,17 +315,22 @@ fn absent_suggestion_and_guarded_links_do_not_write_a_task_theme() {
     );
     let (_, json) =
         capture_json(&vault, &day_file, &config, &["^sase:work#FIX"], false);
-    assert!(json.get("task_theme").is_none(), "{json}");
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
     assert!(
-        !fs::read_to_string(vault.join("sase.md"))
+        fs::read_to_string(vault.join("sase.md"))
             .unwrap()
-            .contains("[theme::"),
-        ""
+            .contains("[type:: FIX]"),
+        "an explicit #FIX still writes when the cascade has no suggestion"
     );
+}
 
-    write_file(
-        &vault.join("sase.md"),
+#[test]
+fn matching_type_and_guarded_links_do_not_write_a_task_theme() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-same-or-guarded",
         &project(Some("BUILD"), "- [ ] #task Work [theme:: FIX] ^work\n"),
+        "## Pomodoros\n- [ ] () — FIX\n",
     );
     let (_, same_theme) =
         capture_json(&vault, &day_file, &config, &["^sase:work#FIX"], false);
@@ -405,38 +410,168 @@ fn ref_today_named_selection_never_writes_task_theme() {
 }
 
 #[test]
-fn composite_exempt_and_unnamed_destinations_do_not_write_task_themes() {
-    let cases = [
-        (
-            "composite",
-            "## Pomodoros\n- [ ] () — FIX + BUILD\n",
-            "^sase:work#FIX+BUILD",
-        ),
-        (
-            "exempt",
-            "## Pomodoros\n- [ ] () — PLAN\n",
-            "^sase:work#PLAN",
-        ),
-        ("unnamed", "## Pomodoros\n- [ ] ()\n", "^sase:work"),
-    ];
+fn unnamed_destinations_do_not_write_task_themes() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-unnamed",
+        &project(Some("BUILD"), "- [ ] #task Work [theme:: READ] ^work\n"),
+        "## Pomodoros\n- [ ] ()\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work"], false);
+    assert!(json.get("task_theme").is_none(), "{json}");
+    assert!(
+        json["task_line"]
+            .as_str()
+            .unwrap()
+            .contains("[theme:: READ]"),
+        "{json}"
+    );
+}
 
-    for (case, day, capture) in cases {
-        let (_temp, vault, day_file, config) = fixture(
-            &format!("bob-capture-task-theme-{case}"),
-            &project(Some("BUILD"), "- [ ] #task Work [theme:: READ] ^work\n"),
-            day,
-        );
-        let (_, json) =
-            capture_json(&vault, &day_file, &config, &[capture], false);
-        assert!(json.get("task_theme").is_none(), "{case}: {json}");
-        assert!(
-            json["task_line"]
-                .as_str()
-                .unwrap()
-                .contains("[theme:: READ]"),
-            "{case}: {json}"
-        );
-    }
+#[test]
+fn inherited_build_plus_hash_fix_writes_type_fix() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-inherited-build",
+        &project(Some("BUILD"), "- [ ] #task Work ^work\n"),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work#fix"], false);
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    assert_eq!(json["task_theme"]["inherited"]["theme"]["name"], "BUILD");
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .unwrap()
+            .contains("[type:: FIX]"),
+        "inherited BUILD plus #fix writes [type:: FIX]"
+    );
+}
+
+#[test]
+fn hash_build_clears_a_fix_field() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-clear",
+        &project(Some("BUILD"), "- [ ] #task Work [type:: FIX] ^work\n"),
+        "## Pomodoros\n- [ ] () — BUILD\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work#build"], false);
+    assert_eq!(json["task_theme"]["action"], "cleared", "{json}");
+    assert_eq!(json["task_theme"]["theme"], Value::Null, "{json}");
+    let line = json["task_line"].as_str().unwrap();
+    assert!(
+        !line.contains("[type::") && !line.contains("[theme::"),
+        "{line}"
+    );
+}
+
+#[test]
+fn hash_plan_writes_an_exempt_type() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-plan",
+        &project(Some("BUILD"), "- [ ] #task Work ^work\n"),
+        "## Pomodoros\n- [ ] () — PLAN\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work#plan"], false);
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "PLAN", "{json}");
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .unwrap()
+            .contains("[type:: PLAN]"),
+        "PLAN is a legal retype result"
+    );
+}
+
+#[test]
+fn hash_later_keeps_the_task_type() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-later",
+        &project(Some("BUILD"), "- [ ] #task Work [type:: FIX] ^work\n"),
+        "## Pomodoros\n- [ ] () — LATER\n",
+    );
+    let (_, json) =
+        capture_json(&vault, &day_file, &config, &["^sase:work#later"], false);
+    assert!(json.get("task_theme").is_none(), "{json}");
+    assert!(
+        json["task_line"].as_str().unwrap().contains("[type:: FIX]"),
+        "{json}"
+    );
+    let warnings = json
+        .get("warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| warning.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    assert!(
+        warnings.iter().any(|message| message
+            == "LATER is a label · tasks keep their own types"),
+        "{json}"
+    );
+}
+
+#[test]
+fn hash_fix_into_build_plus_fix_keeps_fix_and_retypes_write() {
+    let day = "## Pomodoros\n- [ ] () — BUILD + FIX\n";
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-composite-keep",
+        &project(Some("BUILD"), "- [ ] #task Keep [type:: FIX] ^keep\n"),
+        day,
+    );
+    let (_, keep) =
+        capture_json(&vault, &day_file, &config, &["^sase:keep#fix"], false);
+    assert!(keep.get("task_theme").is_none(), "{keep}");
+    assert!(
+        keep["task_line"].as_str().unwrap().contains("[type:: FIX]"),
+        "{keep}"
+    );
+
+    write_file(
+        &vault.join("sase.md"),
+        &project(Some("BUILD"), "- [ ] #task Other [type:: WRITE] ^other\n"),
+    );
+    let (_, retyped) =
+        capture_json(&vault, &day_file, &config, &["^sase:other#fix"], false);
+    assert_eq!(retyped["task_theme"]["action"], "set", "{retyped}");
+    assert_eq!(retyped["task_theme"]["theme"]["name"], "FIX", "{retyped}");
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .unwrap()
+            .contains("[type:: FIX]"),
+        "WRITE under BUILD + FIX plus #fix becomes FIX"
+    );
+}
+
+#[test]
+fn named_project_note_bullets_retype_linked_tasks() {
+    let (_temp, vault, day_file, config) = fixture(
+        "bob-capture-task-theme-project-note",
+        &project(Some("BUILD"), ""),
+        "## Pomodoros\n- [ ] () — FIX\n",
+    );
+    let (_, json) = capture_json_stdin(
+        &vault,
+        &day_file,
+        &config,
+        "Ship it @sase^exit+#fix\n- Draft the memo :draft-memo\n",
+        false,
+    );
+    assert_eq!(json["kind"], "project_note", "{json}");
+    assert_eq!(json["task_theme"]["action"], "set", "{json}");
+    assert_eq!(json["task_theme"]["theme"]["name"], "FIX", "{json}");
+    let line = json["project_note"]["task_links"][0]["task_line"]
+        .as_str()
+        .unwrap();
+    assert!(line.contains("[type:: FIX]"), "{json}");
+    assert!(
+        fs::read_to_string(vault.join("sase_exit.md"))
+            .unwrap()
+            .contains("[type:: FIX]"),
+        "named project-note bullets retype each linked task"
+    );
 }
 
 #[test]

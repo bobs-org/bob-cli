@@ -1094,15 +1094,16 @@ Cancelled, nested, and fenced lookalikes are not anchors. Multiple open timed
 entries remain an invariant error when a new named entry would need the
 current-Pomodoro anchor.
 
-An explicit `#NAME` choice also records the selected theme on the task when
-the destination note or task provides a usable suggestion. For a new task,
-the suggestion comes from its destination note. For an existing task, its
-current task field is compared with the suggestion it inherits from its
-destination note. Bob writes `[theme:: NAME]` only when the resolved Pomodoro
-name is deliberate and the task has exactly one non-exempt theme field, or
-no field; choosing the inherited theme clears the task override. An absent
-suggestion, an ambiguous or repair field, a guarded link, or a no-op leaves
-the line alone. The field edit joins the routed note and daily-note transaction.
+An explicit `#NAME` choice also retypes the task to agree with the
+destination Pomodoro. For a new task, the type comes from its staged
+line and destination note. For an existing task, its current task field
+is compared with the type it inherits from its destination note. Bob
+writes `[type:: X]` for the chosen type component of the resolved name
+(the authored selector's slug or prefix, else the first non-exempt type
+component), or clears the field when X is the inherited type. PLAN is a
+legal result. A container name such as `#later` or `#snack` keeps the
+task's type and warns. A guarded link or a no-op leaves the line
+alone. The field edit joins the routed note and daily-note transaction.
 
 The routed note and daily note are both parsed and validated before either is
 replaced. A missing daily note or Pomodoros section, no eligible unnamed target,
@@ -1184,11 +1185,11 @@ are rejected with messages naming the `@route^block-id+` project-note and
 current new-task meaning.
 
 An explicit Pomodoro name on a whole-item existing-task link also applies the
-task-theme write rule described above. This includes the `^route:block-id`
-active-task spelling and the `@route+block-id#pomodoro` Ensure Next spelling.
-The suggestion is evaluated from the task's staged pre-edit line and its
-destination note; the selected, resolved Pomodoro name is the deliberate
-choice. The field edit is staged with the task and ledger changes.
+retype rule described above. This includes the `^route:block-id`
+active-task spelling, the `@route+id#pomodoro` Ensure Next spelling, and
+the equivalent `=name` shorthands. The type is evaluated from the task's
+staged pre-edit line and its destination note; the selected, resolved
+Pomodoro name plus the authored selector choose the type component. The field edit is staged with the task and ledger changes.
 
 The existing task resolves with the task-toggle lookup, so missing notes,
 missing IDs (with a close-match suggestion plus a hint to add text for a new
@@ -4236,9 +4237,9 @@ created: 2026-09-29T14:31:07-0400
 
 ## Tasks
 
-- [*] #task Draft the resignation memo [created::2026-09-29] ^draft-memo
+- [*] #task Draft the resignation memo [type:: ADMIN] [created::2026-09-29] ^draft-memo
 	- keep it short
-- [*] #task Call Morgan Stanley about the 401k [created::2026-09-29] ^call-ms
+- [*] #task Call Morgan Stanley about the 401k [type:: ADMIN] [created::2026-09-29] ^call-ms
 - [ ] #task Collect the equity paperwork [created::2026-09-29] ^equity-docs
 
 ## Future Work
@@ -4256,8 +4257,10 @@ Pomodoro, in source order — creating the future placeholder
   - [[cash_goog_exit#^call-ms]]
 ```
 
-Without `#admin`, the links go to today's implicit current/next Pomodoro,
-the same selection rule `@route:id` uses.
+A named `#admin` also retypes each linked ` :` task to agree with that
+Pomodoro, the same rule as `#NAME` on a new or existing-task capture. Without
+`#admin`, the links go to today's implicit current/next Pomodoro, the same
+selection rule `@route:id` uses.
 
 This mirrors the Obsidian Bob Navigation Hotkeys command **Create project
 note from task**, so CLI-created notes are indistinguishable from
@@ -5183,10 +5186,11 @@ for `dry_run`. Human output names a deleted session on the structured
 
 #### Task-theme changes
 
-When an explicitly named Pomodoro capture changes a task's `[theme::]`
+When an explicitly named Pomodoro capture changes a task's `[type::]`
 field, that item gains this additive `task_theme` object. It is omitted when
-there is no suggestion, a guard consumes the gesture, or the field already
-has the desired value. The field edit is included in the same staged capture
+the type does not change: a container destination, a consistent type, a
+guard that consumes the gesture, or a field that already holds the chosen
+value. The field edit is included in the same staged capture
 transaction as the task and Pomodoro changes.
 
 ```json
@@ -5203,13 +5207,14 @@ transaction as the task and Pomodoro changes.
 ```
 
 `action` is `"set"` or `"cleared"`. `theme` is the selected
-`ThemeRef`, or null when cleared. `previous` is the valid task theme before
+`ThemeRef`, or null when cleared. `previous` is the valid task type before
 the edit, or null when the field was absent or needed repair. `inherited` is
 the suggestion that the task inherits apart from its own field, or null when
-there was no suggestion. A clear removes every task theme field; a set writes
+there was no suggestion. A clear removes every type field; a set writes
 the catalog spelling before trailing task metadata. The human output includes
-a `theme` row naming the selected or cleared theme and its inherited reason.
-Dry-run JSON reports the same post-image and summary without writing files.
+a type row `type   → FIX · <stem> suggests BUILD` /
+`type   cleared · <stem> suggests BUILD`. Dry-run JSON reports the same
+post-image and summary without writing files.
 
 #### Task blocks
 

@@ -298,6 +298,18 @@ impl Catalog {
         self.exempt.contains(key)
     }
 
+    /// Config-derived type vocabulary, exempt set, and inventory labels
+    /// for the routing planners. Capture named `#NAME` / `=name` forms
+    /// pass this to `routing::retype`.
+    pub(crate) fn theme_sources(&self) -> config::themes::ThemeSources {
+        config::themes::ThemeSources {
+            exempt: self.exempt.clone(),
+            inventory: self.inventory.clone(),
+            themes: self.themes.clone(),
+            warning: self.config_warning.clone(),
+        }
+    }
+
     pub(crate) fn pin(&self, key: &str) -> Option<Hue> {
         self.prefs.pin(key)
     }

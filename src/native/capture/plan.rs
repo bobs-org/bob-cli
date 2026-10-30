@@ -768,6 +768,7 @@ pub(super) fn plan_capture_item(
                     block_id,
                     &toggle.previous_task_line,
                     toggle.pomodoro_name.as_deref(),
+                    pomodoro_name.as_deref(),
                     warnings,
                 )?
                 .map(|applied| {
@@ -950,6 +951,7 @@ pub(super) fn plan_capture_item(
                 block_id,
                 previous_task_line,
                 resolved_name,
+                pomodoro_name.as_deref(),
                 warnings,
             )? {
                 planned.result.task_line = applied.task_line;
@@ -967,6 +969,8 @@ pub(super) fn plan_capture_item(
             roll_seed,
             parsed_item.index,
             planner,
+            task_theme_context,
+            warnings,
         );
     }
     let created = date_string(today);
@@ -1720,7 +1724,7 @@ pub(super) fn plan_capture_item(
     let task_theme = match &parsed.kind {
         CaptureKind::Pomodoro {
             block_id,
-            pomodoro_name: Some(_),
+            pomodoro_name: Some(selector),
             close: None,
             ..
         } if new_task_link_guard.is_none() && note_plan.pomodoro.is_some() => {
@@ -1740,6 +1744,7 @@ pub(super) fn plan_capture_item(
                     route,
                     block_id,
                     destination_name,
+                    Some(selector.as_str()),
                     warnings,
                 )?
                 .map(|applied| {

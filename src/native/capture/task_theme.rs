@@ -1,12 +1,17 @@
-//! Capture-only integration of deliberate Pomodoro names with task themes.
+//! Capture-only integration of deliberate Pomodoro names with task types.
 
 use super::*;
 use crate::native::{
+    config::themes::ThemeSources,
+    plan_budget::{normalize_component, split_components},
     pomodoro_homes::{HomeResolver, HomeSource, NoteFacts},
-    pomodoro_themes::{self, suggest::ThemeSuggestion, Catalog, ThemeRef},
+    pomodoro_themes::{
+        self, routing, suggest::ThemeSuggestion, Catalog, ThemeRef,
+    },
+    task_fields::canonical_theme_name,
     task_theme::{
-        clear_task_theme, parse_task_theme, plan_theme_change, set_task_theme,
-        TaskThemeState, ThemeChange,
+        clear_task_theme, parse_task_theme, set_task_theme, TaskThemeState,
+        ThemeChange,
     },
     vault_links::{target_to_markdown_path, LinkResolution, VaultLinkResolver},
 };
@@ -60,6 +65,7 @@ impl CaptureTaskThemeContext {
         route: &str,
         block_id: &str,
         destination_name: Option<&str>,
+        selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -84,7 +90,7 @@ impl CaptureTaskThemeContext {
             block_id,
             &source_line,
             destination_name,
-            true,
+            selector,
             warnings,
         )
     }
@@ -97,6 +103,7 @@ impl CaptureTaskThemeContext {
         block_id: &str,
         previous_task_line: &str,
         destination_name: Option<&str>,
+        selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
         let Some(destination_name) = destination_name else {
@@ -109,7 +116,7 @@ impl CaptureTaskThemeContext {
             block_id,
             previous_task_line,
             destination_name,
-            false,
+            selector,
             warnings,
         )
     }
@@ -123,7 +130,7 @@ impl CaptureTaskThemeContext {
         block_id: &str,
         source_line: &str,
         destination_name: &str,
-        new_task: bool,
+        selector: Option<&str>,
         warnings: &mut Vec<CaptureWarning>,
     ) -> Result<Option<AppliedTaskTheme>, CaptureError> {
         self.refresh_residence_snapshot(planner);
@@ -134,26 +141,16 @@ impl CaptureTaskThemeContext {
         let catalog = self.catalog.as_ref().expect("loaded theme catalog");
         let residence_path = relative_target(Some(route));
         let residence = Path::new(&residence_path);
-        let suggested = if new_task {
-            // The staged line carries authored fields and ref-task markers;
-            // resolve it as the task that will be written instead of using
-            // a blank-task-only note default.
-            pomodoro_themes::suggest::suggest_for_task(
-                &mut self.resolver,
-                catalog,
-                cfg,
-                residence,
-                source_line,
-            )
-        } else {
-            pomodoro_themes::suggest::suggest_for_task(
-                &mut self.resolver,
-                catalog,
-                cfg,
-                residence,
-                source_line,
-            )
-        };
+        // The staged line carries authored fields and ref-task markers;
+        // resolve it as the task that will be written instead of using
+        // a blank-task-only note default.
+        let suggested = pomodoro_themes::suggest::suggest_for_task(
+            &mut self.resolver,
+            catalog,
+            cfg,
+            residence,
+            source_line,
+        );
         for warning in suggested.warnings {
             let identity = (warning.code.clone(), warning.path.clone());
             if self.warned_suggestions.insert(identity) {
@@ -163,28 +160,51 @@ impl CaptureTaskThemeContext {
 
         let field = parse_task_theme(source_line);
         let inherited = suggestion_inherited(suggested.suggestion.as_ref());
-        let shown_key = suggested
+        let effective_key = suggested
             .suggestion
             .as_ref()
             .map(|item| item.theme.key.as_str());
+        let effective_name = suggested
+            .suggestion
+            .as_ref()
+            .map(|item| item.theme.name.as_str());
         let inherited_key =
             inherited.as_ref().map(|item| item.theme.key.as_str());
-        let exempt_keys = cfg
-            .exempt()
-            .iter()
-            .map(|name| plan_budget::normalize_component(name))
-            .collect::<BTreeSet<_>>();
-        let change = plan_theme_change(
-            &field,
-            shown_key,
-            inherited_key,
-            destination_name,
-            &exempt_keys,
-            true,
+        let sources = catalog.theme_sources();
+        let outcome = routing::retype(
+            &routing::RetypeInput {
+                field: &field,
+                effective_key,
+                effective_name,
+                inherited_key,
+                destination: destination_name,
+                selector,
+                keep_type: false,
+                tab_pick: None,
+            },
+            &sources,
         );
-        if change == ThemeChange::None {
-            return Ok(None);
-        }
+        let change = match outcome {
+            routing::RetypeOutcome::Container => {
+                if let Some(message) =
+                    label_keep_warning(destination_name, &sources)
+                {
+                    warnings.push(CaptureWarning::Text(message));
+                }
+                return Ok(None);
+            }
+            routing::RetypeOutcome::Consistent
+            | routing::RetypeOutcome::Merge { .. } => {
+                return Ok(None);
+            }
+            routing::RetypeOutcome::Set { name, key } => {
+                ThemeChange::Set { name, key }
+            }
+            routing::RetypeOutcome::Clear => match field {
+                TaskThemeState::None => return Ok(None),
+                _ => ThemeChange::Clear,
+            },
+        };
 
         let previous = valid_previous_theme(&field, catalog);
         let (action, theme, task_line) = match &change {
@@ -413,4 +433,31 @@ fn valid_previous_theme(
         }
         TaskThemeState::None | TaskThemeState::Repair { .. } => None,
     }
+}
+
+/// D4/D10 label copy when a named destination is a container.
+fn label_keep_warning(
+    destination: &str,
+    sources: &ThemeSources,
+) -> Option<String> {
+    let trimmed = destination.trim();
+    if trimmed.is_empty() || trimmed == "(unnamed)" {
+        return None;
+    }
+    let components = split_components(trimmed);
+    let display = components
+        .first()
+        .and_then(|component| canonical_theme_name(component))
+        .unwrap_or_else(|| trimmed.to_string());
+    let inventory =
+        components.iter().any(|component| {
+            sources.inventory.contains(&normalize_component(component))
+        }) || sources.inventory.contains(&normalize_component(trimmed));
+    Some(if inventory {
+        format!("{display} is a label · tasks keep their own types")
+    } else {
+        format!(
+            "{display} isn't one of your types; tasks here keep their own types"
+        )
+    })
 }

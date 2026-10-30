@@ -663,13 +663,13 @@ fn capture_project_note_task_links_write_the_worked_example() {
                 "block_id": "draft-memo",
                 "block_link": "[[cash_goog_exit#^draft-memo]]",
                 "text": "Draft the resignation memo",
-                "task_line": "- [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo",
+                "task_line": "- [*] #task Draft the resignation memo [type:: ADMIN] [created::2026-09-20] ^draft-memo",
             },
             {
                 "block_id": "call-ms",
                 "block_link": "[[cash_goog_exit#^call-ms]]",
                 "text": "Call Morgan Stanley about the 401k",
-                "task_line": "- [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms",
+                "task_line": "- [*] #task Call Morgan Stanley about the 401k [type:: ADMIN] [created::2026-09-20] ^call-ms",
             },
         ]),
         "{json}"
@@ -695,9 +695,9 @@ fn capture_project_note_task_links_write_the_worked_example() {
          \n\
          ## Tasks\n\
          \n\
-         - [*] #task Draft the resignation memo [created::2026-09-20] ^draft-memo\n\
+         - [*] #task Draft the resignation memo [type:: ADMIN] [created::2026-09-20] ^draft-memo\n\
          \t- keep it short\n\
-         - [*] #task Call Morgan Stanley about the 401k [created::2026-09-20] ^call-ms\n\
+         - [*] #task Call Morgan Stanley about the 401k [type:: ADMIN] [created::2026-09-20] ^call-ms\n\
          - [ ] #task Collect the equity paperwork [created::2026-09-20] ^equity-docs\n\
          \n\
          ## Future Work\n\

@@ -254,7 +254,7 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work [fresh:: 2026-07-10] ^sched\n",
+            "- [*] #task Scheduled work [type:: DEEP] [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
@@ -283,12 +283,12 @@ fn capture_task_toggle_named_creation_dry_run_and_pull_forward() {
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
         concat!(
-            "- [*] #task Scheduled work [fresh:: 2026-07-10] ^sched\n",
+            "- [*] #task Scheduled work [type:: DEEP] [fresh:: 2026-07-10] ^sched\n",
             "  - 🗓️ **SCHEDULE LOG**
 ",
             "    - _2026-07-20 → 2026-07-10_ — 🍅 pulled into today's Pomodoro\n",
             "    - *2026-07-01* — older\n",
-            "- [*] #task No log [fresh:: 2026-07-10] ^nolog\n",
+            "- [*] #task No log [type:: DEEP] [fresh:: 2026-07-10] ^nolog\n",
         )
     );
     assert_eq!(
@@ -402,7 +402,7 @@ fn capture_task_toggle_batch_uses_staged_snapshots_and_rolls_back() {
     );
     assert_eq!(
         fs::read_to_string(&cash).expect("read cash"),
-        "- [*] #task Alpha [fresh:: 2026-07-10] ^alpha\n- [*] #task Beta [fresh:: 2026-07-10] ^beta\n",
+        "- [*] #task Alpha [type:: DEEP-WORK] [fresh:: 2026-07-10] ^alpha\n- [*] #task Beta [type:: DEEP-WORK] [fresh:: 2026-07-10] ^beta\n",
     );
 
     let rollback_temp = TempDir::new("bob-cli-capture-task-toggle-rollback");

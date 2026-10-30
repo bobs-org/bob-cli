@@ -617,49 +617,47 @@ consumed as trailing metadata, and overlapping removals from adjacent
 fields stay safe. Catalog spelling is used for X; a semantic no-op
 (exactly one valid field already holding X's key) never rewrites bytes.
 
-### The write rule and never-writers
+### Named captures retype the task
 
-A deliberate choice for destination name D with shown suggestion S:
+Capture `#NAME`, `#"NAME"`, and `=name` always take the retype Enter
+path. Bob resolves the destination Pomodoro name D, then chooses one
+type component X of D: the authored selector's slug or prefix match,
+else the first non-exempt type component, else the first type
+component.
 
-1. Not deliberate: no change.
-2. D unnamed, all-exempt, or holding other than exactly one non-exempt
-   component: no change. `PLAN + BUILD` selects BUILD; `BUILD + FIX`
-   does not write.
-3. No suggestion was shown: no change. The explicit Task Card edit
-   escape hatch stays separate, where this guard does not apply.
-4. Chosen key equals inherited: clear every type field, no-op if
-   absent.
-5. Otherwise set catalog-spelled X, no-op when already exact.
+1. D is a container (no type components): the task keeps its type, and
+   capture warns `LATER is a label · tasks keep their own types` or
+   `SNACK isn't one of your types; tasks here keep their own types`.
+2. The task's type is already a component of D: consistent, nothing
+   written.
+3. X equals the inherited type: clear every type field (no-op if
+   absent).
+4. Otherwise set catalog-spelled `[type:: X]`. PLAN is a legal result;
+   there is no suggestion-shown guard and no
+   single-non-exempt-component guard.
 
-Deliberate capture means an explicit `#NAME` or equivalent `=name`;
-the picker means a changed committed row, a nonempty query, or
-Shift+Enter. Alt+Enter is always link once; untouched preselection is
-not deliberate. Guards refuse before any field edit. Type edits never
-affect freshness eligibility.
+Forms: a new Pomodoro-linked task (`<text> @route:id#NAME`), a
+whole-item existing-task link (`@route:id#NAME` or `^route:id#NAME`),
+Ensure Next (`@route+id#NAME`), the equivalent `=name` shorthands, and
+project-note ` :<id>` bullets under a named `+#NAME`. Link guards,
+unnamed links, ordinary toggles, close gestures, and `bob ref today`
+never write this field. A batch re-evaluates suggestions against its
+staged note snapshot, and the task field is committed with that
+capture's task and ledger edits.
 
-Capture writes task types only for an explicit Pomodoro name: a new
-Pomodoro-linked task (`<text> @route:id#NAME`), a whole-item existing-task
-link (`@route:id#NAME` or `^route:id#NAME`), or Ensure Next
-(`@route+id#NAME`). The equivalent `=name` link-and-start shorthand is also
-deliberate. New tasks use the destination note's suggestion; existing tasks
-use the staged task line and the suggestion it inherits from that note. The
-writer runs after the destination name resolves, so a slug or prefix writes
-the chosen Pomodoro's canonical name. Link guards, unnamed links, ordinary
-toggles, close gestures, and `bob ref today` never write this field. A batch
-re-evaluates suggestions against its staged note snapshot, and the task field
-is committed with that capture's task and ledger edits.
-
-Capture JSON omits `task_theme` unless the field changes. When present it is
-`{action, theme, previous, inherited}`: `action` is `set` or `cleared`,
-`theme` is the selected `ThemeRef` (null on clear), `previous` is the prior
-valid task field (null when absent or needing repair), and `inherited` is the
-suggestion without the task's own field (or null). Human output adds a type
-row that names the choice and its inherited reason; dry-run reports the same
+Capture JSON omits `task_theme` unless the field changes. When present
+it is `{action, theme, previous, inherited}`: `action` is `set` or
+`cleared`, `theme` is the selected `ThemeRef` (null on clear),
+`previous` is the prior valid task field (null when absent or needing
+repair), and `inherited` is the suggestion without the task's own
+field (or null). Human output adds a type row
+`type   → FIX · <stem> suggests BUILD` /
+`type   cleared · <stem> suggests BUILD`; dry-run reports the same
 post-image without writing.
 
-The explicitly named capture choice is the writer boundary in this phase.
-Close, roll, typed `^^`, move, rollover, reconcile, ordinary successor
-placement, and ref-today remain never-writers.
+The explicitly named capture choice is the writer boundary in this
+phase. Close, roll, typed `^^`, move, rollover, reconcile, ordinary
+successor placement, and ref-today remain never-writers.
 
 ### Preservation
 
@@ -765,10 +763,11 @@ readers at `bob types suggest`.
 ## Routing: agreement, retype, placement, relocation
 
 Pure planners in `src/native/pomodoro_themes/routing.rs`, next to
-`preselect.rs`. No capture behavior changes yet; later phases wire these
-into capture, moves, links, ref-today, successors, and the Task Card.
-The `agree`, `retype`, `place`, and `relocate` vector sections are the
-Ledger Tools JS mirror's contract.
+`preselect.rs`. Named capture `#NAME` / `=name` forms call `retype`.
+Later phases wire `place` and `relocate` into bare capture, moves,
+links, ref-today, successors, and the Task Card. The `agree`,
+`retype`, `place`, and `relocate` vector sections are the Ledger Tools
+JS mirror's contract.
 
 - **Type components.** A component of a Pomodoro name is a type component
   iff its key is in the configured `types:` vocabulary; without a
