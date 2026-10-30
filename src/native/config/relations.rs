@@ -35,7 +35,7 @@ impl Default for RelationsConfig {
     fn default() -> Self {
         Self {
             linked_from_lines: true,
-            linked_from_mentions: false,
+            linked_from_mentions: true,
             cancel_labels: Vec::new(),
             complete_labels: Vec::new(),
             warnings: Vec::new(),
@@ -148,14 +148,14 @@ pub(crate) fn parse_relations_config(
         }
     };
     let linked_from_mentions = match mapping.get(&mentions_key) {
-        None | Some(Value::Null) => false,
+        None | Some(Value::Null) => true,
         Some(Value::Bool(value)) => *value,
         Some(value) => {
             warnings.push(format!(
-                "relations.linked_from_mentions in {path_display} must be a boolean; got {}; using relations.linked_from_mentions=false",
+                "relations.linked_from_mentions in {path_display} must be a boolean; got {}; using relations.linked_from_mentions=true",
                 yaml_type(value)
             ));
-            false
+            true
         }
     };
     let mut cancel_labels = parse_effect_labels(
@@ -308,24 +308,24 @@ mod tests {
         )
         .expect("explicit false");
         assert!(!disabled.linked_from_lines);
-        assert!(!disabled.linked_from_mentions);
+        assert!(disabled.linked_from_mentions);
     }
 
     #[test]
-    fn linked_from_mentions_defaults_false_and_parses_true() {
+    fn linked_from_mentions_defaults_true_and_parses_false() {
         let defaulted = parse_relations_config(
             "properties: []\n",
             Path::new("/config.yml"),
         )
         .expect("absent relations block");
-        assert!(!defaulted.linked_from_mentions);
+        assert!(defaulted.linked_from_mentions);
 
         let null_value = parse_relations_config(
             "relations:\n  linked_from_mentions: null\n",
             Path::new("/config.yml"),
         )
         .expect("null key falls back to default");
-        assert!(!null_value.linked_from_mentions);
+        assert!(null_value.linked_from_mentions);
 
         let enabled = parse_relations_config(
             "relations:\n  linked_from_mentions: true\n",
@@ -374,10 +374,10 @@ mod tests {
             Path::new("/tmp/bob-config.yml"),
         )
         .expect("invalid mention flag uses conservative default");
-        assert!(!parsed.linked_from_mentions);
+        assert!(parsed.linked_from_mentions);
         assert_eq!(
             parsed.warnings,
-            ["relations.linked_from_mentions in /tmp/bob-config.yml must be a boolean; got 1; using relations.linked_from_mentions=false"]
+            ["relations.linked_from_mentions in /tmp/bob-config.yml must be a boolean; got 1; using relations.linked_from_mentions=true"]
         );
     }
 

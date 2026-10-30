@@ -10,7 +10,7 @@ aliases:
 
 A directed, optionally labelled, inert link from one task to another. It is authored on
 the source task's 🪢 **LINKS:** line and mirrored on the target task's generated 🪢
-**LINKED FROM:** line. The generated LINKED FROM line also lists [[task-mention]]s
+**LINKED FROM:** line. The generated LINKED FROM line also lists enabled-by-default [[task-mention]]s
 (`(💬 mentions)` entries), which are not relations. Add one with Capture `~` / `~~` or the Task Card `l` / `⇧L`
 gestures. A relation is distinct from a Pomodoro [[task-link]]: it never blocks a task,
 counts as a Pomodoro Task Link, or changes its schedule, priority, or freshness.

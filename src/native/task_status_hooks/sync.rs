@@ -248,7 +248,7 @@ fn load_relations_linked_from_enabled() -> bool {
     }
 }
 
-/// Load `relations.linked_from_mentions`, falling back to `false` and
+/// Load `relations.linked_from_mentions`, falling back to `true` and
 /// warning on stderr when the value is invalid.
 fn load_relations_linked_from_mentions_enabled() -> bool {
     match bob_config::load_relations_config(&bob_config::config_path()) {
@@ -264,9 +264,9 @@ fn load_relations_linked_from_mentions_enabled() -> bool {
         }
         Err(error) => {
             eprintln!(
-                "{COMMAND_NAME}: warning: invalid relations config: {error}; using relations.linked_from_mentions=false"
+                "{COMMAND_NAME}: warning: invalid relations config: {error}; using relations.linked_from_mentions=true"
             );
-            false
+            true
         }
     }
 }

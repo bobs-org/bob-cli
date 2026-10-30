@@ -1417,7 +1417,7 @@ fn mention_only_owner_with_mentions_off_loses_only_mention_entries() {
 }
 
 #[test]
-fn mn_invalid_mentions_switch_behaves_as_false() {
+fn mn_invalid_mentions_switch_uses_enabled_default() {
     let temp = TempDir::new("bob-cli-mentions-invalid");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
@@ -1435,10 +1435,13 @@ fn mn_invalid_mentions_switch_behaves_as_false() {
     let (json, err) = dry_run_with_config(&vault, &daily, &config);
     assert!(
         err.contains("invalid relations config")
-            && err.contains("using relations.linked_from_mentions=false"),
+            && err.contains("using relations.linked_from_mentions=true"),
         "{err}"
     );
-    assert_relations_clean(&json);
+    assert_eq!(json["mention_edges"], 1);
+    assert!(linked_from_updates(&json).iter().any(|update| update
+        ["mentions_added"]
+        == serde_json::json!(["[[#^s]]"])));
 }
 
 #[test]

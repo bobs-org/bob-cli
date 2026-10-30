@@ -102,7 +102,7 @@ pub(super) fn load_linked_from_lines_enabled() -> (bool, Option<String>) {
     }
 }
 
-/// Load `relations.linked_from_mentions`, falling back to `false` and
+/// Load `relations.linked_from_mentions`, falling back to `true` and
 /// warning through the capture warning string on invalid values.
 pub(super) fn load_linked_from_mentions_enabled() -> (bool, Option<String>) {
     match config::load_relations_config(&config::config_path()) {
@@ -117,9 +117,9 @@ pub(super) fn load_linked_from_mentions_enabled() -> (bool, Option<String>) {
                 .map(|warning| format!("invalid relations config: {warning}")),
         ),
         Err(error) => (
-            false,
+            true,
             Some(format!(
-                "invalid relations config: {error}; using relations.linked_from_mentions=false"
+                "invalid relations config: {error}; using relations.linked_from_mentions=true"
             )),
         ),
     }

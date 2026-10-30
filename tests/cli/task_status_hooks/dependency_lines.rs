@@ -1312,6 +1312,8 @@ fn reconcile_does_not_read_child_links_as_dependencies() {
     let temp = TempDir::new("bob-cli-task-status-hooks-child-content");
     let vault = temp.path().join("vault");
     let daily = write_daily(&vault);
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  linked_from_mentions: false\n");
     let tasks = vault.join("tasks.md");
     let before = concat!(
         "- [ ] #task Child-only links stay content ^child-only\n",
@@ -1326,7 +1328,17 @@ fn reconcile_does_not_read_child_links_as_dependencies() {
     write_file(&tasks, before);
     write_blocked_tasks_settings(&vault);
 
-    let json = dry_run_json(&vault, &daily);
+    let dry_run = bob_command()
+        .args(["task", "reconcile", "--dry-run", "--format", "json"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("dry-run child-content run");
+    assert_success(&dry_run);
+    let json: Value = serde_json::from_str(stdout(&dry_run).trim())
+        .expect("child-content dry-run JSON");
     assert!(
         json.get("legacy_dependency_children").is_none(),
         "legacy_dependency_children key was removed from hooks JSON"
@@ -1338,6 +1350,7 @@ fn reconcile_does_not_read_child_links_as_dependencies() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("apply child-content run");
     assert_success(&applied);
@@ -1358,7 +1371,17 @@ fn reconcile_does_not_read_child_links_as_dependencies() {
     );
     assert!(after.contains("  - [[#^two]]\n"), "{after}");
 
-    let second = dry_run_json(&vault, &daily);
+    let second = bob_command()
+        .args(["task", "reconcile", "--dry-run", "--format", "json"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
+        .output()
+        .expect("second dry-run child-content check");
+    assert_success(&second);
+    let second: Value = serde_json::from_str(stdout(&second).trim())
+        .expect("second child-content dry-run JSON");
     assert_reconciled_clean(&second);
     assert!(warning_kinds(&second).is_empty());
 }

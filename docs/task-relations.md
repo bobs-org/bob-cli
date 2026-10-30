@@ -479,13 +479,13 @@ bob-ledger-tools keeps a raw-text relation index and publishes it as
 ```yaml
 relations:
   linked_from_lines: true # write 🪢 LINKED FROM mirrors (task-relations.md)
-  linked_from_mentions: false # inert (💬 mentions) entries; see §19
+  linked_from_mentions: true # inert (💬 mentions) entries; see §19
 ```
 
 Rust, nav, and ledger-tools read both keys from
 `~/.config/bob/config.yml` (`BOB_CONFIG_FILE` / `XDG_CONFIG_HOME`).
 An invalid `linked_from_lines` value falls back to `true` and warns.
-An invalid `linked_from_mentions` value falls back to `false` and
+An invalid `linked_from_mentions` value falls back to `true` and
 warns, in the same wording pattern.
 
 - With `linked_from_lines: false`, reconcile removes every LINKED
@@ -1912,7 +1912,7 @@ grouped; only the chips group.
 ```yaml
 relations:
   linked_from_lines: true # unchanged: false removes every LINKED FROM line
-  linked_from_mentions: false # mentions; default false
+  linked_from_mentions: true # mentions; default true
 ```
 
 - `false` removes only `(💬 mentions)` entries on writable tasks,

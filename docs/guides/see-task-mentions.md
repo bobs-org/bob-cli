@@ -18,8 +18,8 @@ row is here. It is not a relation.
 Install the CLI, open the vault in Obsidian, and enable **Bob Ledger
 Tools** and **Bob Navigation Hotkeys**. Mentions ride
 `relations.linked_from_mentions` in `~/.config/bob/config.yml` (default
-`false`). With the switch off, chips hide and writers mint nothing for
-mentions.
+`true`). Set it to `false` to hide chips and stop writers from minting
+mention entries.
 
 ## 1. Find a mention on the target
 

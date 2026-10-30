@@ -957,6 +957,8 @@ fn task_status_hooks_un_decorates_legacy_groups_holding_only_ready() {
 fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     let temp = TempDir::new("bob-cli-task-status-hooks-previous-daily");
     let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  linked_from_mentions: false\n");
     let current = vault.join("2026/20260721.md");
     let previous = vault.join("2026/20260710.md");
     let older = vault.join("2026/20260701.md");
@@ -1064,6 +1066,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &current)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2030-01-01 12:00:00")
         .output()
         .expect("dry-run rolling daily reconciliation");
@@ -1088,6 +1091,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &current)
+        .env("BOB_CONFIG_FILE", &config)
         .env("BOB_NOW", "2030-01-01 12:00:00")
         .output()
         .expect("apply rolling daily reconciliation");
@@ -1110,6 +1114,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &current)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("rerun rolling daily reconciliation");
     assert_success(&second);
@@ -1293,6 +1298,8 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
 fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     let temp = TempDir::new("bob-cli-task-status-hooks-prune-duplicates");
     let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    write_file(&config, "relations:\n  linked_from_mentions: false\n");
     let daily = vault.join("2026/20260713.md");
     let tasks = vault.join("tasks.md");
     let daily_before = concat!(
@@ -1323,6 +1330,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("dry-run duplicate Pomodoro cleanup");
     assert_success(&dry_run);
@@ -1347,6 +1355,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("human dry-run duplicate Pomodoro cleanup");
     assert_success(&human_dry_run);
@@ -1364,6 +1373,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("apply duplicate Pomodoro cleanup");
     assert_success(&applied);
@@ -1401,6 +1411,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
+        .env("BOB_CONFIG_FILE", &config)
         .output()
         .expect("rerun duplicate Pomodoro cleanup");
     assert_success(&second);

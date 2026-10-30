@@ -5,7 +5,7 @@ aliases:
   - "text mention"
 ---
 
-An inert, derived back-reference from one task's own text to another. When
+An inert, derived back-reference from one task's own text to another, enabled by default. When
 task S's title, a note under it, or a Cancel / Schedule / Work / Rotten Log
 entry contains a block [[task-link]] to task T (`[[note#^id]]`, including
 embeds and struck links), Bob stores `[[S]] (💬 mentions)` on T's generated
