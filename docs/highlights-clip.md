@@ -92,6 +92,25 @@ plus the episode instead.
    writes the `ref/` note and reading task, and commits those paths together. A
    queued PDF is drained locally by `bob ref scan -i` or the host's intake timer.
 
+## Tables
+
+Web articles and collections use the configured
+`highlights.table_layout` (`auto`, `records`, or `grid`, default `auto`) and
+`highlights.table_prose_words` (default 12). In `auto`, a table becomes
+single-column row records when a body cell after the first column reaches the
+configured word threshold. Short-cell tables stay grids. Tables with merged
+cells, multiple header rows, footers, nested tables, or linked or identified
+header cells stay grids even when records are requested.
+
+These settings are the only overrides on the web route: captured pages have no
+`bob-tables` frontmatter or `.bob-records` / `.bob-grid` table wrappers. The
+print rewrite moves table content in the print DOM, while the saved source view
+keeps the original tables. Remaining grids use 9.5 pt text, row-bottom rules,
+and no zebra fill; records use body-size text with muted semibold field labels.
+Successful renders report `tables: N records · N grids` and warn for prose
+tables that stayed grids. See [Tables](highlights-create.md#tables) for the
+shared policy and the pandoc-route overrides.
+
 "Reliable" means "never silently wrong": bot challenges it cannot clear,
 login walls, thin extractions, missing browsers, and private-network URLs
 all fail closed with a `hint:` line and exit code 1, writing nothing.

@@ -494,6 +494,10 @@ words (default 12). Header and caption words do not count. All other tables
 keep a grid, with content-aware column widths and row air only; grids have no
 hairline rules between body rows.
 
+Web articles and collections use the same config defaults and classification,
+with a print-DOM rewrite and config-only overrides; see
+[Web article tables](highlights-clip.md#tables).
+
 Three levels reverse the choice, highest wins:
 
 1. **Per table:** wrap the table in a fenced Div with class `bob-records`

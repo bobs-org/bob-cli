@@ -14,7 +14,7 @@ use super::{
     clip::format_bytes,
     clip_adapter::{
         CaptureRequest, CaptureSuccess, ClipAdapterClient, CollectionMeta,
-        ComposePart, ComposeRequest, ComposeSuccess,
+        ComposePart, ComposeRequest, ComposeSuccess, TablesSettings,
     },
     clip_url::{self, WebUrl},
     collection_name,
@@ -1093,6 +1093,8 @@ fn capture_and_install(
         ))
     })?;
     let composed_pdf = scratch.path().join("collection.pdf");
+    let (table_layout, table_prose_words) =
+        super::create::table_layout_settings()?;
     let compose_request = ComposeRequest::new(
         parts
             .iter()
@@ -1108,6 +1110,10 @@ fn capture_and_install(
         },
         compose_dir.to_string_lossy().into_owned(),
         composed_pdf.to_string_lossy().into_owned(),
+        TablesSettings {
+            layout: table_layout,
+            prose_words: table_prose_words,
+        },
     );
     let compose = client.compose(&compose_request).map_err(|failure| {
         with_nothing_written(partless_adapter_error(failure))
@@ -1341,6 +1347,8 @@ fn capture_and_install_overwrite(
     let composed_pdf = scratch.path().join("collection.pdf");
     let title_seed = &selection.family.root_stem;
     let derived = derive_collection_meta(&parts, &options, title_seed);
+    let (table_layout, table_prose_words) =
+        super::create::table_layout_settings()?;
     let compose_request = ComposeRequest::new(
         parts
             .iter()
@@ -1356,6 +1364,10 @@ fn capture_and_install_overwrite(
         },
         compose_dir.to_string_lossy().into_owned(),
         composed_pdf.to_string_lossy().into_owned(),
+        TablesSettings {
+            layout: table_layout,
+            prose_words: table_prose_words,
+        },
     );
     let compose = client.compose(&compose_request).map_err(|failure| {
         with_nothing_written(partless_adapter_error(failure))
@@ -1914,6 +1926,7 @@ fn print_success(
         compose.images.total,
         format_bytes(installed_bytes),
     );
+    super::table_layout::emit_value(compose.tables.as_ref(), styler);
     // The composed source view is stored write-once with its catalog on
     // the fresh-install path: anchors already number across all parts in
     // document order, so one compose response yields one store whose

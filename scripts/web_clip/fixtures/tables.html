@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Reading coastal infrastructure tables</title>
+<meta property="og:title" content="Reading coastal infrastructure tables">
+<meta property="og:site_name" content="Harbor Research">
+<meta name="description" content="A fixture for prose and data table printing.">
+</head>
+<body>
+<main>
+<article>
+<time datetime="2026-10-29T09:00:00Z">October 29, 2026</time>
+<h1>Reading coastal infrastructure tables</h1>
+<p>Harbor researchers compare maintenance records, navigation measurements, and
+shoreline surveys before publishing seasonal reports. Their field teams collect
+observations at several locations, then review each source with engineers and
+pilots so that readers can distinguish a measured fact from an operational note.</p>
+<p>The coastal archive preserves original wording, links, and code labels in
+every saved article. Printed pages use a single-column record for prose tables,
+while compact numeric measurements remain in a grid that readers can scan across
+its headings without losing the relationship between a year and its value.</p>
+<p>Some source tables contain merged cells to show that several observations
+share one feature. Those tables keep their grid because flattening them would
+change the structure of the evidence. The browser fixture checks both paths and
+also confirms that the saved source keeps the authored HTML intact.</p>
+
+<table id="prose-table">
+<caption>Unique caption for prose data</caption>
+<thead><tr><th>Station</th><th>Summary</th><th>Notes</th></tr></thead>
+<tbody>
+<tr>
+<td>Lighthouse</td>
+<td>Harbor crew marks the western beacon before morning fog crosses the inlet and records <code>signal-lens-v2</code></td>
+<td>Engineers replace the signal lens after storms scatter salt across its polished brass housing according to <a href="https://example.com/maintenance">the maintenance record</a></td>
+</tr>
+<tr>
+<td>Tide Chart</td>
+<td>Pilots compare the seasonal current against the harbor depth before choosing a safe route at dawn</td>
+<td>Crews record every sounding in a field notebook beside the pier at the north entrance each morning</td>
+</tr>
+</tbody>
+</table>
+
+<table id="numeric-table">
+<thead><tr><th>Year</th><th>Water level</th></tr></thead>
+<tbody>
+<tr><td>2024</td><td>1.8</td></tr>
+<tr><td>2025</td><td>2.1</td></tr>
+</tbody>
+</table>
+
+<table id="rowspan-table">
+<thead><tr><th>Feature</th><th>Description</th></tr></thead>
+<tbody>
+<tr>
+<td rowspan="2">Shared marker</td>
+<td>Surveyors compare the submerged marker against the old chart before the ferry enters the eastern channel on each spring tide</td>
+</tr>
+<tr>
+<td>Inspectors photograph the bronze plate after the afternoon inspection concludes beside the lighthouse steps and archive their notes</td>
+</tr>
+</tbody>
+</table>
+</article>
+</main>
+</body>
+</html>

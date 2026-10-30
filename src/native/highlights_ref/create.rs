@@ -364,7 +364,7 @@ pub(crate) fn default_table_settings() -> (String, u32) {
 /// `load_highlights_config`. Route callers pass the result into
 /// [`write_render_filters`]; that function never loads config itself
 /// because tests call it directly.
-fn table_layout_settings() -> Result<(String, u32)> {
+pub(super) fn table_layout_settings() -> Result<(String, u32)> {
     let highlights = super::bob_config::load_highlights_config(
         &super::bob_config::config_path(),
     )
@@ -2559,6 +2559,7 @@ fn create_article_route(
 ) -> Result<()> {
     let ref_type =
         default_ref_type_for_kind("article", options.ref_type.as_deref())?;
+    let (table_layout, table_prose_words) = table_layout_settings()?;
     let validated_name = options
         .name
         .clone()
@@ -2578,6 +2579,10 @@ fn create_article_route(
         ref_type,
         status: options.status.clone(),
         title: options.title.clone(),
+        tables: super::clip_adapter::TablesSettings {
+            layout: table_layout,
+            prose_words: table_prose_words,
+        },
         reread: options.reread().cloned(),
     };
     // `-i` is accepted and is a no-op: the clip engine always stamps `id`.

@@ -182,6 +182,26 @@ class AdapterFail(Exception):
         self.hint = hint
 
 
+def _table_settings(request: dict) -> dict:
+    """Validate optional print-table settings and apply protocol defaults."""
+    if "tables" not in request:
+        return {"layout": "auto", "prose_words": 12}
+    value = request["tables"]
+    if not isinstance(value, dict):
+        raise AdapterFail("invalid_request", "tables must be an object")
+    layout = value.get("layout", "auto")
+    if not isinstance(layout, str) or layout.strip().lower() not in (
+            "auto", "records", "grid"):
+        raise AdapterFail(
+            "invalid_request", "tables.layout must be auto, records, or grid")
+    prose_words = value.get("prose_words", 12)
+    if (isinstance(prose_words, bool) or not isinstance(prose_words, int)
+            or not 1 <= prose_words <= 200):
+        raise AdapterFail(
+            "invalid_request", "tables.prose_words must be an integer from 1 to 200")
+    return {"layout": layout.strip().lower(), "prose_words": prose_words}
+
+
 def error_response(
     op: str, kind: str, message: str, hint: str | None = None
 ) -> dict:
@@ -1507,6 +1527,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
     deadline = start + OVERALL_TIMEOUT_SECS
     debug: dict = {"images": {}, "fidelity": {}, "mode": None}
     warnings: list[str] = []
+    tables = _table_settings(request)
 
     url = request.get("url")
     if not isinstance(url, str):
@@ -1858,7 +1879,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                     try:
                         rendered = web_clip_render.render(
                             article_json, out_pdf,
-                            _RendererLauncher(pw, browser_info))
+                            _RendererLauncher(pw, browser_info), tables)
                     except web_clip_render.RenderError as exc:
                         raise AdapterFail(
                             "render", str(exc),
@@ -1923,6 +1944,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             if rendered_output is not None:
                 response["source_html"] = rendered_output["source_html"]
                 response["code_anchors"] = rendered_output["code_anchors"]
+                response["tables"] = rendered_output["tables"]
                 debug["dom_code_blocks"] = rendered_output["code_blocks"]
             return response, debug
         finally:
@@ -2012,6 +2034,7 @@ def op_capture(request: dict) -> dict:
 
 def op_compose(request: dict) -> dict:
     """Typeset ordered article.json parts into one collection PDF."""
+    tables = _table_settings(request)
     parts = request.get("parts")
     if not isinstance(parts, list) or not parts:
         raise AdapterFail(
@@ -2096,6 +2119,7 @@ def op_compose(request: dict) -> dict:
                 workdir,
                 out_pdf,
                 _RendererLauncher(pw, browser_info),
+                tables,
             )
     except web_clip_render.BrowserLaunchError as exc:
         raise AdapterFail("browser", str(exc), BROWSER_HINT) from exc
@@ -2116,6 +2140,7 @@ def op_compose(request: dict) -> dict:
         "pdf_bytes": pdf_bytes,
         "source_html": rendered["source_html"],
         "code_anchors": rendered["code_anchors"],
+        "tables": rendered["tables"],
         "images": rendered.get("images") or {},
         "warnings": rendered.get("warnings") or [],
     }
@@ -2775,6 +2800,24 @@ def self_test() -> int:
     check("site host fallback",
           layer_site(None, None, "example.com")
           == ("example.com", "host"))
+    check("table settings default to auto and twelve words",
+          _table_settings({}) == {"layout": "auto", "prose_words": 12})
+    check("table settings accept explicit config",
+          _table_settings({"tables": {"layout": " RECORDS ",
+                                       "prose_words": 20}})
+          == {"layout": "records", "prose_words": 20})
+
+    def _invalid_table_settings(value) -> bool:
+        try:
+            _table_settings({"tables": value})
+        except AdapterFail as exc:
+            return exc.kind == "invalid_request"
+        return False
+
+    check("malformed table settings are invalid requests",
+          all(_invalid_table_settings(value) for value in (
+              None, [], {"layout": "rows"},
+              {"prose_words": True}, {"prose_words": 201})))
 
     # -- Text cleanup -------------------------------------------------------
     cleaned, dropped = clean_text_html(
@@ -3426,6 +3469,28 @@ def self_test() -> int:
         check("source view drops data URI images",
               "inline image" not in rendered_source
               and "data:image/" not in rendered_source)
+        tables_response, _tables_debug, tables_workdir = _capture("tables.html")
+        tables_report = tables_response.get("tables") or {}
+        check("tables fixture is an article",
+              tables_response.get("ok") is True
+              and tables_response.get("kind") == "article")
+        check("web table report counts records, grids, and kept grids",
+              tables_report.get("version") == 1
+              and tables_report.get("tables") == 3
+              and tables_report.get("records") == 1
+              and tables_report.get("grids") == 2
+              and len(tables_report.get("kept_grid", [])) == 1
+              and tables_report["kept_grid"][0].get("reason")
+              == "row or column spans")
+        tables_source_path = tables_response.get("source_html")
+        try:
+            with open(tables_source_path, encoding="utf-8") as handle:
+                tables_source = handle.read()
+        except (OSError, TypeError):
+            tables_source = ""
+        check("tables source view preserves all three authored tables",
+              len(re.findall(r"<table\b", tables_source,
+                             flags=re.IGNORECASE)) == 3)
         check("printed PDF has named code destinations",
               _pdf_has_named_destinations(
                   os.path.join(workdir, "render.pdf"),
@@ -3659,6 +3724,34 @@ def self_test() -> int:
                         break
                 check("reader text has no auto-hyphenation",
                       hyphenated is False)
+                tables_pdf = os.path.join(tables_workdir, "render.pdf")
+                tables_text_path = os.path.join(txt_dir, "tables.txt")
+                try:
+                    subprocess.run(
+                        ["mutool", "draw", "-F", "txt", "-o",
+                         tables_text_path, tables_pdf],
+                        check=True, capture_output=True, timeout=120)
+                    with open(tables_text_path, encoding="utf-8",
+                              errors="replace") as handle:
+                        tables_text = re.sub(r"\s+", " ", handle.read())
+                    text_checks = [
+                        "Harbor crew marks the western beacon before morning fog crosses the inlet",
+                        "Engineers replace the signal lens after storms scatter salt across its polished brass housing",
+                        "Pilots compare the seasonal current against the harbor depth before choosing a safe route",
+                        "Crews record every sounding in a field notebook beside the pier at the north entrance",
+                        "Surveyors compare the submerged marker against the old chart before the ferry enters the eastern channel",
+                        "Inspectors photograph the bronze plate after the afternoon inspection concludes beside the lighthouse steps",
+                    ]
+                    check("web record labels print",
+                          "Summary:" in tables_text and "Notes:" in tables_text)
+                    check("web table body cell text prints exactly once",
+                          all(tables_text.count(text) == 1
+                              for text in text_checks))
+                    check("web record caption prints",
+                          tables_text.count("Unique caption for prose data") == 1)
+                except (subprocess.SubprocessError, OSError) as exc:
+                    log(f"mutool table extraction failed: {exc}")
+                    check("web table text extraction ran", False)
 
         # Challenge and login fixtures fail closed with headed disabled.
         import tempfile as _tf

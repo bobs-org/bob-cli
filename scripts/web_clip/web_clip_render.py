@@ -966,8 +966,9 @@ def _route_handler(render_dir: str):
     return _handle
 
 
-def print_pdf(render_dir: str, out_pdf: str, launcher) -> list[dict]:
-    """Print ``render/article.html`` and record code blocks at render time."""
+def print_pdf(render_dir: str, out_pdf: str, launcher,
+              tables: dict | None = None) -> tuple[list[dict], dict]:
+    """Rewrite print tables, print the article, and record render-time facts."""
     try:
         with open(READER_CSS_PATH, encoding="utf-8") as handle:
             handle.read()
@@ -994,6 +995,193 @@ def print_pdf(render_dir: str, out_pdf: str, launcher) -> list[dict]:
                     "Promise.race([document.fonts.ready.then(() => 1), "
                     "new Promise((r) => setTimeout(() => r(0), 10000))])"
                 )
+                table_report = page.evaluate("""(settings) => {
+                    const report = {
+                        version: 1, tables: 0, records: 0, grids: 0,
+                        kept_grid: [], warnings: []
+                    };
+                    const root = document.querySelector('.article-body');
+                    if (!root) return report;
+                    const tables = Array.from(root.querySelectorAll('table'))
+                        .filter((table) => {
+                            for (let node = table.parentElement;
+                                 node && node !== root;
+                                 node = node.parentElement) {
+                                if (node.tagName === 'TABLE') return false;
+                            }
+                            return true;
+                        });
+                    const wordCount = (node) => {
+                        const text = (node && node.textContent || '').trim();
+                        return text ? text.split(/\\s+/).length : 0;
+                    };
+                    const emptyCell = (cell) =>
+                        !(cell.textContent || '').trim() &&
+                        !cell.querySelector('img,svg,math,video,audio,object,canvas');
+                    const leadCell = (cell) => {
+                        if (emptyCell(cell)) return true;
+                        const paragraphs = Array.from(cell.querySelectorAll('p'));
+                        const meaningful = Array.from(cell.childNodes).filter(
+                            (node) => node.nodeType === 1 ||
+                                (node.nodeType === 3 && node.textContent.trim())
+                        );
+                        if (paragraphs.length > 1 ||
+                            cell.querySelector('ul,ol,pre,blockquote,div,' +
+                                'section,article,table')) return false;
+                        if (paragraphs.length === 1 &&
+                            (meaningful.length !== 1 ||
+                             meaningful[0] !== paragraphs[0])) return false;
+                        return wordCount(cell) <= 8;
+                    };
+                    const complexReason = (table, headerRow, bodyRows) => {
+                        const cells = Array.from(table.querySelectorAll('th,td'))
+                            .filter((cell) => cell.closest('table') === table);
+                        if (cells.some((cell) =>
+                            Number.parseInt(cell.getAttribute('rowspan') || '1', 10) > 1 ||
+                            Number.parseInt(cell.getAttribute('colspan') || '1', 10) > 1))
+                            return 'row or column spans';
+                        const headRows = table.tHead
+                            ? Array.from(table.tHead.rows) : [];
+                        if (headRows.length > 1) return 'multiple header rows';
+                        if (table.tFoot) return 'footer row';
+                        if (cells.some((cell) => cell.querySelector('table')))
+                            return 'nested table';
+                        if (table.tBodies.length > 1) return 'multiple table bodies';
+                        if (bodyRows.some((row) =>
+                            Array.from(row.cells).some((cell) => cell.tagName === 'TH')))
+                            return 'intermediate body head';
+                        if (headerRow && Array.from(headerRow.cells).some((cell) =>
+                            cell.matches('a,img,[id]') ||
+                            cell.querySelector('a,img,[id]')))
+                            return 'header cell contains link, image, or identifier';
+                        return null;
+                    };
+                    const rowsFor = (table) => Array.from(table.querySelectorAll('tr'))
+                        .filter((row) => row.closest('table') === table);
+                    const isAllHeaderCells = (row) => {
+                        const cells = Array.from(row.cells);
+                        return cells.length > 0 && cells.every(
+                            (cell) => cell.tagName === 'TH');
+                    };
+                    const moveChildren = (from, to) => {
+                        while (from.firstChild) to.appendChild(from.firstChild);
+                    };
+                    tables.forEach((table, index) => {
+                        report.tables += 1;
+                        const rows = rowsFor(table);
+                        const headRows = table.tHead
+                            ? Array.from(table.tHead.rows) : [];
+                        let headerRow = headRows.length === 1 ? headRows[0] : null;
+                        if (!table.tHead && rows.length && isAllHeaderCells(rows[0]))
+                            headerRow = rows[0];
+                        const bodyRows = rows.filter((row) =>
+                            !row.closest('thead') && !row.closest('tfoot') &&
+                            row !== headerRow);
+                        if (!bodyRows.length) {
+                            report.grids += 1;
+                            return;
+                        }
+                        const prose = bodyRows.some((row) =>
+                            Array.from(row.cells).some((cell, column) =>
+                                column > 0 && wordCount(cell) >= settings.prose_words));
+                        const wantRecords = settings.layout === 'records' ||
+                            (settings.layout === 'auto' && prose);
+                        if (!wantRecords) {
+                            report.grids += 1;
+                            return;
+                        }
+                        const reason = complexReason(table, headerRow, bodyRows);
+                        if (reason) {
+                            report.grids += 1;
+                            report.kept_grid.push({
+                                table: index + 1, reason,
+                                requested: settings.layout === 'records' ? 'records' : 'auto'
+                            });
+                            return;
+                        }
+                        try {
+                            const headerCells = headerRow
+                                ? Array.from(headerRow.cells) : [];
+                            const columnCount = Math.max(
+                                headerCells.length,
+                                ...bodyRows.map((row) => row.cells.length));
+                            const useLead = bodyRows.every((row) =>
+                                row.cells.length === 0 || leadCell(row.cells[0]));
+                            const twoColumnLead = useLead && columnCount === 2;
+                            const wrapper = document.createElement('div');
+                            wrapper.className = 'bob-records';
+                            for (const className of table.classList) {
+                                if (className !== 'bob-records')
+                                    wrapper.classList.add(className);
+                            }
+                            if (table.id) wrapper.id = table.id;
+                            const caption = table.caption;
+                            if (caption) {
+                                const printedCaption = document.createElement('p');
+                                printedCaption.className = 'bob-records-caption';
+                                moveChildren(caption, printedCaption);
+                                wrapper.appendChild(printedCaption);
+                            }
+                            for (const sourceRow of bodyRows) {
+                                const record = document.createElement('div');
+                                record.className = 'bob-record';
+                                let start = 0;
+                                if (useLead) {
+                                    start = 1;
+                                    const lead = sourceRow.cells[0];
+                                    if (lead && !emptyCell(lead)) {
+                                        const leadPara = document.createElement('p');
+                                        leadPara.className = 'bob-record-lead';
+                                        const strong = document.createElement('strong');
+                                        moveChildren(lead, strong);
+                                        leadPara.appendChild(strong);
+                                        record.appendChild(leadPara);
+                                    }
+                                }
+                                for (let column = start;
+                                     column < columnCount; column++) {
+                                    const cell = sourceRow.cells[column] || null;
+                                    const header = headerCells[column] || null;
+                                    const unlabeled = twoColumnLead && column === 1;
+                                    const headerText = header
+                                        ? (header.textContent || '').trim() : '';
+                                    const hasLabel = !unlabeled && !!headerText;
+                                    const field = document.createElement('div');
+                                    field.className = hasLabel
+                                        ? 'bob-record-field' : 'bob-record-value';
+                                    if (hasLabel) {
+                                        const label = document.createElement('span');
+                                        label.className = 'bob-record-label';
+                                        const clonedHeader = header.cloneNode(true);
+                                        moveChildren(clonedHeader, label);
+                                        label.appendChild(document.createTextNode(':'));
+                                        field.appendChild(label);
+                                        field.appendChild(document.createTextNode(' '));
+                                    }
+                                    if (cell) {
+                                        if (emptyCell(cell)) field.appendChild(
+                                            document.createTextNode('—'));
+                                        else moveChildren(cell, field);
+                                    } else {
+                                        field.appendChild(document.createTextNode('—'));
+                                    }
+                                    record.appendChild(field);
+                                }
+                                wrapper.appendChild(record);
+                            }
+                            table.replaceWith(wrapper);
+                            report.records += 1;
+                        } catch (error) {
+                            report.grids += 1;
+                            report.warnings.push(
+                                `table ${index + 1} rewrite failed (${error}); leaving as a grid`
+                            );
+                        }
+                    });
+                    return report;
+                }""", tables or {"layout": "auto", "prose_words": 12})
+                if not isinstance(table_report, dict) or table_report.get("version") != 1:
+                    raise RenderError("browser returned invalid table-layout report")
                 code_blocks = page.evaluate("""() => {
                     const blocks = Array.from(
                         document.querySelectorAll('.article-body pre'));
@@ -1055,14 +1243,15 @@ def print_pdf(render_dir: str, out_pdf: str, launcher) -> list[dict]:
             browser.close()
         except Exception:  # noqa: BLE001 - best effort
             pass
-    return code_blocks
+    return code_blocks, table_report
 
 
 # ---------------------------------------------------------------------------
 # Entry point (adapter protocol calls this).
 # ---------------------------------------------------------------------------
 
-def render(article_json_path: str, out_pdf: str, launcher) -> dict:
+def render(article_json_path: str, out_pdf: str, launcher,
+           tables: dict | None = None) -> dict:
     """Normalize, assemble, and print; return pdf/images/warnings."""
     import json
 
@@ -1085,7 +1274,8 @@ def render(article_json_path: str, out_pdf: str, launcher) -> dict:
     with open(source_path, "w", encoding="utf-8") as handle:
         handle.write(assemble_source(article))
 
-    code_blocks = print_pdf(render_dir, out_pdf, launcher)
+    code_blocks, table_report = print_pdf(
+        render_dir, out_pdf, launcher, tables)
 
     pdf_bytes = os.path.getsize(out_pdf)
     if pdf_bytes > PDF_WARN_BYTES:
@@ -1100,16 +1290,19 @@ def render(article_json_path: str, out_pdf: str, launcher) -> dict:
         "code_anchors": os.path.abspath(os.path.join(
             render_dir, "code-anchors.json")),
         "code_blocks": code_blocks,
+        "tables": table_report,
     }
 
 
 def render_collection(parts: list[str], collection: dict, workdir: str,
-                      out_pdf: str, launcher) -> dict:
+                      out_pdf: str, launcher,
+                      tables: dict | None = None) -> dict:
     """Normalize, assemble, and print a multi-part collection PDF."""
     _page, images, warnings = build_collection_html(
         parts, collection, workdir)
     render_dir = os.path.join(workdir, "render")
-    code_blocks = print_pdf(render_dir, out_pdf, launcher)
+    code_blocks, table_report = print_pdf(
+        render_dir, out_pdf, launcher, tables)
 
     pdf_bytes = os.path.getsize(out_pdf)
     if pdf_bytes > PDF_WARN_BYTES:
@@ -1124,4 +1317,5 @@ def render_collection(parts: list[str], collection: dict, workdir: str,
         "code_anchors": os.path.abspath(os.path.join(
             render_dir, "code-anchors.json")),
         "code_blocks": code_blocks,
+        "tables": table_report,
     }

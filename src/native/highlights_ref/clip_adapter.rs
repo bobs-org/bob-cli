@@ -373,6 +373,14 @@ pub(super) struct MetadataOverrides {
     pub(super) published: Option<String>,
 }
 
+/// Web-clip table policy forwarded to the print adapter. Optional on the
+/// protocol so older clients retain the adapter's auto/12 defaults.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(super) struct TablesSettings {
+    pub(super) layout: String,
+    pub(super) prose_words: u32,
+}
+
 /// One `capture` request.
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct CaptureRequest {
@@ -388,6 +396,8 @@ pub(super) struct CaptureRequest {
     pub(super) overrides: MetadataOverrides,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) render: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tables: Option<TablesSettings>,
 }
 
 impl CaptureRequest {
@@ -400,6 +410,7 @@ impl CaptureRequest {
         dry_run: bool,
         captured: String,
         overrides: MetadataOverrides,
+        tables: TablesSettings,
     ) -> Self {
         Self {
             protocol: ADAPTER_PROTOCOL_VERSION,
@@ -412,6 +423,7 @@ impl CaptureRequest {
             captured,
             overrides,
             render: None,
+            tables: Some(tables),
         }
     }
 
@@ -433,6 +445,7 @@ impl CaptureRequest {
             captured,
             overrides: MetadataOverrides::default(),
             render: Some(false),
+            tables: None,
         }
     }
 }
@@ -461,6 +474,7 @@ pub(super) struct ComposeRequest {
     pub(super) collection: CollectionMeta,
     pub(super) workdir: String,
     pub(super) out_pdf: String,
+    pub(super) tables: Option<TablesSettings>,
 }
 
 impl ComposeRequest {
@@ -469,6 +483,7 @@ impl ComposeRequest {
         collection: CollectionMeta,
         workdir: String,
         out_pdf: String,
+        tables: TablesSettings,
     ) -> Self {
         Self {
             protocol: ADAPTER_PROTOCOL_VERSION,
@@ -477,6 +492,7 @@ impl ComposeRequest {
             collection,
             workdir,
             out_pdf,
+            tables: Some(tables),
         }
     }
 }
@@ -517,6 +533,8 @@ pub(super) struct CaptureSuccess {
     pub(super) code_anchors: Option<String>,
     #[serde(default)]
     pub(super) article_json: Option<String>,
+    #[serde(default)]
+    pub(super) tables: Option<serde_json::Value>,
     #[serde(default)]
     pub(super) warnings: Vec<String>,
 }
@@ -601,6 +619,8 @@ pub(super) struct ComposeSuccess {
     pub(super) source_html: Option<String>,
     #[serde(default)]
     pub(super) code_anchors: Option<String>,
+    #[serde(default)]
+    pub(super) tables: Option<serde_json::Value>,
     #[serde(default)]
     pub(super) images: ImageReport,
     #[serde(default)]
@@ -883,6 +903,10 @@ mod tests {
             false,
             "2026-10-15".into(),
             MetadataOverrides::default(),
+            TablesSettings {
+                layout: "auto".into(),
+                prose_words: 12,
+            },
         )
     }
 
@@ -892,7 +916,7 @@ mod tests {
             .expect("serialize capture request");
         assert_eq!(
             json,
-            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","out_pdf":"/tmp/w/out.pdf","dry_run":false,"captured":"2026-10-15","overrides":{}}"#
+            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","out_pdf":"/tmp/w/out.pdf","dry_run":false,"captured":"2026-10-15","overrides":{},"tables":{"layout":"auto","prose_words":12}}"#
         );
     }
 
@@ -905,7 +929,7 @@ mod tests {
             .expect("serialize render:false capture");
         assert_eq!(
             json,
-            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","dry_run":false,"captured":"2026-10-15","overrides":{},"render":false}"#
+            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","dry_run":false,"captured":"2026-10-15","overrides":{},"render":false,"tables":{"layout":"auto","prose_words":12}}"#
         );
     }
 
@@ -923,12 +947,16 @@ mod tests {
             },
             "/abs/compose".into(),
             "/abs/collection.pdf".into(),
+            TablesSettings {
+                layout: "records".into(),
+                prose_words: 20,
+            },
         );
         let json =
             serde_json::to_string(&request).expect("serialize compose request");
         assert_eq!(
             json,
-            r#"{"protocol":1,"op":"compose","parts":[{"article_json":"/abs/part-1/article.json"}],"collection":{"title":"Tokio Internals","author":null,"published":null,"captured":"2026-10-15"},"workdir":"/abs/compose","out_pdf":"/abs/collection.pdf"}"#
+            r#"{"protocol":1,"op":"compose","parts":[{"article_json":"/abs/part-1/article.json"}],"collection":{"title":"Tokio Internals","author":null,"published":null,"captured":"2026-10-15"},"workdir":"/abs/compose","out_pdf":"/abs/collection.pdf","tables":{"layout":"records","prose_words":20}}"#
         );
     }
 
@@ -948,6 +976,7 @@ mod tests {
             Some("/tmp/render/code-anchors.json")
         );
         assert_eq!(value.images.kept, 2);
+        assert!(value.tables.is_none());
         assert!(value.warnings.is_empty());
     }
 
@@ -959,6 +988,16 @@ mod tests {
         .expect("deserialize older compose response");
         assert!(value.source_html.is_none());
         assert!(value.code_anchors.is_none());
+        assert!(value.tables.is_none());
+    }
+
+    #[test]
+    fn malformed_optional_tables_report_does_not_break_response() {
+        let value: ComposeSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":1234,"tables":{"version":"future"}}"#,
+        )
+        .expect("deserialize success with malformed optional table report");
+        assert!(value.tables.is_some());
     }
 
     #[test]

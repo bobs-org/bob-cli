@@ -4,8 +4,8 @@
 //! into single-column row records; other tables stay grids. The TeX macros
 //! ([`HEADER_INCLUDES`]) draw the record environment. This module holds both
 //! embedded assets, the JSON report the filter writes for bob, and the
-//! `tables:` summary and warning formatting. The pass is not wired into
-//! `bob ref create` render chains.
+//! `tables:` summary and warning formatting shared by the pandoc and web-clip
+//! routes.
 
 use std::{fs, path::Path};
 
@@ -115,6 +115,39 @@ pub(crate) fn tables_line(report: &Report) -> Option<String> {
     ))
 }
 
+/// Parse an adapter-provided report without making a malformed optional
+/// response field fail an otherwise successful capture.
+pub(crate) fn report_from_value(value: &serde_json::Value) -> Option<Report> {
+    let report = serde_json::from_value::<Report>(value.clone()).ok()?;
+    (report.version == 1).then_some(report)
+}
+
+/// Print a valid report using the same output contract as the pandoc routes.
+pub(crate) fn emit_report(report: &Report, styler: &Styler) {
+    if let Some(line) = tables_line(report) {
+        println!("{line}");
+    }
+    for kept in &report.kept_grid {
+        eprintln!(
+            "{}: table {} stayed a grid: {}",
+            styler.warning_prefix(),
+            kept.table,
+            kept.reason
+        );
+    }
+    for warning in &report.warnings {
+        eprintln!("{}: {warning}", styler.warning_prefix());
+    }
+}
+
+/// Emit an optional JSON report returned by the web-clip adapter. Invalid or
+/// absent optional data has no effect on the successful capture.
+pub(crate) fn emit_value(value: Option<&serde_json::Value>, styler: &Styler) {
+    if let Some(report) = value.and_then(report_from_value) {
+        emit_report(&report, styler);
+    }
+}
+
 /// Print the `tables:` line on stdout and the report warnings on stderr.
 pub(crate) fn emit_outcome(outcome: &ReportOutcome, styler: &Styler) {
     match outcome {
@@ -126,20 +159,7 @@ pub(crate) fn emit_outcome(outcome: &ReportOutcome, styler: &Styler) {
             );
         }
         ReportOutcome::Report(report) => {
-            if let Some(line) = tables_line(report) {
-                println!("{line}");
-            }
-            for kept in &report.kept_grid {
-                eprintln!(
-                    "{}: table {} stayed a grid: {}",
-                    styler.warning_prefix(),
-                    kept.table,
-                    kept.reason
-                );
-            }
-            for warning in &report.warnings {
-                eprintln!("{}: {warning}", styler.warning_prefix());
-            }
+            emit_report(report, styler);
         }
     }
 }
@@ -399,6 +419,27 @@ mod tests {
         assert_eq!(
             tables_line(&report_with(1, 0, 1)),
             Some("tables: 0 records · 1 grid".to_string())
+        );
+    }
+
+    #[test]
+    fn adapter_report_parser_ignores_invalid_optional_data() {
+        let valid = serde_json::json!({
+            "version": 1,
+            "tables": 2,
+            "records": 1,
+            "grids": 1,
+            "kept_grid": [{"table": 2, "reason": "row span", "requested": "auto"}]
+        });
+        let report = report_from_value(&valid).expect("valid adapter report");
+        assert_eq!(
+            tables_line(&report).as_deref(),
+            Some("tables: 1 record · 1 grid")
+        );
+        assert!(report_from_value(&serde_json::json!({"version": 2})).is_none());
+        assert!(
+            report_from_value(&serde_json::json!({"version": "invalid"}))
+                .is_none()
         );
     }
 

@@ -1203,6 +1203,8 @@ fn ingest_article_route(
         super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
     let out_pdf = workdir.path().join("render.pdf");
     let captured = current_local_date();
+    let (table_layout, table_prose_words) =
+        super::create::table_layout_settings().map_err(command_error)?;
     let client = ClipAdapterClient::resolve().map_err(|failure| {
         ingest_error(failure.message.clone(), failure.hint.clone())
     })?;
@@ -1217,6 +1219,10 @@ fn ingest_article_route(
         false,
         captured.clone(),
         MetadataOverrides::default(),
+        super::clip_adapter::TablesSettings {
+            layout: table_layout,
+            prose_words: table_prose_words,
+        },
     );
     let response = client.capture(&request).map_err(|failure| {
         ingest_error(failure.message.clone(), failure.hint.clone())

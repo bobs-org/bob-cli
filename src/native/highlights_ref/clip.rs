@@ -96,6 +96,7 @@ pub(super) struct ClipOptions {
     pub(super) ref_type: String,
     pub(super) status: String,
     pub(super) title: Option<String>,
+    pub(super) tables: TablesSettings,
     /// The shared reread preflight from create's dispatch (`None` for
     /// ordinary captures). Carries the allocated `<root>__vN` stem and
     /// family defaults so the article engine never re-derives them.
@@ -363,6 +364,7 @@ pub(super) fn capture_article(
         options.dry_run,
         captured.clone(),
         overrides,
+        options.tables.clone(),
     );
 
     let client = ClipAdapterClient::resolve()?;
@@ -796,6 +798,7 @@ pub(super) fn capture_article(
         format_bytes(installed_bytes),
         response.fidelity.status.as_deref().unwrap_or("unknown"),
     );
+    super::table_layout::emit_value(response.tables.as_ref(), &styler);
     // The converted source view is stored write-once with its catalog on
     // every branch (plain, companion audio, listen episode, reread): the
     // verified pointer rides intake, and a queued (`-k`) birth adopts it
@@ -888,6 +891,7 @@ pub(super) fn capture_article_overwrite(
         options.dry_run,
         captured.clone(),
         overrides,
+        options.tables.clone(),
     );
     let client = ClipAdapterClient::resolve()?;
     crate::native::style::stderr_progress_line(&format!(
@@ -1047,6 +1051,10 @@ pub(super) fn capture_article_overwrite(
             )
             .flatten(),
         super::overwrite::local::kept_closed_task(&plan, explicit_status),
+    );
+    super::table_layout::emit_value(
+        response.tables.as_ref(),
+        &Styler::detect(),
     );
     Ok(())
 }
@@ -1260,6 +1268,7 @@ fn print_dry_run(
         response.fidelity.kept_code_blocks,
         response.fidelity.page_code_blocks,
     );
+    super::table_layout::emit_value(response.tables.as_ref(), styler);
     print_warnings(styler, &response.warnings);
     for hit in legacy {
         println!(
