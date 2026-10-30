@@ -25,6 +25,7 @@ mod flag_guard;
 mod freshness_stamps;
 mod inbox_route;
 mod link_guard;
+mod mentions;
 mod open_notes;
 mod parse;
 mod parse_blocked_task;

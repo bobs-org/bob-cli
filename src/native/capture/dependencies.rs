@@ -54,6 +54,7 @@ pub(super) struct DependencyContext {
     link_unblocked: OnceLock<bool>,
     blocks_lines: OnceLock<(bool, Option<String>)>,
     linked_from_lines: OnceLock<(bool, Option<String>)>,
+    linked_from_mentions: OnceLock<(bool, Option<String>)>,
     close_policy: OnceLock<(
         Vec<config::relations::CancelLabel>,
         Vec<config::relations::CompleteLabel>,
@@ -84,6 +85,7 @@ impl DependencyContext {
             link_unblocked: OnceLock::new(),
             blocks_lines: OnceLock::new(),
             linked_from_lines: OnceLock::new(),
+            linked_from_mentions: OnceLock::new(),
             block_reservations: BTreeMap::new(),
             close_policy: OnceLock::new(),
             closing_intents: HashMap::new(),
@@ -178,6 +180,26 @@ impl DependencyContext {
     /// when the batch consulted the switch and the value was invalid.
     pub(super) fn linked_from_lines_warning(&self) -> Option<String> {
         self.linked_from_lines
+            .get()
+            .and_then(|(_, warning)| warning.clone())
+    }
+
+    /// Mention-mirror kill switch (`docs/task-relations.md` §12 / §19),
+    /// read once per batch: `relations.linked_from_mentions`, defaulting
+    /// to `false`. An invalid value falls back to `false`; the warning
+    /// surfaces once per batch through
+    /// [`Self::linked_from_mentions_warning`].
+    pub(super) fn linked_from_mentions_enabled(&self) -> bool {
+        self.linked_from_mentions
+            .get_or_init(load_linked_from_mentions_enabled)
+            .0
+    }
+
+    /// The invalid-config warning for
+    /// [`Self::linked_from_mentions_enabled`], when the batch consulted
+    /// the switch and the value was invalid.
+    pub(super) fn linked_from_mentions_warning(&self) -> Option<String> {
+        self.linked_from_mentions
             .get()
             .and_then(|(_, warning)| warning.clone())
     }

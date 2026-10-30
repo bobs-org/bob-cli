@@ -1049,6 +1049,13 @@ pub(super) struct BlocksLineUpdateJson {
     pub(super) kind: String,
     pub(super) added: Vec<String>,
     pub(super) removed: Vec<String>,
+    /// Mention subset of `added`. Omitted when empty so BLOCKS and
+    /// relation rows stay byte-identical for older decoders.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) mentions_added: Vec<String>,
+    /// Mention subset of `removed`. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) mentions_removed: Vec<String>,
 }
 
 /// One dependent `^block-id` minted so a BLOCKS entry can name it
@@ -1295,6 +1302,12 @@ pub(super) struct MintedRelationBlockIdJson {
     pub(super) line: usize,
     pub(super) block_id: String,
     pub(super) role: MintedRelationRole,
+    /// `"mention"` when capture minted this id so a text-mention mirror
+    /// can name S. Omitted for relation mints so existing JSON stays
+    /// byte-identical. A source minted for both reports as a relation
+    /// mint (no reason).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -139,6 +139,8 @@ pub(super) fn stage_blocks_delta(
                 kind: report.kind.as_str().to_string(),
                 added: report.added,
                 removed: report.removed,
+                mentions_added: Vec::new(),
+                mentions_removed: Vec::new(),
             };
             let task_ref = owner_task_ref(
                 ctx,

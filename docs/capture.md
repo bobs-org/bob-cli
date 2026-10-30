@@ -2511,7 +2511,10 @@ the draft contains a `~` byte. `capture-complete` adds the
 action: hide|already_hidden}`, pre-capture counts, omitted when
 empty), plus a `hides_existing_relation_label` warning object
 (`{code, label, count, message}`) when a one-off hides a visible
-existing label. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
+existing label. Mention mirrors reuse `linked_from_line_updates[]`
+(`mentions_added` / `mentions_removed`) and
+`minted_relation_block_ids[]` (`reason: "mention"`); a draft with no
+task block links is byte-identical to today. See [Task relations](task-relations.md#12-kill-switch-outputs-and-warnings).
 Cancel-label fields (`relation_cancels[]`, `cancel_effect`,
 `relation_cancelled_source`, and `cancels_source` spans) are specified in
 [§17 CL7](task-relations.md#cl7-contracts) and
@@ -5027,7 +5030,11 @@ previous_label, action: added|relabeled|unchanged}`),
 `linked_from_line_updates[]`, `minted_relation_block_ids[]`, and
 `mirror_skipped[]` (`{reason:
 archived_target|previous_daily_target|malformed_line|disabled}`), all
-omitted when empty. An existing task whose LINKS line changed is
+omitted when empty. Mention mirrors appear in those same arrays:
+`linked_from_line_updates[]` gains `mentions_added` /
+`mentions_removed` (omitted when empty), and a source minted only for
+a mention reports `reason: "mention"` on
+`minted_relation_block_ids[]`. An existing task whose LINKS line changed is
 reported as a task block with role `relation_source`; mirror-only
 changes report rows, not task blocks. Human output prints the `🪢`
 rows shown in [Linking tasks with '~' and

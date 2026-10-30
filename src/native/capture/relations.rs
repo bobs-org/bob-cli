@@ -690,6 +690,7 @@ fn ensure_owner_block_id(
         line: owner.line_index + 1,
         block_id: minted.clone(),
         role,
+        reason: None,
     });
     owner.block_id = Some(minted);
     Ok(())

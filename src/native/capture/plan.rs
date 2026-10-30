@@ -212,6 +212,13 @@ pub(super) fn plan_capture_batch_with_config_path(
         &request.inbox_routes,
     )?;
     task_tracker.remap_routed_tasks(&applied.moves);
+    plan_mention_mirrors(
+        &mut dependency_ctx,
+        &mut planner,
+        &request.bob_dir,
+        &mut items,
+        &mut warnings,
+    )?;
     let final_day = planner.peek_text(&day_file);
     let successor_links = surviving_successor_links(&items);
     let pomodoro_blocks = block_tracker
@@ -228,6 +235,13 @@ pub(super) fn plan_capture_batch_with_config_path(
         warnings.push(warning.into());
     }
     if let Some(warning) = dependency_ctx.linked_from_lines_warning()
+        && !warnings
+            .iter()
+            .any(|known| known.as_text() == Some(warning.as_str()))
+    {
+        warnings.push(warning.into());
+    }
+    if let Some(warning) = dependency_ctx.linked_from_mentions_warning()
         && !warnings
             .iter()
             .any(|known| known.as_text() == Some(warning.as_str()))
@@ -1052,6 +1066,7 @@ pub(super) fn plan_capture_item(
                 line: 0,
                 block_id: minted.clone(),
                 role: MintedRelationRole::Target,
+                reason: None,
             });
         }
         parsed.kind = CaptureKind::TaskWithBlockId {

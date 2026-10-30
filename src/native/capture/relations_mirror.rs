@@ -18,7 +18,7 @@ use crate::native::{
     task_relations::{
         parse as relation_parse,
         plan::{linked_from_desired_after_delta, plan_linked_from_line},
-        LinkedFromLine, RelationEntry,
+        LinkedFromLine, RelationEntry, RelationEntryKind, MENTION_LABEL,
     },
     task_status_hooks,
     vault_links::NoteIndex,
@@ -97,6 +97,29 @@ pub(super) fn load_linked_from_lines_enabled() -> (bool, Option<String>) {
             true,
             Some(format!(
                 "invalid relations config: {error}; using relations.linked_from_lines=true"
+            )),
+        ),
+    }
+}
+
+/// Load `relations.linked_from_mentions`, falling back to `false` and
+/// warning through the capture warning string on invalid values.
+pub(super) fn load_linked_from_mentions_enabled() -> (bool, Option<String>) {
+    match config::load_relations_config(&config::config_path()) {
+        Ok(loaded) => (
+            loaded.linked_from_mentions,
+            loaded
+                .warnings
+                .iter()
+                .find(|warning| {
+                    warning.starts_with("relations.linked_from_mentions")
+                })
+                .map(|warning| format!("invalid relations config: {warning}")),
+        ),
+        Err(error) => (
+            false,
+            Some(format!(
+                "invalid relations config: {error}; using relations.linked_from_mentions=false"
             )),
         ),
     }
@@ -188,6 +211,8 @@ pub(super) fn stage_linked_from_add(
         &BTreeSet::new(),
     );
     let desired: BTreeSet<_> = desired_entries.into_iter().collect();
+    let (mentions_added, mentions_removed) =
+        mention_changes(&existing, &desired);
     match plan_linked_from_line(&lines, &fenced, owner.line_index, &desired) {
         BlocksLinePlan::Noop => Ok(None),
         BlocksLinePlan::Malformed => {
@@ -212,9 +237,151 @@ pub(super) fn stage_linked_from_add(
                 kind: report.kind.as_str().to_string(),
                 added: report.added,
                 removed: report.removed,
+                mentions_added,
+                mentions_removed,
             }))
         }
     }
+}
+
+/// Stage T's LINKED FROM edit for one removed source identity.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stage_linked_from_remove(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    index: &NoteIndex,
+    mirror_owner_relative: &Path,
+    mirror_owner_block: &str,
+    source: &(PathBuf, String),
+    warnings: &mut Vec<CaptureWarning>,
+) -> Result<Option<BlocksLineUpdateJson>, CaptureError> {
+    let owner_display = display_relative(mirror_owner_relative);
+    let owner_absolute = absolute_note(bob_dir, mirror_owner_relative);
+    let contents = match current_note_text(planner, &owner_absolute) {
+        Ok(contents) => contents,
+        Err(error) => {
+            warnings.push(format!(
+                "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: {error}",
+                owner = source.1,
+                error = error.message,
+            ).into());
+            return Ok(None);
+        }
+    };
+    let scan = note_tasks::scan(&contents, ctx.settings());
+    let owner = match scan.by_block_id(mirror_owner_block) {
+        note_tasks::BlockIdLookup::Found(task) => task.clone(),
+        _ => {
+            warnings.push(format!(
+                "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: task ^{target} is missing or ambiguous there",
+                owner = source.1,
+                target = mirror_owner_block,
+            ).into());
+            return Ok(None);
+        }
+    };
+    let owned: Vec<String> = contents.lines().map(str::to_string).collect();
+    let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+    let children = relation_parse::linked_from_children_of(
+        &lines,
+        &fenced,
+        owner.line_index,
+    );
+    if children
+        .iter()
+        .any(|child| matches!(child.parsed, LinkedFromLine::Malformed))
+    {
+        warnings.push(format!(
+            "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: malformed LINKED FROM line left alone",
+            owner = source.1,
+        ).into());
+        return Ok(None);
+    }
+    let existing: Vec<RelationEntry> = children
+        .iter()
+        .filter_map(|child| match &child.parsed {
+            LinkedFromLine::Accepted { entries, .. } => {
+                Some(entries.as_slice())
+            }
+            _ => None,
+        })
+        .flatten()
+        .cloned()
+        .collect();
+    let source_identity = relation_identity(&source.0, &source.1);
+    let keep_relation = existing.iter().any(|entry| {
+        resolve_relation_entry(index, mirror_owner_relative, entry).is_some_and(
+            |(identity, _)| {
+                identity == source_identity
+                    && entry.kind == RelationEntryKind::Relation
+            },
+        )
+    });
+    if keep_relation {
+        return Ok(None);
+    }
+    let mut remove = BTreeSet::new();
+    remove.insert(source_identity);
+    let desired_entries = linked_from_desired_after_delta(
+        &existing,
+        |entry| resolve_relation_entry(index, mirror_owner_relative, entry),
+        &BTreeMap::new(),
+        &remove,
+    );
+    let desired: BTreeSet<_> = desired_entries.into_iter().collect();
+    let (mentions_added, mentions_removed) =
+        mention_changes(&existing, &desired);
+    match plan_linked_from_line(&lines, &fenced, owner.line_index, &desired) {
+        BlocksLinePlan::Noop => Ok(None),
+        BlocksLinePlan::Malformed => {
+            warnings.push(format!(
+                "🪢 LINKED FROM not updated for ^{owner} in {owner_display}: malformed LINKED FROM line left alone",
+                owner = source.1,
+            ).into());
+            Ok(None)
+        }
+        BlocksLinePlan::Edits { edits, report } => {
+            let line = edits
+                .first()
+                .map(edit_line_index)
+                .unwrap_or(owner.line_index)
+                + 1;
+            let staged = apply_blocks_edits(&contents, edits);
+            planner.stage(&owner_absolute, staged)?;
+            Ok(Some(BlocksLineUpdateJson {
+                path: owner_display,
+                line,
+                task: owner.description.clone(),
+                kind: report.kind.as_str().to_string(),
+                added: report.added,
+                removed: report.removed,
+                mentions_added,
+                mentions_removed,
+            }))
+        }
+    }
+}
+
+fn mention_changes(
+    existing: &[RelationEntry],
+    desired: &BTreeSet<(String, Option<String>)>,
+) -> (Vec<String>, Vec<String>) {
+    let before: BTreeSet<_> = existing
+        .iter()
+        .filter(|entry| entry.kind == RelationEntryKind::Mention)
+        .map(RelationEntry::canonical_text)
+        .collect();
+    let after: BTreeSet<_> = desired
+        .iter()
+        .filter(|(_, label)| label.as_deref() == Some(MENTION_LABEL))
+        .map(|(link, _)| link.clone())
+        .collect();
+    (
+        after.difference(&before).cloned().collect(),
+        before.difference(&after).cloned().collect(),
+    )
 }
 
 /// Whether T's LINKED FROM is malformed, so capture can skip the
