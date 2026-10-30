@@ -149,6 +149,7 @@ fn span_updates_rewrite_clean_spans_and_reslot() {
     let events_at = note.find("## Events").expect("Events");
     let section =
         &note[events_at..note.find("## Pomodoros").expect("Pomodoros")];
+    assert!(section.starts_with("## Events\n\n"), "{section}");
     let dentist_at = section.find("^dentist").expect("dentist");
     let interview_at = section.find("Product interview").expect("interview");
     assert!(dentist_at < interview_at, "{section}");

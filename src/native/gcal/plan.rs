@@ -4,8 +4,9 @@
 //! The plan inserts new rows in time order (never reordering existing
 //! lines), adopts crash-recovery rows by their `📅` URL, tombstones
 //! journaled rows whose line is gone, and appends each eligible MEET
-//! link once. When the computed contents equal the input, the plan
-//! reports no change and carries no records.
+//! link once. It keeps a blank line under the `## Events` heading. When
+//! the computed contents equal the input, the plan reports no change and
+//! carries no records.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -341,6 +342,8 @@ pub(crate) fn plan_sync(input: &SyncPlanInput<'_>) -> SyncPlan {
     if !input.lifecycle.is_empty() {
         apply_lifecycle(input, &mut working, &mut plan);
     }
+
+    working.ensure_events_heading_gap();
 
     if input.is_today {
         plan_meet_links(input, &mut working, &mut plan);
@@ -977,10 +980,10 @@ impl WorkingNote {
         event_task::events_section_range(&refs)
     }
 
-    /// Create `## Events` immediately above `## Pomodoros` with tidy
-    /// blank lines. Callers guarantee the Pomodoros section exists.
-    /// (Section ranges start at the body, so the heading sits one
-    /// line above `pomodoros.start`.)
+    /// Create `## Events` immediately above `## Pomodoros`, with one
+    /// blank line under the heading. Callers guarantee the Pomodoros
+    /// section exists. (Section ranges start at the body, so the heading
+    /// sits one line above `pomodoros.start`.)
     fn ensure_events_section(&mut self) {
         if self.events_range().is_some() {
             return;
@@ -1006,9 +1009,8 @@ impl WorkingNote {
         match slot {
             Some(after) => self.lines.insert(after + 1, text.to_string()),
             None => {
-                let start =
-                    self.events_range().expect("Events section exists").start;
-                self.lines.insert(start, text.to_string());
+                let index = self.events_top_index();
+                self.lines.insert(index, text.to_string());
             }
         }
     }
@@ -1021,12 +1023,40 @@ impl WorkingNote {
                 }
             }
             None => {
-                let start =
-                    self.events_range().expect("Events section exists").start;
+                let start = self.events_top_index();
                 for (offset, line) in block.iter().enumerate() {
                     self.lines.insert(start + offset, line.clone());
                 }
             }
+        }
+    }
+
+    /// Return the insertion point for a row that sorts before every other
+    /// row, keeping it below the heading gap and together with the list.
+    fn events_top_index(&self) -> usize {
+        let range = self.events_range().expect("Events section exists");
+        if let Some(index) = range
+            .clone()
+            .find(|index| !self.lines[*index].trim().is_empty())
+        {
+            return index;
+        }
+        if range.len() >= 2 {
+            range.start + 1
+        } else {
+            range.start
+        }
+    }
+
+    /// Ensure a non-empty Events section has at least one blank line below
+    /// its heading. Existing and extra blank lines are preserved.
+    fn ensure_events_heading_gap(&mut self) {
+        let Some(range) = self.events_range() else {
+            return;
+        };
+        if range.start < range.end && !self.lines[range.start].trim().is_empty()
+        {
+            self.lines.insert(range.start, String::new());
         }
     }
 }
@@ -1339,3 +1369,6 @@ fn find_meet_entry(contents: &str) -> Option<usize> {
     }
     fallback
 }
+
+#[cfg(test)]
+mod tests;

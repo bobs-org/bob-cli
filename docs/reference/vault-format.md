@@ -353,7 +353,8 @@ Pomodoro time to that area or project; `[type:: MEET]` is needed only when
 the root's suggested task type is not already `MEET`. Link an Event Task with
 its local block link under a Pomodoro.
 
-`bob gcal sync` writes rows in this shape. A written Event Task carries a
+`bob gcal sync` writes rows in this shape, with a blank line between the
+`## Events` heading and the section's first line. A written Event Task carries a
 `📅` identity badge (Google's event link, also the adoption key), an optional
 `📹` join badge, and an optional `📍` maps badge for a non-URL location, then
 `[root::]`, then `[type:: MEET]` only when needed, then a `^block-id` minted

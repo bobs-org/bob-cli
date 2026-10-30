@@ -352,7 +352,9 @@ new rows in time order (never reordering existing lines), adopts rows whose
 `📅` URL is already in the note without a journal record (crash recovery),
 tombstones journaled rows whose line is gone (never re-created), and appends
 each eligible MEET link once. A removed or moved link is never re-added. A
-byte-identical plan writes nothing and appends nothing.
+byte-identical plan writes nothing and appends nothing. Sync keeps a blank
+line between the `## Events` heading and its first line, and adds the gap to
+an existing section that lacks it, even when there are no calendar changes.
 
 The write takes the vault lock (30 seconds), re-reads and re-plans, then
 writes through the preimage-checked staged writer, all-or-nothing, retrying

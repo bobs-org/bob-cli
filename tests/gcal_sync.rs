@@ -70,6 +70,13 @@ fn first_sync_creates_events_meet_and_links() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     let note = today_note(&env);
 
+    assert!(
+        note.contains(
+            "# Friday 2026-10-30\n## Events\n\n- **all day** Conference"
+        ),
+        "{note}"
+    );
+
     // Events section above Pomodoros with time-ordered rows.
     let events_at = note.find("## Events").expect("Events section");
     let pomodoros_at = note.find("## Pomodoros").expect("Pomodoros");
@@ -165,6 +172,35 @@ fn first_sync_creates_events_meet_and_links() {
     assert_eq!(status["day"], "2026-10-30");
     assert_eq!(status["tasks_added"], 5);
     assert_eq!(status["links_added"], 4);
+}
+
+#[test]
+fn sync_restores_missing_blank_under_events_heading() {
+    let env = GcalEnv::new("bob-cli-gcal-sync-heading-gap");
+    prepare(&env);
+    let fake = FakeGog::new(&env, "fake-gog");
+    fake.events_json(include_str!("fixtures/gcal/events.json"));
+
+    let first = sync_output(&env, &fake, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let original = today_note(&env);
+    let journal_count = journal_lines(&env).len();
+    let without_gap = original.replacen("## Events\n\n", "## Events\n", 1);
+    assert_ne!(without_gap, original, "fixture should have an Events gap");
+    fs::write(env.vault().join("2026/20261030.md"), without_gap)
+        .expect("remove heading gap");
+
+    let repaired = sync_output(&env, &fake, &[]);
+    assert_eq!(repaired.status.code(), Some(0), "{}", stderr(&repaired));
+    let repaired_note = today_note(&env);
+    assert!(repaired_note.contains("## Events\n\n"), "{repaired_note}");
+    assert_eq!(journal_lines(&env).len(), journal_count);
+    assert_eq!(status(&env)["outcome"], "written");
+
+    let third = sync_output(&env, &fake, &[]);
+    assert_eq!(third.status.code(), Some(0), "{}", stderr(&third));
+    assert!(stdout(&third).contains("unchanged"), "{}", stdout(&third));
+    assert_eq!(today_note(&env), repaired_note);
 }
 
 #[test]
