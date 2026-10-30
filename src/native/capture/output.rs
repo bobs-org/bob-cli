@@ -93,6 +93,12 @@ pub(super) struct PomodoroCloseTimingJson {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroCloseTaskLinkClockJson {
+    pub(super) class: &'static str,
+    pub(super) span: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroCloseTaskLinkJson {
     pub(super) index: u32,
     pub(super) ledger_line: usize,
@@ -101,6 +107,8 @@ pub(super) struct PomodoroCloseTaskLinkJson {
     pub(super) marker: &'static str,
     pub(super) outcome: &'static str,
     pub(super) source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) clock: Option<PomodoroCloseTaskLinkClockJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2597,6 +2605,34 @@ pub(super) fn print_human_pomodoro_close_success(
                 line.push_str(&format!(" +{count} Work Log"));
             }
         }
+        if let Some(clock) = task
+            .index
+            .and_then(|index| {
+                close.task_links.iter().find(|link| link.index == index)
+            })
+            .and_then(|link| link.clock.as_ref())
+        {
+            let caption = match clock.class {
+                "ended_inside" => {
+                    format!("ended {}", format_event_hhmm(&clock.span[5..9]))
+                }
+                "running" => format!(
+                    "running until {}",
+                    format_event_hhmm(&clock.span[5..9])
+                ),
+                "not_started" => {
+                    format!("starts {}", format_event_hhmm(&clock.span[..4]))
+                }
+                "ended_before" => format!(
+                    "ended {} · before this session",
+                    format_event_hhmm(&clock.span[5..9])
+                ),
+                _ => String::new(),
+            };
+            if !caption.is_empty() {
+                line.push_str(&styler.dim(&format!(" · {caption}")));
+            }
+        }
         println!("{prefix}{line}");
         // Typed entries print first, all of them, not dimmed, each
         // followed by its details indented two more spaces and not
@@ -2679,6 +2715,14 @@ pub(super) fn print_human_pomodoro_close_success(
                 next.line
             ))
         );
+    }
+}
+
+fn format_event_hhmm(value: &str) -> String {
+    if value.len() == 4 {
+        format!("{}:{}", &value[..2], &value[2..])
+    } else {
+        value.to_string()
     }
 }
 

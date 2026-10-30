@@ -3464,6 +3464,35 @@ printf 'x\n\n=\n' | bob capture
 Single-quote tokens that contain `!`, `*`, or `~`: shells glob `*` and
 history-expand `!`. A bare `x` needs no `=`-word quoting.
 
+#### Event Task links close by the clock
+
+On a timed close, a plain Task Link to an Event Task in this daily note's
+`## Events` section uses the event span and the session's start **S** and
+close time **C**. A hand-written Event Task follows the same rule. Task Links
+to ordinary tasks or to Event Tasks in another note keep their existing
+close behavior.
+
+| Event class | Clock test | Default close outcome |
+| --- | --- | --- |
+| `ended_inside` | end ≤ C and end > S | Complete `[x]`, counted |
+| `running` | start < C < end | In Progress, carried |
+| `not_started` | start ≥ C | Deferred, carried, not counted or started |
+| `ended_before` | end ≤ S | Deferred, carried, not counted or started |
+
+An explicitly numbered link (`x<N>`, `*P`, `!M`, or `~K`) keeps the outcome
+you selected. The `!` and `*` wildcards do not select a `not_started` Event
+Task; it stays deferred. Wildcards otherwise keep their normal meaning, and
+unlisted Event Tasks use the clock defaults above. Ordinary Task Links are
+unchanged. Embedded links and authored `#` deferrals also keep their current
+meaning.
+
+JSON adds `pomodoro_close.task_links[].clock` for Event Task links, with
+`class` and the original `span` (for example
+`{"class":"ended_inside","span":"0800-0830"}`). It is included even
+when an explicit selection wins. Human output adds one dim caption: `ended
+08:30`, `running until 11:00`, `starts 14:00`, or
+`ended 07:30 · before this session`.
+
 #### Retired close spellings
 
 Whole-item `=x…`, `=*…`, and `=!…` are claimed teaching errors. They write

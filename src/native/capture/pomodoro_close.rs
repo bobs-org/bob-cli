@@ -422,6 +422,10 @@ pub(super) fn build_close_summary_json(
             marker: link.marker.as_str(),
             outcome: link.outcome.as_str(),
             source: link.source.as_str(),
+            clock: link.clock.map(|clock| PomodoroCloseTaskLinkClockJson {
+                class: clock.class.as_str(),
+                span: clock.span.text(),
+            }),
         })
         .collect();
     // Wildcard selections are lexical intent until the staged lineup has

@@ -5,10 +5,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Timelike};
 
+use super::super::event_task::CloseClock;
 use super::super::{
-    capture::line_spans,
+    capture::{line_spans, parse_adjustment_range},
     capture_language::CloseLogEntry,
     capture_task_toggle, capture_work_log,
     note_tasks::{
@@ -25,8 +26,9 @@ use super::super::{
 };
 use super::links::{apply_edits, pomodoro_marker_prefix};
 use super::selection::{
-    apply_close_selection, number_task_links, CloseSelection,
-    CloseSelectionError, NumberedTaskLink, TaskLinkOutcome, TaskLinkSource,
+    apply_close_selection, apply_close_selection_with_clock, number_task_links,
+    number_task_links_with_clock, CloseSelection, CloseSelectionError,
+    NumberedTaskLink, TaskLinkOutcome, TaskLinkSource,
 };
 use super::{
     close_task_text, find_running_pomodoro, plan_ledger_close,
@@ -927,12 +929,45 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
 ) -> Result<PomodoroClosePlan, PomodoroClosePlanError> {
     let running = find_running_pomodoro(day_contents)
         .map_err(PomodoroClosePlanError::FindRunning)?;
+    let close_clock =
+        build_close_clock(day_path, day_contents, &running, now, vault);
+    let has_clocked_event = close_clock.as_ref().is_some_and(|clock| {
+        number_task_links_with_clock(day_contents, &running, Some(clock))
+            .iter()
+            .any(|link| link.clock.is_some())
+    });
     let (working_contents, task_links, inserted_lines, resolved_log) =
         match selection {
             Some(sel) => {
-                let applied =
-                    apply_close_selection(day_contents, &running, sel)
-                        .map_err(PomodoroClosePlanError::Selection)?;
+                let applied = apply_close_selection_with_clock(
+                    day_contents,
+                    &running,
+                    sel,
+                    close_clock.as_ref(),
+                )
+                .map_err(PomodoroClosePlanError::Selection)?;
+                (
+                    applied.contents,
+                    applied.lineup,
+                    applied.inserted_lines,
+                    applied.log,
+                )
+            }
+            None if has_clocked_event => {
+                let default = CloseSelection::new(
+                    None,
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    BTreeSet::new(),
+                    "",
+                );
+                let applied = apply_close_selection_with_clock(
+                    day_contents,
+                    &running,
+                    &default,
+                    close_clock.as_ref(),
+                )
+                .map_err(PomodoroClosePlanError::Selection)?;
                 (
                     applied.contents,
                     applied.lineup,
@@ -1047,6 +1082,36 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
             log: log_entries,
         },
         warnings: planner.warnings,
+    })
+}
+
+fn build_close_clock<V: CloseVault>(
+    day_path: &Path,
+    day_contents: &str,
+    running: &RunningPomodoro,
+    now: NaiveDateTime,
+    vault: &V,
+) -> Option<CloseClock> {
+    let day_relative =
+        day_path.strip_prefix(vault.bob_dir()).unwrap_or(day_path);
+    let entry_line = day_contents.lines().nth(running.line.checked_sub(1)?)?;
+    close_clock_for_entry(day_relative, entry_line, now)
+}
+
+fn close_clock_for_entry(
+    day_relative: &Path,
+    entry_line: &str,
+    now: NaiveDateTime,
+) -> Option<CloseClock> {
+    super::super::task_status_hooks::canonical_daily_date(day_relative)?;
+    let session_start_min =
+        u16::try_from(parse_adjustment_range(entry_line)?.start_minutes)
+            .ok()?;
+    let close_at_min = u16::try_from(now.hour() * 60 + now.minute()).ok()?;
+    Some(CloseClock {
+        day_relative: day_relative.to_path_buf(),
+        session_start_min,
+        close_at_min,
     })
 }
 
@@ -1302,4 +1367,39 @@ fn retire_embedded_links(
         edits.push((prefix.start, token.end, format!("~~{}~~", token.token)));
     }
     apply_edits(line, edits)
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    fn at(hour: u32, minute: u32) -> NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 29)
+            .expect("date")
+            .and_hms_opt(hour, minute, 0)
+            .expect("time")
+    }
+
+    #[test]
+    fn only_canonical_daily_timed_entries_supply_a_close_clock() {
+        let day = Path::new("2026/20261029.md");
+        assert!(
+            close_clock_for_entry(day, "- [ ] () — MEET", at(9, 0)).is_none()
+        );
+        assert!(close_clock_for_entry(
+            Path::new("20261029.md"),
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            at(9, 0),
+        )
+        .is_none());
+
+        let clock = close_clock_for_entry(
+            day,
+            "- [ ] (**0800-0900** [t:: 60m]) — MEET",
+            at(8, 30),
+        )
+        .expect("timed daily entry clock");
+        assert_eq!(clock.session_start_min, 480);
+        assert_eq!(clock.close_at_min, 510);
+    }
 }

@@ -19,6 +19,7 @@ mod complete_task_link;
 mod complete_themes;
 mod complete_wikilink_task;
 mod ensure_next;
+mod event_task_close;
 mod flag_guard;
 mod freshness_stamps;
 mod inbox_route;

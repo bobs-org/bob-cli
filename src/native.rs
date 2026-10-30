@@ -52,6 +52,7 @@ pub(crate) mod completion;
 mod config;
 mod dataview;
 pub(crate) mod env;
+mod event_task;
 // The executor phase (bob-cli-at.3) will connect this primitive to PDF writes.
 #[allow(dead_code)]
 pub(crate) mod file_coordination;

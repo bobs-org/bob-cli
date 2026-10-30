@@ -1,0 +1,115 @@
+{
+  "classify": [
+    {
+      "id": "event-start-equals-close-is-not-started",
+      "session_start": "0800",
+      "close_at": "0900",
+      "span": "0900-0930",
+      "class": "not_started"
+    },
+    {
+      "id": "event-end-equals-session-start-is-ended-before",
+      "session_start": "0800",
+      "close_at": "0900",
+      "span": "0730-0800",
+      "class": "ended_before"
+    },
+    {
+      "id": "event-end-equals-close-is-ended-inside",
+      "session_start": "0800",
+      "close_at": "0900",
+      "span": "0830-0900",
+      "class": "ended_inside"
+    },
+    {
+      "id": "zero-length-inside-session",
+      "session_start": "0800",
+      "close_at": "0900",
+      "span": "0830-0830",
+      "class": "ended_inside"
+    },
+    {
+      "id": "event-crosses-midnight-and-ends-inside",
+      "session_start": "2330",
+      "close_at": "0030",
+      "span": "2330-0015",
+      "class": "ended_inside"
+    },
+    {
+      "id": "event-and-session-cross-midnight-running-at-close",
+      "session_start": "2345",
+      "close_at": "0015",
+      "span": "2355-0030",
+      "class": "running"
+    },
+    {
+      "id": "event-ended-before-session-which-crosses-midnight",
+      "session_start": "2330",
+      "close_at": "0030",
+      "span": "2200-2230",
+      "class": "ended_before"
+    }
+  ],
+  "close": [
+    {
+      "id": "bare-close-applies-all-four-clock-classes",
+      "close_token": "x",
+      "now": "2026-10-29 10:00:00",
+      "day": "## Events\n- [ ] #task **0830-0900** Ended inside ^ended-inside\n- [ ] #task **0930-1030** Running ^running\n- [ ] #task **1000-1030** Not started ^not-started\n- [ ] #task **0700-0730** Ended before ^ended-before\n\n## Pomodoros\n- [ ] (**0800-1000** [t:: 120m]) — MEET\n  - [[#^ended-inside]]\n  - [[#^running]]\n  - [[#^not-started]]\n  - [[#^ended-before]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["complete", "in_progress", "deferred", "deferred"],
+      "expected_clock": ["ended_inside", "running", "not_started", "ended_before"]
+    },
+    {
+      "id": "all-deferred-meetings-pin-rust-output",
+      "close_token": "x",
+      "now": "2026-10-29 09:00:00",
+      "day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **1100-1130** Later meeting ^later-meeting\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^future-meeting]]\n  - [[#^later-meeting]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["deferred", "deferred"],
+      "expected_clock": ["not_started", "not_started"],
+      "expected_day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **1100-1130** Later meeting ^later-meeting\n\n## Pomodoros\n- [x] (**0800-0900** [t:: 60m]) — MEET\n- [ ] () — MEET\n  - [[#^future-meeting]]\n  - [[#^later-meeting]]\n- [ ] () — PLAN\n"
+    },
+    {
+      "id": "foreign-daily-event-link-keeps-ordinary-close-behavior",
+      "close_token": "x",
+      "now": "2026-10-29 10:00:00",
+      "day": "## Pomodoros\n- [ ] (**0800-1000** [t:: 120m]) — MEET\n  - [[2026/20261028#^yesterday-meeting]]\n- [ ] () — PLAN\n",
+      "other_note_path": "2026/20261028.md",
+      "other_note": "## Events\n- [ ] #task **0830-0900** Yesterday meeting ^yesterday-meeting\n",
+      "expected_outcomes": ["in_progress"],
+      "expected_clock": [null]
+    },
+    {
+      "id": "explicit-x2-wins-for-not-started-event-and-clock-applies-to-unlisted",
+      "close_token": "x2",
+      "rust_only": true,
+      "now": "2026-10-29 10:00:00",
+      "day": "## Events\n- [ ] #task **0830-0900** Ended inside ^ended-inside\n- [ ] #task **1000-1030** Not started ^not-started\n\n## Pomodoros\n- [ ] (**0800-1000** [t:: 120m]) — MEET\n  - [[#^ended-inside]]\n  - [[#^not-started]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["complete", "in_progress"],
+      "expected_clock": ["ended_inside", "not_started"]
+    },
+    {
+      "id": "complete-wildcard-does-not-complete-not-started-event",
+      "close_token": "x!",
+      "rust_only": true,
+      "now": "2026-10-29 09:00:00",
+      "day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n- [ ] #task **0830-0900** Ended inside ^ended-inside\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^future-meeting]]\n  - [[#^ended-inside]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["deferred", "complete"],
+      "expected_clock": ["not_started", "ended_inside"]
+    },
+    {
+      "id": "explicit-numbered-complete-wins-for-not-started-event",
+      "close_token": "x!1",
+      "rust_only": true,
+      "now": "2026-10-29 09:00:00",
+      "day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n\n## Pomodoros\n- [ ] (**0800-0900** [t:: 60m]) — MEET\n  - [[#^future-meeting]]\n- [ ] () — PLAN\n",
+      "expected_outcomes": ["complete"],
+      "expected_clock": ["not_started"]
+    },
+    {
+      "id": "untimed-entry-does-not-create-clock-metadata",
+      "rust_only": true,
+      "timed": false,
+      "day": "## Events\n- [ ] #task **1000-1030** Future meeting ^future-meeting\n\n## Pomodoros\n- [ ] () — MEET\n  - [[#^future-meeting]]\n"
+    }
+  ]
+}

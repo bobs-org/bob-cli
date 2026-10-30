@@ -13,6 +13,7 @@ use super::super::{
     capture_language::{
         assign_log_positions, CloseLogEntry, CloseLogOrigin, PositionalLogError,
     },
+    event_task::{event_task_by_id, ClockClass, CloseClock, EventTaskClock},
     markdown,
 };
 use super::ledger::{sub_bullet_range, RunningPomodoro};
@@ -164,6 +165,7 @@ pub(crate) struct NumberedTaskLink {
     pub marker: TaskLinkMarker,
     pub outcome: TaskLinkOutcome,
     pub source: TaskLinkSource,
+    pub clock: Option<EventTaskClock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +632,14 @@ pub(crate) fn number_task_links(
     contents: &str,
     running: &RunningPomodoro,
 ) -> Vec<NumberedTaskLink> {
+    number_task_links_with_clock(contents, running, None)
+}
+
+pub(crate) fn number_task_links_with_clock(
+    contents: &str,
+    running: &RunningPomodoro,
+    close_clock: Option<&CloseClock>,
+) -> Vec<NumberedTaskLink> {
     let spans = line_spans(contents);
     let line_text: Vec<&str> = spans.iter().map(|span| span.text).collect();
     let entry_index = running.line.saturating_sub(1);
@@ -638,7 +648,30 @@ pub(crate) fn number_task_links(
     }
     let range = sub_bullet_range(&line_text, entry_index);
     let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
-    number_task_links_in_range(&line_text, &fenced, range)
+    let mut links = number_task_links_in_range(&line_text, &fenced, range);
+    if let Some(close_clock) = close_clock {
+        for link in &mut links {
+            if link.marker != TaskLinkMarker::Plain
+                || !link.path_part.is_empty()
+            {
+                continue;
+            }
+            let Some(event) = event_task_by_id(
+                &close_clock.day_relative,
+                contents,
+                &link.block_id,
+            ) else {
+                continue;
+            };
+            let clock = EventTaskClock {
+                class: close_clock.classify(event.span),
+                span: event.span,
+            };
+            link.outcome = clock_outcome(clock.class);
+            link.clock = Some(clock);
+        }
+    }
+    links
 }
 
 /// Numbered Task Link walk over one entry's sub-bullet range. The close
@@ -672,6 +705,7 @@ pub(crate) fn number_task_links_in_range(
             marker,
             outcome,
             source: TaskLinkSource::Ledger,
+            clock: None,
         });
     }
     links
@@ -681,6 +715,7 @@ fn outcome_for(
     index: u32,
     marker: TaskLinkMarker,
     selection: &CloseSelection,
+    clock: Option<EventTaskClock>,
 ) -> (TaskLinkOutcome, TaskLinkSource) {
     // Concrete lists are explicit exceptions to a wildcard group. Resolve
     // them first; the wildcard then owns only the remaining lineup indices.
@@ -700,11 +735,33 @@ fn outcome_for(
         || selection.park.contains(&index)
         || selection.complete.contains(&index)
         || selection.drop.contains(&index);
-    if !explicitly_assigned && selection.park_all {
+    let wildcard_excludes_event =
+        clock.is_some_and(|clock| clock.class == ClockClass::NotStarted);
+    if !explicitly_assigned && selection.park_all && !wildcard_excludes_event {
         return (TaskLinkOutcome::Parked, TaskLinkSource::Listed);
     }
-    if !explicitly_assigned && selection.complete_all {
+    if !explicitly_assigned
+        && selection.complete_all
+        && !wildcard_excludes_event
+    {
         return (TaskLinkOutcome::Complete, TaskLinkSource::Listed);
+    }
+    if selection
+        .in_progress
+        .as_ref()
+        .is_some_and(|numbers| numbers.contains(&index))
+    {
+        return (TaskLinkOutcome::InProgress, TaskLinkSource::Listed);
+    }
+    if marker == TaskLinkMarker::Plain
+        && let Some(clock) = clock
+    {
+        let source = if selection.has_work_selection() {
+            TaskLinkSource::Unlisted
+        } else {
+            TaskLinkSource::Ledger
+        };
+        return (clock_outcome(clock.class), source);
     }
     if let Some(in_progress) = selection.in_progress.as_ref() {
         if in_progress.contains(&index) {
@@ -724,6 +781,16 @@ fn outcome_for(
     (marker.ledger_outcome(), TaskLinkSource::Ledger)
 }
 
+fn clock_outcome(class: ClockClass) -> TaskLinkOutcome {
+    match class {
+        ClockClass::EndedInside => TaskLinkOutcome::Complete,
+        ClockClass::Running => TaskLinkOutcome::InProgress,
+        ClockClass::NotStarted | ClockClass::EndedBefore => {
+            TaskLinkOutcome::Deferred
+        }
+    }
+}
+
 fn line_ending(contents: &str) -> &'static str {
     if contents.contains("\r\n") {
         "\r\n"
@@ -737,7 +804,17 @@ pub(crate) fn apply_close_selection(
     running: &RunningPomodoro,
     selection: &CloseSelection,
 ) -> Result<AppliedCloseSelection, CloseSelectionError> {
-    let mut lineup = number_task_links(contents, running);
+    apply_close_selection_with_clock(contents, running, selection, None)
+}
+
+pub(crate) fn apply_close_selection_with_clock(
+    contents: &str,
+    running: &RunningPomodoro,
+    selection: &CloseSelection,
+    close_clock: Option<&CloseClock>,
+) -> Result<AppliedCloseSelection, CloseSelectionError> {
+    let mut lineup =
+        number_task_links_with_clock(contents, running, close_clock);
     let total = lineup.len();
     let mut bad: BTreeSet<u32> = BTreeSet::new();
     if let Some(in_progress) = selection.in_progress.as_ref() {
@@ -774,7 +851,8 @@ pub(crate) fn apply_close_selection(
         });
     }
     for link in lineup.iter_mut() {
-        let (outcome, source) = outcome_for(link.index, link.marker, selection);
+        let (outcome, source) =
+            outcome_for(link.index, link.marker, selection, link.clock);
         link.outcome = outcome;
         link.source = source;
     }
@@ -913,7 +991,13 @@ pub(crate) fn apply_close_selection(
     if had_final_newline {
         rebuilt.push_str(ending);
     }
-    reline_close_log_lineup(&rebuilt, running, &mut lineup, &tags)?;
+    reline_close_log_lineup(
+        &rebuilt,
+        running,
+        &mut lineup,
+        &tags,
+        close_clock,
+    )?;
     let mut inserted_lines = vec![0usize; resolved_log.len()];
     for (position, tag) in tags.iter().enumerate() {
         if let LineTag::Inserted(ordinal) = tag {
@@ -1185,8 +1269,9 @@ fn reline_close_log_lineup(
     running: &RunningPomodoro,
     lineup: &mut [NumberedTaskLink],
     tags: &[LineTag],
+    close_clock: Option<&CloseClock>,
 ) -> Result<(), CloseSelectionError> {
-    let relined = number_task_links(rebuilt, running);
+    let relined = number_task_links_with_clock(rebuilt, running, close_clock);
     let mut kept = lineup
         .iter_mut()
         .filter(|link| link.outcome != TaskLinkOutcome::Dropped)

@@ -323,6 +323,38 @@ ALL-CAPS name) names it. Child bullets that are exactly one Task Link are
 that session's queued work. `bob capture` session operators (`=`, `+N`,
 `++N`, `x`) rewrite this section.
 
+### Events section and Event Tasks
+
+A canonical daily note may place one `## Events` section above
+`## Pomodoros`. Its rows describe that local day's calendar commitments. Bob
+recognizes an **Event Task** only inside this section of a canonical daily
+note: a checkbox task whose description starts with a 24-hour
+`**HHMM-HHMM**` span, optionally after a `#task` tag. Hand-written rows
+qualify too; Google Calendar is not required.
+
+```markdown
+## Events
+
+- [ ] #task **0800-0830** Product interview [root:: job] [type:: MEET] ^product-interview
+- **all day** School holiday
+- **0915-1000** Toddler class · *maybe*
+
+## Pomodoros
+
+- [ ] (**0800-0830** [t:: 30m]) — MEET
+  - [[#^product-interview]]
+```
+
+The span is local to the daily note's `timezone:` (or the host timezone).
+Hours are `00`–`23` and minutes are `00`–`59`; when the end is earlier than
+the start, the event crosses midnight. Context rows have no checkbox, so they
+are not Event Tasks. An Event Task may carry `[root:: NOTE]` to attribute its
+Pomodoro time to that area or project; `[type:: MEET]` is needed only when
+the root's suggested task type is not already `MEET`. Link an Event Task with
+its local block link under a Pomodoro.
+
+Contract: [Event Task](glossary.md#event-task).
+
 A `+` separates themes within a name: `WORK + ADMIN` has two themes. The
 theme catalog comes from canonical daily notes, with hide and color
 preferences in `.bob/themes/<host>.jsonl`. Hiding affects Recent suggestions;
