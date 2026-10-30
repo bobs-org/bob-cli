@@ -85,7 +85,7 @@ groups:
         order: 26
         reader: concepts/tasks-and-lanes.md
       - stem: task-tag-marks
-        summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill"
+        summary: "Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`"
         order: 27
       - stem: today-marks
         summary: "Today marks: a display-only tomato on task lines linked under today's open Pomodoros"

@@ -36,7 +36,7 @@ These pages specify behavior that Bob components and their tests must agree on.
 - [Task relations](../task-relations.md) — Task relations: directed LINKS edges, the generated LINKED FROM mirror, inert text mentions, and `~` / `~~` capture
 - [Move open tasks between notes](../task-move.md) — `bob task move` selection, preservation, link repair, guarded writes, and sync behavior
 - [Task Status Hooks](../task-status-hooks.md) — `bob task reconcile` Pomodoro-driven task status
-- [Task tag marks](../task-tag-marks.md) — Task tag marks: the teal hash glyph that replaces the `#task` pill
+- [Task tag marks](../task-tag-marks.md) — Task tag marks: the teal hash glyph that replaces the `#task` pill; explicit types render as colored `#TYPE`
 - [Today marks](../today-marks.md) — Today marks: a display-only tomato on task lines linked under today's open Pomodoros
 
 ## References

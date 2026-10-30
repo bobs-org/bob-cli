@@ -15,29 +15,39 @@ when a consumer exists).
 `removeGlobalFilter: false`), so about 3,400 task lines start with an
 accent-colored `#task` tag pill. That pill repeats on almost every
 line and adds the most visual noise. Every exact `#task` tag on a
-task line renders as one small teal identity hash glyph instead:
+task line renders as one small teal identity hash glyph instead.
+When the line has an explicit `[type:: X]` (or legacy `[theme:: X]`),
+the slot is the hash plus the type name in that type's ink, and the
+trailing field is folded away:
 
 ```text
 before: - [ ] #task Rename the queue input  ▮▮▮  + Sep 29  ⧗ today
 after:  - [ ] ⌗ Rename the queue input  ▮▮▮  + Sep 29  ⧗ today      (⌗ ≈ the teal identity hash glyph)
-        - [ ] Pack charger                                         (plain checklist: no glyph, unchanged)
+        - [ ] #FIX Significantly speed up sase commits               (explicit FIX in FIX ink)
+        - [ ] ⌗ Restart athena                                       (inherited BUILD: hash only)
+        - [ ] Pack charger                                           (plain checklist: no glyph, unchanged)
 dash.md Tasks results:  - [ ] Rename the queue input  ▮▮▮  + Sep 29   (tasks_results = hide: tag dropped)
 ```
 
-Hovering the glyph shows `#task · tracked task` plus the demote hint.
+Hovering the generic glyph shows `#task · tracked task` plus the demote hint.
+An explicit type shows `FIX · set on this task · … · Ctrl+Shift+P t to change`.
+An inherited type stays a plain hash whose tooltip reads `BUILD · from dev`.
 Moving the cursor into the glyph, or clicking it, reveals `#task`
-for editing.
+for editing; moving into the folded field reveals `[type:: X]`.
 
 ## Principles
 
 Display-only: the text `#task` stays the only stored form, and
 nothing writes the mark. Tasks, Dataview, bob-cli, and capture
 semantics are unchanged. Small but distinct: it repeats on every
-task line, so it uses no pill or resting background, and one
-constant identity ink that never encodes state. It
+task line, so it uses no pill or resting background. The hash is one
+constant teal identity ink until a task has an explicit type; then
+the name and ink encode that type. Ink never encodes lane, priority,
+freshness, or checkbox state. It
 is truthful, never guessing: a mark appears only on exact, whole
 `#task` tags on task lines; anything else stays Obsidian's normal tag
-pill. It is reversible: the cursor or a click reveals the raw tag,
+pill. With stale catalog data the generic glyph is shown rather than a
+confidently wrong type. It is reversible: the cursor or a click reveals the raw tag,
 source mode shows raw text, a session toggle restores the pills
 instantly, and without the plugin the vault looks exactly as it does
 today. There is one glyph definition, a CSS mask shared by every
@@ -99,6 +109,20 @@ bordered monospace chip the glyph never reads as. Defined on `body`:
 The theme hook `--bob-task-tag-color` is unset by default and still
 wins when set.
 
+When the task has an explicit type, that teal is replaced by the type
+ink for the type's hue slot. Defined on `.theme-light` and
+`.theme-dark` for each of the eight palette slots:
+
+```css
+--bob-type-ink-<slot>: color-mix(in srgb, var(--bob-hue-<slot>) 55%, var(--text-normal));
+```
+
+`--bob-task-tag-color` still wins when set. A node test computes WCAG
+contrast for 8 slots × {plain, Blocked tint, In Progress tint, Next
+tint} × {light, dark}; every cell is ≥ 4.5:1. Exempt and `auto`-muted
+hues use muted ink; unconfigured names use `--text-muted` with a
+dotted underline; repair uses `#?` in warning-orange.
+
 ## Anatomy and tones
 
 There are two hosts with **one shared rule set**, both gated by
@@ -139,17 +163,28 @@ and unprefixed `mask-image: var(--bob-task-tag-glyph)`,
 Cursor: `default` on the Live Preview widget (as in the family) and
 `pointer` on the `a.tag` host (it is a link). Transitions (`opacity`,
 `background-color`, 120ms) are off under `prefers-reduced-motion`.
-The theme hook `--bob-task-tag-color` is unset by default. The ink
-is constant: it names what the line is, never its state.
+The theme hook `--bob-task-tag-color` is unset by default. The generic
+hash ink names a tracked task, never its lane. When `data-bob-type` is
+set, CSS `::after` draws the name in `var(--font-interface)`, about
+0.8em, weight 600, letter-spacing 0.02em, on the text baseline, and
+the host grows past the 1.08em glyph square (`overflow: visible`).
 
 ## Tooltip
 
-The text is exactly `#task · tracked task` followed by
-`Ctrl+Shift+] to demote to a bullet` (lines joined with `\n`). It
-never contains `::`, because Dataview re-scans `innerHTML`. Exported
-as the `TASK_TAG_MARK_TOOLTIP` constant. `Ctrl+Shift+]` is
+The generic text is exactly `#task · tracked task` followed by
+`Ctrl+Shift+] to demote to a bullet` (lines joined with `\n`). An
+explicit type uses
+`FIX · set on this task · dev suggests BUILD · Ctrl+Shift+P t to change`.
+An inherited type uses `BUILD · from dev` on the plain glyph. A
+disagreeing ledger link uses
+`BUILD task under FIX · Ctrl+Shift+M to move · Ctrl+Shift+P t to retype`.
+None of these strings contain `::`, because Dataview re-scans
+`innerHTML`. Exported as `TASK_TAG_MARK_TOOLTIP`,
+`taskTagIdentityTooltip`, and `ledgerTypeDisagreeTooltip`.
+`Ctrl+Shift+]` is
 task-status-cycler's `toggle-obsidian-task` hotkey, the existing
-gesture that removes the checkbox and `#task`.
+gesture that removes the checkbox and `#task`. The aria label for an
+explicit type is `#task · type FIX`.
 
 ## Eligibility
 
@@ -188,8 +223,8 @@ gesture that removes the checkbox and `#task`.
   raw until you type the following space. The ledger snippet `#task
   [created::…]` (cursor between the two spaces) shows the glyph
   immediately. Mousedown places the cursor at the tag start and
-  focuses the editor; it never writes. Widget equality uses a
-  constant key, so marks never flicker. Rebuild on doc, viewport, or
+  focuses the editor; it never writes. Widget equality keys include type, hue, and state, so a retype
+  refreshes the mark and an unchanged type never flickers. Rebuild on doc, viewport, or
   selection changes, Live Preview or file switches, and the new
   `taskTagMarksRefresh` effect. A cheap
   `line.text.indexOf("#task")` prefilter runs before the task-line
@@ -197,7 +232,10 @@ gesture that removes the checkbox and `#task`.
 - **Rendered views**: a markdown post-processor (sort order 50)
   annotates eligible `a.tag` elements in place: it adds the class
   plus `aria-label` and `data-tooltip-position`, and never creates or
-  removes nodes. It is idempotent, and attributes survive Dataview's
+  removes nodes. When the type is shown it also sets `data-bob-type`,
+  `data-bob-type-hue`, and `data-bob-type-state`; CSS `::after` draws
+  the name, so the post-processor creates no extra nodes. It is
+  idempotent, and attributes survive Dataview's
   `innerHTML` round trip. It covers reading view, embeds, hover
   previews, canvas cards, and Dataview task lists.
 - **Coexistence**: ranges are disjoint from the freshness, priority,
@@ -342,6 +380,27 @@ results are CSS-only, the body class handles them instantly.
 `onunload` removes the body class and strips the annotations. When
 off, JS creates no marks.
 
+The command "Toggle inherited task types" (id
+`toggle-inherited-task-types`) is session-only and **off** by default.
+When on, inherited types render as `#BUILD` in a quieter ink (weight
+400, about 60% of explicit). When off, the hash stays and the tooltip
+still reads `BUILD · from dev`. Tasks query rows keep hiding the hash.
+
+The command "Toggle task type marks" (id `toggle-task-theme-marks`)
+keeps its id and now folds `[type::]` / `[theme::]` fields without a
+trailing pill. Session-name pills (ledger, pickers, Task Card, Day
+strip, Stats) stay. Notice copy is `Task type marks on` /
+`Task type marks off`.
+
+## Ledger agreement marks
+
+A live Task Link that disagrees with its task's type (D5) shows
+`#BUILD` before the link with a dashed warning-orange underline.
+In an entry with two or more type components, agreeing links show a
+quiet, underline-free `#BUILD` prefix. Inherited types are never
+prefixed. With stale cache the prefix is omitted. Clicking never
+writes.
+
 ## Rejected alternatives
 
 - **Hide `#task` entirely everywhere**: this erases the
@@ -436,6 +495,26 @@ PRE/POST checklist marks:
 | CK13 | `- [ ] #task #gtd #pre Brush teeth ^teeth`, Today-linked | 🍅 widget at offset 22 |
 | CK14 | `checklistKindForText` on `#gtd #pre` / `#GTD #Post` / `#gtd #pre #post` / `#gtd/pre` / `#pre, #gtd` | `pre` / `post` / `pre` / `null` / `pre` |
 
+Type identity (D11). `taskTagTypeFieldOf` / `taskTagIdentity*` / `ledgerTypeMarkKind`.
+Ink now encodes type when the field is explicit; lane, priority, freshness, and
+checkbox state still never tint the hash.
+
+| # | Input | Expected |
+| --- | --- | --- |
+| TI1 | `- [ ] #task Do [type:: FIX]` | field `FIX`; identity shown as `#FIX` in type ink; tooltip `FIX · set on this task · … · Ctrl+Shift+P t to change`; aria `#task · type FIX`; `[type:: FIX]` folded |
+| TI2 | `- [ ] #task Do [theme:: WRITE]` | same as TI1 for legacy `theme` |
+| TI3 | `- [ ] #task Restart athena` with inherited BUILD | hash only; tooltip `BUILD · from dev`; `data-bob-type` absent until inherited toggle is on |
+| TI4 | `- [ ] #task #ref Harness [type:: BUILD]` | book plus `BUILD` name |
+| TI5 | `- [ ] #task #gtd #pre Brush [type:: GTD]` | sunrise plus `GTD` name |
+| TI6 | `- [ ] #task Buy [type:: SNACK]` unconfigured | `#SNACK` in muted ink, dotted underline |
+| TI7 | `- [ ] #task Fix [type:: ???]` | `#?` repair mark; raw field visible |
+| TI8 | inherited toggle off / on | hash only / `#BUILD` in quieter ink |
+| LM1 | Task Link to a BUILD task under `— FIX` | `#BUILD` prefix, dashed orange underline |
+| LM2 | Task Link to a BUILD task under `— BUILD + FIX` | quiet `#BUILD` prefix, no underline |
+| LM3 | Task Link to an inherited-only task, or stale cache | no prefix |
+
+Contrast: 8 hue slots × {plain, Blocked, In Progress, Next} × {light, dark} all ≥ 4.5:1.
+
 Rendered views (fake DOM in tests):
 
 | #   | DOM                                                         | Expected                                                                            |
@@ -463,9 +542,13 @@ Rendered views (fake DOM in tests):
 
 - The teal ink reads clearly yet stays secondary to the title in
   light and dark themes.
+- An explicit `#FIX` reads as type ink, not as another tag pill, and
+  the trailing `[type:: FIX]` is gone.
 - The ink stays legible on Blocked (red tint), Next (green tint),
   and In Progress (yellow tint) lines, and sits well beside a
   `#prj` pill.
+- A BUILD task under a FIX Pomodoro shows a dashed `#BUILD` before
+  the Task Link.
 - The hover capsule appears in both Live Preview and reading view.
 - Plain checkboxes show no glyph.
 - The cursor or a click reveals `#task`, and typing `#task` stays raw
