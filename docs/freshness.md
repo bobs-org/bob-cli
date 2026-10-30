@@ -655,7 +655,8 @@ same default as any other generic stamp.
    stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
    answered. For a tickler, "not now" is a priority roll: press Alt+P to
-   take the Task Card's recommended roll or decay in one key. An immediate
+   take the Task Card's recommended roll or decay in one key; a task with
+   no priority takes P1. An immediate
    roll or decay uses the existing Ctrl+Enter path and advances the walk;
    when the recommendation is cancel, the card appears and a second Alt+P
    confirms it. A Next or Pending task still offers the optional Work Log
@@ -692,7 +693,7 @@ lengthen `next_interval` to 2–3 and leave Pending at 1.
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Alt+P takes the
-recommended roll or decay → next; a cancel requires a second press; use
+recommended roll or decay, or sets P1 when the task has no priority → next; a cancel requires a second press; use
 Ctrl+Shift+P `1`–`4` to choose a level); do today (Ctrl+Shift+Enter picks a Pomodoro / Alt+N → next); route an
 inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where it goes
 as the last step before writing, then answers → next); route to a
