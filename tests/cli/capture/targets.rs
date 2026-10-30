@@ -251,6 +251,91 @@ fn capture_targets_human_groups_and_summarizes_without_ansi() {
 }
 
 #[test]
+fn capture_targets_and_complete_skip_conflicts_directory() {
+    let temp = TempDir::new("bob-cli-capture-conflicts-excluded");
+    let vault = temp.path().join("vault");
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
+    write_file(&vault.join("area.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("_conflicts/proj.kellys-mbp-2026-10-23T224729-0400.md"),
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "status: wip\n",
+            "parent: \"[[area]]\"\n",
+            "---\n",
+            "- [ ] #task #prj Conflict copy ^prj\n",
+        ),
+    );
+
+    let targets = bob_command()
+        .arg("capture-targets")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("HOME", &home)
+        .output()
+        .expect("run bob capture-targets against conflict copy");
+    assert_success(&targets);
+    let targets_json: serde_json::Value =
+        serde_json::from_str(stdout(&targets).trim()).unwrap_or_else(|error| {
+            panic!(
+                "stdout should be JSON: {error}\n{}",
+                format_output(&targets)
+            )
+        });
+    let target_paths = targets_json["targets"]
+        .as_array()
+        .expect("targets array")
+        .iter()
+        .filter_map(|target| target["relative_path"].as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        target_paths
+            .iter()
+            .all(|path| !path.contains("_conflicts/")),
+        "capture-targets listed a _conflicts path: {target_paths:?}"
+    );
+
+    let query = "[[proj";
+    let complete = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(query.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .env("HOME", &home)
+        .arg("--")
+        .arg(query)
+        .output()
+        .expect("run bob capture-complete against conflict copy");
+    assert_success(&complete);
+    let complete_json: serde_json::Value = serde_json::from_str(
+        stdout(&complete).trim(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "stdout should be JSON: {error}\n{}",
+            format_output(&complete)
+        )
+    });
+    let candidates = complete_json["candidates"]
+        .as_array()
+        .expect("candidates array");
+    for candidate in candidates {
+        let path = candidate["path"].as_str().unwrap_or_default();
+        assert!(
+            !path.contains("_conflicts/"),
+            "capture-complete listed a _conflicts candidate: {candidate}"
+        );
+    }
+}
+
+#[test]
 fn capture_targets_empty_vault_still_lists_inbox_default() {
     let temp = TempDir::new("bob-cli-capture-targets-empty");
     let vault = temp.path().join("vault");

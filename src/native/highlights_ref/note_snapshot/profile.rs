@@ -2012,7 +2012,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         }
         let (outcome, tex) = render_snapshot_tables("");
         assert!(
-            tex.contains("BobTableRecords"),
+            tex.contains("\\begin{BobTableRecords}"),
             "prose table becomes records on the snapshot chain"
         );
         assert_eq!(
@@ -2068,7 +2068,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let (grid_outcome, grid_tex) =
             render_snapshot_tables("bob-tables: grid\n");
         assert!(
-            !grid_tex.contains("BobTableRecords"),
+            !grid_tex.contains("\\begin{BobTableRecords}"),
             "frontmatter grid keeps the prose table a grid"
         );
         assert_eq!(
