@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::model::{AttachmentKind, KeepNote};
-use crate::native::{capture, env as bob_env};
+use crate::native::{capture, env as bob_env, task_text_escape};
 
 /// One rendered Keep note as a vault task block.
 ///
@@ -134,109 +134,22 @@ pub(super) fn display_title(note: &KeepNote) -> String {
     raw_title(note).0
 }
 
-/// Escape free text for the task line: it sits mid-line, so only the
-/// token, comment, field, and block-id hazards apply.
+/// Escape free text for the task line (shared): it sits mid-line, so
+/// only the token, comment, field, and block-id hazards apply.
 pub(super) fn escape_task_text(text: &str) -> String {
-    let staged = text.replace("%%", "%&#37;");
-    let staged = escape_colon_runs(&staged);
-    let staged = escape_hash_task_token(&staged);
-    escape_trailing_block_id(&staged)
-}
-
-/// Escape every colon in any run of two or more colons
-/// (`:::` → `\:\:\:`). A non-overlapping replace leaves `::` in
-/// odd-length runs, so runs are scanned manually.
-fn escape_colon_runs(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == ':' {
-            let mut j = i;
-            while j < chars.len() && chars[j] == ':' {
-                j += 1;
-            }
-            if j - i >= 2 {
-                for _ in i..j {
-                    out.push_str("\\:");
-                }
-            } else {
-                out.push(':');
-            }
-            i = j;
-        } else {
-            out.push(chars[i]);
-            i += 1;
-        }
-    }
-    out
+    task_text_escape::escape_task_text(text)
 }
 
 /// Escape free text for a child bullet: the task-line escaping plus the
 /// leading-marker rule, since a child starts a fresh list item.
 pub(crate) fn escape_child_text(text: &str) -> String {
-    escape_leading_marker(&escape_task_text(text))
+    escape_leading_marker(&task_text_escape::escape_task_text(text))
 }
 
 static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(#{1,6}(\s|$)|>|\d+[.)](\s|$)|\||[+*-](\s|$))")
         .expect("valid leading-marker regex")
 });
-
-/// `\#task` for every whitespace-delimited `#task` token.
-///
-/// The Tasks global filter matches per whitespace token, so only exact
-/// tokens are phantom tasks; `#tasks` and `(#task)` stay literal. A
-/// manual scan (not a regex) keeps adjacent `#task #task` tokens working,
-/// since the crate has no look-ahead.
-fn escape_hash_task_token(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find("#task") {
-        let (before, after) = rest.split_at(index);
-        let after_tag = &after["#task".len()..];
-        let boundary =
-            |side: Option<char>| side.is_none_or(|c| c.is_whitespace());
-        escaped.push_str(before);
-        if boundary(before.chars().next_back())
-            && boundary(after_tag.chars().next())
-        {
-            escaped.push_str("\\#task");
-        } else {
-            escaped.push_str("#task");
-        }
-        rest = after_tag;
-    }
-    escaped.push_str(rest);
-    escaped
-}
-
-/// `\^id` when the text ends with a trailing ` ^id` block id.
-///
-/// Mirrors `collect_done::trailing_block_id_in_line`: the caret must
-/// start the text or follow any Unicode whitespace (NBSP included) and
-/// be followed only by block-id bytes.
-fn escape_trailing_block_id(text: &str) -> String {
-    let trimmed = text.trim_end();
-    let Some(caret) = trimmed.rfind('^') else {
-        return text.to_string();
-    };
-    let id = &trimmed[caret + 1..];
-    if id.is_empty()
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        || (caret > 0
-            && !trimmed[..caret]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_whitespace))
-    {
-        return text.to_string();
-    }
-    let trailing_ws = &text[trimmed.len()..];
-    format!("{}\\^{id}{trailing_ws}", &trimmed[..caret])
-}
 
 /// Backslash-escape a child-leading heading, quote, list, table
 /// marker, thematic break, or code fence.
@@ -849,8 +762,14 @@ mod tests {
         assert_eq!(escape_child_text("~~~"), "\\~~~");
         assert_eq!(escape_child_text("^abc"), "\\^abc");
         assert_eq!(escape_child_text("\u{a0}^abc"), "\u{a0}\\^abc");
-        assert_eq!(escape_colon_runs("a ::: b"), "a \\:\\:\\: b");
-        assert_eq!(escape_colon_runs("a :::: b"), "a \\:\\:\\:\\: b");
+        assert_eq!(
+            task_text_escape::escape_task_text("a ::: b"),
+            "a \\:\\:\\: b"
+        );
+        assert_eq!(
+            task_text_escape::escape_task_text("a :::: b"),
+            "a \\:\\:\\:\\: b"
+        );
     }
 
     #[test]

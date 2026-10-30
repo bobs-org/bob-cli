@@ -18,7 +18,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Google Calendar → daily-note Event Tasks: one read-only login \
              through gog, then list accepted events and preview their roots. \
-             Sync writes them above today's Pomodoros in a later phase.",
+             Sync writes them above today's Pomodoros, idempotently.",
         )
         .after_help(top_after_help())
         .disable_help_flag(true)
@@ -32,10 +32,11 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(logout_command())
+        .subcommand(sync_command())
 }
 
 fn top_after_help() -> &'static str {
-    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Store a Desktop-app client JSON first\n  bob gcal login -m           Browserless sign-in (paste the redirect URL)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
+    "Running `bob gcal` with no command runs `bob gcal list`.\n\nExamples:\n  bob gcal                    Show today's events and what sync would do\n  bob gcal -D tomorrow        List tomorrow in Bob's timezone\n  bob gcal -a -f json         Include omitted events as JSON\n  bob gcal login              One-time read-only Calendar consent\n  bob gcal login -c PATH      Store a Desktop-app client JSON first\n  bob gcal login -m           Browserless sign-in (paste the redirect URL)\n  bob gcal calendars          List calendars with ids for config\n  bob gcal doctor             Diagnose gog, the client, and the vault\n  bob gcal sync               Write today's Events and MEET links\n  bob gcal sync -d            Preview the exact Markdown a sync writes\n  bob gcal logout -y          Remove Bob's Calendar grant only\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH"
 }
 
 fn calendars_command() -> ClapCommand {
@@ -70,6 +71,29 @@ fn list_command() -> ClapCommand {
 
 fn list_after_help() -> &'static str {
     "`-a` also shows declined, unanswered, and out-of-scope events with their reasons. Root candidates are validated against the vault; warnings show why Bob fell back.\n\nExamples:\n  bob gcal\n  bob gcal list -D tomorrow\n  bob gcal list -D 2026-10-30 -f json\n  bob gcal list -a\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_NOW            Local datetime override for default day selection"
+}
+
+fn sync_command() -> ClapCommand {
+    ClapCommand::new("sync")
+        .about("Write one day's Events rows and MEET links")
+        .long_about(
+            "Write one day's Events rows and MEET links: reconcile one \
+             bounded, idempotent day (default today, `-D` for another day \
+             whose note exists). `-d` prints the exact unified diff of the \
+             plan and writes nothing. Never overwrites your edits.",
+        )
+        .after_help(sync_after_help())
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(day_arg())
+        .arg(dry_run_arg())
+        .arg(human_format_arg())
+        .arg(help_arg())
+        .arg(quiet_arg())
+}
+
+fn sync_after_help() -> &'static str {
+    "Examples:\n  bob gcal sync\n  bob gcal sync -D tomorrow\n  bob gcal sync -d\n  bob gcal sync -q\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gcal config; defaults to ~/.config/bob/config.yml\n  BOB_GCAL_GOG       gog executable replacing `gog` on PATH\n  BOB_NOW            Local datetime override for default day selection"
 }
 
 fn doctor_command() -> ClapCommand {
@@ -217,6 +241,22 @@ fn manual_arg() -> Arg {
         .short('m')
         .action(ArgAction::SetTrue)
         .help("Browserless sign-in: paste the redirect URL")
+}
+
+fn dry_run_arg() -> Arg {
+    Arg::new("dry-run")
+        .long("dry-run")
+        .short('d')
+        .action(ArgAction::SetTrue)
+        .help("Preview the exact Markdown a sync would write")
+}
+
+fn quiet_arg() -> Arg {
+    Arg::new("quiet")
+        .long("quiet")
+        .short('q')
+        .action(ArgAction::SetTrue)
+        .help("Print nothing on success, no-op, or waiting")
 }
 
 /// `doctor`/`login`/`logout` output format.
@@ -375,6 +415,39 @@ impl LoginArgs {
     }
 }
 
+/// Typed `sync` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncArgs {
+    pub bob_dir: Option<PathBuf>,
+    pub day: String,
+    pub dry_run: bool,
+    pub format: HumanFormat,
+    pub quiet: bool,
+}
+
+impl SyncArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            day: matches
+                .get_one::<OsString>("day")
+                .map(|value| value.to_string_lossy().trim().to_string())
+                .unwrap_or_else(|| "today".to_string()),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            quiet: matches.get_flag("quiet"),
+        }
+    }
+
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
+}
+
 /// Typed `logout` arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LogoutArgs {
@@ -461,6 +534,23 @@ mod tests {
         ));
         assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
         assert!(args.format.is_json());
+    }
+
+    #[test]
+    fn sync_args_pin_options() {
+        let args = SyncArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gcal", "sync", "-b", "~/vault", "-D", "tomorrow", "-d",
+                "-f", "json", "-q",
+            ],
+            "sync",
+        ));
+        assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
+        assert_eq!(args.day, "tomorrow");
+        assert!(args.dry_run);
+        assert!(args.format.is_json());
+        assert!(args.quiet);
+        assert_eq!(args.error_format(), "json");
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `bob gcal`: Google Calendar events as daily-note Event Tasks.
 //!
 //! The read-only `list` command previews the event snapshot and its roots;
-//! later phases add vault synchronization.
+//! `sync` writes the rows above today's Pomodoros, idempotently.
 
 mod calendars;
 mod classify;
@@ -9,17 +9,22 @@ pub(crate) mod cli;
 mod config;
 mod doctor;
 mod gog;
+mod journal;
 mod list;
 mod login;
 mod logout;
 mod model;
+mod plan;
+mod render;
 mod root;
+mod snapshot;
+mod sync;
 mod ui;
 
 use std::{ffi::OsString, iter};
 
 pub(crate) use cli::{
-    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs,
+    CalendarsArgs, DoctorArgs, ListArgs, LoginArgs, LogoutArgs, SyncArgs,
 };
 
 const COMMAND_NAME: &str = "bob gcal";
@@ -116,6 +121,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("logout", sub_matches)) => {
             logout::run(&LogoutArgs::from_matches(sub_matches))
+        }
+        Some(("sync", sub_matches)) => {
+            sync::run(&SyncArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

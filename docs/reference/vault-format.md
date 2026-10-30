@@ -353,7 +353,19 @@ Pomodoro time to that area or project; `[type:: MEET]` is needed only when
 the root's suggested task type is not already `MEET`. Link an Event Task with
 its local block link under a Pomodoro.
 
-Contract: [Event Task](glossary.md#event-task).
+`bob gcal sync` writes rows in this shape. A written Event Task carries a
+`📅` identity badge (Google's event link, also the adoption key), an optional
+`📹` join badge, and an optional `📍` maps badge for a non-URL location, then
+`[root::]`, then `[type:: MEET]` only when needed, then a `^block-id` minted
+from the bare title and unique within the note. A written context row carries
+the span (`**all day**` or `**HHMM-HHMM**`) plus optional `· *day N of M*`,
+`· *maybe*`, or `· *free*` tags and the `📅` badge. Event Tasks linked under
+today's MEET show `[*]`; a row first synced after its event ended shows
+`[ ]`. Titles are data: `#task`, trailing `^id`, `%%`, `::`, `🔁`, Tasks
+emoji, and leading markers are escaped or neutralized, and a resolved
+`@route` token is stripped from the title.
+
+Contract: [Event Task](glossary.md#event-task), [Bob Gcal](../gcal.md#sync).
 
 A `+` separates types within a name: `WORK + ADMIN` has two types. The
 type catalog comes from canonical daily notes, with hide and color

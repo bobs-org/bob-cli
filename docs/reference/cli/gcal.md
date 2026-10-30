@@ -9,7 +9,7 @@ description: "Project Google Calendar events onto today's daily note"
 Project Google Calendar events onto today's daily note
 
 ```text title="bob gcal --help"
-Google Calendar → daily-note Event Tasks: one read-only login through gog, then list accepted events and preview their roots. Sync writes them above today's Pomodoros in a later phase.
+Google Calendar → daily-note Event Tasks: one read-only login through gog, then list accepted events and preview their roots. Sync writes them above today's Pomodoros, idempotently.
 
 Usage: bob gcal [OPTIONS] [COMMAND]
 
@@ -19,6 +19,7 @@ Commands:
   list       List a local day of events and show how Bob would classify them
   login      One-time read-only Google Calendar consent through gog
   logout     Remove Bob's Calendar grant only; prints the Google revoke URL
+  sync       Write one day's Events rows and MEET links
   help       Print this message or the help of the given subcommand(s)
 
 Options:
@@ -53,6 +54,8 @@ Examples:
   bob gcal login -m           Browserless sign-in (paste the redirect URL)
   bob gcal calendars          List calendars with ids for config
   bob gcal doctor             Diagnose gog, the client, and the vault
+  bob gcal sync               Write today's Events and MEET links
+  bob gcal sync -d            Preview the exact Markdown a sync writes
   bob gcal logout -y          Remove Bob's Calendar grant only
 
 Environment:

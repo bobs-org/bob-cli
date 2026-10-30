@@ -1,0 +1,849 @@
+//! `bob gcal sync`: one bounded, idempotent reconciliation of one day.
+//!
+//! Fetch outside any lock; any failure means the snapshot is
+//! incomplete, so write nothing and exit 1. Then take the vault lock,
+//! re-read and re-plan, write through preimage-checked
+//! `write_staged_files` with a single retry, and append the journal
+//! only after the note write succeeds.
+
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+
+use chrono::{NaiveDate, Timelike};
+use serde_json::{json, Value};
+
+use super::{
+    classify::{self, Inclusion},
+    config::GcalConfig,
+    journal,
+    model::EventDateTime,
+    plan::{self, PlannedOccurrence},
+    render,
+    snapshot::{self},
+    ui, GcalError, SyncArgs,
+};
+use crate::native::{
+    capture::{write_staged_files, CaptureFailureKind, StagedTextFile},
+    env as bob_env, ob,
+    pomodoro::pomodoros_section_range,
+    pref_journal,
+    style::Styler,
+};
+
+pub(crate) fn run(args: &SyncArgs) -> i32 {
+    let format = args.error_format();
+    match sync(args) {
+        Ok(report) => {
+            print_report(&report, args);
+            0
+        }
+        Err(error) => ui::report_error("sync", &error, format),
+    }
+}
+
+struct ReportRow {
+    action: &'static str,
+    kind: &'static str,
+    time: String,
+    title: String,
+    root: Option<String>,
+    source: Option<String>,
+}
+
+struct SyncReport {
+    day: NaiveDate,
+    path: String,
+    status: &'static str,
+    rows: Vec<ReportRow>,
+    entry_line: Option<usize>,
+    entry_created: bool,
+    links_added: usize,
+    warnings: Vec<String>,
+    quiet: bool,
+    json: bool,
+    diff: Option<String>,
+}
+
+fn sync(args: &SyncArgs) -> Result<SyncReport, GcalError> {
+    let config = GcalConfig::resolve()?;
+    let host = journal::host_label();
+    if !args.dry_run
+        && let Some(writer) = config.writer()
+        && writer != host
+    {
+        return Err(GcalError::setup(
+            "writer",
+            format!("this host is {host}; gcal.writer is {writer}"),
+        )
+        .with_hint(&format!(
+            "run `bob gcal sync` on {writer}, or set gcal.writer: {host}"
+        )));
+    }
+    let today = bob_env::current_datetime().date();
+    let day = classify::resolve_day(&args.day, today)?;
+    let is_today = day == today;
+    let vault = args.bob_dir();
+
+    // Fetch outside any lock; an incomplete snapshot writes nothing.
+    let snapshot = snapshot::fetch_day(vault, &config, day)?;
+    let vault = snapshot.vault.clone();
+    let day = snapshot.day;
+    let daily_rel = snapshot.daily_rel.clone();
+    let note_path = vault.join(&daily_rel);
+    let display_path = display_rel(&vault, &note_path);
+
+    let contents = match std::fs::read_to_string(&note_path) {
+        Ok(contents) => contents,
+        Err(_) => {
+            return waiting(
+                args,
+                &host,
+                day,
+                &display_path,
+                &journal_warnings(&vault)?,
+            );
+        }
+    };
+    let refs: Vec<&str> = contents.lines().collect();
+    if pomodoros_section_range(&refs).is_none() {
+        return waiting(
+            args,
+            &host,
+            day,
+            &display_path,
+            &journal_warnings(&vault)?,
+        );
+    }
+
+    let (journal_state, mut warnings, _) = journal::load_state(&vault)
+        .map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("read the gcal journal: {error}"),
+            )
+        })?;
+    let now = bob_env::current_datetime();
+    let mut occurrences = Vec::new();
+    for (occurrence, warning) in
+        build_occurrences(&snapshot, &vault, &daily_rel, is_today, &now)
+    {
+        if let Some(warning) = warning {
+            warnings.push(warning);
+        }
+        occurrences.push(occurrence);
+    }
+
+    let plan = plan::plan_sync(&plan::SyncPlanInput {
+        contents: &contents,
+        is_today,
+        occurrences: occurrences.clone(),
+        journal: &journal_state,
+        day_string: day.to_string(),
+    });
+
+    if args.dry_run {
+        let diff = unified_diff(&contents, &plan.contents, &display_path);
+        return Ok(SyncReport {
+            day,
+            path: display_path,
+            status: "dry_run",
+            rows: report_rows(&plan),
+            entry_line: plan.pomodoro_entry_line,
+            entry_created: plan.pomodoro_created,
+            links_added: plan.links_added.len(),
+            warnings,
+            quiet: args.quiet,
+            json: args.format.is_json(),
+            diff: Some(diff),
+        });
+    }
+
+    if !plan.changed {
+        let report = SyncReport {
+            day,
+            path: display_path.clone(),
+            status: "unchanged",
+            rows: Vec::new(),
+            entry_line: None,
+            entry_created: false,
+            links_added: 0,
+            warnings,
+            quiet: args.quiet,
+            json: args.format.is_json(),
+            diff: None,
+        };
+        record_status(&host, day, "unchanged", &report, None);
+        return Ok(report);
+    }
+
+    // Take the vault lock, re-read and re-plan, then write through the
+    // preimage-checked staged writer with a single retry.
+    let styler = Styler::detect();
+    let _lock = match ob::acquire_lock_waiting(Duration::from_secs(30), || {
+        eprintln!(
+            "{}",
+            styler.dim("waiting for another vault maintenance run…")
+        );
+    }) {
+        Ok(lock) => lock,
+        Err(error) => {
+            return Err(GcalError::runtime(
+                "lock",
+                format!("acquire the vault lock: {error}"),
+            )
+            .with_hint("another run held the lock for 30 s; try again"));
+        }
+    };
+    let mut plan = plan;
+    let mut current = contents.clone();
+    for attempt in 0..2 {
+        if plan.contents == current {
+            // Journal-only change (tombstones, adoptions): the note
+            // is already byte-identical, so write nothing to it.
+            break;
+        }
+        let staged = StagedTextFile {
+            target: note_path.clone(),
+            target_existed: true,
+            original_target: current.clone(),
+            updated_target: plan.contents.clone(),
+        };
+        match write_staged_files(std::slice::from_ref(&staged)) {
+            Ok(()) => break,
+            Err(error)
+                if error.typed == Some(CaptureFailureKind::NoteChanged)
+                    && attempt == 0 =>
+            {
+                current =
+                    std::fs::read_to_string(&note_path).map_err(|error| {
+                        GcalError::runtime(
+                            "note",
+                            format!("re-read {}: {error}", note_path.display()),
+                        )
+                    })?;
+                plan = plan::plan_sync(&plan::SyncPlanInput {
+                    contents: &current,
+                    is_today,
+                    occurrences: occurrences.clone(),
+                    journal: &journal_state,
+                    day_string: day.to_string(),
+                });
+                if !plan.changed {
+                    let report = SyncReport {
+                        day,
+                        path: display_path.clone(),
+                        status: "unchanged",
+                        rows: Vec::new(),
+                        entry_line: None,
+                        entry_created: false,
+                        links_added: 0,
+                        warnings,
+                        quiet: args.quiet,
+                        json: args.format.is_json(),
+                        diff: None,
+                    };
+                    record_status(&host, day, "unchanged", &report, None);
+                    return Ok(report);
+                }
+            }
+            Err(error) => {
+                return Err(GcalError::runtime(
+                    "note",
+                    format!("write {}: {}", note_path.display(), error.message),
+                ));
+            }
+        }
+    }
+
+    // Append the journal only after the note write succeeds.
+    append_journal(&vault, &host, &plan, &display_path, day)?;
+
+    let report = SyncReport {
+        day,
+        path: display_path,
+        status: "written",
+        rows: report_rows(&plan),
+        entry_line: plan.pomodoro_entry_line,
+        entry_created: plan.pomodoro_created,
+        links_added: plan.links_added.len(),
+        warnings,
+        quiet: args.quiet,
+        json: args.format.is_json(),
+        diff: None,
+    };
+    record_status(&host, day, "written", &report, None);
+    Ok(report)
+}
+
+fn waiting(
+    args: &SyncArgs,
+    host: &str,
+    day: NaiveDate,
+    display_path: &str,
+    warnings: &[String],
+) -> Result<SyncReport, GcalError> {
+    let report = SyncReport {
+        day,
+        path: display_path.to_string(),
+        status: "waiting",
+        rows: Vec::new(),
+        entry_line: None,
+        entry_created: false,
+        links_added: 0,
+        warnings: warnings.to_vec(),
+        quiet: args.quiet,
+        json: args.format.is_json(),
+        diff: None,
+    };
+    if !args.dry_run {
+        record_status(host, day, "waiting", &report, None);
+    }
+    Ok(report)
+}
+
+fn journal_warnings(vault: &std::path::Path) -> Result<Vec<String>, GcalError> {
+    journal::load_state(vault)
+        .map(|(_, warnings, _)| warnings)
+        .map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("read the gcal journal: {error}"),
+            )
+        })
+}
+
+/// Build time-ordered plan occurrences from the snapshot, deciding
+/// roots, the `[type:: MEET]` field, badges, span hashes, and MEET
+/// eligibility. Returns each occurrence with its root warnings.
+fn build_occurrences(
+    snapshot: &snapshot::DaySnapshot,
+    vault: &std::path::Path,
+    daily_rel: &std::path::Path,
+    is_today: bool,
+    now: &chrono::NaiveDateTime,
+) -> Vec<(PlannedOccurrence, Option<String>)> {
+    let mut out = Vec::new();
+    for event in &snapshot.events {
+        if matches!(event.inclusion, Inclusion::Omitted(_)) {
+            continue;
+        }
+        let task = event.inclusion == Inclusion::Task;
+        let (all_day, start_min, time_label) =
+            row_time(&snapshot.window, &event.event);
+        let root_value =
+            event.root.as_ref().and_then(|root| root.value.clone());
+        let root_source =
+            event.root.as_ref().and_then(|root| root.source.clone());
+        let needs_type = if task {
+            needs_meet_type(
+                vault,
+                daily_rel,
+                &time_label,
+                &event.event.title,
+                root_value.as_deref(),
+            )
+        } else {
+            false
+        };
+        let badges = render::badge_text(
+            event.event.html_link.as_deref(),
+            event.event.join_link.as_deref(),
+            event.event.location.as_deref(),
+        );
+        let mut spans = BTreeMap::new();
+        spans.insert("time".to_string(), journal::span_hash(&time_label));
+        spans.insert(
+            "title".to_string(),
+            journal::span_hash(&event.event.title),
+        );
+        spans.insert("badges".to_string(), journal::span_hash(&badges));
+        let qualifier = if task {
+            None
+        } else {
+            context_qualifier(event.inclusion.reason())
+        };
+        let link_eligible =
+            task && is_today && !has_ended(&event.event, &snapshot.window, now);
+        let warnings = event
+            .root
+            .as_ref()
+            .map(|root| {
+                if root.warnings.is_empty() {
+                    None
+                } else {
+                    Some(
+                        root.warnings
+                            .iter()
+                            .map(|warning| {
+                                format!(
+                                    "root for {}: {warning}",
+                                    event.event.title
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    )
+                }
+            })
+            .unwrap_or(None);
+        out.push((
+            PlannedOccurrence {
+                calendar_id: event.event.key.calendar_id.clone(),
+                event_id: event.event.key.event_id.clone(),
+                ical_uid: event.event.ical_uid.clone(),
+                series_id: event.event.series_id.clone(),
+                id_hint: event.event.title.clone(),
+                task,
+                time_label,
+                title: event.event.title.clone(),
+                html_link: event.event.html_link.clone(),
+                join_link: event.event.join_link.clone(),
+                location: event.event.location.clone(),
+                root: root_value,
+                source: root_source,
+                qualifier,
+                spans,
+                needs_type,
+                link_eligible,
+                all_day,
+                start_min,
+            },
+            warnings,
+        ));
+    }
+    out
+}
+
+/// `(all_day, start_min, time_label)` for one event in vault-local time.
+fn row_time(
+    window: &classify::DayWindow,
+    event: &super::model::GcalEvent,
+) -> (bool, i32, String) {
+    match (&event.start, &event.end) {
+        (EventDateTime::AllDay(_), EventDateTime::AllDay(_)) => {
+            (true, 0, "all day".to_string())
+        }
+        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
+            let local_start = window.local(start);
+            let local_end = window.local(end);
+            let label = format!(
+                "{:02}{:02}-{:02}{:02}",
+                local_start.hour(),
+                local_start.minute(),
+                local_end.hour(),
+                local_end.minute(),
+            );
+            let start_min =
+                local_start.hour() as i32 * 60 + local_start.minute() as i32;
+            (false, start_min, label)
+        }
+        _ => (true, 0, "all day".to_string()),
+    }
+}
+
+fn needs_meet_type(
+    vault: &std::path::Path,
+    daily_rel: &std::path::Path,
+    time_label: &str,
+    title: &str,
+    root: Option<&str>,
+) -> bool {
+    let mut probe = format!("- [ ] #task **{time_label}** {title}");
+    if let Some(root) = root {
+        probe = crate::native::task_root::set_task_root(&probe, root);
+    }
+    render::needs_meet_type(vault, daily_rel, &probe)
+}
+
+/// Whether the timed event already ended at sync time, in vault-local
+/// wall time.
+fn has_ended(
+    event: &super::model::GcalEvent,
+    window: &classify::DayWindow,
+    now: &chrono::NaiveDateTime,
+) -> bool {
+    match &event.end {
+        EventDateTime::Timed(end) => window.local(end) <= *now,
+        EventDateTime::AllDay(_) => false,
+    }
+}
+
+/// Context-row qualifier from the inclusion reason.
+fn context_qualifier(reason: Option<&str>) -> Option<String> {
+    match reason {
+        None | Some("all-day") => None,
+        Some(reason) => reason
+            .strip_prefix("all-day · ")
+            .map(str::to_string)
+            .or_else(|| Some(reason.to_string())),
+    }
+}
+
+fn report_rows(plan: &plan::SyncPlan) -> Vec<ReportRow> {
+    let mut rows = Vec::new();
+    for added in &plan.rows_added {
+        rows.push(ReportRow {
+            action: "added",
+            kind: if added.row_kind == "task" {
+                "task"
+            } else {
+                "context"
+            },
+            time: added.time_label.clone(),
+            title: added.title.clone(),
+            root: added.root.clone(),
+            source: added.source.clone(),
+        });
+    }
+    for adopted in &plan.rows_adopted {
+        rows.push(ReportRow {
+            action: "adopted",
+            kind: if adopted.row_kind == "task" {
+                "task"
+            } else {
+                "context"
+            },
+            time: adopted.time_label.clone(),
+            title: adopted.title.clone(),
+            root: adopted.root.clone(),
+            source: adopted.source.clone(),
+        });
+    }
+    for _ in &plan.rows_gone {
+        rows.push(ReportRow {
+            action: "removed",
+            kind: "task",
+            time: String::new(),
+            title: String::new(),
+            root: None,
+            source: None,
+        });
+    }
+    rows
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_row_record(
+    vault: &std::path::Path,
+    host: &str,
+    day: &str,
+    display_path: &str,
+    calendar_id: &str,
+    event_id: &str,
+    ical_uid: Option<&str>,
+    series_id: Option<&str>,
+    block_id: &str,
+    row_kind: &str,
+    spans: &BTreeMap<String, String>,
+    root: Option<&str>,
+    source: Option<&str>,
+) -> Result<(), GcalError> {
+    journal::append_row(
+        vault,
+        host,
+        &journal::NewRow {
+            calendar_id: calendar_id.to_string(),
+            event_id: event_id.to_string(),
+            ical_uid: ical_uid.map(str::to_string),
+            series_id: series_id.map(str::to_string),
+            day: day.to_string(),
+            path: display_path.to_string(),
+            block_id: block_id.to_string(),
+            row_kind: row_kind.to_string(),
+            spans: spans.clone(),
+            root: root.map(str::to_string),
+            source: source.map(str::to_string),
+        },
+    )
+    .map(|_| ())
+    .map_err(|error| {
+        GcalError::runtime(
+            "journal",
+            format!("append the gcal journal: {error}"),
+        )
+    })
+}
+
+fn append_journal(
+    vault: &std::path::Path,
+    host: &str,
+    plan: &plan::SyncPlan,
+    display_path: &str,
+    day: NaiveDate,
+) -> Result<(), GcalError> {
+    let day_string = day.to_string();
+    for added in &plan.rows_added {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &added.calendar_id,
+            &added.event_id,
+            added.ical_uid.as_deref(),
+            added.series_id.as_deref(),
+            &added.block_id,
+            &added.row_kind,
+            &added.spans,
+            added.root.as_deref(),
+            added.source.as_deref(),
+        )?;
+    }
+    for adopted in &plan.rows_adopted {
+        append_row_record(
+            vault,
+            host,
+            &day_string,
+            display_path,
+            &adopted.calendar_id,
+            &adopted.event_id,
+            adopted.ical_uid.as_deref(),
+            adopted.series_id.as_deref(),
+            &adopted.block_id,
+            &adopted.row_kind,
+            &adopted.spans,
+            adopted.root.as_deref(),
+            adopted.source.as_deref(),
+        )?;
+    }
+    for adopted in &plan.rows_adopted {
+        if adopted.link_adopted {
+            journal::append_mark(
+                vault,
+                host,
+                "gcal.link",
+                &journal::NewMark {
+                    calendar_id: adopted.calendar_id.clone(),
+                    event_id: adopted.event_id.clone(),
+                    day: day_string.clone(),
+                    block_id: Some(adopted.block_id.clone()),
+                    reason: None,
+                },
+            )
+            .map_err(|error| {
+                GcalError::runtime(
+                    "journal",
+                    format!("append the gcal journal: {error}"),
+                )
+            })?;
+        }
+    }
+    for gone in &plan.rows_gone {
+        journal::append_mark(
+            vault,
+            host,
+            "gcal.gone",
+            &journal::NewMark {
+                calendar_id: gone.calendar_id.clone(),
+                event_id: gone.event_id.clone(),
+                day: day_string.clone(),
+                block_id: Some(gone.block_id.clone()),
+                reason: Some("line_removed".to_string()),
+            },
+        )
+        .map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("append the gcal journal: {error}"),
+            )
+        })?;
+    }
+    for link in &plan.links_added {
+        journal::append_mark(
+            vault,
+            host,
+            "gcal.link",
+            &journal::NewMark {
+                calendar_id: link.calendar_id.clone(),
+                event_id: link.event_id.clone(),
+                day: day_string.clone(),
+                block_id: Some(link.block_id.clone()),
+                reason: None,
+            },
+        )
+        .map_err(|error| {
+            GcalError::runtime(
+                "journal",
+                format!("append the gcal journal: {error}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn record_status(
+    host: &str,
+    day: NaiveDate,
+    outcome: &str,
+    report: &SyncReport,
+    error: Option<String>,
+) {
+    let tasks_added = report
+        .rows
+        .iter()
+        .filter(|row| row.action == "added" && row.kind == "task")
+        .count();
+    let context_added = report
+        .rows
+        .iter()
+        .filter(|row| row.action == "added" && row.kind == "context")
+        .count();
+    let _ = journal::write_status(&journal::SyncStatus {
+        ts: pref_journal::event_timestamp(),
+        host: host.to_string(),
+        day: day.to_string(),
+        outcome: outcome.to_string(),
+        tasks_added,
+        context_added,
+        links_added: report.links_added,
+        error,
+    });
+}
+
+fn display_rel(vault: &std::path::Path, path: &PathBuf) -> String {
+    path.strip_prefix(vault)
+        .map(|rel| rel.display().to_string().replace('\\', "/"))
+        .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn print_report(report: &SyncReport, _args: &SyncArgs) {
+    if report.json {
+        print_json(report);
+    } else if let Some(diff) = report.diff.as_deref() {
+        print!("{diff}");
+    } else {
+        print_human(report);
+    }
+}
+
+fn print_json(report: &SyncReport) {
+    let rows: Vec<Value> = report
+        .rows
+        .iter()
+        .map(|row| {
+            json!({
+                "action": row.action,
+                "kind": row.kind,
+                "time": row.time,
+                "title": row.title,
+                "root": row.root,
+                "source": row.source,
+            })
+        })
+        .collect();
+    println!(
+        "{}",
+        json!({
+            "schema_version": 1,
+            "ok": true,
+            "day": report.day.to_string(),
+            "path": report.path,
+            "status": report.status,
+            "rows": rows,
+            "pomodoro": {
+                "entry_line": report.entry_line,
+                "created": report.entry_created,
+                "links_added": report.links_added,
+            },
+            "warnings": report.warnings,
+        })
+    );
+}
+
+/// Unified diff of the dry-run plan, `---`/`+++` plus `@@` hunks.
+pub(crate) fn unified_diff(old: &str, new: &str, path: &str) -> String {
+    let diff = similar::TextDiff::from_lines(old, new);
+    let mut out = format!("--- {path}\n+++ {path}\n");
+    let mut unified = diff.unified_diff();
+    unified.context_radius(3);
+    for hunk in unified.iter_hunks() {
+        out.push_str(&format!("{}\n", hunk.header()));
+        for change in hunk.iter_changes() {
+            let value = change.value().trim_end_matches(['\r', '\n']);
+            out.push_str(&format!("{}{value}\n", change.tag()));
+        }
+    }
+    out
+}
+
+fn print_human(report: &SyncReport) {
+    if report.quiet {
+        return;
+    }
+    let styler = Styler::detect();
+    if report.status == "waiting" {
+        println!("bob gcal sync · {}", report.path);
+        println!("waiting for {}", report.path);
+        return;
+    }
+    println!("bob gcal sync · {}", report.path);
+    for row in &report.rows {
+        let sigil = match row.action {
+            "added" => "+",
+            "adopted" => "=",
+            _ => "-",
+        };
+        let time = human_time(&row.time);
+        let root = row
+            .root
+            .as_deref()
+            .map(|root| format!("  ● {root}"))
+            .unwrap_or_default();
+        let source = row
+            .source
+            .as_deref()
+            .map(|source| format!("  via {source}"))
+            .unwrap_or_default();
+        let detail = match row.action {
+            "removed" => "removed by you".to_string(),
+            _ => format!("{time}  {}{root}{source}", row.title),
+        };
+        println!("  {sigil} {:<7} {detail}", row.kind);
+    }
+    if report.links_added > 0 {
+        let made = if report.entry_created { "created " } else { "" };
+        println!(
+            "  {} MEET     {}() — MEET · linked {}",
+            if report.entry_created { "+" } else { "=" },
+            made,
+            report.links_added,
+        );
+    }
+    let tasks = report
+        .rows
+        .iter()
+        .filter(|row| row.action == "added" && row.kind == "task")
+        .count();
+    let context = report
+        .rows
+        .iter()
+        .filter(|row| row.action == "added" && row.kind == "context")
+        .count();
+    let summary = if report.status == "unchanged" {
+        "✓ Events unchanged · Pomodoros unchanged".to_string()
+    } else {
+        format!(
+            "✓ Events +{tasks} tasks, +{context} context · Pomodoros +{} entry, +{} links",
+            usize::from(report.entry_created),
+            report.links_added,
+        )
+    };
+    println!("{summary}");
+    for warning in &report.warnings {
+        eprintln!("{}", styler.dim(&format!("warning: {warning}")));
+    }
+}
+
+/// `0800-0830` → `08:00–08:30`; `all day` stays as written.
+fn human_time(time: &str) -> String {
+    if time.len() == 9 && time.as_bytes().get(4) == Some(&b'-') {
+        format!(
+            "{}:{}–{}:{}",
+            &time[..2],
+            &time[2..4],
+            &time[5..7],
+            &time[7..9]
+        )
+    } else {
+        time.to_string()
+    }
+}

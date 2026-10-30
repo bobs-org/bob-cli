@@ -132,7 +132,9 @@ fn a_page_failure_or_remaining_token_fails_the_whole_snapshot() {
 fn bare_gcal_explains_how_to_connect_before_login() {
     let env = GcalEnv::new("bob-cli-gcal-not-connected");
     env.prepare_healthy_vault();
-    env.write_config("timezone: America/New_York\ngcal:\n  writer: test-host\n");
+    env.write_config(
+        "timezone: America/New_York\ngcal:\n  writer: test-host\n",
+    );
     let fake = FakeGog::new(&env, "fake-gog").scenario("not_logged_in");
     let mut command = env.command();
     let output = fake

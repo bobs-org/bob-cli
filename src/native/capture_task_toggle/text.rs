@@ -1,6 +1,6 @@
 use crate::native::capture::{leading_spaces_or_tabs_len, LineSpan};
 
-pub(super) fn insert_line_before(
+pub(crate) fn insert_line_before(
     content: &str,
     lines: &[LineSpan<'_>],
     at_index: usize,
@@ -211,7 +211,7 @@ fn line_has_crlf(content: &str, lines: &[LineSpan<'_>], index: usize) -> bool {
 /// including `after_index` being the last line when the file *does* end
 /// with a newline -- needs no special-casing, since `content[insert..]` is
 /// already empty there).
-pub(super) fn insert_line_after(
+pub(crate) fn insert_line_after(
     content: &str,
     lines: &[LineSpan<'_>],
     after_index: usize,

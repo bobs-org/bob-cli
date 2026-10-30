@@ -11,6 +11,7 @@ use super::super::{
 use super::{
     config::GcalConfig,
     gog::{Gog, CLIENT},
+    journal,
     root::validate_root_candidate,
     ui, DoctorArgs, GcalError,
 };
@@ -251,6 +252,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
     checks.push(today_check(&bob_dir));
     checks.push(journal_check(&bob_dir));
     checks.push(writer_check(config.writer(), &host));
+    checks.push(last_sync_check());
     finish(args, &host, checks)
 }
 
@@ -399,6 +401,31 @@ fn journal_check(bob_dir: &Path) -> Check {
     }
 }
 
+fn last_sync_check() -> Check {
+    let Some(status) = journal::read_status() else {
+        return skipped("last_sync", "never synced");
+    };
+    if status.outcome == "waiting" {
+        return Check {
+            id: "last_sync",
+            status: CheckStatus::Warn,
+            summary: format!("last run waited for {}", status.day),
+            fix: Some("open the daily note in Obsidian, then sync".to_string()),
+        };
+    }
+    Check {
+        id: "last_sync",
+        status: CheckStatus::Ok,
+        summary: format!(
+            "synced {} on {} · +{} tasks",
+            journal::ago(&status.ts),
+            status.host,
+            status.tasks_added,
+        ),
+        fix: None,
+    }
+}
+
 fn writer_check(configured: Option<&str>, host: &str) -> Check {
     match configured {
         None => Check {
@@ -437,6 +464,7 @@ fn display_path(path: &Path, bob_dir: &Path) -> String {
 fn human_label(id: &str) -> &str {
     match id {
         "default_root" => "default root",
+        "last_sync" => "last sync",
         other => other,
     }
 }

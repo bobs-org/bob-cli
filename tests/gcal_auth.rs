@@ -306,9 +306,14 @@ fn doctor_json_healthy_setup() {
             "today",
             "journal",
             "writer",
+            "last_sync",
         ]
     );
     for check in checks {
+        if check["id"] == "last_sync" {
+            assert_eq!(check["status"], "skip", "expected skip: {check}");
+            continue;
+        }
         assert_eq!(check["status"], "ok", "expected ok: {check}");
     }
 }

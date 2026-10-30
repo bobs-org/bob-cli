@@ -79,7 +79,22 @@ The table shows id, name, access role, colour, whether Bob will sync it,
 and the mapped root. Put those ids under `gcal.calendars`. `primary` matches
 the account's primary calendar.
 
-## 4. Remove the grant
+## 4. Preview, then run the first sync
+
+```bash
+bob gcal sync -d
+bob gcal sync
+```
+
+The preview prints the exact unified diff of the plan and writes nothing.
+The write adds a `## Events` section above `## Pomodoros`, one row per
+accepted event in time order, plus a `() — MEET` placeholder carrying a link
+per unended meeting. Meetings that already ended arrive as `[ ]` rows with no
+link; later meetings arrive `[*]` and linked. Run `bob gcal sync` again to
+confirm the second run is byte-identical and appends nothing, then
+`bob gcal doctor` to see the `last sync` check go green.
+
+## 5. Remove the grant
 
 ```bash
 bob gcal logout -y

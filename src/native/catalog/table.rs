@@ -902,6 +902,19 @@ pub(crate) const ENTRIES: &[Row] = &[
     },
     Row {
         network: true,
+        invalidates: &["tasks"],
+        ..writes(
+            "gcal-sync",
+            &["gcal", "sync"],
+            "Sync Calendar events to today",
+            &["calendar", "google", "gcal", "events", "sync"],
+            Policy::PreviewFirst,
+            Some(DRY_RUN),
+            300,
+        )
+    },
+    Row {
+        network: true,
         ..reads(
             "gkeep-list",
             &["gkeep", "list"],

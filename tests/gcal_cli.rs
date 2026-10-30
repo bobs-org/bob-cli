@@ -54,6 +54,7 @@ fn top_help_pins_the_command_surface() {
         ("list", "List a local day of events"),
         ("login", "read-only Google Calendar consent"),
         ("logout", "Remove Bob's Calendar grant"),
+        ("sync", "Events rows and MEET links"),
     ] {
         assert!(
             help.contains(subcommand),

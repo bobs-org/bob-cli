@@ -600,7 +600,7 @@ pub(crate) fn find_movable_task_links<'a>(
 /// Insert `block_link` as a child of the entry at `entry_line_index`,
 /// skipping insertion when a matching link is already among that entry's
 /// children (idempotence).
-pub(super) fn insert_link_into_entry(
+pub(crate) fn insert_link_into_entry(
     day_contents: &str,
     lines: &[LineSpan<'_>],
     entry_line_index: usize,

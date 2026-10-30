@@ -1,12 +1,14 @@
 # Bob Gcal
 
 `bob gcal` projects Google Calendar events onto today's daily note as Event
-Tasks. This page covers the read-only event list and one-time setup through
-[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0). `list` is the bare
-default; a later phase adds vault synchronization.
+Tasks. This page covers one-time setup through
+[gog](https://github.com/openclaw/gogcli) (≥ v0.44.0), the read-only event
+list, and the vault synchronization that writes Event Tasks above today's
+Pomodoros. `list` is the bare default.
 
 Typical order: `bob gcal login` once, `bob gcal doctor` to confirm the
-checklist, `bob gcal calendars` to copy calendar ids into config. Tests never
+checklist, `bob gcal calendars` to copy calendar ids into config, then
+`bob gcal sync` to write today's Events. Tests never
 touch Google: set `BOB_GCAL_GOG` to a fake executable.
 
 ## Contents
@@ -20,6 +22,7 @@ touch Google: set `BOB_GCAL_GOG` to a fake executable.
 - [Doctor](#doctor)
 - [Calendars](#calendars)
 - [List](#list)
+- [Sync](#sync)
 - [Event inclusion](#event-inclusion)
 - [Root selection](#root-selection)
 - [Exit status](#exit-status)
@@ -37,10 +40,11 @@ bob gcal doctor [-b|--bob-dir DIR] [-f|--format human|json]
 bob gcal [list] [-a] [-b|--bob-dir DIR] [-D|--day DAY] [-f|--format table|json]
 bob gcal login [-a|--account EMAIL] [-c|--credentials FILE] [-f|--format human|json] [-m|--manual]
 bob gcal logout [-a|--account EMAIL] [-f|--format human|json] [-y|--force]
+bob gcal sync [-b|--bob-dir DIR] [-D|--day DAY] [-d|--dry-run] [-f|--format human|json] [-q|--quiet]
 ```
 
 Running `bob gcal` with no subcommand runs `bob gcal list`. The list is
-read-only. `sync` is not in this release.
+read-only; `sync` writes the vault.
 
 ## How it works
 
@@ -210,15 +214,72 @@ calendar is fetched with all pages; any transport failure, malformed event, or
 leftover page token fails the whole list rather than presenting a partial
 snapshot.
 
-The table shows local time, title, RSVP, selected root and source, and whether
-sync would create a task or context row. `-a` also shows omitted events with the
-reason. Counts include omitted events even when their rows are hidden.
+The table shows local time, title, RSVP, selected root, and the VAULT column:
+what sync did, or would do, with the event — `task · MEET`, `task`,
+`context`, `waiting for note`, or `removed by you`. Omitted events keep their
+omission reason. `-a` also shows omitted events. Counts include omitted events
+even when their rows are hidden. The header carries the last sync: `synced
+3 min ago on kellys-macbook-pro`, falling back to the newest journal record,
+else `never synced`.
 
-JSON has `schema_version`, `day`, `calendars`, `events`, and `counts` fields.
-Each event reports `time`, `title`, `answer`, `inclusion`, `reason`, and
-`root.value`, `root.source`, and `root.warnings`. Descriptions and attendee
-details are omitted. A root may be null when no candidate is valid; warnings
-explain each rejected candidate and its fix.
+JSON has `schema_version`, `day`, `calendars`, `events`, `counts`, and
+`last_sync` fields. Each event reports `time`, `title`, `answer`, `inclusion`,
+`reason`, `vault`, and `root.value`, `root.source`, and `root.warnings`.
+Descriptions and attendee details are omitted. A root may be null when no
+candidate is valid; warnings explain each rejected candidate and its fix.
+
+## Sync
+
+`bob gcal sync` reconciles one bounded, idempotent day — today by default,
+`-D` for another day whose note already exists. Bob never creates daily notes;
+when the note or its `## Pomodoros` section is missing, sync exits 0 with
+`waiting for 2026/20261030.md`.
+
+```bash
+bob gcal sync
+bob gcal sync -D tomorrow
+bob gcal sync -d
+bob gcal sync -q
+```
+
+The run fetches every configured calendar outside any lock, classifies each
+event, chooses roots, and folds the per-host journal. The plan then inserts
+new rows in time order (never reordering existing lines), adopts rows whose
+`📅` URL is already in the note without a journal record (crash recovery),
+tombstones journaled rows whose line is gone (never re-created), and appends
+each eligible MEET link once. A removed or moved link is never re-added. A
+byte-identical plan writes nothing and appends nothing.
+
+The write takes the vault lock (30 seconds), re-reads and re-plans, then
+writes through the preimage-checked staged writer, all-or-nothing, retrying
+once on a concurrent edit before failing. The journal (`.bob/gcal/<host>.jsonl`)
+appends only after the note write succeeds, and host-local status
+(`$XDG_STATE_HOME/bob/gcal/status.json`) records the run for `list` and
+`doctor`. Commits are left to vault-sync, as with capture. Past days get rows
+only; only today gains MEET links. `-d` prints the exact unified diff of the
+plan and writes nothing. `-q` prints nothing on success, no-op, or waiting.
+
+`sync -f json` reports `schema_version`, `ok`, `day`, `path`,
+`status` (`written`, `unchanged`, `waiting`, or `dry_run`), `rows`
+(`action`, `kind`, `time`, `title`, `root`, `source`), `pomodoro`
+(`entry_line`, `created`, `links_added`), and `warnings`.
+
+### Who owns each part of a row
+
+| Part | Owner | Sync behavior |
+| --- | --- | --- |
+| Checkbox | You | Never changed |
+| Time span, title, badges | Google | Left alone once written |
+| `[root::]` | Precedence | Written once; your edits win and are never rewritten |
+| `[type::]`, block ID | Bob, once | Never rewritten |
+| Child bullets (meeting notes) | You | Never touched |
+| MEET Task Link | Bob, once | Never re-added or moved |
+| The whole row | You | Deleted or moved away: tombstoned, never re-added |
+
+"Untouched" means not done, not In Progress, never linked under a closed
+Pomodoro, and with no 🍅 history. MEET placeholders are created only in the
+same write that adds their first link, so sync never leaves a second open
+MEET.
 
 ## Event inclusion
 
@@ -251,17 +312,18 @@ the R11 reason and fix. If a title route resolves, Bob removes the final token
 from the displayed title. An unknown route stays in the title and is reported.
 If the default root also fails, list shows no root and `doctor` reports the
 invalid default. Root sources are reported as `@body`, `colour tomato`,
-`calendar Health`, or `default`. The list has no vault-state column; sync adds
-it later.
+`calendar Health`, or `default`. The VAULT column reports the same roots
+beside the note.
 
 ## Exit status
 
-- `0` — success, including "already connected" and a doctor run with only
-  warnings.
-- `1` — runtime failure: gog, network, timeout, token, or a doctor check
-  that failed.
+- `0` — success, including "already connected", a doctor run with only
+  warnings, an unchanged sync, and a sync waiting for the daily note.
+- `1` — runtime failure: gog, network, timeout, token, a doctor check
+  that failed, or a daily-note write that lost a concurrent-edit race.
 - `2` — usage or setup error: clap usage errors, bad `gcal:` config, missing
-  gog, gog older than v0.44.0, no client, or not logged in.
+  gog, gog older than v0.44.0, no client, not logged in, or sync on a host
+  other than `gcal.writer`.
 
 Errors print `bob gcal <cmd>: <message>` to stderr (a red `error` prefix on a
 TTY) with an optional dim `  hint: …` line. In JSON mode, failures print
@@ -278,14 +340,18 @@ descriptions, or attendees.
 
 `logout -f json`: `ok`, `account`, `client`, `revoke_url`.
 
-`doctor -f json`: `ok`, `host`, `checks` (`id`, `status`, `summary`, `fix`).
+`doctor -f json`: `ok`, `host`, `checks` (`id`, `status`, `summary`, `fix`),
+including the `last_sync` check.
 
 `calendars -f json`: `ok`, `calendars` (`id`, `name`, `access_role`, `color`,
 `primary`, `synced`, `root`).
 
-`list -f json`: `day`, configured `calendars`, classified `events`, and
-`counts`. `-a` adds omitted event rows. Each event contains no provider
-description or attendee list.
+`list -f json`: `day`, configured `calendars`, classified `events`,
+`counts`, and `last_sync`. `-a` adds omitted event rows. Each event contains
+no provider description or attendee list, and carries the `vault` state.
+
+`sync -f json`: `ok`, `day`, `path`, `status`, `rows`, `pomodoro`, and
+`warnings`.
 
 ## Security
 
@@ -305,6 +371,7 @@ bucket from Gmail. Tests use `you@example.com` and never a live cookie.
 
 ## Known limits
 
-- `sync` is not in this release.
+- One writer: `gcal.writer` pins the single host allowed to sync.
+- Google-side edits to synced rows are left alone, never applied.
 - Google forbids Calendar scopes on the device-code flow; use `-m` over SSH.
 - Consent screens left in Testing expire in 7 days; publish them.

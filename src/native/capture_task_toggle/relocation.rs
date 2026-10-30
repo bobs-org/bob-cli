@@ -513,6 +513,59 @@ pub(crate) fn insert_named_placeholder(
     Ok((content, created_line, name))
 }
 
+/// Insert `- [ ] () — NAME` after the child block of the last open
+/// Pomodoro entry. With no open entry it goes after the last entry's
+/// child block; in an empty section it becomes the first line.
+/// `bob gcal sync` uses this for its appended MEET placeholder, which
+/// is created only in the same write that adds its first link.
+pub(crate) fn insert_named_placeholder_after_last_open(
+    contents: &str,
+    selector: &str,
+) -> Result<(String, usize, String), LinkRelocationError> {
+    let scan = capture_pomodoros::scan(contents);
+    if !scan.has_section {
+        return Err(LinkRelocationError::NoPomodorosSection);
+    }
+    let name = capture_pomodoros::canonicalize_pomodoro_name(selector)
+        .ok_or(LinkRelocationError::InvalidPomodoroName)?;
+    let lines = line_spans(contents);
+    let line_texts = lines.iter().map(|line| line.text).collect::<Vec<_>>();
+    let section = pomodoro::pomodoros_section_range(&line_texts)
+        .ok_or(LinkRelocationError::NoPomodorosSection)?;
+    let placeholder = capture_pomodoros::format_named_placeholder_line(&name);
+    let anchor = scan
+        .entries
+        .iter()
+        .filter(|entry| entry.state == PomodoroState::Open)
+        .last()
+        .or(scan.entries.last())
+        .map(|entry| entry.line - 1);
+    match anchor {
+        Some(index) => {
+            let end = child_block_end_line(&lines, index);
+            Ok((
+                insert_line_after(contents, &lines, end, &placeholder),
+                end + 1,
+                name,
+            ))
+        }
+        None if section.start < lines.len() => Ok((
+            insert_line_before(contents, &lines, section.start, &placeholder),
+            section.start,
+            name,
+        )),
+        None if !lines.is_empty() => {
+            let after = lines.len() - 1;
+            Ok((
+                insert_line_after(contents, &lines, after, &placeholder),
+                after + 1,
+                name,
+            ))
+        }
+        None => Err(LinkRelocationError::NoPomodorosSection),
+    }
+}
+
 pub(super) fn relocation_from_link_plan_error(
     error: LinkPlanError,
 ) -> LinkRelocationError {

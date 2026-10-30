@@ -195,6 +195,13 @@ const TABLE: &[Entry] = &[
         arg: "account",
         kind: Kind::FreeText,
     },
+    // `bob gcal [-D|--day]` selects a local day: today, tomorrow, a
+    // weekday name, or YYYY-MM-DD.
+    Entry {
+        path: &[],
+        arg: "day",
+        kind: Kind::FreeText,
+    },
     // `bob gcal login -c` stores a Desktop-app OAuth client JSON.
     Entry {
         path: &[],

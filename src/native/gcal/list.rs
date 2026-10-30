@@ -1,18 +1,15 @@
 //! Read-only `bob gcal list`: fetch a complete local-day snapshot, classify
 //! every event, choose valid roots, then render a table or JSON envelope.
 
-use std::{cmp::Ordering, path::PathBuf};
-
-use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
+use chrono::NaiveDate;
 use serde_json::{json, Value};
 
 use super::{
-    calendars::resolve_account,
-    classify::{self, DayWindow, Inclusion},
+    classify::{self, Inclusion},
     config::GcalConfig,
-    gog::Gog,
-    model::{EventDateTime, GcalEvent, MyAnswer},
-    root::{self, EventRoot},
+    journal,
+    model::MyAnswer,
+    snapshot::{self, SnapshotEvent},
     ui, GcalError, ListArgs,
 };
 use crate::native::{
@@ -20,13 +17,7 @@ use crate::native::{
     style::{self, Styler},
 };
 
-struct ListedEvent {
-    event: GcalEvent,
-    inclusion: Inclusion,
-    root: Option<EventRoot>,
-    time: String,
-    sort_at: DateTime<FixedOffset>,
-}
+type ListedEvent = SnapshotEvent;
 
 pub(crate) fn run(args: &ListArgs) -> i32 {
     match list(args) {
@@ -49,119 +40,232 @@ fn list(args: &ListArgs) -> Result<(), GcalError> {
     let config = GcalConfig::resolve()?;
     let day =
         classify::resolve_day(&args.day, bob_env::current_datetime().date())?;
-    let timezone = bob_env::configured_timezone();
-    let window = DayWindow::new(day, timezone)?;
     let vault = args.bob_dir();
-    let daily_rel = daily_relative_path(day);
-    let gog = Gog::resolve(config.timeout())?;
-    let _ = gog.require_version()?;
-    let account = resolve_account(&gog, &config)?;
-    let calendars = gog.calendars(&account)?;
-
-    let mut visible_calendars = Vec::new();
-    let mut events = Vec::new();
-    for configured in config.calendars() {
-        let calendar = calendars
-            .iter()
-            .find(|calendar| calendar.matches_configured_id(&configured.id));
-        let calendar_name = calendar
-            .map(|calendar| calendar.name().to_string())
-            .unwrap_or_else(|| configured.id.clone());
-        visible_calendars.push(json!({
-            "id": configured.id,
-            "name": calendar_name,
-        }));
-
-        let raw_events = gog.events(
-            &configured.id,
-            &window.from_rfc3339(),
-            &window.to_rfc3339(),
-        )?;
-        for raw_event in raw_events {
-            let event = GcalEvent::from_google(&configured.id, raw_event)?;
-            let inclusion = classify::classify(&event, &window, &config);
-            let root = if inclusion == Inclusion::Task {
-                Some(root::choose_event_root(
-                    &vault,
-                    &daily_rel,
-                    &event,
-                    &calendar_name,
-                    &config,
-                ))
-            } else {
-                None
-            };
-            let title = root
-                .as_ref()
-                .map(|chosen| chosen.title.clone())
-                .unwrap_or_else(|| event.title.clone());
-            let time = event_time(&event, &window);
-            let sort_at = window.effective_start(&event);
-            let mut event = event;
-            event.title = title;
-            events.push(ListedEvent {
-                event,
-                inclusion,
-                root,
-                time,
-                sort_at,
-            });
-        }
-    }
-    events.sort_by(compare_events);
-    let counts = counts(&events);
+    let snapshot = snapshot::fetch_day(vault.clone(), &config, day)?;
+    let visible_calendars: Vec<Value> = config
+        .calendars()
+        .iter()
+        .map(|calendar| {
+            let name = snapshot
+                .events
+                .iter()
+                .find(|event| event.event.key.calendar_id == calendar.id)
+                .map(|event| event.calendar_name.clone())
+                .unwrap_or_else(|| calendar.id.clone());
+            json!({"id": calendar.id, "name": name})
+        })
+        .collect();
+    let events = &snapshot.events;
+    let counts = counts(events);
+    // The VAULT column reads the same journal sync writes, plus the
+    // day's note. A missing note means every row is still waiting;
+    // an unreadable journal degrades to unjournaled display with a
+    // stderr warning rather than failing this read-only command.
+    let (journal_state, journal_warnings, newest) =
+        match journal::load_state(&vault) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                ui::warn(&format!("could not read the gcal journal: {error}"));
+                Default::default()
+            }
+        };
+    let note = std::fs::read_to_string(vault.join(&snapshot.daily_rel)).ok();
+    let note_lines: Vec<&str> = note
+        .as_deref()
+        .map(|contents| contents.lines().collect())
+        .unwrap_or_default();
+    let has_note = note.is_some();
+    let day_string = day.to_string();
     if args.format.is_json() {
         print_json(
             day,
             &visible_calendars,
-            &events,
+            events,
             &counts,
             args.include_omitted,
+            &journal_state,
+            &day_string,
+            has_note.then_some(note_lines.as_slice()),
+            last_sync_json(&newest),
         )
     } else {
         print_table(
             day,
             &visible_calendars,
-            &events,
+            events,
             &counts,
             args.include_omitted,
+            &journal_state,
+            &day_string,
+            has_note.then_some(note_lines.as_slice()),
+            &last_sync_human(&newest),
+            &journal_warnings,
         )
     }
 }
 
-fn daily_relative_path(day: NaiveDate) -> PathBuf {
-    PathBuf::from(format!(
-        "{}/{:04}{:02}{:02}.md",
-        day.year(),
-        day.year(),
-        day.month(),
-        day.day()
-    ))
-}
-
-fn event_time(event: &GcalEvent, window: &DayWindow) -> String {
-    match (&event.start, &event.end) {
-        (EventDateTime::AllDay(_), EventDateTime::AllDay(_)) => {
-            "all day".to_string()
+/// What sync did, or would do, with one event: `task · MEET`, `task`,
+/// `context`, `waiting for note`, or `removed by you`. Omitted events
+/// keep their omission reason.
+fn vault_status(
+    event: &ListedEvent,
+    journal: &std::collections::BTreeMap<
+        (String, String),
+        journal::OccurrenceState,
+    >,
+    day: &str,
+    note: Option<&[&str]>,
+) -> String {
+    if let Inclusion::Omitted(reason) = &event.inclusion {
+        return reason.clone();
+    }
+    let Some(lines) = note else {
+        return "waiting for note".to_string();
+    };
+    let key = journal::occurrence_key(
+        &event.event.key.calendar_id,
+        &event.event.key.event_id,
+    );
+    let state = journal.get(&(key, day.to_string()));
+    if state.is_some_and(|state| state.gone) {
+        return "removed by you".to_string();
+    }
+    match &event.inclusion {
+        Inclusion::Omitted(_) => unreachable!("filtered above"),
+        Inclusion::Context(_) => {
+            if state.and_then(|state| state.row.as_ref()).is_some()
+                && !row_present(lines, "", event_url(event), false)
+            {
+                return "removed by you".to_string();
+            }
+            "context".to_string()
         }
-        (EventDateTime::Timed(start), EventDateTime::Timed(end)) => {
-            format!("{}-{}", window.format_time(start), window.format_time(end))
+        Inclusion::Task => {
+            if let Some(row) = state.and_then(|state| state.row.as_ref()) {
+                if !row_present(lines, &row.block_id, event_url(event), true) {
+                    return "removed by you".to_string();
+                }
+                if meet_link_present(lines, &row.block_id) {
+                    return "task · MEET".to_string();
+                }
+                return "task".to_string();
+            }
+            match adopted_block_id(lines, event_url(event)) {
+                Some(block_id) if meet_link_present(lines, &block_id) => {
+                    "task · MEET".to_string()
+                }
+                _ => "task".to_string(),
+            }
         }
-        _ => "all day".to_string(),
     }
 }
 
-fn compare_events(left: &ListedEvent, right: &ListedEvent) -> Ordering {
-    let left_all_day = matches!(left.event.start, EventDateTime::AllDay(_));
-    let right_all_day = matches!(right.event.start, EventDateTime::AllDay(_));
-    left_all_day
-        .cmp(&right_all_day)
-        .reverse()
-        .then_with(|| left.sort_at.cmp(&right.sort_at))
-        .then_with(|| {
-            left.event.key.calendar_id.cmp(&right.event.key.calendar_id)
-        })
-        .then_with(|| left.event.key.event_id.cmp(&right.event.key.event_id))
+fn event_url(event: &ListedEvent) -> Option<&str> {
+    event.event.html_link.as_deref()
+}
+
+/// A row is present when its journaled `^block_id` matches, or its
+/// `📅` URL appears in the note.
+fn row_present(
+    lines: &[&str],
+    block_id: &str,
+    url: Option<&str>,
+    task: bool,
+) -> bool {
+    if task && !block_id.is_empty() {
+        let suffix = format!("^{block_id}");
+        if lines.iter().any(|line| {
+            line.trim_end().strip_suffix(suffix.as_str()).is_some_and(
+                |before| before.chars().last().is_some_and(char::is_whitespace),
+            )
+        }) {
+            return true;
+        }
+    }
+    url.filter(|url| !url.is_empty())
+        .is_some_and(|url| lines.iter().any(|line| line.contains(url)))
+}
+
+/// The `^block_id` of the note line carrying `url`, for unjournaled rows.
+fn adopted_block_id(lines: &[&str], url: Option<&str>) -> Option<String> {
+    let url = url.filter(|url| !url.is_empty())?;
+    lines
+        .iter()
+        .find(|line| line.contains(url))
+        .and_then(|line| trailing_block_id(line))
+}
+
+fn trailing_block_id(line: &str) -> Option<String> {
+    let trimmed = line.trim_end();
+    let caret = trimmed.rfind('^')?;
+    let id = trimmed.get(caret + 1..)?;
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        || (caret > 0
+            && !trimmed[..caret]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace))
+    {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn meet_link_present(lines: &[&str], block_id: &str) -> bool {
+    let link = format!("[[#^{block_id}]]");
+    let range = match crate::native::pomodoro::pomodoros_section_range(lines) {
+        Some(range) => range,
+        None => return false,
+    };
+    range
+        .filter_map(|index| lines.get(index))
+        .any(|line| line.contains(link.as_str()))
+}
+
+/// Header freshness: the host-local status file, else the newest
+/// journal record's host and time, else never synced.
+fn last_sync_human(
+    newest: &Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
+) -> String {
+    if let Some(status) = journal::read_status() {
+        if status.outcome == "waiting" {
+            return "waiting for note".to_string();
+        }
+        return format!(
+            "synced {} on {}",
+            journal::ago(&status.ts),
+            status.host,
+        );
+    }
+    match newest {
+        Some((ts, host)) => {
+            format!("synced {} on {}", journal::ago(ts), host)
+        }
+        None => "never synced".to_string(),
+    }
+}
+
+fn last_sync_json(
+    newest: &Option<(chrono::DateTime<chrono::FixedOffset>, String)>,
+) -> Value {
+    if let Some(status) = journal::read_status() {
+        return json!({
+            "outcome": status.outcome,
+            "host": status.host,
+            "ts": status.ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        });
+    }
+    match newest {
+        Some((ts, host)) => json!({
+            "outcome": "unknown",
+            "host": host,
+            "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        }),
+        None => Value::Null,
+    }
 }
 
 #[derive(Default)]
@@ -187,12 +291,20 @@ fn counts(events: &[ListedEvent]) -> Counts {
     counts
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_json(
     day: NaiveDate,
     calendars: &[Value],
     events: &[ListedEvent],
     counts: &Counts,
     include_omitted: bool,
+    journal: &std::collections::BTreeMap<
+        (String, String),
+        journal::OccurrenceState,
+    >,
+    day_string: &str,
+    note: Option<&[&str]>,
+    last_sync: Value,
 ) -> Result<(), GcalError> {
     let rows: Vec<Value> = events
         .iter()
@@ -210,6 +322,7 @@ fn print_json(
                     "source": root.and_then(|root| root.source.as_deref()),
                     "warnings": root.map(|root| root.warnings.as_slice()).unwrap_or(&[]),
                 },
+                "vault": vault_status(event, journal, day_string, note),
             })
         })
         .collect();
@@ -224,15 +337,25 @@ fn print_json(
             "omitted": counts.omitted,
             "awaiting_reply": counts.awaiting_reply,
         },
+        "last_sync": last_sync,
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_table(
     day: NaiveDate,
     calendars: &[Value],
     events: &[ListedEvent],
     counts: &Counts,
     include_omitted: bool,
+    journal: &std::collections::BTreeMap<
+        (String, String),
+        journal::OccurrenceState,
+    >,
+    day_string: &str,
+    note: Option<&[&str]>,
+    sync_state: &str,
+    journal_warnings: &[String],
 ) -> Result<(), GcalError> {
     let styler = Styler::detect();
     let calendar_names = calendars
@@ -243,11 +366,11 @@ fn print_table(
     let mut output = format!(
         "{}\n",
         styler.cyan(&format!(
-            "Google Calendar · {} · {calendar_names}",
+            "Google Calendar · {} · {calendar_names} · {sync_state}",
             day.format("%a %Y-%m-%d")
         ))
     );
-    let headers = ["TIME", "EVENT", "RSVP", "ROOT", "SOURCE", "SYNC WOULD"];
+    let headers = ["TIME", "EVENT", "RSVP", "ROOT", "VAULT"];
     let mut rows = Vec::new();
     for event in events.iter().filter(|event| {
         include_omitted || !matches!(event.inclusion, Inclusion::Omitted(_))
@@ -258,16 +381,7 @@ fn print_table(
             .and_then(|root| root.value.as_ref())
             .map(|root| format!("● {root}"))
             .unwrap_or_else(|| "—".to_string());
-        let source = event
-            .root
-            .as_ref()
-            .and_then(|root| root.source.clone())
-            .unwrap_or_default();
-        let action = match &event.inclusion {
-            Inclusion::Task => "task".to_string(),
-            Inclusion::Context(reason) => format!("context · {reason}"),
-            Inclusion::Omitted(reason) => reason.clone(),
-        };
+        let vault = vault_status(event, journal, day_string, note);
         rows.push([
             event.time.clone(),
             event.event.title.clone(),
@@ -276,8 +390,7 @@ fn print_table(
                 event.event.organizer_or_no_guests,
             ),
             root_label,
-            source,
-            action,
+            vault,
         ]);
     }
     let widths: Vec<usize> = (0..headers.len())
@@ -322,6 +435,9 @@ fn print_table(
         "{} tasks · {} context · {} awaiting your reply\n",
         counts.tasks, counts.context, counts.awaiting_reply
     ));
+    for warning in journal_warnings {
+        ui::warn(warning);
+    }
     write_text_stdout(&output)
 }
 
