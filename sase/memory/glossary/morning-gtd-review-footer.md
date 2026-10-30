@@ -16,8 +16,11 @@ recommended roll, the `Alt+P` preview in the hint slot (for example
 `Alt+P roll P2 1/1`). The other nonempty tier
 groups follow in walk order, then the `✓ upkeep/budget today` meter. To fit the
 status bar it uses short tier labels — `WIP` for PENDING (WIP is an official alias of
-the Pending status), `TICKS` for TICKLER, `REFS` for REFERENCES — explained in its
-tooltip, and it drops groups, then detail, hint, and meter as space runs out.
+the Pending status), `RECUR` for RECURRING, `TICKS` for TICKLER — explained in its
+tooltip. Each group, and the current tier's context, wears that tier's own color; a
+hairline divider separates the commitment groups from ROTTEN and POST; and as space
+runs out it drops groups from the end of the walk (marking the cut with `…`), then
+detail, hint, and meter.
 Clicking jumps to the next due task like `]s`. It is a read-only projection: it never
 stamps or changes tasks, its numbers are queue positions rather than progress, and it
 hides when nothing is due or Tasks is unavailable. `]s` notices and
