@@ -192,6 +192,8 @@ pub(crate) struct FakeGog {
     state: PathBuf,
     events: PathBuf,
     event_dir: PathBuf,
+    home: PathBuf,
+    stdin_log: PathBuf,
     scenario: String,
 }
 
@@ -204,14 +206,34 @@ impl FakeGog {
         chmod_exec(&path);
         let event_dir = root.join("event-lookup");
         fs::create_dir_all(&event_dir).expect("create event lookup dir");
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("create fake home dir");
         Self {
             path,
             log: root.join("calls.jsonl"),
             state: root.join("state.json"),
             events: root.join("events.json"),
             event_dir,
+            stdin_log: root.join("stdin.log"),
+            home,
             scenario: "ok".to_string(),
         }
+    }
+
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
+    pub(crate) fn stdin_payloads(&self) -> Vec<serde_json::Value> {
+        let text = fs::read_to_string(&self.stdin_log).unwrap_or_default();
+        text.lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                serde_json::from_str(line).unwrap_or_else(|error| {
+                    panic!("stdin payload is not JSON ({error}):\n{line}")
+                })
+            })
+            .collect()
     }
 
     /// Answer one `calendar event <calendar> <id>` lookup with this raw
@@ -241,6 +263,8 @@ impl FakeGog {
             .env("BOB_GCAL_FAKE_STATE", &self.state)
             .env("BOB_GCAL_FAKE_EVENTS", &self.events)
             .env("BOB_GCAL_FAKE_EVENT_DIR", &self.event_dir)
+            .env("BOB_GCAL_FAKE_HOME", &self.home)
+            .env("BOB_GCAL_FAKE_STDIN_LOG", &self.stdin_log)
             .env("BOB_GCAL_FAKE_SCENARIO", &self.scenario)
     }
 

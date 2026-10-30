@@ -28,6 +28,8 @@ args = sys.argv[1:]
 log_path = os.environ.get("BOB_GCAL_FAKE_LOG")
 state_path = os.environ.get("BOB_GCAL_FAKE_STATE")
 scenario = os.environ.get("BOB_GCAL_FAKE_SCENARIO", "ok")
+fake_home = Path(os.environ.get("BOB_GCAL_FAKE_HOME", "/tmp"))
+stdin_log = os.environ.get("BOB_GCAL_FAKE_STDIN_LOG")
 
 if log_path:
     path = Path(log_path)
@@ -41,6 +43,10 @@ def positional(argv: list[str]) -> list[str]:
     i = 0
     while i < len(argv):
         item = argv[i]
+        if item == "-":
+            out.append(item)
+            i += 1
+            continue
         if item in FLAGS_WITH_VALUE:
             i += 2
             continue
@@ -107,11 +113,21 @@ def connected_account(email: str = EMAIL) -> dict:
     }
 
 
+def legacy_flat_client(client_id: str, secret: str) -> dict:
+    return {"client_id": client_id, "client_secret": secret}
+
+
 def scenario_defaults(name: str) -> dict:
+    home = fake_home
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    bob_path = str(home / "bob-gcal.json")
     defaults: dict = {
         "version": "0.44.0",
         "clients": [
-            {"client": CLIENT, "path": "/tmp/bob-gcal.json", "default": True}
+            {"client": CLIENT, "path": bob_path, "default": True}
         ],
         "accounts": [connected_account()],
         "calendars": default_calendars(),
@@ -122,10 +138,20 @@ def scenario_defaults(name: str) -> dict:
         defaults["clients"] = []
         defaults["accounts"] = []
     elif name == "other_client":
+        other_path = home / "default-client.json"
+        other_path.write_text(
+            json.dumps(
+                legacy_flat_client(
+                    "123456789012-abc.apps.googleusercontent.com",
+                    "other-secret",
+                )
+            ),
+            encoding="utf-8",
+        )
         defaults["clients"] = [
             {
                 "client": "default",
-                "path": "/tmp/default-client.json",
+                "path": str(other_path),
                 "default": True,
             }
         ]
@@ -137,6 +163,37 @@ def scenario_defaults(name: str) -> dict:
                 "scopes": [],
             }
         ]
+    elif name == "keyring_client":
+        keyring_path = home / "keyring-client.json"
+        keyring_path.write_text(
+            json.dumps({"client_id": "123456789012-abc.apps.googleusercontent.com"}),
+            encoding="utf-8",
+        )
+        defaults["clients"] = [
+            {
+                "client": "default",
+                "path": str(keyring_path),
+                "default": True,
+                "client_secret_in_keyring": True,
+            }
+        ]
+        defaults["accounts"] = [
+            {
+                "email": EMAIL,
+                "client": "default",
+                "services": ["gmail"],
+                "scopes": [],
+            }
+        ]
+    elif name == "keyring_fail":
+        defaults["clients"] = []
+        defaults["accounts"] = []
+        defaults["fail"] = {
+            "credentials_set": {
+                "stderr": "cannot store secret: keyring is locked",
+                "code": 1,
+            }
+        }
     elif name == "not_logged_in":
         defaults["accounts"] = []
     elif name == "no_scope":
@@ -204,6 +261,25 @@ def fail(message: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
+def valid_client_payload(payload: bytes) -> bool:
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return False
+    for key in ("installed", "web"):
+        section = value.get(key)
+        if isinstance(section, dict):
+            client_id = section.get("client_id")
+            secret = section.get("client_secret")
+            return bool(
+                isinstance(client_id, str)
+                and client_id.strip()
+                and isinstance(secret, str)
+                and secret.strip()
+            )
+    return False
+
+
 state = load_state()
 defaults = scenario_defaults(scenario)
 for key, value in defaults.items():
@@ -260,6 +336,41 @@ if op == "credentials_list":
 
 if op == "credentials_set":
     path = pos[3] if len(pos) > 3 else ""
+    if path == "-":
+        payload = sys.stdin.buffer.read()
+        if stdin_log:
+            log = Path(stdin_log)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("ab") as handle:
+                handle.write(payload + b"\n")
+        if not valid_client_payload(payload):
+            fail(
+                "invalid credentials.json "
+                "(expected installed/web client_id and client_secret)",
+                1,
+            )
+        stored_path = str(fake_home / "bob-gcal.json")
+        try:
+            Path(stored_path).write_bytes(payload)
+        except Exception:
+            pass
+        path = stored_path
+    else:
+        try:
+            payload = Path(path).read_bytes()
+        except Exception:
+            fail(
+                "invalid credentials.json "
+                "(expected installed/web client_id and client_secret)",
+                1,
+            )
+            raise SystemExit(1)
+        if not valid_client_payload(payload):
+            fail(
+                "invalid credentials.json "
+                "(expected installed/web client_id and client_secret)",
+                1,
+            )
     clients = list(state.get("clients") or [])
     found = False
     for entry in clients:

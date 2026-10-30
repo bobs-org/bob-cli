@@ -6,6 +6,7 @@
 mod calendars;
 mod classify;
 pub(crate) mod cli;
+pub(crate) mod client;
 mod config;
 mod doctor;
 mod gog;

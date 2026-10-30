@@ -41,6 +41,8 @@ pub(crate) struct GogClient {
     pub path: Option<String>,
     #[serde(default)]
     pub default: bool,
+    #[serde(default)]
+    pub client_secret_in_keyring: bool,
 }
 
 /// One account from `gog auth list --json`.
@@ -219,9 +221,15 @@ impl Gog {
         })
     }
 
-    pub(crate) fn credentials_set(&self, path: &Path) -> Result<(), GcalError> {
-        // Storing a client is a write: omit `--readonly`.
-        let _ = self.run(
+    /// Pipe normalized `{"installed": …}` JSON to
+    /// `gog auth credentials set -` over stdin. The secret never appears
+    /// in argv. Storing a client is a write: omit `--readonly` and never
+    /// pass `--insecure`.
+    pub(crate) fn credentials_set_json(
+        &self,
+        payload: &[u8],
+    ) -> Result<(), GcalError> {
+        let _ = self.run_with_stdin(
             vec![
                 OsString::from("--no-input"),
                 OsString::from("--json"),
@@ -232,8 +240,9 @@ impl Gog {
                 OsString::from("auth"),
                 OsString::from("credentials"),
                 OsString::from("set"),
-                OsString::from(path.as_os_str()),
+                OsString::from("-"),
             ],
+            Some(payload.to_vec()),
             false,
         )?;
         Ok(())
@@ -442,10 +451,19 @@ impl Gog {
         args: Vec<OsString>,
         inherit_stdio: bool,
     ) -> Result<subprocess_runner::RunOutput, GcalError> {
+        self.run_with_stdin(args, None, inherit_stdio)
+    }
+
+    fn run_with_stdin(
+        &self,
+        args: Vec<OsString>,
+        stdin: Option<Vec<u8>>,
+        inherit_stdio: bool,
+    ) -> Result<subprocess_runner::RunOutput, GcalError> {
         let output = subprocess_runner::run(&RunSpec {
             program: self.program.clone(),
             args,
-            stdin: None,
+            stdin,
             env: Vec::new(),
             timeout: self.timeout,
             inherit_stdio,
@@ -504,6 +522,31 @@ pub(crate) fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
+/// Project-specific Calendar API console URL from Google's message,
+/// else `None` for the generic library URL.
+fn project_console_url(stdout: &str, stderr: &str) -> Option<String> {
+    for text in [stdout, stderr] {
+        let lower = text.to_ascii_lowercase();
+        let mut search = lower.as_str();
+        while let Some(index) = search.find("project") {
+            let after = &search[index + "project".len()..];
+            let digits: String = after
+                .chars()
+                .skip_while(|ch| !ch.is_ascii_digit())
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect();
+            if !digits.is_empty() {
+                return Some(format!(
+                    "https://console.developers.google.com/apis/api/\
+                     calendar-json.googleapis.com/overview?project={digits}"
+                ));
+            }
+            search = after;
+        }
+    }
+    None
+}
+
 pub(crate) fn classify_gog_failure(stdout: &str, stderr: &str) -> GcalError {
     let blob = format!("{stdout}\n{stderr}").to_ascii_lowercase();
     if blob.contains("accessnotconfigured")
@@ -511,12 +554,51 @@ pub(crate) fn classify_gog_failure(stdout: &str, stderr: &str) -> GcalError {
         || blob.contains("has not been used in project")
         || blob.contains("is disabled")
     {
+        let url = project_console_url(stdout, stderr)
+            .unwrap_or_else(|| API_CONSOLE_URL.to_string());
         return GcalError::runtime(
             "api_disabled",
             "the Google Calendar API is not enabled for this Cloud project"
                 .to_string(),
         )
-        .with_hint(&format!("enable it at {API_CONSOLE_URL}"));
+        .with_hint(&format!("enable it at {url}"));
+    }
+    if blob.contains("store secret") || blob.contains("keyring") {
+        return GcalError::runtime(
+            "keyring",
+            "gog could not save the client or token in the system keyring"
+                .to_string(),
+        )
+        .with_hint(
+            "run `gog auth status` and `gog auth keyring file` to inspect the \
+             keyring, then rerun `bob gcal login`",
+        );
+    }
+    if blob.contains("invalid_client")
+        || blob.contains("oauth client was not found")
+    {
+        return GcalError::setup(
+            "invalid_client",
+            "Google does not know this OAuth client (deleted or from \
+             another project)"
+                .to_string(),
+        )
+        .with_hint(
+            "download a Desktop app client JSON and run \
+             `bob gcal login -c PATH`",
+        );
+    }
+    if blob.contains("redirect_uri_mismatch") {
+        return GcalError::setup(
+            "client_invalid",
+            "Google rejected the redirect: the OAuth client is not a \
+             Desktop app"
+                .to_string(),
+        )
+        .with_hint(
+            "download a Desktop app client JSON and run \
+             `bob gcal login -c PATH`",
+        );
     }
     if blob.contains("invalid_grant") {
         return GcalError::runtime(
@@ -616,10 +698,40 @@ mod tests {
         assert_eq!(error.kind(), "api_disabled");
         assert!(error.hint().unwrap_or_default().contains("calendar-json"));
 
+        let error = classify_gog_failure(
+            "",
+            "accessNotConfigured: Calendar API has not been used in project \
+             123456789012",
+        );
+        assert_eq!(error.kind(), "api_disabled");
+        assert!(error
+            .hint()
+            .unwrap_or_default()
+            .contains("project=123456789012"));
+
         let error =
             classify_gog_failure("", "invalid_grant: Token has been expired");
         assert_eq!(error.kind(), "invalid_grant");
         assert!(error.hint().unwrap_or_default().contains("7 days"));
+    }
+
+    #[test]
+    fn maps_keyring_invalid_client_and_redirect_mismatch() {
+        let error = classify_gog_failure("", "cannot store secret in keyring");
+        assert_eq!(error.kind(), "keyring");
+        assert!(error
+            .hint()
+            .unwrap_or_default()
+            .contains("gog auth keyring"));
+
+        let error = classify_gog_failure("", "invalid_client: unknown");
+        assert_eq!(error.kind(), "invalid_client");
+        assert_eq!(error.exit_code(), 2);
+
+        let error =
+            classify_gog_failure("", "Error 400: redirect_uri_mismatch");
+        assert_eq!(error.kind(), "client_invalid");
+        assert_eq!(error.exit_code(), 2);
     }
 
     #[test]

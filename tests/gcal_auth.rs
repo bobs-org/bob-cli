@@ -8,8 +8,7 @@ mod gcal_support;
 use std::fs;
 
 use gcal_support::{
-    json_stdout, run_gcal, run_gcal_stdin, stderr, stdout, FakeGog, GcalEnv,
-    ACCOUNT,
+    json_stdout, run_gcal, stderr, stdout, FakeGog, GcalEnv, ACCOUNT,
 };
 use serde_json::Value;
 
@@ -57,7 +56,11 @@ fn login_dash_c_stores_the_client() {
     let env = GcalEnv::new("bob-cli-gcal-login-c");
     let fake = FakeGog::new(&env, "gog").scenario("no_client");
     let client = env.root().join("client.json");
-    fs::write(&client, "{\"installed\":{}}\n").expect("write client json");
+    fs::write(
+        &client,
+        r#"{"installed":{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"test-secret-123","project_id":"my-proj"}}"#,
+    )
+    .expect("write client json");
     let output = run_gcal(
         &env,
         &fake,
@@ -91,26 +94,41 @@ fn login_dash_c_stores_the_client() {
         })
         .expect("credentials set call");
     assert!(
-        set_call.iter().any(|arg| arg == client.to_str().unwrap()),
-        "credentials set must pass the client path: {set_call:?}"
+        set_call.iter().any(|arg| arg == "-"),
+        "credentials set must read from stdin: {set_call:?}"
+    );
+    assert!(
+        !set_call.iter().any(|arg| arg.contains("test-secret-123")),
+        "argv must not carry the secret: {set_call:?}"
     );
     assert!(
         !set_call.iter().any(|arg| arg == "--readonly"),
         "storing a client is a write: {set_call:?}"
     );
+    let payloads = fake.stdin_payloads();
+    assert_eq!(
+        payloads.len(),
+        1,
+        "expected one stdin payload: {payloads:?}"
+    );
+    assert_eq!(
+        payloads[0]["installed"]["client_id"],
+        "123456789012-abc.apps.googleusercontent.com"
+    );
+    assert_eq!(payloads[0]["installed"]["client_secret"], "test-secret-123");
 }
 
 #[test]
-fn login_reuses_another_stored_client() {
+fn login_reuses_legacy_default_client_without_prompt() {
     let env = GcalEnv::new("bob-cli-gcal-login-reuse");
     let fake = FakeGog::new(&env, "gog").scenario("other_client");
-    let output = run_gcal_stdin(&env, &fake, &["login", "-f", "json"], "y\n");
+    let output = run_gcal(&env, &fake, &["login", "-f", "json"]);
     assert_success(&output, "login reuse");
     let doc = json_stdout(&output);
     assert_eq!(doc["ok"], true);
     assert!(
         fake.called_with(&["auth", "credentials", "set"]),
-        "reuse must copy the other client path:\n{:?}",
+        "reuse must pipe the normalized client:\n{:?}",
         fake.calls()
     );
     let set_call = fake
@@ -121,9 +139,165 @@ fn login_reuses_another_stored_client() {
         })
         .expect("credentials set call");
     assert!(
-        set_call.iter().any(|arg| arg == "/tmp/default-client.json"),
-        "reuse copies the stored path: {set_call:?}"
+        set_call.iter().any(|arg| arg == "-"),
+        "reuse must use `set -`: {set_call:?}"
     );
+    assert!(
+        !set_call.iter().any(|arg| arg.contains("other-secret")),
+        "argv must not carry the secret: {set_call:?}"
+    );
+    let payloads = fake.stdin_payloads();
+    assert_eq!(
+        payloads.len(),
+        1,
+        "expected one stdin payload: {payloads:?}"
+    );
+    assert_eq!(
+        payloads[0]["installed"]["client_id"],
+        "123456789012-abc.apps.googleusercontent.com"
+    );
+    assert_eq!(payloads[0]["installed"]["client_secret"], "other-secret");
+}
+
+#[test]
+fn login_skips_keyring_held_client() {
+    let env = GcalEnv::new("bob-cli-gcal-login-keyring-skip");
+    let fake = FakeGog::new(&env, "gog").scenario("keyring_client");
+    let output = run_gcal(&env, &fake, &["login", "-f", "json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["ok"], false);
+    assert_eq!(doc["error"]["kind"], "no_client");
+    let hint = doc["error"]["hint"].as_str().unwrap_or_default();
+    assert!(
+        hint.contains("keyring"),
+        "expected keyring note in hint: {doc}"
+    );
+    assert!(
+        hint.contains("default"),
+        "expected client name in keyring note: {doc}"
+    );
+    assert!(
+        !fake.called_with(&["auth", "credentials", "set"]),
+        "keyring client must not be copied:\n{:?}",
+        fake.calls()
+    );
+}
+
+#[test]
+fn login_dash_c_rejects_web_client() {
+    let env = GcalEnv::new("bob-cli-gcal-login-web");
+    let fake = FakeGog::new(&env, "gog").scenario("no_client");
+    let client = env.root().join("web.json");
+    fs::write(
+        &client,
+        r#"{"web":{"client_id":"1-a.apps.googleusercontent.com","client_secret":"s"}}"#,
+    )
+    .expect("write web json");
+    let output = run_gcal(
+        &env,
+        &fake,
+        &[
+            "login",
+            "-c",
+            client.to_str().expect("utf8 path"),
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "client_invalid");
+    assert!(
+        doc["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Desktop app"),
+        "{doc}"
+    );
+}
+
+#[test]
+fn login_dash_c_accepts_legacy_flat_file() {
+    let env = GcalEnv::new("bob-cli-gcal-login-flat");
+    let fake = FakeGog::new(&env, "gog").scenario("no_client");
+    let client = env.root().join("flat.json");
+    fs::write(
+        &client,
+        r#"{"client_id":"123456789012-abc.apps.googleusercontent.com","client_secret":"flat-secret"}"#,
+    )
+    .expect("write flat json");
+    let output = run_gcal(
+        &env,
+        &fake,
+        &[
+            "login",
+            "-c",
+            client.to_str().expect("utf8 path"),
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output, "login -c flat");
+    let payloads = fake.stdin_payloads();
+    assert_eq!(payloads.len(), 1, "{payloads:?}");
+    assert_eq!(payloads[0]["installed"]["client_secret"], "flat-secret");
+}
+
+#[test]
+fn login_dash_c_replaces_existing_client() {
+    let env = GcalEnv::new("bob-cli-gcal-login-replace");
+    let fake = FakeGog::new(&env, "gog");
+    let client = env.root().join("new.json");
+    fs::write(
+        &client,
+        r#"{"installed":{"client_id":"999-abc.apps.googleusercontent.com","client_secret":"new-secret"}}"#,
+    )
+    .expect("write new json");
+    let output = run_gcal(
+        &env,
+        &fake,
+        &[
+            "login",
+            "-c",
+            client.to_str().expect("utf8 path"),
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output, "login -c replace");
+    let payloads = fake.stdin_payloads();
+    assert_eq!(payloads.len(), 1, "{payloads:?}");
+    assert_eq!(
+        payloads[0]["installed"]["client_id"],
+        "999-abc.apps.googleusercontent.com"
+    );
+}
+
+#[test]
+fn login_keyring_failure_is_classified() {
+    let env = GcalEnv::new("bob-cli-gcal-login-keyring-fail");
+    let fake = FakeGog::new(&env, "gog").scenario("keyring_fail");
+    let client = env.root().join("client.json");
+    fs::write(
+        &client,
+        r#"{"installed":{"client_id":"1-a.apps.googleusercontent.com","client_secret":"s"}}"#,
+    )
+    .expect("write client json");
+    let output = run_gcal(
+        &env,
+        &fake,
+        &[
+            "login",
+            "-c",
+            client.to_str().expect("utf8 path"),
+            "-f",
+            "json",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let doc = json_stdout(&output);
+    assert_eq!(doc["error"]["kind"], "keyring");
 }
 
 #[test]

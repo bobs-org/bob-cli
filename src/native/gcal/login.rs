@@ -9,10 +9,12 @@ use serde_json::json;
 
 use super::super::style::Styler;
 use super::{
+    client::{parse_client_json, ClientOrigin},
     config::{assume_tty, GcalConfig},
-    gog::{self, Gog, GogClient, CLIENT},
+    gog::{self, Gog, CLIENT},
     ui, GcalError, LoginArgs,
 };
+use crate::native::env as bob_env;
 
 pub(crate) fn run(args: &LoginArgs) -> i32 {
     let format = args.format.as_str();
@@ -83,54 +85,61 @@ fn ensure_client(
     credentials: Option<&Path>,
 ) -> Result<String, GcalError> {
     let clients = gog.credentials_list()?;
+    // `-c FILE` replaces any stored `bob-gcal` client.
+    if let Some(path) = credentials {
+        let expanded = bob_env::expand_tilde(path);
+        let display = expanded.display().to_string();
+        let bytes = std::fs::read(&expanded).map_err(|error| {
+            GcalError::setup(
+                "client_invalid",
+                format!("{}: cannot read client JSON: {error}", display),
+            )
+            .with_hint(
+                "download a Desktop app client JSON and pass its path with \
+                 `bob gcal login -c PATH`",
+            )
+        })?;
+        let client = parse_client_json(&bytes, ClientOrigin::File)
+            .map_err(|problem| problem.into_error(&display))?;
+        gog.credentials_set_json(&client.to_gog_json())?;
+        return Ok(CLIENT.to_string());
+    }
     if clients.iter().any(|client| client.client == CLIENT) {
         return Ok(CLIENT.to_string());
     }
-    if let Some(path) = credentials {
-        gog.credentials_set(path)?;
-        return Ok(CLIENT.to_string());
+    // Reuse another gog client without a prompt: Google's consent screen
+    // is the real confirmation. Keyring-held clients cannot be copied.
+    let mut skipped_keyring: Vec<String> = Vec::new();
+    for client in &clients {
+        if client.client == CLIENT {
+            continue;
+        }
+        if client.client_secret_in_keyring {
+            skipped_keyring.push(client.client.clone());
+        }
     }
-    if is_tty()
-        && let Some(other) = pick_reuse_client(&clients)
-        && confirm_reuse(other)?
-    {
-        let path = other.path.as_deref().ok_or_else(|| {
-            GcalError::setup(
-                "no_client",
-                format!(
-                    "gog client '{}' has no stored credentials path",
-                    other.client
-                ),
-            )
-        })?;
-        gog.credentials_set(Path::new(path))?;
-        return Ok(CLIENT.to_string());
-    }
-    Err(checklist_error())
-}
-
-fn pick_reuse_client(clients: &[GogClient]) -> Option<&GogClient> {
-    clients
+    let mut ordered: Vec<_> = clients
         .iter()
-        .find(|client| {
-            client.default && client.client != CLIENT && client.path.is_some()
+        .filter(|client| {
+            client.client != CLIENT && !client.client_secret_in_keyring
         })
-        .or_else(|| {
-            clients
-                .iter()
-                .find(|client| client.client != CLIENT && client.path.is_some())
-        })
-}
-
-fn confirm_reuse(client: &GogClient) -> Result<bool, GcalError> {
-    eprint!("Reuse gog client '{}' for Calendar? [Y/n] ", client.client);
-    let _ = io::stderr().flush();
-    let mut line = String::new();
-    io::stdin().lock().read_line(&mut line).map_err(|error| {
-        GcalError::setup("no_client", format!("read the reuse prompt: {error}"))
-    })?;
-    let answer = line.trim().to_ascii_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+        .collect();
+    ordered.sort_by_key(|client| !client.default);
+    for other in ordered {
+        let Some(path) = other.path.as_deref() else {
+            continue;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let Ok(client) = parse_client_json(&bytes, ClientOrigin::GogClient)
+        else {
+            continue;
+        };
+        gog.credentials_set_json(&client.to_gog_json())?;
+        return Ok(CLIENT.to_string());
+    }
+    Err(checklist_error(&skipped_keyring))
 }
 
 fn resolve_account(
@@ -224,18 +233,24 @@ fn is_already_connected(gog: &Gog, account: &str) -> Result<bool, GcalError> {
         .any(|entry| entry.email == account && entry.has_calendar_readonly()))
 }
 
-fn checklist_error() -> GcalError {
+fn checklist_error(skipped_keyring: &[String]) -> GcalError {
+    let mut hint = "1. Enable the Calendar API in the Cloud project.\n  \
+         2. Set the consent screen to External and In production \
+         (unverified is fine for personal use).\n  \
+         3. Download a Desktop app client.\n  \
+         4. Run `bob gcal login -c PATH`."
+        .to_string();
+    for name in skipped_keyring {
+        hint.push_str(&format!(
+            "\n  gog's \"{name}\" client keeps its secret in the system \
+             keyring, so Bob can't copy it."
+        ));
+    }
     GcalError::setup(
         "no_client",
         "no bob-gcal OAuth client is stored".to_string(),
     )
-    .with_hint(
-        "1. Enable the Calendar API in the Cloud project.\n  \
-         2. Set the consent screen to External and In production \
-         (unverified is fine for personal use).\n  \
-         3. Download a Desktop app client.\n  \
-         4. Run `bob gcal login -c PATH`.",
-    )
+    .with_hint(&hint)
 }
 
 fn is_tty() -> bool {
