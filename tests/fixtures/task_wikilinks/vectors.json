@@ -1,0 +1,1041 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "name": "groups-hidden-order",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "2026/20260929.md": "- [ ] #task Yesterday task\n- [ ] #task Yesterday kept ^yest-kept\n",
+        "2026/20260930.md": "- [ ] #task Today task ^today-task\n- [ ] #task Today plain\n",
+        "a/dup.md": "- [ ] #task Dup A ^dup-a\n",
+        "b/dup.md": "- [ ] #task Dup B ^dup-b\n",
+        "cafe.md": "- [ ] #task Café ☕ review ^cafe\n",
+        "cash.md": "- [ ] #task Confirm grocery budget ^budget\n- [*] #task Plan meals ^meals\n- [?] #task Blocked bill ^bill\n",
+        "done/old.md": "- [x] #task Old done\n- [x] #task Old kept ^kept\n",
+        "home.md": "- [ ] #task Buy milk ^milk\n- [/] #task Cook dinner ^dinner\n- [ ] #task No id yet\n- [ ] #task Hidden chore #hide ^hidden-chore\n- [x] #task Done deed ^done-deed\n- [-] #task Cancelled chore ^cancelled-chore\n```\n- [ ] #task Fenced task ^fenced\n```\nPlain line ^plain-anchor\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n- [ ] #task Inbox plain\n- [ ] #task Inbox hidden #hide ^inbox-hidden\n",
+        "projects/alpha.md": "- [ ] #task Alpha task ^alpha\n- [ ] #task Alpha clone\n",
+        "ref/papers/paper.md": "---\ntype: \"[[ref]]\"\n---\n- [ ] #task Read paper ^paper-read\n",
+        "Shopping List.md": "- [ ] #task Buy eggs ^eggs\n- [ ] #task Buy cheese\n",
+        "twin.md": "- [ ] #task First twin ^twin\n- [ ] #task Second twin ^twin\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "inbox-chore",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-chore]]",
+          "status_symbol": " ",
+          "text": "Inbox chore"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 2,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Inbox plain"
+        },
+        {
+          "block_id": "inbox-hidden",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": true,
+          "line": 3,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-hidden]]",
+          "status_symbol": " ",
+          "text": "Inbox hidden #hide"
+        },
+        {
+          "block_id": "dinner",
+          "disabled_reason": null,
+          "group": "in_progress",
+          "hidden": false,
+          "line": 2,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^dinner]]",
+          "status_symbol": "/",
+          "text": "Cook dinner"
+        },
+        {
+          "block_id": "meals",
+          "disabled_reason": null,
+          "group": "next",
+          "hidden": false,
+          "line": 2,
+          "link_target": "cash",
+          "locator": "cash",
+          "note_path": "cash.md",
+          "replacement": "[[cash#^meals]]",
+          "status_symbol": "*",
+          "text": "Plan meals"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": "the previous daily note is read-only",
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "20260929",
+          "locator": "20260929",
+          "note_path": "2026/20260929.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Yesterday task"
+        },
+        {
+          "block_id": "yest-kept",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "20260929",
+          "locator": "20260929",
+          "note_path": "2026/20260929.md",
+          "replacement": "[[20260929#^yest-kept]]",
+          "status_symbol": " ",
+          "text": "Yesterday kept"
+        },
+        {
+          "block_id": "today-task",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "20260930",
+          "locator": "20260930",
+          "note_path": "2026/20260930.md",
+          "replacement": "[[20260930#^today-task]]",
+          "status_symbol": " ",
+          "text": "Today task"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "20260930",
+          "locator": "20260930",
+          "note_path": "2026/20260930.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Today plain"
+        },
+        {
+          "block_id": "eggs",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "Shopping List",
+          "locator": "Shopping List",
+          "note_path": "Shopping List.md",
+          "replacement": "[[Shopping List#^eggs]]",
+          "status_symbol": " ",
+          "text": "Buy eggs"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "Shopping List",
+          "locator": "Shopping List",
+          "note_path": "Shopping List.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Buy cheese"
+        },
+        {
+          "block_id": "dup-a",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "a/dup",
+          "locator": "a/dup",
+          "note_path": "a/dup.md",
+          "replacement": "[[a/dup#^dup-a]]",
+          "status_symbol": " ",
+          "text": "Dup A"
+        },
+        {
+          "block_id": "dup-b",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "b/dup",
+          "locator": "b/dup",
+          "note_path": "b/dup.md",
+          "replacement": "[[b/dup#^dup-b]]",
+          "status_symbol": " ",
+          "text": "Dup B"
+        },
+        {
+          "block_id": "cafe",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "cafe",
+          "locator": "cafe",
+          "note_path": "cafe.md",
+          "replacement": "[[cafe#^cafe]]",
+          "status_symbol": " ",
+          "text": "Café ☕ review"
+        },
+        {
+          "block_id": "budget",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "cash",
+          "locator": "cash",
+          "note_path": "cash.md",
+          "replacement": "[[cash#^budget]]",
+          "status_symbol": " ",
+          "text": "Confirm grocery budget"
+        },
+        {
+          "block_id": "bill",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 3,
+          "link_target": "cash",
+          "locator": "cash",
+          "note_path": "cash.md",
+          "replacement": "[[cash#^bill]]",
+          "status_symbol": "?",
+          "text": "Blocked bill"
+        },
+        {
+          "block_id": "milk",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^milk]]",
+          "status_symbol": " ",
+          "text": "Buy milk"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 3,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "No id yet"
+        },
+        {
+          "block_id": "alpha",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "alpha",
+          "locator": "alpha",
+          "note_path": "projects/alpha.md",
+          "replacement": "[[alpha#^alpha]]",
+          "status_symbol": " ",
+          "text": "Alpha task"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "alpha",
+          "locator": "alpha",
+          "note_path": "projects/alpha.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Alpha clone"
+        },
+        {
+          "block_id": "paper-read",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 4,
+          "link_target": "paper",
+          "locator": "paper",
+          "note_path": "ref/papers/paper.md",
+          "replacement": "[[paper#^paper-read]]",
+          "status_symbol": " ",
+          "text": "Read paper"
+        },
+        {
+          "block_id": "twin",
+          "disabled_reason": "duplicate block ID ^twin in twin.md",
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "twin",
+          "locator": "twin",
+          "note_path": "twin.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "First twin"
+        },
+        {
+          "block_id": "twin",
+          "disabled_reason": "duplicate block ID ^twin in twin.md",
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "twin",
+          "locator": "twin",
+          "note_path": "twin.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Second twin"
+        },
+        {
+          "block_id": "hidden-chore",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": true,
+          "line": 4,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^hidden-chore]]",
+          "status_symbol": " ",
+          "text": "Hidden chore #hide"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": "archived tasks can't get an id",
+          "group": "completed",
+          "hidden": false,
+          "line": 1,
+          "link_target": "done/old",
+          "locator": "old",
+          "note_path": "done/old.md",
+          "replacement": "",
+          "status_symbol": "x",
+          "text": "Old done"
+        },
+        {
+          "block_id": "kept",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 2,
+          "link_target": "done/old",
+          "locator": "old",
+          "note_path": "done/old.md",
+          "replacement": "[[done/old#^kept]]",
+          "status_symbol": "x",
+          "text": "Old kept"
+        },
+        {
+          "block_id": "done-deed",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 5,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^done-deed]]",
+          "status_symbol": "x",
+          "text": "Done deed"
+        },
+        {
+          "block_id": "cancelled-chore",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 6,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^cancelled-chore]]",
+          "status_symbol": "-",
+          "text": "Cancelled chore"
+        }
+      ]
+    },
+    {
+      "name": "rank-kept-open-first",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "done/old.md": "- [x] #task Old kept ^kept\n",
+        "keep.md": "- [ ] #task Locked kept ^locked-kept\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "kept",
+      "rows": [
+        {
+          "block_id": "locked-kept",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "keep",
+          "locator": "keep",
+          "note_path": "keep.md",
+          "replacement": "[[keep#^locked-kept]]",
+          "status_symbol": " ",
+          "text": "Locked kept"
+        },
+        {
+          "block_id": "kept",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 1,
+          "link_target": "done/old",
+          "locator": "old",
+          "note_path": "done/old.md",
+          "replacement": "[[done/old#^kept]]",
+          "status_symbol": "x",
+          "text": "Old kept"
+        }
+      ]
+    },
+    {
+      "name": "rank-and-terms",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "home.md": "- [ ] #task Buy milk ^milk\n- [ ] #task Buy oat milk ^oat\n- [ ] #task Milk the cow ^cow\n- [ ] #task Buy bread ^bread\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "buy milk",
+      "rows": [
+        {
+          "block_id": "milk",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^milk]]",
+          "status_symbol": " ",
+          "text": "Buy milk"
+        },
+        {
+          "block_id": "oat",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^oat]]",
+          "status_symbol": " ",
+          "text": "Buy oat milk"
+        }
+      ]
+    },
+    {
+      "name": "rank-tiers-and-ties",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "a/dup.md": "- [ ] #task Dup A ^dup-a\n",
+        "b/dup.md": "- [ ] #task Dup B ^dup-b\n",
+        "dupes.md": "## Duplicates\n\n- [ ] #task Duplicate thing ^dupe\n- [ ] #task Something else ^other\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "dup",
+      "rows": [
+        {
+          "block_id": "dup-a",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "a/dup",
+          "locator": "a/dup",
+          "note_path": "a/dup.md",
+          "replacement": "[[a/dup#^dup-a]]",
+          "status_symbol": " ",
+          "text": "Dup A"
+        },
+        {
+          "block_id": "dup-b",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "b/dup",
+          "locator": "b/dup",
+          "note_path": "b/dup.md",
+          "replacement": "[[b/dup#^dup-b]]",
+          "status_symbol": " ",
+          "text": "Dup B"
+        },
+        {
+          "block_id": "dupe",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 3,
+          "link_target": "dupes",
+          "locator": "dupes",
+          "note_path": "dupes.md",
+          "replacement": "[[dupes#^dupe]]",
+          "status_symbol": " ",
+          "text": "Duplicate thing"
+        },
+        {
+          "block_id": "other",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 4,
+          "link_target": "dupes",
+          "locator": "dupes",
+          "note_path": "dupes.md",
+          "replacement": "[[dupes#^other]]",
+          "status_symbol": " ",
+          "text": "Something else"
+        }
+      ]
+    },
+    {
+      "name": "excluded-directories",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".bob/cache.md": "- [ ] #task Bob cache task ^cache\n",
+        ".hidden/h.md": "- [ ] #task Hidden note task ^hid\n",
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "_conflicts/c.md": "- [ ] #task Conflict task ^conf\n",
+        "_generated/g.md": "- [ ] #task Generated task ^gen\n",
+        "_templates/t.md": "- [ ] #task Tmpl task ^tmpl\n",
+        "mac_inbox.md": "- [ ] #task Visible chore ^visible\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "visible",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^visible]]",
+          "status_symbol": " ",
+          "text": "Visible chore"
+        }
+      ]
+    },
+    {
+      "name": "guards",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "2026/20260929.md": "- [ ] #task Yesterday task\n- [ ] #task Yesterday kept ^yest-kept\n",
+        "2026/20260930.md": "- [ ] #task Today task ^today-task\n",
+        "done/old.md": "- [x] #task Old done\n- [x] #task Old kept ^kept\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n",
+        "twin.md": "- [ ] #task First twin ^twin\n- [ ] #task Second twin ^twin\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "inbox-chore",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-chore]]",
+          "status_symbol": " ",
+          "text": "Inbox chore"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": "the previous daily note is read-only",
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "20260929",
+          "locator": "20260929",
+          "note_path": "2026/20260929.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Yesterday task"
+        },
+        {
+          "block_id": "yest-kept",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "20260929",
+          "locator": "20260929",
+          "note_path": "2026/20260929.md",
+          "replacement": "[[20260929#^yest-kept]]",
+          "status_symbol": " ",
+          "text": "Yesterday kept"
+        },
+        {
+          "block_id": "today-task",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "20260930",
+          "locator": "20260930",
+          "note_path": "2026/20260930.md",
+          "replacement": "[[20260930#^today-task]]",
+          "status_symbol": " ",
+          "text": "Today task"
+        },
+        {
+          "block_id": "twin",
+          "disabled_reason": "duplicate block ID ^twin in twin.md",
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "twin",
+          "locator": "twin",
+          "note_path": "twin.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "First twin"
+        },
+        {
+          "block_id": "twin",
+          "disabled_reason": "duplicate block ID ^twin in twin.md",
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "twin",
+          "locator": "twin",
+          "note_path": "twin.md",
+          "replacement": "",
+          "status_symbol": " ",
+          "text": "Second twin"
+        },
+        {
+          "block_id": null,
+          "disabled_reason": "archived tasks can't get an id",
+          "group": "completed",
+          "hidden": false,
+          "line": 1,
+          "link_target": "done/old",
+          "locator": "old",
+          "note_path": "done/old.md",
+          "replacement": "",
+          "status_symbol": "x",
+          "text": "Old done"
+        },
+        {
+          "block_id": "kept",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 2,
+          "link_target": "done/old",
+          "locator": "old",
+          "note_path": "done/old.md",
+          "replacement": "[[done/old#^kept]]",
+          "status_symbol": "x",
+          "text": "Old kept"
+        }
+      ]
+    },
+    {
+      "name": "status-symbols",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n",
+        "symbols.md": "- [ ] #task Ready row ^ready\n- [/] #task Doing row ^doing\n- [*] #task Next row ^next\n- [?] #task Waiting row ^waiting\n- [x] #task Done row ^done\n- [X] #task Upper done row ^upper\n- [-] #task Cancelled row ^cancelled\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "inbox-chore",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-chore]]",
+          "status_symbol": " ",
+          "text": "Inbox chore"
+        },
+        {
+          "block_id": "doing",
+          "disabled_reason": null,
+          "group": "in_progress",
+          "hidden": false,
+          "line": 2,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^doing]]",
+          "status_symbol": "/",
+          "text": "Doing row"
+        },
+        {
+          "block_id": "next",
+          "disabled_reason": null,
+          "group": "next",
+          "hidden": false,
+          "line": 3,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^next]]",
+          "status_symbol": "*",
+          "text": "Next row"
+        },
+        {
+          "block_id": "ready",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^ready]]",
+          "status_symbol": " ",
+          "text": "Ready row"
+        },
+        {
+          "block_id": "waiting",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 4,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^waiting]]",
+          "status_symbol": "?",
+          "text": "Waiting row"
+        },
+        {
+          "block_id": "done",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 5,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^done]]",
+          "status_symbol": "x",
+          "text": "Done row"
+        },
+        {
+          "block_id": "upper",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 6,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^upper]]",
+          "status_symbol": "X",
+          "text": "Upper done row"
+        },
+        {
+          "block_id": "cancelled",
+          "disabled_reason": null,
+          "group": "completed",
+          "hidden": false,
+          "line": 7,
+          "link_target": "symbols",
+          "locator": "symbols",
+          "note_path": "symbols.md",
+          "replacement": "[[symbols#^cancelled]]",
+          "status_symbol": "-",
+          "text": "Cancelled row"
+        }
+      ]
+    },
+    {
+      "name": "ref-tag-lines",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n",
+        "refs.md": "- [ ] #task #ref Read paper ^paper\n- [ ] #task #references Keep word ^keepword\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "inbox-chore",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-chore]]",
+          "status_symbol": " ",
+          "text": "Inbox chore"
+        },
+        {
+          "block_id": "paper",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "refs",
+          "locator": "refs",
+          "note_path": "refs.md",
+          "replacement": "[[refs#^paper]]",
+          "status_symbol": " ",
+          "text": "Read paper"
+        },
+        {
+          "block_id": "keepword",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "refs",
+          "locator": "refs",
+          "note_path": "refs.md",
+          "replacement": "[[refs#^keepword]]",
+          "status_symbol": " ",
+          "text": "#references Keep word"
+        }
+      ]
+    },
+    {
+      "name": "crlf-note",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "crlf.md": "- [ ] #task First line ^first\r\n- [ ] #task Second line ^second\r\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "",
+      "rows": [
+        {
+          "block_id": "inbox-chore",
+          "disabled_reason": null,
+          "group": "in_this_note",
+          "hidden": false,
+          "line": 1,
+          "link_target": "mac_inbox",
+          "locator": "mac_inbox",
+          "note_path": "mac_inbox.md",
+          "replacement": "[[mac_inbox#^inbox-chore]]",
+          "status_symbol": " ",
+          "text": "Inbox chore"
+        },
+        {
+          "block_id": "first",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "crlf",
+          "locator": "crlf",
+          "note_path": "crlf.md",
+          "replacement": "[[crlf#^first]]",
+          "status_symbol": " ",
+          "text": "First line"
+        },
+        {
+          "block_id": "second",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "crlf",
+          "locator": "crlf",
+          "note_path": "crlf.md",
+          "replacement": "[[crlf#^second]]",
+          "status_symbol": " ",
+          "text": "Second line"
+        }
+      ]
+    },
+    {
+      "name": "multibyte-title",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "cafe.md": "- [ ] #task Café ☕ review ^cafe\n",
+        "home.md": "- [ ] #task Buy milk ^milk\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "café",
+      "rows": [
+        {
+          "block_id": "cafe",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "cafe",
+          "locator": "cafe",
+          "note_path": "cafe.md",
+          "replacement": "[[cafe#^cafe]]",
+          "status_symbol": " ",
+          "text": "Café ☕ review"
+        }
+      ]
+    },
+    {
+      "name": "rank-prefix-word-substring",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "home.md": "- [ ] #task Milk ^milk-a\n- [ ] #task Buy milk ^buy-m\n- [ ] #task Oatmilk latte ^oat-l\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "milk",
+      "rows": [
+        {
+          "block_id": "milk-a",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^milk-a]]",
+          "status_symbol": " ",
+          "text": "Milk"
+        },
+        {
+          "block_id": "buy-m",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^buy-m]]",
+          "status_symbol": " ",
+          "text": "Buy milk"
+        },
+        {
+          "block_id": "oat-l",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 3,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^oat-l]]",
+          "status_symbol": " ",
+          "text": "Oatmilk latte"
+        }
+      ]
+    },
+    {
+      "name": "rank-subsequence-tie",
+      "now": "2026-09-30 09:02:00",
+      "vault": {
+        ".obsidian/plugins/obsidian-tasks-plugin/data.json": "{\n  \"globalFilter\": \"#task\",\n  \"statusSettings\": {\n    \"coreStatuses\": [\n      {\"symbol\":\" \",\"name\":\"Ready\",\"type\":\"TODO\"},\n      {\"symbol\":\"x\",\"name\":\"Done\",\"type\":\"DONE\"}\n    ],\n    \"customStatuses\": [\n      {\"symbol\":\"*\",\"name\":\"Next\",\"type\":\"ON_HOLD\"},\n      {\"symbol\":\"?\",\"name\":\"Blocked\",\"type\":\"TODO\"},\n      {\"symbol\":\"/\",\"name\":\"In Progress\",\"type\":\"IN_PROGRESS\"},\n      {\"symbol\":\"-\",\"name\":\"Canceled\",\"type\":\"CANCELLED\"}\n    ]\n  }\n}",
+        "home.md": "- [ ] #task Badge ^badge-a\n- [ ] #task Abiding ^abide-b\n- [ ] #task Bdg ^bdg-c\n",
+        "mac_inbox.md": "- [ ] #task Inbox chore ^inbox-chore\n"
+      },
+      "owner": "mac_inbox.md",
+      "query": "bdg",
+      "rows": [
+        {
+          "block_id": "bdg-c",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 3,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^bdg-c]]",
+          "status_symbol": " ",
+          "text": "Bdg"
+        },
+        {
+          "block_id": "badge-a",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 1,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^badge-a]]",
+          "status_symbol": " ",
+          "text": "Badge"
+        },
+        {
+          "block_id": "abide-b",
+          "disabled_reason": null,
+          "group": "open",
+          "hidden": false,
+          "line": 2,
+          "link_target": "home",
+          "locator": "home",
+          "note_path": "home.md",
+          "replacement": "[[home#^abide-b]]",
+          "status_symbol": " ",
+          "text": "Abiding"
+        }
+      ]
+    }
+  ]
+}

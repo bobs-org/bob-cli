@@ -575,3 +575,139 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod vectors_tests {
+    use super::super::{
+        capture_dependency_tasks, task_dependencies::format as link_format,
+        vault_links::NoteIndex,
+    };
+    use super::*;
+    use std::ffi::OsStr;
+
+    static TASK_WIKILINK_VECTORS: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| {
+            serde_json::from_str(include_str!(
+                "../../tests/fixtures/task_wikilinks/vectors.json"
+            ))
+            .expect("wikilink vectors parse")
+        });
+
+    fn expect_text(value: &serde_json::Value) -> &str {
+        value.as_str().expect("vector string")
+    }
+
+    fn expect_optional_text(value: &serde_json::Value) -> Option<&str> {
+        if value.is_null() {
+            None
+        } else {
+            Some(value.as_str().expect("vector string or null"))
+        }
+    }
+
+    fn write_vector_vault(
+        bob_dir: &Path,
+        vault: &serde_json::Map<String, serde_json::Value>,
+    ) {
+        for (path, content) in vault {
+            let full = bob_dir.join(path);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).expect("vector parent");
+            }
+            std::fs::write(&full, expect_text(content)).expect("vector file");
+        }
+    }
+
+    /// The shared parity contract: every vector pins `candidates()` row
+    /// order and fields plus `cross_note_link_target` for the row's
+    /// note. If bob's behavior differs from a hand-written expectation,
+    /// read the code and fix the vector, never bob.
+    #[test]
+    fn vectors_match_candidates_and_link_targets() {
+        for vector in TASK_WIKILINK_VECTORS["vectors"]
+            .as_array()
+            .expect("vectors array")
+        {
+            let name = expect_text(&vector["name"]);
+            let vault_dir = tempfile::tempdir().expect("vector vault");
+            write_vector_vault(
+                vault_dir.path(),
+                vector["vault"].as_object().expect("vault map"),
+            );
+            let _now = crate::native::env::TestEnvGuard::set(&[(
+                "BOB_NOW",
+                Some(OsStr::new(expect_text(&vector["now"]))),
+            )]);
+            let field = WikilinkTaskField {
+                query: expect_text(&vector["query"]).to_string(),
+                replacement: (0, 0),
+            };
+            let owner = expect_text(&vector["owner"]);
+            let (rows, _) = candidates(vault_dir.path(), &field, owner);
+            let (note_paths, _) =
+                capture_dependency_tasks::vault_note_paths(vault_dir.path());
+            let index = NoteIndex::from_paths(note_paths);
+            let expected = vector["rows"].as_array().expect("rows array");
+            assert_eq!(rows.len(), expected.len(), "{name}: row count");
+            for (row, want) in rows.iter().zip(expected) {
+                assert_eq!(
+                    row.note_path,
+                    expect_text(&want["note_path"]),
+                    "{name}"
+                );
+                assert_eq!(
+                    row.line,
+                    want["line"].as_u64().expect("line") as usize,
+                    "{name}"
+                );
+                assert_eq!(row.group, expect_text(&want["group"]), "{name}");
+                assert_eq!(
+                    row.hidden,
+                    want["hidden"].as_bool().expect("hidden"),
+                    "{name}"
+                );
+                assert_eq!(
+                    row.block_id.as_deref(),
+                    expect_optional_text(&want["block_id"]),
+                    "{name}"
+                );
+                assert_eq!(
+                    row.locator,
+                    expect_text(&want["locator"]),
+                    "{name}"
+                );
+                assert_eq!(
+                    row.link_target,
+                    expect_text(&want["link_target"]),
+                    "{name}"
+                );
+                assert_eq!(
+                    link_format::cross_note_link_target(
+                        Path::new(&row.note_path),
+                        &index
+                    ),
+                    row.link_target,
+                    "{name}: link target"
+                );
+                assert_eq!(
+                    row.replacement,
+                    expect_text(&want["replacement"]),
+                    "{name}"
+                );
+                assert_eq!(
+                    row.disabled_reason.as_deref(),
+                    expect_optional_text(&want["disabled_reason"]),
+                    "{name}"
+                );
+                let symbol = expect_text(&want["status_symbol"]);
+                assert_eq!(
+                    Some(row.status_symbol),
+                    symbol.chars().next(),
+                    "{name}"
+                );
+                assert_eq!(symbol.chars().count(), 1, "{name}");
+                assert_eq!(row.text, expect_text(&want["text"]), "{name}");
+            }
+        }
+    }
+}
